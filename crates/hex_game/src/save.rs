@@ -112,6 +112,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/art/object_catalog.ron"),
     ),
     (
+        "art/objects/plant/date-palm.ron",
+        include_str!("../../../assets/art/objects/plant/date-palm.ron"),
+    ),
+    (
         "art/objects/plant/old-growth.ron",
         include_str!("../../../assets/art/objects/plant/old-growth.ron"),
     ),
@@ -236,8 +240,24 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-crystal-mountain.ron"),
     ),
     (
+        "config/worlds/procedural-desert-oasis-rings.ron",
+        include_str!("../../../assets/config/worlds/procedural-desert-oasis-rings.ron"),
+    ),
+    (
+        "config/worlds/procedural-desert-plain.ron",
+        include_str!("../../../assets/config/worlds/procedural-desert-plain.ron"),
+    ),
+    (
+        "config/worlds/procedural-desert-transition.ron",
+        include_str!("../../../assets/config/worlds/procedural-desert-transition.ron"),
+    ),
+    (
         "config/worlds/procedural-deep-forest.ron",
         include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
+    ),
+    (
+        "config/worlds/procedural-dunes.ron",
+        include_str!("../../../assets/config/worlds/procedural-dunes.ron"),
     ),
     (
         "config/worlds/procedural-forest.ron",
@@ -3825,7 +3845,7 @@ mod tests {
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0xF8E1_3246_74EB_146E);
+        assert_eq!(example.scenario_digest, 0x79B7_A6A8_C52F_8BDF);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 

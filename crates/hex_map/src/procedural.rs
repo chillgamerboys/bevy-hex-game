@@ -102,6 +102,14 @@ pub enum ProceduralRecipeMetrics {
     DeepForest(DeepForestMetrics),
     /// Open grassland, ground-cover, and route measurements.
     Prairie(PrairieMetrics),
+    /// Grass, ecotone, sand, and route measurements across one arid transition.
+    DesertTransition(DesertTransitionMetrics),
+    /// Bare sand coverage, relief, and ordinary-route measurements.
+    DesertPlain(DesertPlainMetrics),
+    /// Authored dune ridges, troughs, relief, and ordinary-route measurements.
+    Dunes(DunesMetrics),
+    /// Local still water, green shore, palms, and ordinary-route measurements.
+    Oasis(OasisMetrics),
     /// Whole-world topology, hydrology, and content measurements for Two Rings.
     Ring19(Ring19Metrics),
     /// Generic authored Macro topology, traversal, and hydrology measurements.
@@ -447,6 +455,84 @@ pub struct PrairieMetrics {
     /// Distinct elevations in the ordinary network.
     pub reachable_elevation_levels: u32,
     /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Desert Transition plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DesertTransitionMetrics {
+    /// Ordinary walker surfaces in the connected network.
+    pub ordinary_surfaces: u32,
+    /// Exposed top surfaces assigned to the connected grass side.
+    pub grass_surfaces: u32,
+    /// Exposed top surfaces assigned to the mixed ecotone.
+    pub transition_surfaces: u32,
+    /// Exposed top surfaces assigned to open sand.
+    pub sand_surfaces: u32,
+    /// Percentage of ordinary surfaces on the ecotone or sand side.
+    pub dry_coverage_percent: u32,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Desert Plain plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DesertPlainMetrics {
+    /// Ordinary walker surfaces in the connected network.
+    pub ordinary_surfaces: u32,
+    /// Exposed top surfaces capped by sand.
+    pub sand_surfaces: u32,
+    /// Percentage of exposed top surfaces capped by sand.
+    pub sand_surface_percent: u32,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Dunes plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DunesMetrics {
+    /// Ordinary walker surfaces in the connected dune field.
+    pub ordinary_surfaces: u32,
+    /// Exact surfaces classified as ridge crests.
+    pub crest_surfaces: u32,
+    /// Exact surfaces classified as trough bottoms.
+    pub trough_surfaces: u32,
+    /// Authored ridge count before mask and seam clipping.
+    pub ridge_count: u8,
+    /// Highest admitted crest above the lowest trough.
+    pub ridge_height: Level,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Oasis plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OasisMetrics {
+    /// Ordinary dry walker surfaces surrounding the pool.
+    pub ordinary_surfaces: u32,
+    /// Unique horizontal coordinates occupied by local still water.
+    pub water_cells: u32,
+    /// Exact grass-and-soil shore surfaces surrounding the pool.
+    pub grass_ring_surfaces: u32,
+    /// Exact rooted date-palm instances.
+    pub palm_roots: u32,
+    /// Distinct elevations in the ordinary dry network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary dry surface minus the lowest.
     pub relief: Level,
     /// Shortest ordinary route between the required actor anchors.
     pub critical_route_steps: u32,

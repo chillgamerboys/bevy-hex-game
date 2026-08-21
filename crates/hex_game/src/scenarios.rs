@@ -4385,6 +4385,10 @@ pub(crate) mod tests {
             "Prairie",
             "Two Rings",
             "Mountain Range",
+            "Desert Transition",
+            "Desert Plain",
+            "Dunes",
+            "Desert Oasis Rings",
         ] {
             let scenario = library()
                 .scenarios
@@ -4437,11 +4441,38 @@ pub(crate) mod tests {
                         metrics.grass_coverage_percent
                     );
                 }
+                ("Desert Transition", Some(ProceduralRecipeMetrics::DesertTransition(metrics))) => {
+                    assert!(metrics.grass_surfaces > 0);
+                    assert!(metrics.transition_surfaces > 0);
+                    assert!(metrics.sand_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Desert Plain", Some(ProceduralRecipeMetrics::DesertPlain(metrics))) => {
+                    assert_eq!(metrics.sand_surface_percent, 100);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Dunes", Some(ProceduralRecipeMetrics::Dunes(metrics))) => {
+                    assert_eq!(metrics.ridge_count, 5);
+                    assert_eq!(metrics.ridge_height, 6);
+                    assert!(metrics.crest_surfaces > 0);
+                    assert!(metrics.trough_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
                 ("Two Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
                     assert_eq!(metrics.world_columns, 9_241);
                     assert_eq!(metrics.biome_regions, 19);
                     assert_eq!(metrics.reciprocal_seams, 42);
                     assert_eq!(metrics.redundant_regions, 19);
+                }
+                ("Desert Oasis Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
+                    assert_eq!(metrics.world_columns, 9_241);
+                    assert_eq!(metrics.biome_regions, 19);
+                    assert_eq!(metrics.reciprocal_seams, 42);
+                    assert_eq!(metrics.redundant_regions, 19);
+                    assert_eq!(metrics.directed_liquid_seams, 0);
+                    assert_eq!(metrics.boundary_liquid_outlets, 0);
+                    assert!(metrics.liquid_cells > 0);
+                    assert!(metrics.feature_instances >= 12);
                 }
                 ("Mountain Range", Some(ProceduralRecipeMetrics::MountainRange(metrics))) => {
                     assert_eq!(metrics.world_columns, 18_019);
@@ -4454,7 +4485,11 @@ pub(crate) mod tests {
                     assert!((92..=104).contains(&metrics.summit_level));
                     assert!(metrics.high_massif_surfaces >= 100);
                 }
-                ("Deep Forest" | "Prairie" | "Two Rings" | "Mountain Range", metrics) => {
+                (
+                    "Deep Forest" | "Prairie" | "Desert Transition" | "Desert Plain" | "Dunes"
+                    | "Two Rings" | "Desert Oasis Rings" | "Mountain Range",
+                    metrics,
+                ) => {
                     panic!("{scenario_name} published unexpected metrics: {metrics:?}");
                 }
                 _ => {}
@@ -4478,6 +4513,15 @@ pub(crate) mod tests {
                 "Forest" => &["forest_clearing", "prairie_overlook"],
                 "Deep Forest" => &["deep_forest_clearing"],
                 "Prairie" => &["prairie_overlook"],
+                "Desert Transition" => &["transition_center", "grass_overlook", "sand_overlook"],
+                "Desert Plain" => &["desert_plain_overlook"],
+                "Dunes" => &["dune_crest", "dune_trough"],
+                "Desert Oasis Rings" => &[
+                    "oasis_overlook",
+                    "inner_dune_crest",
+                    "outer_dune_crest",
+                    "desert_plain_overlook",
+                ],
                 "Two Rings" => &[
                     "center_conflict_center",
                     "mountains_a_stream_source_overlook",
@@ -4509,6 +4553,10 @@ pub(crate) mod tests {
                 "Sky Islands" | "Two Rings" => assert!(
                     !special_regions.is_empty(),
                     "{scenario_name} dropped its flight-gated upper layer"
+                ),
+                "Desert Oasis Rings" => assert!(
+                    !special_regions.is_empty(),
+                    "Desert Oasis Rings dropped its closed non-route seams"
                 ),
                 "Mountain Range" => assert!(
                     !special_regions.is_empty(),

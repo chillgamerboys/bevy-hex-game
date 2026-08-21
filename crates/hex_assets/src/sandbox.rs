@@ -181,6 +181,39 @@ mod tests {
         assert_eq!(deep_forest.scenario, "Deep Forest");
         assert_eq!(deep_forest.fixed_seed, Some(1_592_598_566));
         assert_eq!(deep_forest.preview, "ui/sandbox/deep-forest.png");
+        for (id, scenario, preview) in [
+            (
+                "desert-transition",
+                "Desert Transition",
+                "ui/sandbox/desert-transition.png",
+            ),
+            (
+                "desert-plain",
+                "Desert Plain",
+                "ui/sandbox/desert-plain.png",
+            ),
+            ("dunes", "Dunes", "ui/sandbox/dunes.png"),
+            (
+                "desert-oasis-rings",
+                "Desert Oasis Rings",
+                "ui/sandbox/desert-oasis-rings.png",
+            ),
+        ] {
+            let map = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("{scenario} should be selectable in Sandbox"));
+            assert_eq!(map.scenario, scenario);
+            assert_eq!(map.fixed_seed, Some(1_592_598_566));
+            assert_eq!(map.preview, preview);
+            assert_eq!(
+                map.player_region.center,
+                SandboxRegionCenter::Anchor("party_start".to_owned())
+            );
+            assert_eq!(
+                map.hostile_region.center,
+                SandboxRegionCenter::Anchor("hostile_start".to_owned())
+            );
+        }
         assert!(catalog.get("fort").is_some());
         let crystal_ascent = catalog
             .get("crystal-ascent")
@@ -223,7 +256,39 @@ mod tests {
         assert_eq!(mountain_range.scenario, "Mountain Range");
         assert_eq!(mountain_range.fixed_seed, Some(129_704_046));
         assert_eq!(mountain_range.preview, "ui/sandbox/mountain-range.png");
-        assert_eq!(catalog.maps.len(), 19);
+        assert_eq!(catalog.maps.len(), 23);
+        assert_eq!(
+            catalog
+                .maps
+                .iter()
+                .map(|map| map.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "flat-arena",
+                "the-crossing",
+                "procedural-hills",
+                "rolling-hills",
+                "frozen-hills",
+                "volcanic-hills",
+                "sky-islands",
+                "mountains",
+                "caves",
+                "waterfall",
+                "forest",
+                "deep-forest",
+                "prairie",
+                "desert-transition",
+                "desert-plain",
+                "dunes",
+                "desert-oasis-rings",
+                "fort",
+                "crystal-ascent",
+                "crystal-mountain",
+                "seven-regions",
+                "two-rings",
+                "mountain-range",
+            ]
+        );
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))

@@ -731,7 +731,7 @@ pub(super) struct ProjectedVegetationVolume {
 }
 
 impl VegetationObjectSpec {
-    fn resolve(
+    pub(super) fn resolve(
         catalog: &RuntimeArtCatalog,
         raw_id: &str,
         expected_category: ObjectCategory,
@@ -921,6 +921,10 @@ pub(crate) mod tests {
                 include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/../../assets/art/objects/plant/snowy-tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/date-palm.ron"
                 )),
                 include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),

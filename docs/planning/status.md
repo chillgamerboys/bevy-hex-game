@@ -24,9 +24,40 @@ The branch now contains the defaulted surface-walker, spanning-feature, and anch
 contracts; authored summit-port alignment; reserve/merge/carve/finalize composition;
 exact subsurface seam closures; unified interior, tunnel crystals, anchors and
 validators; selectable non-combat content; and review-cutaway feature reconciliation.
-The remaining acceptance work is the combined CI-equivalent gate, deterministic
-captures and benchmarks, named human camera/play review, and publication of the
-reviewed candidate to `dev`.
+Exact delivery head `74deb7f` is published as
+[draft PR #210](https://github.com/chillgamerboys/bevy-hex-game/pull/210). The complete
+selector-chosen CI-equivalent gate passes at that head, including release rotations
+and corpora, runtime lifecycle, materialization and re-entry, fog and heart occupancy,
+camera collision, and perception. Its deterministic review pack contains 28 captures
+under `.context/visual-walks/crystal-mountain/74deb7f`.
+
+Release profiling records Crystal Mountain generation at 7.10 s p95 versus 3.04 s
+for Ring19, or 2.33× inside the 2.5× budget. Materialization takes 7.187 s for 61,450
+entities, compared with Mountain Range's 3.854 s for 68,650. Camera collision is
+2.917 µs p95 and terrain-index rebuilding is 4.935 ms. Perception is 33.768 ms p95,
+the dense six-observer case is 101.655 ms p95, and 10,000 idle frames perform zero
+recomputation. Crystal Mountain's measured RSS/peak memory is
+940,670,976/1,481,492,232 bytes versus Mountain Range's
+764,608,512/1,249,576,544, an increase of 23.0%/18.6%.
+
+Human visual, camera-motion, control-feel, and named play approval remain pending.
+The PR deliberately remains draft and the candidate has not merged to `dev`; neither
+the generated frames nor the automated gate substitutes for that human review.
+
+The stacked **Arid biomes** wave is implemented on its delivery branch and is not yet
+a claim about `dev`. It adds the `Arid` environment, Desert Transition, Desert Plain,
+Dunes, and Oasis recipes, the blocking `plant/date-palm` object, and four selectable
+maps: **Desert Transition**, **Desert Plain**, **Dunes**, and **Desert Oasis Rings**.
+The first three are focused radius-12 `Single` worlds. The last is a radius-55
+`DesertOasis` Ring19 profile with one local-water oasis, six inner dune regions, and
+an alternating outer ring of six taller dune and six plain regions. It retains 42
+Dry reciprocal seams, redundant ordinary reachability, and the original defaulted
+`TwoRings` fingerprint.
+
+Current focused verification records 13 desert integration checks, five Dunes
+fixtures, and eight Oasis fixtures passing. The full selector-chosen CI-equivalent
+gate, runtime lifecycle, deterministic capture pack, visual review, and publication
+to `dev` remain pending and are not inferred from those focused results.
 
 ## What is built
 
@@ -61,16 +92,18 @@ placement remains rejected; the in-delivery Crystal Mountain candidate is the on
 specialized composition that constructs the landmark at world origin, aligns its
 authored summit approach, and joins its lower aperture to the global tunnel.
 
-V3 now has fifteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
+V3 now has nineteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
 Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,
-and Crystal Ascent. Ring7 places its fixed seven-recipe roster in one connected radius-33
-world. Ring19 powers the selectable **Two Rings** map: a radius-55, 9,241-column
-world with 19 fixed regions, 42 reciprocal seams, 30 outer boundary sides, and a
-physical ordinary-walker graph that keeps all regions reachable after any one seam is
-removed. Its three mountain-fed water branches meet in central Hills before flowing
-through downstream Hills and an outlet Waterfall; the western Volcano owns a separate
-lava outlet. Single and Ring7 retain their 4-bit patch namespace, while Ring19 uses 5
-patch bits so slots 16–18 remain collision-free.
+Crystal Ascent, Desert Transition, Desert Plain, Dunes, and Oasis. Ring7 places its
+fixed seven-recipe roster in one connected radius-33 world. Ring19 powers two
+selectable radius-55, 9,241-column profiles. **Two Rings** retains its 19 fixed mixed
+regions, 42 reciprocal seams, 30 outer boundary sides, and physical ordinary-walker
+graph that keeps all regions reachable after any one seam is removed. Its three
+mountain-fed water branches meet in central Hills before flowing through downstream
+Hills and an outlet Waterfall; the western Volcano owns a separate lava outlet.
+**Desert Oasis Rings** reuses the masks and redundant dry walker graph around one
+local Still pool. Single and Ring7 retain their 4-bit patch namespace, while Ring19
+uses 5 patch bits so slots 16–18 remain collision-free.
 
 The new authored Macro path powers the selectable **Mountain Range** map. It covers a
 radius-77, 18,019-column world with 37 atomic radius-12-scale cells collapsed into 30
@@ -550,6 +583,9 @@ tree through isolated per-tree material clones; authored canopy masks remain art
 metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
+Oasis publishes exact `plant/date-palm` instances with a single blocking root each;
+their seed-selected rotations and positions cannot overlap the pool, reserved routes,
+or one another.
 
 The camera action now cycles Map → Third Person → First Person → Map. Third Person
 gives the player exclusive ownership of yaw, full-range pitch, and desired zoom. A

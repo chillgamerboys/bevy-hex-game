@@ -442,6 +442,60 @@ four-wide summit threshold are the eight registered entrances of one world-owned
 interior containing the tunnel and Crystal Ascent. Crystal Ascent's lower aperture is
 therefore an internal handoff, not a second light domain or exterior entrance.
 
+**Use V3 Arid terrain.** `Arid` admits four recipes and no overlays. The first three
+shipped `Single` configurations are radius 12; Oasis is the central patch of the
+Ring19 map below. Their authored settings are:
+
+```ron
+recipe: DesertTransition((
+    base_level: 15,
+    max_relief: 3,
+    transition_width: 8,
+    dry_coverage_percent: 55,
+)),
+
+recipe: DesertPlain((base_level: 15, max_relief: 2)),
+
+recipe: Dunes((
+    base_level: 15,
+    ridge_height: 6,
+    ridge_spacing: 12,
+    ridge_count: 5,
+)),
+
+recipe: Oasis((
+    base_level: 15,
+    pool_radius: 5,
+    palm_count: 12,
+    grass_ring_width: 3,
+)),
+```
+
+Desert Transition accepts relief `1..=4`, transition width `5..=12`, and dry
+coverage `40..=70` percent. Desert Plain accepts relief `1..=4`. Dunes accepts ridge
+height `3..=8`, spacing `8..=16`, and count `3..=7`. Oasis accepts pool radius
+`3..=6`, exact palm count `8..=18`, and green-ring width `2..=4`; its pool and ring
+must leave four dry approach columns. Each recipe requires `base_level >= 5`, must
+remain under the V3 ceiling, and rejects unknown fields.
+
+The material bands, requested ridge dimensions, local oasis footprint, and exact
+date-palm count are deterministic setting consequences. Named streams vary rolling
+relief, bounded dune warp, and palm selection/rotation without changing those
+contracts. Oasis uses a connected local Still-water body with no seam connection.
+
+**Compose Desert Oasis Rings.** The selectable radius-55 Ring19 file sets
+`profile: DesertOasis`: slot 0 is Oasis; slots 1–6 are the six rotated inner Dunes;
+slots 7–18 alternate taller Dunes and Desert Plain. Seam defaults remain level
+`15..=19` with preferred level 17, two width-two walker ports, and depth-three
+approaches. Every seam is Dry, while both `liquid_connections` and
+`boundary_outlets` are empty because the central pool is intentionally local. Only
+this profile admits that empty hydrology contract; the original defaulted
+`TwoRings` profile and fingerprint remain unchanged.
+
+The four selectable scenario names are **Desert Transition**, **Desert Plain**,
+**Dunes**, and **Desert Oasis Rings**. Each ships with configured seed `1592598566`;
+Sandbox regeneration changes only the pending resolved seed.
+
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,
 extended plunge basin, upper two-wide metal bridge, meandering escarpment, mid-height
@@ -715,10 +769,10 @@ boundary and never enter the shipping asset loader. Local saved creations belong
 the per-user data directory's `creations.ron`, not the shipped asset tree.
 
 `sandbox_maps.ron` owns the deployable Sandbox map list. Its `schema_version` is
-checked on load. Every distinct
-supported shipped environment appears once. Each entry has a stable ID, display name,
-tactical description and tags, renderer-generated preview asset, scenario, optional
-generation seed, and one hidden actor-staging region per side. A staging center is
+checked on load. Every distinct supported shipped environment appears at least once;
+separate recipe and layout experiences may share an environment. Each entry has a
+stable ID, display name, tactical description and tags, renderer-generated preview
+asset, scenario, optional generation seed, and one hidden actor-staging region per side. A staging center is
 either `Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated
 exact surface, with a bounded path-cost `radius`. These fields are retained as stable
 compatibility metadata so Loading can stage the frozen roster before guided

@@ -61,6 +61,27 @@ const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_CO
     (V3EnvironmentSettings::Frozen, "Mountains", 0),
     (V3EnvironmentSettings::Frozen, "Mountains", 0),
 ];
+const DESERT_OASIS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
+    (V3EnvironmentSettings::Arid, "Oasis", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 1),
+    (V3EnvironmentSettings::Arid, "Dunes", 2),
+    (V3EnvironmentSettings::Arid, "Dunes", 3),
+    (V3EnvironmentSettings::Arid, "Dunes", 4),
+    (V3EnvironmentSettings::Arid, "Dunes", 5),
+    (V3EnvironmentSettings::Arid, "Dunes", 0),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 1),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 2),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 3),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 4),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 5),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+];
 const TWO_RINGS_INTERNAL_HYDROLOGY: [(u8, u8, u32, Level); 8] = [
     (16, 5, 3, 29),
     (5, 0, 3, 16),
@@ -761,6 +782,12 @@ pub struct V3Ring7Settings {
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V3Ring19Settings {
+    /// Fixed semantic roster and whole-world validation profile.
+    ///
+    /// The default preserves the original shipped Two Rings wire shape. New
+    /// profiles must remain additive in the settings fingerprint.
+    #[serde(default)]
+    pub profile: V3Ring19ProfileSettings,
     /// Exactly nineteen regions in the fixed semantic slot order.
     pub regions: Vec<Ring19RegionSettings>,
     /// Default contract for every reciprocal internal seam.
@@ -774,6 +801,16 @@ pub struct V3Ring19Settings {
     /// Directed liquid exits through exact outer boundary sides.
     #[serde(default)]
     pub boundary_outlets: Vec<Ring19BoundaryOutletSettings>,
+}
+
+/// Fixed semantic contracts admitted by the radius-55 Ring19 layout.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V3Ring19ProfileSettings {
+    /// The original mixed-biome, mountain-fed watershed.
+    #[default]
+    TwoRings,
+    /// A local central oasis surrounded by two dry desert rings.
+    DesertOasis,
 }
 
 /// One semantic region in the fixed Ring19 slot order.
@@ -871,6 +908,8 @@ pub enum V3EnvironmentSettings {
     Coastal,
     /// Rocky lower slopes transitioning to snow and ice above the snowline.
     Alpine,
+    /// Sand, sparse vegetation, dunes, and isolated still-water oases.
+    Arid,
 }
 
 /// V3 geometry recipes.
@@ -906,6 +945,14 @@ pub enum V3RecipeSettings {
     DeepMountain(V3DeepMountainSettings),
     /// A monumental authored stair tower around an open crystal shaft.
     CrystalAscent(V3CrystalAscentSettings),
+    /// Connected grassland grading through a dry ecotone into open sand.
+    DesertTransition(V3DesertTransitionSettings),
+    /// Bare, gently rolling sand without authored structures or vegetation.
+    DesertPlain(V3DesertPlainSettings),
+    /// Deterministic traversable sand ridges and troughs.
+    Dunes(V3DunesSettings),
+    /// A local still-water pool, green shore, and blocking date palms.
+    Oasis(V3OasisSettings),
 }
 
 /// V3 Hills parameters, intentionally independent from the frozen V2 payload.
@@ -994,6 +1041,58 @@ pub struct V3PrairieSettings {
     pub max_relief: Level,
     /// Target percentage of eligible surfaces carrying nonblocking grass.
     pub grass_coverage_percent: u8,
+}
+
+/// V3 grass-to-desert transition parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DesertTransitionSettings {
+    /// Base surface level before modest rolling variation.
+    pub base_level: Level,
+    /// Maximum height above the base surface.
+    pub max_relief: Level,
+    /// Width of the mixed dirt-and-grass ecotone in local columns.
+    pub transition_width: u8,
+    /// Target percentage of the patch assigned to the dry side.
+    pub dry_coverage_percent: u8,
+}
+
+/// V3 open-desert parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DesertPlainSettings {
+    /// Base surface level before modest rolling variation.
+    pub base_level: Level,
+    /// Maximum height above the base surface.
+    pub max_relief: Level,
+}
+
+/// V3 traversable dune-field parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DunesSettings {
+    /// Surface level at the bottom of each dune trough.
+    pub base_level: Level,
+    /// Exact target height of a full dune ridge above its trough.
+    pub ridge_height: Level,
+    /// Target spacing between successive ridge centres.
+    pub ridge_spacing: u8,
+    /// Exact authored ridge count before mask and seam clipping.
+    pub ridge_count: u8,
+}
+
+/// V3 local-oasis parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3OasisSettings {
+    /// Dry surface datum surrounding the pool.
+    pub base_level: Level,
+    /// Radius of the connected local still-water pool.
+    pub pool_radius: u8,
+    /// Exact target count of date palms outside protected routes.
+    pub palm_count: u8,
+    /// Width of the grass-and-soil ring surrounding the pool.
+    pub grass_ring_width: u8,
 }
 
 /// V3 Shallow Sea parameters.
@@ -2241,6 +2340,10 @@ enum MacroBiomeKind {
     Shore,
     DeepMountain,
     CrystalAscent,
+    DesertTransition,
+    DesertPlain,
+    Dunes,
+    Oasis,
 }
 
 impl MacroBiomeKind {
@@ -2261,6 +2364,10 @@ impl MacroBiomeKind {
             V3RecipeSettings::Shore(_) => Self::Shore,
             V3RecipeSettings::DeepMountain(_) => Self::DeepMountain,
             V3RecipeSettings::CrystalAscent(_) => Self::CrystalAscent,
+            V3RecipeSettings::DesertTransition(_) => Self::DesertTransition,
+            V3RecipeSettings::DesertPlain(_) => Self::DesertPlain,
+            V3RecipeSettings::Dunes(_) => Self::Dunes,
+            V3RecipeSettings::Oasis(_) => Self::Oasis,
         }
     }
 }
@@ -2924,7 +3031,10 @@ impl V3Ring7Settings {
 
 impl V3Ring19Settings {
     fn validate(&self) -> Result<(), String> {
-        self.validate_two_rings_contract()
+        match self.profile {
+            V3Ring19ProfileSettings::TwoRings => self.validate_two_rings_contract(),
+            V3Ring19ProfileSettings::DesertOasis => self.validate_desert_oasis_contract(),
+        }
     }
 
     fn validate_structure(&self) -> Result<(), String> {
@@ -3044,8 +3154,11 @@ impl V3Ring19Settings {
             }
             boundary_sources.insert(source);
         }
-        if self.boundary_outlets.is_empty() {
-            return Err("V3 Ring19 requires at least one explicit boundary outlet".to_owned());
+        if !self.liquid_connections.is_empty() && self.boundary_outlets.is_empty() {
+            return Err(
+                "V3 Ring19 cross-region liquid requires at least one explicit boundary outlet"
+                    .to_owned(),
+            );
         }
         if !directed_graph_is_acyclic(V3_RING19_REGION_COUNT, directed_edges) {
             return Err("V3 Ring19 directed liquid connections must be acyclic".to_owned());
@@ -3065,6 +3178,9 @@ impl V3Ring19Settings {
     }
 
     pub(crate) fn validate_two_rings_contract(&self) -> Result<(), String> {
+        if self.profile != V3Ring19ProfileSettings::TwoRings {
+            return Err("V3 Ring19 Two Rings requires profile TwoRings".to_owned());
+        }
         self.validate_structure()?;
 
         for (index, (actual, (environment, recipe, rotation_turns))) in
@@ -3168,6 +3284,88 @@ impl V3Ring19Settings {
         }
         Ok(())
     }
+
+    pub(crate) fn validate_desert_oasis_contract(&self) -> Result<(), String> {
+        if self.profile != V3Ring19ProfileSettings::DesertOasis {
+            return Err("V3 Ring19 Desert Oasis requires profile DesertOasis".to_owned());
+        }
+        self.validate_structure()?;
+
+        for (index, (actual, (environment, recipe, rotation_turns))) in
+            self.regions.iter().zip(DESERT_OASIS_REGIONS).enumerate()
+        {
+            let expected_recipe = desert_oasis_expected_recipe(index);
+            if actual.environment != environment
+                || actual.recipe != expected_recipe
+                || actual.rotation_turns != rotation_turns
+            {
+                return Err(format!(
+                    "V3 Ring19 Desert Oasis slot {index} requires {environment:?} \
+                     {expected_recipe:?} ({recipe}) at rotation {rotation_turns}, got {:?} {:?} \
+                     at rotation {}",
+                    actual.environment, actual.recipe, actual.rotation_turns
+                ));
+            }
+            if !actual.overlays.is_empty() {
+                return Err(format!(
+                    "V3 Ring19 Desert Oasis slot {index} does not admit overlays"
+                ));
+            }
+        }
+
+        if self.seam_defaults.elevation
+            != (EdgeElevationSettings {
+                preferred: 17,
+                min: 15,
+                max: 19,
+            })
+            || self.seam_defaults.walker != (WalkerPortSettings { count: 2, width: 2 })
+            || !matches!(self.seam_defaults.liquid, EdgeLiquidSettings::Dry)
+            || self.seam_defaults.approach_depth != 3
+        {
+            return Err(
+                "V3 Ring19 Desert Oasis seam defaults require elevation 15..=19 (preferred 17), \
+                 two width-two walker ports, Dry liquid, and approach depth three"
+                    .to_owned(),
+            );
+        }
+        if !self.liquid_connections.is_empty() || !self.boundary_outlets.is_empty() {
+            return Err(
+                "V3 Ring19 Desert Oasis requires zero cross-region liquid connections and zero \
+                 boundary outlets; Oasis water remains local"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn desert_oasis_expected_recipe(index: usize) -> V3RecipeSettings {
+    match index {
+        0 => V3RecipeSettings::Oasis(V3OasisSettings {
+            base_level: 15,
+            pool_radius: 5,
+            palm_count: 12,
+            grass_ring_width: 3,
+        }),
+        1..=6 => V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: 15,
+            ridge_height: 4,
+            ridge_spacing: 10,
+            ridge_count: 3,
+        }),
+        7 | 9 | 11 | 13 | 15 | 17 => V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: 15,
+            ridge_height: 6,
+            ridge_spacing: 12,
+            ridge_count: 4,
+        }),
+        8 | 10 | 12 | 14 | 16 | 18 => V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+            base_level: 15,
+            max_relief: 2,
+        }),
+        _ => unreachable!("Ring19 Desert Oasis slot index is bounded by structural validation"),
+    }
 }
 
 const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
@@ -3187,6 +3385,10 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
         V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
+        V3RecipeSettings::DesertTransition(_) => "DesertTransition",
+        V3RecipeSettings::DesertPlain(_) => "DesertPlain",
+        V3RecipeSettings::Dunes(_) => "Dunes",
+        V3RecipeSettings::Oasis(_) => "Oasis",
     }
 }
 
@@ -3333,6 +3535,26 @@ fn validate_v3_recipe(
         (V3RecipeSettings::CrystalAscent(_), _) => {
             Err("V3 CrystalAscent requires the TemperateGrassland environment".to_owned())
         }
+        (V3RecipeSettings::DesertTransition(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::DesertTransition(_), _) => {
+            Err("V3 DesertTransition requires the Arid environment".to_owned())
+        }
+        (V3RecipeSettings::DesertPlain(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::DesertPlain(_), _) => {
+            Err("V3 DesertPlain requires the Arid environment".to_owned())
+        }
+        (V3RecipeSettings::Dunes(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::Dunes(_), _) => Err("V3 Dunes requires the Arid environment".to_owned()),
+        (V3RecipeSettings::Oasis(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::Oasis(_), _) => Err("V3 Oasis requires the Arid environment".to_owned()),
     }
 }
 
@@ -3946,6 +4168,127 @@ impl V3PrairieSettings {
         }
         Ok(())
     }
+}
+
+impl V3DesertTransitionSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_landform(
+            grid_radius,
+            self.base_level,
+            self.max_relief,
+            "DesertTransition",
+        )?;
+        if !(1..=4).contains(&self.max_relief) {
+            return Err("V3 DesertTransition max_relief must be between 1 and 4".to_owned());
+        }
+        if !(5..=12).contains(&self.transition_width) {
+            return Err("V3 DesertTransition transition_width must be between 5 and 12".to_owned());
+        }
+        if !(40..=70).contains(&self.dry_coverage_percent) {
+            return Err(
+                "V3 DesertTransition dry_coverage_percent must be between 40 and 70".to_owned(),
+            );
+        }
+        let footprint_width = grid_radius.saturating_mul(2).saturating_add(1);
+        if u32::from(self.transition_width).saturating_add(6) > footprint_width {
+            return Err(
+                "V3 DesertTransition transition_width must leave three columns on each side"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl V3DesertPlainSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_landform(grid_radius, self.base_level, self.max_relief, "DesertPlain")?;
+        if !(1..=4).contains(&self.max_relief) {
+            return Err("V3 DesertPlain max_relief must be between 1 and 4".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl V3DunesSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_landform(grid_radius, self.base_level, self.ridge_height, "Dunes")?;
+        if !(3..=8).contains(&self.ridge_height) {
+            return Err("V3 Dunes ridge_height must be between 3 and 8".to_owned());
+        }
+        if !(8..=16).contains(&self.ridge_spacing) {
+            return Err("V3 Dunes ridge_spacing must be between 8 and 16".to_owned());
+        }
+        if !(3..=7).contains(&self.ridge_count) {
+            return Err("V3 Dunes ridge_count must be between 3 and 7".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl V3OasisSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_base(grid_radius, self.base_level, "Oasis")?;
+        if !(3..=6).contains(&self.pool_radius) {
+            return Err("V3 Oasis pool_radius must be between 3 and 6".to_owned());
+        }
+        if !(8..=18).contains(&self.palm_count) {
+            return Err("V3 Oasis palm_count must be between 8 and 18".to_owned());
+        }
+        if !(2..=4).contains(&self.grass_ring_width) {
+            return Err("V3 Oasis grass_ring_width must be between 2 and 4".to_owned());
+        }
+        let reserved_radius = u32::from(self.pool_radius)
+            .saturating_add(u32::from(self.grass_ring_width))
+            .saturating_add(4);
+        if reserved_radius > grid_radius {
+            return Err(
+                "V3 Oasis pool and grass ring must leave four columns for dry approaches"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_arid_landform(
+    grid_radius: u32,
+    base_level: Level,
+    max_relief: Level,
+    recipe: &str,
+) -> Result<(), String> {
+    validate_arid_base(grid_radius, base_level, recipe)?;
+    if !(1..=8).contains(&max_relief) {
+        return Err(format!("V3 {recipe} relief must be between 1 and 8"));
+    }
+    let Some(highest_surface) = base_level.checked_add(max_relief) else {
+        return Err(format!("V3 {recipe} level relationship overflows Level"));
+    };
+    if highest_surface > MAX_V3_LEVEL {
+        return Err(format!(
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_arid_base(grid_radius: u32, base_level: Level, recipe: &str) -> Result<(), String> {
+    if !(12..=RING19_RADIUS).contains(&grid_radius) {
+        return Err(format!(
+            "procedural V3 {recipe} requires grid_radius from 12 through {RING19_RADIUS}"
+        ));
+    }
+    if base_level < 5 {
+        return Err(format!(
+            "V3 {recipe} base_level must leave room for bedrock and strata"
+        ));
+    }
+    if base_level > MAX_V3_LEVEL {
+        return Err(format!(
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
+        ));
+    }
+    Ok(())
 }
 
 impl V3CrystalAscentSettings {
@@ -4742,6 +5085,7 @@ mod tests {
             rotation_turns: 0,
         };
         V3Ring19Settings {
+            profile: V3Ring19ProfileSettings::TwoRings,
             regions: vec![region; V3_RING19_REGION_COUNT],
             seam_defaults: SharedEdgeSettings {
                 elevation: EdgeElevationSettings {
@@ -4765,6 +5109,37 @@ mod tests {
                 width: 3,
                 level: 16,
             }],
+        }
+    }
+
+    fn valid_desert_ring19() -> V3Ring19Settings {
+        let regions = (0..V3_RING19_REGION_COUNT)
+            .map(|index| {
+                let recipe = desert_oasis_expected_recipe(index);
+                let (_, _, rotation_turns) = DESERT_OASIS_REGIONS[index];
+                Ring19RegionSettings {
+                    environment: V3EnvironmentSettings::Arid,
+                    recipe,
+                    overlays: Vec::new(),
+                    rotation_turns,
+                }
+            })
+            .collect();
+        V3Ring19Settings {
+            profile: V3Ring19ProfileSettings::DesertOasis,
+            regions,
+            seam_defaults: SharedEdgeSettings {
+                elevation: EdgeElevationSettings {
+                    preferred: 17,
+                    min: 15,
+                    max: 19,
+                },
+                walker: WalkerPortSettings { count: 2, width: 2 },
+                liquid: EdgeLiquidSettings::Dry,
+                approach_depth: 3,
+            },
+            liquid_connections: Vec::new(),
+            boundary_outlets: Vec::new(),
         }
     }
 
@@ -5461,6 +5836,13 @@ mod tests {
             .validate_structure()
             .expect("an independent boundary-only Volcano outlet is valid");
 
+        let mut completely_dry = valid_ring19();
+        completely_dry.liquid_connections.clear();
+        completely_dry.boundary_outlets.clear();
+        completely_dry
+            .validate_structure()
+            .expect("a profile may own a completely dry Ring19 liquid graph");
+
         let mut cycle = valid_ring19();
         cycle.liquid_connections = vec![
             Ring19LiquidConnectionSettings {
@@ -5562,6 +5944,126 @@ mod tests {
     }
 
     #[test]
+    fn ring19_profile_defaults_to_two_rings_and_desert_oasis_is_exactly_dry() {
+        let shipped = shipped_ring19_settings();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(shipped_ring),
+        })) = &shipped.terrain
+        else {
+            panic!("the shipped fixture should remain Ring19");
+        };
+        assert_eq!(
+            shipped_ring.profile,
+            V3Ring19ProfileSettings::TwoRings,
+            "omitting the additive profile field preserves the shipped contract"
+        );
+
+        valid_desert_ring19()
+            .validate_desert_oasis_contract()
+            .expect("the canonical dry Desert Oasis roster should validate");
+
+        let mut wrong_slot = valid_desert_ring19();
+        wrong_slot
+            .regions
+            .get_mut(8)
+            .expect("the fixture has slot 8")
+            .recipe = V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: 15,
+            ridge_height: 6,
+            ridge_spacing: 12,
+            ridge_count: 4,
+        });
+        assert!(
+            wrong_slot.validate_desert_oasis_contract().is_err(),
+            "the fixed alternating outer roster must reject a substituted recipe"
+        );
+
+        let mut wrong_oasis = valid_desert_ring19();
+        let V3RecipeSettings::Oasis(oasis) = &mut wrong_oasis.regions[0].recipe else {
+            unreachable!("slot zero is the canonical Oasis")
+        };
+        oasis.palm_count = 13;
+        assert!(
+            wrong_oasis.validate_desert_oasis_contract().is_err(),
+            "the central Oasis payload is part of the fixed profile"
+        );
+
+        let mut wrong_inner_dunes = valid_desert_ring19();
+        let V3RecipeSettings::Dunes(dunes) = &mut wrong_inner_dunes.regions[1].recipe else {
+            unreachable!("slot one is a canonical inner dune")
+        };
+        dunes.ridge_height = 5;
+        assert!(
+            wrong_inner_dunes.validate_desert_oasis_contract().is_err(),
+            "the inner dune payload is part of the fixed profile"
+        );
+
+        let mut wrong_outer_dunes = valid_desert_ring19();
+        let V3RecipeSettings::Dunes(dunes) = &mut wrong_outer_dunes.regions[7].recipe else {
+            unreachable!("slot seven is a canonical outer dune")
+        };
+        dunes.ridge_spacing = 11;
+        assert!(
+            wrong_outer_dunes.validate_desert_oasis_contract().is_err(),
+            "the outer dune payload is part of the fixed profile"
+        );
+
+        let mut wrong_plain = valid_desert_ring19();
+        let V3RecipeSettings::DesertPlain(plain) = &mut wrong_plain.regions[8].recipe else {
+            unreachable!("slot eight is a canonical outer plain")
+        };
+        plain.max_relief = 3;
+        assert!(
+            wrong_plain.validate_desert_oasis_contract().is_err(),
+            "the open-desert payload is part of the fixed profile"
+        );
+
+        let mut wrong_rotation = valid_desert_ring19();
+        wrong_rotation.regions[2].rotation_turns = 0;
+        assert!(
+            wrong_rotation.validate_desert_oasis_contract().is_err(),
+            "each fixed slot owns its exact rotation"
+        );
+
+        let mut wrong_order = valid_desert_ring19();
+        wrong_order.regions.swap(7, 8);
+        assert!(
+            wrong_order.validate_desert_oasis_contract().is_err(),
+            "the alternating outer roster owns an exact slot order"
+        );
+
+        let mut cross_region_water = valid_desert_ring19();
+        cross_region_water.liquid_connections = vec![
+            Ring19LiquidConnectionSettings {
+                source_region: 0,
+                sink_region: 1,
+                width: 2,
+                level: 15,
+            },
+            Ring19LiquidConnectionSettings {
+                source_region: 1,
+                sink_region: 7,
+                width: 2,
+                level: 15,
+            },
+        ];
+        cross_region_water.boundary_outlets = vec![Ring19BoundaryOutletSettings {
+            source_region: 7,
+            side: Ring19BoundarySide::NorthEast,
+            width: 2,
+            level: 15,
+        }];
+        assert!(
+            cross_region_water.validate_desert_oasis_contract().is_err(),
+            "oasis water must remain local rather than entering Ring19 seams"
+        );
+
+        let mut wrong_profile = valid_desert_ring19();
+        wrong_profile.profile = V3Ring19ProfileSettings::TwoRings;
+        assert!(wrong_profile.validate_desert_oasis_contract().is_err());
+    }
+
+    #[test]
     fn additive_v3_recipe_settings_validate_without_loosening_environments() {
         let volcano = V3RecipeSettings::Volcano(V3VolcanoSettings {
             base_level: 12,
@@ -5600,6 +6102,91 @@ mod tests {
             validate_v3_recipe(&prairie, V3EnvironmentSettings::Frozen, 20).is_err(),
             "Prairie remains temperate-only"
         );
+    }
+
+    #[test]
+    fn arid_recipe_settings_are_strict_bounded_and_arid_only() {
+        let recipes = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 3,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 2,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 6,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 5,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+        for recipe in &recipes {
+            validate_v3_recipe(recipe, V3EnvironmentSettings::Arid, 24)
+                .unwrap_or_else(|error| panic!("canonical {recipe:?} should validate: {error}"));
+            assert!(
+                validate_v3_recipe(recipe, V3EnvironmentSettings::Coastal, 24).is_err(),
+                "{recipe:?} must remain Arid-only"
+            );
+        }
+
+        let invalid = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 5,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 0,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 2,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 7,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+        for recipe in &invalid {
+            assert!(
+                validate_v3_recipe(recipe, V3EnvironmentSettings::Arid, 24).is_err(),
+                "out-of-range {recipe:?} must fail closed"
+            );
+        }
+
+        let overflow = V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: MAX_V3_LEVEL,
+            ridge_height: 3,
+            ridge_spacing: 12,
+            ridge_count: 5,
+        });
+        assert!(validate_v3_recipe(&overflow, V3EnvironmentSettings::Arid, 24).is_err());
+
+        for source in [
+            "DesertTransition((base_level: 15, max_relief: 3, transition_width: 8, dry_coverage_percent: 55, typoed_field: 1))",
+            "DesertPlain((base_level: 15, max_relief: 2, typoed_field: 1))",
+            "Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 5, typoed_field: 1))",
+            "Oasis((base_level: 15, pool_radius: 5, palm_count: 12, grass_ring_width: 3, typoed_field: 1))",
+        ] {
+            ron::from_str::<V3RecipeSettings>(source)
+                .expect_err("arid recipe payloads must reject unknown fields");
+        }
     }
 
     #[test]

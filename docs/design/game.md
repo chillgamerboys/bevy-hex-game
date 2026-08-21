@@ -426,6 +426,27 @@ are presentation and illumination fixtures rather than blockers. Map, Third Pers
 and First Person remain ordinary camera choices; no automatic gameplay cutaway is
 introduced for the tower.
 
+### Arid biomes
+
+The Arid family treats desert as several tactical spaces rather than one palette
+swap. **Desert Transition** crosses connected grass, sparse dirt ecotone, and sand so
+a larger authored world can make climate change legible. **Desert Plain** keeps long
+sightlines over modest weathered relief. **Dunes** replaces that openness with broad,
+parallel ridges and sheltered troughs while preserving ordinary one-level traversal
+from floor to crest.
+
+**Desert Oasis Rings** is the large desert composition: a green, palm-lined oasis
+sits inside one ring of lower dunes and a second alternating ring of taller dunes and
+open sand. Its pool is local still water, not the source or outlet of a cross-biome
+river. The dry composite therefore reads as a destination surrounded by successive
+belts of cover and high ground without inventing a desert watershed.
+
+Date palms use exact authored visual volumes and one blocking root each. Their count
+is stable while seed variation changes placement and rotation; reserved routes and
+the oasis shoreline remain clear. Sand and dunes do not shift during play, the water
+does not simulate redistribution, and no heat, thirst, concealment, or sandstorm rule
+is implied by these biomes.
+
 ### Magic shapes the world; the world decides how
 
 **Evocations make persistent terrain changes.** They last at least across multiple

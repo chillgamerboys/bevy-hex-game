@@ -1599,6 +1599,10 @@ mod tests {
     const FIRST_PERSON_CAMERA_SCRIPT: &str = "../../walks/camera_first_person.ron";
     const CRYSTAL_ASCENT_CAMERA_SCRIPT: &str = "../../walks/camera_crystal_ascent.ron";
     const CRYSTAL_MOUNTAIN_CAMERA_SCRIPT: &str = "../../walks/camera_crystal_mountain.ron";
+    const DESERT_TRANSITION_CAMERA_SCRIPT: &str = "../../walks/camera_desert_transition.ron";
+    const DESERT_PLAIN_CAMERA_SCRIPT: &str = "../../walks/camera_desert_plain.ron";
+    const DUNES_CAMERA_SCRIPT: &str = "../../walks/camera_dunes.ron";
+    const DESERT_OASIS_RINGS_CAMERA_SCRIPT: &str = "../../walks/camera_desert_oasis_rings.ron";
 
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
@@ -1616,6 +1620,16 @@ mod tests {
         ("../../walks/camera_forest.ron", "Forest"),
         ("../../walks/camera_deep_forest.ron", "Deep Forest"),
         ("../../walks/camera_prairie.ron", "Prairie"),
+        (
+            "../../walks/camera_desert_transition.ron",
+            "Desert Transition",
+        ),
+        ("../../walks/camera_desert_plain.ron", "Desert Plain"),
+        ("../../walks/camera_dunes.ron", "Dunes"),
+        (
+            "../../walks/camera_desert_oasis_rings.ron",
+            "Desert Oasis Rings",
+        ),
         ("../../walks/camera_fort.ron", "Fort"),
         ("../../walks/camera_crystal_ascent.ron", "Crystal Ascent"),
         (
@@ -2162,7 +2176,7 @@ mod tests {
                 "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
             );
         }
-        assert_eq!(routes.len(), 18);
+        assert_eq!(routes.len(), 22);
 
         for route in &manifest.routes {
             assert!(
@@ -2444,6 +2458,198 @@ mod tests {
         assert!(
             CAMERA_ROUTE_SCRIPTS.contains(&(CRYSTAL_MOUNTAIN_CAMERA_SCRIPT, "Crystal Mountain"))
         );
+    }
+
+    #[test]
+    fn desert_camera_walks_pin_every_authored_review_landmark() {
+        struct DesertWalkCase<'a> {
+            script_path: &'a str,
+            scenario: &'a str,
+            party_start: CameraRouteTile,
+            graph_steps: &'a [u8],
+            anchors: &'a [&'a str],
+            captures: &'a [&'a str],
+        }
+
+        let cases = [
+            DesertWalkCase {
+                script_path: DESERT_TRANSITION_CAMERA_SCRIPT,
+                scenario: "Desert Transition",
+                party_start: CameraRouteTile {
+                    q: -12,
+                    r: 0,
+                    level: 15,
+                },
+                graph_steps: &[4, 4, 3, 1, 4, 4],
+                anchors: &["grass_overlook", "transition_center", "sand_overlook"],
+                captures: &[
+                    "01-desert-transition-bands-map",
+                    "02-desert-transition-grass-front-character",
+                    "03-desert-transition-grass-reverse-character",
+                    "04-desert-transition-ecotone-character",
+                    "05-desert-transition-sand-front-character",
+                    "06-desert-transition-sand-reverse-character",
+                ],
+            },
+            DesertWalkCase {
+                script_path: DESERT_PLAIN_CAMERA_SCRIPT,
+                scenario: "Desert Plain",
+                party_start: CameraRouteTile {
+                    q: -12,
+                    r: 0,
+                    level: 15,
+                },
+                graph_steps: &[4, 4, 4, 4, 1],
+                anchors: &["desert_plain_overlook"],
+                captures: &[
+                    "01-desert-plain-relief-map",
+                    "02-desert-plain-overlook-front-character",
+                    "03-desert-plain-overlook-side-character",
+                    "04-desert-plain-overlook-rear-character",
+                ],
+            },
+            DesertWalkCase {
+                script_path: DUNES_CAMERA_SCRIPT,
+                scenario: "Dunes",
+                party_start: CameraRouteTile {
+                    q: -12,
+                    r: 0,
+                    level: 21,
+                },
+                graph_steps: &[4, 4, 4, 4, 2],
+                anchors: &["dune_crest", "dune_trough"],
+                captures: &[
+                    "01-dunes-ridge-field-map",
+                    "02-dunes-crest-front-character",
+                    "03-dunes-crest-side-character",
+                    "04-dunes-trough-front-character",
+                    "05-dunes-trough-ridge-wall-character",
+                ],
+            },
+            DesertWalkCase {
+                script_path: DESERT_OASIS_RINGS_CAMERA_SCRIPT,
+                scenario: "Desert Oasis Rings",
+                party_start: CameraRouteTile {
+                    q: -13,
+                    r: 6,
+                    level: 15,
+                },
+                graph_steps: &[4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 4, 4, 4, 4, 2],
+                anchors: &[
+                    "oasis_overlook",
+                    "inner_dune_crest",
+                    "outer_dune_crest",
+                    "desert_plain_overlook",
+                ],
+                captures: &[
+                    "01-desert-oasis-rings-oasis-overview-map",
+                    "02-desert-oasis-rings-oasis-overlook-character",
+                    "03-desert-oasis-rings-oasis-palms-character",
+                    "04-desert-oasis-rings-inner-dune-crest-character",
+                    "05-desert-oasis-rings-inner-dune-oasis-reverse-character",
+                    "06-desert-oasis-rings-outer-dune-crest-character",
+                    "07-desert-oasis-rings-open-desert-character",
+                ],
+            },
+        ];
+
+        for case in cases {
+            let script_path = case.script_path;
+            let scenario = case.scenario;
+            let steps: Vec<WalkStep> = ron::from_str(
+                &std::fs::read_to_string(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path),
+                )
+                .unwrap_or_else(|error| panic!("cannot read {script_path}: {error}")),
+            )
+            .unwrap_or_else(|error| panic!("cannot parse {script_path}: {error}"));
+            for step in &steps {
+                validate_step(step)
+                    .unwrap_or_else(|error| panic!("{script_path} is invalid: {error}"));
+            }
+
+            assert!(steps.contains(&WalkStep::StartScenario {
+                name: scenario.to_owned(),
+                seed: Some(1_592_598_566),
+                suppress_hostiles: true,
+            }));
+            assert!(steps.contains(&WalkStep::AssertCameraMode(WalkCameraMode::Map)));
+            assert!(steps.contains(&WalkStep::AssertCameraMode(WalkCameraMode::Character)));
+            let anchors = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::ClickAnchor { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(anchors, case.anchors, "{scenario}");
+            let captures = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::Capture(name) => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(captures, case.captures, "{scenario}");
+            assert!(steps
+                .windows(4)
+                .filter(|window| matches!(
+                    window.first(),
+                    Some(WalkStep::ClickAnchor { .. } | WalkStep::ClickTile { .. })
+                ))
+                .all(|window| matches!(
+                    window,
+                    [
+                        WalkStep::ClickAnchor { .. } | WalkStep::ClickTile { .. },
+                        WalkStep::Settle(5),
+                        WalkStep::AwaitPartyIdle { .. },
+                        WalkStep::AssertSelectedAt { .. },
+                    ]
+                )));
+
+            // These edge counts are emitted by the production Footing router over
+            // the seed-exact published tile graph (including Oasis palm blockers).
+            // The horizontal and vertical lower bounds make accidental coordinate
+            // edits fail even before a visual walk reaches the tactical range gate.
+            let destinations = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::ClickAnchor { expected, .. } => Some(*expected),
+                    WalkStep::ClickTile {
+                        q,
+                        r,
+                        level: Some(level),
+                    } => Some(CameraRouteTile {
+                        q: *q,
+                        r: *r,
+                        level: *level,
+                    }),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(destinations.len(), case.graph_steps.len(), "{scenario}");
+            let mut previous = case.party_start;
+            for (destination, &graph_steps) in destinations.iter().zip(case.graph_steps) {
+                assert!((1..=4).contains(&graph_steps), "{scenario}");
+                assert!(
+                    previous
+                        .position()
+                        .coord
+                        .distance(destination.position().coord)
+                        <= u32::from(graph_steps),
+                    "{scenario} movement leg {previous:?} -> {destination:?} cannot fit its \
+                     recorded {graph_steps}-step ordinary path"
+                );
+                assert!(
+                    previous.level.abs_diff(destination.level) <= u32::from(graph_steps),
+                    "{scenario} movement leg {previous:?} -> {destination:?} changes too many \
+                     levels for {graph_steps} ordinary steps"
+                );
+                previous = *destination;
+            }
+            assert!(destinations.len() > case.anchors.len(), "{scenario}");
+            assert!(CAMERA_ROUTE_SCRIPTS.contains(&(script_path, scenario)));
+        }
     }
 
     #[test]
@@ -2834,10 +3040,18 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            let suppress_hostiles = matches!(
+                scenario_name,
+                "Mountain Range"
+                    | "Desert Transition"
+                    | "Desert Plain"
+                    | "Dunes"
+                    | "Desert Oasis Rings"
+            );
             assert_eq!(
                 launches,
-                vec![(scenario_name, route.seed, scenario_name == "Mountain Range")],
-                "only Mountain Range may remove hostiles from map-presentation evidence"
+                vec![(scenario_name, route.seed, suppress_hostiles)],
+                "only presentation-focused routes may remove hostiles from map evidence"
             );
             assert!(steps.contains(&WalkStep::Key("C".to_owned())));
             assert!(
