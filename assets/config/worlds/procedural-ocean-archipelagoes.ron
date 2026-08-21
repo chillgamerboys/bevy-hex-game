@@ -102,12 +102,12 @@
                     recipe: WoodedIsland((
                         sea_level: 8,
                         land_coverage_percent: 68,
-                        max_relief: 6,
+                        max_relief: 8,
                         tree_coverage_percent: 26,
                     )),
                     rotation_turns: 0,
                     access: Land,
-                    elevation: (low: 9, high: 14, grade_axis: East),
+                    elevation: (low: 9, high: 16, grade_axis: East),
                 ),
             ],
             liquid_connections: [

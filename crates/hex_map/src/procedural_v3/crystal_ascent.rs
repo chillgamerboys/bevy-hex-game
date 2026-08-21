@@ -90,6 +90,22 @@ pub(crate) fn macro_upper_terminal_coords(
         .collect()
 }
 
+/// Resolves every authored stair-plinth column in world space for Macro validation.
+///
+/// The landmark validates these columns before composition, while Macro calls this
+/// again after every fragment has been merged and the spanning tunnel has been
+/// carved. Keeping the footprint here prevents the two validators from drifting.
+pub(crate) fn macro_stair_base_plinth_columns(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS)
+        .flat_map(ring_coordinates)
+        .map(|coord| frame.to_world(coord))
+        .collect()
+}
+
 /// Resolves the authored four-wide summit trail rows consumed by a Macro seam.
 pub(crate) fn macro_upper_terminal_approach_coords(
     mask: &BTreeSet<HexCoord>,
@@ -403,16 +419,27 @@ fn construct_patch_with_streams(
             let fringe_level = if composite { summit } else { base };
             add_ground(&mut masses, *coord, fringe_level, SolidMaterialRole::Grass);
             surface_intents.insert(TilePos::new(*coord, fringe_level), exterior_surface());
-        } else if radius <= CHAMBER_RADIUS
-            || (radius < SHELL_INNER_RADIUS && is_lower_connector(*coord))
-            || (radius >= SHELL_INNER_RADIUS && is_lower_aperture(*coord))
-        {
+        } else if radius < SHELL_INNER_RADIUS {
+            // Close the complete chamber-to-shell annulus at the chamber floor.
+            // Elevated stair haunches still carry only their authored taper, but
+            // they now rise from a founded stone plinth instead of floating over
+            // world void. Only the four-wide connector is ordinary traversal;
+            // the remaining flush plinth top is architectural backing.
+            add_ground(&mut masses, *coord, base, SolidMaterialRole::WorkedStone);
+            let metadata = if radius <= CHAMBER_RADIUS || is_lower_connector(*coord) {
+                interior_surface()
+            } else {
+                interior_architecture_surface(SurfaceAccess::SpecialMovement(SHELL_TOPS))
+            };
+            surface_intents.insert(TilePos::new(*coord, base), metadata);
+        } else if is_lower_aperture(*coord) {
             add_ground(&mut masses, *coord, base, SolidMaterialRole::WorkedStone);
             surface_intents.insert(TilePos::new(*coord, base), interior_surface());
         }
     }
 
     let mut geometry = build_stairs(&mut masses, &mut surface_intents, settings)?;
+    classify_stair_base_plinth(&masses, &mut surface_intents, base);
     build_shell(
         &mut masses,
         &mut surface_intents,
@@ -1722,6 +1749,19 @@ pub(crate) fn validate_crystal_ascent(
         ));
     }
 
+    'base_plinth: for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+        for coord in ring_coordinates(radius) {
+            for level in 0..=base {
+                if solid_material_at(&plan.volume, coord, level).is_none() {
+                    issues.push(recipe_issue(format!(
+                        "stair base plinth leaves world void below {coord:?} at level {level}"
+                    )));
+                    break 'base_plinth;
+                }
+            }
+        }
+    }
+
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     let distances = ordinary.distances_from(lower);
     let reverse_distances = ordinary.distances_from(upper);
@@ -1738,6 +1778,32 @@ pub(crate) fn validate_crystal_ascent(
         issues.push(recipe_issue(
             "Crystal Ascent cannot derive all three authored stair circuits",
         ));
+    }
+    let expected_stair_surfaces = expected_circuits
+        .iter()
+        .flat_map(|surfaces| surfaces.iter().copied())
+        .collect::<BTreeSet<_>>();
+    'plinth_access: for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+        for coord in ring_coordinates(radius) {
+            let surface = TilePos::new(coord, base);
+            if let Some(metadata) = plan.volume.surfaces.get(&surface) {
+                if metadata.interior != Some(INTERIOR) {
+                    issues.push(recipe_issue(format!(
+                        "stair base plinth leaves an exterior daylight surface at {surface:?}"
+                    )));
+                    break 'plinth_access;
+                }
+                if metadata.access == SurfaceAccess::Ordinary
+                    && !is_lower_connector(coord)
+                    && !expected_stair_surfaces.contains(&surface)
+                {
+                    issues.push(recipe_issue(format!(
+                        "stair base plinth exposes an unintended ordinary shortcut at {surface:?}"
+                    )));
+                    break 'plinth_access;
+                }
+            }
+        }
     }
     match expected_stair_haunch_thicknesses(&expected_circuits) {
         Ok(haunches) => {
@@ -2162,15 +2228,17 @@ pub(crate) fn validate_crystal_ascent(
         let actual = plan
             .volume
             .surfaces
-            .keys()
-            .copied()
-            .filter(|surface| {
-                surface.level == base && surface.coord.distance(HexCoord::ORIGIN) == radius
+            .iter()
+            .filter_map(|(surface, metadata)| {
+                (metadata.access == SurfaceAccess::Ordinary
+                    && surface.level == base
+                    && surface.coord.distance(HexCoord::ORIGIN) == radius)
+                    .then_some(*surface)
             })
             .collect::<BTreeSet<_>>();
         if actual != expected {
             issues.push(recipe_issue(format!(
-                "interior approach radius {radius} does not narrow to the exact four-wide route"
+                "interior approach radius {radius} does not narrow to the exact four-wide ordinary route"
             )));
         }
     }
@@ -2875,6 +2943,46 @@ const fn shell_top_surface() -> SurfaceMetadata {
     }
 }
 
+const fn interior_architecture_surface(access: SurfaceAccess) -> SurfaceMetadata {
+    SurfaceMetadata {
+        access,
+        interior: Some(INTERIOR),
+    }
+}
+
+fn classify_stair_base_plinth(
+    masses: &BTreeMap<HexCoord, Vec<MassSpec>>,
+    surface_intents: &mut BTreeMap<TilePos, SurfaceMetadata>,
+    base: Level,
+) {
+    for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+        for coord in ring_coordinates(radius) {
+            let surface = TilePos::new(coord, base);
+            if surface_intents
+                .get(&surface)
+                .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+            {
+                continue;
+            }
+            let low_overhead = (base.saturating_add(1)..=base.saturating_add(2)).any(|level| {
+                masses.get(&coord).is_some_and(|column| {
+                    column
+                        .iter()
+                        .any(|mass| mass.bottom <= level && level < mass.top)
+                })
+            });
+            surface_intents.insert(
+                surface,
+                if low_overhead {
+                    interior_architecture_surface(SurfaceAccess::NonStandable)
+                } else {
+                    interior_architecture_surface(SurfaceAccess::SpecialMovement(SHELL_TOPS))
+                },
+            );
+        }
+    }
+}
+
 fn protected_route(surfaces: &BTreeSet<TilePos>) -> ProtectedFeatureRoute {
     ProtectedFeatureRoute {
         centerline: surfaces.iter().copied().collect(),
@@ -3152,6 +3260,86 @@ mod tests {
             (metrics.circuits, metrics.flights, metrics.landings),
             (3, 18, 18)
         );
+    }
+
+    #[test]
+    fn stair_base_plinth_closes_the_chamber_to_shell_annulus_without_shortcuts() {
+        for rise_levels in [100, 144, 200] {
+            let (plan, objects) = raw_plan(rise_levels);
+            let _metrics = validated_metrics(&plan, &objects, rise_levels);
+            let settings = V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels,
+            };
+            let expected_stairs = expected_all_stair_surfaces(&settings);
+            let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+            let mut founded_columns = 0_usize;
+
+            for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+                for coord in ring_coordinates(radius) {
+                    founded_columns = founded_columns.saturating_add(1);
+                    for level in 0..=settings.base_level {
+                        assert!(
+                            solid_material_at(&plan.volume, coord, level).is_some(),
+                            "rise {rise_levels} leaves world void below the stair base at {coord:?}, level {level}"
+                        );
+                    }
+
+                    let base_surface = TilePos::new(coord, settings.base_level);
+                    if let Some(metadata) = plan.volume.surfaces.get(&base_surface) {
+                        assert_eq!(
+                            metadata.interior,
+                            Some(INTERIOR),
+                            "the stair plinth must remain in the Crystal Dark domain at {base_surface:?}"
+                        );
+                    }
+                    if !is_lower_connector(coord) && !expected_stairs.contains(&base_surface) {
+                        assert!(
+                            !ordinary.contains(base_surface),
+                            "the founded stair plinth must not create an ordinary shortcut at {base_surface:?}"
+                        );
+                    }
+                }
+            }
+
+            assert_eq!(founded_columns, 612);
+        }
+    }
+
+    #[test]
+    fn validator_rejects_world_void_below_the_stair_base_plinth() {
+        let (mut plan, objects) = raw_plan(144);
+        let coord = ring_coordinates(CHAMBER_RADIUS.saturating_add(1))
+            .into_iter()
+            .find(|coord| !is_lower_connector(*coord))
+            .expect("the stair plinth should contain a non-route column");
+        let foundation = plan
+            .volume
+            .columns
+            .get_mut(&coord)
+            .expect("the stair plinth column should exist")
+            .elements
+            .iter_mut()
+            .find_map(|element| match element {
+                VolumeElement::Solid(mass) if mass.levels.bottom == 0 => Some(mass),
+                _ => None,
+            })
+            .expect("the stair plinth should begin with a bedrock run");
+        foundation.levels.bottom = 1;
+
+        let WorldValidation::Invalid(issues) = validate_crystal_ascent(
+            &plan,
+            &V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels: 144,
+            },
+            &objects,
+        ) else {
+            panic!("an unfounded stair plinth must invalidate Crystal Ascent")
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| { issue.detail.contains("stair base plinth leaves world void") }));
     }
 
     #[test]
@@ -3893,6 +4081,14 @@ mod tests {
                     "Macro composition must preserve exact authored-site volume at {coord:?}"
                 );
             }
+            for coord in ring_coordinates(SITE_RADIUS) {
+                for level in 0..=recipe_settings.base_level {
+                    assert!(
+                        solid_material_at(&local.volume, coord, level).is_some(),
+                        "the exact radius-32 Macro seam must remain founded at {coord:?}, level {level}"
+                    );
+                }
+            }
             let local_site_surfaces = local
                 .volume
                 .surfaces
@@ -3921,6 +4117,12 @@ mod tests {
                     Some(SolidMaterialRole::Grass)
                 );
                 assert!(!local.volume.surfaces.contains_key(&TilePos::new(*coord, 6)));
+                for level in 0..=150 {
+                    assert!(
+                        solid_material_at(&local.volume, *coord, level).is_some(),
+                        "the high Macro fringe must remain continuously founded at {coord:?}, level {level}"
+                    );
+                }
             }
             assert_eq!(local.features, canonical.features);
             assert_eq!(local.structures, canonical.structures);

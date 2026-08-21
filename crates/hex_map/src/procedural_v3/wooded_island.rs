@@ -906,7 +906,7 @@ mod tests {
                 recipe: V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
                     sea_level: 8,
                     land_coverage_percent: 65,
-                    max_relief: 6,
+                    max_relief: 8,
                     tree_coverage_percent: 25,
                 }),
                 overlays: Vec::new(),
@@ -943,7 +943,89 @@ mod tests {
         );
         assert!(first.metrics.tree_roots > 0);
         assert!(first.metrics.critical_route_steps > 0);
-        assert_eq!(first.metrics.relief, 5);
+        assert_eq!(first.metrics.relief, 7);
+
+        let plan = &first.validated.plan;
+        let water = plan
+            .liquids
+            .bodies
+            .values()
+            .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+            .collect::<BTreeSet<_>>();
+        let dry = plan
+            .volume
+            .mask
+            .difference(&water)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let inward = inward_distances(&dry);
+        let dry_surfaces = plan
+            .volume
+            .surfaces
+            .keys()
+            .filter(|position| dry.contains(&position.coord))
+            .map(|position| (position.coord, *position))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(dry_surfaces.len(), dry.len());
+        for (coord, distance) in inward {
+            let expected_rise = i32::try_from(distance).unwrap_or(i32::MAX).clamp(1, 8);
+            assert_eq!(
+                dry_surfaces.get(&coord).map(|position| position.level),
+                Some(8 + expected_rise),
+                "dry surface {coord:?} must retain the exact inward-distance relief profile"
+            );
+        }
+        assert_eq!(
+            dry_surfaces.values().map(|position| position.level).min(),
+            Some(9)
+        );
+        assert_eq!(
+            dry_surfaces.values().map(|position| position.level).max(),
+            Some(16)
+        );
+        assert_eq!(
+            plan.anchors.get(BEACH).map(|position| position.level),
+            Some(9)
+        );
+        assert_eq!(
+            plan.anchors.get(RIDGE).map(|position| position.level),
+            Some(16)
+        );
+        let crossing = plan
+            .features
+            .protected_routes
+            .get(CROSSING)
+            .expect("Wooded Island should retain its protected crossing");
+        assert!(crossing.centerline.windows(2).all(|pair| {
+            matches!(pair, [from, to]
+                if from.coord.distance(to.coord) == 1 && from.level.abs_diff(to.level) <= 1)
+        }));
+
+        let review = generate(40, 0.4, &settings(), 1_592_598_566, runtime_art_catalog())
+            .expect("the shipped Wooded Island review seed should generate");
+        let review_plan = &review.validated.plan;
+        assert_eq!(
+            review_plan.anchors.get(BEACH).copied(),
+            Some(TilePos::new(HexCoord::from_axial(-33, 4), 9))
+        );
+        let high_clearing = TilePos::new(HexCoord::from_axial(25, 0), 16);
+        assert_eq!(
+            review_plan.anchors.get(CLEARING).copied(),
+            Some(high_clearing)
+        );
+        assert_eq!(review_plan.anchors.get(RIDGE).copied(), Some(high_clearing));
+        for (coord, expected_level) in [
+            (HexCoord::from_axial(-30, 1), 11),
+            (HexCoord::from_axial(-27, -2), 12),
+            (HexCoord::from_axial(-23, -2), 16),
+            (HexCoord::from_axial(25, -2), 16),
+        ] {
+            assert!(review_plan
+                .volume
+                .surfaces
+                .contains_key(&TilePos::new(coord, expected_level)));
+        }
     }
 
     #[test]

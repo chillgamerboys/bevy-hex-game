@@ -33,6 +33,11 @@ Archipelagoes at 2.583 µs query p95 against its 2 ms budget. Named-human visual
 approval and publication to `dev` remain pending; neither the automated gate nor the
 captures substitute for that review.
 
+The 2026-08-21 corrective pass increased Wooded Island's central relief allowance by two
+voxels in both the focused recipe and Ocean Archipelagoes' wooded heart. Focused and Macro
+tests retain shoreline, protected-route, dry-connectivity, and height-bound contracts while
+replacement frames show the raised center; named-human approval remains pending.
+
 The **Crystal Mountain** wave is implemented on its delivery branch and is not yet a
 claim about `dev`. Its selectable radius-77 Macro candidate places the existing
 base-6/rise-144 Crystal Ascent at world origin, surrounds its level-150 summit with a
@@ -68,6 +73,14 @@ Human visual, camera-motion, control-feel, and named play approval remain pendin
 The PR deliberately remains draft and the candidate has not merged to `dev`; neither
 the generated frames nor the automated gate substitutes for that human review.
 
+The 2026-08-21 corrective pass found and closed two Crystal defects at their world and mesh
+sources. The complete Crystal Ascent stair annulus now has a stratified foundation through
+base level with a worked-stone cap, and final Crystal Mountain composition revalidates that exact plinth after merge
+and tunnel carving. Crystal mesh chunks now give opaque geometry sole ownership of a shared
+opaque-to-translucent/additive face, removing the coincident surfaces that caused movement
+flicker while retaining a closed backing. Typed geometry and mesh tests are green; native
+camera-motion review remains intentionally pending.
+
 The stacked **Arid biomes** wave is implemented on its delivery branch and is not yet
 a claim about `dev`. It adds the `Arid` environment, Desert Transition, Desert Plain,
 Dunes, and Oasis recipes, the blocking `plant/date-palm` object, and four selectable
@@ -86,6 +99,17 @@ doctests, formatting, dependency policy, panic-free clippy, generated documentat
 and the optimized shipping build also pass. Four pointer-driven camera walks produced
 22 deterministic frames and four Sandbox previews. Human visual/play approval and
 publication to `dev` remain pending; the automated pack does not substitute for either.
+
+The 2026-08-21 corrective pass lowered Oasis water exactly one voxel below its surrounding
+base-level grass, with the sand bed one further voxel down. Exact generation tests and
+replacement review frames verify the recessed-basin contract; named-human approval remains
+pending.
+
+Corrective visual evidence now fails closed across these review packs. Each run invalidates
+any stale review index before setup, records scenario/seed/script provenance and successful
+capture names, and may report completion only with the exact expected frame set. Every frame
+starts `UNREVIEWED` and must receive an explicit `PASS` or `FAIL`; static evidence is never
+used to claim native-motion flicker or control-feel approval.
 
 ## What is built
 

@@ -10,7 +10,7 @@
             recipe: WoodedIsland((
                 sea_level: 8,
                 land_coverage_percent: 65,
-                max_relief: 6,
+                max_relief: 8,
                 tree_coverage_percent: 25,
             )),
             overlays: [],

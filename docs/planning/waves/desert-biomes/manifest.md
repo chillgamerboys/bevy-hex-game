@@ -250,6 +250,16 @@ The automated candidate and scripted walks are complete. They do not substitute 
 taste, native camera/control feel, or a named-human `PASS`; the wave remains review-ready
 rather than delivered until that review and publication to `dev` occur.
 
+## Corrective verification — 2026-08-21
+
+- Oasis grass remains at the authored base level, while the Still-water surface is now
+  exactly one voxel lower and its sand bed one further voxel below. Exact recipe tests prove
+  that relationship so the lake reads as a recessed basin rather than a blue coplanar tile.
+- The replacement Oasis walk is governed by the shared fail-closed evidence index: a new run
+  first invalidates stale approval, records its provenance and successful captures, and is
+  incomplete unless the exact expected frame set exists. Each completed frame still requires
+  an explicit visual classification, and captures do not replace named-human play review.
+
 ## Stop conditions
 
 - Crystal Mountain does not land at or reconcile cleanly from exact head `74deb7f`.

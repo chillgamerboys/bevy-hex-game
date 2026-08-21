@@ -340,6 +340,22 @@ Focused tests and benchmark samples run before this ledger receives an exact can
 useful development evidence only. They must not be promoted to combined acceptance by wording
 in status, roadmap, a PR description, or a screenshot caption.
 
+## Corrective verification — 2026-08-21
+
+- The Crystal Ascent stair annulus now has an exact stratified plinth from level zero
+  through the base level, capped in worked stone. Standalone validation proves every required annular column is
+  founded, and Crystal Mountain repeats that invariant on the final composed world after
+  fragment merge and tunnel carving so a later composition stage cannot reopen the void.
+- Crystal mesh baking now assigns one owner to a shared face across opaque and
+  translucent/additive style chunks: the translucent or additive cell yields while the
+  opaque backing remains closed. Exact side/top/bottom and reverse-order tests cover the
+  ownership rule and prevent coincident faces, the identified source of movement flicker.
+- The replacement visual walks use a fail-closed evidence index. Starting a run invalidates
+  stale approval, records scenario/seed/script provenance and successful capture names, and
+  cannot become complete unless the exact expected capture set exists. Every frame begins
+  `UNREVIEWED` and needs an explicit `PASS` or `FAIL`; static frames still cannot clear the
+  required native camera-motion flicker review.
+
 ## Stop conditions
 
 - A required mask subtraction disconnects an adjacent biome.
