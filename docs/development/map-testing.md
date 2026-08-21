@@ -92,3 +92,9 @@ timing JSON, and logs for all three ordinary concerns.
   typed map tests, not those frames, prove exact material coverage, one-level dune
   traversal, local-water isolation, date-palm blockers, seam redundancy, and
   reachability.
+- Island review must show all five Sandy Islets and the playable primary route, the
+  Wooded Island beach/interior/ridge progression, and Ocean Archipelagoes' open sea,
+  three satellite clusters, landing, wooded heart, and only dry seam. Typed tests,
+  not those frames, prove level-8 water continuity, exact component counts, two-column
+  sand fringes, tree exclusions, ordinary reachability, scenic disconnection, and
+  teardown/re-entry. No capture may be used as evidence that water is impassable.

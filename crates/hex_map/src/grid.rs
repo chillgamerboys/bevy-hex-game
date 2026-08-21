@@ -52,9 +52,10 @@ use crate::world_snapshot::{
 };
 use crate::{
     CavesReportMetrics, DeepForestReportMetrics, ForestReportMetrics, FortReportMetrics,
-    GenerationReport, MacroMetrics, MountainRangeMetrics, PrairieReportMetrics,
-    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, VolcanoReportMetrics,
-    WaterfallReportMetrics,
+    GenerationReport, MacroMetrics, MountainRangeMetrics, OceanArchipelagoMetrics,
+    PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
+    SandyIsletsReportMetrics, VolcanoReportMetrics, WaterfallReportMetrics,
+    WoodedIslandReportMetrics,
 };
 
 /// One claimed impact decision retained in exact incoming message order.
@@ -131,6 +132,9 @@ pub fn plugin(app: &mut App) {
         .register_type::<Ring19Metrics>()
         .register_type::<MacroMetrics>()
         .register_type::<MountainRangeMetrics>()
+        .register_type::<SandyIsletsReportMetrics>()
+        .register_type::<WoodedIslandReportMetrics>()
+        .register_type::<OceanArchipelagoMetrics>()
         .init_resource::<DamagedVoxels>()
         .init_resource::<TerrainDamageState>()
         .init_resource::<PendingTerrainEdits>()

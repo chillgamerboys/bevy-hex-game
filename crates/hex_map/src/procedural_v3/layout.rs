@@ -2278,8 +2278,28 @@ fn resolve_shared_edge_with_pairs(
         LiquidRequest::Dry => ResolvedLiquidPort::Dry,
         LiquidRequest::Standing { width } => {
             let mut port = if width == 0 {
+                let walker_first_approach = walker_ports
+                    .iter()
+                    .flat_map(|port| port.first_approach.iter().copied())
+                    .collect::<BTreeSet<_>>();
+                let walker_second_approach = walker_ports
+                    .iter()
+                    .flat_map(|port| port.second_approach.iter().copied())
+                    .collect::<BTreeSet<_>>();
+                let walker_exclusions = port_pairs
+                    .iter()
+                    .filter(|(first, second)| {
+                        walker_first_approach.contains(first)
+                            || walker_second_approach.contains(second)
+                    })
+                    .copied()
+                    .collect::<BTreeSet<_>>();
                 ResolvedPort {
-                    lanes: port_pairs,
+                    // A full standing-water seam may coexist with an explicit
+                    // dry walker aperture. Its complete protected approaches are
+                    // exact exclusions, so the ocean remains continuous everywhere
+                    // else without requiring liquid endpoints under the causeway.
+                    lanes: port_pairs.difference(&walker_exclusions).copied().collect(),
                     first_approach: BTreeSet::new(),
                     second_approach: BTreeSet::new(),
                 }
@@ -3350,10 +3370,41 @@ fn validate_resolved_edge(
         issues.push(LayoutIssue::InvalidResolvedContract(id));
     }
     if let ResolvedLiquidPort::Standing { port, elevation } = &edge.liquid {
+        let walker_first_approach = edge
+            .walker
+            .ports
+            .iter()
+            .flat_map(|walker| walker.first_approach.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let walker_second_approach = edge
+            .walker
+            .ports
+            .iter()
+            .flat_map(|walker| walker.second_approach.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let walker_exclusions = edge
+            .boundary_pairs
+            .iter()
+            .filter(|(first, second)| {
+                walker_first_approach.contains(first) || walker_second_approach.contains(second)
+            })
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let full_except_walker = kind == LayoutKind::Macro
+            && !walker_exclusions.is_empty()
+            && port.lanes.is_disjoint(&walker_exclusions)
+            && port
+                .lanes
+                .union(&walker_exclusions)
+                .copied()
+                .collect::<BTreeSet<_>>()
+                == edge.boundary_pairs;
         let lane_width_valid = port.lanes == edge.boundary_pairs
+            || full_except_walker
             || u32::try_from(port.lanes.len())
                 .is_ok_and(|width| (2..=MAX_SEAM_PORT_WIDTH).contains(&width));
-        let geometry_valid = (kind == LayoutKind::Macro && port.lanes == edge.boundary_pairs)
+        let geometry_valid = (kind == LayoutKind::Macro
+            && (port.lanes == edge.boundary_pairs || full_except_walker))
             || ordered_simple_seam_lanes(&port.lanes).is_some();
         let width_valid = lane_width_valid
             && port.lanes.is_subset(&edge.boundary_pairs)

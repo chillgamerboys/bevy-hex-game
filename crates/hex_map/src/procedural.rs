@@ -110,12 +110,18 @@ pub enum ProceduralRecipeMetrics {
     Dunes(DunesMetrics),
     /// Local still water, green shore, palms, and ordinary-route measurements.
     Oasis(OasisMetrics),
+    /// Separated sand islands, shoreline, water, and primary-route measurements.
+    SandyIslets(SandyIsletsMetrics),
+    /// One broad wooded island, beach fringe, vegetation, and route measurements.
+    WoodedIsland(WoodedIslandMetrics),
     /// Whole-world topology, hydrology, and content measurements for Two Rings.
     Ring19(Ring19Metrics),
     /// Generic authored Macro topology, traversal, and hydrology measurements.
     Macro(MacroMetrics),
     /// Coastal-to-massif topology, traversal, and elevation measurements.
     MountainRange(MountainRangeMetrics),
+    /// Whole-ocean topology, scenic islands, and playable-home-island measurements.
+    OceanArchipelago(OceanArchipelagoMetrics),
 }
 
 /// Exact deterministic measurements of one selected V3 Hills plan.
@@ -538,6 +544,54 @@ pub struct OasisMetrics {
     pub critical_route_steps: u32,
 }
 
+/// Exact deterministic measurements of one V3 Sandy Islets plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SandyIsletsMetrics {
+    /// Exact horizontal columns in the generated footprint.
+    pub world_columns: u32,
+    /// Dry sandy support surfaces across every island.
+    pub land_surfaces: u32,
+    /// Unique horizontal coordinates occupied by still water.
+    pub water_cells: u32,
+    /// Exact separated dry land components.
+    pub land_components: u8,
+    /// Dry surfaces reachable from the primary party anchor.
+    pub primary_reachable_surfaces: u32,
+    /// Sand surfaces in the exact two-column shoreline fringe.
+    pub sand_fringe_surfaces: u32,
+    /// Distinct elevations reachable on the primary component.
+    pub reachable_elevation_levels: u32,
+    /// Highest dry support minus the lowest dry support.
+    pub relief: Level,
+    /// Shortest ordinary route between the primary component's actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one V3 Wooded Island plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WoodedIslandMetrics {
+    /// Exact horizontal columns in the generated footprint.
+    pub world_columns: u32,
+    /// Dry support surfaces on the island.
+    pub land_surfaces: u32,
+    /// Unique horizontal coordinates occupied by still water.
+    pub water_cells: u32,
+    /// Sand surfaces in the exact two-column shoreline fringe.
+    pub sand_fringe_surfaces: u32,
+    /// Grass-and-soil surfaces inland of the beach.
+    pub grass_interior_surfaces: u32,
+    /// Exact rooted broadleaf tree instances.
+    pub tree_roots: u32,
+    /// Dry surfaces reachable from the party anchor.
+    pub reachable_surfaces: u32,
+    /// Distinct elevations reachable on the island.
+    pub reachable_elevation_levels: u32,
+    /// Highest dry support minus the lowest dry support.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
 /// Exact deterministic measurements of one selected V3 Ring19 world.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Ring19Metrics {
@@ -643,6 +697,35 @@ pub struct MountainRangeMetrics {
     pub summit_level: Level,
     /// Deep Mountain surfaces at or above its broad-shoulder datum.
     pub high_massif_surfaces: u32,
+}
+
+/// Exact deterministic measurements of the V3 Ocean Archipelagoes Macro world.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OceanArchipelagoMetrics {
+    /// Exact horizontal columns in the radius-77 footprint.
+    pub world_columns: u32,
+    /// Atomic radius-12-scale cells in the authored radius-three graph.
+    pub macro_cells: u32,
+    /// Exact logical sea, island-cluster, landing, and heart regions.
+    pub biome_regions: u32,
+    /// Exact full-width still-water seams joining the ocean.
+    pub standing_water_seams: u32,
+    /// Unique horizontal coordinates occupied by the connected ocean.
+    pub liquid_cells: u32,
+    /// Exact dry connected components across the complete world.
+    pub dry_components: u8,
+    /// Dry components intentionally excluded from ordinary traversal.
+    pub scenic_dry_components: u8,
+    /// Ordinary dry support surfaces across all islands.
+    pub ordinary_surfaces: u32,
+    /// Dry surfaces reachable from the playable home-island party anchor.
+    pub reachable_surfaces: u32,
+    /// Shortest ordinary route from the sandy landing into the wooded heart.
+    pub critical_route_steps: u32,
+    /// Exact dry shore surfaces adjacent to the ocean.
+    pub shoreline_surfaces: u32,
+    /// Exact rooted tree instances on the wooded heart.
+    pub tree_roots: u32,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.

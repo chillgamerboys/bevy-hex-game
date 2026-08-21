@@ -65,9 +65,10 @@ pub use procedural::{
     DesertTransitionMetrics as DesertTransitionReportMetrics, DunesMetrics as DunesReportMetrics,
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
     MacroMetrics, MountainRangeMetrics, OasisMetrics as OasisReportMetrics,
-    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
-    TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    OceanArchipelagoMetrics, PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics,
+    Ring19Metrics, Ring7Metrics, SandyIsletsMetrics as SandyIsletsReportMetrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    WoodedIslandMetrics as WoodedIslandReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
@@ -84,9 +85,10 @@ pub use settings::{
     V3BeachSettings, V3CavesSettings, V3CrystalAscentSettings, V3DeepForestSettings,
     V3DeepMountainSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
     V3HillsSettings, V3LayoutSettings, V3MountainsSettings, V3OverlaySettings, V3PrairieSettings,
-    V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, V3ShallowSeaSettings, V3ShoreSettings,
-    V3SkyIslandsSettings, V3VolcanoSettings, V3WaterfallSettings, WalkerPortSettings,
-    V3_MACRO_CELL_COUNT, V3_MOUNTAIN_RANGE_REGION_COUNT, V3_RING19_REGION_COUNT,
+    V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, V3SandyIsletsSettings,
+    V3ShallowSeaSettings, V3ShoreSettings, V3SkyIslandsSettings, V3VolcanoSettings,
+    V3WaterfallSettings, V3WoodedIslandSettings, WalkerPortSettings, V3_MACRO_CELL_COUNT,
+    V3_MOUNTAIN_RANGE_REGION_COUNT, V3_RING19_REGION_COUNT,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 pub use world_snapshot::{

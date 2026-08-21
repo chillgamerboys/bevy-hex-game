@@ -74,6 +74,7 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 const CRYSTAL_ASCENT_SHOWCASE: &str = "Crystal Ascent Showcase";
+const CRYSTAL_ASCENT_SCENARIO: &str = "Crystal Ascent";
 const CRYSTAL_ASCENT_SITE_RADIUS: u32 = 32;
 const CRYSTAL_ASCENT_LOWER_ENTRY: &str = "crystal_ascent.lower_entry";
 const CRYSTAL_ASCENT_BOTTOM_CHAMBER: &str = "crystal_ascent.bottom_chamber";
@@ -91,8 +92,13 @@ const CRYSTAL_MOUNTAIN_TUNNEL_MOUTH: &str = "crystal_mountain.tunnel_mouth";
 /// that one launch after generic actors exist and before save restoration/perception.
 /// A pending save therefore remains authoritative, while a fresh launch never exposes
 /// the generic formation's temporary positions to gameplay systems.
+///
+/// Other non-combat maps reuse the same encounter roster, so the active scenario is
+/// part of this adapter's authority gate. Only Crystal Ascent owns landmark-specific
+/// apron staging and its fail-closed anchor checks.
 fn stage_crystal_ascent_showcase_party(
     mut commands: Commands,
+    active: Option<Res<ActiveScenario>>,
     encounter: Option<Res<Encounter>>,
     anchors: Option<Res<MapAnchors>>,
     interiors: Option<Res<InteriorRegions>>,
@@ -103,8 +109,12 @@ fn stage_crystal_ascent_showcase_party(
     players: Query<(Entity, &UnitId, &Body), With<Player>>,
     tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
 ) {
+    let Some(active) = active else { return };
     let Some(encounter) = encounter else { return };
-    if encounter.name != CRYSTAL_ASCENT_SHOWCASE || failure.is_some() {
+    if active.0.scenario.name != CRYSTAL_ASCENT_SCENARIO
+        || encounter.name != CRYSTAL_ASCENT_SHOWCASE
+        || failure.is_some()
+    {
         return;
     }
 
@@ -1312,8 +1322,8 @@ pub(crate) mod tests {
     /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
     /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
     /// coordinate that is not a hex, no two units sharing one exact surface. The two
-    /// Crystal traversal showcases are approved non-combat maps; every other scenario
-    /// must still provide somebody to fight.
+    /// Crystal traversal showcases and the three island review maps are approved
+    /// non-combat maps; every other scenario must still provide somebody to fight.
     #[test]
     fn every_scenario_names_an_encounter_that_exists_and_parses() {
         for scenario in &library().scenarios {
@@ -1326,11 +1336,15 @@ pub(crate) mod tests {
             let hostile_count = encounter.unit_count(EncounterFaction::Hostile);
             if matches!(
                 scenario.name.as_str(),
-                "Crystal Ascent" | "Crystal Mountain"
+                "Crystal Ascent"
+                    | "Crystal Mountain"
+                    | "Sandy Islets"
+                    | "Wooded Island"
+                    | "Ocean Archipelagoes"
             ) {
                 assert_eq!(
                     hostile_count, 0,
-                    "the Crystal traversal showcases should remain non-combat"
+                    "the non-combat map showcases should remain non-combat"
                 );
             } else {
                 assert!(
@@ -3586,6 +3600,11 @@ pub(crate) mod tests {
         app.insert_resource(art_catalog);
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
+        app.insert_resource(ActiveScenario(ScenarioToLoad {
+            scenario: entry.clone(),
+            resolved_seed: seed,
+            encounter_override: None,
+        }));
         app.insert_resource(world);
         let formations: FormationCatalog =
             ron::from_str(include_str!("../../../assets/config/formations.ron"))
@@ -4338,6 +4357,288 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn island_showcases_freeze_their_shipped_profiles_and_standard_party() {
+        for (name, world_path, radius) in [
+            (
+                "Sandy Islets",
+                "config/worlds/procedural-sandy-islets.ron",
+                24,
+            ),
+            (
+                "Wooded Island",
+                "config/worlds/procedural-wooded-island.ron",
+                40,
+            ),
+            (
+                "Ocean Archipelagoes",
+                "config/worlds/procedural-ocean-archipelagoes.ron",
+                77,
+            ),
+        ] {
+            let scenario = library()
+                .scenarios
+                .into_iter()
+                .find(|scenario| scenario.name == name)
+                .unwrap_or_else(|| panic!("the shipped library should contain {name}"));
+            assert_eq!(scenario.world, world_path);
+            assert_eq!(scenario.generation_seed, Some(1_592_598_566));
+            assert_eq!(scenario.encounter, "config/encounters/island-showcase.ron");
+
+            let world_text = fs::read_to_string(assets_dir().join(world_path))
+                .unwrap_or_else(|error| panic!("cannot read {name} world: {error}"));
+            let world: MapSettings = ron::from_str(&world_text)
+                .unwrap_or_else(|error| panic!("cannot parse {name} world: {error}"));
+            assert_eq!(world.grid_radius, radius);
+            let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) = &world.terrain
+            else {
+                panic!("{name} should remain a V3 procedural world");
+            };
+            match (name, &v3.layout) {
+                ("Sandy Islets", hex_map::V3LayoutSettings::Single(patch)) => {
+                    assert_eq!(patch.environment, hex_map::V3EnvironmentSettings::Coastal);
+                    assert!(patch.overlays.is_empty());
+                    assert!(matches!(
+                        &patch.mask,
+                        hex_map::PatchMaskSettings::WholeWorld
+                    ));
+                    let hex_map::V3RecipeSettings::SandyIslets(settings) = &patch.recipe else {
+                        panic!("Sandy Islets changed recipe");
+                    };
+                    assert_eq!(settings.sea_level, 8);
+                    assert_eq!(settings.land_coverage_percent, 32);
+                    assert_eq!(settings.islet_count, 5);
+                    assert_eq!(settings.max_relief, 3);
+                }
+                ("Wooded Island", hex_map::V3LayoutSettings::Single(patch)) => {
+                    assert_eq!(patch.environment, hex_map::V3EnvironmentSettings::Coastal);
+                    assert!(patch.overlays.is_empty());
+                    assert!(matches!(
+                        &patch.mask,
+                        hex_map::PatchMaskSettings::WholeWorld
+                    ));
+                    let hex_map::V3RecipeSettings::WoodedIsland(settings) = &patch.recipe else {
+                        panic!("Wooded Island changed recipe");
+                    };
+                    assert_eq!(settings.sea_level, 8);
+                    assert_eq!(settings.land_coverage_percent, 65);
+                    assert_eq!(settings.max_relief, 6);
+                    assert_eq!(settings.tree_coverage_percent, 25);
+                }
+                ("Ocean Archipelagoes", hex_map::V3LayoutSettings::Macro(layout)) => {
+                    assert_eq!(layout.macro_radius, 3);
+                    assert_eq!(layout.instances.len(), 6);
+                    assert_eq!(layout.liquid_connections.len(), 10);
+                    assert_eq!(layout.walker_connections.len(), 1);
+                }
+                _ => panic!("{name} changed its shipped layout kind"),
+            }
+
+            let encounter = encounter_of(&scenario);
+            assert_eq!(encounter.name, "Island Showcase");
+            assert_eq!(encounter.unit_count(EncounterFaction::Player), 3);
+            assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+            let [roster] = encounter.rosters.as_slice() else {
+                panic!("Island Showcase must retain exactly one roster");
+            };
+            assert_eq!(roster.faction, EncounterFaction::Player);
+            assert_eq!(
+                roster.placement,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Anchor("party_start".to_owned()),
+                    spread: 1,
+                }
+            );
+            assert_eq!(
+                roster
+                    .units
+                    .iter()
+                    .map(|unit| unit.archetype.as_str())
+                    .collect::<Vec<_>>(),
+                ["hedge-mage", "raider", "wolf"]
+            );
+            assert!(roster.units.iter().all(|unit| unit.placement.is_none()));
+        }
+    }
+
+    fn assert_island_scenario_reenters_with_same_world(
+        scenario_name: &str,
+        required_anchors: &[&str],
+    ) {
+        let mut app = procedural_gameplay_app(scenario_name);
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let first_fingerprint = app.world().resource::<GenerationReport>().map_fingerprint;
+        let first_terrain_occupancy = app.world().resource::<TerrainOccupancy>().clone();
+        let first_blockers = app
+            .world()
+            .resource::<TraversalBlockers>()
+            .iter()
+            .collect::<Vec<_>>();
+        let first_objects = island_object_snapshot(&mut app);
+        let first_anchors = {
+            let anchors = app.world().resource::<MapAnchors>();
+            required_anchors
+                .iter()
+                .map(|name| {
+                    (
+                        *name,
+                        anchors
+                            .get(&MapAnchorId::from(*name))
+                            .unwrap_or_else(|| panic!("{scenario_name} omitted {name}")),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let first_party = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("party_start"))
+            .expect("an island world should publish party_start");
+        assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
+        assert_eq!(
+            player_count(&mut app),
+            3,
+            "{scenario_name} changed its party"
+        );
+        assert!(
+            standing_pos::<Enemy>(&mut app).is_none(),
+            "{scenario_name} should remain a non-combat review world"
+        );
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert!(!app.world().contains_resource::<MapAnchors>());
+        assert!(!app.world().contains_resource::<GenerationReport>());
+        assert!(!app.world().contains_resource::<TerrainReady>());
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+        assert!(!app.world().contains_resource::<TraversalBlockers>());
+        assert!(standing_pos::<Player>(&mut app).is_none());
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
+        assert_eq!(player_count(&mut app), 0);
+        assert!(island_object_snapshot(&mut app).is_empty());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "{scenario_name} teardown left a rendered grid alive"
+        );
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        assert_eq!(
+            app.world().resource::<GenerationReport>().map_fingerprint,
+            first_fingerprint,
+            "{scenario_name} changed fingerprint after re-entry"
+        );
+        let second_anchors = app.world().resource::<MapAnchors>();
+        for (name, expected) in first_anchors {
+            assert_eq!(
+                second_anchors.get(&MapAnchorId::from(name)),
+                Some(expected),
+                "{scenario_name} changed anchor {name} after re-entry"
+            );
+        }
+        assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
+        assert_eq!(
+            player_count(&mut app),
+            3,
+            "{scenario_name} changed its party"
+        );
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
+        assert_eq!(
+            app.world().resource::<TerrainOccupancy>(),
+            &first_terrain_occupancy,
+            "{scenario_name} rebuilt different terrain occupancy"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<TraversalBlockers>()
+                .iter()
+                .collect::<Vec<_>>(),
+            first_blockers,
+            "{scenario_name} rebuilt different generated blockers"
+        );
+        assert_eq!(
+            island_object_snapshot(&mut app),
+            first_objects,
+            "{scenario_name} rebuilt different generated objects"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(app.world())
+                .count(),
+            1,
+            "{scenario_name} re-entry duplicated the rendered grid"
+        );
+    }
+
+    fn player_count(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut players = world.query_filtered::<Entity, With<Player>>();
+        players.iter(world).count()
+    }
+
+    fn island_object_snapshot(app: &mut App) -> Vec<(String, TilePos, u8)> {
+        let world = app.world_mut();
+        let mut objects = world.query::<&ObjectInstance>();
+        let mut snapshot = objects
+            .iter(world)
+            .map(|instance| {
+                (
+                    instance.object_id().as_str().to_owned(),
+                    instance.origin(),
+                    instance.rotation().steps(),
+                )
+            })
+            .collect::<Vec<_>>();
+        snapshot.sort_unstable();
+        snapshot
+    }
+
+    #[test]
+    fn island_worlds_reenter_with_same_fingerprint_anchors_and_actors() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "Sandy Islets",
+                &[
+                    "party_start",
+                    "hostile_start",
+                    "sandy_islets_primary_overlook",
+                    "sandy_islets_channel_overlook",
+                ],
+            ),
+            (
+                "Wooded Island",
+                &[
+                    "party_start",
+                    "hostile_start",
+                    "wooded_island_beach",
+                    "wooded_island_clearing",
+                    "wooded_island_ridge",
+                ],
+            ),
+            (
+                "Ocean Archipelagoes",
+                &[
+                    "party_start",
+                    "hostile_start",
+                    "macro_route_end",
+                    "archipelago.home_beach",
+                    "archipelago.channel_overlook",
+                    "archipelago.home_ridge",
+                ],
+            ),
+        ];
+        for (scenario_name, required_anchors) in cases {
+            assert_island_scenario_reenters_with_same_world(scenario_name, required_anchors);
+        }
+    }
+
+    #[test]
     fn missing_generated_enemy_anchor_fails_setup_and_cleans_partial_world() {
         let mut app = procedural_gameplay_app("Procedural Hills");
         // Point the hostile roster at an anchor the generator does not publish. The
@@ -4389,6 +4690,9 @@ pub(crate) mod tests {
             "Desert Plain",
             "Dunes",
             "Desert Oasis Rings",
+            "Sandy Islets",
+            "Wooded Island",
+            "Ocean Archipelagoes",
         ] {
             let scenario = library()
                 .scenarios
@@ -4458,6 +4762,38 @@ pub(crate) mod tests {
                     assert!(metrics.trough_surfaces > 0);
                     assert!(metrics.critical_route_steps > 0);
                 }
+                ("Sandy Islets", Some(ProceduralRecipeMetrics::SandyIslets(metrics))) => {
+                    assert_eq!(metrics.world_columns, 1_801);
+                    assert_eq!(metrics.land_components, 5);
+                    assert!(metrics.land_surfaces > 0);
+                    assert!(metrics.water_cells > 0);
+                    assert!(metrics.primary_reachable_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Wooded Island", Some(ProceduralRecipeMetrics::WoodedIsland(metrics))) => {
+                    assert_eq!(metrics.world_columns, 4_921);
+                    assert!(metrics.land_surfaces > 0);
+                    assert!(metrics.water_cells > 0);
+                    assert!(metrics.grass_interior_surfaces > 0);
+                    assert!(metrics.tree_roots > 0);
+                    assert!(metrics.reachable_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                (
+                    "Ocean Archipelagoes",
+                    Some(ProceduralRecipeMetrics::OceanArchipelago(metrics)),
+                ) => {
+                    assert_eq!(metrics.world_columns, 18_019);
+                    assert_eq!(metrics.macro_cells, 37);
+                    assert_eq!(metrics.biome_regions, 6);
+                    assert_eq!(metrics.standing_water_seams, 10);
+                    assert_eq!(metrics.dry_components, 7);
+                    assert_eq!(metrics.scenic_dry_components, 6);
+                    assert!(metrics.liquid_cells > 0);
+                    assert!(metrics.reachable_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                    assert!(metrics.tree_roots > 0);
+                }
                 ("Two Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
                     assert_eq!(metrics.world_columns, 9_241);
                     assert_eq!(metrics.biome_regions, 19);
@@ -4486,8 +4822,17 @@ pub(crate) mod tests {
                     assert!(metrics.high_massif_surfaces >= 100);
                 }
                 (
-                    "Deep Forest" | "Prairie" | "Desert Transition" | "Desert Plain" | "Dunes"
-                    | "Two Rings" | "Desert Oasis Rings" | "Mountain Range",
+                    "Deep Forest"
+                    | "Prairie"
+                    | "Desert Transition"
+                    | "Desert Plain"
+                    | "Dunes"
+                    | "Sandy Islets"
+                    | "Wooded Island"
+                    | "Ocean Archipelagoes"
+                    | "Two Rings"
+                    | "Desert Oasis Rings"
+                    | "Mountain Range",
                     metrics,
                 ) => {
                     panic!("{scenario_name} published unexpected metrics: {metrics:?}");
@@ -4521,6 +4866,21 @@ pub(crate) mod tests {
                     "inner_dune_crest",
                     "outer_dune_crest",
                     "desert_plain_overlook",
+                ],
+                "Sandy Islets" => &[
+                    "sandy_islets_primary_overlook",
+                    "sandy_islets_channel_overlook",
+                ],
+                "Wooded Island" => &[
+                    "wooded_island_beach",
+                    "wooded_island_clearing",
+                    "wooded_island_ridge",
+                ],
+                "Ocean Archipelagoes" => &[
+                    "macro_route_end",
+                    "archipelago.home_beach",
+                    "archipelago.channel_overlook",
+                    "archipelago.home_ridge",
                 ],
                 "Two Rings" => &[
                     "center_conflict_center",
@@ -4562,6 +4922,10 @@ pub(crate) mod tests {
                     !special_regions.is_empty(),
                     "Mountain Range dropped its closed non-route macro seams"
                 ),
+                // Remote dry components are deliberately scenic. Whether Macro represents
+                // their closed seams as ordinary disconnection or special movement metadata
+                // is validated by the composition contract, not this lifecycle smoke test.
+                "Ocean Archipelagoes" => {}
                 "Mountains" => {}
                 "Waterfall" => {
                     assert_eq!(
@@ -4598,7 +4962,17 @@ pub(crate) mod tests {
                 );
             }
             assert!(standing_pos::<Player>(&mut app).is_some());
-            assert!(standing_pos::<Enemy>(&mut app).is_some());
+            if matches!(
+                scenario_name,
+                "Sandy Islets" | "Wooded Island" | "Ocean Archipelagoes"
+            ) {
+                assert!(
+                    standing_pos::<Enemy>(&mut app).is_none(),
+                    "{scenario_name} should remain a non-combat review world"
+                );
+            } else {
+                assert!(standing_pos::<Enemy>(&mut app).is_some());
+            }
             assert_eq!(
                 app.world_mut()
                     .query_filtered::<Entity, With<HexGrid>>()
@@ -4623,6 +4997,11 @@ pub(crate) mod tests {
             ),
             (
                 "Crystal Mountain",
+                18_019,
+                std::time::Duration::from_millis(2),
+            ),
+            (
+                "Ocean Archipelagoes",
                 18_019,
                 std::time::Duration::from_millis(2),
             ),

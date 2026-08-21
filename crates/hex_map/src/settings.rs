@@ -953,6 +953,10 @@ pub enum V3RecipeSettings {
     Dunes(V3DunesSettings),
     /// A local still-water pool, green shore, and blocking date palms.
     Oasis(V3OasisSettings),
+    /// Separated sandy land components in one shallow ocean footprint.
+    SandyIslets(V3SandyIsletsSettings),
+    /// One broad island with a sandy fringe and wooded grass interior.
+    WoodedIsland(V3WoodedIslandSettings),
 }
 
 /// V3 Hills parameters, intentionally independent from the frozen V2 payload.
@@ -1123,6 +1127,37 @@ pub struct V3ShoreSettings {
     pub tree_coverage_percent: u8,
     /// Highest authored cliff rise above sea level.
     pub cliff_height: Level,
+}
+
+/// V3 separated sandy-islet parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3SandyIsletsSettings {
+    /// Exact still-water surface level surrounding every islet.
+    pub sea_level: Level,
+    /// Target percentage of horizontal columns occupied by dry land.
+    pub land_coverage_percent: u8,
+    /// Exact requested count of separated dry land components.
+    pub islet_count: u8,
+    /// Highest authored dry-surface rise above sea level.
+    pub max_relief: Level,
+}
+
+/// V3 broad wooded-island parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3WoodedIslandSettings {
+    /// Exact still-water surface level surrounding the island.
+    pub sea_level: Level,
+    /// Target percentage of horizontal columns occupied by dry land.
+    pub land_coverage_percent: u8,
+    /// Highest authored dry-surface rise above sea level.
+    pub max_relief: Level,
+    /// Target broadleaf-canopy coverage over eligible inland columns.
+    ///
+    /// Exact non-overlapping object roots are placed at half this percentage
+    /// because each accepted broadleaf silhouette spans multiple columns.
+    pub tree_coverage_percent: u8,
 }
 
 /// V3 Deep Mountain parameters.
@@ -1650,6 +1685,28 @@ impl ProceduralV3Settings {
                         patch.recipe
                     ));
                 }
+                match &patch.recipe {
+                    V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                        if !patch.overlays.is_empty()
+                            || !matches!(patch.mask, PatchMaskSettings::WholeWorld) =>
+                    {
+                        return Err(
+                            "V3 Single island recipes require a WholeWorld mask without overlays"
+                                .to_owned(),
+                        );
+                    }
+                    V3RecipeSettings::SandyIslets(_) if grid_radius != 24 => {
+                        return Err(
+                            "V3 Single SandyIslets requires grid_radius exactly 24".to_owned()
+                        );
+                    }
+                    V3RecipeSettings::WoodedIsland(_) if grid_radius != 40 => {
+                        return Err(
+                            "V3 Single WoodedIsland requires grid_radius exactly 40".to_owned()
+                        );
+                    }
+                    _ => {}
+                }
                 match &patch.mask {
                     PatchMaskSettings::WholeWorld | PatchMaskSettings::Explicit(_) => {}
                     PatchMaskSettings::GeneratedRegion => {
@@ -1756,6 +1813,7 @@ impl MacroLayoutSettings {
                 )
                 .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
             }
+            validate_macro_island_elevation(instance)?;
             if !matches!(
                 &instance.recipe,
                 V3RecipeSettings::Hills(_)
@@ -1766,6 +1824,8 @@ impl MacroLayoutSettings {
                     | V3RecipeSettings::ShallowSea(_)
                     | V3RecipeSettings::Beach(_)
                     | V3RecipeSettings::Shore(_)
+                    | V3RecipeSettings::SandyIslets(_)
+                    | V3RecipeSettings::WoodedIsland(_)
                     | V3RecipeSettings::DeepMountain(_)
                     | V3RecipeSettings::CrystalAscent(_)
             ) {
@@ -1830,6 +1890,20 @@ impl MacroLayoutSettings {
             return Err(format!(
                 "V3 Macro instances must cover all {V3_MACRO_CELL_COUNT} radius-three cells exactly; missing {missing:?}"
             ));
+        }
+
+        if !self.spanning_features.is_empty()
+            && self.instances.iter().any(|instance| {
+                matches!(
+                    instance.recipe,
+                    V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                )
+            })
+        {
+            return Err(
+                "V3 Macro spanning features do not yet support SandyIslets or WoodedIsland instances"
+                    .to_owned(),
+            );
         }
 
         let adjacency = macro_instance_adjacency(self.instances.len(), &owners)?;
@@ -2137,6 +2211,19 @@ impl MacroLayoutSettings {
                     "V3 Macro liquid connection {first_name:?} -> {second_name:?} must use one external instance seam"
                 ));
             }
+            let touches_island = [first, second].into_iter().any(|index| {
+                self.instances.get(index).is_some_and(|instance| {
+                    matches!(
+                        instance.recipe,
+                        V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                    )
+                })
+            });
+            if touches_island && (directed || width != 0 || level != 8) {
+                return Err(format!(
+                    "V3 Macro island seam {first_name:?} <-> {second_name:?} requires one full-width Standing connection at level 8"
+                ));
+            }
             if directed || width != 0 {
                 validate_macro_liquid_width(width)?;
             }
@@ -2153,6 +2240,31 @@ impl MacroLayoutSettings {
             }
             if directed {
                 directed_edges.push((first, second));
+            }
+        }
+        for (first, neighbors) in adjacency.iter().enumerate() {
+            for &second in neighbors.iter().filter(|&&second| first < second) {
+                let touches_island = [first, second].into_iter().any(|index| {
+                    self.instances.get(index).is_some_and(|instance| {
+                        matches!(
+                            instance.recipe,
+                            V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                        )
+                    })
+                });
+                if touches_island && !occupied_seams.contains(&(first, second)) {
+                    let first_name = self
+                        .instances
+                        .get(first)
+                        .map_or("<invalid>", |instance| instance.name.as_str());
+                    let second_name = self
+                        .instances
+                        .get(second)
+                        .map_or("<invalid>", |instance| instance.name.as_str());
+                    return Err(format!(
+                        "V3 Macro island seam {first_name:?} <-> {second_name:?} requires one full-width Standing connection at level 8"
+                    ));
+                }
             }
         }
         if !directed_graph_is_acyclic(self.instances.len(), directed_edges) {
@@ -2323,6 +2435,30 @@ impl MacroLayoutSettings {
     }
 }
 
+fn validate_macro_island_elevation(instance: &MacroBiomeInstanceSettings) -> Result<(), String> {
+    let expected = match &instance.recipe {
+        V3RecipeSettings::SandyIslets(settings) => Some((
+            settings.sea_level,
+            settings.sea_level.saturating_add(settings.max_relief),
+        )),
+        V3RecipeSettings::WoodedIsland(settings) => Some((
+            settings.sea_level.saturating_add(1),
+            settings.sea_level.saturating_add(settings.max_relief),
+        )),
+        _ => None,
+    };
+    let Some((expected_low, expected_high)) = expected else {
+        return Ok(());
+    };
+    if instance.elevation.low != expected_low || instance.elevation.high != expected_high {
+        return Err(format!(
+            "V3 Macro island instance {:?} elevation must match its intrinsic coastal range {expected_low}..={expected_high}",
+            instance.name
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MacroBiomeKind {
     Hills,
@@ -2344,6 +2480,8 @@ enum MacroBiomeKind {
     DesertPlain,
     Dunes,
     Oasis,
+    SandyIslets,
+    WoodedIsland,
 }
 
 impl MacroBiomeKind {
@@ -2368,6 +2506,8 @@ impl MacroBiomeKind {
             V3RecipeSettings::DesertPlain(_) => Self::DesertPlain,
             V3RecipeSettings::Dunes(_) => Self::Dunes,
             V3RecipeSettings::Oasis(_) => Self::Oasis,
+            V3RecipeSettings::SandyIslets(_) => Self::SandyIslets,
+            V3RecipeSettings::WoodedIsland(_) => Self::WoodedIsland,
         }
     }
 }
@@ -2391,7 +2531,19 @@ struct MacroAdjacencyRegistry {
     neighbor_rules: &'static [MacroNeighborRule],
 }
 
-const COASTAL_NEIGHBORS: &[MacroBiomeKind] = &[MacroBiomeKind::Beach, MacroBiomeKind::Shore];
+const COASTAL_NEIGHBORS: &[MacroBiomeKind] = &[
+    MacroBiomeKind::Beach,
+    MacroBiomeKind::Shore,
+    MacroBiomeKind::SandyIslets,
+    MacroBiomeKind::WoodedIsland,
+];
+const SANDY_ISLET_NEIGHBORS: &[MacroBiomeKind] = &[
+    MacroBiomeKind::ShallowSea,
+    MacroBiomeKind::SandyIslets,
+    MacroBiomeKind::WoodedIsland,
+];
+const WOODED_ISLAND_NEIGHBORS: &[MacroBiomeKind] =
+    &[MacroBiomeKind::ShallowSea, MacroBiomeKind::SandyIslets];
 const MOUNTAIN_NEIGHBORS: &[MacroBiomeKind] = &[MacroBiomeKind::Mountains];
 const INLAND_GREEN_NEIGHBORS: &[MacroBiomeKind] =
     &[MacroBiomeKind::Forest, MacroBiomeKind::Prairie];
@@ -2417,6 +2569,20 @@ const MACRO_NEIGHBOR_RULES: &[MacroNeighborRule] = &[
         requires_any: INLAND_GREEN_NEIGHBORS,
         requires_all: SHALLOW_SEA_NEIGHBOR,
         minimum_neighbors: 2,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::SandyIslets,
+        allowed_only: SANDY_ISLET_NEIGHBORS,
+        requires_any: &[],
+        requires_all: SHALLOW_SEA_NEIGHBOR,
+        minimum_neighbors: 1,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::WoodedIsland,
+        allowed_only: WOODED_ISLAND_NEIGHBORS,
+        requires_any: &[],
+        requires_all: SHALLOW_SEA_NEIGHBOR,
+        minimum_neighbors: 1,
     },
     MacroNeighborRule {
         subject: MacroBiomeKind::DeepMountain,
@@ -3389,6 +3555,8 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::DesertPlain(_) => "DesertPlain",
         V3RecipeSettings::Dunes(_) => "Dunes",
         V3RecipeSettings::Oasis(_) => "Oasis",
+        V3RecipeSettings::SandyIslets(_) => "SandyIslets",
+        V3RecipeSettings::WoodedIsland(_) => "WoodedIsland",
     }
 }
 
@@ -3512,6 +3680,18 @@ fn validate_v3_recipe(
         }
         (V3RecipeSettings::Shore(_), _) => {
             Err("V3 Shore requires the Coastal environment".to_owned())
+        }
+        (V3RecipeSettings::SandyIslets(settings), V3EnvironmentSettings::Coastal) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::SandyIslets(_), _) => {
+            Err("V3 SandyIslets requires the Coastal environment".to_owned())
+        }
+        (V3RecipeSettings::WoodedIsland(settings), V3EnvironmentSettings::Coastal) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::WoodedIsland(_), _) => {
+            Err("V3 WoodedIsland requires the Coastal environment".to_owned())
         }
         (V3RecipeSettings::DeepMountain(settings), V3EnvironmentSettings::Alpine) => {
             if settings.treeline < 5
@@ -4251,6 +4431,69 @@ impl V3OasisSettings {
     }
 }
 
+impl V3SandyIsletsSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_coastal_island(grid_radius, self.sea_level, self.max_relief, "SandyIslets")?;
+        if !(18..=40).contains(&self.land_coverage_percent) {
+            return Err(
+                "V3 SandyIslets land_coverage_percent must be between 18 and 40".to_owned(),
+            );
+        }
+        if !(1..=9).contains(&self.islet_count) {
+            return Err("V3 SandyIslets islet_count must be between 1 and 9".to_owned());
+        }
+        if !(1..=4).contains(&self.max_relief) {
+            return Err("V3 SandyIslets max_relief must be between 1 and 4".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl V3WoodedIslandSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_coastal_island(grid_radius, self.sea_level, self.max_relief, "WoodedIsland")?;
+        if !(50..=80).contains(&self.land_coverage_percent) {
+            return Err(
+                "V3 WoodedIsland land_coverage_percent must be between 50 and 80".to_owned(),
+            );
+        }
+        if !(3..=8).contains(&self.max_relief) {
+            return Err("V3 WoodedIsland max_relief must be between 3 and 8".to_owned());
+        }
+        if !(18..=35).contains(&self.tree_coverage_percent) {
+            return Err(
+                "V3 WoodedIsland tree_coverage_percent must be between 18 and 35".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_coastal_island(
+    grid_radius: u32,
+    sea_level: Level,
+    max_relief: Level,
+    recipe: &str,
+) -> Result<(), String> {
+    if !(12..=40).contains(&grid_radius) {
+        return Err(format!(
+            "procedural V3 {recipe} requires grid_radius from 12 through 40"
+        ));
+    }
+    if sea_level != 8 {
+        return Err(format!("V3 {recipe} sea_level must be exactly 8"));
+    }
+    let Some(highest_surface) = sea_level.checked_add(max_relief) else {
+        return Err(format!("V3 {recipe} level relationship overflows Level"));
+    };
+    if highest_surface > MAX_V3_LEVEL {
+        return Err(format!(
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_arid_landform(
     grid_radius: u32,
     base_level: Level,
@@ -4889,6 +5132,8 @@ mod tests {
         include_str!("../../../assets/config/worlds/procedural-two-rings.ron");
     const V3_MACRO_RON: &str =
         include_str!("../../../assets/config/worlds/procedural-mountain-range.ron");
+    const V3_OCEAN_ARCHIPELAGO_RON: &str =
+        include_str!("../../../assets/config/worlds/procedural-ocean-archipelagoes.ron");
     const V1_HILLS_RON: &str = r#"
 (
     grid_radius: 12,
@@ -5582,6 +5827,136 @@ mod tests {
     }
 
     #[test]
+    fn macro_island_neighbors_admit_sea_sandy_clusters_and_the_wooded_heart() {
+        let settings = shipped_macro_settings();
+        let mut instances = named_macro_instances(
+            macro_layout(&settings),
+            &["shallow-sea", "beach-lower", "shore-center", "beach-upper"],
+        );
+        let [sea, sandy_cluster, sandy_landing, wooded_heart] = instances.as_mut_slice() else {
+            panic!("the island adjacency fixture needs exactly four instances");
+        };
+        sea.environment = V3EnvironmentSettings::Coastal;
+        sea.recipe = V3RecipeSettings::ShallowSea(V3ShallowSeaSettings { sea_level: 8 });
+        for sandy in [sandy_cluster, sandy_landing] {
+            sandy.environment = V3EnvironmentSettings::Coastal;
+            sandy.recipe = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 2,
+                max_relief: 3,
+            });
+        }
+        wooded_heart.environment = V3EnvironmentSettings::Coastal;
+        wooded_heart.recipe = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+
+        validate_macro_adjacency(
+            &instances,
+            &adjacency_for_pairs(instances.len(), &[(0, 1), (0, 2), (0, 3), (1, 2), (2, 3)]),
+        )
+        .expect("the locked archipelago sea, sandy, and wooded adjacencies should validate");
+    }
+
+    #[test]
+    fn macro_islands_reject_spanning_features_until_reservations_are_supported() {
+        let mut settings: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+            .expect("the shipped Ocean Archipelagoes settings should parse");
+        let feature = macro_layout(&macro_with_contract_extensions())
+            .spanning_features
+            .first()
+            .cloned()
+            .expect("the spanning fixture should publish one tunnel");
+        macro_layout_mut(&mut settings).spanning_features = vec![feature];
+
+        let error = settings
+            .validate()
+            .expect_err("island Macro recipes must fail closed around spanning reservations");
+        assert!(
+            error.contains("spanning features do not yet support SandyIslets or WoodedIsland"),
+            "unexpected island-spanning diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn macro_island_elevation_must_match_recipe_authored_levels() {
+        for instance_name in ["home-landing", "wooded-heart"] {
+            let mut settings: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+                .expect("the shipped Ocean Archipelagoes settings should parse");
+            let instance = macro_layout_mut(&mut settings)
+                .instances
+                .iter_mut()
+                .find(|instance| instance.name == instance_name)
+                .unwrap_or_else(|| panic!("missing island instance {instance_name}"));
+            instance.elevation.low = instance.elevation.low.saturating_add(1);
+
+            let error = settings
+                .validate()
+                .expect_err("Macro island elevation drift must fail before generation");
+            assert!(
+                error.contains("elevation must match its intrinsic coastal range"),
+                "unexpected island elevation diagnostic: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn macro_island_seams_require_exact_level_eight_standing_water() {
+        let mut missing: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+            .expect("the shipped Ocean Archipelagoes settings should parse");
+        let connections = &mut macro_layout_mut(&mut missing).liquid_connections;
+        let index = connections
+            .iter()
+            .position(|connection| match connection {
+                MacroLiquidConnectionSettings::Standing {
+                    first_instance,
+                    second_instance,
+                    ..
+                } => first_instance == "open-sea" && second_instance == "east-islets",
+                MacroLiquidConnectionSettings::Directed { .. } => false,
+            })
+            .expect("the shipped ocean should connect east-islets");
+        connections.remove(index);
+        let error = missing
+            .validate()
+            .expect_err("an undeclared island water seam must fail settings validation");
+        assert!(
+            error.contains("requires one full-width Standing connection at level 8"),
+            "unexpected missing island seam diagnostic: {error}"
+        );
+
+        let mut wrong_level: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+            .expect("the shipped Ocean Archipelagoes settings should parse");
+        let connection = macro_layout_mut(&mut wrong_level)
+            .liquid_connections
+            .iter_mut()
+            .find(|connection| match connection {
+                MacroLiquidConnectionSettings::Standing {
+                    first_instance,
+                    second_instance,
+                    ..
+                } => first_instance == "home-landing" && second_instance == "wooded-heart",
+                MacroLiquidConnectionSettings::Directed { .. } => false,
+            })
+            .expect("the shipped ocean should connect the playable island seam");
+        let MacroLiquidConnectionSettings::Standing { level, .. } = connection else {
+            panic!("the island seam should remain Standing");
+        };
+        *level = 9;
+        let error = wrong_level
+            .validate()
+            .expect_err("an island Standing seam at the wrong level must fail");
+        assert!(
+            error.contains("requires one full-width Standing connection at level 8"),
+            "unexpected wrong-level island seam diagnostic: {error}"
+        );
+    }
+
+    #[test]
     fn macro_forbidden_adjacencies_are_symmetric_and_diagnostic() {
         let settings = shipped_macro_settings();
         let layout = macro_layout(&settings);
@@ -6214,6 +6589,268 @@ mod tests {
             ron::from_str::<V3RecipeSettings>(source)
                 .expect_err("arid recipe payloads must reject unknown fields");
         }
+    }
+
+    #[test]
+    fn coastal_island_settings_are_strict_bounded_and_coastal_only() {
+        let sandy = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+            sea_level: 8,
+            land_coverage_percent: 28,
+            islet_count: 5,
+            max_relief: 3,
+        });
+        let wooded = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+
+        for (recipe, radius) in [(&sandy, 24), (&wooded, 40), (&sandy, 12), (&wooded, 12)] {
+            validate_v3_recipe(recipe, V3EnvironmentSettings::Coastal, radius)
+                .unwrap_or_else(|error| panic!("canonical {recipe:?} should validate: {error}"));
+            assert!(
+                validate_v3_recipe(recipe, V3EnvironmentSettings::TemperateGrassland, radius)
+                    .is_err(),
+                "{recipe:?} must remain Coastal-only"
+            );
+        }
+
+        for recipe in [
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 18,
+                islet_count: 1,
+                max_relief: 1,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 40,
+                islet_count: 9,
+                max_relief: 4,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 50,
+                max_relief: 3,
+                tree_coverage_percent: 18,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 80,
+                max_relief: 8,
+                tree_coverage_percent: 35,
+            }),
+        ] {
+            validate_v3_recipe(&recipe, V3EnvironmentSettings::Coastal, 24)
+                .unwrap_or_else(|error| panic!("inclusive bound {recipe:?} should pass: {error}"));
+        }
+
+        for recipe in [
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 7,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 17,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 41,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 0,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 10,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 0,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 5,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 7,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 49,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 81,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 2,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 17,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 9,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 36,
+            }),
+        ] {
+            assert!(
+                validate_v3_recipe(&recipe, V3EnvironmentSettings::Coastal, 24).is_err(),
+                "out-of-range {recipe:?} must fail closed"
+            );
+        }
+
+        for source in [
+            "SandyIslets((sea_level: 8, land_coverage_percent: 28, islet_count: 5, max_relief: 3, typoed_field: 1))",
+            "WoodedIsland((sea_level: 8, land_coverage_percent: 68, max_relief: 6, tree_coverage_percent: 26, typoed_field: 1))",
+        ] {
+            ron::from_str::<V3RecipeSettings>(source)
+                .expect_err("coastal island recipe payloads must reject unknown fields");
+        }
+
+        for radius in [11, 41] {
+            assert!(
+                validate_v3_recipe(&sandy, V3EnvironmentSettings::Coastal, radius).is_err(),
+                "SandyIslets radius {radius} must fail outside Single/Macro recipe bounds"
+            );
+            assert!(
+                validate_v3_recipe(&wooded, V3EnvironmentSettings::Coastal, radius).is_err(),
+                "WoodedIsland radius {radius} must fail outside Single/Macro recipe bounds"
+            );
+        }
+    }
+
+    #[test]
+    fn coastal_island_recipes_are_single_and_macro_only() {
+        fn single(recipe: V3RecipeSettings, grid_radius: u32) -> MapSettings {
+            MapSettings {
+                grid_radius,
+                level_height: 0.4,
+                terrain: TerrainSettings::Procedural(ProceduralSettings::V3(
+                    ProceduralV3Settings {
+                        layout: V3LayoutSettings::Single(PatchSpec {
+                            environment: V3EnvironmentSettings::Coastal,
+                            recipe,
+                            overlays: Vec::new(),
+                            mask: PatchMaskSettings::WholeWorld,
+                            edges: world_boundary_edges(),
+                        }),
+                    },
+                )),
+            }
+        }
+
+        let sandy = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+            sea_level: 8,
+            land_coverage_percent: 28,
+            islet_count: 5,
+            max_relief: 3,
+        });
+        let wooded = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+        single(sandy.clone(), 24)
+            .validate()
+            .expect("SandyIslets should be a supported Single recipe");
+        single(wooded.clone(), 40)
+            .validate()
+            .expect("WoodedIsland should be a supported Single recipe");
+        assert!(single(sandy.clone(), 23).validate().is_err());
+        assert!(single(sandy.clone(), 40).validate().is_err());
+        assert!(single(wooded.clone(), 24).validate().is_err());
+        assert!(single(wooded.clone(), 39).validate().is_err());
+
+        let mut explicit = single(sandy.clone(), 24);
+        let TerrainSettings::Procedural(ProceduralSettings::V3(explicit_v3)) =
+            &mut explicit.terrain
+        else {
+            panic!("island Single fixture should remain V3");
+        };
+        let V3LayoutSettings::Single(explicit_patch) = &mut explicit_v3.layout else {
+            panic!("island Single fixture should remain Single");
+        };
+        explicit_patch.mask = PatchMaskSettings::Explicit(vec![CubeCoord { x: 0, y: 0, z: 0 }]);
+        assert!(explicit.validate().is_err());
+
+        let mut overlaid = single(wooded.clone(), 40);
+        let TerrainSettings::Procedural(ProceduralSettings::V3(overlaid_v3)) =
+            &mut overlaid.terrain
+        else {
+            panic!("island Single fixture should remain V3");
+        };
+        let V3LayoutSettings::Single(overlaid_patch) = &mut overlaid_v3.layout else {
+            panic!("island Single fixture should remain Single");
+        };
+        overlaid_patch.overlays.push(NamedOverlaySettings {
+            name: "unexpected".to_owned(),
+            kind: V3OverlaySettings::Vegetation,
+        });
+        assert!(overlaid.validate().is_err());
+
+        validate_v3_recipe(&sandy, V3EnvironmentSettings::Coastal, 12)
+            .expect("SandyIslets should admit Macro's radius-12 recipe context");
+        validate_v3_recipe(&wooded, V3EnvironmentSettings::Coastal, 12)
+            .expect("WoodedIsland should admit Macro's radius-12 recipe context");
+
+        let mut ring7 = valid_ring7();
+        ring7.forest.environment = V3EnvironmentSettings::Coastal;
+        ring7.forest.recipe = sandy;
+        assert!(
+            ring7.validate(33).is_err(),
+            "Ring7 must retain its fixed recipe roster"
+        );
+
+        let mut ring19 = valid_desert_ring19();
+        let Some(center) = ring19.regions.first_mut() else {
+            panic!("the Ring19 fixture must have a center region");
+        };
+        center.environment = V3EnvironmentSettings::Coastal;
+        center.recipe = wooded;
+        assert!(
+            ring19.validate().is_err(),
+            "Ring19 must retain its profile-selected recipe roster"
+        );
     }
 
     #[test]

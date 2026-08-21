@@ -294,6 +294,57 @@
             ),
         ),
         (
+            id: "sandy-islets",
+            display_name: "Sandy Islets",
+            description: "Five separated sandy islets share one shallow sea; the largest supports the ordinary landing route.",
+            tags: ["Coastal", "Islands", "Water"],
+            preview: "ui/sandbox/sandy-islets.png",
+            scenario: "Sandy Islets",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "wooded-island",
+            display_name: "Wooded Island",
+            description: "A wide sandy coast rises into a connected rolling island covered by broadleaf woodland.",
+            tags: ["Coastal", "Island", "Forest"],
+            preview: "ui/sandbox/wooded-island.png",
+            scenario: "Wooded Island",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "ocean-archipelagoes",
+            display_name: "Ocean Archipelagoes",
+            description: "Open ocean separates sandy island clusters from one large wooded island heart and its landing route.",
+            tags: ["Macro", "Archipelago", "Ocean"],
+            preview: "ui/sandbox/ocean-archipelagoes.png",
+            scenario: "Ocean Archipelagoes",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "fort",
             display_name: "Fort",
             description: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",

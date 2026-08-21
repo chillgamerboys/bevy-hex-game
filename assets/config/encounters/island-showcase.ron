@@ -1,0 +1,19 @@
+// Non-combat coastal review party.
+//
+// Island routes include four-wide causeways and narrow shoreline turns. A compact
+// spread keeps the standard three-character party inside those authored lanes while
+// preserving ordinary formation movement for every visual and lifecycle proof.
+(
+    name: "Island Showcase",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Anchor("party_start"), spread: 1),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+    ],
+)

@@ -482,7 +482,7 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 111, "map_generation": 466, "map_contracts": 95},
+            {"map_unit": 119, "map_generation": 506, "map_contracts": 97},
         )
         self.assertEqual(partition["expected_ignored"], 32)
 

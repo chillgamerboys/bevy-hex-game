@@ -117,6 +117,11 @@ pub(crate) fn construct_fragment(
         | V3RecipeSettings::DeepMountain(_) => Err(vec![composite_issue(
             "Macro-only recipes are constructed by the authored Macro runner",
         )]),
+        V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_) => {
+            Err(vec![composite_issue(
+                "Coastal island recipes are not supported by Ring7 or Ring19",
+            )])
+        }
     }
 }
 
@@ -216,6 +221,11 @@ pub(crate) fn validate_fragment(
         | V3RecipeSettings::DeepMountain(_) => WorldValidation::Invalid(vec![composite_issue(
             "Macro-only recipes are validated by the authored Macro runner",
         )]),
+        V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_) => {
+            WorldValidation::Invalid(vec![composite_issue(
+                "Coastal island recipes are not supported by Ring7 or Ring19",
+            )])
+        }
     };
     match validation {
         WorldValidation::Valid(()) => Ok(()),

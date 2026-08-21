@@ -496,6 +496,47 @@ The four selectable scenario names are **Desert Transition**, **Desert Plain**,
 **Dunes**, and **Desert Oasis Rings**. Each ships with configured seed `1592598566`;
 Sandbox regeneration changes only the pending resolved seed.
 
+**Use V3 Coastal island terrain.** The two focused `Single` configurations use the
+existing `Coastal` environment and reject overlays:
+
+```ron
+recipe: SandyIslets((
+    sea_level: 8,
+    land_coverage_percent: 32,
+    islet_count: 5,
+    max_relief: 3,
+)),
+
+recipe: WoodedIsland((
+    sea_level: 8,
+    land_coverage_percent: 65,
+    max_relief: 6,
+    tree_coverage_percent: 25,
+)),
+```
+
+Sandy Islets requires sea level 8, dry coverage `18..=40` percent, `1..=9`
+separated islets, and relief `1..=4`; its shipped radius-24 map fixes five components.
+Wooded Island requires sea level 8, dry coverage `50..=80` percent, relief `3..=8`,
+and broadleaf canopy coverage `18..=35` percent; its shipped radius-40 map has one
+connected island and an exact two-column sand fringe. Because each accepted tree
+silhouette spans several columns, exact non-overlapping roots are placed at half the
+configured canopy percentage. Unknown fields and non-Coastal pairings fail settings
+validation.
+
+**Compose Ocean Archipelagoes.** The radius-77 Macro file claims all 37 atomic cells
+with 24 sea cells, three two-cell scenic Sandy Islets instances, one sandy landing,
+and one six-cell Wooded Island heart. Ten `Standing` seam declarations keep the
+level-8 ocean continuous. Exactly one width-four walker connection excludes its
+protected causeway footprint from the otherwise full standing-water coast between the landing and
+wooded heart; remote dry components remain scenic and publish no ordinary
+cross-water route.
+
+The selectable scenario names are **Sandy Islets**, **Wooded Island**, and **Ocean
+Archipelagoes**. Each uses configured review seed `1592598566`; Sandbox regeneration
+changes only the pending resolved seed. Seed variation may alter bounded detail, not
+the authored land-component roster or Macro instance topology.
+
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,
 extended plunge basin, upper two-wide metal bridge, meandering escarpment, mid-height

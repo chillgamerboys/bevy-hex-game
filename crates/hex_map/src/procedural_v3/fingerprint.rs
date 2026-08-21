@@ -641,6 +641,21 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.u8(settings.palm_count);
             encoder.u8(settings.grass_ring_width);
         }
+        V3RecipeSettings::SandyIslets(settings) => {
+            // Coastal-island tags append after the accepted Arid recipe range.
+            encoder.tag(21);
+            encoder.i32(settings.sea_level);
+            encoder.u8(settings.land_coverage_percent);
+            encoder.u8(settings.islet_count);
+            encoder.i32(settings.max_relief);
+        }
+        V3RecipeSettings::WoodedIsland(settings) => {
+            encoder.tag(22);
+            encoder.i32(settings.sea_level);
+            encoder.u8(settings.land_coverage_percent);
+            encoder.i32(settings.max_relief);
+            encoder.u8(settings.tree_coverage_percent);
+        }
     }
 }
 
@@ -1218,7 +1233,7 @@ mod tests {
         Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings, SharedEdgeSettings,
         TerrainSettings, V3CrystalAscentSettings, V3DesertPlainSettings,
         V3DesertTransitionSettings, V3DunesSettings, V3HillsSettings, V3OasisSettings,
-        V3PrairieSettings, WalkerPortSettings,
+        V3PrairieSettings, V3SandyIsletsSettings, V3WoodedIslandSettings, WalkerPortSettings,
     };
 
     const MOUNTAIN_RANGE_RON: &str =
@@ -1495,6 +1510,113 @@ mod tests {
             let mut encoder = FingerprintEncoder::new();
             encode_recipe_settings(&mut encoder, recipe);
             assert_eq!(encoder.bytes, expected);
+        }
+    }
+
+    #[test]
+    fn coastal_island_recipe_tags_are_append_only_and_every_field_is_sensitive() {
+        assert_eq!(environment_tag(V3EnvironmentSettings::Coastal), 4);
+
+        fn recipe_fingerprint(recipe: &V3RecipeSettings) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_recipe_settings(&mut encoder, recipe);
+            encoder.finish_settings()
+        }
+
+        let sandy = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+            sea_level: 8,
+            land_coverage_percent: 28,
+            islet_count: 5,
+            max_relief: 3,
+        });
+        let wooded = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+
+        let mut sandy_encoder = FingerprintEncoder::new();
+        encode_recipe_settings(&mut sandy_encoder, &sandy);
+        let mut sandy_expected = vec![21];
+        sandy_expected.extend_from_slice(&8_i32.to_le_bytes());
+        sandy_expected.extend_from_slice(&[28, 5]);
+        sandy_expected.extend_from_slice(&3_i32.to_le_bytes());
+        assert_eq!(sandy_encoder.bytes, sandy_expected);
+
+        let mut wooded_encoder = FingerprintEncoder::new();
+        encode_recipe_settings(&mut wooded_encoder, &wooded);
+        let mut wooded_expected = vec![22];
+        wooded_expected.extend_from_slice(&8_i32.to_le_bytes());
+        wooded_expected.push(68);
+        wooded_expected.extend_from_slice(&6_i32.to_le_bytes());
+        wooded_expected.push(26);
+        assert_eq!(wooded_encoder.bytes, wooded_expected);
+
+        let sandy_baseline = recipe_fingerprint(&sandy);
+        for changed in [
+            V3SandyIsletsSettings {
+                sea_level: 9,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 3,
+            },
+            V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 29,
+                islet_count: 5,
+                max_relief: 3,
+            },
+            V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 6,
+                max_relief: 3,
+            },
+            V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 4,
+            },
+        ] {
+            assert_ne!(
+                sandy_baseline,
+                recipe_fingerprint(&V3RecipeSettings::SandyIslets(changed))
+            );
+        }
+
+        let wooded_baseline = recipe_fingerprint(&wooded);
+        for changed in [
+            V3WoodedIslandSettings {
+                sea_level: 9,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            },
+            V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 69,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            },
+            V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 7,
+                tree_coverage_percent: 26,
+            },
+            V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 27,
+            },
+        ] {
+            assert_ne!(
+                wooded_baseline,
+                recipe_fingerprint(&V3RecipeSettings::WoodedIsland(changed))
+            );
         }
     }
 
