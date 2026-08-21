@@ -4421,7 +4421,7 @@ pub(crate) mod tests {
                     };
                     assert_eq!(settings.sea_level, 8);
                     assert_eq!(settings.land_coverage_percent, 65);
-                    assert_eq!(settings.max_relief, 6);
+                    assert_eq!(settings.max_relief, 8);
                     assert_eq!(settings.tree_coverage_percent, 25);
                 }
                 ("Ocean Archipelagoes", hex_map::V3LayoutSettings::Macro(layout)) => {
@@ -4429,6 +4429,21 @@ pub(crate) mod tests {
                     assert_eq!(layout.instances.len(), 6);
                     assert_eq!(layout.liquid_connections.len(), 10);
                     assert_eq!(layout.walker_connections.len(), 1);
+                    let wooded_heart = layout
+                        .instances
+                        .iter()
+                        .find(|instance| instance.name == "wooded-heart")
+                        .expect("Ocean Archipelagoes should retain its wooded heart");
+                    let hex_map::V3RecipeSettings::WoodedIsland(settings) = &wooded_heart.recipe
+                    else {
+                        panic!("Ocean Archipelagoes wooded heart changed recipe");
+                    };
+                    assert_eq!(settings.sea_level, 8);
+                    assert_eq!(settings.land_coverage_percent, 68);
+                    assert_eq!(settings.max_relief, 8);
+                    assert_eq!(settings.tree_coverage_percent, 26);
+                    assert_eq!(wooded_heart.elevation.low, 9);
+                    assert_eq!(wooded_heart.elevation.high, 16);
                 }
                 _ => panic!("{name} changed its shipped layout kind"),
             }

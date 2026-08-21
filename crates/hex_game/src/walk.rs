@@ -27,6 +27,7 @@
 //! input plugin's frame clear, so `just_pressed` is visible to every `Update`
 //! reader in the same frame.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -52,7 +53,7 @@ use hex_units::{MovingTo, Party, Selected, StandsOn, UnitRegistry};
 use hex_world::CameraMode;
 use serde::Deserialize;
 
-use crate::capture::write_png;
+use crate::capture::{install_capture, prepare_capture_path, temporary_capture_path, write_png};
 use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
@@ -60,6 +61,7 @@ const OUT_ENV: &str = "HEX_WALK_OUT";
 const VIEWPORT_ENV: &str = "HEX_WALK_VIEWPORT";
 const UI_DEBUG_ENV: &str = "HEX_WALK_UI_DEBUG";
 const DATA_ENV: &str = "HEX_GAME_DATA_DIR";
+const REVIEW_INDEX_FILE: &str = "review-index.md";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const WALK_TIME_SCALE: f32 = 12.0;
 const MAX_ORBIT_YAW_TURNS: f32 = 0.5;
@@ -69,6 +71,45 @@ const MAX_ORBIT_PITCH_FRACTION: f32 = 1.0;
 /// Four frames let the asynchronous UI glyph atlas settle on Metal. Two frames
 /// occasionally captured a complete 3D pass with only part of the UI text uploaded.
 const CAPTURE_TARGET_SETTLE_FRAMES: u8 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewScenarioProvenance {
+    name: String,
+    seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewRunProvenance {
+    run_id: String,
+    script_path: String,
+    expected_captures: usize,
+    planned_scenarios: Vec<ReviewScenarioProvenance>,
+}
+
+impl ReviewRunProvenance {
+    fn from_steps(script_path: String, run_id: String, steps: &[WalkStep]) -> Self {
+        let expected_captures = steps
+            .iter()
+            .filter(|step| matches!(step, WalkStep::Capture(_) | WalkStep::ReviewCapture { .. }))
+            .count();
+        let planned_scenarios = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::StartScenario { name, seed, .. } => Some(ReviewScenarioProvenance {
+                    name: name.clone(),
+                    seed: *seed,
+                }),
+                _ => None,
+            })
+            .collect();
+        Self {
+            run_id,
+            script_path,
+            expected_captures,
+            planned_scenarios,
+        }
+    }
+}
 
 /// Gives every configured walk a fresh storage root unless the caller explicitly
 /// supplied one. This runs before persistence plugins initialize `StoragePaths`.
@@ -98,10 +139,26 @@ fn isolated_storage_root(out: PathBuf, process_id: u32, nonce: u128) -> PathBuf 
     out.join(format!(".game-data-{process_id}-{nonce}"))
 }
 
+fn review_run_id() -> String {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("{}-{nonce}", std::process::id())
+}
+
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
     let script = env::var(SCRIPT_ENV).ok();
     let out = env::var(OUT_ENV).ok();
+    let run_id = review_run_id();
+    if let Some(out) = out.as_deref() {
+        let script_label = script.as_deref().unwrap_or("<missing HEX_WALK_SCRIPT>");
+        if let Err(error) = write_starting_review_index(&PathBuf::from(out), script_label, &run_id)
+        {
+            install_config_error(app, error);
+            return;
+        }
+    }
     let (script, out) = match (script, out) {
         (None, None) => return,
         (Some(script), Some(out)) => (script, out),
@@ -114,6 +171,7 @@ pub(super) fn plugin(app: &mut App) {
             return;
         }
     };
+    let out_dir = PathBuf::from(&out);
 
     let steps = match load_script(&script) {
         Ok(steps) => steps,
@@ -136,6 +194,11 @@ pub(super) fn plugin(app: &mut App) {
             return;
         }
     };
+    let review = ReviewRunProvenance::from_steps(script.clone(), run_id, &steps);
+    if let Err(error) = write_incomplete_review_index(&out_dir, &review) {
+        install_config_error(app, error);
+        return;
+    }
 
     info!(
         "visual walk: {} steps from {script}, output to {out} at {}x{}@{}",
@@ -158,9 +221,10 @@ pub(super) fn plugin(app: &mut App) {
     }
     app.insert_resource(WalkState::new(
         steps,
-        PathBuf::from(out),
+        out_dir,
         viewport,
         diagnostic_overlays,
+        review,
     ))
     .add_systems(Startup, accelerate_walk_time)
     .add_systems(
@@ -379,8 +443,20 @@ fn load_script(path: &str) -> Result<Vec<WalkStep>, String> {
     if steps.is_empty() {
         return Err(format!("{path} contains no steps"));
     }
+    let mut capture_names = BTreeSet::new();
     for (index, step) in steps.iter().enumerate() {
         validate_step(step).map_err(|error| format!("{path} step {index}: {error}"))?;
+        let capture_name = match step {
+            WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. } => Some(name),
+            _ => None,
+        };
+        if let Some(name) = capture_name {
+            if !capture_names.insert(name.as_str()) {
+                return Err(format!(
+                    "{path} step {index}: duplicate capture name {name:?} would overwrite evidence"
+                ));
+            }
+        }
     }
     Ok(steps)
 }
@@ -389,10 +465,8 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
     match step {
         WalkStep::AwaitScreen(name) => parse_screen(name).map(|_| ()),
         WalkStep::Key(name) => parse_key(name).map(|_| ()),
-        WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. }
-            if name.trim().is_empty() =>
-        {
-            Err("capture name must not be empty".to_owned())
+        WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. } => {
+            validate_capture_name(name)
         }
         WalkStep::Click { name, .. } if name.trim().is_empty() => {
             Err("click name must not be empty".to_owned())
@@ -447,6 +521,184 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         }
         _ => Ok(()),
     }
+}
+
+fn validate_capture_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("capture name must not be empty".to_owned());
+    }
+    if name.chars().all(|character| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '-' | '_')
+    }) {
+        Ok(())
+    } else {
+        Err(format!(
+            "capture name {name:?} must use only lowercase ASCII letters, digits, '-' or '_'"
+        ))
+    }
+}
+
+fn markdown_html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn scenario_provenance_markdown(label: &str, scenarios: &[ReviewScenarioProvenance]) -> String {
+    if scenarios.is_empty() {
+        return format!("- {label}: none\n");
+    }
+    scenarios
+        .iter()
+        .map(|scenario| {
+            let seed = scenario.seed.map_or_else(
+                || "none/catalog default".to_owned(),
+                |seed| seed.to_string(),
+            );
+            format!(
+                "- {label}: <code>{}</code> — seed <code>{seed}</code>\n",
+                markdown_html_text(&scenario.name)
+            )
+        })
+        .collect()
+}
+
+fn incomplete_review_index_markdown(review: &ReviewRunProvenance) -> String {
+    let mut markdown = format!(
+        "# Visual walk review index — INCOMPLETE\n\n\
+         **Run status: INCOMPLETE — NOT REVIEWABLE.** A visual walk has started but has not\n\
+         atomically published a complete capture pack. PNGs in this directory may mix stale and\n\
+         current-run output; do not classify or curate them.\n\n\
+         ## Run provenance\n\n\
+         - Run ID: <code>{}</code>\n\
+         - Script: <code>{}</code>\n\
+         - Captures persisted by a completed run: **0 of {} expected**\n",
+        markdown_html_text(&review.run_id),
+        markdown_html_text(&review.script_path),
+        review.expected_captures,
+    );
+    markdown.push_str(&scenario_provenance_markdown(
+        "Planned scenario",
+        &review.planned_scenarios,
+    ));
+    markdown
+}
+
+fn starting_review_index_markdown(script_path: &str, run_id: &str) -> String {
+    format!(
+        "# Visual walk review index — INCOMPLETE\n\n\
+         **Run status: INCOMPLETE — NOT REVIEWABLE.** A visual walk invocation has started, but\n\
+         its script and capture plan have not finished validation. PNGs in this directory may\n\
+         mix stale and current-run output; do not classify or curate them.\n\n\
+         ## Run provenance\n\n\
+         - Run ID: <code>{}</code>\n\
+         - Script: <code>{}</code>\n\
+         - Expected captures: unknown until script validation completes\n",
+        markdown_html_text(run_id),
+        markdown_html_text(script_path),
+    )
+}
+
+fn completed_review_index_markdown(
+    review: &ReviewRunProvenance,
+    launched_scenarios: &[ReviewScenarioProvenance],
+    captures: &[String],
+) -> Result<String, String> {
+    if captures.len() != review.expected_captures {
+        return Err(format!(
+            "visual walk completed with {} persisted captures, expected {}; the review index remains incomplete",
+            captures.len(),
+            review.expected_captures
+        ));
+    }
+    let mut markdown = format!(
+        "# Visual walk review index\n\n\
+         **Capture status: COMPLETE. Human review status: UNREVIEWED.** This index includes every\n\
+         persisted frame from the completed run in script order. Set each frame's result to PASS\n\
+         or FAIL and record notes before curating a smaller approval report. Static frames do not\n\
+         replace the required native motion check.\n\n\
+         ## Run provenance\n\n\
+         - Run ID: <code>{}</code>\n\
+         - Script: <code>{}</code>\n\
+         - Captures persisted: **{} of {} expected**\n",
+        markdown_html_text(&review.run_id),
+        markdown_html_text(&review.script_path),
+        captures.len(),
+        review.expected_captures,
+    );
+    markdown.push_str(&scenario_provenance_markdown(
+        "Planned scenario",
+        &review.planned_scenarios,
+    ));
+    markdown.push_str(&scenario_provenance_markdown(
+        "Launched scenario",
+        launched_scenarios,
+    ));
+    markdown.push_str(
+        "\n## Per-frame classification\n\n\
+         Allowed results are **PASS** and **FAIL**. `UNREVIEWED` is never approval evidence.\n\n",
+    );
+    for name in captures {
+        markdown.push_str("### `");
+        markdown.push_str(name);
+        markdown.push_str("`\n\n- Result: **UNREVIEWED** — replace with **PASS** or **FAIL**\n- Notes: _record the defect for FAIL; optional for PASS_\n\n![");
+        markdown.push_str(name);
+        markdown.push_str("](<./");
+        markdown.push_str(name);
+        markdown.push_str(".png>)\n\n");
+    }
+    Ok(markdown)
+}
+
+fn write_review_index_atomically(
+    out_dir: &std::path::Path,
+    markdown: &str,
+) -> Result<PathBuf, String> {
+    let path = out_dir.join(REVIEW_INDEX_FILE);
+    prepare_capture_path(&path)
+        .map_err(|error| format!("cannot prepare staged review index: {error}"))?;
+    let temporary = temporary_capture_path(&path)
+        .map_err(|error| format!("cannot prepare staged review index: {error}"))?;
+    if let Err(error) = std::fs::write(&temporary, markdown) {
+        let _cleanup = std::fs::remove_file(&temporary);
+        return Err(format!("cannot write temporary review index: {error}"));
+    }
+    if let Err(error) = install_capture(&temporary, &path) {
+        let _cleanup = std::fs::remove_file(&temporary);
+        return Err(format!("cannot atomically install review index: {error}"));
+    }
+    Ok(path)
+}
+
+fn write_incomplete_review_index(
+    out_dir: &std::path::Path,
+    review: &ReviewRunProvenance,
+) -> Result<PathBuf, String> {
+    write_review_index_atomically(out_dir, &incomplete_review_index_markdown(review))
+}
+
+fn write_starting_review_index(
+    out_dir: &std::path::Path,
+    script_path: &str,
+    run_id: &str,
+) -> Result<PathBuf, String> {
+    write_review_index_atomically(
+        out_dir,
+        &starting_review_index_markdown(script_path, run_id),
+    )
+}
+
+fn write_completed_review_index(
+    out_dir: &std::path::Path,
+    review: &ReviewRunProvenance,
+    launched_scenarios: &[ReviewScenarioProvenance],
+    captures: &[String],
+) -> Result<PathBuf, String> {
+    let markdown = completed_review_index_markdown(review, launched_scenarios, captures)?;
+    write_review_index_atomically(out_dir, &markdown)
 }
 
 fn validate_orbit_drag(yaw_turns: f32, pitch_fraction: f32) -> Result<(), String> {
@@ -690,10 +942,14 @@ struct WalkState {
     steps: Vec<WalkStep>,
     cursor: usize,
     out_dir: PathBuf,
+    review: ReviewRunProvenance,
+    launched_scenarios: Vec<ReviewScenarioProvenance>,
     settled: u32,
     step_started: Instant,
     capture_requested: bool,
     capture_outcome: Option<CaptureOutcome>,
+    /// Every successfully persisted frame, in script order, for exhaustive review.
+    completed_captures: Vec<String>,
     /// A button pressed by the previous step, to be reset to `None`.
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
@@ -827,15 +1083,19 @@ impl WalkState {
         out_dir: PathBuf,
         viewport: hex_ui::ReviewViewport,
         diagnostic_overlays: bool,
+        review: ReviewRunProvenance,
     ) -> Self {
         Self {
             steps,
             cursor: 0,
             out_dir,
+            review,
+            launched_scenarios: Vec::new(),
             settled: 0,
             step_started: Instant::now(),
             capture_requested: false,
             capture_outcome: None,
+            completed_captures: Vec::new(),
             pressed: None,
             held_key: None,
             orbit_gesture: None,
@@ -1155,7 +1415,26 @@ fn run_walk(
     }
 
     let Some(step) = state.steps.get(state.cursor).cloned() else {
-        info!("visual walk complete: {} steps", state.steps.len());
+        let review_index = match write_completed_review_index(
+            &state.out_dir,
+            &state.review,
+            &state.launched_scenarios,
+            &state.completed_captures,
+        ) {
+            Ok(path) => path,
+            Err(reason) => {
+                error!("visual walk could not publish its exhaustive review index: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        info!(
+            "visual walk complete: {} steps, {} captures indexed at {}",
+            state.steps.len(),
+            state.completed_captures.len(),
+            review_index.display()
+        );
         input.mouse.release(MouseButton::Right);
         exit.write(AppExit::Success);
         state.failed = true;
@@ -1337,6 +1616,7 @@ fn run_walk(
                     coverage,
                 }) if brightest > 8 => {
                     info!("visual walk captured {name} (coverage: {coverage})");
+                    state.completed_captures.push(name.clone());
                     state.advance();
                 }
                 Some(CaptureOutcome::Written { .. }) => {
@@ -1592,6 +1872,10 @@ fn run_walk(
             };
             let resolved_seed = seed.or(scenario.generation_seed).map(ResolvedMapSeed);
             info!("visual walk launching scenario {name:?}");
+            state.launched_scenarios.push(ReviewScenarioProvenance {
+                name: name.clone(),
+                seed: resolved_seed.map(|resolved| resolved.0),
+            });
             if suppress_hostiles {
                 commands.insert_resource(SuppressHostilesForMapReview);
             } else {
@@ -1971,6 +2255,11 @@ mod tests {
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
+        assert!(validate_step(&WalkStep::Capture("../overwrite".into())).is_err());
+        assert!(validate_step(&WalkStep::Capture("review frame".into())).is_err());
+        assert!(validate_step(&WalkStep::Capture("01-Case-Collision".into())).is_err());
+        validate_step(&WalkStep::Capture("01-safe_review-frame".into()))
+            .expect("a stable slug is a safe capture name");
         assert!(validate_step(&WalkStep::ReviewCapture {
             name: " ".into(),
             task: hex_ui::test_support::UiTaskCase::MainMenu,
@@ -1996,6 +2285,136 @@ mod tests {
         .is_err());
         validate_step(&WalkStep::AssertCameraMode(WalkCameraMode::FirstPerson))
             .expect("every typed camera mode should be a valid assertion");
+    }
+
+    fn review_index_test_directory(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!(
+            "hex-walk-review-index-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    fn review_provenance(expected_captures: usize) -> ReviewRunProvenance {
+        ReviewRunProvenance {
+            run_id: "test-run-42".to_owned(),
+            script_path: "walks/camera_test.ron".to_owned(),
+            expected_captures,
+            planned_scenarios: vec![ReviewScenarioProvenance {
+                name: "Test Scenario".to_owned(),
+                seed: Some(77),
+            }],
+        }
+    }
+
+    #[test]
+    fn generated_review_index_exposes_every_capture_and_explicit_classification() {
+        let captures = vec![
+            "01-overview".to_owned(),
+            "02-seam-stress".to_owned(),
+            "03-emissive-closeup".to_owned(),
+        ];
+        let review = review_provenance(captures.len());
+        let launched = vec![ReviewScenarioProvenance {
+            name: "Test Scenario".to_owned(),
+            seed: Some(91),
+        }];
+        let markdown = completed_review_index_markdown(&review, &launched, &captures)
+            .expect("a complete capture list should render its review index");
+
+        assert!(markdown.contains("Capture status: COMPLETE"));
+        assert!(markdown.contains("Human review status: UNREVIEWED"));
+        assert!(markdown.contains("native motion check"));
+        assert!(markdown.contains("walks/camera_test.ron"));
+        assert!(markdown.contains("Test Scenario"));
+        assert!(markdown.contains("seed <code>91</code>"));
+        assert!(markdown.contains("3 of 3 expected"));
+        for name in &captures {
+            assert!(markdown.contains(&format!("### `{name}`")));
+            assert!(markdown.contains(&format!("](<./{name}.png>)")));
+        }
+        assert_eq!(
+            markdown.matches("- Result: **UNREVIEWED**").count(),
+            captures.len()
+        );
+        assert_eq!(markdown.matches("- Notes:").count(), captures.len());
+        assert_eq!(markdown.matches(".png>)").count(), captures.len());
+        assert!(!markdown.contains("- [ ]"));
+    }
+
+    #[test]
+    fn walk_start_replaces_a_stale_checked_index_with_incomplete_marker() {
+        let directory = review_index_test_directory("stale");
+        let _cleanup = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("review test directory should be creatable");
+        let path = directory.join(REVIEW_INDEX_FILE);
+        std::fs::write(&path, "# Old review\n\n- [x] PASS\n")
+            .expect("stale checked index should be writable");
+
+        write_starting_review_index(&directory, "walks/camera_test.ron", "startup-run-43")
+            .expect("walk startup should invalidate stale review evidence");
+        let markdown = std::fs::read_to_string(&path)
+            .expect("the incomplete review marker should remain readable");
+        assert!(markdown.contains("INCOMPLETE — NOT REVIEWABLE"));
+        assert!(markdown.contains("Expected captures: unknown until script validation completes"));
+        assert!(markdown.contains("walks/camera_test.ron"));
+        assert!(!markdown.contains("[x] PASS"));
+        assert!(!temporary_capture_path(&path)
+            .expect("review index should have a valid staging path")
+            .exists());
+
+        let _cleanup = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn completed_index_is_installed_only_for_the_exact_capture_count() {
+        let directory = review_index_test_directory("complete");
+        let _cleanup = std::fs::remove_dir_all(&directory);
+        let review = review_provenance(2);
+        let path = write_incomplete_review_index(&directory, &review)
+            .expect("walk startup should publish an incomplete marker");
+        let incomplete = std::fs::read_to_string(&path)
+            .expect("the incomplete review marker should be readable");
+
+        let error = write_completed_review_index(
+            &directory,
+            &review,
+            &[ReviewScenarioProvenance {
+                name: "Test Scenario".to_owned(),
+                seed: Some(77),
+            }],
+            &["01-overview".to_owned()],
+        )
+        .expect_err("a partial capture pack must not replace its incomplete marker");
+        assert!(error.contains("1 persisted captures, expected 2"));
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("the rejected completion should leave its marker readable"),
+            incomplete
+        );
+
+        write_completed_review_index(
+            &directory,
+            &review,
+            &[ReviewScenarioProvenance {
+                name: "Test Scenario".to_owned(),
+                seed: Some(77),
+            }],
+            &["01-overview".to_owned(), "02-detail".to_owned()],
+        )
+        .expect("an exact capture pack should atomically replace its marker");
+        let complete =
+            std::fs::read_to_string(&path).expect("the completed review index should be readable");
+        assert!(complete.contains("Capture status: COMPLETE"));
+        assert!(complete.contains("2 of 2 expected"));
+        assert!(!complete.contains("INCOMPLETE — NOT REVIEWABLE"));
+        assert!(!temporary_capture_path(&path)
+            .expect("review index should have a valid staging path")
+            .exists());
+
+        let _cleanup = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -2095,11 +2514,17 @@ mod tests {
             WalkStep::Capture("first".to_owned()),
             WalkStep::Capture("second".to_owned()),
         ];
+        let review = ReviewRunProvenance::from_steps(
+            "test-camera-walk.ron".to_owned(),
+            "test-render-target-run".to_owned(),
+            &steps,
+        );
         let mut state = WalkState::new(
             steps,
             PathBuf::from("captures"),
             hex_ui::ReviewViewport::DEFAULT,
             false,
+            review,
         );
         let mut images = Assets::<Image>::default();
 
@@ -2330,10 +2755,19 @@ mod tests {
                 ),
             ]
         );
-        assert!(steps.contains(&WalkStep::ClickTile {
-            q: -20,
-            r: -19,
-            level: Some(6),
+        assert!(steps.contains(&WalkStep::AssertSelectedAt {
+            expected: CameraRouteTile {
+                q: -17,
+                r: -15,
+                level: 6,
+            },
+        }));
+        assert!(!steps
+            .iter()
+            .any(|step| matches!(step, WalkStep::ClickTile { .. })));
+        assert!(steps.windows(2).all(|pair| {
+            !matches!(pair.first(), Some(WalkStep::ClickAnchor { .. }))
+                || matches!(pair.get(1), Some(WalkStep::Settle(frames)) if *frames >= 5)
         }));
         let captures = steps
             .iter()
@@ -2448,18 +2882,20 @@ mod tests {
                 "09-crystal-mountain-gothic-transition-map",
                 "10-crystal-mountain-gothic-transition-character",
                 "11-crystal-mountain-gothic-transition-first-person",
-                "12-crystal-mountain-crystal-chamber-map",
-                "13-crystal-mountain-crystal-chamber-character",
-                "14-crystal-mountain-crystal-chamber-first-person",
-                "15-crystal-mountain-mid-ascent-map",
-                "16-crystal-mountain-mid-ascent-character",
-                "17-crystal-mountain-mid-ascent-first-person",
-                "18-crystal-mountain-summit-exit-map",
-                "19-crystal-mountain-summit-exit-character",
-                "20-crystal-mountain-summit-exit-first-person",
-                "21-crystal-mountain-wooded-basin-map",
-                "22-crystal-mountain-wooded-basin-character",
-                "23-crystal-mountain-wooded-basin-first-person",
+                "12-crystal-mountain-ascent-base-plinth-character",
+                "13-crystal-mountain-ascent-base-plinth-first-person",
+                "14-crystal-mountain-crystal-chamber-map",
+                "15-crystal-mountain-crystal-chamber-character",
+                "16-crystal-mountain-crystal-chamber-first-person",
+                "17-crystal-mountain-mid-ascent-map",
+                "18-crystal-mountain-mid-ascent-character",
+                "19-crystal-mountain-mid-ascent-first-person",
+                "20-crystal-mountain-summit-exit-map",
+                "21-crystal-mountain-summit-exit-character",
+                "22-crystal-mountain-summit-exit-first-person",
+                "23-crystal-mountain-wooded-basin-map",
+                "24-crystal-mountain-wooded-basin-character",
+                "25-crystal-mountain-wooded-basin-first-person",
             ]
         );
         for camera in [

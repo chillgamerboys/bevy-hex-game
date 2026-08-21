@@ -1,10 +1,10 @@
 //! Pure semantic Oasis recipe for procedural generator V3.
 //!
 //! Oasis owns one exact, local still-water pool, its green shore, and an exact
-//! count of authored date palms. The pool never participates in a composite
-//! liquid seam: ordinary seam shaping is applied only to the surrounding dry
-//! terrain, while the complete pool and grass ring remain in the patch-local
-//! frame.
+//! count of authored date palms. The water surface sits one voxel below the
+//! surrounding grass datum. The pool never participates in a composite liquid
+//! seam: ordinary seam shaping is applied only to the surrounding dry terrain,
+//! while the complete pool and grass ring remain in the patch-local frame.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,6 +47,7 @@ const OASIS_OVERLOOK: &str = "oasis_overlook";
 const MIN_SINGLE_RADIUS: u32 = 12;
 const MAX_SINGLE_RADIUS: u32 = 40;
 const PALM_BELT_SAND_WIDTH: u32 = 4;
+const POOL_SURFACE_DROP: Level = 1;
 const POOL_BODY: LiquidBodyId = LiquidBodyId(0);
 
 #[derive(Debug)]
@@ -330,11 +331,12 @@ fn construct_patch_with_vegetation(
     let mut ordinary_dry = BTreeMap::new();
     let mut grass_surfaces = BTreeMap::new();
     let mut water_nodes = BTreeMap::new();
+    let water_level = oasis_water_level(settings);
     for coord in &mask {
         if pool_coords.contains(coord) {
-            let bed_level = settings.base_level.saturating_sub(1);
+            let bed_level = water_level.saturating_sub(1);
             let bed = TilePos::new(*coord, bed_level);
-            columns.insert(*coord, oasis_pool_column(settings.base_level));
+            columns.insert(*coord, oasis_pool_column(water_level));
             surfaces.insert(
                 bed,
                 SurfaceMetadata {
@@ -343,7 +345,7 @@ fn construct_patch_with_vegetation(
                 },
             );
             water_nodes.insert(
-                TilePos::new(*coord, settings.base_level),
+                TilePos::new(*coord, water_level),
                 LiquidNode {
                     state: LiquidFlowState::Still,
                     downstream: None,
@@ -674,12 +676,13 @@ fn validate_pool(
     pool_coords: &BTreeSet<HexCoord>,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
+    let water_level = oasis_water_level(settings);
     let expected_nodes = pool_coords
         .iter()
         .copied()
         .map(|coord| {
             (
-                TilePos::new(coord, settings.base_level),
+                TilePos::new(coord, water_level),
                 LiquidNode {
                     state: LiquidFlowState::Still,
                     downstream: None,
@@ -700,7 +703,8 @@ fn validate_pool(
     };
     if body.material != FillMaterialRole::Water || body.nodes != expected_nodes {
         issues.push(recipe_issue(
-            "Oasis pool must exactly fill its local radius with level Still water and no downstream",
+            "Oasis pool must exactly fill its local radius with Still water one level below the \
+             grass datum and no downstream",
         ));
     }
 }
@@ -738,16 +742,18 @@ fn validate_columns(
             continue;
         };
         if pool_coords.contains(coord) {
-            let expected_surface = TilePos::new(*coord, settings.base_level.saturating_sub(1));
+            let water_level = oasis_water_level(settings);
+            let expected_surface = TilePos::new(*coord, water_level.saturating_sub(1));
             if surface != expected_surface
                 || plan.volume.surfaces.get(&surface).is_none_or(|metadata| {
                     metadata.access != SurfaceAccess::NonStandable || metadata.interior.is_some()
                 })
-                || *column != oasis_pool_column(settings.base_level)
+                || *column != oasis_pool_column(water_level)
             {
                 issues.push(recipe_issue(format!(
                     "Oasis pool column {coord:?} must expose one nonstandable sand bed exactly one \
-                     level below its one-level water fill"
+                     level below its one-level water fill, with the water surface exactly one \
+                     level below the grass datum"
                 )));
             }
             continue;
@@ -900,6 +906,10 @@ fn oasis_footprint(settings: &V3OasisSettings) -> (BTreeSet<HexCoord>, BTreeSet<
 
 fn oasis_outer_radius(settings: &V3OasisSettings) -> u32 {
     u32::from(settings.pool_radius).saturating_add(u32::from(settings.grass_ring_width))
+}
+
+fn oasis_water_level(settings: &V3OasisSettings) -> Level {
+    settings.base_level.saturating_sub(POOL_SURFACE_DROP)
 }
 
 fn palm_belt_coords(mask: &BTreeSet<HexCoord>, settings: &V3OasisSettings) -> BTreeSet<HexCoord> {
@@ -1083,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn pool_bed_ring_and_still_topology_are_exact() {
+    fn pool_surface_is_one_voxel_below_the_ring_and_still_topology_is_exact() {
         let selected = generate(20, 77).expect("Oasis should generate");
         let plan = &selected.validated.plan;
         let recipe = V3OasisSettings {
@@ -1108,8 +1118,10 @@ mod tests {
             .expect("Oasis should publish one local pool body");
         assert_eq!(body.material, FillMaterialRole::Water);
         assert_eq!(body.nodes.len(), pool.len());
+        assert!(plan.lights.is_empty(), "Oasis must remain daylight-only");
         for coord in pool {
-            let bed = TilePos::new(coord, 14);
+            let water_level = oasis_water_level(&recipe);
+            let bed = TilePos::new(coord, water_level.saturating_sub(1));
             assert_eq!(
                 plan.volume
                     .surfaces
@@ -1119,14 +1131,19 @@ mod tests {
             );
             assert_eq!(
                 plan.volume.columns.get(&coord),
-                Some(&oasis_pool_column(15))
+                Some(&oasis_pool_column(water_level))
             );
             assert_eq!(
-                body.nodes.get(&TilePos::new(coord, 15)),
+                body.nodes.get(&TilePos::new(coord, water_level)),
                 Some(&LiquidNode {
                     state: LiquidFlowState::Still,
                     downstream: None,
                 })
+            );
+            assert_eq!(
+                water_level.saturating_add(POOL_SURFACE_DROP),
+                recipe.base_level,
+                "the authoritative water surface must sit exactly one voxel below the grass ring"
             );
         }
         for coord in grass {

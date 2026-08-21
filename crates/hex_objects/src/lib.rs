@@ -77,6 +77,12 @@ struct ChunkKey {
     canopy: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OccupiedCell {
+    style: VoxelStyleId,
+    surface_mode: VoxelSurfaceMode,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct FaceCullMask {
     sides: [bool; 6],
@@ -499,7 +505,7 @@ fn cached_object(
     let blueprint = catalog
         .object(object_id)
         .ok_or_else(|| format!("runtime art catalog has no object '{object_id}'"))?;
-    let baked = bake_blueprint(source_mesh, blueprint)?;
+    let baked = bake_blueprint(source_mesh, blueprint, catalog)?;
     let mut chunks = Vec::with_capacity(baked.len());
     for (key, mesh) in baked {
         let style = catalog.style(&key.style).ok_or_else(|| {
@@ -776,25 +782,44 @@ fn material_for(style: &ResolvedVoxelStyle) -> StandardMaterial {
 fn bake_blueprint(
     source_mesh: &Mesh,
     blueprint: &ObjectBlueprint,
+    catalog: &RuntimeArtCatalog,
 ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
     let canopy: BTreeSet<_> = blueprint.canopy_occluders.iter().copied().collect();
     let mut groups: BTreeMap<ChunkKey, Vec<LocalVoxelCoord>> = BTreeMap::new();
+    let mut occupied_by_visibility =
+        BTreeMap::<bool, BTreeMap<LocalVoxelCoord, OccupiedCell>>::new();
     for placement in &blueprint.placements {
+        let is_canopy = canopy.contains(&placement.position);
+        let style = catalog.style(&placement.style).ok_or_else(|| {
+            format!(
+                "validated object '{}' references unresolved style '{}' while baking",
+                blueprint.id, placement.style
+            )
+        })?;
         groups
             .entry(ChunkKey {
                 style: placement.style.clone(),
-                canopy: canopy.contains(&placement.position),
+                canopy: is_canopy,
             })
             .or_default()
             .push(placement.position);
+        occupied_by_visibility.entry(is_canopy).or_default().insert(
+            placement.position,
+            OccupiedCell {
+                style: placement.style.clone(),
+                surface_mode: style.authored().surface_mode(),
+            },
+        );
     }
 
     groups
         .into_iter()
         .map(|(key, mut cells)| {
             cells.sort_unstable();
-            let occupied: BTreeSet<_> = cells.iter().copied().collect();
-            let mesh = merge_cells(source_mesh, blueprint.origin, &cells, &occupied)?;
+            let occupied = occupied_by_visibility
+                .get(&key.canopy)
+                .ok_or_else(|| "object chunk lost its visibility partition".to_owned())?;
+            let mesh = merge_cells(source_mesh, blueprint.origin, &cells, occupied)?;
             Ok((key, mesh))
         })
         .collect()
@@ -804,15 +829,21 @@ fn merge_cells(
     source_mesh: &Mesh,
     origin: LocalVoxelCoord,
     cells: &[LocalVoxelCoord],
-    occupied_with_style: &BTreeSet<LocalVoxelCoord>,
+    occupied_in_visibility_partition: &BTreeMap<LocalVoxelCoord, OccupiedCell>,
 ) -> Result<Mesh, String> {
     let mut cells = cells.iter();
     let first = cells
         .next()
         .ok_or_else(|| "cannot bake an empty object chunk".to_owned())?;
-    let mut merged = transformed_cell(source_mesh, origin, *first, occupied_with_style)?;
+    let mut merged = transformed_cell(
+        source_mesh,
+        origin,
+        *first,
+        occupied_in_visibility_partition,
+    )?;
     for cell in cells {
-        let transformed = transformed_cell(source_mesh, origin, *cell, occupied_with_style)?;
+        let transformed =
+            transformed_cell(source_mesh, origin, *cell, occupied_in_visibility_partition)?;
         merged
             .merge(&transformed)
             .map_err(|error| format!("hex mesh chunks cannot be merged: {error}"))?;
@@ -824,7 +855,7 @@ fn transformed_cell(
     source_mesh: &Mesh,
     origin: LocalVoxelCoord,
     cell: LocalVoxelCoord,
-    occupied_with_style: &BTreeSet<LocalVoxelCoord>,
+    occupied_in_visibility_partition: &BTreeMap<LocalVoxelCoord, OccupiedCell>,
 ) -> Result<Mesh, String> {
     let relative_q = cell
         .q
@@ -843,17 +874,23 @@ fn transformed_cell(
         reason = "authored object levels are bounded to 64 and exactly represented by f32"
     )]
     let translation = HexCoord::from_axial(relative_q, relative_r).to_world(relative_level as f32);
-    cull_internal_faces(source_mesh, face_cull_mask(cell, occupied_with_style))?
-        .try_transformed_by(Transform::from_translation(translation))
-        .map_err(|error| format!("hex mesh cannot be transformed: {error}"))
+    cull_internal_faces(
+        source_mesh,
+        face_cull_mask(cell, occupied_in_visibility_partition),
+    )?
+    .try_transformed_by(Transform::from_translation(translation))
+    .map_err(|error| format!("hex mesh cannot be transformed: {error}"))
 }
 
 const AXIAL_NEIGHBOURS: [(i32, i32); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
 
 fn face_cull_mask(
     cell: LocalVoxelCoord,
-    occupied_with_style: &BTreeSet<LocalVoxelCoord>,
+    occupied_in_visibility_partition: &BTreeMap<LocalVoxelCoord, OccupiedCell>,
 ) -> FaceCullMask {
+    let Some(current) = occupied_in_visibility_partition.get(&cell) else {
+        return FaceCullMask::default();
+    };
     let mut sides = [false; 6];
     for (culled, (delta_q, delta_r)) in sides.iter_mut().zip(AXIAL_NEIGHBOURS) {
         let neighbour = cell
@@ -861,19 +898,31 @@ fn face_cull_mask(
             .checked_add(delta_q)
             .zip(cell.r.checked_add(delta_r))
             .map(|(q, r)| LocalVoxelCoord::new(q, r, cell.level));
-        *culled = neighbour.is_some_and(|position| occupied_with_style.contains(&position));
+        *culled = neighbour
+            .and_then(|position| occupied_in_visibility_partition.get(&position))
+            .is_some_and(|neighbour| shared_face_is_owned_by_neighbour(current, neighbour));
     }
     let top = cell
         .level
         .checked_add(1)
         .map(|level| LocalVoxelCoord::new(cell.q, cell.r, level))
-        .is_some_and(|position| occupied_with_style.contains(&position));
+        .and_then(|position| occupied_in_visibility_partition.get(&position))
+        .is_some_and(|neighbour| shared_face_is_owned_by_neighbour(current, neighbour));
     let bottom = cell
         .level
         .checked_sub(1)
         .map(|level| LocalVoxelCoord::new(cell.q, cell.r, level))
-        .is_some_and(|position| occupied_with_style.contains(&position));
+        .and_then(|position| occupied_in_visibility_partition.get(&position))
+        .is_some_and(|neighbour| shared_face_is_owned_by_neighbour(current, neighbour));
     FaceCullMask { sides, top, bottom }
+}
+
+fn shared_face_is_owned_by_neighbour(current: &OccupiedCell, neighbour: &OccupiedCell) -> bool {
+    current.style == neighbour.style
+        || (matches!(
+            current.surface_mode,
+            VoxelSurfaceMode::Translucent | VoxelSurfaceMode::Additive
+        ) && neighbour.surface_mode == VoxelSurfaceMode::Opaque)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1266,6 +1315,30 @@ mod tests {
         }
     }
 
+    fn bake_fixture(
+        source: &Mesh,
+        blueprint: &ObjectBlueprint,
+    ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+        bake_blueprint(source, blueprint, &fixture_catalog(0.24))
+    }
+
+    fn occupied_fixture(
+        cells: impl IntoIterator<Item = LocalVoxelCoord>,
+    ) -> BTreeMap<LocalVoxelCoord, OccupiedCell> {
+        cells
+            .into_iter()
+            .map(|cell| {
+                (
+                    cell,
+                    OccupiedCell {
+                        style: style_id("test/opaque"),
+                        surface_mode: VoxelSurfaceMode::Opaque,
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn rotation(steps: u8) -> HexObjectRotation {
         match HexObjectRotation::new(steps) {
             Ok(rotation) => rotation,
@@ -1425,7 +1498,7 @@ mod tests {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let blueprint = fixture_blueprint();
         assert_eq!(blueprint.validate_intrinsic(), Ok(()));
-        let baked = match bake_blueprint(&source, &blueprint) {
+        let baked = match bake_fixture(&source, &blueprint) {
             Ok(baked) => baked,
             Err(error) => unreachable!("valid blueprint should bake: {error}"),
         };
@@ -1456,7 +1529,7 @@ mod tests {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let source_indices = mesh_index_count(&source);
         let blueprint = fixture_blueprint();
-        let baked = match bake_blueprint(&source, &blueprint) {
+        let baked = match bake_fixture(&source, &blueprint) {
             Ok(baked) => baked,
             Err(error) => unreachable!("valid canopy fixture should bake: {error}"),
         };
@@ -1478,7 +1551,7 @@ mod tests {
     fn adjacent_translucent_cells_share_no_closed_internal_prism_faces() {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let blueprint = material_fixture_blueprint();
-        let baked = match bake_blueprint(&source, &blueprint) {
+        let baked = match bake_fixture(&source, &blueprint) {
             Ok(baked) => baked,
             Err(error) => unreachable!("valid material fixture should bake: {error}"),
         };
@@ -1495,6 +1568,134 @@ mod tests {
     }
 
     #[test]
+    fn only_blended_and_additive_cells_yield_a_shared_face_to_opaque_backing() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let source_indices = mesh_index_count(&source);
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        for (neighbour_style, neighbour_indices) in [
+            ("test/cutout", source_indices),
+            ("test/translucent", source_indices - 6),
+            ("test/additive", source_indices - 6),
+        ] {
+            let mut blueprint = material_fixture_blueprint();
+            blueprint.origin = origin;
+            blueprint.placements = vec![
+                ObjectPlacement {
+                    position: origin,
+                    style: style_id("test/opaque"),
+                    part: ObjectPart::Effect(EffectPart::Core),
+                },
+                ObjectPlacement {
+                    position: LocalVoxelCoord::new(1, 0, 0),
+                    style: style_id(neighbour_style),
+                    part: ObjectPart::Effect(EffectPart::Accent),
+                },
+            ];
+
+            let baked = match bake_fixture(&source, &blueprint) {
+                Ok(baked) => baked,
+                Err(error) => unreachable!("valid cross-style fixture should bake: {error}"),
+            };
+            let opaque = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id("test/opaque"))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its opaque chunk"));
+            let neighbour = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id(neighbour_style))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its neighbouring chunk"));
+
+            assert_eq!(
+                mesh_index_count(opaque),
+                source_indices,
+                "opaque backing must remain closed behind {neighbour_style}"
+            );
+            assert_eq!(
+                mesh_index_count(neighbour),
+                neighbour_indices,
+                "{neighbour_style} must follow its exact shared-face ownership policy"
+            );
+        }
+    }
+
+    #[test]
+    fn additive_yields_to_opaque_backing_across_side_top_and_bottom_directions() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let source_indices = mesh_index_count(&source);
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        let side = LocalVoxelCoord::new(1, 0, 0);
+        let above = LocalVoxelCoord::new(0, 0, 1);
+
+        for (opaque_position, additive_position) in [
+            (origin, side),
+            (side, origin),
+            (origin, above),
+            (above, origin),
+        ] {
+            let mut blueprint = material_fixture_blueprint();
+            blueprint.origin = origin;
+            blueprint.placements = vec![
+                ObjectPlacement {
+                    position: opaque_position,
+                    style: style_id("test/opaque"),
+                    part: ObjectPart::Effect(EffectPart::Core),
+                },
+                ObjectPlacement {
+                    position: additive_position,
+                    style: style_id("test/additive"),
+                    part: ObjectPart::Effect(EffectPart::Accent),
+                },
+            ];
+
+            let baked = match bake_fixture(&source, &blueprint) {
+                Ok(baked) => baked,
+                Err(error) => unreachable!("valid directional fixture should bake: {error}"),
+            };
+            let opaque = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id("test/opaque"))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its opaque chunk"));
+            let additive = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id("test/additive"))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its additive chunk"));
+
+            assert_eq!(mesh_index_count(opaque), source_indices);
+            assert_eq!(mesh_index_count(additive), source_indices - 6);
+        }
+    }
+
+    #[test]
+    fn unresolved_style_aborts_baking_without_partial_mesh_output() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let mut blueprint = material_fixture_blueprint();
+        blueprint.placements = vec![
+            ObjectPlacement {
+                position: blueprint.origin,
+                style: style_id("test/opaque"),
+                part: ObjectPart::Effect(EffectPart::Core),
+            },
+            ObjectPlacement {
+                position: LocalVoxelCoord::new(1, 0, 0),
+                style: style_id("test/missing"),
+                part: ObjectPart::Effect(EffectPart::Accent),
+            },
+        ];
+
+        let catalog = fixture_catalog(0.24);
+        let Err(error) = bake_blueprint(&source, &blueprint, &catalog) else {
+            unreachable!("an unresolved style must abort the complete bake")
+        };
+        assert!(error.contains("effect/material-test"));
+        assert!(error.contains("test/missing"));
+        assert!(error.contains("while baking"));
+    }
+
+    #[test]
     fn merged_chunk_vertex_count_scales_with_cells_not_entities() {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let source_vertices = source.count_vertices();
@@ -1504,7 +1705,7 @@ mod tests {
             LocalVoxelCoord::new(1, 0, 0),
             LocalVoxelCoord::new(1, -1, 2),
         ];
-        let occupied = BTreeSet::from(cells);
+        let occupied = occupied_fixture(cells);
         let merged = match merge_cells(&source, origin, &cells, &occupied) {
             Ok(mesh) => mesh,
             Err(error) => unreachable!("compatible meshes should merge: {error}"),
@@ -1518,7 +1719,7 @@ mod tests {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let origin = LocalVoxelCoord::new(-2, 1, -3);
         let cell = LocalVoxelCoord::new(-1, 0, -1);
-        let occupied = BTreeSet::from([cell]);
+        let occupied = occupied_fixture([cell]);
         let merged = match merge_cells(&source, origin, &[cell], &occupied) {
             Ok(mesh) => mesh,
             Err(error) => unreachable!("compatible mesh should transform: {error}"),
@@ -1535,7 +1736,7 @@ mod tests {
             &source,
             LocalVoxelCoord::new(0, 0, 0),
             &[],
-            &BTreeSet::new(),
+            &BTreeMap::new(),
         );
 
         assert_eq!(

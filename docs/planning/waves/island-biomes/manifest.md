@@ -283,6 +283,17 @@ The local ignored handoff index is `.context/waves/island-biomes-review.md`; it 
 captures do not ship in the source branch. Captures are presentation evidence only; the
 typed tests remain authoritative for topology, connectivity, determinism, and lifecycle.
 
+## Corrective verification — 2026-08-21
+
+- Wooded Island's central relief allowance increased by two voxels in both its focused map
+  and the Ocean Archipelagoes wooded-heart profile. Exact recipe and Macro tests preserve
+  the shoreline, protected route, dry connectivity, and ceiling bounds while allowing a
+  more legible raised interior.
+- Replacement Wooded Island and Ocean Archipelagoes walks use the shared fail-closed evidence
+  index. A run invalidates stale approval before setup, records scenario/seed/script
+  provenance and successful captures, and cannot report completion without exactly the
+  expected frame set. Every frame remains `UNREVIEWED` until explicitly classified.
+
 ## Stop conditions
 
 - Tags 21/22 conflict with another appended recipe or any legacy fingerprint changes.

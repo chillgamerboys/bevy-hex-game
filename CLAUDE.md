@@ -113,6 +113,14 @@ Every capture replaces that shared 3D/UI image, gives both cameras four complete
 frames, and mirrors the 3D camera's MSAA onto the dedicated UI camera. The last rule
 keeps OIT tree-fade captures compatible while restoring ordinary sampling when OIT
 leaves.
+At walk startup, `review-index.md` is replaced with an **INCOMPLETE — NOT REVIEWABLE**
+marker so an aborted rerun cannot leave a prior approved index authoritative. Only an
+exactly complete capture set atomically publishes a completed index beside the PNGs; that
+index records run/script/scenario provenance and starts every frame as `UNREVIEWED` with
+explicit PASS/FAIL and notes fields. Inspect and classify every frame before selecting hero
+images or calling the pack reviewed. The exit code proves capture mechanics, not pixel quality.
+Emissive, translucent, or animated geometry additionally requires a named native-camera
+motion pass; static captures cannot clear flicker.
 `walks/camera_routes.ron` is the seed-exact route authority for every selectable Map
 scenario. Named anchor clicks carry an expected `TilePos` stale detector, and camera
 orbits pass through the ordinary held-right-button plus cursor-motion input path;

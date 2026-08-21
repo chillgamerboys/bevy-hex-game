@@ -98,3 +98,35 @@ timing JSON, and logs for all three ordinary concerns.
   not those frames, prove level-8 water continuity, exact component counts, two-column
   sand fringes, tree exclusions, ordinary reachability, scenic disconnection, and
   teardown/re-entry. No capture may be used as evidence that water is impassable.
+
+## Visual-pack close-out
+
+A successful visual-walk process proves that the route, renderer, and structural capture
+oracles completed. It does **not** mean that somebody inspected the resulting pixels. At walk
+startup, `review-index.md` is atomically replaced with an **INCOMPLETE — NOT REVIEWABLE**
+marker. This invalidates any checked index left by an earlier run; if the process aborts, the
+directory remains explicitly non-reviewable even when old PNGs are still present.
+
+Only when the persisted capture count exactly matches the script's expected count does the
+walk atomically replace that marker with a completed index. It records the run ID, script path,
+planned and launched scenarios (including resolved seeds), and capture count, then embeds every
+frame in script order. Every frame begins as `UNREVIEWED`; a reviewer must replace that result
+with explicit `PASS` or `FAIL` and fill in its notes before curating a smaller hero set or calling
+the candidate review-ready. Looking only at the images selected for a summary is not a review of
+the pack.
+
+Authored and composed maps add two required stress checks:
+
+- Inspect a character-height view across every landmark/biome seam and entrance apron, with
+  enough exterior sky in frame for a missing foundation, skirt, or cutaway-owned run to be
+  obvious. Crystal Mountain specifically includes the lower-entry apron and the complete base
+  of Crystal Ascent in this check. Its authored stair annulus must also prove exact continuous
+  occupancy from level 0 through the chamber datum; validating only the elevated treads is not
+  sufficient foundation evidence.
+- Orbit the native camera past repeated emissive, translucent, or animated props. Static frames
+  cannot clear flicker or temporal visibility changes; the motion check remains a named-human
+  gate even when every still is clean.
+
+When visual review finds a defect, fix the renderer or authored geometry, add the narrowest typed
+root-cause invariant available, and recapture the affected route. Old frames are not evidence for
+the corrected candidate.

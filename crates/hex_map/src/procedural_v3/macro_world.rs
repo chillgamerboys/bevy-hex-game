@@ -5107,7 +5107,8 @@ fn validate_crystal_mountain(
         .within_radius(32)
         .into_iter()
         .collect::<BTreeSet<_>>();
-    match patch("crystal-ascent") {
+    let crystal_patch = patch("crystal-ascent");
+    match crystal_patch {
         Some((_, crystal)) if expected_site.is_subset(&crystal.mask) => {}
         Some((_, crystal)) => issues.push(macro_issue(format!(
             "Crystal Mountain landmark must contain the complete radius-32 site, got {} columns",
@@ -5116,6 +5117,51 @@ fn validate_crystal_mountain(
         None => issues.push(macro_issue(
             "Crystal Mountain has no resolved Crystal Ascent patch",
         )),
+    }
+
+    // Recheck the authored landmark after the complete Macro merge and tunnel
+    // carve. Fragment-local validation cannot detect a later composition stage
+    // punching world void through the stair annulus.
+    if let Some((crystal_id, crystal)) = crystal_patch {
+        let crystal_instance = usize::try_from(crystal_id.0)
+            .ok()
+            .and_then(|index| settings.instances.get(index));
+        if let Some(crystal_instance) = crystal_instance {
+            if let V3RecipeSettings::CrystalAscent(crystal_settings) = &crystal_instance.recipe {
+                match super::crystal_ascent::macro_stair_base_plinth_columns(
+                    &crystal.mask,
+                    crystal_instance.rotation_turns,
+                ) {
+                    Ok(columns) => {
+                        if columns.len() != 612 {
+                            issues.push(macro_issue(format!(
+                                "Crystal Mountain final stair-plinth footprint contains {} columns instead of 612",
+                                columns.len()
+                            )));
+                        }
+                        'foundation: for coord in columns {
+                            for level in 0..=crystal_settings.base_level {
+                                let founded = plan.volume.columns.get(&coord).is_some_and(|column| {
+                                    column.elements.iter().any(|element| {
+                                        matches!(element, VolumeElement::Solid(mass)
+                                            if mass.levels.bottom <= level && level < mass.levels.top)
+                                    })
+                                });
+                                if !founded {
+                                    issues.push(macro_issue(format!(
+                                        "Crystal Mountain final composition leaves world void below the Crystal Ascent stair plinth at {coord:?}, level {level}"
+                                    )));
+                                    break 'foundation;
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => issues.push(macro_issue(format!(
+                        "Crystal Mountain cannot resolve its final stair-plinth footprint: {error}"
+                    ))),
+                }
+            }
+        }
     }
 
     for name in REQUIRED_ANCHORS {
@@ -6448,6 +6494,17 @@ mod tests {
         assert_eq!(layout.grid_radius, 77);
         assert_eq!(layout.footprint.len(), 18_019);
         assert_eq!(layout.patches.len(), 6);
+        let wooded_heart = macro_settings
+            .instances
+            .iter()
+            .find(|instance| instance.name == "wooded-heart")
+            .expect("Ocean Archipelagoes should retain its wooded heart");
+        let V3RecipeSettings::WoodedIsland(wooded_settings) = &wooded_heart.recipe else {
+            panic!("Ocean Archipelagoes wooded heart changed recipe");
+        };
+        assert_eq!(wooded_settings.max_relief, 8);
+        assert_eq!(wooded_heart.elevation.low, 9);
+        assert_eq!(wooded_heart.elevation.high, 16);
         assert_eq!(
             macro_settings
                 .instances
@@ -6556,6 +6613,10 @@ mod tests {
         assert!(metrics.tree_roots > 0);
         assert!(metrics.critical_route_steps > 0);
         assert!(metrics.reachable_surfaces < metrics.ordinary_surfaces);
+        assert_eq!(
+            world.anchors.get("archipelago.home_ridge").copied(),
+            Some(TilePos::new(HexCoord::from_axial(10, 11), 16))
+        );
     }
 
     #[test]
@@ -6714,6 +6775,81 @@ mod tests {
                 ),
             ])
         );
+    }
+
+    #[test]
+    fn crystal_mountain_validator_rejects_a_post_merge_stair_plinth_void() {
+        let map = crystal_mountain_map();
+        let settings = v3_settings(map);
+        let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+            .expect("shipped Crystal Mountain setup should resolve");
+        let mut world = construct_world(map.level_height, &setup, None, None, true)
+            .expect("shipped Crystal Mountain canonical world should construct");
+        let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
+            panic!("shipped Crystal Mountain must remain Macro");
+        };
+        let crystal_instance = macro_settings
+            .instances
+            .first()
+            .expect("Crystal Ascent must remain the first Macro instance");
+        let crystal_patch = setup
+            .layout
+            .patches
+            .get(&PatchId(0))
+            .expect("Crystal Ascent must retain its resolved patch");
+        let tunnel_coords = world
+            .features
+            .protected_routes
+            .get("crystal_mountain.tunnel")
+            .expect("Crystal Mountain must retain its spanning tunnel")
+            .surfaces
+            .iter()
+            .map(|surface| surface.coord)
+            .collect::<BTreeSet<_>>();
+        let plinth = super::super::crystal_ascent::macro_stair_base_plinth_columns(
+            &crystal_patch.mask,
+            crystal_instance.rotation_turns,
+        )
+        .expect("the authored stair-plinth footprint should resolve");
+        assert_eq!(plinth.len(), 612);
+        for coord in &plinth {
+            for level in 0..=6 {
+                assert!(world.volume.columns.get(coord).is_some_and(|column| {
+                    column.elements.iter().any(|element| {
+                        matches!(element, VolumeElement::Solid(mass)
+                            if mass.levels.bottom <= level && level < mass.levels.top)
+                    })
+                }));
+            }
+        }
+        let coord = plinth
+            .into_iter()
+            .find(|coord| !tunnel_coords.contains(coord))
+            .expect("the stair plinth must include a column outside the tunnel");
+        let foundation = world
+            .volume
+            .columns
+            .get_mut(&coord)
+            .expect("the finalized stair-plinth column should exist")
+            .elements
+            .iter_mut()
+            .find_map(|element| match element {
+                VolumeElement::Solid(mass) if mass.levels.bottom == 0 && mass.levels.top > 0 => {
+                    Some(mass)
+                }
+                _ => None,
+            })
+            .expect("the finalized stair-plinth column should begin at world foundation");
+        foundation.levels.bottom = 1;
+
+        let WorldValidation::Invalid(issues) = validate_macro_world(settings, &world, None) else {
+            panic!("post-merge world void beneath the stair plinth must fail validation")
+        };
+        assert!(issues.iter().any(|issue| {
+            issue.detail.contains(
+                "final composition leaves world void below the Crystal Ascent stair plinth",
+            )
+        }));
     }
 
     #[test]
