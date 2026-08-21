@@ -5116,7 +5116,10 @@ mod tests {
         let regions = (0..V3_RING19_REGION_COUNT)
             .map(|index| {
                 let recipe = desert_oasis_expected_recipe(index);
-                let (_, _, rotation_turns) = DESERT_OASIS_REGIONS[index];
+                let (_, _, rotation_turns) = DESERT_OASIS_REGIONS
+                    .get(index)
+                    .copied()
+                    .expect("the fixed desert roster covers all nineteen slots");
                 Ring19RegionSettings {
                     environment: V3EnvironmentSettings::Arid,
                     recipe,
@@ -5979,7 +5982,12 @@ mod tests {
         );
 
         let mut wrong_oasis = valid_desert_ring19();
-        let V3RecipeSettings::Oasis(oasis) = &mut wrong_oasis.regions[0].recipe else {
+        let V3RecipeSettings::Oasis(oasis) = &mut wrong_oasis
+            .regions
+            .get_mut(0)
+            .expect("the fixture has slot zero")
+            .recipe
+        else {
             unreachable!("slot zero is the canonical Oasis")
         };
         oasis.palm_count = 13;
@@ -5989,7 +5997,12 @@ mod tests {
         );
 
         let mut wrong_inner_dunes = valid_desert_ring19();
-        let V3RecipeSettings::Dunes(dunes) = &mut wrong_inner_dunes.regions[1].recipe else {
+        let V3RecipeSettings::Dunes(dunes) = &mut wrong_inner_dunes
+            .regions
+            .get_mut(1)
+            .expect("the fixture has slot one")
+            .recipe
+        else {
             unreachable!("slot one is a canonical inner dune")
         };
         dunes.ridge_height = 5;
@@ -5999,7 +6012,12 @@ mod tests {
         );
 
         let mut wrong_outer_dunes = valid_desert_ring19();
-        let V3RecipeSettings::Dunes(dunes) = &mut wrong_outer_dunes.regions[7].recipe else {
+        let V3RecipeSettings::Dunes(dunes) = &mut wrong_outer_dunes
+            .regions
+            .get_mut(7)
+            .expect("the fixture has slot seven")
+            .recipe
+        else {
             unreachable!("slot seven is a canonical outer dune")
         };
         dunes.ridge_spacing = 11;
@@ -6009,7 +6027,12 @@ mod tests {
         );
 
         let mut wrong_plain = valid_desert_ring19();
-        let V3RecipeSettings::DesertPlain(plain) = &mut wrong_plain.regions[8].recipe else {
+        let V3RecipeSettings::DesertPlain(plain) = &mut wrong_plain
+            .regions
+            .get_mut(8)
+            .expect("the fixture has slot eight")
+            .recipe
+        else {
             unreachable!("slot eight is a canonical outer plain")
         };
         plain.max_relief = 3;
@@ -6019,7 +6042,11 @@ mod tests {
         );
 
         let mut wrong_rotation = valid_desert_ring19();
-        wrong_rotation.regions[2].rotation_turns = 0;
+        wrong_rotation
+            .regions
+            .get_mut(2)
+            .expect("the fixture has slot two")
+            .rotation_turns = 0;
         assert!(
             wrong_rotation.validate_desert_oasis_contract().is_err(),
             "each fixed slot owns its exact rotation"

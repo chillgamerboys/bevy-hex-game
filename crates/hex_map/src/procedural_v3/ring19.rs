@@ -2296,7 +2296,13 @@ mod tests {
             &first.validated.plan.volume,
             Some(&first.validated.plan.blockers),
         );
-        let party = first.validated.plan.anchors[PARTY_START];
+        let party = first
+            .validated
+            .plan
+            .anchors
+            .get(PARTY_START)
+            .copied()
+            .expect("the validated desert world publishes party_start");
         let reachable = ordinary.distances_from(party);
         assert_eq!(
             reachable.len(),

@@ -1,6 +1,6 @@
 # Desert biomes wave
 
-- Status: `integrating`
+- Status: `review-ready`
 - Wave branch: `wave/desert-biomes`
 - Base `origin/dev`: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Required stacked dependency: Crystal Mountain exact head
@@ -231,10 +231,10 @@ PR is implied. The common branch is existing territory, not evidence of a lane m
 |---|---|---|
 | Four Arid recipes validate bounds, exact materials, anchors, fallback, and determinism | Typed recipe tests | Focused desert filter: 13 passing; Dunes: 5 passing; Oasis: 8 passing; full `cargo test -p hex_map` passed |
 | DesertOasis keeps 19 regions, 9,241 columns, 42 Dry seams, 12 central palms, seven aliases, connectivity, and repeated fingerprint/metrics | Typed Ring19 hero-seed test | Ring19 module: 11 passing, one release benchmark ignored; full `hex_map` test command passed |
-| Legacy `TwoRings` and existing tags/fingerprints remain unchanged | Fingerprint regression tests on composed head | Full `cargo test -p hex_map` passed; selector rerun remains part of candidate closure |
-| Palm catalog, blocking root, four scenarios, four Sandbox cards, embedded worlds, and save dependency digest compose | Asset/app/shipping tests plus release build | Full `cargo test -p hex_assets` passed; app lifecycle and shipping concerns remain pending |
-| Regeneration, teardown, return-to-title, and gameplay re-entry leave no stale map/object state | Headless lifecycle hooks | Expanded 15-scenario lifecycle test passed; remaining selected app/candidate lifecycle coverage is pending |
-| Full selector-chosen CI-equivalent candidate is green | Committed-head selector plan and every selected command | Plan at `7d904794` is full: selector, rules, trajectory contracts, contracts, simulation, app, all three map concerns, residual, clippy, docs, and shipping. Selector, rules, and trajectory-contract concerns passed; all remaining concerns are pending |
+| Legacy `TwoRings` and existing tags/fingerprints remain unchanged | Fingerprint regression tests on composed head | Full `hex_map` unit, generation, and contract profiles pass, including the legacy fingerprint fixtures |
+| Palm catalog, blocking root, four scenarios, four Sandbox cards, embedded worlds, and save dependency digest compose | Asset/app/shipping tests plus release build | Asset/configuration contracts, 169 application tests, 11 application postflight tests, and the optimized shipping build pass |
+| Regeneration, teardown, return-to-title, and gameplay re-entry leave no stale map/object state | Headless lifecycle hooks | Expanded 15-scenario lifecycle test and the selected application/residual lifecycle coverage pass |
+| Full selector-chosen CI-equivalent candidate is green | Committed-head selector plan and every selected command | Full plan passes: selector 60/60; rules 180/180; trajectory contracts 93/93; contracts 420/420 plus 5 spell-resolution checks; simulation 29/29; app 169/169 plus 11 postflight; map unit 113/113; map generation 493/493; map contracts 95/95; residual 1,047/1,047; workspace doctests; formatting; dependency policy; panic-free clippy; documentation; and optimized shipping build |
 | Presentation is legible and camera movement feels correct | Scripted static frames plus named human play review | All four real walks passed exact pointer movement and arrival proofs and produced 22 frames plus four card previews; human taste/play review pending |
 
 The review matrix is:
@@ -246,10 +246,9 @@ The review matrix is:
 - Desert Oasis Rings: seven frames covering the oasis overview, palms, inner dune in both
   directions, outer dune, and open plain.
 
-The current focused and crate-wide tests plus completed walks are useful intermediate
-evidence only. They do not close the release benchmark, complete selector gate, runtime
-coverage outside the passed 15-scenario test, deterministic capture replay, visual taste,
-or named-human `PASS`.
+The automated candidate and scripted walks are complete. They do not substitute for visual
+taste, native camera/control feel, or a named-human `PASS`; the wave remains review-ready
+rather than delivered until that review and publication to `dev` occur.
 
 ## Stop conditions
 
@@ -266,6 +265,9 @@ or named-human `PASS`.
 
 - 2026-08-21: retroactive wave artifact added for the already composed desert working tree;
   no behavior or acceptance state changed by this documentation step.
+- 2026-08-21: the full selector-chosen CI-equivalent gate, doctests, lint/policy/docs gates,
+  optimized shipping build, four pointer-driven walks, and 22-frame review matrix passed;
+  named-human presentation/play approval and delivery remain intentionally open.
 
 ## Close-out
 

@@ -54,10 +54,14 @@ an alternating outer ring of six taller dune and six plain regions. It retains 4
 Dry reciprocal seams, redundant ordinary reachability, and the original defaulted
 `TwoRings` fingerprint.
 
-Current focused verification records 13 desert integration checks, five Dunes
-fixtures, and eight Oasis fixtures passing. The full selector-chosen CI-equivalent
-gate, runtime lifecycle, deterministic capture pack, visual review, and publication
-to `dev` remain pending and are not inferred from those focused results.
+The complete selector-chosen CI-equivalent candidate is green: 60 selector checks,
+180 rules checks, 93 trajectory contracts, 420 cross-crate contracts plus five spell
+resolution checks, 29 simulation tests, 180 application and postflight tests, 701 map
+unit/generation/contract tests, and 1,047 residual workspace tests all pass. Workspace
+doctests, formatting, dependency policy, panic-free clippy, generated documentation,
+and the optimized shipping build also pass. Four pointer-driven camera walks produced
+22 deterministic frames and four Sandbox previews. Human visual/play approval and
+publication to `dev` remain pending; the automated pack does not substitute for either.
 
 ## What is built
 
