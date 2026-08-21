@@ -4437,8 +4437,9 @@ pub(crate) mod tests {
             assert_eq!(encounter.name, "Island Showcase");
             assert_eq!(encounter.unit_count(EncounterFaction::Player), 3);
             assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
-            assert_eq!(encounter.rosters.len(), 1);
-            let roster = &encounter.rosters[0];
+            let [roster] = encounter.rosters.as_slice() else {
+                panic!("Island Showcase must retain exactly one roster");
+            };
             assert_eq!(roster.faction, EncounterFaction::Player);
             assert_eq!(
                 roster.placement,
