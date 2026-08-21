@@ -1,8 +1,10 @@
 # Island biomes wave
 
-- Status: `candidate-assembly` (implementation and visual walks complete; final exact-tree
-  selector gate and named-human review pending)
+- Status: `review-ready` (exact implementation head and automated gate complete;
+  named-human visual/play review and delivery to `dev` pending)
 - Wave branch: `wave/island-biomes`
+- Exact implementation head: `6f78a9cae681d9675e67daf6bd98b20e4a058475`
+- Validation close-out head: `45b0704c409474abf86c273b70fef3cac981751d`
 - Base `origin/dev`: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Required stacked dependency: Desert biomes exact review-ready head
   `441c22cc6968478993e920a1a575fa086edc05ee`
@@ -23,10 +25,9 @@ The focused recipes must be independently useful, but the final value comes from
 that they compose into one continuous ocean without pretending disconnected scenic islands
 are ordinarily walkable. That makes this one candidate with four ownership lanes.
 
-The four lanes are now composed in the shared wave working tree. `merged-to-wave` below
+The four lanes are composed at the exact implementation head above. `merged-to-wave` below
 means their implementation has been reconciled there; it does not claim a source-lane PR,
-a committed candidate head, the final selector-chosen CI-equivalent gate, or delivery to
-`dev`.
+named-human presentation approval, or delivery to `dev`.
 
 ## Locked decisions
 
@@ -271,15 +272,15 @@ lanes:
 
 | Acceptance slice | Current evidence | Remaining work |
 |---|---|---|
-| Focused island contracts and geometry | The targeted island unit slice passes all 13 tests, including settings, fingerprints, exact component counts, coastline/strata, protected routes, and deterministic construction. | Re-run through the selector-chosen final candidate gate. |
-| Ocean Archipelagoes composition | Canonical radius-77 construction, exact aliases, and the alias-retarget mutation test pass; the generated report covers 18,019 columns, the 37-cell roster, one ocean, seven dry components, ten wet seams, and the four-wide playable causeway. | Re-run the complete map-contract and release corpus at the final committed head. |
-| Runtime lifecycle | Island generation, teardown, and deterministic gameplay re-entry passed in the targeted lifecycle test before the compact encounter was added. | Re-run lifecycle on the exact final tree so the new encounter and dependency digest are included. |
+| Focused island contracts and geometry | The final targeted island slice passes all 16 tests, including settings, fingerprints, exact component counts, coastline/strata, protected routes, deterministic construction, and the exact compact roster. | Complete; named-human play classification remains. |
+| Ocean Archipelagoes composition | At exact head `6f78a9c`, canonical radius-77 construction, exact aliases, and alias-retarget mutation pass. The report covers 18,019 columns, the 37-cell roster, one ocean, seven dry components, ten wet seams, and the four-wide playable causeway; the complete 119/506/97 map unit/generation/contract gate is green. | Complete; named-human visual classification remains. |
+| Runtime lifecycle | Final scenario parsing, dependency digest, island generation, teardown, and deterministic gameplay re-entry pass with the compact encounter included. | Complete. |
 | Selectable presentation | All three current visual-walk scripts completed and produced 17 real frames: four Sandy Islets, six Wooded Island, and seven Ocean Archipelagoes captures. The three shipped Sandbox previews are real 640x360 renders derived from this review work. | Named-human visual/play classification remains required. |
-| Party formation | `assets/config/encounters/island-showcase.ron` keeps the standard three-character noncombat party but uses compact formation spread `1`, allowing ordinary movement through the authored four-wide coastal routes. | Include encounter parsing, scenario wiring, save dependency digest, and exact-route assertions in the final gate. |
-| Candidate closure | Targeted static, construction, alias, lifecycle, and live visual-walk checks have passed as recorded above. | The final exact-tree selector plan, full CI-equivalent command set, doctests, format/lint/policy/docs checks, optimized shipping build, and benchmarks have not yet been claimed. |
+| Party formation | `assets/config/encounters/island-showcase.ron` keeps the standard three-character noncombat party but uses compact formation spread `1`, allowing ordinary movement through the authored four-wide coastal routes. Parsing, scenario wiring, save dependency digest, and exact-route assertions pass at the final head. | Complete. |
+| Candidate closure | Validation head `45b0704` passes the exhaustive/disjoint 119/506/97 map partition and all selected concerns: 60 selector, 180 rules, 93 trajectory, 425 contract/postflight, 29 simulation, 180 application/postflight, 722 map, and 1,050 residual tests. Doctests, format/diff, strict clippy, dependency policy, generated docs, tracked Markdown links, optimized shipping, and the shipped large-map camera benchmark are green; Ocean Archipelagoes measures 2.583 µs query p95 against 2 ms. | Named-human presentation/play approval and delivery to `dev` remain. |
 
-The visual review index is
-`.context/waves/island-biomes-review.md`. Captures are presentation evidence only; the
+The local ignored handoff index is `.context/waves/island-biomes-review.md`; it and the
+captures do not ship in the source branch. Captures are presentation evidence only; the
 typed tests remain authoritative for topology, connectivity, determinism, and lifecycle.
 
 ## Stop conditions
@@ -296,19 +297,24 @@ typed tests remain authoritative for topology, connectivity, determinism, and li
 
 ## Injection log
 
-- 2026-08-20: initial four-lane island wave recorded from the user's overnight sequence;
+- 2026-08-21: initial four-lane island wave recorded from the user's overnight sequence;
   no source work dispatched before the manifest commit.
-- 2026-08-20: L3 ownership expanded narrowly to the focused-island public report structs,
+- 2026-08-21: L3 ownership expanded narrowly to the focused-island public report structs,
   enum variants, exports, and reflection registration. L2 owns private construction metrics,
   while the report boundary remains coordinator-integrated with the Ocean profile; no geometry
   or serialized settings ownership moved.
-- 2026-08-20: all four lanes were reconciled into the shared wave tree. Sandy Islets,
+- 2026-08-21: all four lanes were reconciled into the shared wave tree. Sandy Islets,
   Wooded Island, and Ocean Archipelagoes are selectable; the dedicated compact encounter
   uses formation spread `1`; three successful live walks produced 17 review frames and
   three real 640x360 Sandbox previews.
-- 2026-08-20: targeted island unit, canonical Ocean construction, alias mutation, and
-  lifecycle slices passed as recorded in the evidence ledger. The final committed-head
-  selector-chosen CI-equivalent gate and named-human review remain deliberately open.
+- 2026-08-21: exact implementation head `6f78a9c` passed the complete selector-chosen
+  CI-equivalent source gate, exact parser/digest/lifecycle coverage, doctests, strict clippy,
+  formatting, dependency policy, generated documentation, tracked-link validation, and the
+  optimized shipping build. Named-human visual/play approval remains deliberately open.
+- 2026-08-21: fresh-eyes review found stale map-partition count pins despite every selected
+  suite passing. Validation close-out `45b0704` updates them to 119/506/97, proves the
+  partition exhaustive and disjoint, and passes the resulting full selector gate plus the
+  shipped large-map release camera benchmark. No gameplay or presentation source changed.
 
 ## Close-out
 

@@ -9,9 +9,10 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-The **Coastal islands** wave is in parallel delivery and is not yet a claim about
-`dev`. Its locked content surface consists of focused **Sandy Islets** and **Wooded
-Island** maps plus the radius-77 **Ocean Archipelagoes** Macro world. The focused
+The **Coastal islands** wave is review-ready on its delivery branch and is not yet a
+claim about `dev`. Exact implementation head
+`6f78a9cae681d9675e67daf6bd98b20e4a058475` contains focused **Sandy Islets** and
+**Wooded Island** maps plus the radius-77 **Ocean Archipelagoes** Macro world. The focused
 profiles reuse the Coastal environment at sea level 8: five separated sandy
 components in a radius-24 world, and one broad radius-40 island with a two-column
 beach and broadleaf interior. The Macro roster assigns 24 of 37 atomic cells to one
@@ -19,11 +20,18 @@ continuous ocean, six cells to three scenic sandy clusters, one to a playable sa
 landing, and six to the wooded heart. Its landing-heart seam is the only ordinary dry
 cross-instance route; six remote dry components remain scenery.
 
-Typed settings, metrics, generation, and Macro composition are being built in
-separate lanes. Selectable scenario/Sandbox wiring, dependency invalidation,
-lifecycle checks, semantic review routes, documentation, and coordinator-owned visual
-captures follow those generators. The full selector gate, optimized benchmarks,
-deterministic capture pack, and human visual/play approval are still pending.
+Validation close-out head `45b0704c409474abf86c273b70fef3cac981751d`
+refreshes the exhaustive map-partition pins to the delivered 119/506/97 split. Typed
+settings, metrics, generation, Macro composition, three selectable maps, compact
+party placement, dependency invalidation, lifecycle checks, semantic review routes, and
+real Sandbox previews are complete. The exact-head selector-chosen CI-equivalent gate is
+green, including 119 map-unit, 506 map-generation, 97 map-contract, and 1,050 residual
+tests; doctests, strict clippy, formatting, dependency policy, generated documentation,
+tracked documentation links, and the optimized shipping build also pass. Three deterministic
+scripted walks produced 17 captures. The shipped large-map camera benchmark records Ocean
+Archipelagoes at 2.583 µs query p95 against its 2 ms budget. Named-human visual/play
+approval and publication to `dev` remain pending; neither the automated gate nor the
+captures substitute for that review.
 
 The **Crystal Mountain** wave is implemented on its delivery branch and is not yet a
 claim about `dev`. Its selectable radius-77 Macro candidate places the existing
