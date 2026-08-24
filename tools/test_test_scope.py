@@ -213,6 +213,21 @@ class TestScopeTests(unittest.TestCase):
             ("map_generation", "map_contracts", "clippy", "docs", "shipping"),
         )
 
+    def test_schematic_planner_stays_in_its_pure_tooling_partition(self) -> None:
+        for path in (
+            "crates/hex_schematic/src/generator.rs",
+            "assets/config/schematics/grand-v3-template.ron",
+        ):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(
+                    decision.concerns,
+                    ("residual", "clippy", "docs"),
+                )
+                self.assertEqual(decision.unknown_files, ())
+                self.assertIn("schematic-planner", decision.matched_rules)
+
     def test_map_contract_test_change_is_narrow(self) -> None:
         decision = self.classify(
             "crates/hex_map/tests/contracts/publication.rs"

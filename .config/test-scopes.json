@@ -430,6 +430,15 @@
       "reason": "World-owned changes retain their existing complete owner and seam coverage."
     },
     {
+      "name": "schematic-planner",
+      "patterns": [
+        "crates/hex_schematic/**",
+        "assets/config/schematics/**"
+      ],
+      "concerns": ["residual", "clippy", "docs"],
+      "reason": "The standalone schematic planner is covered by its pure library, CLI, corpus, lint, and documentation tests without selecting voxel-map or gameplay suites."
+    },
+    {
       "name": "lattice-rules",
       "patterns": ["crates/hex_lattice/**"],
       "concerns": ["rules", "contracts", "simulation", "clippy", "docs"],
