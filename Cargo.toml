@@ -6,6 +6,7 @@ default-members = ["crates/hex_game"]
 # Dependency versions live here so the crates can't drift apart. Each crate
 # opts in with `foo = { workspace = true }` and states its own features.
 [workspace.dependencies]
+hex_schematic = { path = "crates/hex_schematic" }
 hex_core = { path = "crates/hex_core" }
 hex_lattice = { path = "crates/hex_lattice" }
 hex_assets = { path = "crates/hex_assets" }
@@ -52,6 +53,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 rand = "0.8.5"
 rcgen = "=0.13.2"
 ron = "0.12.2"
+rustix = { version = "1.1.4", features = ["fs"] }
 sha2 = "=0.10.9"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 x509-parser = "=0.17.0"

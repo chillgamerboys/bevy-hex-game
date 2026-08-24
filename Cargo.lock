@@ -4014,6 +4014,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_schematic"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "ron",
+ "rustix 1.1.4",
+ "serde",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "hex_test_app"
 version = "0.4.0"
 dependencies = [
