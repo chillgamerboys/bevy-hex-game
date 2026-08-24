@@ -39,7 +39,8 @@ unchanged. Four disjoint world-authority lanes therefore assemble one review can
 
 ## Shared foundation
 
-- `hex_core::HexCoord` supplies the canonical serialized grid coordinate.
+- `hex_schematic::SchematicCoord` supplies a checked, strict cube coordinate without
+  importing gameplay or Bevy into the planning boundary.
 - Existing V3 named-stream, validation, fingerprint, and fail-closed evidence practices
   are precedents only; the new library has no dependency on `hex_map` or Bevy rendering.
 - The coordinator owns workspace registration, aggregate integration, selector planning,

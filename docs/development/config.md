@@ -6,6 +6,7 @@ you do not need to recompile the game.
 
 | File | Controls |
 |---|---|
+| `schematics/grand-v3-template.ron` | Offline radius-eight schematic facts, locked landmarks, bounded region envelopes, and seeded variation limits; it does not generate voxel terrain |
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
 | `terrain_damage.ron` | Boolean element × substance damage admission; every missing pair resists |
@@ -76,6 +77,52 @@ several frames never admits a mixed revision.
 
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
+
+## Planning the Grand V3 world
+
+`assets/config/schematics/grand-v3-template.ron` is the strict, traced radius-eight
+world-plan template. It is an offline planning input, not a hot-reloaded game setting:
+it owns coarse geography and authorship constraints, while a later compiler will own
+voxel scale, elevation, recipes, materials, and the final palette.
+
+Generate a labelled blank tracing grid, one validated seed, or the fixed twelve-seed
+approval gallery with:
+
+```sh
+cargo run -p hex_schematic -- grid \
+  --output .context/schematic-grid
+
+cargo run -p hex_schematic -- generate \
+  --template assets/config/schematics/grand-v3-template.ron \
+  --seed 42 \
+  --output .context/schematic-seed-42
+
+cargo run -p hex_schematic -- gallery \
+  --template assets/config/schematics/grand-v3-template.ron \
+  --first-seed 0 \
+  --output .context/schematic-gallery-0
+```
+
+Output destinations must not already exist. Each command validates all typed outputs in
+a sibling staging directory and publishes the complete directory with one rename, so a
+failed run cannot leave a partial plan or gallery looking reviewable. `generate` writes
+`plan.ron`, `metrics.ron`, `composite.svg`, and `diagnostics.svg`; `gallery` writes those
+four files for twelve consecutive seeds plus `contact-sheet.svg` and `index.html`.
+
+Reload and validate an existing plan without trusting its SVG projection:
+
+```sh
+cargo run -p hex_schematic -- validate \
+  --template assets/config/schematics/grand-v3-template.ron \
+  --plan .context/schematic-seed-42/plan.ron \
+  --metrics .context/schematic-seed-42/metrics.ron
+```
+
+Omit `--plan` and `--metrics` to validate only the template.
+
+RON parsing rejects unknown fields, duplicate or non-canonical cells, malformed cube
+coordinates, and unsupported schema versions. SVG colors, patterns, and labels are a
+debug palette for review; only the RON model and validator establish correctness.
 
 ## Deterministic review captures
 
