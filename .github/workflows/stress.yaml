@@ -66,6 +66,26 @@ jobs:
           path: stress.log
           if-no-files-found: error
 
+  schematic-corpus:
+    name: Grand V3 schematic corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run release schematic validity, diversity, and performance corpus
+        shell: bash
+        run: |
+          set -o pipefail
+          { time cargo test --release --package hex_schematic --test acceptance release_corpus_diversity_performance_and_memory_gate -- --ignored --exact --nocapture --test-threads=1; } 2>&1 | tee schematic-corpus.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grand-v3-schematic-corpus
+          path: schematic-corpus.log
+          if-no-files-found: error
+
   performance:
     name: Release performance probes
     runs-on: ubuntu-latest
