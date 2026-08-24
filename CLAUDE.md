@@ -146,6 +146,7 @@ infer state transitions from pixels.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_schematic  (pure semantic world-plan library and CLI)
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
@@ -190,6 +191,11 @@ Installing `MultiplayerPlugin` alone opens no socket and leaves offline single-p
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
+**`hex_schematic` is the pure world-plan boundary.** It depends on `hex_core` and
+deterministic serialization/utility crates only, never `hex_map`, gameplay, ECS apps, or a
+renderer. A later map compiler may depend on it; the planner must not depend back on the
+runtime map implementation.
+
 `hex_objects` is the renderer for static Workshop-authored objects. Producers publish
 the shared `hex_assets::ObjectInstance` contract; they do not depend on the renderer,
 and the renderer does not project gameplay blockers.
@@ -201,7 +207,7 @@ for player movement, while `hex_combat` consumes faction-generic projections and
 richer current-observation API to gate gameplay-owned lattice knowledge, cast anchors,
 and AI. Neither gameplay crate may import map-generator internals.
 
-**Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
+**Two owners, two roles.** The **world owner** has `hex_schematic`, `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
 content (world files, `substances.ron`, lighting profiles, `perception.ron`).
 The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat_core`, `hex_combat`, `hex_lattice`,

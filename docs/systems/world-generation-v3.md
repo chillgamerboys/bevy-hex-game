@@ -64,6 +64,28 @@ leave stale current or fall descriptors behind.
 
 ## Layouts and patches
 
+### Pre-terrain schematic planning
+
+The Grand V3 test world introduces a planning stage before any V3 layout or voxel recipe.
+`hex_schematic` consumes a strict versioned template and `u64` world seed and resolves one
+complete radius-eight graph: 217 canonical coarse cells, 600 internal adjacencies, 48
+boundary cells, and 102 outward sides. The plan stores surface/landform, climate,
+vegetation, access intent, feature overlays, provenance, hydrology, metrics, and a semantic
+fingerprint. It stores no voxel radius, height, substance, final colour, entity, or camera
+fact.
+
+The first template fixes the sharp-peak ring, elevated mountain lake and island, frozen
+woods, waterfall, Crystal Ascent, and tunnel. It bounds the remaining biome envelopes and
+lets named independent seed streams vary the coast, valley lake/river, sea-island groups,
+and coherent woodland. Thirty-two complete schematic candidates are validated and scored;
+an independently validated reference plan is the only fallback. Invalid output is never
+published.
+
+This planner is not yet a fifth `V3LayoutSettings` variant. A later map-owned compiler will
+consume the same pure plan at runtime and choose horizontal spacing, vertical budgets,
+recipe mapping, materials, and routes. Keeping that expansion separate is what permits
+radius-to-height and palette experiments without changing the semantic geography.
+
 `generator_version: 3` selects one of four layouts:
 
 - `Single(PatchSpec)` fills one connected world footprint with one recipe.

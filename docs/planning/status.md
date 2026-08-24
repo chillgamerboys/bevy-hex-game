@@ -9,6 +9,16 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+The **Grand V3 schematic planner** is in implementation on
+`wave/grand-v3-schematic`, stacked temporarily on the exact corrective biome head while
+draft PRs #210–#213 await delivery to `dev`. Its first milestone is deliberately not a
+voxel map: a pure world-owned library and CLI turn one seed plus a strict radius-eight
+template into a complete 217-cell semantic plan, validation metrics, fingerprints, and
+review-only SVG/HTML projections. Locked landmark and network cells remain exact; bounded
+biome envelopes and seeded coast, island, river, and woodland layers provide controlled
+variation. Runtime V3 compilation, voxel scale, elevation, materials, and final palette
+remain the next phase.
+
 The **Coastal islands** wave is review-ready on its delivery branch and is not yet a
 claim about `dev`. Exact implementation head
 `6f78a9cae681d9675e67daf6bd98b20e4a058475` contains focused **Sandy Islets** and

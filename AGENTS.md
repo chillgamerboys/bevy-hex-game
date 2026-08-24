@@ -81,7 +81,7 @@ and hot-file overlap rather than opening one PR per ticket.
 
 ## Ownership and shared concerns
 
-- The world owner controls `hex_map`, `hex_world`, `hex_perception`, and their
+- The world owner controls `hex_schematic`, `hex_map`, `hex_world`, `hex_perception`, and their
   domain content and schema. The gameplay owner controls `hex_core`, `hex_units`,
   `hex_combat`, `hex_lattice`, `hex_anim`, and generic asset-loader infrastructure.
 - `hex_game` is shared integration; `hex_objects` and `hex_editor` are shared
