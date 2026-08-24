@@ -1,6 +1,6 @@
 # Grand V3 schematic planner wave
 
-- Status: `dispatching`
+- Status: `review-ready`
 - Wave branch: `wave/grand-v3-schematic`
 - Base `origin/dev`: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Required stacked dependency: biome feedback head
@@ -70,7 +70,7 @@ lanes:
     selector: {concerns: [residual, clippy, docs], full: true}
     evidence: logic-only
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: integrated
     pr: null
 
   - id: L2
@@ -92,7 +92,7 @@ lanes:
     selector: {concerns: [residual, clippy, docs], full: true}
     evidence: logic-only
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: integrated
     pr: null
 
   - id: L3
@@ -113,7 +113,7 @@ lanes:
     selector: {concerns: [residual, clippy, docs], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: integrated
     pr: null
 
   - id: L4
@@ -136,7 +136,7 @@ lanes:
     selector: {concerns: [residual, clippy, docs], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: integrated
     pr: null
 ```
 
@@ -165,6 +165,18 @@ lanes:
   projection; typed plans and validators own all logical claims.
 - The final selector-chosen CI-equivalent gate runs once on the exact combined head.
 
+## Acceptance ledger
+
+| Evidence | Result |
+|---|---|
+| Strict package tests | 30 library, 16 binary, and 12 black-box acceptance tests pass; the release-only corpus is intentionally ignored by the ordinary package run |
+| Normal corpus | 256/256 valid, non-fallback, semantically unique plans; every required bounded region varies |
+| Release corpus | 10,000/10,000 valid, zero fallback, 10,000 unique fingerprints, every island-count and island-size bucket represented, adjacent-seed diversity threshold met, generation p95 below 50 ms |
+| Memory | Linux `VmHWM < 64 MiB` remains enforced by the scheduled stress workflow; macOS local runs cannot publish that metric |
+| Static presentation | labelled grid, canonical reference, twelve seed variants, authorship diagnostics, and hydrology overlays generated and inspected at original resolution and as a self-contained contact sheet |
+| Dependency boundary | normal tree contains only `atomicwrites`, `ron`, `rustix`, `serde`, and `xxhash-rust`; no Bevy, gameplay, `hex_core`, or `hex_map` dependency |
+| Repository integration | selector-chosen CI-equivalent gate pending on the documentation-complete combined head |
+
 ## Stop conditions
 
 - Any dependency on `hex_map`, a renderer, gameplay, or runtime map state.
@@ -176,8 +188,18 @@ lanes:
 
 ## Injection log
 
-- None.
+- The final contract audit separated deliberate canonical reference artifacts from genuine
+  exhausted-candidate fallbacks, hardened fixed-overlay ownership and scalar provenance,
+  and moved hydrology before island/vegetation resolution so later named streams cannot
+  affect candidate eligibility or selection.
+- Static review found externally embedded gallery panels and overly dense cell labels.
+  The contact sheet now renders all twelve maps directly, composites carry one semantic
+  abbreviation per cell, and diagnostics retain coordinates and authorship detail.
+- Directory publication now uses an atomic no-replace rename and has a deterministic
+  late-created-empty-destination race regression.
 
 ## Close-out
 
-Pending implementation, combined verification, gallery review, and delivery to `dev`.
+Implementation, package verification, both deterministic corpora, and static gallery review
+are complete. Pending the selector-chosen repository gate, named-human approval,
+publication, and delivery to `dev` after the prerequisite corrective stack lands.

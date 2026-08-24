@@ -9,15 +9,26 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-The **Grand V3 schematic planner** is in implementation on
-`wave/grand-v3-schematic`, stacked temporarily on the exact corrective biome head while
-draft PRs #210–#213 await delivery to `dev`. Its first milestone is deliberately not a
-voxel map: a pure world-owned library and CLI turn one seed plus a strict radius-eight
-template into a complete 217-cell semantic plan, validation metrics, fingerprints, and
-review-only SVG/HTML projections. Locked landmark and network cells remain exact; bounded
-biome envelopes and seeded coast, island, river, and woodland layers provide controlled
-variation. Runtime V3 compilation, voxel scale, elevation, materials, and final palette
-remain the next phase.
+The **Grand V3 schematic planner** is review-ready on `wave/grand-v3-schematic`, stacked
+temporarily on the exact corrective biome head while draft PRs #210–#213 await delivery to
+`dev`. Exact implementation and corpus head `1a64ce7` adds a standalone world-owned
+library and CLI that turn one seed plus a strict radius-eight template into a complete
+217-cell semantic plan, validation metrics, semantic fingerprint, and review-only
+SVG/HTML projections. Locked landmark and network cells remain exact; bounded biome
+envelopes and independently named coast, hydrology, island, landform, and vegetation
+streams provide controlled variation without cross-stream selection feedback.
+
+The package gate passes 30 library, 16 binary, and 12 black-box acceptance tests. The
+corrected 256-seed corpus produced 256 valid, non-fallback, unique plans and varied every
+required bounded region. The release 10,000-seed corpus produced zero invalid plans, zero
+fallbacks, and 10,000 unique semantic fingerprints; it covered every allowed island-count
+and island-size bucket, met the consecutive-seed diversity threshold, and passed the
+50 ms generation-p95 assertion. Local macOS cannot expose Linux `VmHWM`, so the scheduled
+Linux stress job remains the authoritative 64 MiB peak-memory gate. The final generated
+reference/grid/twelve-seed approval pack has been inspected at full resolution and as a
+self-contained contact sheet. The selector-chosen repository gate, named-human approval,
+publication, and delivery to `dev` remain pending. Runtime V3 compilation, voxel scale,
+elevation, materials, and final palette remain the next phase.
 
 The **Coastal islands** wave is review-ready on its delivery branch and is not yet a
 claim about `dev`. Exact implementation head

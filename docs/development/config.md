@@ -104,10 +104,14 @@ cargo run -p hex_schematic -- gallery \
 ```
 
 Output destinations must not already exist. Each command validates all typed outputs in
-a sibling staging directory and publishes the complete directory with one rename, so a
-failed run cannot leave a partial plan or gallery looking reviewable. `generate` writes
+a sibling staging directory and publishes the complete directory with one atomic
+no-replace rename, so a failed or racing run cannot leave a partial plan or gallery looking
+reviewable or replace another publisher's output. `generate` writes
 `plan.ron`, `metrics.ron`, `composite.svg`, and `diagnostics.svg`; `gallery` writes those
-four files for twelve consecutive seeds plus `contact-sheet.svg` and `index.html`.
+four files for a canonical reference-artifact `reference/` bundle and twelve consecutive
+seed bundles, plus a self-contained `contact-sheet.svg` and `index.html` at the gallery
+root. A reference artifact preserves the template's original authorship; it is not marked
+as an exhausted-candidate fallback.
 
 Reload and validate an existing plan without trusting its SVG projection:
 
@@ -123,6 +127,9 @@ Omit `--plan` and `--metrics` to validate only the template.
 RON parsing rejects unknown fields, duplicate or non-canonical cells, malformed cube
 coordinates, and unsupported schema versions. SVG colors, patterns, and labels are a
 debug palette for review; only the RON model and validator establish correctness.
+The scheduled stress workflow runs the ignored 10,000-seed release corpus, including
+validity, fallback, semantic uniqueness, island-bucket, consecutive-seed diversity,
+50 ms p95 generation, and Linux peak-memory gates.
 
 ## Deterministic review captures
 

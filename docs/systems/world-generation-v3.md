@@ -77,9 +77,17 @@ fact.
 The first template fixes the sharp-peak ring, elevated mountain lake and island, frozen
 woods, waterfall, Crystal Ascent, and tunnel. It bounds the remaining biome envelopes and
 lets named independent seed streams vary the coast, valley lake/river, sea-island groups,
-and coherent woodland. Thirty-two complete schematic candidates are validated and scored;
-an independently validated reference plan is the only fallback. Invalid output is never
-published.
+and coherent woodland. Thirty-two complete schematic candidates are validated and scored.
+If all candidates fail, generation may use one exact reference-fallback copy whose layer
+provenance records the underlying template authorities. A directly requested canonical
+reference artifact is different: it preserves the template's original locked, bounded,
+and seeded provenance and never claims that candidate generation failed.
+
+The standalone `hex_schematic` CLI emits canonical plan and metrics RON plus review-only
+SVG/HTML projections. Directory outputs are staged and published with an atomic no-replace
+rename; malformed or partially rendered galleries never replace an existing destination.
+The contact sheet is self-contained, while the typed plan and validator remain the only
+logical authority. Invalid output is never published.
 
 This planner is not yet a fifth `V3LayoutSettings` variant. A later map-owned compiler will
 consume the same pure plan at runtime and choose horizontal spacing, vertical budgets,
