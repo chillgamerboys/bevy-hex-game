@@ -9,10 +9,10 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-The **Grand V3 schematic planner** has completed its automated revision-2 correction on
-`wave/grand-v3-schematic` and awaits visual approval, stacked temporarily on the exact
-corrective biome head while draft PRs #210–#213 await delivery to `dev`. The implementation
-adds a standalone world-owned
+The **Grand V3 schematic planner** has completed its revision-2 correction and received
+cell-for-cell visual approval on `wave/grand-v3-schematic`, stacked temporarily on the
+exact corrective biome head while draft PRs #210–#213 await delivery to `dev`. The
+implementation adds a standalone world-owned
 library and CLI that turn one seed plus a strict radius-eight template into a complete
 217-cell semantic plan, validation metrics, semantic fingerprint, and review-only
 SVG/HTML projections. Alberto approved the corrected cell-for-cell source transcription:
@@ -25,10 +25,37 @@ Revision 2 now passes the complete package suite, the 256-seed normal corpus, an
 10,000-seed release corpus with zero invalid outputs, fallbacks, or duplicate semantic
 plans. Deterministic four-worker candidate evaluation preserves byte-identical serial
 results and brings sampled release p95 to 36.6–37.7 ms below the 50 ms budget. A fresh
-revision-2 reference plus twelve-seed gallery has been generated and machine-validated;
-named-human review remains pending. Local peak resident memory measured 8.7 MiB, while
-the scheduled Linux `VmHWM` run remains the authoritative 64 MiB platform gate. Runtime
-V3 compilation, voxel scale, elevation, materials, and final palette remain the next phase.
+revision-2 reference plus twelve-seed gallery has been generated and machine-validated.
+The exact source transcription has Alberto's named visual approval; the seeded gallery's
+variation quality remains a separate pending human review. Local peak resident memory measured 8.7 MiB, while
+the scheduled Linux `VmHWM` run remains the authoritative 64 MiB platform gate.
+
+The **Grand V3 schematic-to-map compiler** has reached its required representative proxy
+checkpoint on the same branch. The additive `Schematic` V3 layout compiles the approved
+plan once at pitch 22 into a radius-187 world with exactly 105,469 columns, 217 stable biome
+identities, and 444 resident 16 by 16 axial chunks. Terrain storage and presentation are
+chunk-native; `TerrainReady` now follows complete presentation and snapshot publication.
+Localized edits retain the grid and every unaffected chunk and revalidate only affected
+columns. Snapshots keep their existing wire shape with a raised 131,072-column bound, and
+teardown/re-entry reproduce every tested map-owned fingerprint and category. Representative
+strata, locked height/water pins, party setup, traversal probes, perception, cameras, edits,
+and renderer-shaped top-down captures are live. The proxy deliberately leaves
+`ordinary_route_validated` false. Final hydrology, physical routes, Crystal Ascent,
+vegetation, bridges, interiors, and lights remain intentionally absent.
+
+The final optimized checkpoint enters gameplay through `TerrainReady` in 1.794 s and its
+combined semantic compile plus voxel materialization takes 1.137 s. Its canonical snapshot
+is 10,861,429 bytes. Reach and long-path A* are 43.019 and 32.495 ms p95; isolated
+perception is 56.707 ms p95; and a one-column edit is 192.377 ms p95. The last two miss the
+proposed 50 and 100 ms budgets. The larger warning is presentation scale: the undecorated
+proxy already publishes 421,876 terrain-run entities and 422,586 total headless entities.
+A warm renderer run reaches 1,521,238,016 bytes maximum RSS and a 2,549,385,832-byte macOS
+peak footprint, roughly 1.8 times Crystal Mountain. The required budget and architecture
+decision is therefore pending. The recommended next lane is combined solid-terrain meshes
+per chunk plus exact picking, followed by remeasurement of the two missed latency targets,
+without shrinking radius, pitch, height, or content fidelity. Full measurements, proposed
+budgets, caveats, and the explicit approval question are recorded in
+[the proxy checkpoint](waves/grand-v3-map/proxy-checkpoint.md).
 
 The **Coastal islands** wave is review-ready on its delivery branch and is not yet a
 claim about `dev`. Exact implementation head
