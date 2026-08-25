@@ -240,6 +240,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Grand V3 Baseline",
+            category: Map,
+            blurb: "Undecorated radius-187 performance proxy for the approved eight-ring schematic; final hydrology, routes, Crystal Ascent, and vegetation await budget approval.",
+            world: "config/worlds/procedural-grand-v3-baseline.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/grand-v3-baseline-showcase.ron",
+        ),
+        (
             name: "Party Trial",
             category: Demo,
             blurb: "A full 3v3 party approaches the Crossing, compresses through its bridge, and fights archetype-for-archetype.",

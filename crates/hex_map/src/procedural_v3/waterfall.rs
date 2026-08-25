@@ -335,6 +335,9 @@ impl WaterfallHydrology {
             LayoutKind::Macro => Err(vec![recipe_issue(
                 "Macro Waterfall hydrology is resolved by the authored Macro runner",
             )]),
+            LayoutKind::Schematic => Err(vec![recipe_issue(
+                "Schematic hydrology is resolved by the global schematic compiler",
+            )]),
         }
     }
 

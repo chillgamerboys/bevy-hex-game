@@ -19,6 +19,7 @@ bevy = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
 hex_multiplayer = { workspace = true }
+hex_schematic = { workspace = true }
 rand = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 xxhash-rust = { workspace = true }
@@ -34,3 +35,7 @@ workspace = true
 [[test]]
 name = "contracts"
 path = "tests/contracts.rs"
+
+[[test]]
+name = "schematic_compile"
+path = "tests/schematic_compile.rs"

@@ -3939,6 +3939,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_multiplayer",
+ "hex_schematic",
  "hex_test_support",
  "rand 0.8.7",
  "ron",

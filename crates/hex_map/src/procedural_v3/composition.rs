@@ -247,6 +247,7 @@ impl GeneratedPatchPlan {
             boundary_liquid_outlets: BTreeMap::new(),
         };
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout: isolated_layout,
             volume: self.volume.clone(),
             liquids: self.liquids.clone(),
@@ -408,6 +409,7 @@ fn patch_slug(layout_kind: LayoutKind, patch: PatchId) -> String {
             id => format!("patch_{id}"),
         },
         LayoutKind::Macro => format!("macro_{:02}", patch.0),
+        LayoutKind::Schematic => format!("schematic_{:03}", patch.0),
     }
 }
 
@@ -429,6 +431,7 @@ fn namespace_numeric(
             RING19_MAX_LOCAL_ID,
         ),
         LayoutKind::Macro => (MACRO_LOCAL_ID_BITS, MACRO_MAX_PATCH_ID, MACRO_MAX_LOCAL_ID),
+        LayoutKind::Schematic => (24, 254, 0x00ff_ffff),
     };
     if patch.0 > maximum_patch || local > maximum_local {
         return Err(WorldCompositionError::NamespaceOverflow { patch, kind, local });
@@ -694,6 +697,7 @@ pub(crate) fn merge_world(
     }
 
     Ok(GeneratedWorldPlan {
+        source_schematic_fingerprint: None,
         layout,
         volume,
         liquids,
@@ -1675,6 +1679,58 @@ mod tests {
                 kind: NamespaceKind::Structure,
                 local: RING19_MAX_LOCAL_ID + 1,
             })
+        );
+    }
+
+    #[test]
+    fn schematic_namespace_reserves_world_prefix_and_admits_every_cell() {
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(254),
+                0x00ff_ffff,
+                NamespaceKind::Interior
+            ),
+            Ok(0xfeff_ffff)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(255),
+                0,
+                NamespaceKind::Feature
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(255),
+                kind: NamespaceKind::Feature,
+                local: 0,
+            })
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(0),
+                0x0100_0000,
+                NamespaceKind::Structure
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(0),
+                kind: NamespaceKind::Structure,
+                local: 0x0100_0000,
+            })
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(216),
+                42,
+                NamespaceKind::Liquid
+            ),
+            Ok(0xd800_002a)
+        );
+        assert_eq!(
+            namespace_name(LayoutKind::Schematic, PatchId(216), "party_start"),
+            "schematic_216_party_start"
         );
     }
 

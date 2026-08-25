@@ -43,9 +43,9 @@ use hex_core::{
     HexSpan, HexTile, IlluminationLevel, InteriorRegionId, InteriorRegions, Level, MapAnchorId,
     MapAnchors, MapViewHint, PausableSystems, Pause, PerceptionSystems, PresentationOcclusion,
     ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainBatchId, TerrainEdit, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
-    TerrainImpactRejection, TerrainImpactResult, TerrainReady, TerrainSystems, TerrainVoxelHealth,
-    TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
+    TerrainBatchId, TerrainChunkRoot, TerrainEdit, TerrainImpact, TerrainImpactDisposition,
+    TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainReady,
+    TerrainSystems, TerrainVoxelHealth, TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
@@ -705,6 +705,50 @@ fn tile_count(app: &mut App) -> usize {
         .query_filtered::<Entity, With<HexTile>>()
         .iter(app.world())
         .count()
+}
+
+fn terrain_chunk_key(coord: HexCoord) -> (i32, i32) {
+    (coord.x().div_euclid(16), coord.y().div_euclid(16))
+}
+
+fn terrain_chunk_roots(app: &mut App) -> BTreeMap<(i32, i32), Entity> {
+    let world = app.world_mut();
+    let expected = world
+        .resource::<VoxelMap>()
+        .columns()
+        .map(|(coord, _column)| terrain_chunk_key(coord))
+        .collect::<BTreeSet<_>>();
+    let grid = world
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(world)
+        .expect("the active terrain grid should be unique");
+    let mut roots = world.query::<(Entity, &TerrainChunkRoot, Option<&ChildOf>)>();
+    let mut found = BTreeMap::new();
+    for (entity, chunk, parent) in roots.iter(world) {
+        let parent = parent.expect("every terrain chunk root should have a parent");
+        assert_eq!(
+            parent.parent(),
+            grid,
+            "every terrain chunk root should belong to the active grid"
+        );
+        let key = (chunk.q, chunk.r);
+        assert_eq!(
+            found.insert(key, entity),
+            None,
+            "the active grid published duplicate chunk root {key:?}"
+        );
+    }
+    assert_eq!(
+        found.len(),
+        expected.len(),
+        "the active grid published the wrong number of chunk roots"
+    );
+    assert_eq!(
+        found.keys().copied().collect::<BTreeSet<_>>(),
+        expected,
+        "the active grid's chunk roots disagree with resident voxel storage"
+    );
+    found
 }
 
 fn published_run_bounds(app: &mut App, coord: HexCoord) -> BTreeSet<(Level, Level, SubstanceId)> {

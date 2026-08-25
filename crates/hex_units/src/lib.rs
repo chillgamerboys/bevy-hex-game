@@ -61,7 +61,8 @@ pub use formation::{
 };
 pub use hex_core::{Faction, OccupancyBlock, UnitOccupancy};
 pub use movement::{
-    route, route_with_occupancy, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing,
+    route, route_with_occupancy, Body, Footing, FootingCache, MovementCrossings, MovementSystems,
+    Reach, Standing,
 };
 pub use pathing::HexPathingLine;
 pub use selection::{

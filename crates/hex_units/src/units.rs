@@ -40,9 +40,11 @@ use hex_core::{
     SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
-use crate::movement::{route_with_occupancy, Body, Footing, MovementCrossings, Reach, Standing};
+use crate::movement::{
+    route_with_occupancy, Body, Footing, FootingCache, MovementCrossings, Reach, Standing,
+};
 use crate::pathing::{leg_duration, reached_step_index};
-use crate::selection::Selected;
+use crate::selection::{Selected, TerrainRevision};
 use crate::{
     formation_subset_anchor, plan_formation_subset_move_with_occupancy, AuthoredObjectOccupancy,
     FormationMember, FormationPlanError, UnitOccupancy,
@@ -71,6 +73,28 @@ pub(crate) type TileQuery<'w, 's> = Query<
     ),
     With<HexTile>,
 >;
+
+/// Optional gameplay resources read by the global tile-click observer.
+///
+/// Observers can fire outside gameplay, so every field remains optional. Grouping
+/// them as one system parameter also keeps the observer below Bevy's function-arity
+/// limit as movement gains additional authoritative projections.
+#[derive(SystemParam)]
+struct TileClickResources<'w> {
+    queue: Option<ResMut<'w, CommandQueue>>,
+    table: Option<Res<'w, SubstanceTable>>,
+    party: Option<Res<'w, Party>>,
+    formation: Option<Res<'w, PartyFormation>>,
+    formations: Option<Res<'w, FormationCatalog>>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+    authored_objects: Option<Res<'w, AuthoredObjectOccupancy>>,
+    revision: Option<Res<'w, TerrainRevision>>,
+    footing_cache: Option<ResMut<'w, FootingCache>>,
+    mode: Option<Res<'w, State<Mode>>>,
+    pause: Option<Res<'w, State<Pause>>>,
+    phase: Option<Res<'w, GameplayPhase>>,
+    pending: Option<Res<'w, PendingDecision>>,
+}
 
 /// Which surface a piece is **actually standing on**, right now.
 ///
@@ -494,18 +518,23 @@ fn on_tile_clicked(
         With<Player>,
     >,
     positions: Query<(&UnitId, &StandsOn, Option<&MovingTo>)>,
-    queue: Option<ResMut<CommandQueue>>,
-    table: Option<Res<SubstanceTable>>,
-    party: Option<Res<Party>>,
-    formation: Option<Res<PartyFormation>>,
-    formations: Option<Res<FormationCatalog>>,
-    blockers: Option<Res<TraversalBlockers>>,
-    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
-    mode: Option<Res<State<Mode>>>,
-    pause: Option<Res<State<Pause>>>,
-    phase: Option<Res<GameplayPhase>>,
-    pending: Option<Res<PendingDecision>>,
+    resources: TileClickResources,
 ) {
+    let TileClickResources {
+        queue,
+        table,
+        party,
+        formation,
+        formations,
+        blockers,
+        authored_objects,
+        revision,
+        mut footing_cache,
+        mode,
+        pause,
+        phase,
+        pending,
+    } = resources;
     if phase.is_some_and(|phase| *phase != GameplayPhase::Active) {
         return;
     }
@@ -544,6 +573,7 @@ fn on_tile_clicked(
                     .map(|step| (*unit, step.pos)),
             )
         }));
+    let terrain_revision = revision.as_deref().map_or(0, |revision| revision.0);
 
     // The click identifies a tile *entity*, which resolves to one specific surface
     // even where several share a coordinate. Picking is the right input for exactly
@@ -611,13 +641,27 @@ fn on_tile_clicked(
         {
             return;
         }
-        let anchor_footing = Arc::new(Footing::from_tiles_with_object_occupancy(
-            tiles.iter(),
-            &table,
-            *anchor_body,
-            blockers.as_deref(),
-            &authored_objects,
-        ));
+        let anchor_footing = footing_cache.as_deref_mut().map_or_else(
+            || {
+                Arc::new(Footing::from_tiles_with_object_occupancy(
+                    tiles.iter(),
+                    &table,
+                    *anchor_body,
+                    blockers.as_deref(),
+                    &authored_objects,
+                ))
+            },
+            |cache| {
+                cache.get_or_build(
+                    terrain_revision,
+                    tiles.iter(),
+                    &table,
+                    *anchor_body,
+                    blockers.as_deref(),
+                    &authored_objects,
+                )
+            },
+        );
         let Some(destination) = anchor_footing.at(*pos) else {
             return;
         };
@@ -653,13 +697,27 @@ fn on_tile_clicked(
             {
                 Arc::clone(footing)
             } else {
-                let footing = Arc::new(Footing::from_tiles_with_object_occupancy(
-                    tiles.iter(),
-                    &table,
-                    *body,
-                    blockers.as_deref(),
-                    &authored_objects,
-                ));
+                let footing = footing_cache.as_deref_mut().map_or_else(
+                    || {
+                        Arc::new(Footing::from_tiles_with_object_occupancy(
+                            tiles.iter(),
+                            &table,
+                            *body,
+                            blockers.as_deref(),
+                            &authored_objects,
+                        ))
+                    },
+                    |cache| {
+                        cache.get_or_build(
+                            terrain_revision,
+                            tiles.iter(),
+                            &table,
+                            *body,
+                            blockers.as_deref(),
+                            &authored_objects,
+                        )
+                    },
+                );
                 footing_by_body.push((*body, Arc::clone(&footing)));
                 footing
             };
@@ -717,12 +775,26 @@ fn on_tile_clicked(
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
         // between right and wrong.
-        let footing = Footing::from_tiles_with_object_occupancy(
-            tiles.iter(),
-            &table,
-            *body,
-            blockers.as_deref(),
-            &authored_objects,
+        let footing = footing_cache.as_deref_mut().map_or_else(
+            || {
+                Arc::new(Footing::from_tiles_with_object_occupancy(
+                    tiles.iter(),
+                    &table,
+                    *body,
+                    blockers.as_deref(),
+                    &authored_objects,
+                ))
+            },
+            |cache| {
+                cache.get_or_build(
+                    terrain_revision,
+                    tiles.iter(),
+                    &table,
+                    *body,
+                    blockers.as_deref(),
+                    &authored_objects,
+                )
+            },
         );
         let Some(destination) = footing.at(*pos) else {
             continue;
@@ -732,7 +804,7 @@ fn on_tile_clicked(
         // a cliff, a gap, or a ceiling too low to fit under means the piece simply
         // does not move.
         let Some(steps) =
-            route_with_occupancy(standing.0, destination, &footing, &occupancy, *unit)
+            route_with_occupancy(standing.0, destination, footing.as_ref(), &occupancy, *unit)
         else {
             continue;
         };

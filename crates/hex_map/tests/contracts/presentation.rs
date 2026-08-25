@@ -22,6 +22,7 @@ fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
         .expect("the first grid should exist");
+    let first_chunks = terrain_chunk_roots(&mut app);
     let first_presentations = liquid_presentations(&mut app);
     assert!(
         !first_presentations.is_empty(),
@@ -54,19 +55,24 @@ fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
         .world_mut()
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
-        .expect("the rebuilt grid should exist");
-    assert_ne!(second_grid, first_grid);
-    assert!(first_presentations
-        .iter()
-        .all(|(entity, _parent, _pickable)| app.world().get_entity(*entity).is_err()));
-    let second_presentations = liquid_presentations(&mut app);
-    assert!(!second_presentations.is_empty());
+        .expect("the edited grid should exist");
+    assert_eq!(second_grid, first_grid);
+    let second_chunks = terrain_chunk_roots(&mut app);
+    let affected = terrain_chunk_key(solid_edit.coord);
+    assert_ne!(second_chunks.get(&affected), first_chunks.get(&affected));
+    let retired_root = first_chunks
+        .get(&affected)
+        .copied()
+        .expect("the edited column should have an original chunk root");
     assert!(
-        second_presentations
-            .iter()
-            .all(|(_entity, parent, pickable)| *parent == second_grid
-                && *pickable == Pickable::IGNORE)
+        app.world().get_entity(retired_root).is_err(),
+        "the replaced chunk root remained alive"
     );
+    assert!(first_chunks
+        .iter()
+        .all(|(chunk, entity)| { *chunk == affected || second_chunks.get(chunk) == Some(entity) }));
+    let second_presentations = liquid_presentations(&mut app);
+    assert_eq!(second_presentations, first_presentations);
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()

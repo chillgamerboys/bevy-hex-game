@@ -122,6 +122,8 @@ pub enum ProceduralRecipeMetrics {
     MountainRange(MountainRangeMetrics),
     /// Whole-ocean topology, scenic islands, and playable-home-island measurements.
     OceanArchipelago(OceanArchipelagoMetrics),
+    /// Radius-187 schematic ownership and representative proxy measurements.
+    GrandV3(GrandV3Metrics),
 }
 
 /// Exact deterministic measurements of one selected V3 Hills plan.
@@ -726,6 +728,29 @@ pub struct OceanArchipelagoMetrics {
     pub shoreline_surfaces: u32,
     /// Exact rooted tree instances on the wooded heart.
     pub tree_roots: u32,
+}
+
+/// Exact deterministic measurements for the Grand V3 performance checkpoint.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GrandV3Metrics {
+    /// Coarse semantic cells retained as stable biome identities.
+    pub schematic_cells: u32,
+    /// Exact horizontal columns in the radius-187 footprint.
+    pub world_columns: u32,
+    /// Fixed resident 16 by 16 axial chunks occupied by the footprint.
+    pub resident_chunks: u32,
+    /// Exact ordinary dry support surfaces.
+    pub ordinary_surfaces: u32,
+    /// Horizontal columns carrying authored liquid.
+    pub water_columns: u32,
+    /// Connected still-water bodies in the checkpoint proxy.
+    pub liquid_bodies: u32,
+    /// Lowest exposed solid surface.
+    pub minimum_surface: Level,
+    /// Highest exposed solid surface.
+    pub maximum_surface: Level,
+    /// Selected revision-2 schematic semantic fingerprint.
+    pub schematic_fingerprint: u64,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.

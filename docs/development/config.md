@@ -81,9 +81,11 @@ while tuning, and `--release` when you just want to play.)
 ## Planning the Grand V3 world
 
 `assets/config/schematics/grand-v3-template.ron` is the strict, traced radius-eight
-world-plan template. It is an offline planning input, not a hot-reloaded game setting:
-it owns coarse geography and authorship constraints, while a later compiler will own
-voxel scale, elevation, recipes, materials, and the final palette.
+world-plan template. It is a packaged planning input rather than a hot-reloaded gameplay
+setting: it owns coarse geography and authorship constraints. The map-owned
+`Schematic(GrandV3, revision 2, pitch 22, GrandV3BasicV1)` layout now consumes the same
+pure generator at runtime and owns voxel scale, representative elevation, and materials.
+Final routes, decoration, and palette work remain later compiler layers.
 
 Revision 2 is the approved source transcription; revision 1 was an approximate trace and
 must not be used as visual or semantic evidence. Review projections use the fixed flat-top

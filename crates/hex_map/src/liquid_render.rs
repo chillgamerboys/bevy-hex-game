@@ -1,9 +1,9 @@
 //! Opaque, non-interactive presentation geometry for liquid voxel runs.
 //!
 //! The ordinary voxel prisms remain the authoritative volume, pick target, and
-//! shadow caster. This module adds only a biased horizontal cap to each exposed
-//! water or lava run, a combined vertical curtain for semantic V3 falls, and
-//! deterministic landing-splash geometry for lava falls.
+//! shadow caster. This module adds only chunk-batched biased horizontal caps for
+//! exposed water or lava runs, a combined vertical curtain for semantic V3 falls,
+//! and deterministic landing-splash geometry for lava falls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -23,7 +23,7 @@ use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
 use hex_core::{HexCoord, Level, PausableSystems, Screen, SubstanceId, TilePos};
 
 use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresentationProjection};
-use crate::voxel::{runs, SubstanceRun, VoxelMap};
+use crate::voxel::{runs, terrain_chunk_coord, SubstanceRun, TerrainChunkCoord, VoxelMap};
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
 const LIQUID_FOAM_SWATCH: &str = "liquid/foam";
@@ -340,6 +340,19 @@ struct LiquidSurface {
     downstream: Option<TilePos>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct LiquidCapBatchKey {
+    chunk: TerrainChunkCoord,
+    role: FillMaterialRole,
+    style: MaterialStyle,
+}
+
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct LiquidCapBatch {
+    key: LiquidCapBatchKey,
+    surfaces: Vec<LiquidSurface>,
+}
+
 #[derive(Debug)]
 struct PresentationPlan {
     surfaces: Vec<LiquidSurface>,
@@ -347,7 +360,7 @@ struct PresentationPlan {
     roles: BTreeSet<FillMaterialRole>,
 }
 
-/// Spawns non-pickable liquid caps and combined fall curtains.
+/// Spawns non-pickable, chunk-batched liquid caps and combined fall curtains.
 ///
 /// Validation and mesh construction complete before commands or assets are
 /// changed, so an error never leaves a partially spawned presentation.
@@ -366,6 +379,12 @@ pub(crate) fn spawn_presentations(
         clear_material_cache(commands);
         return Ok(Vec::new());
     }
+    let cap_batches = batch_liquid_caps(&plan.surfaces)
+        .into_iter()
+        .map(|(key, surfaces)| {
+            cap_batch_geometry(&surfaces, level_height).map(|geometry| (key, surfaces, geometry))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let role_colors = plan
         .roles
@@ -379,7 +398,6 @@ pub(crate) fn spawn_presentations(
         .ok_or(LiquidPresentationError::MissingPaletteSwatch {
             swatch: LIQUID_FOAM_SWATCH,
         })?;
-    let cap = meshes.add(cap_geometry().into_mesh());
     let mut material_sets = Vec::with_capacity(role_colors.len());
     let mut registered_handles = Vec::with_capacity(role_colors.len().saturating_mul(4));
     for (role, color) in role_colors {
@@ -388,28 +406,18 @@ pub(crate) fn spawn_presentations(
         material_sets.push(set);
     }
 
-    let mut entities = Vec::with_capacity(plan.surfaces.len().saturating_add(plan.falls.len()));
-    for surface in plan.surfaces {
-        let style = match surface.flow {
-            LiquidFlowState::Still => MaterialStyle::Still,
-            LiquidFlowState::Current => MaterialStyle::Current,
-            LiquidFlowState::Rapid | LiquidFlowState::Fall => MaterialStyle::Rapid,
-        };
-        let material = material_handle(&material_sets, surface.role, style);
-        let direction = match surface.flow {
-            LiquidFlowState::Still => None,
-            LiquidFlowState::Current | LiquidFlowState::Rapid | LiquidFlowState::Fall => surface
-                .downstream
-                .and_then(|downstream| side_between(surface.position.coord, downstream.coord)),
-        };
-        let transform = cap_transform(surface.position, direction, level_height);
+    let mut entities = Vec::with_capacity(cap_batches.len().saturating_add(plan.falls.len()));
+    for (key, surfaces, geometry) in cap_batches {
+        let mesh = meshes.add(geometry.into_mesh());
+        let material = material_handle(&material_sets, key.role, key.style);
         let entity = commands
             .spawn((
-                Mesh3d(cap.clone()),
+                Mesh3d(mesh),
                 MeshMaterial3d(material),
-                transform,
+                Transform::default(),
                 Pickable::IGNORE,
                 NotShadowCaster,
+                LiquidCapBatch { key, surfaces },
                 Name::new("LiquidCap"),
             ))
             .id();
@@ -491,6 +499,34 @@ fn build_presentation_plan(
         falls,
         roles,
     })
+}
+
+fn batch_liquid_caps(
+    surfaces: &[LiquidSurface],
+) -> BTreeMap<LiquidCapBatchKey, Vec<LiquidSurface>> {
+    let mut batches = BTreeMap::<LiquidCapBatchKey, Vec<LiquidSurface>>::new();
+    for &surface in surfaces {
+        batches
+            .entry(LiquidCapBatchKey {
+                chunk: terrain_chunk_coord(surface.position.coord),
+                role: surface.role,
+                style: cap_material_style(surface.flow),
+            })
+            .or_default()
+            .push(surface);
+    }
+    for batch in batches.values_mut() {
+        batch.sort_by_key(|surface| surface.position);
+    }
+    batches
+}
+
+const fn cap_material_style(flow: LiquidFlowState) -> MaterialStyle {
+    match flow {
+        LiquidFlowState::Still => MaterialStyle::Still,
+        LiquidFlowState::Current => MaterialStyle::Current,
+        LiquidFlowState::Rapid | LiquidFlowState::Fall => MaterialStyle::Rapid,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -677,7 +713,7 @@ fn role_color(
         .ok_or(LiquidPresentationError::MissingSubstance { role })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MaterialStyle {
     Still,
     Current,
@@ -904,6 +940,53 @@ fn cap_geometry() -> RawMesh {
     }
 }
 
+fn cap_batch_geometry(
+    surfaces: &[LiquidSurface],
+    level_height: f32,
+) -> Result<RawMesh, LiquidPresentationError> {
+    let cap = cap_geometry();
+    let mut batch = RawMesh {
+        positions: Vec::with_capacity(surfaces.len().saturating_mul(cap.positions.len())),
+        normals: Vec::with_capacity(surfaces.len().saturating_mul(cap.normals.len())),
+        uvs: Vec::with_capacity(surfaces.len().saturating_mul(cap.uvs.len())),
+        indices: Vec::with_capacity(surfaces.len().saturating_mul(cap.indices.len())),
+    };
+    for surface in surfaces {
+        let direction = match surface.flow {
+            LiquidFlowState::Still => None,
+            LiquidFlowState::Current | LiquidFlowState::Rapid | LiquidFlowState::Fall => surface
+                .downstream
+                .and_then(|downstream| side_between(surface.position.coord, downstream.coord)),
+        };
+        let transform = cap_transform(surface.position, direction, level_height);
+        let base = u32::try_from(batch.positions.len())
+            .map_err(|_error| LiquidPresentationError::MeshIndexOverflow)?;
+        batch.positions.extend(
+            cap.positions
+                .iter()
+                .copied()
+                .map(Vec3::from_array)
+                .map(|position| transform.transform_point(position).to_array()),
+        );
+        batch.normals.extend(
+            cap.normals
+                .iter()
+                .copied()
+                .map(Vec3::from_array)
+                .map(|normal| (transform.rotation * normal).to_array()),
+        );
+        batch.uvs.extend(cap.uvs.iter().copied());
+        for &index in &cap.indices {
+            batch.indices.push(
+                base.checked_add(index)
+                    .ok_or(LiquidPresentationError::MeshIndexOverflow)?,
+            );
+        }
+    }
+    batch.validate_finite()?;
+    Ok(batch)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct FallGeometry {
     source: TilePos,
@@ -1043,6 +1126,7 @@ fn side_between(source: HexCoord, target: HexCoord) -> Option<HexSide> {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::world::CommandQueue;
     use bevy::platform::collections::HashMap;
     use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1235,6 +1319,177 @@ mod tests {
             unreachable!("cap contains its east UV")
         };
         assert!(west < east, "local +V must point East/downstream");
+    }
+
+    #[test]
+    fn liquid_caps_batch_by_euclidean_chunk_role_and_material_style() {
+        let still = |q, role| LiquidSurface {
+            position: TilePos::new(HexCoord::from_axial(q, 0), 4),
+            role,
+            flow: LiquidFlowState::Still,
+            downstream: None,
+        };
+        let moving = |q, level, role, flow| LiquidSurface {
+            position: TilePos::new(HexCoord::from_axial(q, 0), level),
+            role,
+            flow,
+            downstream: Some(TilePos::new(
+                HexCoord::from_axial(q + 1, 0),
+                level.saturating_sub(4),
+            )),
+        };
+        let surfaces = vec![
+            still(-17, FillMaterialRole::Water),
+            still(-16, FillMaterialRole::Water),
+            still(-1, FillMaterialRole::Water),
+            moving(0, 4, FillMaterialRole::Water, LiquidFlowState::Current),
+            moving(2, 8, FillMaterialRole::Water, LiquidFlowState::Rapid),
+            moving(4, 8, FillMaterialRole::Water, LiquidFlowState::Fall),
+            still(6, FillMaterialRole::Lava),
+        ];
+
+        let batches = batch_liquid_caps(&surfaces);
+        assert_eq!(batches.len(), 5);
+        assert_eq!(
+            batches
+                .keys()
+                .map(|key| (key.chunk.q, key.chunk.r, key.role, key.style))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (-2, 0, FillMaterialRole::Water, MaterialStyle::Still),
+                (-1, 0, FillMaterialRole::Water, MaterialStyle::Still),
+                (0, 0, FillMaterialRole::Lava, MaterialStyle::Still),
+                (0, 0, FillMaterialRole::Water, MaterialStyle::Current),
+                (0, 0, FillMaterialRole::Water, MaterialStyle::Rapid),
+            ])
+        );
+        let logical = batches
+            .values()
+            .flatten()
+            .map(|surface| surface.position)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            logical.len(),
+            surfaces.len(),
+            "logical caps may not duplicate"
+        );
+        assert_eq!(
+            logical,
+            surfaces
+                .iter()
+                .map(|surface| surface.position)
+                .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn disconnected_cap_batch_preserves_each_surface_and_flow_orientation() {
+        let east = TilePos::new(HexCoord::from_axial(1, 0), 4);
+        let surfaces = [
+            LiquidSurface {
+                position: TilePos::new(HexCoord::ORIGIN, 4),
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Current,
+                downstream: Some(east),
+            },
+            LiquidSurface {
+                position: TilePos::new(HexCoord::from_axial(15, 15), 7),
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+        ];
+        let mesh = cap_batch_geometry(&surfaces, 0.4).expect("valid disconnected cap batch");
+        assert_eq!(mesh.positions.len(), surfaces.len() * 7);
+        assert_eq!(mesh.normals.len(), surfaces.len() * 7);
+        assert_eq!(mesh.uvs.len(), surfaces.len() * 7);
+        assert_eq!(mesh.indices.len(), surfaces.len() * 18);
+        mesh.validate_finite().expect("batch geometry is finite");
+
+        let expected_first_center = cap_transform(surfaces[0].position, Some(HexSide::East), 0.4)
+            .transform_point(Vec3::ZERO);
+        assert_vec3_near(Vec3::from_array(mesh.positions[0]), expected_first_center);
+        let expected_second_center =
+            cap_transform(surfaces[1].position, None, 0.4).transform_point(Vec3::ZERO);
+        assert_vec3_near(Vec3::from_array(mesh.positions[7]), expected_second_center);
+    }
+
+    #[test]
+    fn spawned_cap_batches_retain_exact_logical_coverage_and_teardown_cleanly() {
+        let table = liquid_table();
+        let Some(water) = table.id("water") else {
+            unreachable!("test table contains water")
+        };
+        let Some(lava) = table.id("lava") else {
+            unreachable!("test table contains lava")
+        };
+        let positions = [
+            (TilePos::new(HexCoord::from_axial(-17, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(-16, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(-1, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(0, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(16, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(0, 1), 0), lava),
+        ];
+        let mut map = VoxelMap::new();
+        for &(position, substance) in &positions {
+            map.set(position, substance);
+        }
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<LiquidMaterial>::default();
+        let entities = {
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_presentations(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &map,
+                &table,
+                0.4,
+                0.0,
+                None,
+            )
+            .expect("valid liquid batches should spawn")
+        };
+        queue.apply(&mut world);
+
+        assert_eq!(
+            entities.len(),
+            5,
+            "five chunk/role/style batches are expected"
+        );
+        assert_eq!(meshes.len(), entities.len());
+        let mut logical = BTreeSet::new();
+        let mut keys = BTreeSet::new();
+        let mut query =
+            world.query::<(&LiquidCapBatch, &Pickable, Has<NotShadowCaster>, &Transform)>();
+        for (batch, pickable, no_shadow, transform) in query.iter(&world) {
+            assert!(keys.insert(batch.key), "duplicate liquid batch key");
+            assert_eq!(*pickable, Pickable::IGNORE);
+            assert!(no_shadow);
+            assert_eq!(*transform, Transform::default());
+            for surface in &batch.surfaces {
+                assert!(
+                    logical.insert(surface.position),
+                    "duplicate logical liquid cap"
+                );
+                assert_eq!(surface.flow, LiquidFlowState::Still);
+            }
+        }
+        assert_eq!(
+            logical,
+            positions
+                .into_iter()
+                .map(|(position, _substance)| position)
+                .collect::<BTreeSet<_>>()
+        );
+
+        for entity in entities {
+            assert!(world.despawn(entity));
+        }
+        assert_eq!(query.iter(&world).count(), 0);
     }
 
     #[test]

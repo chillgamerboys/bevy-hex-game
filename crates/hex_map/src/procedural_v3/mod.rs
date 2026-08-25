@@ -18,9 +18,10 @@ use crate::procedural::{
     DeepForestMetrics as DeepForestReportMetrics, DesertPlainMetrics as DesertPlainReportMetrics,
     DesertTransitionMetrics as DesertTransitionReportMetrics, DunesMetrics as DunesReportMetrics,
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
-    HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
-    OasisMetrics as OasisReportMetrics, PrairieMetrics as PrairieReportMetrics,
-    ProceduralRecipeMetrics, SandyIsletsMetrics as SandyIsletsReportMetrics, TacticalMetrics,
+    GrandV3Metrics as GrandV3ReportMetrics, HillsMetrics as HillsReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, OasisMetrics as OasisReportMetrics,
+    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics,
+    SandyIsletsMetrics as SandyIsletsReportMetrics, TacticalMetrics,
     VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
     WoodedIslandMetrics as WoodedIslandReportMetrics,
 };
@@ -79,6 +80,7 @@ mod ring7;
 mod river_terrain;
 mod routing;
 mod sandy_islets;
+mod schematic;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -235,6 +237,7 @@ pub(crate) fn ensure_recipe_available(
         V3LayoutSettings::Ring7(_) => Ok(()),
         V3LayoutSettings::Ring19(_) => Ok(()),
         V3LayoutSettings::Macro(_) => Ok(()),
+        V3LayoutSettings::Schematic(_) => Ok(()),
     }
 }
 
@@ -661,6 +664,77 @@ pub(crate) fn build(
                 },
             )
         }
+        V3LayoutSettings::Schematic(_) => finish_build(
+            schematic::generate(grid_radius, level_height, settings, seed)?,
+            grid_radius,
+            level_height,
+            settings,
+            seed,
+            palette,
+            is_solid,
+            started,
+            schematic_report_metrics,
+            |metrics| ProceduralRecipeMetrics::GrandV3(schematic_recipe_metrics(metrics)),
+        ),
+    }
+}
+
+/// Compiles one already-generated Grand V3 schematic through the same semantic
+/// validation, materialization, and reporting boundary as runtime generation.
+///
+/// This path deliberately skips schematic candidate generation: review tools can
+/// compile an exact reference or saved plan without asking the planner to select
+/// another candidate.
+pub(crate) fn compile_schematic_plan(
+    plan: &hex_schematic::SchematicPlanV1,
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV3Settings,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<ProceduralBuild, V3GenerationError> {
+    let started = Instant::now();
+    finish_build(
+        schematic::compile_schematic(plan, settings, grid_radius, level_height)?,
+        grid_radius,
+        level_height,
+        settings,
+        plan.provenance.world_seed,
+        palette,
+        is_solid,
+        started,
+        schematic_report_metrics,
+        |metrics| ProceduralRecipeMetrics::GrandV3(schematic_recipe_metrics(metrics)),
+    )
+}
+
+fn schematic_report_metrics(metrics: &schematic::SchematicWorldMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics
+            .maximum_surface
+            .saturating_sub(metrics.minimum_surface),
+        barrier_cells: metrics.water_columns,
+        // The proxy labels ordinary surfaces but intentionally does not compile the
+        // final route graph yet. Do not present authored intent as proven reachability.
+        reachable_surfaces: 0,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+const fn schematic_recipe_metrics(
+    metrics: &schematic::SchematicWorldMetrics,
+) -> GrandV3ReportMetrics {
+    GrandV3ReportMetrics {
+        schematic_cells: metrics.schematic_cells,
+        world_columns: metrics.world_columns,
+        resident_chunks: metrics.expected_chunks,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        water_columns: metrics.water_columns,
+        liquid_bodies: metrics.liquid_bodies,
+        minimum_surface: metrics.minimum_surface,
+        maximum_surface: metrics.maximum_surface,
+        schematic_fingerprint: metrics.schematic_fingerprint,
     }
 }
 

@@ -581,6 +581,7 @@ mod tests {
             },
         );
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan::default(),

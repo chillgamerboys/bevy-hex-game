@@ -12,7 +12,7 @@
 //! gameplay. A richer map means producing different voxels in the terrain builder;
 //! it does not change what a tile *is* to anyone else.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
@@ -26,14 +26,14 @@ use hex_core::{
     GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
     InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
     PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SimulationRole,
-    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainImpact, TerrainImpactDisposition,
-    TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainReady,
-    TerrainSystems, TilePos, TraversalBlockers, TraversalProfile, TreeOccluder,
+    SpecialMovementRegions, SubstanceId, TerrainChunkRoot, TerrainEdit, TerrainImpact,
+    TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult,
+    TerrainReady, TerrainSystems, TilePos, TraversalBlockers, TraversalProfile, TreeOccluder,
 };
 use hex_multiplayer::AuthorityBoundary;
 
 use crate::crystal_render::{self, CrystalPresentationError};
-use crate::feature_render::{self, FeaturePresentationError};
+use crate::feature_render::{self, FeaturePresentationError, GeneratedFeatureRoot};
 use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError, LiquidVisualTime};
 use crate::procedural;
 use crate::procedural_v2;
@@ -42,7 +42,7 @@ use crate::procedural_v3::MapPresentationProjection;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::terrain_damage::TerrainDamageState;
-use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
+use crate::voxel::{runs, terrain_chunk_coord, Column, SubstanceRun, TerrainChunkCoord, VoxelMap};
 use crate::world_snapshot::{
     apply_world_delta_v1, export_from_parts, prepare_world_snapshot_v1,
     CampaignWorldRestoreOutcomeV2, CampaignWorldRestoreRefusalV2, CampaignWorldRestoreResultV2,
@@ -97,6 +97,22 @@ struct PendingCampaignWorldPublication {
     public_fingerprint: hex_multiplayer::PublicWorldFingerprint,
 }
 
+/// Complete validated map resources waiting for their first grid publication.
+///
+/// This private marker separates semantic construction from presentation readiness.
+/// [`TerrainReady`] is published only after [`build_grid`] has created every resident
+/// chunk root and global presentation projection and the canonical world snapshot has
+/// been published without error.
+#[derive(Resource, Debug, Clone, Copy)]
+struct PendingTerrainPublication;
+
+/// A complete grid waiting for canonical snapshot publication and final readiness.
+///
+/// Keeping this distinct from [`PendingTerrainPublication`] prevents any observer from
+/// seeing [`TerrainReady`] between presentation construction and snapshot publication.
+#[derive(Resource, Debug, Clone, Copy)]
+struct PendingInitialSnapshotPublication;
+
 const MAX_WORLD_REPLICATION_REQUESTS_PER_UPDATE: usize = 64;
 
 /// Registers world construction and tile spawning.
@@ -104,6 +120,7 @@ pub fn plugin(app: &mut App) {
     liquid_render::plugin(app);
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()
+        .register_type::<TerrainChunkRoot>()
         .register_type::<HexSpan>()
         .register_type::<HexTile>()
         .register_type::<SubstanceId>()
@@ -135,6 +152,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<SandyIsletsReportMetrics>()
         .register_type::<WoodedIslandReportMetrics>()
         .register_type::<OceanArchipelagoMetrics>()
+        .register_type::<crate::procedural::GrandV3Metrics>()
+        .init_resource::<MaterialCache>()
         .init_resource::<DamagedVoxels>()
         .init_resource::<TerrainDamageState>()
         .init_resource::<PendingTerrainEdits>()
@@ -174,9 +193,15 @@ pub fn plugin(app: &mut App) {
         )
         .add_systems(
             OnEnter(Screen::Gameplay),
-            spawn_grid
-                .in_set(GameplaySetup::Terrain)
-                .run_if(resource_exists::<TerrainReady>),
+            (
+                spawn_grid.run_if(resource_exists::<PendingTerrainPublication>),
+                publish_current_world_snapshot
+                    .run_if(resource_exists::<PendingInitialSnapshotPublication>),
+                finalize_initial_terrain_publication
+                    .run_if(resource_exists::<PendingInitialSnapshotPublication>),
+            )
+                .chain()
+                .in_set(GameplaySetup::Terrain),
         )
         .add_systems(
             Update,
@@ -198,13 +223,6 @@ pub fn plugin(app: &mut App) {
                 .after(collect_terrain_edits)
                 .after(collect_terrain_impacts)
                 .run_if(in_state(Screen::Gameplay)),
-        )
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            publish_current_world_snapshot
-                .in_set(GameplaySetup::Terrain)
-                .after(spawn_grid)
-                .run_if(resource_exists::<TerrainReady>),
         )
         .add_systems(
             Update,
@@ -275,6 +293,8 @@ fn generate_world(
     commands.remove_resource::<CurrentWorldSnapshotV1>();
     commands.remove_resource::<PendingSnapshotGridBuild>();
     commands.remove_resource::<PendingCampaignWorldPublication>();
+    commands.remove_resource::<PendingTerrainPublication>();
+    commands.remove_resource::<PendingInitialSnapshotPublication>();
     commands.remove_resource::<CampaignWorldRestoreResultV2>();
 
     if let Some(pending_campaign) = pending_campaign.as_deref_mut() {
@@ -331,7 +351,7 @@ fn generate_world(
         commands.insert_resource(MapAnchors::new());
         commands.insert_resource(SpecialMovementRegions::new());
         commands.insert_resource(InteriorRegions::new());
-        commands.insert_resource(TerrainReady);
+        commands.insert_resource(PendingTerrainPublication);
         return;
     };
 
@@ -367,7 +387,7 @@ fn generate_world(
                 );
                 commands.insert_resource(generated.special_regions);
                 commands.insert_resource(InteriorRegions::new());
-                commands.insert_resource(TerrainReady);
+                commands.insert_resource(PendingTerrainPublication);
             } else {
                 error!(
                     "procedural map and canonical fallback failed validation: {:?}",
@@ -412,7 +432,7 @@ fn generate_world(
             commands.insert_resource(generated.interiors);
             commands.insert_resource(generated.view_hint);
             commands.insert_resource(generated.report);
-            commands.insert_resource(TerrainReady);
+            commands.insert_resource(PendingTerrainPublication);
         }
         crate::settings::ProceduralSettings::V3(v3) => {
             let generated = match procedural_v3::build(
@@ -449,7 +469,7 @@ fn generate_world(
             commands.insert_resource(generated.view_hint);
             commands.insert_resource(generated.presentation);
             commands.insert_resource(generated.report);
-            commands.insert_resource(TerrainReady);
+            commands.insert_resource(PendingTerrainPublication);
         }
     }
 }
@@ -491,7 +511,7 @@ fn stage_campaign_world_restore(
     }
     commands.insert_resource(CurrentWorldSnapshotV1::new(snapshot));
     commands.insert_resource(PendingCampaignWorldPublication { public_fingerprint });
-    commands.insert_resource(TerrainReady);
+    commands.insert_resource(PendingTerrainPublication);
 }
 
 fn refuse_campaign_world_restore(commands: &mut Commands, reason: CampaignWorldRestoreRefusalV2) {
@@ -547,6 +567,8 @@ fn teardown_map(
     commands.remove_resource::<CurrentWorldSnapshotV1>();
     commands.remove_resource::<PendingSnapshotGridBuild>();
     commands.remove_resource::<PendingCampaignWorldPublication>();
+    commands.remove_resource::<PendingTerrainPublication>();
+    commands.remove_resource::<PendingInitialSnapshotPublication>();
     commands.remove_resource::<CampaignWorldRestoreResultV2>();
     liquid_render::clear_material_cache(&mut commands);
     commands.remove_resource::<TerrainReady>();
@@ -576,6 +598,7 @@ fn spawn_grid(
     let built = build_grid(
         &mut commands,
         &assets,
+        &mut presentation_assets.terrain_materials,
         &mut presentation_assets.materials,
         &mut presentation_assets.meshes,
         &mut presentation_assets.liquid_materials,
@@ -589,16 +612,12 @@ fn spawn_grid(
     );
     match built {
         Ok(()) => {
-            if let Some(pending_campaign) = pending_campaign {
-                commands.insert_resource(CampaignWorldRestoreResultV2 {
-                    outcome: CampaignWorldRestoreOutcomeV2::Applied {
-                        public_fingerprint: pending_campaign.public_fingerprint,
-                    },
-                });
-                commands.remove_resource::<PendingCampaignWorldPublication>();
-            }
+            commands.remove_resource::<PendingTerrainPublication>();
+            commands.insert_resource(PendingInitialSnapshotPublication);
         }
         Err(error) => {
+            commands.remove_resource::<PendingTerrainPublication>();
+            commands.remove_resource::<PendingInitialSnapshotPublication>();
             fail_presentation_setup(&mut commands, &error);
             if pending_campaign.is_some() {
                 discard_staged_campaign_world(
@@ -616,6 +635,65 @@ fn spawn_grid(
     }
 }
 
+/// Publishes initial terrain readiness only after the canonical snapshot exists.
+///
+/// This system is chained after [`publish_current_world_snapshot`]. Deferred commands
+/// from that system are applied before this one runs, so a missing snapshot is an exact
+/// setup failure and no downstream gameplay system can observe partial readiness.
+fn finalize_initial_terrain_publication(
+    mut commands: Commands,
+    current: Option<Res<CurrentWorldSnapshotV1>>,
+    pending_campaign: Option<Res<PendingCampaignWorldPublication>>,
+    mut damage_state: ResMut<TerrainDamageState>,
+    mut damaged_voxels: ResMut<DamagedVoxels>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    commands.remove_resource::<PendingInitialSnapshotPublication>();
+
+    let Some(current) = current else {
+        if pending_campaign.is_some() {
+            discard_staged_campaign_world(&mut commands, &mut damage_state, &mut damaged_voxels);
+            refuse_campaign_world_restore(
+                &mut commands,
+                CampaignWorldRestoreRefusalV2::PresentationFailed(
+                    "canonical world snapshot publication failed".to_owned(),
+                ),
+            );
+            commands.remove_resource::<PendingCampaignWorldPublication>();
+        } else {
+            fail_presentation_setup(
+                &mut commands,
+                &MapPresentationError::SnapshotResourcesMissing,
+            );
+        }
+        next_screen.set(Screen::Title);
+        return;
+    };
+
+    if let Some(pending_campaign) = pending_campaign {
+        if current.fingerprint() != pending_campaign.public_fingerprint {
+            discard_staged_campaign_world(&mut commands, &mut damage_state, &mut damaged_voxels);
+            refuse_campaign_world_restore(
+                &mut commands,
+                CampaignWorldRestoreRefusalV2::PresentationFailed(
+                    "canonical world snapshot fingerprint changed during publication".to_owned(),
+                ),
+            );
+            commands.remove_resource::<PendingCampaignWorldPublication>();
+            next_screen.set(Screen::Title);
+            return;
+        }
+        commands.insert_resource(CampaignWorldRestoreResultV2 {
+            outcome: CampaignWorldRestoreOutcomeV2::Applied {
+                public_fingerprint: pending_campaign.public_fingerprint,
+            },
+        });
+        commands.remove_resource::<PendingCampaignWorldPublication>();
+    }
+
+    commands.insert_resource(TerrainReady);
+}
+
 fn discard_staged_campaign_world(
     commands: &mut Commands,
     damage_state: &mut TerrainDamageState,
@@ -631,6 +709,8 @@ fn discard_staged_campaign_world(
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<MapPresentationProjection>();
     commands.remove_resource::<CurrentWorldSnapshotV1>();
+    commands.remove_resource::<PendingTerrainPublication>();
+    commands.remove_resource::<PendingInitialSnapshotPublication>();
     commands.remove_resource::<TerrainReady>();
     liquid_render::clear_material_cache(commands);
 }
@@ -640,6 +720,7 @@ fn discard_staged_campaign_world(
 fn build_grid(
     commands: &mut Commands,
     assets: &GameAssets,
+    palette_materials: &mut MaterialCache,
     materials: &mut Assets<StandardMaterial>,
     meshes: &mut Assets<Mesh>,
     liquid_materials: &mut Assets<LiquidMaterial>,
@@ -652,12 +733,16 @@ fn build_grid(
     art_catalog: Option<&RuntimeArtCatalog>,
 ) -> Result<(), MapPresentationError> {
     let mesh = assets.hex_tile.clone();
-    let mut palette_materials = MaterialCache::default();
     // Crystal asset resolution happens before any presentation entities are
     // queued, so a missing or incompatible dependency cannot leave a partial map.
     let prepared_crystals =
         crystal_render::prepare_presentations(settings.level_height, presentation, art_catalog)
             .map_err(MapPresentationError::Crystal)?;
+    // Substance ids are stable, but their accepted palette colours may have been
+    // replaced since the previous world was presented. A full publication is the
+    // lifecycle boundary at which every terrain material must be resolved again.
+    // Local chunk edits deliberately keep using the refreshed cache below.
+    palette_materials.reset_for_world(materials);
     let mut children = liquid_render::spawn_presentations(
         commands,
         meshes,
@@ -676,7 +761,70 @@ fn build_grid(
     children.extend(crystal_render::spawn_prepared(commands, prepared_crystals));
     children.extend(spawn_gameplay_lights(commands, presentation));
 
-    for (coord, column) in map.columns() {
+    let grid = commands
+        .spawn((
+            Transform::default(),
+            Visibility::default(),
+            Name::new("HexGrid"),
+            HexGrid,
+        ))
+        .id();
+    let chunk_roots = map
+        .chunk_coords()
+        .map(|chunk| {
+            (
+                chunk,
+                spawn_terrain_chunk(
+                    commands,
+                    &mesh,
+                    palette_materials,
+                    materials,
+                    map,
+                    table,
+                    settings,
+                    interiors,
+                    chunk,
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    debug_assert_eq!(chunk_roots.len(), map.chunk_count());
+    commands
+        .entity(grid)
+        .add_children(&chunk_roots.values().copied().collect::<Vec<_>>());
+
+    commands.entity(grid).add_children(&children);
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "chunk projection requires the same explicit terrain inputs as whole-grid publication"
+)]
+fn spawn_terrain_chunk(
+    commands: &mut Commands,
+    mesh: &Handle<Mesh>,
+    palette_materials: &mut MaterialCache,
+    materials: &mut Assets<StandardMaterial>,
+    map: &VoxelMap,
+    table: &SubstanceTable,
+    settings: &MapSettings,
+    interiors: Option<&InteriorRegions>,
+    chunk: crate::voxel::TerrainChunkCoord,
+) -> Entity {
+    let root = commands
+        .spawn((
+            Transform::default(),
+            Visibility::default(),
+            Name::new(format!("TerrainChunk[{},{}]", chunk.q, chunk.r)),
+            TerrainChunkRoot {
+                q: chunk.q,
+                r: chunk.r,
+            },
+        ))
+        .id();
+    let mut children = Vec::new();
+    for (coord, column) in map.columns_in_chunk(chunk) {
         for projected in projected_runs(coord, column, interiors) {
             let run = projected.run;
             let material = palette_materials.get_or_create(run.substance, table, materials);
@@ -717,16 +865,8 @@ fn build_grid(
             children.push(tile.id());
         }
     }
-
-    commands
-        .spawn((
-            Transform::default(),
-            Visibility::default(),
-            Name::new("HexGrid"),
-            HexGrid,
-        ))
-        .add_children(&children);
-    Ok(())
+    commands.entity(root).add_children(&children);
+    root
 }
 
 fn spawn_gameplay_lights(
@@ -764,11 +904,15 @@ enum MapPresentationError {
     Liquid(LiquidPresentationError),
     Feature(FeaturePresentationError),
     Crystal(CrystalPresentationError),
+    TerrainGridMissing,
+    MultipleTerrainGrids,
+    TerrainChunkTopology(String),
     SnapshotResourcesMissing,
 }
 
 #[derive(SystemParam)]
 struct MapPresentationAssets<'w> {
+    terrain_materials: ResMut<'w, MaterialCache>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
@@ -1137,6 +1281,7 @@ fn spawn_imported_snapshot_grid(
         (Some(map), Some(table), Some(settings)) => build_grid(
             &mut commands,
             &assets,
+            &mut presentation_assets.terrain_materials,
             &mut presentation_assets.materials,
             &mut presentation_assets.meshes,
             &mut presentation_assets.liquid_materials,
@@ -1183,6 +1328,13 @@ impl fmt::Display for MapPresentationError {
             Self::Liquid(error) => write!(formatter, "liquid presentation failed: {error}"),
             Self::Feature(error) => write!(formatter, "feature presentation failed: {error}"),
             Self::Crystal(error) => write!(formatter, "crystal presentation failed: {error}"),
+            Self::TerrainGridMissing => formatter.write_str("terrain grid root is missing"),
+            Self::MultipleTerrainGrids => {
+                formatter.write_str("more than one terrain grid root is active")
+            }
+            Self::TerrainChunkTopology(reason) => {
+                write!(formatter, "terrain chunk topology is invalid: {reason}")
+            }
             Self::SnapshotResourcesMissing => {
                 formatter.write_str("snapshot presentation resources are missing")
             }
@@ -1196,7 +1348,10 @@ impl std::error::Error for MapPresentationError {
             Self::Liquid(error) => Some(error),
             Self::Feature(error) => Some(error),
             Self::Crystal(error) => Some(error),
-            Self::SnapshotResourcesMissing => None,
+            Self::TerrainGridMissing
+            | Self::MultipleTerrainGrids
+            | Self::TerrainChunkTopology(_)
+            | Self::SnapshotResourcesMissing => None,
         }
     }
 }
@@ -1271,12 +1426,18 @@ fn span_for(bottom: hex_core::Level, top: hex_core::Level, level_height: f32) ->
 /// Without this every run would allocate its own `StandardMaterial`, so a world of a
 /// few thousand runs would hold a few thousand identical materials and defeat any
 /// chance of batching.
-#[derive(Default)]
+#[derive(Resource, Default)]
 struct MaterialCache {
     by_substance: Vec<(SubstanceId, Handle<StandardMaterial>)>,
 }
 
 impl MaterialCache {
+    fn reset_for_world(&mut self, materials: &mut Assets<StandardMaterial>) {
+        for (_substance, handle) in self.by_substance.drain(..) {
+            let _removed = materials.remove(handle.id());
+        }
+    }
+
     fn get_or_create(
         &mut self,
         substance: SubstanceId,
@@ -1300,6 +1461,15 @@ impl MaterialCache {
 struct EditableSpatialConsequences<'w> {
     biome_regions: Option<ResMut<'w, BiomeRegions>>,
     blockers: Option<ResMut<'w, TraversalBlockers>>,
+}
+
+/// Presentation identity queried and repaired alongside one authoritative edit batch.
+#[derive(SystemParam)]
+struct EditableTerrainPresentation<'w, 's> {
+    grids: Query<'w, 's, Entity, With<HexGrid>>,
+    chunk_roots: Query<'w, 's, (Entity, &'static TerrainChunkRoot, Option<&'static ChildOf>)>,
+    feature_roots: Query<'w, 's, (Entity, &'static GeneratedFeatureRoot, &'static ChildOf)>,
+    next_screen: ResMut<'w, NextState<Screen>>,
 }
 
 /// Mutable terrain-impact resources grouped to stay within Bevy's function-system
@@ -1431,28 +1601,25 @@ fn reject_pending_impacts_without_world(
     }
 }
 
-/// Applies direct terrain edits first, then admitted impacts, and rebuilds once.
+/// Applies direct terrain edits first, then atomically replaces affected chunk roots.
 ///
-/// Naive on purpose: any material change respawns the whole grid. Correct, obviously
-/// so, and fast enough at this scale. Partial health never enters this consequence
-/// path. Re-meshing only affected columns remains a private future optimisation.
+/// Partial health never enters this consequence path. Unchanged chunks and global
+/// authored presentation entities retain their entity identities across an edit.
 fn apply_terrain_changes(
     mut commands: Commands,
     mutation: TerrainMutation,
     mut map: ResMut<VoxelMap>,
-    grids: Query<Entity, With<HexGrid>>,
+    mut terrain_presentation: EditableTerrainPresentation,
     assets: Res<GameAssets>,
     mut presentation_assets: MapPresentationAssets,
     table: Res<SubstanceTable>,
     damage_table: Option<Res<TerrainDamageTable>>,
     settings: Res<MapSettings>,
-    liquid_visual_time: Res<LiquidVisualTime>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
     mut spatial: EditableSpatialConsequences,
     mut presentation: Option<ResMut<MapPresentationProjection>>,
-    mut next_screen: ResMut<NextState<Screen>>,
 ) {
     let TerrainMutation {
         mut edits,
@@ -1462,6 +1629,21 @@ fn apply_terrain_changes(
         mut damaged_voxels,
         mut snapshot_dirty,
     } = mutation;
+    if edits.0.is_empty() && pending.0.is_empty() {
+        return;
+    }
+    let (grid, existing_chunk_roots) = match validated_chunk_roots(
+        &map,
+        &terrain_presentation.grids,
+        &terrain_presentation.chunk_roots,
+    ) {
+        Ok(topology) => topology,
+        Err(error) => {
+            fail_presentation_setup(&mut commands, &error);
+            terrain_presentation.next_screen.set(Screen::Title);
+            return;
+        }
+    };
     let mut changed = false;
     let mut snapshot_changed = false;
     let mut changed_coords = BTreeSet::new();
@@ -1588,6 +1770,9 @@ fn apply_terrain_changes(
     }
 
     special_regions.retain(|position, _| {
+        if !changed_coords.contains(&position.coord) {
+            return true;
+        }
         let Some(column) = map.column(position.coord) else {
             return false;
         };
@@ -1598,6 +1783,9 @@ fn apply_terrain_changes(
     });
     if let Some(interiors) = interiors.as_deref_mut() {
         interiors.retain_surfaces(|position, _| {
+            if !changed_coords.contains(&position.coord) {
+                return true;
+            }
             let Some(column) = map.column(position.coord) else {
                 return false;
             };
@@ -1606,7 +1794,9 @@ fn apply_terrain_changes(
                 column.headroom_above(position.level.saturating_add(1)),
             )
         });
-        interiors.retain_roof_voxels(|position, _| table.is_solid(map.get(position)));
+        interiors.retain_roof_voxels(|position, _| {
+            !changed_coords.contains(&position.coord) || table.is_solid(map.get(position))
+        });
     }
     if let Some(biome_regions) = spatial.biome_regions.as_deref_mut() {
         reproject_biome_surfaces(
@@ -1621,31 +1811,104 @@ fn apply_terrain_changes(
         retain_valid_blockers(&map, &table, &changed_coords, blockers);
     }
 
-    let rebuilt = build_grid(
-        &mut commands,
-        &assets,
-        &mut presentation_assets.materials,
-        &mut presentation_assets.meshes,
-        &mut presentation_assets.liquid_materials,
-        &map,
-        &table,
-        &settings,
-        liquid_visual_time.phase_seconds(),
-        interiors.as_deref(),
-        presentation.as_deref(),
-        art_catalog.as_deref(),
-    );
-    match rebuilt {
-        Ok(()) => {
-            for entity in &grids {
-                commands.entity(entity).despawn();
-            }
-        }
-        Err(error) => {
-            fail_presentation_setup(&mut commands, &error);
-            next_screen.set(Screen::Title);
+    let affected_chunks = changed_coords
+        .iter()
+        .copied()
+        .map(terrain_chunk_coord)
+        .collect::<BTreeSet<_>>();
+    let mesh = assets.hex_tile.clone();
+    let replacements = affected_chunks
+        .iter()
+        .copied()
+        .map(|chunk| {
+            spawn_terrain_chunk(
+                &mut commands,
+                &mesh,
+                &mut presentation_assets.terrain_materials,
+                &mut presentation_assets.materials,
+                &map,
+                &table,
+                &settings,
+                interiors.as_deref(),
+                chunk,
+            )
+        })
+        .collect::<Vec<_>>();
+    commands.entity(grid).add_children(&replacements);
+    for chunk in &affected_chunks {
+        if let Some(entity) = existing_chunk_roots.get(chunk) {
+            commands.entity(*entity).despawn();
         }
     }
+    for (entity, root, parent) in &terrain_presentation.feature_roots {
+        if parent.parent() == grid
+            && presentation
+                .as_deref()
+                .is_none_or(|projection| !projection.features().contains_key(&root.id))
+        {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn validated_chunk_roots(
+    map: &VoxelMap,
+    grids: &Query<Entity, With<HexGrid>>,
+    roots: &Query<(Entity, &TerrainChunkRoot, Option<&ChildOf>)>,
+) -> Result<(Entity, BTreeMap<TerrainChunkCoord, Entity>), MapPresentationError> {
+    let mut grids = grids.iter();
+    let Some(grid) = grids.next() else {
+        return Err(MapPresentationError::TerrainGridMissing);
+    };
+    if grids.next().is_some() {
+        return Err(MapPresentationError::MultipleTerrainGrids);
+    }
+
+    let expected = map.chunk_coords().collect::<BTreeSet<_>>();
+    let mut actual = BTreeMap::new();
+    for (entity, root, parent) in roots {
+        let Some(parent) = parent else {
+            return Err(MapPresentationError::TerrainChunkTopology(format!(
+                "chunk root [{},{}] is orphaned",
+                root.q, root.r
+            )));
+        };
+        if parent.parent() != grid {
+            return Err(MapPresentationError::TerrainChunkTopology(format!(
+                "chunk root [{},{}] belongs to another parent",
+                root.q, root.r
+            )));
+        }
+        let chunk = TerrainChunkCoord {
+            q: root.q,
+            r: root.r,
+        };
+        if !expected.contains(&chunk) {
+            return Err(MapPresentationError::TerrainChunkTopology(format!(
+                "grid owns unexpected chunk [{},{}]",
+                chunk.q, chunk.r
+            )));
+        }
+        if actual.insert(chunk, entity).is_some() {
+            return Err(MapPresentationError::TerrainChunkTopology(format!(
+                "grid owns duplicate chunk [{},{}]",
+                chunk.q, chunk.r
+            )));
+        }
+    }
+    if actual.len() != expected.len() {
+        let missing = expected
+            .iter()
+            .find(|chunk| !actual.contains_key(chunk))
+            .copied();
+        return Err(MapPresentationError::TerrainChunkTopology(
+            missing.map_or_else(
+                || "grid chunk count disagrees with resident voxel storage".to_owned(),
+                |chunk| format!("grid is missing chunk [{},{}]", chunk.q, chunk.r),
+            ),
+        ));
+    }
+    Ok((grid, actual))
 }
 
 /// Rebuilds exact biome membership for every edited column.
@@ -1770,10 +2033,14 @@ mod tests {
     use super::*;
 
     fn spatial_test_table() -> SubstanceTable {
+        spatial_test_table_with_color(0.5, 0.5, 0.5)
+    }
+
+    fn spatial_test_table_with_color(red: f32, green: f32, blue: f32) -> SubstanceTable {
         let swatch_id = SwatchId::new("test/gray").expect("the fixture swatch id should be valid");
         let swatch = PaletteSwatch::new(
             "Test Gray",
-            SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+            SrgbColor::new(red, green, blue).expect("the fixture color should be valid"),
             BTreeSet::from(["test".to_owned()]),
         )
         .expect("the fixture swatch should be valid");
@@ -1792,6 +2059,38 @@ mod tests {
         ]);
         SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
             .expect("the fixture substances should resolve through their palette")
+    }
+
+    #[test]
+    fn full_world_material_refresh_drops_stale_palette_handles() {
+        let first_table = spatial_test_table_with_color(0.25, 0.5, 0.75);
+        let second_table = spatial_test_table_with_color(0.8, 0.2, 0.1);
+        let stone = first_table.id("stone").expect("stone fixture");
+        assert_eq!(second_table.id("stone"), Some(stone));
+
+        let mut cache = MaterialCache::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let first = cache.get_or_create(stone, &first_table, &mut materials);
+        let first_color = materials
+            .get(&first)
+            .expect("the first cached material should exist")
+            .base_color;
+
+        cache.reset_for_world(&mut materials);
+        assert!(
+            materials.get(&first).is_none(),
+            "the retired world's material remained resident"
+        );
+
+        let second = cache.get_or_create(stone, &second_table, &mut materials);
+        let second_color = materials
+            .get(&second)
+            .expect("the refreshed material should exist")
+            .base_color;
+        assert_ne!(
+            first_color, second_color,
+            "the stable substance id reused its stale palette colour"
+        );
     }
 
     #[test]

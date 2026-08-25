@@ -70,6 +70,12 @@ impl MapPresentationProjection {
         &self.features
     }
 
+    /// Returns exact structures in stable map-local identity order.
+    #[must_use]
+    pub(crate) const fn structures(&self) -> &BTreeMap<StructureId, PlannedStructure> {
+        &self.structures
+    }
+
     /// Returns generated gameplay-light descriptors in stable map-local order.
     #[must_use]
     pub(crate) const fn lights(&self) -> &BTreeMap<LightId, PlannedGameplayLight> {
@@ -618,6 +624,13 @@ fn fingerprint_materialized(
 ) -> Result<u64, String> {
     let mut encoder = FingerprintEncoder::new();
     encoder.u32(3);
+
+    // Conditional for legacy stability: only schematic-compiled worlds carry the
+    // complete coarse-plan identity into their materialized map fingerprint.
+    if let Some(source) = plan.source_schematic_fingerprint {
+        encoder.tag(255);
+        encoder.u64(source);
+    }
 
     encoder.tag(0);
     encode_voxel_map(&mut encoder, map)?;
@@ -1244,6 +1257,7 @@ mod tests {
         let roof = TilePos::new(anchor_coord, 3);
 
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan {

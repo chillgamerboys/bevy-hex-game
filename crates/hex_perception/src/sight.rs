@@ -6,7 +6,8 @@ use bevy_ecs::prelude::Resource;
 use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
 use hex_core::{
-    upper_dome_contains, ExactGridPoint, ExteriorIllumination, SightProfile, TilePos, UnitId,
+    upper_dome_contains, ExactGridPoint, ExteriorIllumination, HexCoord, SightProfile, TilePos,
+    UnitId,
 };
 use hex_units::{
     terrain_and_authored_object_sight_is_clear, AuthoredObjectOccupancy, Faction, TerrainOccupancy,
@@ -16,6 +17,13 @@ use crate::{
     resolve_illumination_at, FactionMapKnowledge, LightSourceSnapshot, ObservedUnit,
     PerceptionError, ResolvedIllumination, ResolvedLight,
 };
+
+/// Maximum number of horizontal coordinate probes materialized for one faction.
+///
+/// Ordinary profiles are far below this limit (six radius-36 observers require at
+/// most 23,982 probes). A malformed or future exceptionally large radius falls back
+/// to canonical target iteration rather than attempting an unbounded disk allocation.
+const MAX_INDEXED_COORDINATE_PROBES: u128 = 262_144;
 
 /// Exact current observation for one faction.
 ///
@@ -308,16 +316,15 @@ fn resolve_faction(
         observers.push(unit.pos);
     }
 
-    let mut targets = illumination.iter().collect::<BTreeMap<_, _>>();
-    for (_, known) in prior_knowledge.faction(faction).surfaces() {
-        let snapshot = known.snapshot();
-        targets
-            .entry(snapshot.pos)
-            .or_insert_with(|| ResolvedLight {
-                level: resolve_illumination_at(snapshot.pos, snapshot.domain, exterior, lights),
-                domain: snapshot.domain,
-            });
-    }
+    let targets = collect_faction_targets(
+        &observers,
+        illumination,
+        prior_knowledge,
+        faction,
+        exterior,
+        lights,
+        profile,
+    );
 
     let mut observation = FactionObservation::new();
     for (target, target_light) in targets {
@@ -335,6 +342,145 @@ fn resolve_faction(
         }
     }
 
+    for unit in units.values().copied() {
+        if illumination.get(unit.pos).is_some() && observation.observes(unit.pos) {
+            observation.try_insert_unit(unit)?;
+        }
+    }
+    Ok(observation)
+}
+
+/// Materializes only target columns that can pass at least one sight band.
+///
+/// Horizontal hex distance is a necessary part of every upper-dome test, including
+/// its downward cylindrical half. Consequently, no target outside the union of the
+/// observers' maximum-radius disks can be observed regardless of its height or
+/// illumination tier. Exact range, illumination selection, and LOS remain authoritative
+/// after this conservative prefilter.
+fn collect_faction_targets(
+    observers: &[TilePos],
+    illumination: &ResolvedIllumination,
+    prior_knowledge: &FactionMapKnowledge,
+    faction: Faction,
+    exterior: ExteriorIllumination,
+    lights: &[LightSourceSnapshot],
+    profile: SightProfile,
+) -> BTreeMap<TilePos, ResolvedLight> {
+    let mut targets = BTreeMap::new();
+    if let Some(coords) = bounded_target_coords(observers, profile) {
+        for coord in coords {
+            for (target, target_light) in illumination.iter_at_coord(coord) {
+                targets.insert(target, target_light);
+            }
+            for (_, known) in prior_knowledge.faction(faction).surfaces_at_coord(coord) {
+                insert_remembered_target(&mut targets, known.snapshot(), exterior, lights);
+            }
+        }
+    } else {
+        targets.extend(illumination.iter());
+        for (_, known) in prior_knowledge.faction(faction).surfaces() {
+            insert_remembered_target(&mut targets, known.snapshot(), exterior, lights);
+        }
+    }
+    targets
+}
+
+fn insert_remembered_target(
+    targets: &mut BTreeMap<TilePos, ResolvedLight>,
+    snapshot: crate::SurfaceSnapshot,
+    exterior: ExteriorIllumination,
+    lights: &[LightSourceSnapshot],
+) {
+    targets
+        .entry(snapshot.pos)
+        .or_insert_with(|| ResolvedLight {
+            level: resolve_illumination_at(snapshot.pos, snapshot.domain, exterior, lights),
+            domain: snapshot.domain,
+        });
+}
+
+/// Returns the deterministic union of observer disks, or `None` when bounded
+/// materialization would itself be pathological or coordinate arithmetic unsafe.
+fn bounded_target_coords(
+    observers: &[TilePos],
+    profile: SightProfile,
+) -> Option<BTreeSet<HexCoord>> {
+    let radius = profile
+        .bright
+        .radius
+        .max(profile.dim.radius)
+        .max(profile.dark.radius);
+    let observer_coords = observers
+        .iter()
+        .map(|observer| observer.coord)
+        .collect::<BTreeSet<_>>();
+    let radius_wide = u128::from(radius);
+    let disk_size =
+        1_u128.checked_add(3_u128.checked_mul(radius_wide.checked_mul(radius_wide + 1)?)?)?;
+    let observer_count = u128::try_from(observer_coords.len()).ok()?;
+    let probe_upper_bound = disk_size.checked_mul(observer_count)?;
+    if probe_upper_bound > MAX_INDEXED_COORDINATE_PROBES
+        || observer_coords
+            .iter()
+            .any(|&coord| !coordinate_disk_is_safe(coord, radius))
+    {
+        return None;
+    }
+
+    let mut coords = BTreeSet::new();
+    for observer in observer_coords {
+        coords.extend(observer.within_radius(radius));
+    }
+    Some(coords)
+}
+
+fn coordinate_disk_is_safe(coord: HexCoord, radius: u32) -> bool {
+    let radius = i64::from(radius);
+    let q = i64::from(coord.x());
+    let r = i64::from(coord.y());
+    let s = -q - r;
+    [q, r, s].into_iter().all(|component| {
+        component - radius >= i64::from(i32::MIN) && component + radius <= i64::from(i32::MAX)
+    })
+}
+
+#[cfg(test)]
+fn resolve_faction_naive(
+    faction: Faction,
+    units: &BTreeMap<UnitId, ObservedUnit>,
+    illumination: &ResolvedIllumination,
+    prior_knowledge: &FactionMapKnowledge,
+    exterior: ExteriorIllumination,
+    lights: &[LightSourceSnapshot],
+    profile: SightProfile,
+    terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
+) -> Result<FactionObservation, PerceptionError> {
+    let observers = units
+        .values()
+        .filter(|unit| unit.faction == faction && unit.provides_sight)
+        .map(|unit| unit.pos)
+        .collect::<Vec<_>>();
+    let mut targets = illumination.iter().collect::<BTreeMap<_, _>>();
+    for (_, known) in prior_knowledge.faction(faction).surfaces() {
+        insert_remembered_target(&mut targets, known.snapshot(), exterior, lights);
+    }
+
+    let mut observation = FactionObservation::new();
+    for (target, target_light) in targets {
+        if observers.iter().any(|&observer| {
+            can_observe_resolved(
+                observer,
+                target,
+                target_light,
+                profile,
+                terrain,
+                authored_objects,
+            )
+        }) {
+            observation.insert_surface(target);
+        }
+    }
     for unit in units.values().copied() {
         if illumination.get(unit.pos).is_some() && observation.observes(unit.pos) {
             observation.try_insert_unit(unit)?;
@@ -1021,6 +1167,194 @@ mod tests {
                 hex_core::KnowledgeState::Observed
             );
         }
+    }
+
+    #[test]
+    fn indexed_targets_match_naive_for_negative_stacks_deletions_and_pooled_observers() {
+        let observer_a = pos(-80, 45, 12);
+        let observer_b = pos(-70, 40, 12);
+        let stacked_coord = HexCoord::from_axial(-78, 44);
+        let stacked = [
+            TilePos::new(stacked_coord, 9),
+            TilePos::new(stacked_coord, 12),
+            TilePos::new(stacked_coord, 14),
+        ];
+        let [stacked_low, stacked_middle, stacked_high] = stacked;
+        let pooled_target = pos(-65, 38, 12);
+        let deleted_near = pos(-79, 43, 10);
+        let deleted_far = pos(100, 100, 10);
+        let far_current = pos(80, 80, 12);
+        let current_positions = [
+            observer_a,
+            observer_b,
+            stacked_low,
+            stacked_middle,
+            stacked_high,
+            pooled_target,
+            far_current,
+        ];
+        let current = SurfaceSnapshots::try_from_iter(current_positions.map(surface))
+            .expect("current negative and stacked fixture");
+        let old = SurfaceSnapshots::try_from_iter(
+            current_positions
+                .into_iter()
+                .chain([deleted_near, deleted_far])
+                .map(surface),
+        )
+        .expect("old fixture including deleted surfaces");
+        let mut prior = FactionMapKnowledge::new();
+        let mut first_observation = FactionObservation::new();
+        for (position, _) in old.iter() {
+            first_observation.insert_surface(position);
+        }
+        apply_observations(
+            &mut prior,
+            &old,
+            &FactionObservations::with_faction(Faction::Player, first_observation),
+        );
+        apply_observations(&mut prior, &old, &FactionObservations::new());
+
+        let exterior = ExteriorIllumination::new(IlluminationLevel::Bright);
+        let illumination =
+            ResolvedIllumination::from_surfaces(&current, exterior, &[]).expect("illumination");
+        let profile = profile(6, 3, 1);
+        let units = index_units([
+            unit(2, Faction::Player, observer_b),
+            unit(1, Faction::Player, observer_a),
+            inactive_unit(3, Faction::Hostile, pooled_target),
+        ])
+        .expect("unique units");
+        let terrain = TerrainOccupancy::default();
+        let authored_objects = AuthoredObjectOccupancy::default();
+
+        assert!(bounded_target_coords(&[observer_a, observer_b], profile).is_some());
+        let indexed = resolve_faction(
+            Faction::Player,
+            &units,
+            &illumination,
+            &prior,
+            exterior,
+            &[],
+            profile,
+            &terrain,
+            &authored_objects,
+        )
+        .expect("indexed observations");
+        let naive = resolve_faction_naive(
+            Faction::Player,
+            &units,
+            &illumination,
+            &prior,
+            exterior,
+            &[],
+            profile,
+            &terrain,
+            &authored_objects,
+        )
+        .expect("naive observations");
+
+        assert_eq!(indexed, naive);
+        assert!(indexed.observes(deleted_near));
+        assert!(!indexed.observes(deleted_far));
+        assert!(!indexed.observes(far_current));
+        for target in stacked {
+            assert!(
+                indexed.observes(target),
+                "missing stacked target {target:?}"
+            );
+        }
+        assert!(indexed.observes(pooled_target));
+        assert_eq!(
+            indexed.unit(UnitId(3)),
+            Some(inactive_unit(3, Faction::Hostile, pooled_target))
+        );
+    }
+
+    #[test]
+    fn pathological_radius_falls_back_and_matches_naive_iteration() {
+        let observer = pos(-2, -3, 5);
+        let target = pos(4, -3, 5);
+        let sight_profile = profile(300, 300, 300);
+        assert!(bounded_target_coords(&[observer], sight_profile).is_none());
+        let boundary = TilePos::new(HexCoord::from_axial(i32::MAX, 0), 5);
+        assert!(
+            bounded_target_coords(&[boundary], profile(1, 1, 1)).is_none(),
+            "coordinate overflow risk must select canonical full iteration"
+        );
+
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (observer, LightDomain::Exterior),
+                (target, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("fallback fixture illumination");
+        let units = index_units([unit(1, Faction::Player, observer)]).expect("unique observer");
+        let prior = FactionMapKnowledge::new();
+        let terrain = TerrainOccupancy::default();
+        let authored_objects = AuthoredObjectOccupancy::default();
+        let exterior = ExteriorIllumination::new(IlluminationLevel::Bright);
+
+        let indexed = resolve_faction(
+            Faction::Player,
+            &units,
+            &illumination,
+            &prior,
+            exterior,
+            &[],
+            sight_profile,
+            &terrain,
+            &authored_objects,
+        )
+        .expect("fallback observations");
+        let naive = resolve_faction_naive(
+            Faction::Player,
+            &units,
+            &illumination,
+            &prior,
+            exterior,
+            &[],
+            sight_profile,
+            &terrain,
+            &authored_objects,
+        )
+        .expect("naive observations");
+        assert_eq!(indexed, naive);
+        assert!(indexed.observes(target));
+    }
+
+    #[test]
+    fn radius_187_world_materializes_only_the_local_sight_disk() {
+        let level = 15;
+        let world_radius = 187;
+        let illumination = ResolvedIllumination::try_resolve(
+            HexCoord::ORIGIN
+                .within_radius(world_radius)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, level), LightDomain::Exterior)),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("radius-187 illumination index");
+        assert_eq!(illumination.len(), 105_469);
+
+        let observer = TilePos::new(HexCoord::ORIGIN, level);
+        let targets = collect_faction_targets(
+            &[observer],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            Faction::Player,
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            SightProfile::DEFAULT,
+        );
+
+        assert_eq!(targets.len(), 3_997);
+        assert!(targets.contains_key(&observer));
+        assert!(targets.contains_key(&pos(36, 0, level)));
+        assert!(!targets.contains_key(&pos(37, 0, level)));
     }
 
     #[test]

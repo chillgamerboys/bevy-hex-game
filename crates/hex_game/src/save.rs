@@ -272,6 +272,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
     ),
     (
+        "config/worlds/procedural-grand-v3-baseline.ron",
+        include_str!("../../../assets/config/worlds/procedural-grand-v3-baseline.ron"),
+    ),
+    (
         "config/worlds/procedural-hills.ron",
         include_str!("../../../assets/config/worlds/procedural-hills.ron"),
     ),
@@ -346,6 +350,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/encounters/crystal-mountain-showcase.ron",
         include_str!("../../../assets/config/encounters/crystal-mountain-showcase.ron"),
+    ),
+    (
+        "config/encounters/grand-v3-baseline-showcase.ron",
+        include_str!("../../../assets/config/encounters/grand-v3-baseline-showcase.ron"),
     ),
     (
         "config/encounters/open-ground.ron",

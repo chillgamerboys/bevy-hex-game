@@ -1,0 +1,20 @@
+// Standard non-combat probe party for the internal Grand V3 performance proxy.
+//
+// The compiler publishes `party_start` on the dry coastal-lowland overlook near
+// the provisional river outlet. No Hostile roster is authored. This fixture exists
+// for benchmark and review harnesses; final hydrology, routes, Crystal Ascent, and
+// vegetation await the proxy budget decision.
+(
+    name: "Grand V3 Baseline Showcase",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Anchor("party_start"), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+    ],
+)

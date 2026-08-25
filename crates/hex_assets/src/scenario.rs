@@ -315,10 +315,10 @@ mod tests {
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
     /// Procedural Hills, the additive vegetation, desert and island biomes, the crystal
-    /// landmarks, and the composite wave maps deliberately share one canonical review
-    /// seed so their visual differences are directly comparable. Mountain Range likewise
-    /// shares the Mountains review seed so the single-patch and macro-world massifs can
-    /// be compared directly.
+    /// landmarks, the composite wave maps, and the internal Grand V3 proxy deliberately
+    /// share one canonical review seed so their visual differences are directly comparable.
+    /// Mountain Range likewise shares the Mountains review seed so the single-patch and
+    /// macro-world massifs can be compared directly.
     #[test]
     fn procedural_scenarios_use_only_the_intended_shared_seed_and_name_an_encounter() {
         let library: ScenarioLibrary =
@@ -332,8 +332,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            23,
-            "the scenario library should include all twenty-three generated maps"
+            24,
+            "the scenario library should include all twenty-four generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
@@ -363,6 +363,7 @@ mod tests {
                         "Desert Plain",
                         "Desert Transition",
                         "Dunes",
+                        "Grand V3 Baseline",
                         "Ocean Archipelagoes",
                         "Prairie",
                         "Procedural Hills",

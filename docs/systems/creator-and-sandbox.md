@@ -145,6 +145,11 @@ and one Ring19 composite, while Coastal supplies two focused `Single` maps and o
 Macro archipelago. Sandbox staging remains on each island world's ordinary playable
 component; scenic satellite islands do not become deployable cross-water routes.
 
+The pre-approval Grand V3 radius-187 proxy is deliberately absent from this catalog. Its
+scenario, world, and encounter assets remain internal benchmark/review fixtures until the
+proxy performance budget is approved and the final hydrology, routes, Crystal Ascent, and
+vegetation layers are implemented.
+
 ## Deployment and frozen launch
 
 Sandbox loading has an explicit `Preparing → Deployment → Active` phase boundary.

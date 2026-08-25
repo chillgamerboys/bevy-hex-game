@@ -18,7 +18,7 @@ use crate::settings::{
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide,
     SharedEdgeSettings, V3LayoutSettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings,
     WalkerPortSettings, MAX_SEAM_PORT_WIDTH, MAX_V3_LEVEL, MAX_WALKER_PORT_COUNT,
-    V3_MACRO_CELL_COUNT, V3_RING19_REGION_COUNT,
+    V3_MACRO_CELL_COUNT, V3_RING19_REGION_COUNT, V3_SCHEMATIC_GRID_RADIUS,
 };
 
 const RING_RADIUS: u32 = 33;
@@ -37,6 +37,8 @@ pub(crate) enum LayoutKind {
     Ring7,
     Ring19,
     Macro,
+    /// One continuous world whose patches retain only coarse biome ownership.
+    Schematic,
 }
 
 impl LayoutKind {
@@ -284,6 +286,7 @@ impl ResolvedLayoutPlan {
             LayoutKind::Ring7 => self.grid_radius == RING_RADIUS,
             LayoutKind::Ring19 => self.grid_radius == RING19_RADIUS,
             LayoutKind::Macro => self.grid_radius == MACRO_RADIUS,
+            LayoutKind::Schematic => self.grid_radius == V3_SCHEMATIC_GRID_RADIUS,
         };
         if !radius_valid {
             issues.push(LayoutIssue::UnsupportedRadius(self.grid_radius));
@@ -304,6 +307,7 @@ impl ResolvedLayoutPlan {
             LayoutKind::Ring7 => 7,
             LayoutKind::Ring19 => 19,
             LayoutKind::Macro => self.patches.len(),
+            LayoutKind::Schematic => hex_schematic::SCHEMATIC_CELL_COUNT,
         };
         if self.patches.len() != expected_patch_count {
             issues.push(LayoutIssue::PatchCount {
@@ -340,6 +344,16 @@ impl ResolvedLayoutPlan {
                         .collect())
         {
             issues.push(LayoutIssue::InvalidMacroFootprint);
+        }
+        if self.kind == LayoutKind::Schematic
+            && (self.grid_radius != V3_SCHEMATIC_GRID_RADIUS
+                || self.footprint
+                    != HexCoord::ORIGIN
+                        .within_radius(V3_SCHEMATIC_GRID_RADIUS)
+                        .into_iter()
+                        .collect())
+        {
+            issues.push(LayoutIssue::InvalidRingFootprint);
         }
         if self.kind == LayoutKind::Macro
             && (self.patches.is_empty() || self.patches.len() > V3_MACRO_CELL_COUNT)
@@ -379,6 +393,16 @@ impl ResolvedLayoutPlan {
                     patch.biome_region,
                 ));
             }
+            if self.kind == LayoutKind::Schematic
+                && (id.0 != patch.biome_region.0
+                    || usize::try_from(id.0)
+                        .map_or(true, |id| id >= hex_schematic::SCHEMATIC_CELL_COUNT))
+            {
+                issues.push(LayoutIssue::InvalidRing19PatchIdentity(
+                    *id,
+                    patch.biome_region,
+                ));
+            }
             if patch.rotation_turns > 5
                 || (!matches!(self.kind, LayoutKind::Ring19 | LayoutKind::Macro)
                     && patch.rotation_turns != 0)
@@ -399,11 +423,15 @@ impl ResolvedLayoutPlan {
             if !biome_regions.insert(patch.biome_region) {
                 issues.push(LayoutIssue::DuplicateBiomeRegion(patch.biome_region));
             }
-            if patch.edges.len() != HexSide::ALL.len()
-                || HexSide::ALL
-                    .iter()
-                    .any(|side| !patch.edges.contains_key(side))
+            if self.kind != LayoutKind::Schematic
+                && (patch.edges.len() != HexSide::ALL.len()
+                    || HexSide::ALL
+                        .iter()
+                        .any(|side| !patch.edges.contains_key(side)))
             {
+                issues.push(LayoutIssue::IncompletePatchEdges(*id));
+            }
+            if self.kind == LayoutKind::Schematic && !patch.edges.is_empty() {
                 issues.push(LayoutIssue::IncompletePatchEdges(*id));
             }
         }
@@ -470,9 +498,70 @@ pub(crate) fn resolve_layout(
         V3LayoutSettings::Ring7(ring) => resolve_ring(grid_radius, ring)?,
         V3LayoutSettings::Ring19(ring) => resolve_ring19(grid_radius, ring)?,
         V3LayoutSettings::Macro(macro_layout) => resolve_macro(grid_radius, macro_layout)?,
+        V3LayoutSettings::Schematic(schematic) => resolve_schematic(grid_radius, schematic)?,
     };
     resolved.validate()?;
     Ok(resolved)
+}
+
+fn resolve_schematic(
+    grid_radius: u32,
+    settings: &crate::settings::V3SchematicLayoutSettings,
+) -> Result<ResolvedLayoutPlan, LayoutValidationError> {
+    if grid_radius != V3_SCHEMATIC_GRID_RADIUS {
+        return Err(LayoutValidationError::one(LayoutIssue::UnsupportedRadius(
+            grid_radius,
+        )));
+    }
+    let pitch = i32::try_from(settings.cell_pitch).map_err(|_error| {
+        LayoutValidationError::one(LayoutIssue::UnsupportedRadius(grid_radius))
+    })?;
+    let footprint: BTreeSet<_> = HexCoord::ORIGIN
+        .within_radius(grid_radius)
+        .into_iter()
+        .collect();
+    let coarse = hex_schematic::canonical_coordinates()
+        .into_iter()
+        .enumerate()
+        .map(|(index, coord)| {
+            let center = HexCoord::from_axial(coord.q() * pitch, coord.r() * pitch);
+            (PatchId(u32::try_from(index).unwrap_or(u32::MAX)), center)
+        })
+        .collect::<Vec<_>>();
+    let mut masks = coarse
+        .iter()
+        .map(|(id, _)| (*id, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for coord in &footprint {
+        let owner = coarse
+            .iter()
+            .min_by_key(|(id, center)| (center.distance(*coord), id.0))
+            .map(|(id, _)| *id)
+            .ok_or_else(|| LayoutValidationError::one(LayoutIssue::InvalidFootprint))?;
+        masks.entry(owner).or_default().insert(*coord);
+    }
+    let patches = masks
+        .into_iter()
+        .map(|(id, mask)| {
+            (
+                id,
+                ResolvedPatch {
+                    biome_region: BiomeRegionId(id.0),
+                    rotation_turns: 0,
+                    mask,
+                    edges: BTreeMap::new(),
+                },
+            )
+        })
+        .collect();
+    Ok(ResolvedLayoutPlan {
+        kind: LayoutKind::Schematic,
+        grid_radius,
+        footprint,
+        patches,
+        shared_edges: BTreeMap::new(),
+        boundary_liquid_outlets: BTreeMap::new(),
+    })
 }
 
 fn resolve_single(

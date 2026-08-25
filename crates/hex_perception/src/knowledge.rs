@@ -7,8 +7,8 @@ use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
 use hex_assets::SubstanceTable;
 use hex_core::{
-    Headroom, HexSpan, InteriorRegionId, KnowledgeState, LightDomain, LocalMapKnowledge, RunBottom,
-    TilePos, UnitId,
+    Headroom, HexCoord, HexSpan, InteriorRegionId, KnowledgeState, LightDomain, LocalMapKnowledge,
+    RunBottom, TilePos, UnitId,
 };
 use hex_multiplayer::{
     BoundError, BoundedText, BoundedVec, PlayerKnowledgeSnapshotV1, PlayerKnowledgeStateV1,
@@ -86,6 +86,22 @@ impl FactionKnowledge {
     pub fn surfaces(&self) -> impl Iterator<Item = (TilePos, KnownSurface)> + '_ {
         self.surfaces
             .iter()
+            .map(|(position, known)| (*position, *known))
+    }
+
+    /// Iterates over remembered and observed surfaces in one horizontal column.
+    ///
+    /// The canonical exact-position map is also the spatial index: all levels at
+    /// one [`HexCoord`] form one contiguous key range. This keeps stacked knowledge
+    /// exact without maintaining a second mutable projection.
+    pub fn surfaces_at_coord(
+        &self,
+        coord: HexCoord,
+    ) -> impl Iterator<Item = (TilePos, KnownSurface)> + '_ {
+        let bottom = TilePos::new(coord, i32::MIN);
+        let top = TilePos::new(coord, i32::MAX);
+        self.surfaces
+            .range(bottom..=top)
             .map(|(position, known)| (*position, *known))
     }
 

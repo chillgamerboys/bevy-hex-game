@@ -44,6 +44,7 @@ const fn seam_closure_region(kind: LayoutKind, edge: ResolvedEdgeId) -> SpecialM
         LayoutKind::Single | LayoutKind::Ring7 => LEGACY_SEAM_CLOSURE_REGION_BASE,
         LayoutKind::Ring19 => RING19_SEAM_CLOSURE_REGION_BASE,
         LayoutKind::Macro => MACRO_SEAM_CLOSURE_REGION_BASE,
+        LayoutKind::Schematic => MACRO_SEAM_CLOSURE_REGION_BASE,
     };
     SpecialMovementRegion(base.saturating_add(edge.0))
 }

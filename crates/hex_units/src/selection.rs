@@ -44,7 +44,7 @@ use hex_core::{
     TargetReticleRequest, TilePos, TraversalBlockers, Turn, UnitId, WorldMarkerSuppression,
 };
 
-use crate::movement::{Body, Footing, Reach, Standing};
+use crate::movement::{Body, FootingCache, Reach, Standing};
 use crate::units::{MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
 use crate::AuthoredObjectOccupancy;
 use crate::Faction;
@@ -610,6 +610,7 @@ fn on_tile_unhovered(
 fn redraw_overlays(
     mut commands: Commands,
     mut preview: ResMut<MovementPreview>,
+    mut footing_cache: ResMut<FootingCache>,
     hovered: Res<HoveredSurface>,
     assets: Option<Res<GameAssets>>,
     overlays: Option<Res<OverlayAssets>>,
@@ -709,7 +710,8 @@ fn redraw_overlays(
     let reach_dirty = key != preview.of || footing_changed;
     if reach_dirty {
         preview.reach = if let (Some(_), Some((_, unit, _, standing, body, _))) = (key, selection) {
-            let footing = Footing::from_tiles_with_object_occupancy(
+            let footing = footing_cache.get_or_build(
+                revision.0,
                 tiles.iter(),
                 &table,
                 *body,
@@ -718,7 +720,7 @@ fn redraw_overlays(
             );
             Some(Reach::with_occupancy(
                 standing.0,
-                &footing,
+                footing.as_ref(),
                 None,
                 &disclosed_occupancy,
                 *unit,

@@ -38,6 +38,12 @@ pub const V3_MOUNTAIN_RANGE_REGION_COUNT: usize = 30;
 const RING19_RADIUS: u32 = 55;
 const MACRO_RADIUS: u32 = 77;
 const MACRO_CELL_RADIUS: u32 = 3;
+/// Exact world radius derived by the first schematic-to-voxel contract.
+pub const V3_SCHEMATIC_GRID_RADIUS: u32 = 187;
+/// Exact spacing between adjacent coarse-cell centres in the first schematic compiler.
+pub const V3_SCHEMATIC_CELL_PITCH: u32 = 22;
+/// Only Grand V3 template revision admitted by the first schematic compiler.
+pub const V3_GRAND_V3_TEMPLATE_REVISION: u32 = 2;
 const MACRO_RECIPE_VALIDATION_RADIUS: u32 = 12;
 const RING19_RECIPE_VALIDATION_RADIUS: u32 = 40;
 const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
@@ -508,6 +514,259 @@ pub enum V3LayoutSettings {
     Ring19(V3Ring19Settings),
     /// Authored logical biomes over a radius-three graph of atomic macro cells.
     Macro(MacroLayoutSettings),
+    /// A validated coarse schematic compiled into one complete V3 voxel world.
+    Schematic(V3SchematicLayoutSettings),
+}
+
+/// Strict identity of a schematic template supported by the V3 map compiler.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V3SchematicTemplate {
+    /// The approved radius-eight Grand V3 semantic map.
+    GrandV3,
+}
+
+/// Designer-facing contract for one schematic-to-voxel compilation.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3SchematicLayoutSettings {
+    /// Exact semantic template family.
+    pub template: V3SchematicTemplate,
+    /// Exact approved revision of that template.
+    pub template_revision: u32,
+    /// Distance between neighboring coarse-cell centres in voxel hexes.
+    pub cell_pitch: u32,
+    /// Versioned mapping from schematic facts to terrain levels.
+    pub terrain_profile: V3SchematicTerrainProfile,
+}
+
+impl V3SchematicLayoutSettings {
+    /// Derives the complete voxel-world radius from the radius-eight schematic.
+    ///
+    /// Half a cell pitch remains beyond the outermost coarse-cell centres, matching
+    /// the established nearest-centre ownership used by V3 composite layouts.
+    pub fn derived_grid_radius(&self) -> Result<u32, String> {
+        u32::from(hex_schematic::SCHEMATIC_RADIUS)
+            .checked_mul(self.cell_pitch)
+            .and_then(|centres| centres.checked_add(self.cell_pitch / 2))
+            .ok_or_else(|| "V3 Schematic derived grid radius overflowed u32".to_owned())
+    }
+
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        match self.template {
+            V3SchematicTemplate::GrandV3 => {
+                if self.template_revision != V3_GRAND_V3_TEMPLATE_REVISION {
+                    return Err(format!(
+                        "V3 Schematic GrandV3 template_revision must be exactly {V3_GRAND_V3_TEMPLATE_REVISION}"
+                    ));
+                }
+            }
+        }
+        if self.cell_pitch != V3_SCHEMATIC_CELL_PITCH {
+            return Err(format!(
+                "V3 Schematic cell_pitch must be exactly {V3_SCHEMATIC_CELL_PITCH}"
+            ));
+        }
+        self.terrain_profile.validate()?;
+        let derived = self.derived_grid_radius()?;
+        if derived != V3_SCHEMATIC_GRID_RADIUS {
+            return Err(format!(
+                "V3 Schematic canonical settings must derive grid radius {V3_SCHEMATIC_GRID_RADIUS}, got {derived}"
+            ));
+        }
+        if grid_radius != derived {
+            return Err(format!(
+                "procedural V3 Schematic requires grid_radius exactly {derived}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Versioned vertical profile used to compile one schematic plan.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V3SchematicTerrainProfile {
+    /// First dramatic Grand V3 profile, preserving the approved Crystal heights.
+    GrandV3BasicV1(V3GrandV3BasicTerrainProfile),
+}
+
+impl V3SchematicTerrainProfile {
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::GrandV3BasicV1(profile) => profile.validate(),
+        }
+    }
+}
+
+/// Exact level mapping for the first dramatic Grand V3 terrain compiler.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3GrandV3BasicTerrainProfile {
+    /// Standing sea-water level.
+    pub sea_level: Level,
+    /// Representative dry level for schematic sea islands.
+    pub island_level: Level,
+    /// Representative beach level.
+    pub beach_level: Level,
+    /// Representative marine-shore level.
+    pub shore_level: Level,
+    /// Representative temperate valley level.
+    pub valley_level: Level,
+    /// Representative plateau level.
+    pub plateau_level: Level,
+    /// Representative hill level.
+    pub hill_level: Level,
+    /// Lowest ordinary mountain datum outside the high-core influence.
+    pub mountain_floor: Level,
+    /// Lowest massif datum outside the high-core influence.
+    pub massif_floor: Level,
+    /// Exact datum shared by the approved high landmark cluster.
+    pub high_core_level: Level,
+    /// Datum reduction for each coarse cell away from the high core.
+    pub high_gradient_per_cell: Level,
+    /// Standing-water level of the authored mountain lake.
+    pub mountain_lake_level: Level,
+    /// Ground datum of the authored frozen woods.
+    pub frozen_woods_level: Level,
+    /// Lowest dry surface on the scenic mountain-lake island.
+    pub lake_island_min_level: Level,
+    /// Highest dry surface on the scenic mountain-lake island.
+    pub lake_island_max_level: Level,
+    /// Lowest bench level inside a locked sharp-peak region.
+    pub sharp_peak_bench_min: Level,
+    /// Highest bench level inside a locked sharp-peak region.
+    pub sharp_peak_bench_max: Level,
+    /// Lowest authored sharp summit.
+    pub sharp_peak_min: Level,
+    /// Highest authored sharp summit.
+    pub sharp_peak_max: Level,
+    /// Standing-water level of the lower valley lake.
+    pub valley_lake_level: Level,
+    /// Exact lower-chamber and tunnel-floor level of Crystal Ascent.
+    pub crystal_base_level: Level,
+    /// Exact rise from Crystal Ascent's chamber to its crown.
+    pub crystal_rise_levels: Level,
+}
+
+impl V3GrandV3BasicTerrainProfile {
+    /// Canonical immutable values of the first dramatic terrain profile.
+    #[must_use]
+    pub const fn canonical() -> Self {
+        Self {
+            sea_level: 8,
+            island_level: 12,
+            beach_level: 10,
+            shore_level: 12,
+            valley_level: 16,
+            plateau_level: 20,
+            hill_level: 20,
+            mountain_floor: 28,
+            massif_floor: 48,
+            high_core_level: 150,
+            high_gradient_per_cell: 18,
+            mountain_lake_level: 150,
+            frozen_woods_level: 152,
+            lake_island_min_level: 151,
+            lake_island_max_level: 158,
+            sharp_peak_bench_min: 150,
+            sharp_peak_bench_max: 166,
+            sharp_peak_min: 178,
+            sharp_peak_max: 192,
+            valley_lake_level: 15,
+            crystal_base_level: 6,
+            crystal_rise_levels: 144,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let expected = Self::canonical();
+        for (field, actual, canonical) in [
+            ("sea_level", self.sea_level, expected.sea_level),
+            ("island_level", self.island_level, expected.island_level),
+            ("beach_level", self.beach_level, expected.beach_level),
+            ("shore_level", self.shore_level, expected.shore_level),
+            ("valley_level", self.valley_level, expected.valley_level),
+            ("plateau_level", self.plateau_level, expected.plateau_level),
+            ("hill_level", self.hill_level, expected.hill_level),
+            (
+                "mountain_floor",
+                self.mountain_floor,
+                expected.mountain_floor,
+            ),
+            ("massif_floor", self.massif_floor, expected.massif_floor),
+            (
+                "high_core_level",
+                self.high_core_level,
+                expected.high_core_level,
+            ),
+            (
+                "high_gradient_per_cell",
+                self.high_gradient_per_cell,
+                expected.high_gradient_per_cell,
+            ),
+            (
+                "mountain_lake_level",
+                self.mountain_lake_level,
+                expected.mountain_lake_level,
+            ),
+            (
+                "frozen_woods_level",
+                self.frozen_woods_level,
+                expected.frozen_woods_level,
+            ),
+            (
+                "lake_island_min_level",
+                self.lake_island_min_level,
+                expected.lake_island_min_level,
+            ),
+            (
+                "lake_island_max_level",
+                self.lake_island_max_level,
+                expected.lake_island_max_level,
+            ),
+            (
+                "sharp_peak_bench_min",
+                self.sharp_peak_bench_min,
+                expected.sharp_peak_bench_min,
+            ),
+            (
+                "sharp_peak_bench_max",
+                self.sharp_peak_bench_max,
+                expected.sharp_peak_bench_max,
+            ),
+            (
+                "sharp_peak_min",
+                self.sharp_peak_min,
+                expected.sharp_peak_min,
+            ),
+            (
+                "sharp_peak_max",
+                self.sharp_peak_max,
+                expected.sharp_peak_max,
+            ),
+            (
+                "valley_lake_level",
+                self.valley_lake_level,
+                expected.valley_lake_level,
+            ),
+            (
+                "crystal_base_level",
+                self.crystal_base_level,
+                expected.crystal_base_level,
+            ),
+            (
+                "crystal_rise_levels",
+                self.crystal_rise_levels,
+                expected.crystal_rise_levels,
+            ),
+        ] {
+            if actual != canonical {
+                return Err(format!(
+                    "V3 Schematic GrandV3BasicV1 {field} must be exactly {canonical}, got {actual}"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One authored radius-three macro world.
@@ -1743,6 +2002,7 @@ impl ProceduralV3Settings {
                 }
                 macro_layout.validate()
             }
+            V3LayoutSettings::Schematic(schematic) => schematic.validate(grid_radius),
         }
     }
 }
@@ -5186,6 +5446,44 @@ mod tests {
     )),
 )
 "#;
+    const V3_SCHEMATIC_RON: &str = r#"
+(
+    grid_radius: 187,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Schematic((
+            template: GrandV3,
+            template_revision: 2,
+            cell_pitch: 22,
+            terrain_profile: GrandV3BasicV1((
+                sea_level: 8,
+                island_level: 12,
+                beach_level: 10,
+                shore_level: 12,
+                valley_level: 16,
+                plateau_level: 20,
+                hill_level: 20,
+                mountain_floor: 28,
+                massif_floor: 48,
+                high_core_level: 150,
+                high_gradient_per_cell: 18,
+                mountain_lake_level: 150,
+                frozen_woods_level: 152,
+                lake_island_min_level: 151,
+                lake_island_max_level: 158,
+                sharp_peak_bench_min: 150,
+                sharp_peak_bench_max: 166,
+                sharp_peak_min: 178,
+                sharp_peak_max: 192,
+                valley_lake_level: 15,
+                crystal_base_level: 6,
+                crystal_rise_levels: 144,
+            )),
+        )),
+    )),
+)
+"#;
 
     fn world_boundary_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {
@@ -7032,6 +7330,148 @@ mod tests {
         );
         ron::from_str::<MapSettings>(&nested_unknown)
             .expect_err("V3 recipe payloads must reject derived or misspelled fields");
+    }
+
+    #[test]
+    fn schematic_layout_parses_the_exact_grand_v3_contract() {
+        let settings: MapSettings = ron::from_str(V3_SCHEMATIC_RON)
+            .expect("the canonical Grand V3 schematic settings should deserialize");
+        assert_eq!(settings.grid_radius, V3_SCHEMATIC_GRID_RADIUS);
+
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &settings.terrain else {
+            panic!("the schematic fixture must dispatch to procedural V3");
+        };
+        let V3LayoutSettings::Schematic(schematic) = &v3.layout else {
+            panic!("the schematic fixture must dispatch to the Schematic layout");
+        };
+        assert_eq!(schematic.template, V3SchematicTemplate::GrandV3);
+        assert_eq!(schematic.template_revision, V3_GRAND_V3_TEMPLATE_REVISION);
+        assert_eq!(schematic.cell_pitch, V3_SCHEMATIC_CELL_PITCH);
+        assert_eq!(
+            schematic.derived_grid_radius(),
+            Ok(V3_SCHEMATIC_GRID_RADIUS)
+        );
+        assert_eq!(
+            schematic.terrain_profile,
+            V3SchematicTerrainProfile::GrandV3BasicV1(V3GrandV3BasicTerrainProfile::canonical())
+        );
+
+        let template = hex_schematic::grand_v3_reference_template()
+            .expect("the embedded Grand V3 template should remain valid");
+        assert_eq!(template.id.as_str(), "template/grand-v3");
+        assert_eq!(
+            template.revision, V3_GRAND_V3_TEMPLATE_REVISION,
+            "the map contract and packaged template revision must move together"
+        );
+        assert_eq!(
+            u32::from(template.radius),
+            u32::from(hex_schematic::SCHEMATIC_RADIUS)
+        );
+    }
+
+    #[test]
+    fn schematic_layout_rejects_noncanonical_identity_and_radius_values() {
+        for (old, replacement, expected) in [
+            (
+                "grid_radius: 187",
+                "grid_radius: 186",
+                "requires grid_radius exactly 187",
+            ),
+            (
+                "template_revision: 2",
+                "template_revision: 1",
+                "template_revision must be exactly 2",
+            ),
+            (
+                "cell_pitch: 22",
+                "cell_pitch: 21",
+                "cell_pitch must be exactly 22",
+            ),
+        ] {
+            let source = V3_SCHEMATIC_RON.replacen(old, replacement, 1);
+            let error = ron::from_str::<MapSettings>(&source)
+                .expect_err("a noncanonical schematic contract must fail");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {replacement}: {error}"
+            );
+        }
+
+        let unknown_template = V3_SCHEMATIC_RON.replacen("GrandV3,", "GrandV4,", 1);
+        ron::from_str::<MapSettings>(&unknown_template)
+            .expect_err("unknown schematic template identities must fail");
+        let unknown_profile = V3_SCHEMATIC_RON.replacen("GrandV3BasicV1((", "GrandV3BasicV2((", 1);
+        ron::from_str::<MapSettings>(&unknown_profile)
+            .expect_err("unknown schematic terrain-profile versions must fail");
+
+        let overflowing = V3SchematicLayoutSettings {
+            template: V3SchematicTemplate::GrandV3,
+            template_revision: V3_GRAND_V3_TEMPLATE_REVISION,
+            cell_pitch: u32::MAX,
+            terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                V3GrandV3BasicTerrainProfile::canonical(),
+            ),
+        };
+        assert!(
+            overflowing.derived_grid_radius().is_err(),
+            "derived radii must use checked integer arithmetic"
+        );
+    }
+
+    #[test]
+    fn schematic_layout_is_strict_and_freezes_every_basic_v1_level() {
+        let unknown_layout = V3_SCHEMATIC_RON.replacen(
+            "cell_pitch: 22,",
+            "cell_pitch: 22,\n            typoed_layout_field: 1,",
+            1,
+        );
+        ron::from_str::<MapSettings>(&unknown_layout)
+            .expect_err("schematic layout payloads must reject unknown fields");
+
+        let unknown_profile = V3_SCHEMATIC_RON.replacen(
+            "sea_level: 8,",
+            "sea_level: 8,\n                typoed_profile_field: 1,",
+            1,
+        );
+        ron::from_str::<MapSettings>(&unknown_profile)
+            .expect_err("schematic terrain profiles must reject unknown fields");
+
+        for (field, canonical) in [
+            ("sea_level", 8),
+            ("island_level", 12),
+            ("beach_level", 10),
+            ("shore_level", 12),
+            ("valley_level", 16),
+            ("plateau_level", 20),
+            ("hill_level", 20),
+            ("mountain_floor", 28),
+            ("massif_floor", 48),
+            ("high_core_level", 150),
+            ("high_gradient_per_cell", 18),
+            ("mountain_lake_level", 150),
+            ("frozen_woods_level", 152),
+            ("lake_island_min_level", 151),
+            ("lake_island_max_level", 158),
+            ("sharp_peak_bench_min", 150),
+            ("sharp_peak_bench_max", 166),
+            ("sharp_peak_min", 178),
+            ("sharp_peak_max", 192),
+            ("valley_lake_level", 15),
+            ("crystal_base_level", 6),
+            ("crystal_rise_levels", 144),
+        ] {
+            let source = V3_SCHEMATIC_RON.replacen(
+                &format!("{field}: {canonical},"),
+                &format!("{field}: {},", canonical + 1),
+                1,
+            );
+            let error = ron::from_str::<MapSettings>(&source)
+                .expect_err("every BasicV1 level is part of the versioned contract");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error after changing {field}: {error}"
+            );
+        }
     }
 
     #[test]

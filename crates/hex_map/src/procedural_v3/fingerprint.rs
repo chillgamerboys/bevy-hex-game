@@ -16,7 +16,7 @@ use crate::settings::{
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide,
     Ring19RegionSettings, SharedEdgeSettings, V3EnvironmentSettings, V3LayoutSettings,
     V3OverlaySettings, V3RecipeSettings, V3Ring19ProfileSettings, V3Ring19Settings,
-    V3Ring7Settings,
+    V3Ring7Settings, V3SchematicLayoutSettings, V3SchematicTemplate, V3SchematicTerrainProfile,
 };
 
 use super::layout::{
@@ -209,8 +209,54 @@ pub(crate) fn settings_fingerprint(
             encoder.tag(3);
             encode_macro_settings(&mut encoder, macro_layout)?;
         }
+        V3LayoutSettings::Schematic(schematic) => {
+            encoder.tag(4);
+            encode_schematic_settings(&mut encoder, schematic);
+        }
     }
     Ok(encoder.finish_settings())
+}
+
+fn encode_schematic_settings(
+    encoder: &mut FingerprintEncoder,
+    settings: &V3SchematicLayoutSettings,
+) {
+    encoder.tag(match settings.template {
+        V3SchematicTemplate::GrandV3 => 0,
+    });
+    encoder.u32(settings.template_revision);
+    encoder.u32(settings.cell_pitch);
+    match settings.terrain_profile {
+        V3SchematicTerrainProfile::GrandV3BasicV1(profile) => {
+            encoder.tag(0);
+            for level in [
+                profile.sea_level,
+                profile.island_level,
+                profile.beach_level,
+                profile.shore_level,
+                profile.valley_level,
+                profile.plateau_level,
+                profile.hill_level,
+                profile.mountain_floor,
+                profile.massif_floor,
+                profile.high_core_level,
+                profile.high_gradient_per_cell,
+                profile.mountain_lake_level,
+                profile.frozen_woods_level,
+                profile.lake_island_min_level,
+                profile.lake_island_max_level,
+                profile.sharp_peak_bench_min,
+                profile.sharp_peak_bench_max,
+                profile.sharp_peak_min,
+                profile.sharp_peak_max,
+                profile.valley_lake_level,
+                profile.crystal_base_level,
+                profile.crystal_rise_levels,
+            ] {
+                encoder.i32(level);
+            }
+        }
+    }
 }
 
 fn encode_macro_settings(
@@ -397,6 +443,13 @@ const fn macro_axis_tag(axis: MacroAxisSettings) -> u8 {
 pub(crate) fn semantic_plan_fingerprint(plan: &GeneratedWorldPlan) -> Result<u64, String> {
     let mut encoder = FingerprintEncoder::new();
     encoder.u32(3);
+    // This conditional extension deliberately writes no bytes for established V3
+    // recipes. Grand V3 can therefore bind its complete schematic input without
+    // changing any legacy semantic fingerprint.
+    if let Some(source) = plan.source_schematic_fingerprint {
+        encoder.u8(255);
+        encoder.u64(source);
+    }
     encode_layout_plan(&mut encoder, &plan.layout)?;
     encode_volume_plan(&mut encoder, &plan.volume)?;
     encode_liquids(&mut encoder, &plan.liquids)?;
@@ -770,6 +823,7 @@ fn encode_layout_plan(
         LayoutKind::Ring7 => 1,
         LayoutKind::Ring19 => 2,
         LayoutKind::Macro => 3,
+        LayoutKind::Schematic => 4,
     });
     encoder.u32(layout.grid_radius);
     encode_coord_set(encoder, &layout.footprint)?;
@@ -1232,8 +1286,9 @@ mod tests {
         MacroWalkerConnectionSettings, MapSettings, ProceduralSettings,
         Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings, SharedEdgeSettings,
         TerrainSettings, V3CrystalAscentSettings, V3DesertPlainSettings,
-        V3DesertTransitionSettings, V3DunesSettings, V3HillsSettings, V3OasisSettings,
-        V3PrairieSettings, V3SandyIsletsSettings, V3WoodedIslandSettings, WalkerPortSettings,
+        V3DesertTransitionSettings, V3DunesSettings, V3GrandV3BasicTerrainProfile, V3HillsSettings,
+        V3OasisSettings, V3PrairieSettings, V3SandyIsletsSettings, V3SchematicLayoutSettings,
+        V3SchematicTemplate, V3SchematicTerrainProfile, V3WoodedIslandSettings, WalkerPortSettings,
     };
 
     const MOUNTAIN_RANGE_RON: &str =
@@ -1319,6 +1374,7 @@ mod tests {
             )]),
         };
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan::default(),
@@ -1345,6 +1401,27 @@ mod tests {
         assert_ne!(settings, semantic);
         assert_ne!(settings, materialized);
         assert_ne!(semantic, materialized);
+    }
+
+    #[test]
+    fn conditional_schematic_source_identity_changes_semantics_without_shifting_legacy() {
+        let legacy = compact_world();
+        let legacy_fingerprint =
+            semantic_plan_fingerprint(&legacy).expect("the compact legacy world fingerprints");
+
+        let mut first = legacy.clone();
+        first.source_schematic_fingerprint = Some(7);
+        let mut second = legacy.clone();
+        second.source_schematic_fingerprint = Some(8);
+
+        assert_eq!(
+            semantic_plan_fingerprint(&legacy).expect("legacy identity remains encodable"),
+            legacy_fingerprint
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&first).expect("first source identity fingerprints"),
+            semantic_plan_fingerprint(&second).expect("second source identity fingerprints")
+        );
     }
 
     #[test]
@@ -1642,6 +1719,120 @@ mod tests {
                 .expect("Two Rings settings encode"),
             2_347_243_186_379_186_390,
             "the unrelated Ring19 settings identity remains byte-identical"
+        );
+    }
+
+    #[test]
+    fn schematic_layout_uses_additive_tag_four_and_encodes_every_numeric_field() {
+        let schematic = V3SchematicLayoutSettings {
+            template: V3SchematicTemplate::GrandV3,
+            template_revision: 2,
+            cell_pitch: 22,
+            terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                V3GrandV3BasicTerrainProfile::canonical(),
+            ),
+        };
+        let mut encoder = FingerprintEncoder::new();
+        encoder.tag(4);
+        encode_schematic_settings(&mut encoder, &schematic);
+
+        let mut expected = vec![4, 0];
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        expected.extend_from_slice(&22_u32.to_le_bytes());
+        expected.push(0);
+        for level in [
+            8_i32, 12, 10, 12, 16, 20, 20, 28, 48, 150, 18, 150, 152, 151, 158, 150, 166, 178, 192,
+            15, 6, 144,
+        ] {
+            expected.extend_from_slice(&level.to_le_bytes());
+        }
+        assert_eq!(
+            encoder.bytes, expected,
+            "the additive layout tag and BasicV1 field order are wire contracts"
+        );
+    }
+
+    #[test]
+    fn schematic_settings_fingerprint_changes_with_every_numeric_field() {
+        fn canonical() -> ProceduralV3Settings {
+            ProceduralV3Settings {
+                layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
+                    template: V3SchematicTemplate::GrandV3,
+                    template_revision: 2,
+                    cell_pitch: 22,
+                    terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                        V3GrandV3BasicTerrainProfile::canonical(),
+                    ),
+                }),
+            }
+        }
+
+        let baseline = settings_fingerprint(187, 0.4, &canonical())
+            .expect("canonical Schematic settings encode");
+
+        let mut changed_revision = canonical();
+        let V3LayoutSettings::Schematic(schematic) = &mut changed_revision.layout else {
+            unreachable!("the fixture is Schematic");
+        };
+        schematic.template_revision += 1;
+        assert_ne!(
+            settings_fingerprint(187, 0.4, &changed_revision)
+                .expect("changed revision settings encode"),
+            baseline
+        );
+
+        let mut changed_pitch = canonical();
+        let V3LayoutSettings::Schematic(schematic) = &mut changed_pitch.layout else {
+            unreachable!("the fixture is Schematic");
+        };
+        schematic.cell_pitch += 1;
+        assert_ne!(
+            settings_fingerprint(187, 0.4, &changed_pitch).expect("changed pitch settings encode"),
+            baseline
+        );
+
+        macro_rules! assert_profile_field_changes_fingerprint {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    let mut changed = canonical();
+                    let V3LayoutSettings::Schematic(schematic) = &mut changed.layout else {
+                        unreachable!("the fixture is Schematic");
+                    };
+                    let V3SchematicTerrainProfile::GrandV3BasicV1(profile) =
+                        &mut schematic.terrain_profile;
+                    profile.$field += 1;
+                    assert_ne!(
+                        settings_fingerprint(187, 0.4, &changed)
+                            .expect("changed profile settings encode"),
+                        baseline,
+                        concat!(stringify!($field), " must affect the settings fingerprint")
+                    );
+                )+
+            };
+        }
+        assert_profile_field_changes_fingerprint!(
+            sea_level,
+            island_level,
+            beach_level,
+            shore_level,
+            valley_level,
+            plateau_level,
+            hill_level,
+            mountain_floor,
+            massif_floor,
+            high_core_level,
+            high_gradient_per_cell,
+            mountain_lake_level,
+            frozen_woods_level,
+            lake_island_min_level,
+            lake_island_max_level,
+            sharp_peak_bench_min,
+            sharp_peak_bench_max,
+            sharp_peak_min,
+            sharp_peak_max,
+            valley_lake_level,
+            crystal_base_level,
+            crystal_rise_levels,
         );
     }
 

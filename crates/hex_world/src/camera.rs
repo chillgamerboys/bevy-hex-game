@@ -230,7 +230,7 @@ struct CameraObstruction {
 }
 
 /// One exact public terrain run retained by the cached camera index.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct IndexedCameraSpan {
     position: TilePos,
     span: HexSpan,
@@ -242,8 +242,22 @@ struct IndexedCameraSpan {
 #[derive(Resource, Debug, Default)]
 struct CameraObstructionIndex {
     spans_by_coord: BTreeMap<hex_core::HexCoord, Vec<IndexedCameraSpan>>,
+    /// Reverse ownership for mutation-local removal and relocation.
+    ///
+    /// `HexTile` entities publish exactly one `TilePos`/`HexSpan` pair. Retaining
+    /// that pair here means a terrain edit can erase the old bucket entry without
+    /// searching any unrelated coordinate or rebuilding the complete projection.
+    span_by_entity: BTreeMap<Entity, IndexedCameraSpan>,
     initialized: bool,
+    /// Complete index constructions. After initialization, ordinary terrain edits
+    /// must leave this unchanged.
     rebuilds: u64,
+    /// Frames that applied at least one effective incremental index mutation.
+    incremental_batches: u64,
+    /// Effective entity insertions or geometry updates applied incrementally.
+    incremental_upserts: u64,
+    /// Indexed entities retired incrementally.
+    incremental_removals: u64,
 }
 
 /// Transient pose used only while Character mode avoids terrain.
@@ -896,6 +910,11 @@ fn character_boom_direction(rotation: Quat) -> Vec3 {
 }
 
 impl CameraObstructionIndex {
+    /// Rebuilds an untracked projection for read-only diagnostics.
+    ///
+    /// Production initialization uses [`Self::rebuild_tracked`] so later entity
+    /// mutations can update only their exact entries.
+    #[cfg(feature = "test-support")]
     fn rebuild(&mut self, tiles: impl IntoIterator<Item = (TilePos, HexSpan)>) {
         let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
         for (position, span) in tiles {
@@ -904,19 +923,77 @@ impl CameraObstructionIndex {
                 .or_default()
                 .push(IndexedCameraSpan { position, span });
         }
-        for spans in spans_by_coord.values_mut() {
-            spans.sort_by(|first, second| {
-                first
-                    .span
-                    .bottom
-                    .total_cmp(&second.span.bottom)
-                    .then_with(|| first.span.top.total_cmp(&second.span.top))
-                    .then_with(|| first.position.cmp(&second.position))
-            });
-        }
+        spans_by_coord
+            .values_mut()
+            .for_each(|spans| Self::sort_spans(spans));
         self.spans_by_coord = spans_by_coord;
+        self.span_by_entity.clear();
         self.initialized = true;
         self.rebuilds = self.rebuilds.saturating_add(1);
+    }
+
+    fn rebuild_tracked(&mut self, tiles: impl IntoIterator<Item = (Entity, TilePos, HexSpan)>) {
+        let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
+        let mut span_by_entity = BTreeMap::new();
+        for (entity, position, span) in tiles {
+            let indexed = IndexedCameraSpan { position, span };
+            spans_by_coord
+                .entry(position.coord)
+                .or_default()
+                .push(indexed);
+            span_by_entity.insert(entity, indexed);
+        }
+        spans_by_coord
+            .values_mut()
+            .for_each(|spans| Self::sort_spans(spans));
+        self.spans_by_coord = spans_by_coord;
+        self.span_by_entity = span_by_entity;
+        self.initialized = true;
+        self.rebuilds = self.rebuilds.saturating_add(1);
+    }
+
+    fn sort_spans(spans: &mut [IndexedCameraSpan]) {
+        spans.sort_by(|first, second| {
+            first
+                .span
+                .bottom
+                .total_cmp(&second.span.bottom)
+                .then_with(|| first.span.top.total_cmp(&second.span.top))
+                .then_with(|| first.position.cmp(&second.position))
+        });
+    }
+
+    /// Removes one entity's exact previous projection, if it was indexed.
+    fn remove_entity(&mut self, entity: Entity) -> bool {
+        let Some(indexed) = self.span_by_entity.remove(&entity) else {
+            return false;
+        };
+        let coord = indexed.position.coord;
+        let mut remove_bucket = false;
+        if let Some(spans) = self.spans_by_coord.get_mut(&coord) {
+            if let Some(index) = spans.iter().position(|candidate| *candidate == indexed) {
+                spans.remove(index);
+            }
+            remove_bucket = spans.is_empty();
+        }
+        if remove_bucket {
+            self.spans_by_coord.remove(&coord);
+        }
+        true
+    }
+
+    /// Inserts or relocates one entity without touching unrelated coordinates.
+    fn upsert_entity(&mut self, entity: Entity, position: TilePos, span: HexSpan) -> bool {
+        let replacement = IndexedCameraSpan { position, span };
+        if self.span_by_entity.get(&entity) == Some(&replacement) {
+            return false;
+        }
+        self.remove_entity(entity);
+        let spans = self.spans_by_coord.entry(position.coord).or_default();
+        spans.push(replacement);
+        Self::sort_spans(spans);
+        self.span_by_entity.insert(entity, replacement);
+        true
     }
 
     fn safe_radius(
@@ -1095,33 +1172,72 @@ fn axis_interval(
 
 fn refresh_camera_obstruction_index(
     mut index: ResMut<CameraObstructionIndex>,
-    tiles: Query<(&TilePos, &HexSpan), With<HexTile>>,
+    tiles: Query<(Entity, &TilePos, &HexSpan), With<HexTile>>,
     changed_tiles: Query<
-        (),
+        (Entity, &TilePos, &HexSpan),
         (
             With<HexTile>,
             Or<(Added<HexTile>, Changed<TilePos>, Changed<HexSpan>)>,
         ),
     >,
     mut removed_tiles: RemovedComponents<HexTile>,
+    mut removed_positions: RemovedComponents<TilePos>,
+    mut removed_spans: RemovedComponents<HexSpan>,
 ) {
-    // Drain the complete batch. Reading only the first removal leaves the cursor
-    // behind, which would turn one large terrain replacement into one full index
-    // rebuild per frame until every stale message had been consumed.
-    let removed = removed_tiles.read().count() > 0;
-    if index.initialized && !removed && changed_tiles.is_empty() {
+    // Drain and deduplicate the complete retirement batch. A despawn removes all
+    // three public projection components, while a root replacement can retire
+    // hundreds of entities at once; both still become one deterministic update.
+    let removed = removed_tiles
+        .read()
+        .chain(removed_positions.read())
+        .chain(removed_spans.read())
+        .collect::<BTreeSet<_>>();
+
+    if !index.initialized {
+        index.rebuild_tracked(
+            tiles
+                .iter()
+                .map(|(entity, position, span)| (entity, *position, *span)),
+        );
         return;
     }
 
-    index.rebuild(tiles.iter().map(|(position, span)| (*position, *span)));
+    if removed.is_empty() && changed_tiles.is_empty() {
+        return;
+    }
+
+    let mut removals = 0_u64;
+    for entity in removed {
+        removals += u64::from(index.remove_entity(entity));
+    }
+
+    // Query iteration order is not a semantic contract. Canonicalize the small
+    // changed set before applying it so a 256-column chunk replacement produces
+    // byte-identical buckets independent of archetype traversal order.
+    let mut changed = changed_tiles
+        .iter()
+        .map(|(entity, position, span)| (entity, *position, *span))
+        .collect::<Vec<_>>();
+    changed.sort_by_key(|(entity, _, _)| *entity);
+    let mut upserts = 0_u64;
+    for (entity, position, span) in changed {
+        upserts += u64::from(index.upsert_entity(entity, position, span));
+    }
+
+    if removals > 0 || upserts > 0 {
+        index.incremental_batches = index.incremental_batches.saturating_add(1);
+        index.incremental_removals = index.incremental_removals.saturating_add(removals);
+        index.incremental_upserts = index.incremental_upserts.saturating_add(upserts);
+    }
 }
 
 fn clear_camera_obstruction_index(
     mut index: ResMut<CameraObstructionIndex>,
     mut collision: ResMut<CharacterCameraCollision>,
 ) {
-    if index.initialized || !index.spans_by_coord.is_empty() {
+    if index.initialized || !index.spans_by_coord.is_empty() || !index.span_by_entity.is_empty() {
         index.spans_by_coord.clear();
+        index.span_by_entity.clear();
         index.initialized = false;
     }
     if collision.effective_radius.is_some()
@@ -1703,6 +1819,51 @@ mod tests {
         }
     }
 
+    fn obstruction_index_app() -> App {
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
+            .init_resource::<CameraObstructionIndex>()
+            .add_systems(PostUpdate, refresh_camera_obstruction_index);
+        builder.build()
+    }
+
+    /// Compares the incrementally maintained production resource with a fresh
+    /// construction from the exact same public ECS projection, including several
+    /// collision answers rather than only its internal container shape.
+    fn assert_incremental_index_matches_full(app: &mut App) {
+        let projection = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<(Entity, &TilePos, &HexSpan), With<HexTile>>();
+            query
+                .iter(world)
+                .map(|(entity, position, span)| (entity, *position, *span))
+                .collect::<Vec<_>>()
+        };
+        let mut rebuilt = CameraObstructionIndex::default();
+        rebuilt.rebuild_tracked(projection);
+
+        let incremental = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(incremental.spans_by_coord, rebuilt.spans_by_coord);
+        assert_eq!(incremental.span_by_entity, rebuilt.span_by_entity);
+        for (q, r) in [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)] {
+            let horizontal = hex_core::HexCoord::from_axial(q, r).to_world(0.0);
+            let direction = Vec3::new(horizontal.x, -0.1, horizontal.z).normalize();
+            let incremental_clearance =
+                incremental.safe_radius(Vec3::Y, TilePos::ORIGIN, direction, 64.0, 0.4, 0.35);
+            let rebuilt_clearance =
+                rebuilt.safe_radius(Vec3::Y, TilePos::ORIGIN, direction, 64.0, 0.4, 0.35);
+            assert_eq!(
+                incremental_clearance.radius.to_bits(),
+                rebuilt_clearance.radius.to_bits()
+            );
+            assert_eq!(
+                incremental_clearance.obstructed,
+                rebuilt_clearance.obstructed
+            );
+        }
+    }
+
     fn enter(app: &mut App, screen: Screen) {
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
@@ -1790,6 +1951,7 @@ mod tests {
                 spans_by_coord,
                 initialized: true,
                 rebuilds: 1,
+                ..default()
             },
             direction,
         )
@@ -2018,6 +2180,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         let clearance = index.safe_radius(
@@ -2100,6 +2263,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let direction = hex_core::HexCoord::from_axial(1, 0)
             .to_world(0.0)
@@ -2257,6 +2421,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let clearance = index.safe_radius(
             Vec3::Y * settings.character_focus_height,
@@ -2288,6 +2453,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         let clearance = index.safe_radius(
@@ -2361,6 +2527,7 @@ mod tests {
             ]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let direction = Vec3::new(0.0, 0.5, 1.0).normalize();
 
@@ -2379,6 +2546,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let blocked = wall.safe_radius(focus, support, direction, 7.0, 0.4, 0.35);
         assert!(blocked.obstructed);
@@ -2396,6 +2564,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         let clearance = index.safe_radius(Vec3::Y, TilePos::ORIGIN, direction, 7.0, 0.4, 0.35);
@@ -2633,12 +2802,20 @@ mod tests {
             .entity_mut(tile)
             .insert(HexSpan::new(0.0, 0.8));
         app.update();
-        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 2);
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_upserts, 1);
+        assert_eq!(index.incremental_removals, 0);
         app.world_mut().entity_mut(tile).despawn();
         app.update();
         let index = app.world().resource::<CameraObstructionIndex>();
-        assert_eq!(index.rebuilds, 3);
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 2);
+        assert_eq!(index.incremental_upserts, 1);
+        assert_eq!(index.incremental_removals, 1);
         assert!(index.spans_by_coord.is_empty());
+        assert!(index.span_by_entity.is_empty());
     }
 
     #[test]
@@ -2699,7 +2876,149 @@ mod tests {
     }
 
     #[test]
-    fn a_large_removal_batch_rebuilds_the_obstruction_index_only_once() {
+    fn incremental_span_change_matches_a_full_obstruction_rebuild() {
+        let mut app = obstruction_index_app();
+        let coord = hex_core::HexCoord::from_axial(-7, -5);
+        let tile = app
+            .world_mut()
+            .spawn((HexTile, TilePos::new(coord, 0), HexSpan::new(-0.4, 0.4)))
+            .id();
+        app.update();
+
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(HexSpan::new(-0.4, 2.0));
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_upserts, 1);
+        assert_eq!(index.incremental_removals, 0);
+    }
+
+    #[test]
+    fn incremental_negative_coordinate_move_matches_a_full_obstruction_rebuild() {
+        let mut app = obstruction_index_app();
+        let old_coord = hex_core::HexCoord::from_axial(3, 2);
+        let new_coord = hex_core::HexCoord::from_axial(-11, -9);
+        let tile = app
+            .world_mut()
+            .spawn((HexTile, TilePos::new(old_coord, 0), HexSpan::new(0.0, 1.0)))
+            .id();
+        app.update();
+
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(TilePos::new(new_coord, 1));
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert!(!index.spans_by_coord.contains_key(&old_coord));
+        assert!(index.spans_by_coord.contains_key(&new_coord));
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_upserts, 1);
+    }
+
+    #[test]
+    fn incremental_individual_removal_matches_a_full_obstruction_rebuild() {
+        let mut app = obstruction_index_app();
+        let keep = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(-2, 1), 0),
+                HexSpan::new(0.0, 1.0),
+            ))
+            .id();
+        let retire = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(-3, 1), 0),
+                HexSpan::new(0.0, 2.0),
+            ))
+            .id();
+        app.update();
+
+        app.world_mut().entity_mut(retire).remove::<HexTile>();
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert!(index.span_by_entity.contains_key(&keep));
+        assert!(!index.span_by_entity.contains_key(&retire));
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_removals, 1);
+    }
+
+    #[test]
+    fn a_256_column_remove_add_batch_matches_one_full_rebuild_and_then_idles() {
+        let mut app = obstruction_index_app();
+        let retired = (0..256)
+            .map(|index| {
+                let q = index % 16 - 8;
+                let r = index / 16 - 8;
+                app.world_mut()
+                    .spawn((
+                        HexTile,
+                        TilePos::new(hex_core::HexCoord::from_axial(q, r), 0),
+                        HexSpan::new(0.0, 0.4),
+                    ))
+                    .id()
+            })
+            .collect::<Vec<_>>();
+        app.update();
+
+        for entity in retired {
+            app.world_mut().entity_mut(entity).despawn();
+        }
+        for index in (0..256).rev() {
+            let q = index % 16 - 8;
+            let r = index / 16 - 8;
+            app.world_mut().spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(q, r), 1),
+                HexSpan::new(0.4, 1.2),
+            ));
+        }
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let before_idle = {
+            let index = app.world().resource::<CameraObstructionIndex>();
+            assert_eq!(index.rebuilds, 1);
+            assert_eq!(index.incremental_batches, 1);
+            assert_eq!(index.incremental_removals, 256);
+            assert_eq!(index.incremental_upserts, 256);
+            (
+                index.rebuilds,
+                index.incremental_batches,
+                index.incremental_removals,
+                index.incremental_upserts,
+            )
+        };
+        for _ in 0..256 {
+            app.update();
+        }
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(
+            before_idle,
+            (
+                index.rebuilds,
+                index.incremental_batches,
+                index.incremental_removals,
+                index.incremental_upserts,
+            )
+        );
+    }
+
+    #[test]
+    fn a_large_removal_batch_updates_the_obstruction_index_only_once() {
         let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
         builder
             .app_mut()
@@ -2726,11 +3045,17 @@ mod tests {
 
         app.update();
         let index = app.world().resource::<CameraObstructionIndex>();
-        assert_eq!(index.rebuilds, 2);
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_removals, 128);
+        assert_eq!(index.incremental_upserts, 0);
         assert!(index.spans_by_coord.is_empty());
+        assert!(index.span_by_entity.is_empty());
 
         app.update();
-        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 2);
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
     }
 
     #[test]
@@ -3179,6 +3504,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         app.update();
         let blocked = camera_pose(&app, camera);
@@ -3784,6 +4110,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
     }
 
@@ -4072,6 +4399,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         toggle_camera(&mut app);
@@ -4356,6 +4684,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         app.update();
 

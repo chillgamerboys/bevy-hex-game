@@ -56,7 +56,7 @@ pub use formation::{
     FormationError, FormationPreset, FormationSlot, PartyFormation, PartyMovementMode, PartyPath,
     MAX_FORMATION_SLOTS, MIN_FORMATION_SLOTS,
 };
-pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
+pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant, TerrainChunkRoot};
 pub use input::{
     BindingConflict, BindingEditError, BindingRestoreOutcome, InputAction, InputActionInventory,
     InputActionMetadata, InputBindingOverrides, InputBindings, InputCategory, InputContext,

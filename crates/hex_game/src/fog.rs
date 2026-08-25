@@ -1,20 +1,25 @@
 //! Player-facing tactical shroud derived from authoritative faction observation.
 //!
 //! The terrain itself remains the current, pickable map. This adapter adds a dark
-//! presentation cap to every surface the player faction does not currently observe
-//! and contributes only the composable [`PresentationOcclusionReason::Fog`] reason to
-//! hidden hostile roots. Neither path feeds renderer state back into gameplay.
+//! presentation cap to every surface the player faction does not currently observe.
+//! Caps are disconnected geometry batched by resident chunk and cutaway owner. The
+//! adapter contributes only the composable [`PresentationOcclusionReason::Fog`]
+//! reason to hidden hostile roots. Neither path feeds renderer state back into gameplay.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use bevy::asset::RenderAssetUsages;
 use bevy::light::NotShadowCaster;
+use bevy::mesh::Indices;
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use hex_assets::GameAssets;
+use bevy::render::render_resource::PrimitiveTopology;
+use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
 use hex_core::{
-    CutawayOccluder, Headroom, HexSpan, HexTile, KnowledgeState, PerceptionSystems,
-    PresentationOcclusion, PresentationOcclusionReason, Screen, TilePos, UnitId,
+    CutawayOccluder, Headroom, HexSpan, HexTile, InteriorRegionId, KnowledgeState,
+    PerceptionSystems, PresentationOcclusion, PresentationOcclusionReason, Screen, TilePos, UnitId,
 };
+use hex_map::terrain_chunk_key;
 use hex_perception::FactionMapKnowledge;
 use hex_units::{Enemy, Faction};
 
@@ -23,8 +28,32 @@ pub(super) const FOG_CAP_INSET: f32 = 0.84;
 pub(super) const FOG_CAP_LIFT: f32 = 0.08;
 pub(super) const FOG_CAP_DEPTH_BIAS: f32 = 8.0;
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-struct FogOverlay(TilePos);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct FogBatchKey {
+    chunk_q: i32,
+    chunk_r: i32,
+    cutaway: Option<InteriorRegionId>,
+}
+
+#[derive(Component, Debug, Clone, PartialEq)]
+struct FogOverlayBatch {
+    key: FogBatchKey,
+    positions: Vec<TilePos>,
+    spans: Vec<HexSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct FogBatchProjection {
+    positions: Vec<TilePos>,
+    spans: Vec<HexSpan>,
+}
+
+impl FogBatchProjection {
+    fn push(&mut self, position: TilePos, span: HexSpan) {
+        self.positions.push(position);
+        self.spans.push(span);
+    }
+}
 
 #[derive(Resource, Debug, Default)]
 struct FogPresentationState {
@@ -52,8 +81,8 @@ type OverlayQuery<'w, 's> = Query<
     's,
     (
         Entity,
-        &'static FogOverlay,
-        &'static mut Transform,
+        &'static mut FogOverlayBatch,
+        &'static Mesh3d,
         Option<&'static CutawayOccluder>,
     ),
 >;
@@ -80,7 +109,7 @@ pub(super) fn plugin(app: &mut App) {
 fn reconcile_fog(
     mut commands: Commands,
     knowledge: Option<Res<FactionMapKnowledge>>,
-    game_assets: Option<Res<GameAssets>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     tiles: TileQuery,
     changed_tiles: Query<
@@ -145,7 +174,7 @@ fn reconcile_fog(
 
     reconcile_hostiles(knowledge.as_deref(), &mut hostiles);
 
-    let (Some(game_assets), Some(materials)) = (game_assets, materials.as_mut()) else {
+    let (Some(meshes), Some(materials)) = (meshes.as_mut(), materials.as_mut()) else {
         // Unit concealment remains fail-closed even if renderer assets are not ready.
         return;
     };
@@ -156,44 +185,57 @@ fn reconcile_fog(
 
     let surfaces = collect_current_surfaces(&tiles);
     let desired = desired_shaded_surfaces(knowledge.as_deref(), surfaces.keys().copied());
+    let desired_batches = batch_shaded_surfaces(&desired, &surfaces);
     let mut existing = BTreeMap::new();
-    for (entity, overlay, mut transform, cutaway) in &mut overlays {
-        if !desired.contains(&overlay.0) || !surfaces.contains_key(&overlay.0) {
+    for (entity, mut batch, mesh, cutaway) in &mut overlays {
+        let Some(projection) = desired_batches.get(&batch.key) else {
+            drop(meshes.remove(mesh.0.id()));
             commands.entity(entity).despawn();
             continue;
-        }
-        if existing.insert(overlay.0, entity).is_some() {
+        };
+        if existing.insert(batch.key, entity).is_some() {
+            drop(meshes.remove(mesh.0.id()));
             commands.entity(entity).despawn();
             continue;
         }
 
-        let Some(surface) = surfaces.get(&overlay.0) else {
-            continue;
-        };
-        *transform = fog_transform(overlay.0, surface.span);
-        reconcile_cutaway(&mut commands, entity, cutaway.copied(), surface.cutaway);
+        if batch.positions != projection.positions || batch.spans != projection.spans {
+            let replacement = meshes.add(fog_batch_mesh(projection));
+            drop(meshes.remove(mesh.0.id()));
+            batch.positions.clone_from(&projection.positions);
+            batch.spans.clone_from(&projection.spans);
+            commands.entity(entity).insert(Mesh3d(replacement));
+        }
+        reconcile_cutaway(
+            &mut commands,
+            entity,
+            cutaway.copied(),
+            batch.key.cutaway.map(CutawayOccluder),
+        );
     }
 
-    for position in desired {
-        if existing.contains_key(&position) {
+    for (key, projection) in desired_batches {
+        if existing.contains_key(&key) {
             continue;
         }
-        let Some(surface) = surfaces.get(&position) else {
-            continue;
-        };
+        let mesh = meshes.add(fog_batch_mesh(&projection));
         let mut overlay = commands.spawn((
-            Mesh3d(game_assets.hex_tile.clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(material.clone()),
-            fog_transform(position, surface.span),
+            Transform::default(),
             Visibility::default(),
             Pickable::IGNORE,
             NotShadowCaster,
             PresentationOcclusion::default(),
-            FogOverlay(position),
-            Name::new("FogOverlay"),
+            FogOverlayBatch {
+                key,
+                positions: projection.positions,
+                spans: projection.spans,
+            },
+            Name::new(format!("FogOverlayBatch[{},{}]", key.chunk_q, key.chunk_r)),
         ));
-        if let Some(cutaway) = surface.cutaway {
-            overlay.insert(cutaway);
+        if let Some(cutaway) = key.cutaway {
+            overlay.insert(CutawayOccluder(cutaway));
         }
     }
     state.initialized = true;
@@ -250,6 +292,28 @@ fn desired_shaded_surfaces(
         .collect()
 }
 
+fn batch_shaded_surfaces(
+    desired: &BTreeSet<TilePos>,
+    surfaces: &BTreeMap<TilePos, CurrentSurface>,
+) -> BTreeMap<FogBatchKey, FogBatchProjection> {
+    let mut batches = BTreeMap::<FogBatchKey, FogBatchProjection>::new();
+    for &position in desired {
+        let Some(surface) = surfaces.get(&position) else {
+            continue;
+        };
+        let (chunk_q, chunk_r) = terrain_chunk_key(position.coord);
+        batches
+            .entry(FogBatchKey {
+                chunk_q,
+                chunk_r,
+                cutaway: surface.cutaway.map(|cutaway| cutaway.0),
+            })
+            .or_default()
+            .push(position, surface.span);
+    }
+    batches
+}
+
 fn reconcile_hostiles(
     knowledge: Option<&FactionMapKnowledge>,
     hostiles: &mut Query<(&UnitId, &mut PresentationOcclusion), With<Enemy>>,
@@ -293,6 +357,74 @@ fn fog_transform(position: TilePos, span: HexSpan) -> Transform {
     }
 }
 
+fn fog_batch_mesh(projection: &FogBatchProjection) -> Mesh {
+    debug_assert_eq!(projection.positions.len(), projection.spans.len());
+    let inradius = 0.5 * HEX_SMALL_DIAMETER;
+    let corners = [
+        Vec3::new(0.0, 0.0, -HEX_CIRCUMRADIUS),
+        Vec3::new(-inradius, 0.0, -0.5 * HEX_CIRCUMRADIUS),
+        Vec3::new(-inradius, 0.0, 0.5 * HEX_CIRCUMRADIUS),
+        Vec3::new(0.0, 0.0, HEX_CIRCUMRADIUS),
+        Vec3::new(inradius, 0.0, 0.5 * HEX_CIRCUMRADIUS),
+        Vec3::new(inradius, 0.0, -0.5 * HEX_CIRCUMRADIUS),
+    ];
+    let mut local_positions = Vec::with_capacity(14);
+    local_positions.push(Vec3::new(0.0, 0.5, 0.0));
+    local_positions.extend(corners.map(|corner| corner + Vec3::Y * 0.5));
+    local_positions.push(Vec3::new(0.0, -0.5, 0.0));
+    local_positions.extend(corners.map(|corner| corner - Vec3::Y * 0.5));
+
+    let mut local_indices = vec![0_u32, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 1];
+    for index in 0_u32..6 {
+        let next = (index + 1) % 6;
+        let top = 1 + index;
+        let top_next = 1 + next;
+        let bottom = 8 + index;
+        let bottom_next = 8 + next;
+        local_indices.extend([7, bottom_next, bottom]);
+        local_indices.extend([top, bottom, bottom_next, top, bottom_next, top_next]);
+    }
+    let mut vertices = Vec::with_capacity(
+        projection
+            .positions
+            .len()
+            .saturating_mul(local_positions.len()),
+    );
+    let mut normals = Vec::with_capacity(vertices.capacity());
+    let mut indices = Vec::with_capacity(
+        projection
+            .positions
+            .len()
+            .saturating_mul(local_indices.len()),
+    );
+
+    for (&position, &span) in projection.positions.iter().zip(&projection.spans) {
+        let Ok(base) = u32::try_from(vertices.len()) else {
+            break;
+        };
+        let transform = fog_transform(position, span);
+        vertices.extend(
+            local_positions
+                .iter()
+                .copied()
+                .map(|point| transform.transform_point(point).to_array()),
+        );
+        normals.extend(std::iter::repeat_n(
+            Vec3::Y.to_array(),
+            local_positions.len(),
+        ));
+        indices.extend(local_indices.iter().copied().map(|index| base + index));
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
 fn fog_material() -> StandardMaterial {
     StandardMaterial {
         base_color: Color::srgba(0.03, 0.04, 0.10, 0.72),
@@ -305,11 +437,15 @@ fn fog_material() -> StandardMaterial {
 
 fn clear_fog_presentation(
     mut commands: Commands,
-    overlays: Query<Entity, With<FogOverlay>>,
+    overlays: Query<(Entity, &Mesh3d), With<FogOverlayBatch>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut occlusions: Query<&mut PresentationOcclusion>,
     mut state: ResMut<FogPresentationState>,
 ) {
-    for entity in &overlays {
+    for (entity, mesh) in &overlays {
+        if let Some(meshes) = meshes.as_mut() {
+            drop(meshes.remove(mesh.0.id()));
+        }
         commands.entity(entity).despawn();
     }
     for mut occlusion in &mut occlusions {
@@ -321,8 +457,11 @@ fn clear_fog_presentation(
 /// Exact fog-cap positions exposed only to crate-owned composition tests.
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) fn fog_overlay_positions(world: &mut World) -> BTreeSet<TilePos> {
-    let mut overlays = world.query::<&FogOverlay>();
-    overlays.iter(world).map(|overlay| overlay.0).collect()
+    let mut overlays = world.query::<&FogOverlayBatch>();
+    overlays
+        .iter(world)
+        .flat_map(|overlay| overlay.positions.iter().copied())
+        .collect()
 }
 
 #[cfg(test)]
@@ -369,11 +508,8 @@ mod tests {
     fn fog_app(knowledge: Option<FactionMapKnowledge>) -> App {
         let mut app = App::new();
         app.init_resource::<FogPresentationState>()
+            .insert_resource(Assets::<Mesh>::default())
             .insert_resource(Assets::<StandardMaterial>::default())
-            .insert_resource(GameAssets {
-                hex_tile: Handle::default(),
-                player_pieces: [Handle::default(), Handle::default()],
-            })
             .add_systems(Update, (clear_removed_hostile_fog, reconcile_fog));
         if let Some(knowledge) = knowledge {
             app.insert_resource(knowledge);
@@ -385,11 +521,8 @@ mod tests {
         let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
         let app = builder.app_mut();
         app.init_resource::<FogPresentationState>()
-            .insert_resource(Assets::<StandardMaterial>::default())
-            .insert_resource(GameAssets {
-                hex_tile: Handle::default(),
-                player_pieces: [Handle::default(), Handle::default()],
-            });
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default());
         plugin(app);
         if let Some(knowledge) = knowledge {
             app.insert_resource(knowledge);
@@ -437,7 +570,16 @@ mod tests {
 
     fn overlay_count(app: &mut App) -> usize {
         let world = app.world_mut();
-        let mut query = world.query::<&FogOverlay>();
+        let mut query = world.query::<&FogOverlayBatch>();
+        query
+            .iter(world)
+            .map(|overlay| overlay.positions.len())
+            .sum()
+    }
+
+    fn overlay_batch_count(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut query = world.query::<&FogOverlayBatch>();
         query.iter(world).count()
     }
 
@@ -540,7 +682,7 @@ mod tests {
             let world = app.world_mut();
             let mut query = world.query::<(
                 Entity,
-                &FogOverlay,
+                &FogOverlayBatch,
                 &Pickable,
                 Has<NotShadowCaster>,
                 Option<&CutawayOccluder>,
@@ -552,7 +694,7 @@ mod tests {
                     |(entity, overlay, pickable, no_shadow, cutaway, material)| {
                         (
                             entity,
-                            overlay.0,
+                            overlay.positions.clone(),
                             *pickable,
                             no_shadow,
                             cutaway.copied(),
@@ -566,8 +708,8 @@ mod tests {
         assert!(overlays.iter().all(|(_, _, pickable, no_shadow, _, _)| {
             *pickable == Pickable::IGNORE && *no_shadow
         }));
-        assert!(overlays.iter().any(|(_, position, _, _, marker, _)| {
-            *position == first && *marker == Some(cutaway)
+        assert!(overlays.iter().any(|(_, positions, _, _, marker, _)| {
+            positions.as_slice() == [first] && *marker == Some(cutaway)
         }));
         assert!(
             overlays
@@ -593,15 +735,20 @@ mod tests {
         spawn_surface(&mut app, replacement, None);
         app.update();
 
-        let mut positions = {
+        let positions = {
             let world = app.world_mut();
-            let mut query = world.query::<(&FogOverlay, Option<&CutawayOccluder>)>();
+            let mut query = world.query::<(&FogOverlayBatch, Option<&CutawayOccluder>)>();
             query
                 .iter(world)
-                .map(|(overlay, cutaway)| (overlay.0, cutaway.copied()))
+                .flat_map(|(overlay, cutaway)| {
+                    overlay
+                        .positions
+                        .iter()
+                        .copied()
+                        .map(move |position| (position, cutaway.copied()))
+                })
                 .collect::<Vec<_>>()
         };
-        positions.sort_by_key(|(position, _)| *position);
         assert_eq!(
             positions,
             vec![(first, None), (replacement, None)],
@@ -614,6 +761,7 @@ mod tests {
             .reconciliations;
         app.update();
         assert_eq!(overlay_count(&mut app), 2);
+        assert_eq!(overlay_batch_count(&mut app), 1);
         assert_eq!(
             app.world()
                 .resource::<FogPresentationState>()
@@ -621,6 +769,149 @@ mod tests {
             reconciliations,
             "all replacement removal cursors must be drained in the rebuild frame"
         );
+    }
+
+    #[test]
+    fn fog_caps_batch_by_euclidean_chunk_and_exact_cutaway_region() {
+        let cutaway = CutawayOccluder(InteriorRegionId(9));
+        let plain = [-17, -16, -1, 0, 15, 16]
+            .into_iter()
+            .map(pos)
+            .collect::<BTreeSet<_>>();
+        let cutaway_position = pos(-15);
+        let mut app = fog_app(Some(FactionMapKnowledge::new()));
+        for &position in &plain {
+            spawn_surface(&mut app, position, None);
+        }
+        spawn_surface(&mut app, cutaway_position, Some(cutaway));
+
+        app.update();
+
+        let (keys, positions, material_handles, pickable_and_shadow) = {
+            let world = app.world_mut();
+            let mut query = world.query::<(
+                &FogOverlayBatch,
+                &MeshMaterial3d<StandardMaterial>,
+                &Pickable,
+                Has<NotShadowCaster>,
+                Option<&CutawayOccluder>,
+            )>();
+            let mut keys = BTreeSet::new();
+            let mut positions = BTreeSet::new();
+            let mut material_handles = BTreeSet::new();
+            let mut pickable_and_shadow = Vec::new();
+            for (batch, material, pickable, no_shadow, marker) in query.iter(world) {
+                assert_eq!(batch.key.cutaway.map(CutawayOccluder), marker.copied());
+                assert!(keys.insert(batch.key), "duplicate fog batch key");
+                for &position in &batch.positions {
+                    assert!(positions.insert(position), "duplicate logical fog cap");
+                }
+                material_handles.insert(material.0.id());
+                pickable_and_shadow.push((*pickable, no_shadow));
+            }
+            (keys, positions, material_handles, pickable_and_shadow)
+        };
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                FogBatchKey {
+                    chunk_q: -2,
+                    chunk_r: 0,
+                    cutaway: None,
+                },
+                FogBatchKey {
+                    chunk_q: -1,
+                    chunk_r: 0,
+                    cutaway: None,
+                },
+                FogBatchKey {
+                    chunk_q: -1,
+                    chunk_r: 0,
+                    cutaway: Some(cutaway.0),
+                },
+                FogBatchKey {
+                    chunk_q: 0,
+                    chunk_r: 0,
+                    cutaway: None,
+                },
+                FogBatchKey {
+                    chunk_q: 1,
+                    chunk_r: 0,
+                    cutaway: None,
+                },
+            ])
+        );
+        let mut expected = plain;
+        expected.insert(cutaway_position);
+        assert_eq!(positions, expected);
+        assert_eq!(material_handles.len(), 1, "fog retains one shared material");
+        assert!(pickable_and_shadow
+            .iter()
+            .all(|(pickable, no_shadow)| *pickable == Pickable::IGNORE && *no_shadow));
+
+        app.world_mut()
+            .run_system_once(clear_fog_presentation)
+            .expect("fog teardown should run");
+        assert_eq!(overlay_count(&mut app), 0);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+    }
+
+    #[test]
+    fn changed_surface_geometry_rebuilds_one_batch_then_returns_to_zero_idle_churn() {
+        let position = pos(0);
+        let mut app = fog_app(Some(FactionMapKnowledge::new()));
+        let tile = spawn_surface(&mut app, position, None);
+        app.update();
+
+        let (batch_entity, first_mesh) = {
+            let world = app.world_mut();
+            let mut query = world.query::<(Entity, &Mesh3d, &FogOverlayBatch)>();
+            let (entity, mesh, batch) = query.single(world).expect("one fog batch");
+            assert_eq!(batch.positions, vec![position]);
+            (entity, mesh.0.id())
+        };
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(HexSpan::new(1.0, 5.0));
+        app.update();
+
+        let second_mesh = {
+            let world = app.world_mut();
+            let mut query = world.query::<(Entity, &Mesh3d, &FogOverlayBatch)>();
+            let (entity, mesh, batch) = query.single(world).expect("one rebuilt fog batch");
+            assert_eq!(
+                entity, batch_entity,
+                "stable batch keys retain their entity"
+            );
+            assert_eq!(batch.spans, vec![HexSpan::new(1.0, 5.0)]);
+            mesh.0.id()
+        };
+        assert_ne!(second_mesh, first_mesh);
+        assert_eq!(
+            app.world().resource::<Assets<Mesh>>().len(),
+            1,
+            "replaced batch meshes must not leak"
+        );
+        let reconciliations = app
+            .world()
+            .resource::<FogPresentationState>()
+            .reconciliations;
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<FogPresentationState>()
+                .reconciliations,
+            reconciliations,
+            "an unchanged frame must not rebuild or reconcile fog"
+        );
+        let unchanged_mesh = {
+            let world = app.world_mut();
+            let mut query = world.query::<&Mesh3d>();
+            query.single(world).expect("one unchanged batch").0.id()
+        };
+        assert_eq!(unchanged_mesh, second_mesh);
     }
 
     #[test]
@@ -940,9 +1231,9 @@ mod tests {
             .contains(PresentationOcclusionReason::Fog));
         assert!(
             app.world_mut()
-                .query::<&FogOverlay>()
+                .query::<&FogOverlayBatch>()
                 .iter(app.world())
-                .any(|overlay| overlay.0 == target),
+                .any(|overlay| overlay.positions.contains(&target)),
             "the heart-obscured hostile surface should retain its shroud cap"
         );
 
@@ -985,9 +1276,9 @@ mod tests {
             .contains(PresentationOcclusionReason::Fog));
         assert!(
             !app.world_mut()
-                .query::<&FogOverlay>()
+                .query::<&FogOverlayBatch>()
                 .iter(app.world())
-                .any(|overlay| overlay.0 == target),
+                .any(|overlay| overlay.positions.contains(&target)),
             "revealing the target should remove its fog cap"
         );
 

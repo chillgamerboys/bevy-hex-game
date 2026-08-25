@@ -100,12 +100,31 @@ rename; malformed or partially rendered galleries never replace an existing dest
 The contact sheet is self-contained, while the typed plan and validator remain the only
 logical authority. Invalid output is never published.
 
-This planner is not yet a fifth `V3LayoutSettings` variant. A later map-owned compiler will
-consume the same pure plan at runtime and choose horizontal spacing, vertical budgets,
-recipe mapping, materials, and routes. Keeping that expansion separate is what permits
-radius-to-height and palette experiments without changing the semantic geography.
+`V3LayoutSettings::Schematic` is the additive runtime compiler boundary for this plan.
+The initial strict contract accepts Grand V3 revision 2 at pitch 22 with the
+`GrandV3BasicV1` vertical profile. Runtime generation calls the same pure
+`hex_schematic::generate(template, seed)` function once, then compiles its already-selected
+plan; V3 does not wrap it in the legacy eight-candidate voxel search. Tests and review
+tooling may instead compile an exact validated plan directly. The schematic fingerprint,
+template revision, pitch, profile version, and every vertical-profile value participate in
+the existing V3 settings and semantic fingerprint chain. Existing layout tags and
+fingerprints are unchanged.
 
-`generator_version: 3` selects one of four layouts:
+Each of the 217 canonical coarse cells retains one stable biome identity. Pitch controls
+only where its centre lands in the fine grid: every fine column is assigned to its nearest
+centre with canonical cell ID as the exact-distance tie break. The first baseline therefore
+has radius 187 and exactly 105,469 columns. This ownership layer is independent of build
+topology: the compiler produces one continuous global height field and material volume, not
+217 isolated recipes whose boundaries could become visible shelves.
+
+The current `GrandV3BasicV1` output is the deliberately undecorated performance proxy. It
+contains the intended land/sea extent, representative lowland and highland strata, recessed
+sea and locked-lake water, stable review anchors, access classifications, the complete
+height range, and gameplay projections. It does not yet claim final hydrology, ordinary
+routes, Crystal Ascent geometry, vegetation, bridges, interiors, or gameplay lights. Those
+layers remain behind the recorded large-world performance checkpoint.
+
+`generator_version: 3` selects one of five layouts:
 
 - `Single(PatchSpec)` fills one connected world footprint with one recipe.
 - `Ring7` fills one radius-33 footprint with a central patch and six surrounding
@@ -115,6 +134,31 @@ radius-to-height and palette experiments without changing the semantic geography
 - `Macro(MacroLayoutSettings)` fills a radius-77 footprint from 37
   radius-12-scale atomic cells, then collapses those cells into authored logical
   biome instances.
+- `Schematic(V3SchematicLayoutSettings)` compiles one validated coarse schematic into a
+  continuous fine-grid world while retaining exact coarse-cell identities.
+
+## Chunk-native terrain residency
+
+`VoxelMap` stores generated columns in fixed 16 by 16 axial rhombi using Euclidean
+division, so negative and positive coordinates share one canonical split/join rule.
+Whole-world iteration remains canonical and independent of storage order. Radius 187
+occupies exactly 444 resident chunks, each with at most 256 columns. Chunk coordinates are
+runtime presentation metadata only: they never enter semantic fingerprints, map IDs,
+anchors, snapshots, saves, or network payloads. A restored legacy snapshot is repartitioned
+internally without changing its wire version.
+
+Presentation publishes one `HexGrid` root with one deterministic `TerrainChunkRoot` child
+per resident chunk. All terrain runs and all global gameplay projections exist before
+`TerrainReady`. A terrain edit validates the active grid topology first, mutates authority,
+and atomically replaces only affected chunk roots before publishing one world revision.
+Unchanged chunk entity identities and shared material handles survive; removed feature
+roots are reconciled against the new projection. Missing, duplicate, orphaned, or
+mis-parented chunk roots fail closed instead of leaving authority and presentation out of
+sync. Teardown still removes the complete grid atomically.
+
+The public snapshot remains the existing canonical column/run tuple. Its column admission
+bound is 131,072, raised additively from 65,536 without changing the snapshot wire version;
+chunk metadata is never serialized.
 
 A `PatchSpec` contains an environment, a typed recipe, named overlays, one connected
 mask, and six directional edge contracts. A mask is a set of horizontal columns

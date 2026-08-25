@@ -195,6 +195,13 @@ pub(crate) struct InteriorPlan {
 /// The complete private semantic output of one V3 world candidate.
 #[derive(Debug, Clone)]
 pub(crate) struct GeneratedWorldPlan {
+    /// Validated source-plan identity for compilers whose semantic input contains
+    /// layers that are intentionally not materialized in the current delivery.
+    ///
+    /// Legacy V3 recipes leave this absent so their established fingerprints remain
+    /// byte-identical. The Grand V3 proxy records the complete schematic identity,
+    /// including access, vegetation, and future feature layers.
+    pub(crate) source_schematic_fingerprint: Option<u64>,
     pub(crate) layout: ResolvedLayoutPlan,
     pub(crate) volume: VolumePlan,
     pub(crate) liquids: LiquidPlan,
@@ -1063,6 +1070,11 @@ fn validate_uncontracted_liquid_crossings(
     runs_by_coord: &BTreeMap<hex_core::HexCoord, Vec<(TilePos, NonSolidFill)>>,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
+    // Schematic cells preserve biome ownership only. Their terrain and liquids are
+    // generated globally, so a coarse ownership boundary is not a stitched seam.
+    if layout.kind == super::layout::LayoutKind::Schematic {
+        return;
+    }
     let patch_by_coord: BTreeMap<_, _> = layout
         .patches
         .iter()
@@ -1362,6 +1374,7 @@ mod tests {
         );
 
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan::default(),
@@ -1782,6 +1795,7 @@ mod tests {
         let second_high = TilePos::new(second_high, 3);
 
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan {

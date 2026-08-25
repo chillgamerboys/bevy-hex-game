@@ -1,5 +1,93 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum MalformedChunkTopology {
+    Missing,
+    Orphan,
+    WrongParent,
+    Duplicate,
+    Unexpected,
+}
+
+fn assert_chunk_topology_fails_closed(kind: MalformedChunkTopology) {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let target = {
+        let (coord, run) =
+            diggable_run(&app, 1).expect("the authored map should expose one diggable edit target");
+        TilePos::new(coord, run.top - 1)
+    };
+    let grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the active terrain grid should be unique");
+    let roots = terrain_chunk_roots(&mut app);
+    let (&key, &existing) = roots
+        .iter()
+        .next()
+        .expect("the generated map should publish chunk roots");
+
+    match kind {
+        MalformedChunkTopology::Missing => {
+            app.world_mut().entity_mut(existing).despawn();
+        }
+        MalformedChunkTopology::Orphan => {
+            app.world_mut().spawn(TerrainChunkRoot { q: 99, r: 99 });
+        }
+        MalformedChunkTopology::WrongParent => {
+            let parent = app.world_mut().spawn_empty().id();
+            let root = app
+                .world_mut()
+                .spawn(TerrainChunkRoot { q: 99, r: 99 })
+                .id();
+            app.world_mut().entity_mut(parent).add_child(root);
+        }
+        MalformedChunkTopology::Duplicate => {
+            let root = app
+                .world_mut()
+                .spawn(TerrainChunkRoot { q: key.0, r: key.1 })
+                .id();
+            app.world_mut().entity_mut(grid).add_child(root);
+        }
+        MalformedChunkTopology::Unexpected => {
+            let root = app
+                .world_mut()
+                .spawn(TerrainChunkRoot { q: 99, r: 99 })
+                .id();
+            app.world_mut().entity_mut(grid).add_child(root);
+        }
+    }
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    let failure = app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .as_str();
+    assert!(
+        failure.contains("chunk"),
+        "malformed chunk topology should publish an exact failure: {failure}"
+    );
+}
+
+#[test]
+fn terrain_edits_reject_every_malformed_chunk_root_topology() {
+    for kind in [
+        MalformedChunkTopology::Missing,
+        MalformedChunkTopology::Orphan,
+        MalformedChunkTopology::WrongParent,
+        MalformedChunkTopology::Duplicate,
+        MalformedChunkTopology::Unexpected,
+    ] {
+        assert_chunk_topology_fails_closed(kind);
+    }
+}
+
 #[test]
 fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
     let mut app = v3_forest_app();
@@ -21,6 +109,7 @@ fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
         .expect("Forest grid should exist");
+    let initial_chunks = terrain_chunk_roots(&mut app);
 
     app.world_mut()
         .write_message(TerrainEdit::Clear { pos: tree_root });
@@ -71,26 +160,34 @@ fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
     app.update();
     app.update();
 
-    let rebuilt_grid = app
+    let edited_grid = app
         .world_mut()
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
-        .expect("rebuilt Forest grid should exist");
-    assert_ne!(rebuilt_grid, first_grid);
-    let rebuilt_roots = feature_roots(&mut app);
-    assert_eq!(
-        rebuilt_roots
-            .iter()
-            .map(|(_entity, _kind, position, _parent)| *position)
-            .collect::<BTreeSet<_>>(),
-        initial_roots.keys().copied().collect()
+        .expect("edited Forest grid should exist");
+    assert_eq!(edited_grid, first_grid);
+    let edited_roots: BTreeMap<_, _> = feature_roots(&mut app)
+        .into_iter()
+        .map(|(entity, _kind, position, parent)| {
+            assert_eq!(parent, edited_grid);
+            (position, entity)
+        })
+        .collect();
+    assert_eq!(edited_roots, initial_roots);
+    let edited_chunks = terrain_chunk_roots(&mut app);
+    let affected = terrain_chunk_key(unrelated.coord);
+    assert_ne!(edited_chunks.get(&affected), initial_chunks.get(&affected));
+    let retired_root = initial_chunks
+        .get(&affected)
+        .copied()
+        .expect("the edited column should have an original chunk root");
+    assert!(
+        app.world().get_entity(retired_root).is_err(),
+        "the replaced Forest chunk root remained alive"
     );
-    assert!(rebuilt_roots
+    assert!(initial_chunks
         .iter()
-        .all(|(_entity, _kind, _position, parent)| *parent == rebuilt_grid));
-    assert!(initial_roots
-        .values()
-        .all(|entity| app.world().get_entity(*entity).is_err()));
+        .all(|(chunk, entity)| { *chunk == affected || edited_chunks.get(chunk) == Some(entity) }));
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -330,12 +427,12 @@ fn v3_waterfall_rejects_liquid_and_support_edits_but_rebuilds_dry_terrain() {
         .write_message(TerrainEdit::Clear { pos: dry_position });
     app.update();
     app.update();
-    let rebuilt_grid = app
+    let edited_grid = app
         .world_mut()
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
-        .expect("dry edit should rebuild the grid");
-    assert_ne!(rebuilt_grid, original_grid);
+        .expect("dry edit should retain the grid");
+    assert_eq!(edited_grid, original_grid);
     assert!(app
         .world()
         .resource::<VoxelMap>()
@@ -412,6 +509,7 @@ fn mountain_range_protects_the_shared_sea_and_republishes_it_after_a_dry_edit() 
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
         .expect("Mountain Range grid should exist");
+    let original_chunks = terrain_chunk_roots(&mut app);
     let original_presentations = liquid_presentations(&mut app);
     assert!(
         !original_presentations.is_empty(),
@@ -472,13 +570,26 @@ fn mountain_range_protects_the_shared_sea_and_republishes_it_after_a_dry_edit() 
     app.update();
     app.update();
 
-    let rebuilt_grid = app
+    let edited_grid = app
         .world_mut()
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
-        .expect("the edited Mountain Range grid should be rebuilt");
-    assert_ne!(rebuilt_grid, original_grid);
-    assert!(app.world().get_entity(original_grid).is_err());
+        .expect("the edited Mountain Range grid should remain");
+    assert_eq!(edited_grid, original_grid);
+    let edited_chunks = terrain_chunk_roots(&mut app);
+    let affected = terrain_chunk_key(dry_position.coord);
+    assert_ne!(edited_chunks.get(&affected), original_chunks.get(&affected));
+    let retired_root = original_chunks
+        .get(&affected)
+        .copied()
+        .expect("the edited column should have an original chunk root");
+    assert!(
+        app.world().get_entity(retired_root).is_err(),
+        "the replaced Mountain Range chunk root remained alive"
+    );
+    assert!(original_chunks
+        .iter()
+        .all(|(chunk, entity)| { *chunk == affected || edited_chunks.get(chunk) == Some(entity) }));
     assert!(
         app.world()
             .resource::<VoxelMap>()
@@ -500,16 +611,7 @@ fn mountain_range_protects_the_shared_sea_and_republishes_it_after_a_dry_edit() 
     );
     assert_column_run_publication(&mut app, dry_position.coord);
 
-    assert!(original_presentations
-        .iter()
-        .all(|(entity, _parent, _pickable)| app.world().get_entity(*entity).is_err()));
-    let rebuilt_presentations = liquid_presentations(&mut app);
-    assert_eq!(rebuilt_presentations.len(), original_presentations.len());
-    assert!(rebuilt_presentations
-        .iter()
-        .all(
-            |(_entity, parent, pickable)| *parent == rebuilt_grid && *pickable == Pickable::IGNORE
-        ));
+    assert_eq!(liquid_presentations(&mut app), original_presentations);
     assert!(app.world().contains_resource::<TerrainReady>());
     assert!(!app.world().contains_resource::<GameplaySetupFailure>());
 }

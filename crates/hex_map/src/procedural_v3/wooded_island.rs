@@ -152,7 +152,8 @@ impl V3Recipe for WoodedIslandRecipe {
             },
             V3LayoutSettings::Ring7(_)
             | V3LayoutSettings::Ring19(_)
-            | V3LayoutSettings::Macro(_) => 0,
+            | V3LayoutSettings::Macro(_)
+            | V3LayoutSettings::Schematic(_) => 0,
         };
         (
             metrics

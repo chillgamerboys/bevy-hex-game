@@ -315,6 +315,7 @@ impl LocalPatchFrame {
             boundary_liquid_outlets: BTreeMap::new(),
         };
         Ok(GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids,
