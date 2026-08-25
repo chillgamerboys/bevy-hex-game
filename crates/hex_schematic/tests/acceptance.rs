@@ -17,10 +17,10 @@ use std::time::{Duration, Instant};
 use hex_schematic::{
     canonical_cell_id, canonical_coordinates, generate, grand_v3_reference_template,
     reference_plan, semantic_fingerprint, validate_plan, validate_template, BoundedRegionRule,
-    BoundedTarget, FeatureKind, GeneratedSchematic, LayerProvenance, NetworkKind, NetworkNodeKind,
-    SchematicCoord, SchematicMetricsV1, SchematicPlanV1, SchematicTemplateV1, StableId,
-    VegetationDensity, CANDIDATE_ATTEMPTS, GRAND_V3_TEMPLATE_RON, SCHEMATIC_CELL_COUNT,
-    SCHEMATIC_RADIUS, SCHEMATIC_SCHEMA_VERSION,
+    BoundedTarget, CellPlan, FeatureKind, GeneratedSchematic, LandformKind, LayerProvenance,
+    NetworkKind, NetworkNodeKind, SchematicCoord, SchematicMetricsV1, SchematicPlanV1,
+    SchematicTemplateV1, StableId, SurfaceKind, VegetationDensity, CANDIDATE_ATTEMPTS,
+    GRAND_V3_TEMPLATE_RON, SCHEMATIC_CELL_COUNT, SCHEMATIC_RADIUS, SCHEMATIC_SCHEMA_VERSION,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -252,6 +252,56 @@ fn packaged_template_and_reference_plan_round_trip_strictly() -> TestResult {
     let metrics_wire = ron::ser::to_string(&reference.metrics)?;
     let reparsed_metrics: SchematicMetricsV1 = ron::from_str(&metrics_wire)?;
     assert_eq!(reparsed_metrics, reference.metrics);
+    Ok(())
+}
+
+#[test]
+fn packaged_template_matches_the_literal_approved_source_trace() -> TestResult {
+    let template = grand_v3_reference_template()?;
+    assert_eq!(template.revision, 2);
+    let expected_columns = [
+        (-8, "GGGTTBBBB"),
+        (-7, "GGGGGTBBOB"),
+        (-6, "PGGGGGTTBOB"),
+        (-5, "PPPPGGYYTBBB"),
+        (-4, "PPPPPPGYYTBBB"),
+        (-3, "AAAPPPGGGYTBOB"),
+        (-2, "AAAAAPPGGYTBBBB"),
+        (-1, "AAAAAAPPPGYTBTTT"),
+        (0, "AAAAPPAPPPGYTTYYY"),
+        (1, "AARPKPPPPGGYYYYG"),
+        (2, "AUUKKKPPPGYYYGG"),
+        (3, "AUTBBKPPGYYGGG"),
+        (4, "AKBOBKPBYYGGG"),
+        (5, "PKBBBABBYGPP"),
+        (6, "PKKKKPBYGGP"),
+        (7, "PPPPPPPPGP"),
+        (8, "PPPPPPPPP"),
+    ];
+    let mut projected_cells = 0_usize;
+    for (q, expected) in expected_columns {
+        let first_r = (-8_i32).max(-q - 8);
+        let actual = expected
+            .chars()
+            .enumerate()
+            .map(|(offset, _)| -> Result<char, Box<dyn Error>> {
+                let r = first_r + i32::try_from(offset)?;
+                let coord = SchematicCoord::from_axial(q, r)?;
+                let cell = template
+                    .cell(coord)
+                    .ok_or_else(|| io::Error::other(format!("source column omitted ({q}, {r})")))?;
+                source_trace_code(cell).ok_or_else(|| {
+                    io::Error::other(format!(
+                        "source projection has no literal category for ({q}, {r})"
+                    ))
+                    .into()
+                })
+            })
+            .collect::<Result<String, Box<dyn Error>>>()?;
+        projected_cells = projected_cells.saturating_add(actual.len());
+        assert_eq!(actual, expected, "literal source column q={q} moved");
+    }
+    assert_eq!(projected_cells, SCHEMATIC_CELL_COUNT);
     Ok(())
 }
 
@@ -934,62 +984,67 @@ fn assert_golden_locked_footprints(template: &SchematicTemplateV1) -> TestResult
             (
                 "claim/crystal-ascent",
                 FeatureKind::CrystalAscent,
-                vec![(0, -4, 4)]
+                vec![(1, -6, 5)]
             ),
             (
                 "claim/frozen-woods",
                 FeatureKind::FrozenWoods,
-                vec![(2, -2, 0), (1, -2, 1), (1, -3, 2), (1, -4, 3), (2, -4, 2)],
+                vec![(2, -6, 4), (3, -6, 3), (2, -7, 5), (3, -7, 4)],
             ),
             (
                 "claim/lake-island",
                 FeatureKind::LakeIsland,
-                vec![(4, -2, -2)]
+                vec![(4, -5, 1)]
             ),
             (
                 "claim/mountain-lake",
                 FeatureKind::MountainLake,
                 vec![
-                    (3, -2, -1),
-                    (3, -1, -2),
-                    (4, -3, -1),
-                    (4, -1, -3),
-                    (5, -3, -2),
-                    (5, -2, -3),
+                    (4, -4, 0),
+                    (3, -4, 1),
+                    (5, -5, 0),
+                    (5, -4, -1),
+                    (3, -5, 2),
+                    (4, -6, 2),
+                    (5, -6, 1),
                 ],
             ),
             (
                 "claim/peak-ring",
                 FeatureKind::PeakRing,
                 vec![
-                    (2, -1, -1),
-                    (2, 0, -2),
                     (3, -3, 0),
-                    (3, 0, -3),
-                    (4, -4, 0),
-                    (5, -4, -1),
-                    (5, -1, -4),
+                    (2, -3, 1),
+                    (4, -3, -1),
+                    (1, -4, 3),
+                    (2, -4, 2),
+                    (2, -5, 3),
+                    (6, -6, 0),
+                    (6, -5, -1),
                     (6, -4, -2),
-                    (6, -3, -3),
-                    (6, -2, -4),
+                    (4, -7, 3),
+                    (5, -7, 2),
+                    (6, -7, 1),
                 ],
             ),
             (
                 "claim/tunnel",
                 FeatureKind::Tunnel,
                 vec![
-                    (-2, 0, 2),
-                    (-1, -1, 2),
-                    (-3, 0, 3),
-                    (-1, -2, 3),
-                    (0, -3, 3),
-                    (0, -4, 4),
+                    (1, -1, 0),
+                    (1, 0, -1),
+                    (1, 1, -2),
+                    (1, -2, 1),
+                    (1, -3, 2),
+                    (1, -4, 3),
+                    (1, -5, 4),
+                    (1, -6, 5),
                 ],
             ),
             (
                 "claim/waterfall",
                 FeatureKind::Waterfall,
-                vec![(4, 0, -4), (4, 1, -5), (3, 2, -5)],
+                vec![(5, -4, -1), (5, -3, -2), (5, -2, -3)],
             ),
         ]
     );
@@ -1007,11 +1062,11 @@ fn assert_golden_locked_footprints(template: &SchematicTemplateV1) -> TestResult
             .map(|node| (node.id.as_str(), node.kind, coord_tuple(node.coord)))
             .collect::<Vec<_>>(),
         vec![
-            ("node/tunnel-ascent", NetworkNodeKind::Source, (0, -4, 4),),
+            ("node/tunnel-ascent", NetworkNodeKind::Source, (1, -6, 5),),
             (
                 "node/tunnel-hill-terminal",
                 NetworkNodeKind::Sink,
-                (-3, 0, 3),
+                (1, 1, -2),
             ),
         ]
     );
@@ -1030,15 +1085,52 @@ fn assert_golden_locked_footprints(template: &SchematicTemplateV1) -> TestResult
             .map(coord_tuple)
             .collect::<Vec<_>>(),
         vec![
-            (0, -4, 4),
-            (0, -3, 3),
-            (-1, -2, 3),
-            (-1, -1, 2),
-            (-2, 0, 2),
-            (-3, 0, 3),
+            (1, -6, 5),
+            (1, -5, 4),
+            (1, -4, 3),
+            (1, -3, 2),
+            (1, -2, 1),
+            (1, -1, 0),
+            (1, 0, -1),
+            (1, 1, -2),
         ]
     );
     Ok(())
+}
+
+fn source_trace_code(cell: &CellPlan) -> Option<char> {
+    if cell.facts.overlays.contains(&FeatureKind::CrystalAscent) {
+        return Some('R');
+    }
+    if cell.facts.overlays.contains(&FeatureKind::FrozenWoods)
+        && cell.facts.landform != LandformKind::Shore
+    {
+        return Some('U');
+    }
+    if cell.facts.overlays.contains(&FeatureKind::PeakRing) {
+        return Some('K');
+    }
+    if cell.facts.landform == LandformKind::Island {
+        return Some('O');
+    }
+    if cell.facts.surface == SurfaceKind::OpenWater {
+        return Some('B');
+    }
+    if cell.facts.landform == LandformKind::Massif
+        || cell.facts.overlays.contains(&FeatureKind::Waterfall)
+    {
+        return Some('A');
+    }
+    match cell.facts.landform {
+        LandformKind::Mountain => Some('P'),
+        LandformKind::Hill => Some('G'),
+        LandformKind::Valley => Some('Y'),
+        LandformKind::Beach | LandformKind::Shore | LandformKind::Plateau => Some('T'),
+        LandformKind::None
+        | LandformKind::Island
+        | LandformKind::Massif
+        | LandformKind::SharpPeak => None,
+    }
 }
 
 const fn coord_tuple(coord: SchematicCoord) -> (i32, i32, i32) {

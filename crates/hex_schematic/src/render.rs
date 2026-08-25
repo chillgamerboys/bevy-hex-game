@@ -1033,8 +1033,10 @@ impl HexCanvas {
             min_y = min_y.min(y);
             max_y = max_y.max(y);
         }
-        let raw_width = (max_x - min_x) + 2.0 * HEX_SIZE;
-        let raw_height = (max_y - min_y) + 2.0 * HEX_SIZE;
+        let horizontal_radius = HEX_SIZE;
+        let vertical_radius = SQRT_THREE * HEX_SIZE / 2.0;
+        let raw_width = (max_x - min_x) + 2.0 * horizontal_radius;
+        let raw_height = (max_y - min_y) + 2.0 * vertical_radius;
         let scale = (width / raw_width).min(height / raw_height);
         if !scale.is_finite() || scale <= 0.0 {
             return Err(RenderError::new("schematic does not fit the SVG canvas"));
@@ -1042,8 +1044,8 @@ impl HexCanvas {
         let fitted_width = raw_width * scale;
         let fitted_height = raw_height * scale;
         Ok(Self {
-            min_x: min_x - HEX_SIZE,
-            min_y: min_y - HEX_SIZE,
+            min_x: min_x - horizontal_radius,
+            min_y: min_y - vertical_radius,
             scale,
             offset_x: x + (width - fitted_width) / 2.0,
             offset_y: y + (height - fitted_height) / 2.0,
@@ -1062,12 +1064,12 @@ impl HexCanvas {
         let (center_x, center_y) = self.center(q, r);
         let radius = HEX_SIZE * self.scale;
         [
-            (SQRT_THREE / 2.0, -0.5),
-            (SQRT_THREE / 2.0, 0.5),
-            (0.0, 1.0),
-            (-SQRT_THREE / 2.0, 0.5),
-            (-SQRT_THREE / 2.0, -0.5),
-            (0.0, -1.0),
+            (1.0, 0.0),
+            (0.5, SQRT_THREE / 2.0),
+            (-0.5, SQRT_THREE / 2.0),
+            (-1.0, 0.0),
+            (-0.5, -SQRT_THREE / 2.0),
+            (0.5, -SQRT_THREE / 2.0),
         ]
         .into_iter()
         .map(|(dx, dy)| {
@@ -1084,8 +1086,8 @@ impl HexCanvas {
 
 fn raw_center(q: i32, r: i32) -> (f64, f64) {
     (
-        SQRT_THREE * (f64::from(q) + f64::from(r) / 2.0) * HEX_SIZE,
-        1.5 * f64::from(r) * HEX_SIZE,
+        1.5 * f64::from(q) * HEX_SIZE,
+        SQRT_THREE * (f64::from(r) + f64::from(q) / 2.0) * HEX_SIZE,
     )
 }
 
@@ -1574,6 +1576,10 @@ fn render_write_error(error: fmt::Error) -> RenderError {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "fixed six-point renderer fixtures assert the exact canonical vertex order"
+)]
 mod tests {
     use super::*;
 
@@ -1642,6 +1648,70 @@ mod tests {
                 metrics_href: format!("seed-{index}/metrics.ron"),
             })
             .collect()
+    }
+
+    fn assert_close(actual: f64, expected: f64, label: &str) {
+        assert!(
+            (actual - expected).abs() < 1.0e-9,
+            "{label}: expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn canonical_flat_top_orientation_places_radius_eight_corners_as_traced() {
+        let corner_expectations = [
+            ((0, -8), (0.0, -8.0 * SQRT_THREE), "top"),
+            ((8, -8), (12.0, -4.0 * SQRT_THREE), "upper-right"),
+            ((8, 0), (12.0, 4.0 * SQRT_THREE), "lower-right"),
+            ((0, 8), (0.0, 8.0 * SQRT_THREE), "bottom"),
+            ((-8, 8), (-12.0, 4.0 * SQRT_THREE), "lower-left"),
+            ((-8, 0), (-12.0, -4.0 * SQRT_THREE), "upper-left"),
+        ];
+
+        for ((q, r), (expected_x, expected_y), label) in corner_expectations {
+            let (actual_x, actual_y) = raw_center(q, r);
+            assert_close(actual_x, expected_x * HEX_SIZE, label);
+            assert_close(actual_y, expected_y * HEX_SIZE, label);
+        }
+    }
+
+    #[test]
+    fn rendered_hexes_are_flat_topped() {
+        let cells = [RenderCell {
+            q: 0,
+            r: 0,
+            ordinal: 0,
+            style: CellStyle::Unassigned,
+            accents: Vec::new(),
+            label: String::new(),
+            detail: String::new(),
+            provenance_signature: String::new(),
+            authorship: Vec::new(),
+        }];
+        let canvas = HexCanvas::from_region(&cells, 0.0, 0.0, 200.0, 200.0)
+            .expect("one flat-top hex should fit");
+        let (center_x, center_y) = canvas.center(0, 0);
+        let points = canvas
+            .polygon(0, 0)
+            .split_ascii_whitespace()
+            .map(|point| {
+                let (x, y) = point
+                    .split_once(',')
+                    .expect("rendered polygon point should have x and y");
+                (
+                    x.parse::<f64>().expect("x should be numeric"),
+                    y.parse::<f64>().expect("y should be numeric"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(points.len(), 6);
+        assert_close(points[0].1, center_y, "right vertex");
+        assert_close(points[3].1, center_y, "left vertex");
+        assert_close(points[1].1, points[2].1, "lower horizontal edge");
+        assert_close(points[4].1, points[5].1, "upper horizontal edge");
+        assert!(points[0].0 > center_x && points[3].0 < center_x);
+        assert!(points[4].1 < center_y && points[1].1 > center_y);
     }
 
     #[test]

@@ -430,7 +430,8 @@ pub enum FeatureKind {
     LakeIsland,
     /// Exact frozen woodland landmark.
     FrozenWoods,
-    /// Closed ring of highest mountain cells.
+    /// Exact authored peak-enclosure cells. The Grand V3 trace uses two
+    /// six-cell chains rather than a generic generated ring.
     PeakRing,
     /// Crystal Ascent landmark.
     CrystalAscent,

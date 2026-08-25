@@ -85,6 +85,14 @@ world-plan template. It is an offline planning input, not a hot-reloaded game se
 it owns coarse geography and authorship constraints, while a later compiler will own
 voxel scale, elevation, recipes, materials, and the final palette.
 
+Revision 2 is the approved source transcription; revision 1 was an approximate trace and
+must not be used as visual or semantic evidence. Review projections use the fixed flat-top
+source orientation (`x = 1.5q`, `y = sqrt(3)(r + q/2)`) with no whole-plan rotation. The
+locked north-eastern formation contains exactly twelve peaks in two six-cell chains, the
+mountain lake and its island, the frozen three-cell core plus its mountain-shore contact,
+the waterfall opening, and the straight `q = 1` Crystal Ascent tunnel. River route cells
+remain land with a river overlay until the route reaches the sea.
+
 Generate a labelled blank tracing grid, one validated seed, or the fixed twelve-seed
 approval gallery with:
 
@@ -111,7 +119,8 @@ reviewable or replace another publisher's output. `generate` writes
 four files for a canonical reference-artifact `reference/` bundle and twelve consecutive
 seed bundles, plus a self-contained `contact-sheet.svg` and `index.html` at the gallery
 root. A reference artifact preserves the template's original authorship; it is not marked
-as an exhausted-candidate fallback.
+as an exhausted-candidate fallback. Regenerate all reference and seed bundles whenever the
+template revision changes; a gallery from revision 1 is deliberately stale.
 
 Reload and validate an existing plan without trusting its SVG projection:
 

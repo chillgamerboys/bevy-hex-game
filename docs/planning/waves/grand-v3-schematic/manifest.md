@@ -1,6 +1,6 @@
 # Grand V3 schematic planner wave
 
-- Status: `review-ready`
+- Status: `visual-review-pending`
 - Wave branch: `wave/grand-v3-schematic`
 - Base `origin/dev`: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Required stacked dependency: biome feedback head
@@ -22,10 +22,14 @@ unchanged. Four disjoint world-authority lanes therefore assemble one review can
 ## Locked decisions
 
 1. **S1:** "A complete radius-eight schematic contains exactly 217 canonical cells;
-   this phase plans cells and never chooses voxel radius, height, materials, or colors."
-2. **S2:** "The peak ring, elevated mountain lake, lake island, frozen woods,
-   waterfall, Crystal Ascent, and complete tunnel route use exact traced cells in every
-   seed."
+   its unrotated flat-top source projection uses `x = 1.5q` and
+   `y = sqrt(3)(r + q/2)`, and this phase never chooses voxel radius, height, materials,
+   or colors."
+2. **S2:** "Revision 2 is the approved cell-for-cell trace: twelve north-eastern peaks
+   form two six-cell chains around the elevated mountain lake and lake island; the frozen
+   three-cell core and single mountain-shore contact, waterfall opening, Crystal Ascent,
+   and straight `q = 1` tunnel route remain exact in every seed. The river is an overlay
+   over land until it reaches the sea. Revision 1's approximate trace is not evidence."
 3. **S3:** "The coastline may move at most two cells; sea islands comprise two through
    six scenic groups of one through four cells; eligible woodland occupies thirty
    through eighty percent; and the valley lake contains three through seven cells."
@@ -136,7 +140,7 @@ lanes:
     selector: {concerns: [residual, clippy, docs], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: integrated
+    state: review-pending
     pr: null
 ```
 
@@ -160,20 +164,23 @@ lanes:
   records validity, fallback, uniqueness, and diversity distributions.
 - Release generation p95 remains below 50 ms per plan and peak process memory below
   64 MiB on the acceptance runner.
-- A labelled reference trace, one reference plan, and a twelve-seed gallery are inspected
-  at full resolution and as a complete contact sheet. Pixels judge only the diagnostic
-  projection; typed plans and validators own all logical claims.
+- A labelled revision-2 reference trace, one reference plan, and a twelve-seed gallery are
+  inspected at full resolution and as a complete contact sheet. The six radius-eight
+  corners must retain the approved flat-top orientation and every locked cell must match
+  the source transcription. Pixels judge only the diagnostic projection; typed plans and
+  validators own all logical claims.
 - The final selector-chosen CI-equivalent gate runs once on the exact combined head.
 
 ## Acceptance ledger
 
 | Evidence | Result |
 |---|---|
-| Strict package tests | 30 library, 16 binary, and 12 black-box acceptance tests pass; the release-only corpus is intentionally ignored by the ordinary package run |
-| Normal corpus | 256/256 valid, non-fallback, semantically unique plans; every required bounded region varies |
-| Release corpus | 10,000/10,000 valid, zero fallback, 10,000 unique fingerprints, every island-count and island-size bucket represented, adjacent-seed diversity threshold met, generation p95 below 50 ms |
-| Memory | Linux `VmHWM < 64 MiB` remains enforced by the scheduled stress workflow; macOS local runs cannot publish that metric |
-| Static presentation | labelled grid, canonical reference, twelve seed variants, authorship diagnostics, and hydrology overlays generated and inspected at original resolution and as a self-contained contact sheet |
+| Strict package tests | Green on revision 2: 41 library, 18 CLI/render, and 13 black-box acceptance tests pass; formatting, diff checks, and all-target Clippy with warnings denied pass |
+| Normal corpus | Green on revision 2: all 256 seeds are valid, non-fallback, unique, varied, and preserve every exact locked footprint |
+| Release corpus | Green on revision 2: all 10,000 seeds satisfy validity, zero-fallback, uniqueness, island-bucket, and diversity contracts; the complete release gate passes |
+| Performance | Green locally: independent 512-seed release samples measure 36.6–37.7 ms generation p95 against the 50 ms budget; serial and four-worker results are byte-identical |
+| Memory | Local timed peak resident memory is 8.7 MiB; authoritative revision-2 Linux `VmHWM < 64 MiB` evidence remains pending |
+| Static presentation | Fresh revision-2 reference, twelve variants, authorship/hydrology diagnostics, and contact sheet are generated and machine-validated; named-human gallery review remains pending |
 | Dependency boundary | normal tree contains only `atomicwrites`, `ron`, `rustix`, `serde`, and `xxhash-rust`; no Bevy, gameplay, `hex_core`, or `hex_map` dependency |
 | Repository integration | selector-chosen CI-equivalent gate pending on the documentation-complete combined head |
 
@@ -188,6 +195,11 @@ lanes:
 
 ## Injection log
 
+- Source-to-grid comparison proved that revision 1 was an approximate reinterpretation,
+  including a wrongly positioned peak formation. Alberto approved a neutral 217-cell
+  transcription before implementation resumed. Revision 2 makes that transcription
+  authoritative, fixes the renderer to its unrotated flat-top orientation, and invalidates
+  every revision-1 fingerprint, corpus result, and generated review artifact.
 - The final contract audit separated deliberate canonical reference artifacts from genuine
   exhausted-candidate fallbacks, hardened fixed-overlay ownership and scalar provenance,
   and moved hydrology before island/vegetation resolution so later named streams cannot
@@ -200,6 +212,9 @@ lanes:
 
 ## Close-out
 
-Implementation, package verification, both deterministic corpora, and static gallery review
-are complete. Pending the selector-chosen repository gate, named-human approval,
-publication, and delivery to `dev` after the prerequisite corrective stack lands.
+The exact revision-2 source transcription, validator, generator, golden footprints,
+fingerprints, normal corpus, release corpus, and regenerated visual pack now pass their
+automated gates. The stale revision-1 gallery is not evidence. Named-human review of the
+fresh revision-2 pack, the authoritative Linux memory run, final repository integration,
+publication, and delivery to `dev` remain pending after the prerequisite corrective stack
+lands.

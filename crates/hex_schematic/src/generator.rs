@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::fingerprint::semantic_fingerprint;
 use crate::metrics::SchematicMetricsV1;
@@ -65,8 +66,11 @@ impl fmt::Display for GenerationError {
 impl std::error::Error for GenerationError {}
 
 /// Constructs exactly 32 deterministic candidates, retains the hard-valid
-/// subset, selects by a vegetation-independent semantic score, and validates
-/// the selected plan.
+/// subset, prefers foundations which preserve the complete configured island
+/// group range, then selects by a vegetation-independent semantic score and
+/// validates the selected plan.
+/// Validation and compound coastline preflight use one bounded exact-template
+/// cache; candidate construction and output remain seed-pure.
 /// The separately marked reference fallback is used only if no candidate can
 /// be accepted.
 pub fn generate(
@@ -182,56 +186,51 @@ fn generate_internal(
     force_candidate_failure: bool,
     perturbations: StreamPerturbations,
 ) -> Result<GeneratedSchematic, GenerationError> {
-    validate_template(template).map_err(GenerationError::InvalidTemplate)?;
-
-    let coastline_moves = valid_coastline_moves(template);
-    let mut accepted = Vec::with_capacity(usize::from(CANDIDATE_ATTEMPTS));
-    for candidate in 0..CANDIDATE_ATTEMPTS {
-        if force_candidate_failure {
-            continue;
-        }
-        let samples = NamedSamples::new(world_seed, candidate).with_perturbations(perturbations);
-        let (mut varied_cells, networks) =
-            construct_candidate_foundation(template, samples, &coastline_moves);
-        if !apply_island_stage(
+    let coastline_moves =
+        validated_template_preflight(template).map_err(GenerationError::InvalidTemplate)?;
+    let mut accepted = if force_candidate_failure {
+        Vec::new()
+    } else {
+        evaluate_candidates_parallel(
             template,
-            &mut varied_cells,
-            &networks,
-            samples,
-            SelectionMode::Canonical,
-        ) || !apply_woodland_stage(
-            template,
-            &mut varied_cells,
-            samples,
-            SelectionMode::Canonical,
-        ) {
-            continue;
-        }
-        let candidate_plan = finish_plan(
-            template,
-            PlanProvenance::candidate(world_seed, candidate, 1)
-                .map_err(|error| GenerationError::Model(error.to_string()))?,
-            varied_cells,
-            template.fixed_claims.clone(),
-            networks,
-        )?;
-        if validate_plan_draft(template, &candidate_plan).is_ok() {
-            accepted.push((
-                candidate_quality(template, &candidate_plan),
-                non_vegetation_semantic_fingerprint(&candidate_plan),
-                candidate,
-                candidate_plan,
-            ));
-        }
-    }
+            world_seed,
+            perturbations,
+            coastline_moves.as_ref(),
+        )?
+    };
 
     let hard_valid_candidates = u8::try_from(accepted.len()).unwrap_or(CANDIDATE_ATTEMPTS);
-    if let Some((_, _, candidate, plan)) = accepted.into_iter().max_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| right.1.cmp(&left.1))
-            .then_with(|| right.2.cmp(&left.2))
-    }) {
+    accepted.sort_unstable_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    // Preserve the established semantic score order within each structural
+    // capacity. Stop at the first full-range candidate; if none exists, retain
+    // the first (therefore best-scored) candidate at the highest exact capacity.
+    let maximum_island_groups = template
+        .bounded_regions
+        .iter()
+        .find(|rule| rule.kind == BoundedRegionKind::SeaIslands)
+        .map(|rule| rule.components.max)
+        .unwrap_or(0);
+    let mut selected_index = 0;
+    let mut selected_capacity = 0;
+    for (index, (_, _, _, plan)) in accepted.iter().enumerate() {
+        let capacity = sea_island_group_capacity(template, &plan.cells, &plan.networks);
+        if capacity > selected_capacity {
+            selected_index = index;
+            selected_capacity = capacity;
+        }
+        if capacity == maximum_island_groups {
+            selected_index = index;
+            break;
+        }
+    }
+    if !accepted.is_empty() {
+        let (_, _, candidate, plan) = accepted.swap_remove(selected_index);
         let mut parts = plan.into_parts();
         let samples = NamedSamples::new(world_seed, candidate).with_perturbations(perturbations);
         let islands_applied = apply_island_stage(
@@ -261,6 +260,134 @@ fn generate_internal(
     }
 
     build_reference_plan(template, PlanProvenance::reference_fallback(world_seed))
+}
+
+type AcceptedCandidate = (u32, u64, u8, SchematicPlanV1);
+
+fn evaluate_candidate(
+    template: &SchematicTemplateV1,
+    world_seed: u64,
+    candidate: u8,
+    perturbations: StreamPerturbations,
+    coastline_moves: &[CoastlineMove],
+) -> Result<Option<AcceptedCandidate>, GenerationError> {
+    let samples = NamedSamples::new(world_seed, candidate).with_perturbations(perturbations);
+    let (mut varied_cells, networks) =
+        construct_candidate_foundation(template, samples, coastline_moves);
+    if !apply_island_stage(
+        template,
+        &mut varied_cells,
+        &networks,
+        samples,
+        SelectionMode::Canonical,
+    ) || !apply_woodland_stage(
+        template,
+        &mut varied_cells,
+        samples,
+        SelectionMode::Canonical,
+    ) {
+        return Ok(None);
+    }
+    let candidate_plan = finish_plan(
+        template,
+        PlanProvenance::candidate(world_seed, candidate, 1)
+            .map_err(|error| GenerationError::Model(error.to_string()))?,
+        varied_cells,
+        template.fixed_claims.clone(),
+        networks,
+    )?;
+    if validate_plan_draft(template, &candidate_plan).is_err() {
+        return Ok(None);
+    }
+    Ok(Some((
+        candidate_quality(template, &candidate_plan),
+        non_vegetation_semantic_fingerprint(&candidate_plan),
+        candidate,
+        candidate_plan,
+    )))
+}
+
+fn evaluate_candidates_parallel(
+    template: &SchematicTemplateV1,
+    world_seed: u64,
+    perturbations: StreamPerturbations,
+    coastline_moves: &[CoastlineMove],
+) -> Result<Vec<AcceptedCandidate>, GenerationError> {
+    let worker_count = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(4)
+        .min(usize::from(CANDIDATE_ATTEMPTS));
+    evaluate_candidates_with_worker_count(
+        template,
+        world_seed,
+        perturbations,
+        coastline_moves,
+        worker_count,
+    )
+}
+
+fn evaluate_candidates_with_worker_count(
+    template: &SchematicTemplateV1,
+    world_seed: u64,
+    perturbations: StreamPerturbations,
+    coastline_moves: &[CoastlineMove],
+    worker_count: usize,
+) -> Result<Vec<AcceptedCandidate>, GenerationError> {
+    let worker_count = worker_count.max(1).min(usize::from(CANDIDATE_ATTEMPTS));
+    if worker_count <= 1 {
+        return (0..CANDIDATE_ATTEMPTS).try_fold(
+            Vec::with_capacity(usize::from(CANDIDATE_ATTEMPTS)),
+            |mut accepted, candidate| {
+                if let Some(result) = evaluate_candidate(
+                    template,
+                    world_seed,
+                    candidate,
+                    perturbations,
+                    coastline_moves,
+                )? {
+                    accepted.push(result);
+                }
+                Ok(accepted)
+            },
+        );
+    }
+
+    std::thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for worker in 0..worker_count {
+            workers.push(scope.spawn(move || {
+                let mut accepted =
+                    Vec::with_capacity(usize::from(CANDIDATE_ATTEMPTS).div_ceil(worker_count));
+                for candidate in (worker..usize::from(CANDIDATE_ATTEMPTS)).step_by(worker_count) {
+                    let candidate = u8::try_from(candidate).map_err(|error| {
+                        GenerationError::Model(format!(
+                            "candidate index does not fit the schema: {error}"
+                        ))
+                    })?;
+                    if let Some(result) = evaluate_candidate(
+                        template,
+                        world_seed,
+                        candidate,
+                        perturbations,
+                        coastline_moves,
+                    )? {
+                        accepted.push(result);
+                    }
+                }
+                Ok::<_, GenerationError>(accepted)
+            }));
+        }
+
+        let mut accepted = Vec::with_capacity(usize::from(CANDIDATE_ATTEMPTS));
+        for worker in workers {
+            let mut results = worker.join().map_err(|_panic| {
+                GenerationError::Model("schematic candidate worker panicked".to_owned())
+            })??;
+            accepted.append(&mut results);
+        }
+        accepted.sort_unstable_by_key(|result| result.2);
+        Ok(accepted)
+    })
 }
 
 fn reconcile_final_coastline(template: &SchematicTemplateV1, cells: &mut [CellPlan]) {
@@ -341,13 +468,82 @@ enum SelectionMode {
     Seeded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CoastlineMove {
+    coord: SchematicCoord,
+    repair: Option<LandformRepair>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LandformRepair {
+    coord: SchematicCoord,
+    landform: crate::model::LandformKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TemplatePreflight {
+    template: SchematicTemplateV1,
+    coastline_moves: Arc<[CoastlineMove]>,
+}
+
+static TEMPLATE_PREFLIGHT: OnceLock<Mutex<Option<TemplatePreflight>>> = OnceLock::new();
+
+fn template_preflight_cache() -> &'static Mutex<Option<TemplatePreflight>> {
+    TEMPLATE_PREFLIGHT.get_or_init(|| Mutex::new(None))
+}
+
+fn lock_template_preflight(
+    cache: &Mutex<Option<TemplatePreflight>>,
+) -> MutexGuard<'_, Option<TemplatePreflight>> {
+    match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            *guard = None;
+            cache.clear_poison();
+            guard
+        }
+    }
+}
+
+fn validated_template_preflight(
+    template: &SchematicTemplateV1,
+) -> Result<Arc<[CoastlineMove]>, ValidationError> {
+    validated_template_preflight_with_cache(template, template_preflight_cache())
+}
+
+fn validated_template_preflight_with_cache(
+    template: &SchematicTemplateV1,
+    cache: &Mutex<Option<TemplatePreflight>>,
+) -> Result<Arc<[CoastlineMove]>, ValidationError> {
+    {
+        let guard = lock_template_preflight(cache);
+        if let Some(cached) = guard.as_ref().filter(|cached| cached.template == *template) {
+            return Ok(Arc::clone(&cached.coastline_moves));
+        }
+    }
+
+    validate_template(template)?;
+    let coastline_moves = Arc::<[CoastlineMove]>::from(valid_coastline_moves(template));
+    let preflight = TemplatePreflight {
+        template: template.clone(),
+        coastline_moves: Arc::clone(&coastline_moves),
+    };
+    let mut guard = lock_template_preflight(cache);
+    if let Some(cached) = guard.as_ref().filter(|cached| cached.template == *template) {
+        return Ok(Arc::clone(&cached.coastline_moves));
+    }
+    *guard = Some(preflight);
+    Ok(coastline_moves)
+}
+
 /// Builds the coast, hydrology, and landform foundation used to decide which
 /// candidates are eligible. Islands and woodland are completed separately so
 /// their random samples cannot affect candidate selection.
 fn construct_candidate_foundation(
     template: &SchematicTemplateV1,
     samples: NamedSamples,
-    coastline_moves: &[SchematicCoord],
+    coastline_moves: &[CoastlineMove],
 ) -> (Vec<CellPlan>, Vec<crate::model::Network>) {
     let mut cells = template.reference_cells.clone();
     vary_coastline(template, &mut cells, samples, coastline_moves);
@@ -513,34 +709,7 @@ fn vary_sea_islands(
     ordinal: u32,
     mode: SelectionMode,
 ) -> Option<BTreeSet<SchematicCoord>> {
-    let network_paths = networks
-        .iter()
-        .flat_map(|network| &network.edges)
-        .flat_map(|edge| edge.path.iter().copied())
-        .collect::<BTreeSet<_>>();
-    let safe = rule
-        .envelope
-        .iter()
-        .copied()
-        .filter(|coord| !network_paths.contains(coord))
-        .filter(|coord| {
-            crate::model::canonical_coordinate_index(*coord)
-                .and_then(|index| cells.get(index))
-                .is_some_and(|cell| {
-                    is_sea_cell(cell) || cell.facts.overlays.contains(&FeatureKind::SeaIsland)
-                })
-        })
-        .filter(|coord| {
-            schematic_neighbors(*coord).into_iter().all(|neighbor| {
-                crate::model::canonical_coordinate_index(neighbor)
-                    .and_then(|index| cells.get(index))
-                    .is_none_or(|cell| {
-                        cell.facts.surface != crate::model::SurfaceKind::Land
-                            || cell.facts.overlays.contains(&FeatureKind::SeaIsland)
-                    })
-            })
-        })
-        .collect::<BTreeSet<_>>();
+    let safe = safe_sea_island_cells(cells, networks, rule);
     let desired_groups = match mode {
         SelectionMode::Canonical => 2,
         SelectionMode::Seeded => usize::try_from(samples.bounded(
@@ -552,31 +721,24 @@ fn vary_sea_islands(
         ))
         .unwrap_or(2),
     };
-    let mut groups = Vec::<BTreeSet<SchematicCoord>>::new();
-    let mut selected = BTreeSet::new();
+    let seed_candidates = ranked_coords(
+        mode,
+        samples,
+        "stream/islands",
+        ordinal.saturating_add(2_049),
+        safe.iter().copied().collect(),
+    );
+    let seeds = separated_seed_packing(&seed_candidates, desired_groups)?;
+    let mut groups = seeds
+        .iter()
+        .copied()
+        .map(|seed| BTreeSet::from([seed]))
+        .collect::<Vec<_>>();
+    let mut selected = seeds.iter().copied().collect::<BTreeSet<_>>();
 
-    for group_ordinal in 0..desired_groups {
-        let group_ordinal = u32::try_from(group_ordinal).unwrap_or(u32::MAX);
-        let seed_candidates = safe
-            .iter()
-            .copied()
-            .filter(|coord| !selected.contains(coord))
-            .filter(|coord| {
-                schematic_neighbors(*coord)
-                    .into_iter()
-                    .all(|neighbor| !selected.contains(&neighbor))
-            })
-            .collect::<Vec<_>>();
-        let seeds = ranked_coords(
-            mode,
-            samples,
-            "stream/islands",
-            ordinal.saturating_add(2_049).saturating_add(group_ordinal),
-            seed_candidates,
-        );
-        let Some(seed) = seeds.first().copied() else {
-            break;
-        };
+    for (group_index, group) in groups.iter_mut().enumerate() {
+        let seed = group.first().copied()?;
+        let group_ordinal = u32::try_from(group_index).unwrap_or(u32::MAX);
         let desired_size = match mode {
             SelectionMode::Canonical => 1,
             SelectionMode::Seeded => usize::try_from(samples.bounded(
@@ -588,8 +750,6 @@ fn vary_sea_islands(
             ))
             .unwrap_or(1),
         };
-        let mut group = BTreeSet::from([seed]);
-        selected.insert(seed);
         while group.len() < desired_size {
             let addition_candidates = safe
                 .iter()
@@ -619,14 +779,229 @@ fn vary_sea_islands(
             group.insert(next);
             selected.insert(next);
         }
-        groups.push(group);
     }
 
-    if groups.len() == desired_groups && shape_is_valid(&selected, rule) {
+    if shape_is_valid(&selected, rule) {
         Some(selected)
     } else {
         None
     }
+}
+
+fn safe_sea_island_cells(
+    cells: &[CellPlan],
+    networks: &[crate::model::Network],
+    rule: &BoundedRegionRule,
+) -> BTreeSet<SchematicCoord> {
+    let network_paths = networks
+        .iter()
+        .flat_map(|network| &network.edges)
+        .flat_map(|edge| edge.path.iter().copied())
+        .collect::<BTreeSet<_>>();
+    rule.envelope
+        .iter()
+        .copied()
+        .filter(|coord| !network_paths.contains(coord))
+        .filter(|coord| {
+            crate::model::canonical_coordinate_index(*coord)
+                .and_then(|index| cells.get(index))
+                .is_some_and(|cell| {
+                    is_sea_cell(cell) || cell.facts.overlays.contains(&FeatureKind::SeaIsland)
+                })
+        })
+        .filter(|coord| {
+            schematic_neighbors(*coord).into_iter().all(|neighbor| {
+                crate::model::canonical_coordinate_index(neighbor)
+                    .and_then(|index| cells.get(index))
+                    .is_none_or(|cell| {
+                        cell.facts.surface != crate::model::SurfaceKind::Land
+                            || cell.facts.overlays.contains(&FeatureKind::SeaIsland)
+                    })
+            })
+        })
+        .collect()
+}
+
+/// Returns the largest configured component count for which this foundation
+/// has an exact separated seed packing.
+fn sea_island_group_capacity(
+    template: &SchematicTemplateV1,
+    cells: &[CellPlan],
+    networks: &[crate::model::Network],
+) -> u16 {
+    let Some(rule) = template
+        .bounded_regions
+        .iter()
+        .find(|rule| rule.kind == BoundedRegionKind::SeaIslands)
+    else {
+        return 0;
+    };
+    let mut ranked = safe_sea_island_cells(cells, networks, rule)
+        .into_iter()
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by_key(|coord| {
+        crate::model::canonical_coordinate_index(*coord).unwrap_or(usize::MAX)
+    });
+    (rule.components.min..=rule.components.max)
+        .rev()
+        .find(|desired| {
+            separated_seed_packing(&ranked, usize::from(*desired)).is_some_and(|seeds| {
+                let selected = seeds.into_iter().collect::<BTreeSet<_>>();
+                shape_is_valid(&selected, rule)
+            })
+        })
+        .unwrap_or(0)
+}
+
+/// Selects the lexicographically first independent set under the caller's
+/// deterministic ranking. Unlike greedy seed placement, bounded backtracking
+/// cannot strand a feasible sixth one-cell island behind an early local choice.
+fn separated_seed_packing(
+    ranked: &[SchematicCoord],
+    desired: usize,
+) -> Option<Vec<SchematicCoord>> {
+    if desired == 0 {
+        return Some(Vec::new());
+    }
+    if ranked.len() <= u128::BITS as usize {
+        let adjacency = ranked
+            .iter()
+            .map(|candidate| {
+                ranked
+                    .iter()
+                    .enumerate()
+                    .fold(0_u128, |mask, (index, other)| {
+                        let adjacent = schematic_neighbors(*candidate)
+                            .into_iter()
+                            .any(|neighbor| neighbor == *other);
+                        mask | (u128::from(adjacent) << index)
+                    })
+            })
+            .collect::<Vec<_>>();
+        let candidates = if ranked.len() == u128::BITS as usize {
+            u128::MAX
+        } else {
+            (1_u128 << ranked.len()).saturating_sub(1)
+        };
+        let mut selected = Vec::with_capacity(desired);
+        let mut dead = BTreeSet::new();
+        if bitset_independent_set(candidates, desired, &adjacency, &mut selected, &mut dead) {
+            return selected
+                .into_iter()
+                .map(|index| ranked.get(index).copied())
+                .collect();
+        }
+        return None;
+    }
+    vector_seed_packing(ranked, desired)
+}
+
+fn vector_seed_packing(ranked: &[SchematicCoord], desired: usize) -> Option<Vec<SchematicCoord>> {
+    fn search(
+        candidates: &[SchematicCoord],
+        needed: usize,
+        selected: &mut Vec<SchematicCoord>,
+    ) -> bool {
+        if needed == 0 {
+            return true;
+        }
+        if candidates.len() < needed {
+            return false;
+        }
+        for index in 0..=candidates.len().saturating_sub(needed) {
+            let Some(candidate) = candidates.get(index).copied() else {
+                return false;
+            };
+            selected.push(candidate);
+            let Some(tail) = candidates.get(index.saturating_add(1)..) else {
+                selected.pop();
+                return false;
+            };
+            let remaining = tail
+                .iter()
+                .copied()
+                .filter(|other| {
+                    !schematic_neighbors(candidate)
+                        .into_iter()
+                        .any(|neighbor| neighbor == *other)
+                })
+                .collect::<Vec<_>>();
+            if search(&remaining, needed.saturating_sub(1), selected) {
+                return true;
+            }
+            selected.pop();
+        }
+        false
+    }
+
+    if desired == 0 {
+        return Some(Vec::new());
+    }
+    let mut selected = Vec::with_capacity(desired);
+    search(ranked, desired, &mut selected).then_some(selected)
+}
+
+fn bitset_independent_set(
+    candidates: u128,
+    needed: usize,
+    adjacency: &[u128],
+    selected: &mut Vec<usize>,
+    dead: &mut BTreeSet<(u128, usize)>,
+) -> bool {
+    if needed == 0 {
+        return true;
+    }
+    if candidates.count_ones() < u32::try_from(needed).unwrap_or(u32::MAX)
+        || independent_set_upper_bound(candidates, adjacency) < needed
+        || dead.contains(&(candidates, needed))
+    {
+        return false;
+    }
+
+    let mut remaining = candidates;
+    while remaining.count_ones() >= u32::try_from(needed).unwrap_or(u32::MAX) {
+        let index = usize::try_from(remaining.trailing_zeros()).unwrap_or(usize::MAX);
+        let bit = 1_u128 << index;
+        remaining &= !bit;
+        selected.push(index);
+        let Some(conflicts) = adjacency.get(index).copied() else {
+            selected.pop();
+            return false;
+        };
+        if bitset_independent_set(
+            remaining & !conflicts,
+            needed.saturating_sub(1),
+            adjacency,
+            selected,
+            dead,
+        ) {
+            return true;
+        }
+        selected.pop();
+    }
+    dead.insert((candidates, needed));
+    false
+}
+
+/// A clique cover of the conflict graph is an upper bound on the number of
+/// pairwise nonadjacent cells: an independent set can take at most one member
+/// from each clique. The greedy cover is cheap and makes impossible six-group
+/// proofs terminate before enumerating their coordinate combinations.
+fn independent_set_upper_bound(candidates: u128, adjacency: &[u128]) -> usize {
+    let mut cliques = Vec::<u128>::new();
+    let mut remaining = candidates;
+    while remaining != 0 {
+        let index = usize::try_from(remaining.trailing_zeros()).unwrap_or(usize::MAX);
+        let bit = 1_u128 << index;
+        remaining &= !bit;
+        let conflicts = adjacency.get(index).copied().unwrap_or(u128::MAX);
+        if let Some(clique) = cliques.iter_mut().find(|clique| **clique & !conflicts == 0) {
+            *clique |= bit;
+        } else {
+            cliques.push(bit);
+        }
+    }
+    cliques.len()
 }
 
 fn ranked_coords(
@@ -789,30 +1164,34 @@ fn vary_coastline(
     template: &SchematicTemplateV1,
     cells: &mut [CellPlan],
     samples: NamedSamples,
-    valid_moves: &[SchematicCoord],
+    valid_moves: &[CoastlineMove],
 ) {
-    let Some(stream_id) = template
-        .generation
-        .named_streams
-        .iter()
-        .find(|stream| stream.as_str() == "stream/coastline")
-    else {
-        return;
-    };
     let ranked = samples.ranked(
         "stream/coastline",
         0,
-        valid_moves.iter().copied().map(coord_key),
+        valid_moves
+            .iter()
+            .map(|candidate| coord_key(candidate.coord)),
     );
     let Some(coord) = ranked.first().copied() else {
         return;
     };
-    if flip_coastal_surface(template, cells, coord, stream_id) {
-        reconcile_coastline_overlay(template, cells, stream_id);
+    let Some(selected_move) = valid_moves
+        .iter()
+        .find(|candidate| candidate.coord == coord)
+    else {
+        return;
+    };
+    let mut trial = cells.to_vec();
+    if apply_preflighted_coastline_move(template, &mut trial, *selected_move) {
+        cells.clone_from_slice(&trial);
     }
 }
 
-fn valid_coastline_moves(template: &SchematicTemplateV1) -> Vec<SchematicCoord> {
+/// Preflights each compound coast move once, including its optional minimal
+/// landform repair. Candidate construction ranks the compact results by their
+/// coast coordinates and reapplies the recorded repair directly.
+fn valid_coastline_moves(template: &SchematicTemplateV1) -> Vec<CoastlineMove> {
     let Some(rule) = template
         .bounded_regions
         .iter()
@@ -839,28 +1218,157 @@ fn valid_coastline_moves(template: &SchematicTemplateV1) -> Vec<SchematicCoord> 
                     && !has_hydrology_overlay(reference)
             })
         })
-        .filter(|coord| {
+        .filter_map(|coord| {
             let mut trial = template.reference_cells.clone();
-            if !flip_coastal_surface(template, &mut trial, *coord, stream_id) {
-                return false;
+            if !flip_coastal_surface(template, &mut trial, coord, stream_id) {
+                return None;
             }
             reconcile_coastline_overlay(template, &mut trial, stream_id);
             let coast = coastline_cells(&trial);
-            template
-                .reference_cells
-                .iter()
-                .zip(&trial)
-                .all(|(reference, resolved)| {
-                    reference.facts.surface == resolved.facts.surface
-                        || envelope.contains(&resolved.coord)
-                })
-                && coast.is_subset(&envelope)
-                && shape_is_valid(&coast, rule)
-                && connected_sea(&trial)
-                && connected_mainland(&trial)
-                && bounded_shapes_are_valid(template, &trial)
+            let surface_valid =
+                template
+                    .reference_cells
+                    .iter()
+                    .zip(&trial)
+                    .all(|(reference, resolved)| {
+                        reference.facts.surface == resolved.facts.surface
+                            || envelope.contains(&resolved.coord)
+                    })
+                    && coast.is_subset(&envelope)
+                    && shape_is_valid(&coast, rule)
+                    && connected_sea(&trial)
+                    && connected_mainland(&trial);
+            if !surface_valid {
+                return None;
+            }
+            let repair = repair_coast_displaced_landform(template, &mut trial)?;
+            Some(CoastlineMove { coord, repair })
         })
         .collect()
+}
+
+/// Repairs the single bounded-landform seam which a one-cell coast move may
+/// displace. The repair is part of the compound coast move: it is accepted only
+/// when one deterministic, otherwise-authorized landform reassignment restores
+/// every bounded shape. This keeps candidate scoring over hard-valid
+/// foundations while allowing a legal retreat to expose the sixth-island
+/// packing which exists in the template envelope. A successful repair remains
+/// applied and is returned for compact replay; rejected trials are reverted in
+/// place instead of cloning the complete cell vector.
+fn repair_coast_displaced_landform(
+    template: &SchematicTemplateV1,
+    cells: &mut [CellPlan],
+) -> Option<Option<LandformRepair>> {
+    if bounded_shapes_are_valid(template, cells) {
+        return Some(None);
+    }
+    let stream_id = template
+        .generation
+        .named_streams
+        .iter()
+        .find(|stream| stream.as_str() == "stream/landforms")?;
+    let coast = coastline_cells(cells);
+    let invalid_rules = template
+        .bounded_regions
+        .iter()
+        .filter(|rule| {
+            let selected = cells
+                .iter()
+                .filter(|cell| {
+                    rule.targets
+                        .iter()
+                        .all(|target| cell_has_target(cell, *target))
+                        && (rule.kind != BoundedRegionKind::Woodland
+                            || rule.envelope.contains(&cell.coord))
+                })
+                .map(|cell| cell.coord)
+                .collect::<BTreeSet<_>>();
+            !selected.iter().all(|coord| rule.envelope.contains(coord))
+                || !shape_is_valid(&selected, rule)
+        })
+        .filter_map(|rule| {
+            let mut landforms = rule.targets.iter().filter_map(|target| match target {
+                BoundedTarget::Landform(kind) => Some(*kind),
+                _ => None,
+            });
+            let landform = landforms.next()?;
+            landforms.next().is_none().then_some((rule, landform))
+        })
+        .collect::<Vec<_>>();
+
+    for (rule, landform) in invalid_rules {
+        let mut candidates = rule.envelope.clone();
+        candidates.sort_unstable_by_key(|coord| {
+            crate::model::canonical_coordinate_index(*coord).unwrap_or(usize::MAX)
+        });
+        for coord in candidates {
+            let Some(index) = crate::model::canonical_coordinate_index(coord) else {
+                continue;
+            };
+            let Some(cell) = cells.get(index) else {
+                continue;
+            };
+            if cell.facts.surface != crate::model::SurfaceKind::Land
+                || cell.facts.landform == landform
+                || coast.contains(&coord)
+                || !membership_change_allowed(template, rule, coord, true, &coast)
+            {
+                continue;
+            }
+            let Some(cell) = cells.get_mut(index) else {
+                continue;
+            };
+            let previous_landform = cell.facts.landform;
+            let previous_provenance = cell.provenance.landform.clone();
+            cell.facts.landform = landform;
+            cell.provenance.landform = seeded_provenance(stream_id);
+            if bounded_shapes_are_valid(template, cells) {
+                return Some(Some(LandformRepair { coord, landform }));
+            }
+            let cell = cells.get_mut(index)?;
+            cell.facts.landform = previous_landform;
+            cell.provenance.landform = previous_provenance;
+        }
+    }
+    None
+}
+
+fn apply_preflighted_coastline_move(
+    template: &SchematicTemplateV1,
+    cells: &mut [CellPlan],
+    selected_move: CoastlineMove,
+) -> bool {
+    let Some(coastline_stream) = template
+        .generation
+        .named_streams
+        .iter()
+        .find(|stream| stream.as_str() == "stream/coastline")
+    else {
+        return false;
+    };
+    if !flip_coastal_surface(template, cells, selected_move.coord, coastline_stream) {
+        return false;
+    }
+    reconcile_coastline_overlay(template, cells, coastline_stream);
+    if let Some(repair) = selected_move.repair {
+        let Some(landform_stream) = template
+            .generation
+            .named_streams
+            .iter()
+            .find(|stream| stream.as_str() == "stream/landforms")
+        else {
+            return false;
+        };
+        let Some(index) = crate::model::canonical_coordinate_index(repair.coord) else {
+            return false;
+        };
+        let Some(cell) = cells.get_mut(index) else {
+            return false;
+        };
+        cell.facts.landform = repair.landform;
+        cell.provenance.landform = seeded_provenance(landform_stream);
+    }
+    true
 }
 
 fn flip_coastal_surface(
@@ -1924,6 +2432,10 @@ const fn avalanche(mut value: u64) -> u64 {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "fallible unit-test setup uses Result while assertions express exact contracts"
+)]
 mod tests {
     use super::*;
     use crate::template::grand_v3_reference_template;
@@ -1951,6 +2463,96 @@ mod tests {
     }
 
     #[test]
+    fn exact_template_preflight_cache_hits_misses_and_fails_closed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let template = grand_v3_reference_template()?;
+        let cache = Mutex::new(None);
+        let first = validated_template_preflight_with_cache(&template, &cache)?;
+        let hit = validated_template_preflight_with_cache(&template, &cache)?;
+        assert!(Arc::ptr_eq(&first, &hit));
+
+        let mut changed = template.clone();
+        changed.id = StableId::new("template/grand-v3-cache-miss")?;
+        let missed = validated_template_preflight_with_cache(&changed, &cache)?;
+        assert!(!Arc::ptr_eq(&first, &missed));
+        let changed_hit = validated_template_preflight_with_cache(&changed, &cache)?;
+        assert!(Arc::ptr_eq(&missed, &changed_hit));
+
+        let mut invalid = changed.clone();
+        invalid.radius = invalid.radius.saturating_sub(1);
+        assert!(validated_template_preflight_with_cache(&invalid, &cache).is_err());
+        let after_invalid = validated_template_preflight_with_cache(&changed, &cache)?;
+        assert!(Arc::ptr_eq(&missed, &after_invalid));
+        Ok(())
+    }
+
+    #[test]
+    fn poisoned_template_preflight_cache_is_cleared_before_reuse(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let template = grand_v3_reference_template()?;
+        let cache = Mutex::new(None);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cache.lock().expect("fresh local cache lock");
+            panic!("intentional template-preflight poison witness");
+        }));
+        assert!(poisoned.is_err());
+        assert!(cache.is_poisoned());
+
+        let preflight = validated_template_preflight_with_cache(&template, &cache)?;
+        assert!(!preflight.is_empty());
+        assert!(!cache.is_poisoned());
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_template_preflight_misses_converge_on_one_exact_entry(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let template = grand_v3_reference_template()?;
+        let cache = Mutex::new(None);
+        let results = std::thread::scope(|scope| {
+            let workers = (0..8)
+                .map(|_| scope.spawn(|| validated_template_preflight_with_cache(&template, &cache)))
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .expect("template-preflight worker must not panic")
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        let first = results.first().ok_or("missing preflight witness")?;
+        assert!(results.iter().all(|result| Arc::ptr_eq(first, result)));
+        Ok(())
+    }
+
+    #[test]
+    fn parallel_candidate_evaluation_is_byte_identical_to_serial(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let template = grand_v3_reference_template()?;
+        let coastline_moves = validated_template_preflight(&template)?;
+        for seed in [0, 1, 17, 42, 255, u64::MAX] {
+            let serial = evaluate_candidates_with_worker_count(
+                &template,
+                seed,
+                StreamPerturbations::default(),
+                coastline_moves.as_ref(),
+                1,
+            )?;
+            let parallel = evaluate_candidates_with_worker_count(
+                &template,
+                seed,
+                StreamPerturbations::default(),
+                coastline_moves.as_ref(),
+                4,
+            )?;
+            assert_eq!(parallel, serial, "worker count changed seed {seed}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn bounded_samples_include_both_limits_and_degenerate_cleanly() {
         let samples = NamedSamples::new(9, 3);
         let values = (0..1_000)
@@ -1972,6 +2574,183 @@ mod tests {
             samples.ranked("islands", 0, cells),
             samples.ranked("islands", 0, reversed)
         );
+    }
+
+    #[test]
+    fn separated_seed_packing_backtracks_past_a_blocking_first_choice(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let center = SchematicCoord::from_axial(0, 0)?;
+        let east = SchematicCoord::from_axial(1, 0)?;
+        let north_west = SchematicCoord::from_axial(-1, 1)?;
+        let south_west = SchematicCoord::from_axial(0, -1)?;
+        let packed = separated_seed_packing(&[center, east, north_west, south_west], 3)
+            .ok_or_else(|| std::io::Error::other("three-way packing was rejected"))?;
+        if packed != [east, north_west, south_west] {
+            return Err(format!("packing did not backtrack deterministically: {packed:?}").into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bitset_seed_packing_matches_the_vector_reference() {
+        let canonical = crate::model::canonical_coordinates()
+            .into_iter()
+            .take(19)
+            .collect::<Vec<_>>();
+        let mut reversed = canonical.clone();
+        reversed.reverse();
+        let sparse = canonical
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(index, coord)| (index % 3 != 1).then_some(coord))
+            .collect::<Vec<_>>();
+        for ranked in [&canonical, &reversed, &sparse] {
+            for desired in 0..=7 {
+                assert_eq!(
+                    separated_seed_packing(ranked, desired),
+                    vector_seed_packing(ranked, desired),
+                    "bitset packing diverged for {} cells and target {desired}",
+                    ranked.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corrected_coast_retreat_supports_six_separated_island_groups(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let template = grand_v3_reference_template()?;
+        let mut cells = template.reference_cells.clone();
+        let retreat = SchematicCoord::from_axial(-3, 5)?;
+        let selected_move = valid_coastline_moves(&template)
+            .into_iter()
+            .find(|candidate| candidate.coord == retreat)
+            .ok_or_else(|| std::io::Error::other("approved coast retreat was not preflighted"))?;
+        if !apply_preflighted_coastline_move(&template, &mut cells, selected_move)
+            || !bounded_shapes_are_valid(&template, &cells)
+        {
+            return Err("coast retreat did not restore every bounded landform shape".into());
+        }
+        let bridge = SchematicCoord::from_axial(-3, 3)?;
+        if template.cell(bridge).map(|cell| cell.facts.landform)
+            != Some(crate::model::LandformKind::Hill)
+            || cells
+                .get(
+                    crate::model::canonical_coordinate_index(bridge).ok_or_else(|| {
+                        std::io::Error::other("repair bridge has no canonical index")
+                    })?,
+                )
+                .map(|cell| cell.facts.landform)
+                != Some(crate::model::LandformKind::Valley)
+        {
+            return Err("coast repair did not derive the minimal Hill-to-Valley bridge".into());
+        }
+
+        let (rule_ordinal, rule) = template
+            .bounded_regions
+            .iter()
+            .enumerate()
+            .find(|(_, rule)| rule.kind == BoundedRegionKind::SeaIslands)
+            .ok_or_else(|| std::io::Error::other("template has no sea-island rule"))?;
+        let rule_ordinal = u32::try_from(rule_ordinal)?;
+        let samples = (0..256_u64)
+            .flat_map(|world_seed| {
+                (0..CANDIDATE_ATTEMPTS)
+                    .map(move |candidate| NamedSamples::new(world_seed, candidate))
+            })
+            .find(|samples| {
+                samples.bounded(
+                    "stream/islands",
+                    None,
+                    rule_ordinal.saturating_add(2_048),
+                    2,
+                    6,
+                ) == 6
+            })
+            .ok_or_else(|| std::io::Error::other("no deterministic six-group sample"))?;
+        let selected = vary_sea_islands(
+            &cells,
+            &template.networks,
+            rule,
+            samples,
+            rule_ordinal,
+            SelectionMode::Seeded,
+        )
+        .ok_or_else(|| {
+            std::io::Error::other("six-group packing found no corrected-coast witness")
+        })?;
+        let packed_groups = component_sets(&selected);
+        if packed_groups.len() != 6
+            || packed_groups
+                .iter()
+                .any(|group| !(1..=4).contains(&group.len()))
+            || !selected.iter().all(|coord| rule.envelope.contains(coord))
+            || !shape_is_valid(&selected, rule)
+        {
+            return Err(
+                format!("expected six groups of 1..=4 cells, found {packed_groups:?}").into(),
+            );
+        }
+        let island_stream = template
+            .generation
+            .named_streams
+            .iter()
+            .find(|stream| stream.as_str() == "stream/islands")
+            .ok_or_else(|| std::io::Error::other("template has no island stream"))?;
+        let mut applied = cells.clone();
+        apply_region(
+            &template,
+            &mut applied,
+            rule,
+            &selected,
+            "stream/islands",
+            island_stream,
+            samples,
+            rule_ordinal,
+            &BTreeSet::new(),
+        );
+        let applied_islands = applied
+            .iter()
+            .filter(|cell| cell.facts.overlays.contains(&FeatureKind::SeaIsland))
+            .map(|cell| cell.coord)
+            .collect::<BTreeSet<_>>();
+        if applied_islands != selected || !connected_sea(&applied) || !connected_mainland(&applied)
+        {
+            return Err("six-group packing broke the sea or mainland when applied".into());
+        }
+        let hydrology = established_hydrology_cells(&applied, &template.networks);
+        if !applied_islands.is_disjoint(&hydrology) {
+            return Err("six-group packing crossed authoritative hydrology".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn selected_generation_exercises_the_six_group_bucket() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let template = grand_v3_reference_template()?;
+        let generated = generate(&template, 5)?;
+
+        if generated.metrics.sea_island_groups != 6 {
+            return Err(format!(
+                "seed 5 selected {} sea-island groups instead of six",
+                generated.metrics.sea_island_groups
+            )
+            .into());
+        }
+        if generated.plan.provenance.selected_candidate.is_none()
+            || generated.plan.provenance.used_reference_fallback
+        {
+            return Err("seed 5 did not use a normal selected candidate".into());
+        }
+        if sea_island_group_capacity(&template, &generated.plan.cells, &generated.plan.networks)
+            != 6
+        {
+            return Err("seed 5 lost the full configured island-group capacity".into());
+        }
+        validate_plan_draft(&template, &generated.plan)?;
+        Ok(())
     }
 
     #[test]

@@ -74,10 +74,21 @@ vegetation, access intent, feature overlays, provenance, hydrology, metrics, and
 fingerprint. It stores no voxel radius, height, substance, final colour, entity, or camera
 fact.
 
-The first template fixes the sharp-peak ring, elevated mountain lake and island, frozen
-woods, waterfall, Crystal Ascent, and tunnel. It bounds the remaining biome envelopes and
-lets named independent seed streams vary the coast, valley lake/river, sea-island groups,
-and coherent woodland. Thirty-two complete schematic candidates are validated and scored.
+The designer orientation is fixed and is never rotated as a whole. Its flat-top projection
+uses `x = 1.5q` and `y = sqrt(3)(r + q/2)`: `(0,-8)` is north, `(8,-8)` north-east,
+`(8,0)` south-east, `(0,8)` south, `(-8,8)` south-west, and `(-8,0)` north-west.
+Template revision 2 is the approved cell-for-cell transcription of the source drawing and
+supersedes the earlier approximate trace.
+
+Revision 2 fixes twelve north-eastern sharp peaks as two six-cell chains around the
+elevated mountain lake, with the scenic lake island inside it and the authored waterfall
+opening left in the enclosure. It also fixes the frozen-woods three-cell core and its
+single mountain-shore contact, Crystal Ascent, and the straight `q = 1` tunnel from the
+Ascent to its hill terminal. The river remains an overlay over land until its one sea
+outlet rather than turning every routed cell into open water. The template bounds the
+remaining biome envelopes and lets named independent seed streams vary the coast, valley
+lake/river, sea-island groups, and coherent woodland. Thirty-two complete schematic
+candidates are validated and scored.
 If all candidates fail, generation may use one exact reference-fallback copy whose layer
 provenance records the underlying template authorities. A directly requested canonical
 reference artifact is different: it preserves the template's original locked, bounded,

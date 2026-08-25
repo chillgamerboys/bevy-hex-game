@@ -106,7 +106,7 @@ pub struct OverlayCountsV1 {
     pub lake_island: u16,
     /// Exact frozen-woods overlay cells.
     pub frozen_woods: u16,
-    /// Exact sharp-peak ring cells.
+    /// Exact authored sharp-peak enclosure cells.
     pub peak_ring: u16,
     /// Crystal Ascent overlay cells.
     pub crystal_ascent: u16,

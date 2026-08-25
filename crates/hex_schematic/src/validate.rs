@@ -304,6 +304,9 @@ fn validate_world_topology(cells: &[CellPlan], issues: &mut Vec<ValidationIssue>
             "ordinary mainland must form exactly one connected component",
         ));
     }
+    let mountain_lake = feature_membership(cells, FeatureKind::MountainLake);
+    let frozen_woods = feature_membership(cells, FeatureKind::FrozenWoods);
+    let frozen_shore_contacts = frozen_shore_contacts(cells, &mountain_lake, &frozen_woods);
     for cell in cells {
         if cell.facts.surface != SurfaceKind::Land {
             continue;
@@ -314,13 +317,10 @@ fn validate_world_topology(cells: &[CellPlan], issues: &mut Vec<ValidationIssue>
             else {
                 continue;
             };
-            let fixed_frozen_peak_contact =
-                (cell.facts.overlays.contains(&FeatureKind::FrozenWoods)
-                    && cell.facts.landform == LandformKind::Shore
-                    && other.facts.overlays.contains(&FeatureKind::PeakRing))
-                    || (other.facts.overlays.contains(&FeatureKind::FrozenWoods)
-                        && other.facts.landform == LandformKind::Shore
-                        && cell.facts.overlays.contains(&FeatureKind::PeakRing));
+            let fixed_frozen_peak_contact = (frozen_shore_contacts.contains(&cell.coord)
+                && other.facts.overlays.contains(&FeatureKind::PeakRing))
+                || (frozen_shore_contacts.contains(&other.coord)
+                    && cell.facts.overlays.contains(&FeatureKind::PeakRing));
             if other.facts.surface == SurfaceKind::Land
                 && !fixed_frozen_peak_contact
                 && !legal_landform_transition(cell.facts.landform, other.facts.landform)
@@ -412,15 +412,11 @@ fn validate_coast_contract(
 fn is_sea_cell(cell: &CellPlan) -> bool {
     cell.facts.surface == SurfaceKind::OpenWater
         && cell.facts.climate == ClimateKind::Marine
-        && !cell.facts.overlays.iter().any(|feature| {
-            matches!(
-                feature,
-                FeatureKind::River
-                    | FeatureKind::Waterfall
-                    | FeatureKind::ValleyLake
-                    | FeatureKind::MountainLake
-            )
-        })
+        && !cell
+            .facts
+            .overlays
+            .iter()
+            .any(|feature| matches!(feature, FeatureKind::ValleyLake | FeatureKind::MountainLake))
 }
 
 fn ocean_coastline(cells: &[CellPlan]) -> BTreeSet<SchematicCoord> {
@@ -470,62 +466,34 @@ const fn legal_landform_transition(left: LandformKind, right: LandformKind) -> b
 }
 
 fn validate_landmark_topology(cells: &[CellPlan], issues: &mut Vec<ValidationIssue>) {
-    let membership = |feature| {
-        cells
-            .iter()
-            .filter(|cell| cell.facts.overlays.contains(&feature))
-            .map(|cell| cell.coord)
-            .collect::<BTreeSet<_>>()
-    };
-    let mountain_lake = membership(FeatureKind::MountainLake);
-    let lake_island = membership(FeatureKind::LakeIsland);
-    let peak_ring = membership(FeatureKind::PeakRing);
-    let waterfall = membership(FeatureKind::Waterfall);
-    let frozen_woods = membership(FeatureKind::FrozenWoods);
-    let shore_contacts = cells
-        .iter()
-        .filter(|cell| {
-            cell.facts.landform == LandformKind::Shore
-                && cell.facts.overlays.contains(&FeatureKind::FrozenWoods)
-        })
-        .filter(|cell| {
-            let neighbors = schematic_neighbors(cell.coord);
-            neighbors
-                .iter()
-                .any(|neighbor| mountain_lake.contains(neighbor))
-                && neighbors
-                    .iter()
-                    .any(|neighbor| frozen_woods.contains(neighbor))
-        })
-        .map(|cell| cell.coord)
-        .collect::<BTreeSet<_>>();
+    let mountain_lake = feature_membership(cells, FeatureKind::MountainLake);
+    let lake_island = feature_membership(cells, FeatureKind::LakeIsland);
+    let peak_ring = feature_membership(cells, FeatureKind::PeakRing);
+    let waterfall = feature_membership(cells, FeatureKind::Waterfall);
+    let frozen_woods = feature_membership(cells, FeatureKind::FrozenWoods);
+    let shore_contacts = frozen_shore_contacts(cells, &mountain_lake, &frozen_woods);
+    let peak_chains = components(&peak_ring, schematic_neighbors);
+    let contact_joins_peak_chains = shore_contacts.len() == 1
+        && shore_contacts.first().is_some_and(|contact| {
+            peak_chains.iter().all(|chain| {
+                schematic_neighbors(*contact)
+                    .into_iter()
+                    .any(|neighbor| chain.contains(&neighbor))
+            })
+        });
     let peak_barrier = peak_ring
         .union(&shore_contacts)
         .copied()
         .collect::<BTreeSet<_>>();
-    let barrier_degrees = peak_barrier
-        .iter()
-        .map(|coord| {
-            schematic_neighbors(*coord)
-                .into_iter()
-                .filter(|neighbor| peak_barrier.contains(neighbor))
-                .count()
-        })
-        .collect::<Vec<_>>();
-    if peak_barrier.len() != 11
+    if peak_ring.len() != 12
+        || peak_chains.len() != 2
+        || peak_chains.iter().any(|chain| chain.len() != 6)
+        || !contact_joins_peak_chains
         || !connected(&peak_barrier, schematic_neighbors)
-        || barrier_degrees
-            .iter()
-            .filter(|degree| **degree == 1)
-            .count()
-            != 2
-        || barrier_degrees
-            .iter()
-            .any(|degree| !matches!(degree, 1 | 2))
     {
         issues.push(ValidationIssue::new(
             ValidationCode::FixedClaim,
-            "PeakRing plus the fixed FrozenWoods shore contact must form the exact simple 11-cell barrier arc with one waterfall outlet",
+            "PeakRing must form two exact six-cell chains joined into one lake barrier by the single fixed FrozenWoods shore contact",
         ));
     }
 
@@ -564,7 +532,7 @@ fn validate_landmark_topology(cells: &[CellPlan], issues: &mut Vec<ValidationIss
             issues.push(ValidationIssue::new(
                 ValidationCode::FixedClaim,
                 format!(
-                    "mountain-lake boundary at {} is not enclosed by the peak arc or fixed waterfall outlet",
+                    "mountain-lake boundary at {} is not enclosed by the authored peak barrier or fixed waterfall outlet",
                     coord_label(neighbor)
                 ),
             ));
@@ -589,16 +557,49 @@ fn validate_landmark_topology(cells: &[CellPlan], issues: &mut Vec<ValidationIss
                 })
         })
     });
-    if frozen_woods.is_empty()
-        || !connected(&frozen_woods, schematic_neighbors)
+    if frozen_core.len() != 3
+        || frozen_woods.len() != 4
+        || !connected(&frozen_core, schematic_neighbors)
         || shore_contacts.len() != 1
         || !frozen_surrounded
     {
         issues.push(ValidationIssue::new(
             ValidationCode::FixedClaim,
-            "frozen woods must remain one authored mountain-surrounded region with exactly one shore cell touching both woods and mountain lake",
+            "frozen woods must remain one exact three-cell mountain-surrounded core plus exactly one shore contact touching both woods and mountain lake",
         ));
     }
+}
+
+fn feature_membership(cells: &[CellPlan], feature: FeatureKind) -> BTreeSet<SchematicCoord> {
+    cells
+        .iter()
+        .filter(|cell| cell.facts.overlays.contains(&feature))
+        .map(|cell| cell.coord)
+        .collect()
+}
+
+fn frozen_shore_contacts(
+    cells: &[CellPlan],
+    mountain_lake: &BTreeSet<SchematicCoord>,
+    frozen_woods: &BTreeSet<SchematicCoord>,
+) -> BTreeSet<SchematicCoord> {
+    cells
+        .iter()
+        .filter(|cell| {
+            cell.facts.landform == LandformKind::Shore
+                && cell.facts.overlays.contains(&FeatureKind::FrozenWoods)
+        })
+        .filter(|cell| {
+            let neighbors = schematic_neighbors(cell.coord);
+            neighbors
+                .iter()
+                .any(|neighbor| mountain_lake.contains(neighbor))
+                && neighbors
+                    .iter()
+                    .any(|neighbor| frozen_woods.contains(neighbor))
+        })
+        .map(|cell| cell.coord)
+        .collect()
 }
 
 fn validate_cell_semantics(cell: &CellPlan, issues: &mut Vec<ValidationIssue>) {
@@ -622,10 +623,11 @@ fn validate_cell_semantics(cell: &CellPlan, issues: &mut Vec<ValidationIssue>) {
     for overlay in &cell.facts.overlays {
         let valid = match overlay {
             FeatureKind::Coastline => true,
-            FeatureKind::River
-            | FeatureKind::Waterfall
-            | FeatureKind::ValleyLake
-            | FeatureKind::MountainLake => cell.facts.surface == SurfaceKind::OpenWater,
+            FeatureKind::River => cell.facts.surface == SurfaceKind::Land,
+            FeatureKind::Waterfall => true,
+            FeatureKind::ValleyLake | FeatureKind::MountainLake => {
+                cell.facts.surface == SurfaceKind::OpenWater
+            }
             FeatureKind::LakeIsland | FeatureKind::SeaIsland => {
                 cell.facts.surface == SurfaceKind::Land
                     && cell.facts.landform == LandformKind::Island
@@ -1063,8 +1065,10 @@ fn validate_fixed_claim_overlaps(claims: &[FeatureClaim], issues: &mut Vec<Valid
             let allowed = match pair {
                 (FeatureKind::Waterfall, FeatureKind::River)
                 | (FeatureKind::Waterfall, FeatureKind::MountainLake)
+                | (FeatureKind::Waterfall, FeatureKind::ValleyLake)
                 | (FeatureKind::River, FeatureKind::ValleyLake)
                 | (FeatureKind::CrystalAscent, FeatureKind::Tunnel) => overlap == 1,
+                (FeatureKind::PeakRing, FeatureKind::Tunnel) => overlap == 1,
                 _ => false,
             };
             if !allowed {
@@ -2759,6 +2763,11 @@ fn contiguous_path<T>(path: &[T], adjacent: impl Fn(&T, &T) -> bool) -> bool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    clippy::panic_in_result_fn,
+    reason = "fixed-size test fixtures use checked setup followed by assertions and compact indexing"
+)]
 mod tests {
     use super::*;
 
@@ -2836,6 +2845,245 @@ mod tests {
         assert!(exact_component_contract(exact_two, 2));
         assert!(!exact_component_contract(variable, 2));
         assert!(!exact_component_contract(wrong_exact, 2));
+    }
+
+    #[test]
+    fn approved_landmark_topology_uses_two_peak_chains_and_one_frozen_shore_contact(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut cells = blank_landmark_cells()?;
+        for (q, r) in [
+            (1, -4),
+            (2, -5),
+            (2, -4),
+            (2, -3),
+            (3, -3),
+            (4, -7),
+            (4, -3),
+            (5, -7),
+            (6, -7),
+            (6, -6),
+            (6, -5),
+            (6, -4),
+        ] {
+            set_landmark_cell(
+                &mut cells,
+                q,
+                r,
+                SurfaceKind::Land,
+                LandformKind::SharpPeak,
+                ClimateKind::Alpine,
+                VegetationDensity::None,
+                crate::model::AccessIntent::Ordinary,
+                &[FeatureKind::PeakRing],
+            );
+        }
+        for (q, r) in [
+            (3, -5),
+            (3, -4),
+            (4, -6),
+            (4, -4),
+            (5, -6),
+            (5, -5),
+            (5, -4),
+        ] {
+            set_landmark_cell(
+                &mut cells,
+                q,
+                r,
+                SurfaceKind::OpenWater,
+                LandformKind::None,
+                ClimateKind::Alpine,
+                VegetationDensity::None,
+                crate::model::AccessIntent::Scenic,
+                &[FeatureKind::MountainLake],
+            );
+        }
+        add_overlay(&mut cells, 5, -4, FeatureKind::Waterfall);
+        set_landmark_cell(
+            &mut cells,
+            5,
+            -3,
+            SurfaceKind::Land,
+            LandformKind::Mountain,
+            ClimateKind::Alpine,
+            VegetationDensity::None,
+            crate::model::AccessIntent::Ordinary,
+            &[FeatureKind::Waterfall],
+        );
+        set_landmark_cell(
+            &mut cells,
+            5,
+            -2,
+            SurfaceKind::OpenWater,
+            LandformKind::None,
+            ClimateKind::Temperate,
+            VegetationDensity::None,
+            crate::model::AccessIntent::Scenic,
+            &[FeatureKind::Waterfall, FeatureKind::ValleyLake],
+        );
+        set_landmark_cell(
+            &mut cells,
+            4,
+            -5,
+            SurfaceKind::Land,
+            LandformKind::Island,
+            ClimateKind::Alpine,
+            VegetationDensity::Sparse,
+            crate::model::AccessIntent::Scenic,
+            &[FeatureKind::LakeIsland],
+        );
+        for (q, r) in [(2, -7), (2, -6), (3, -7)] {
+            set_landmark_cell(
+                &mut cells,
+                q,
+                r,
+                SurfaceKind::Land,
+                LandformKind::Mountain,
+                ClimateKind::Frozen,
+                VegetationDensity::Moderate,
+                crate::model::AccessIntent::Ordinary,
+                &[FeatureKind::FrozenWoods],
+            );
+        }
+        set_landmark_cell(
+            &mut cells,
+            3,
+            -6,
+            SurfaceKind::Land,
+            LandformKind::Shore,
+            ClimateKind::Frozen,
+            VegetationDensity::Moderate,
+            crate::model::AccessIntent::Ordinary,
+            &[FeatureKind::FrozenWoods],
+        );
+
+        let mut issues = Vec::new();
+        validate_landmark_topology(&cells, &mut issues);
+        assert!(issues.is_empty(), "approved topology rejected: {issues:?}");
+
+        remove_overlay(&mut cells, 1, -4, FeatureKind::PeakRing);
+        let mut issues = Vec::new();
+        validate_landmark_topology(&cells, &mut issues);
+        assert!(issues.iter().any(|issue| {
+            issue.code == ValidationCode::FixedClaim
+                && issue.detail.contains("two exact six-cell chains")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn hydrology_overlays_preserve_their_underlying_land_and_water(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut cells = blank_landmark_cells()?;
+        set_landmark_cell(
+            &mut cells,
+            0,
+            0,
+            SurfaceKind::Land,
+            LandformKind::Valley,
+            ClimateKind::Temperate,
+            VegetationDensity::Light,
+            crate::model::AccessIntent::Ordinary,
+            &[FeatureKind::River],
+        );
+        set_landmark_cell(
+            &mut cells,
+            1,
+            -1,
+            SurfaceKind::Land,
+            LandformKind::Massif,
+            ClimateKind::Alpine,
+            VegetationDensity::None,
+            crate::model::AccessIntent::Inaccessible,
+            &[FeatureKind::Waterfall],
+        );
+        set_landmark_cell(
+            &mut cells,
+            1,
+            0,
+            SurfaceKind::OpenWater,
+            LandformKind::None,
+            ClimateKind::Temperate,
+            VegetationDensity::None,
+            crate::model::AccessIntent::Scenic,
+            &[FeatureKind::Waterfall, FeatureKind::ValleyLake],
+        );
+        for (q, r) in [(0, 0), (1, -1), (1, 0)] {
+            let cell = &cells[canonical_coordinate_index(coord(q, r)).expect("test coordinate")];
+            let mut issues = Vec::new();
+            validate_cell_semantics(cell, &mut issues);
+            assert!(issues.is_empty(), "hydrology cell rejected: {issues:?}");
+            assert!(network_cell_compatible(
+                &cells,
+                NetworkKind::Hydrology,
+                cell.coord
+            ));
+        }
+
+        set_landmark_cell(
+            &mut cells,
+            -1,
+            0,
+            SurfaceKind::OpenWater,
+            LandformKind::None,
+            ClimateKind::Marine,
+            VegetationDensity::None,
+            crate::model::AccessIntent::Scenic,
+            &[FeatureKind::Waterfall],
+        );
+        assert!(is_sea_cell(
+            &cells[canonical_coordinate_index(coord(-1, 0)).expect("test coordinate")]
+        ));
+
+        set_landmark_cell(
+            &mut cells,
+            0,
+            -1,
+            SurfaceKind::OpenWater,
+            LandformKind::None,
+            ClimateKind::Marine,
+            VegetationDensity::None,
+            crate::model::AccessIntent::Scenic,
+            &[FeatureKind::River],
+        );
+        let river_on_water =
+            &cells[canonical_coordinate_index(coord(0, -1)).expect("test coordinate")];
+        let mut issues = Vec::new();
+        validate_cell_semantics(river_on_water, &mut issues);
+        assert!(issues.iter().any(|issue| {
+            issue.code == ValidationCode::Feature
+                && issue.detail.contains("incompatible with River")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn exact_fixed_feature_endpoint_overlaps_are_authorized_once(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for (left_kind, right_kind) in [
+            (FeatureKind::PeakRing, FeatureKind::Tunnel),
+            (FeatureKind::Waterfall, FeatureKind::ValleyLake),
+        ] {
+            let first = coord(0, 0);
+            let second = coord(1, -1);
+            let mut claims = vec![
+                fixed_claim("claim/left", left_kind, vec![first])?,
+                fixed_claim("claim/right", right_kind, vec![first])?,
+            ];
+            let mut issues = Vec::new();
+            validate_fixed_claim_overlaps(&claims, &mut issues);
+            assert!(issues.is_empty(), "one-cell overlap rejected: {issues:?}");
+
+            claims[0].cells.push(second);
+            claims[1].cells.push(second);
+            let mut issues = Vec::new();
+            validate_fixed_claim_overlaps(&claims, &mut issues);
+            assert!(issues.iter().any(|issue| {
+                issue.code == ValidationCode::FixedClaim
+                    && issue.detail.contains("overlap in 2 unauthorized cell(s)")
+            }));
+        }
+        Ok(())
     }
 
     #[test]
@@ -3167,6 +3415,82 @@ mod tests {
             .into());
         }
         Ok(())
+    }
+
+    fn blank_landmark_cells() -> Result<Vec<CellPlan>, Box<dyn std::error::Error>> {
+        let mut cells = crate::template::grand_v3_reference_template()?.reference_cells;
+        for cell in &mut cells {
+            cell.facts = crate::model::CellFacts {
+                surface: SurfaceKind::Land,
+                landform: LandformKind::Mountain,
+                climate: ClimateKind::Alpine,
+                vegetation: VegetationDensity::Sparse,
+                access: crate::model::AccessIntent::Ordinary,
+                overlays: Vec::new(),
+            };
+        }
+        Ok(cells)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "fixture helper spells every independent cell layer explicitly"
+    )]
+    fn set_landmark_cell(
+        cells: &mut [CellPlan],
+        q: i32,
+        r: i32,
+        surface: SurfaceKind,
+        landform: LandformKind,
+        climate: ClimateKind,
+        vegetation: VegetationDensity,
+        access: crate::model::AccessIntent,
+        overlays: &[FeatureKind],
+    ) {
+        let index = canonical_coordinate_index(coord(q, r)).expect("landmark test coordinate");
+        cells[index].facts = crate::model::CellFacts {
+            surface,
+            landform,
+            climate,
+            vegetation,
+            access,
+            overlays: overlays.to_vec(),
+        };
+        cells[index].facts.overlays.sort_unstable();
+    }
+
+    fn add_overlay(cells: &mut [CellPlan], q: i32, r: i32, feature: FeatureKind) {
+        let index = canonical_coordinate_index(coord(q, r)).expect("landmark test coordinate");
+        let overlays = &mut cells[index].facts.overlays;
+        if let Err(insertion) = overlays.binary_search(&feature) {
+            overlays.insert(insertion, feature);
+        }
+    }
+
+    fn remove_overlay(cells: &mut [CellPlan], q: i32, r: i32, feature: FeatureKind) {
+        let index = canonical_coordinate_index(coord(q, r)).expect("landmark test coordinate");
+        let overlays = &mut cells[index].facts.overlays;
+        if let Ok(removal) = overlays.binary_search(&feature) {
+            overlays.remove(removal);
+        }
+    }
+
+    fn fixed_claim(
+        id: &str,
+        kind: FeatureKind,
+        cells: Vec<SchematicCoord>,
+    ) -> Result<FeatureClaim, Box<dyn std::error::Error>> {
+        let id = StableId::new(id)?;
+        Ok(FeatureClaim {
+            id: id.clone(),
+            kind,
+            provenance: LayerProvenance::Locked { claim: id },
+            cells,
+        })
+    }
+
+    fn coord(q: i32, r: i32) -> SchematicCoord {
+        SchematicCoord::new(q, r, -q - r).expect("valid test cube coordinate")
     }
 
     fn cube_distance((aq, ar): Coord, (bq, br): Coord) -> u32 {
