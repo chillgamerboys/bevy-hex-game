@@ -381,6 +381,16 @@ Codex reads root [`AGENTS.md`](AGENTS.md) automatically and discovers repository
 skills under `.agents/skills/`. Use `$plan-parallel-work` before dividing a related
 outcome across lanes, and `$plan-epic` once that choice is a wave.
 
+Four case-backed development workflows are also canonical in `.agents/skills/`, with
+thin same-name adapters under `.claude/skills/`: `/trace-authored-map-reference` locks an
+approved exact oracle before generator work; `/develop-large-world-features` coordinates
+global composition, full-scale proxies, and budget checkpoints;
+`/recover-cargo-capacity` audits and protects worktrees/evidence before Cargo cleanup; and
+`/inspect-game-renders` requires fresh complete matrices, full-resolution inspection, and
+motion-appropriate evidence. Their concrete successes and failures are indexed in
+[`docs/development/problem-solving-casebook.md`](docs/development/problem-solving-casebook.md).
+Keep these pointers short and update the canonical skills rather than the adapters.
+
 Waves have their own pipeline, and
 [`docs/development/wave-protocol.md`](docs/development/wave-protocol.md) is the
 tool-neutral contract behind all of it — the committed manifest under

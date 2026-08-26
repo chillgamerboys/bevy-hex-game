@@ -68,6 +68,25 @@ skills reuse existing tickets only when they add product or cross-owner value an
 leave lanes unlinked. After complete delivery reaches `dev`, delete eligible workflow-owned
 issues only under the durable-record and safety checks in the delivery-state contract.
 
+## Reuse development lessons
+
+The evidence ledger at `docs/development/problem-solving-casebook.md` records concrete
+successful, failed, superseded, and provisional approaches from the visibility and world
+development work. Use it for provenance; use the focused skills for execution:
+
+- `$trace-authored-map-reference` before implementing an exact map from a sketch or image;
+- `$develop-large-world-features` for global reservations, cross-biome features, or
+  full-scale world checkpoints;
+- `$recover-cargo-capacity` when Cargo builds are constrained by disk, memory, duplicate
+  worktrees, or target profiles; and
+- `$inspect-game-renders` after presentation-affecting map/render changes and before
+  calling their pixels review-ready.
+
+These skills are canonical under `.agents/skills/`; Claude commands are thin adapters.
+Do not copy the workflows into this file. An optional user-level
+`$distill-development-task` can analyze another Codex task from a separate window; it is
+read-only by default and never directs or mutates the observed task.
+
 ## Capture UI bugs before fixing them
 
 Use `$linear-ui-bug-intake` for a reproduced UI, interaction, accessibility, focus,
