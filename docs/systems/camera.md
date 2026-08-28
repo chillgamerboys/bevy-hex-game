@@ -24,6 +24,15 @@ cycling between Third Person and First Person never overwrites it. If the follow
 subject becomes unavailable, either character view fails safely back to that saved
 Map pose.
 
+`MapViewHint` is also a bounded depth contract for generated worlds. A valid hint may
+increase the perspective far plane to the greater of its authored baseline and twice
+the hint's eye-to-focus distance, which keeps the far half of the radius-187 Grand V3
+world and its expanded sky dome inside the view volume. Camera-owned override state
+remembers both values. A later hintless or authored Map restores the exact baseline
+only when the projection still has the generated value; an external projection edit
+instead becomes the new baseline before the generated minimum is reapplied, so later
+restoration never replaces newer authority with a stale value.
+
 This is presentation only. Camera geometry never grants sight, changes gameplay
 targeting legality, brightens darkness, or becomes an occupancy fact. A unit hidden
 by the near-camera presentation envelope, or the complete model hidden in First
@@ -198,7 +207,8 @@ orbit/zoom input; 120 open-motion frames; blocked-clearance chatter; delayed mon
 recovery; proximity occlusion composition; a clear and obstructed focus retarget;
 one-shot Map inspection centering; character-view inspection follow and
 selected-target fallback; no gameplay-authority mutation; a
-synthetic flat radius-55 lower-level benchmark,
+synthetic flat radius-55 lower-level benchmark; complete radius-187 Grand V3 boundary,
+far-depth, and sky-dome coverage;
 a 2,048-render-chunk tree-fade
 performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
 roofs, and 100 gameplay lifecycles. An ignored release composition diagnostic
@@ -231,6 +241,13 @@ formation planner before Restore, which remains authoritative for saves. The rev
 enters the four-wide mouth once in default Group mode, then chooses Solo movement and leaves
 the two allies at the threshold so the vertical camera proof does not become a formation
 benchmark.
+
+Review focus and review look-at deliberately use different anchor contracts. A focus
+override relocates an actor and therefore resolves only `MapAnchors`, whose surfaces
+must satisfy live footing. A free-camera look-at may additionally resolve
+`MapObservationAnchors`, which can name a blocked crest, scenic island, or other exact
+rendered surface. If one identity appears in both namespaces, capture setup fails
+closed. Observation anchors are review metadata and are not serialized in Snapshot V1.
 
 The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
 a camera-route manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`

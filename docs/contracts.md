@@ -25,8 +25,10 @@ than agreed, the fallback the gameplay side ships without it is in
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
 | `HexTile` + `TilePos`, `RunBottom`, `HexSpan`, `SubstanceId`, `Headroom` on every material-run entity | world | gameplay | live | [systems/map.md](systems/map.md) |
+| `TerrainRenderBatch` / `TerrainPickRun` — bounded disposable combined-mesh lookup from a world-space pointer hit to its exact logical material-run entity; chunk and entity ids remain outside saves and fingerprints | world | gameplay picking / presentation tooling | live | [systems/map.md](systems/map.md) |
 | `TraversalProfile` / `TraversalEndpoint` — standability and step predicates | core | both | live | [systems/map.md](systems/map.md) |
 | `MapAnchorId` / `MapAnchors` — named exact surfaces | world | gameplay | live | [systems/map.md](systems/map.md) |
+| `MapObservationAnchors` — named exact scenic surfaces that are never placement or movement targets | world | review presentation | live | [systems/map.md](systems/map.md), [systems/camera.md](systems/camera.md) |
 | `SpecialMovementRegions` — deliberately opaque region ids | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `TerrainReady` — terrain built and validated | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `MapViewHint` — generated camera framing | world | presentation | live | [systems/map.md](systems/map.md) |

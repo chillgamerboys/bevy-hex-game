@@ -205,8 +205,13 @@ Both anchors are validated on the same exact walker graph as live movement.
 
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
-non-standable and may associate it with an interior. Anchors also name exact
-`TilePos`s, so stacked surfaces at one `HexCoord` never become interchangeable.
+non-standable and may associate it with an interior. `MapAnchors` name only exact
+standable gameplay/spawn surfaces. Scenic or blocked camera targets instead live in
+the separate `MapObservationAnchors` resource and are never consumed by scenario
+placement or movement. Both namespaces use full `TilePos`s, so stacked surfaces at one
+`HexCoord` never become interchangeable. Snapshot V1 serializes only gameplay anchors;
+review-only observation landmarks are regenerated metadata and restore as an empty
+resource rather than changing the gameplay wire contract.
 
 Each interior records its exact floor and entrance surfaces plus the air intervals
 that must remain clear. Roof masses identify their `InteriorRegionId`; voxelization
@@ -261,9 +266,12 @@ under a megabyte and the correctness difference is what matters.
 This is the part worth understanding before changing anything.
 
 **One entity per voxel would be tens of thousands of entities on a deep map.** Instead
-the spawn pass merges vertical runs of the same substance into a single prism, so a
-fifteen-level stone column is one entity. The rendered entity count therefore follows
-the number of substance bands rather than the number of stored voxels.
+the spawn pass merges vertical runs of the same substance into one lightweight logical
+run entity. The logical entity carries the authoritative gameplay tuple but no mesh or
+material. Presentation groups bounded sets of those runs by resident chunk, substance,
+and cutaway owner into combined render meshes. Logical entity count therefore follows
+the number of substance bands, while draw-entity topology follows disposable batches
+rather than voxels or runs.
 
 Two consequences:
 
@@ -299,17 +307,23 @@ hex_units    reads tiles and authored-object run components, publishing exact te
              and object occupancy resources; cannot see hex_map
 ```
 
-The map exposes rendered footing through components on tile entities:
+The map exposes authoritative footing through lightweight logical run entities:
 
 ```rust
-(HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
+(HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, ...)
 ```
+
+Those entities deliberately carry no mesh, material, or picking surface. Bounded
+`TerrainRenderBatch` children combine runs by resident chunk, substance, and cutaway
+owner; a world-space mesh hit resolves back to the exact logical run. This keeps
+movement, occupancy, snapshots, and semantic identities independent of disposable
+draw topology while preserving stacked-surface selection.
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
 by `TilePos`; they are not duplicated on tile entities. Exact interior floors and
-cutaway roof voxels likewise live in `InteriorRegions`; only rendered segments projected
-from those roof voxels receive the `CutawayOccluder` component needed by live
-presentation queries. `hex_units` queries the footing components. It never reads
+cutaway roof voxels likewise live in `InteriorRegions`; both logical segments and their
+corresponding render batches receive the `CutawayOccluder` needed by live presentation
+queries. `hex_units` queries the footing components. It never reads
 `VoxelMap` or any generator, so terrain storage and generation can be replaced wholesale
 — chunked, streamed, generated differently — without anything else noticing.
 

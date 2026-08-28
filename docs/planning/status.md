@@ -30,32 +30,39 @@ The exact source transcription has Alberto's named visual approval; the seeded g
 variation quality remains a separate pending human review. Local peak resident memory measured 8.7 MiB, while
 the scheduled Linux `VmHWM` run remains the authoritative 64 MiB platform gate.
 
-The **Grand V3 schematic-to-map compiler** has reached its required representative proxy
-checkpoint on the same branch. The additive `Schematic` V3 layout compiles the approved
-plan once at pitch 22 into a radius-187 world with exactly 105,469 columns, 217 stable biome
-identities, and 444 resident 16 by 16 axial chunks. Terrain storage and presentation are
-chunk-native; `TerrainReady` now follows complete presentation and snapshot publication.
-Localized edits retain the grid and every unaffected chunk and revalidate only affected
-columns. Snapshots keep their existing wire shape with a raised 131,072-column bound, and
-teardown/re-entry reproduce every tested map-owned fingerprint and category. Representative
-strata, locked height/water pins, party setup, traversal probes, perception, cameras, edits,
-and renderer-shaped top-down captures are live. The proxy deliberately leaves
-`ordinary_route_validated` false. Final hydrology, physical routes, Crystal Ascent,
-vegetation, bridges, interiors, and lights remain intentionally absent.
+The **Grand V3 schematic-to-map compiler** has passed its required representative proxy
+decision and is now in final implementation on the same branch. Alberto approved the exact
+pitch-22/radius-187 scale, the recorded budgets, combined solid-terrain chunk meshes with
+exact picking, and retention of the 50 ms perception plus 100 ms local-edit targets. The
+approved proxy remains the before-state: 105,469 columns, 217 stable biome identities, 444
+resident chunks, a 10,861,429-byte snapshot, 1.794 s setup, and 1.137 s combined semantic
+compile plus voxel materialization. Its 56.707 ms perception and 192.377 ms local-edit p95
+measurements remain misses to close, not relaxed budgets.
 
-The final optimized checkpoint enters gameplay through `TerrainReady` in 1.794 s and its
-combined semantic compile plus voxel materialization takes 1.137 s. Its canonical snapshot
-is 10,861,429 bytes. Reach and long-path A* are 43.019 and 32.495 ms p95; isolated
-perception is 56.707 ms p95; and a one-column edit is 192.377 ms p95. The last two miss the
-proposed 50 and 100 ms budgets. The larger warning is presentation scale: the undecorated
-proxy already publishes 421,876 terrain-run entities and 422,586 total headless entities.
-A warm renderer run reaches 1,521,238,016 bytes maximum RSS and a 2,549,385,832-byte macOS
-peak footprint, roughly 1.8 times Crystal Mountain. The required budget and architecture
-decision is therefore pending. The recommended next lane is combined solid-terrain meshes
-per chunk plus exact picking, followed by remeasurement of the two missed latency targets,
-without shrinking radius, pitch, height, or content fidelity. Full measurements, proposed
-budgets, caveats, and the explicit approval question are recorded in
-[the proxy checkpoint](waves/grand-v3-map/proxy-checkpoint.md).
+Final implementation now includes bounded terrain batches with exact picking, authoritative
+three-lane hydrology, exactly two bridges, ordinary hubs/routes, the tunnel and embedded
+Crystal Ascent, one shared interior/light domain, vegetation, and the complete anchor set.
+The 256-seed fine-topology corpus passes and exercises all three natural-pass width buckets;
+reference, zero, hero, and maximum-seed complete worlds also pass the final physical pass,
+route-cut, seam, vegetation, Crystal, anchor, and export validators.
+Exact release runtime gates also pass for one-chunk edit locality, complete Crystal
+occupancy/perception/fog/cutaway teardown and re-entry, and 10,000 unchanged updates with
+zero projection or presentation rebuild churn. The final-content comparison now meets all
+approved deterministic latency and snapshot budgets: 3.210 s setup, 2.099 s semantic
+compile plus materialization, 25.535 ms perception p95, and 77.638 ms one-column edit p95.
+Full-renderer measurements remain over the approved memory targets at 3.84 GB
+maximum RSS and 7.63 GB peak footprint. A same-process phase trace now isolates the current
+actionable miss to terrain publication/extraction: RSS peaks near 2.94 GB during upload,
+then settles around 0.50--0.72 GB and reaches about 0.78 GB during PNG capture. Renderer
+publication-memory optimization therefore remains open. The 32-world fully materialized
+release corpus passes in 64.65 s, including a permanent seed-14 review-anchor reachability
+regression. The real preview, camera-route capture, CI-equivalent gate, native
+motion review, and named visual/play approval remain outstanding. The fail-closed delivery
+state is tracked in
+[the Grand V3 map manifest](waves/grand-v3-map/manifest.md); the original quantitative
+baseline remains in [the proxy checkpoint](waves/grand-v3-map/proxy-checkpoint.md), and
+the final measurements are recorded in
+[the final runtime checkpoint](waves/grand-v3-map/final-runtime-checkpoint.md).
 
 The **Coastal islands** wave is review-ready on its delivery branch and is not yet a
 claim about `dev`. Exact implementation head

@@ -37,6 +37,23 @@ upper-dome range and requires every canonical tunnel, stair, and landing surface
 resolve to at least Dim, while exact Bright pools remain local to their fixtures.
 Optional recesses may remain Dark.
 
+## Grand V3 Baseline
+
+Grand V3 gives its generated level-6 tunnel and embedded Crystal Ascent one shared
+Dark domain described in [interiors](interiors.md). The roofless graded approach and
+summit exterior use exterior ambient illumination; the first roofed foot threshold
+and four-wide summit terminal are the only exterior boundaries, and the lower Crystal
+threshold is internal.
+
+Each deterministic tunnel-alcove crystal publishes a Bright radius-4 and Dim radius-18
+gameplay pair. Only its Bright source owns the nonblocking visual crystal and the
+presentation-only, non-shadow-casting point light. Fixture count follows the resolved
+route rather than being a map-wide constant. Validation requires every non-Crystal
+tunnel route surface to lie within Dim-18 coverage; the embedded landmark retains its
+approved landing and heart pairs, so every required tunnel and Crystal route surface
+resolves to at least Dim. Physical lights and emissive materials remain presentation
+only.
+
 The renderer's illumination overlay is diagnostic presentation over
 `ResolvedIllumination`; it never changes a source, domain, observation, fog, or
 picking. Delivery status and capture requirements live in

@@ -1,6 +1,6 @@
 # Grand V3 map proxy checkpoint
 
-- Status: `budget-and-presentation-architecture-approval-pending`
+- Status: `approved-historical-baseline; final implementation in progress`
 - Branch: `wave/grand-v3-schematic`
 - Implementation head: `03c3a0c0443bede6d0f136e6d09a9a4182e8fb40`
 - Schematic dependency head: `36b67f349cca394fdd198636451eaac7f4b66ff9`
@@ -160,7 +160,7 @@ remain red because approving the architecture should not normalize visible stutt
 | Camera query p95 | <= 5 us | 2.750 us | pass |
 | One-column edit p95 | <= 100 ms | 192.377 ms | **miss** |
 
-## Decision requested
+## Decision recorded
 
 Generation at exact scale is viable for this simple proxy, but comparison with the much
 more authored Crystal Mountain does not prove that final content is free. Presentation
@@ -175,15 +175,20 @@ exact. Only solid presentation and picking change; one affected chunk rebuilds b
 batches instead of retaining one renderer entity per material run. That migration should
 reduce edit and memory pressure. Perception is independent of render-entity cardinality and
 requires its own optimization and remeasurement lane to reach 50 ms p95. Both missed
-latency targets must close before final content begins.
+latency targets remain final acceptance gates while content proceeds in parallel.
 
-Approval is needed for both:
+The checkpoint asked for both:
 
 1. combined solid chunk meshes plus exact picking as the next implementation lane; and
 2. the proposed budgets above, including retaining the two currently missed latency targets
    as optimization requirements rather than loosening them.
 
-No stage-four content work or mesh migration begins without that decision.
+Alberto approved both decisions on 2026-08-25. The exact scale and proposed budgets remain
+fixed, combined solid chunk meshes with exact picking are the approved presentation lane,
+and the 50 ms perception plus 100 ms local-edit targets remain requirements rather than
+being relaxed. Final implementation and evidence are tracked by
+[the delivery manifest](manifest.md); this document remains the immutable before-state for
+remeasurement.
 
 ## Verification
 
@@ -202,6 +207,6 @@ No stage-four content work or mesh migration begins without that decision.
 - Post-readiness-order release Grand/Crystal proxy checkpoint: passed
 - Warm renderer captures: both completed successfully
 
-The full workspace/CI-equivalent gate remains deliberately deferred until this required
-budget and presentation-architecture decision; running it cannot answer that product and
-architecture choice.
+The full workspace/CI-equivalent gate was deliberately deferred at this checkpoint because
+it could not answer the product and architecture choice. It remains a required final-world
+gate once the approved mesh, optimization, and content lanes stabilize.

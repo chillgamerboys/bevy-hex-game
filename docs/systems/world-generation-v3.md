@@ -66,7 +66,7 @@ leave stale current or fall descriptors behind.
 
 ### Pre-terrain schematic planning
 
-The Grand V3 test world introduces a planning stage before any V3 layout or voxel recipe.
+The Grand V3 baseline introduces a planning stage before any V3 layout or voxel recipe.
 `hex_schematic` consumes a strict versioned template and `u64` world seed and resolves one
 complete radius-eight graph: 217 canonical coarse cells, 600 internal adjacencies, 48
 boundary cells, and 102 outward sides. The plan stores surface/landform, climate,
@@ -117,12 +117,19 @@ has radius 187 and exactly 105,469 columns. This ownership layer is independent 
 topology: the compiler produces one continuous global height field and material volume, not
 217 isolated recipes whose boundaries could become visible shelves.
 
-The current `GrandV3BasicV1` output is the deliberately undecorated performance proxy. It
-contains the intended land/sea extent, representative lowland and highland strata, recessed
-sea and locked-lake water, stable review anchors, access classifications, the complete
-height range, and gameplay projections. It does not yet claim final hydrology, ordinary
-routes, Crystal Ascent geometry, vegetation, bridges, interiors, or gameplay lights. Those
-layers remain behind the recorded large-world performance checkpoint.
+`GrandV3BasicV1` is the complete baseline compiler profile. It preserves the approved
+coarse geography while resolving one global fine-grid volume, the mountain-lake to sea
+hydrology chain, exactly two worked-stone river bridges, ordinary hubs and routes, one
+variable-width natural upper pass, and the tunnel/Crystal route. The exact Crystal Ascent
+landmark is compiled through its existing authored builder and retains its occupancy,
+interior, lighting, cutaway, and stable-anchor contracts. Vegetation is applied only after
+water, routes, structures, and sight-critical clearings are reserved.
+
+The earlier undecorated radius-187 artifact remains useful as the recorded performance
+baseline in `docs/planning/waves/grand-v3-map/proxy-checkpoint.md`; it is not the semantic
+definition of this profile. Completion claims for the final world require the delivery
+manifest's typed, runtime, benchmark, and visual gates rather than inference from that
+proxy.
 
 `generator_version: 3` selects one of five layouts:
 
@@ -148,13 +155,18 @@ anchors, snapshots, saves, or network payloads. A restored legacy snapshot is re
 internally without changing its wire version.
 
 Presentation publishes one `HexGrid` root with one deterministic `TerrainChunkRoot` child
-per resident chunk. All terrain runs and all global gameplay projections exist before
-`TerrainReady`. A terrain edit validates the active grid topology first, mutates authority,
-and atomically replaces only affected chunk roots before publishing one world revision.
-Unchanged chunk entity identities and shared material handles survive; removed feature
-roots are reconciled against the new projection. Missing, duplicate, orphaned, or
-mis-parented chunk roots fail closed instead of leaving authority and presentation out of
-sync. Teardown still removes the complete grid atomically.
+per resident chunk. Every material run remains a lightweight logical `HexTile`; bounded
+`TerrainRenderBatch` meshes group those runs by chunk, substance, and cutaway owner and
+project exact pointer hits back to the logical entity. Internal same-chunk walls are
+culled, while chunk-seam walls remain independently owned so a terrain edit never needs
+to invalidate a neighbouring root. All terrain runs, render batches, and global gameplay
+projections exist before `TerrainReady`. A terrain edit validates the active grid topology
+first, mutates authority, and atomically replaces only affected chunk roots before
+publishing one world revision. Unchanged chunk entity identities and shared material
+handles survive; removed feature roots are reconciled against the new projection. Missing,
+duplicate, orphaned, or mis-parented chunk roots fail closed instead of leaving authority
+and presentation out of sync. Teardown removes the complete grid and its generated mesh
+assets atomically.
 
 The public snapshot remains the existing canonical column/run tuple. Its column admission
 bound is 131,072, raised additively from 65,536 without changing the snapshot wire version;
@@ -858,6 +870,21 @@ four-wide entrance sets; complete Dim coverage; and the absence of a surface byp
 undeclared seam opening, liquid collision, bedrock breach, or shortcut.
 Representative seeds and all six landmark rotations exercise the patch constructor
 even though the shipped world fixes rotation zero.
+
+Grand V3 coverage fixes 217 nonempty biome owners over 105,469 columns and 444 resident
+chunks; the exact three-lane, descending, acyclic mountain-lake-to-sea liquid graph; two
+and only two worked-stone river crossings; one foothill-reachable Ordinary component with
+one representative hub per Ordinary schematic cell; and a typed complete review-anchor
+roster whose current-source hero export is byte-stable. The public
+`public_schematic_fine_topology_admits_256_seeds` contract exercises 256 deterministic
+schematic plans, both declared upper routes, and natural-pass widths 3, 4, and 5 without
+paying complete-world decoration cost. Feature-gated `hex_game` contracts separately prove
+one-chunk edit locality, the embedded Crystal occupancy/light/perception/fog/cutaway
+lifecycle, and 10,000 unchanged runtime updates with no terrain, perception, knowledge, or
+fog-batch rebuild. The complete 32-world release corpus and deterministic performance
+comparison also pass. Renderer publication-memory optimization, the selector-chosen
+CI-equivalent gate, multi-angle and temporal visual inspection, and human play approval
+remain tracked by the Grand V3 delivery manifest.
 
 Arid coverage fixes connected and rotated transition bands, exact sand coverage,
 bounded low relief, dune ridge count/spacing/height, one-level dune transitions, the

@@ -35,6 +35,23 @@ biome identity; there is no tunnel biome. Changing camera mode does not change a
 these facts. Map view keeps the complete mountain roof opaque, while the explicit full
 review cutaway may expose the continuous foot-to-summit route.
 
+## Grand V3 Baseline
+
+Grand V3 compiles its own level-6 tunnel and exact Crystal Ascent into exactly one
+`InteriorRegionId`, and therefore one Dark light domain. Exactly eight surfaces are
+entrances: the four-wide first roofed foot threshold and the four-wide summit terminal.
+The longer graded approach and monumental mouth before the foot threshold remain
+exterior, while Crystal Ascent's authored lower threshold becomes an internal
+connection rather than a second domain boundary.
+
+The same interior records the tunnel floors and alcoves, Crystal chamber and stair
+floors, and every owned roof voxel used by review cutaway presentation. The surface
+biomes above the tunnel remain intact, and tunnel floors inherit the biome identity of
+their horizontal owners instead of creating a tunnel biome. Ordinary Map, Third
+Person, and First Person views keep the roof opaque. Only the explicit full review
+cutaway may expose the continuous route, without changing occupancy, light domains,
+movement, or sight.
+
 The delivery state for this contract is recorded in
 [status.md](../planning/status.md); the exact generation stages are specified in
 [world-generation-v3.md](world-generation-v3.md).

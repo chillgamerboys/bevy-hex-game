@@ -84,8 +84,10 @@ while tuning, and `--release` when you just want to play.)
 world-plan template. It is a packaged planning input rather than a hot-reloaded gameplay
 setting: it owns coarse geography and authorship constraints. The map-owned
 `Schematic(GrandV3, revision 2, pitch 22, GrandV3BasicV1)` layout now consumes the same
-pure generator at runtime and owns voxel scale, representative elevation, and materials.
-Final routes, decoration, and palette work remain later compiler layers.
+pure generator at runtime and owns voxel scale, elevation, materials, hydrology, ordinary
+routes, Crystal Ascent integration, and baseline vegetation. The final-palette,
+radius-to-height, and partial-voxel plant experiments remain later profiles; changing those
+experiments must not silently change the accepted revision-2 biome topology.
 
 Revision 2 is the approved source transcription; revision 1 was an approximate trace and
 must not be used as visual or semantic evidence. Review projections use the fixed flat-top
@@ -164,11 +166,14 @@ The optional review overrides are:
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
+| `HEX_REVIEW_LOOK_AT_ANCHOR` | Frames an exact generated gameplay or observation anchor without moving an actor |
+| `HEX_REVIEW_LOOK_AT_OFFSET` | Sets the look-at camera's finite world-space `x,y,z` offset from that anchor |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`,
-`HEX_REVIEW_CUTAWAY`, and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
+`HEX_REVIEW_LOOK_AT_ANCHOR`, `HEX_REVIEW_LOOK_AT_OFFSET`, `HEX_REVIEW_CUTAWAY`, and
+`HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
 The focus override resolves the anchor's full `TilePos`, not just its horizontal
 coordinate, so it can target an underground floor beneath a surface. It also applies
 the selected actor's normal solidity and headroom rules. An unknown anchor or one the
@@ -180,6 +185,11 @@ overlay reads `ResolvedIllumination`. Its diagnostic caps are physically separat
 and render-ordered above tactical fog caps, so both translucent projections compose
 deterministically; it never changes gameplay light, physical lights, faction
 knowledge, ordinary fog behavior, or picking.
+
+Look-at framing never relocates an actor. It may resolve either an ordinary gameplay
+`MapAnchor` or a scenic `MapObservationAnchor`; the latter can intentionally name a
+blocked or nonstandable surface. A duplicate name across those namespaces fails closed.
+Observation anchors are review-only generated metadata and do not enter Snapshot V1.
 
 For example, this exposes the complete generated cave network for a top-down overview:
 
