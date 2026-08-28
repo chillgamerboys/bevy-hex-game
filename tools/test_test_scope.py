@@ -235,6 +235,12 @@ class TestScopeTests(unittest.TestCase):
         self.assertFalse(decision.full)
         self.assertEqual(decision.concerns, ("map_contracts", "clippy"))
 
+    def test_schematic_map_compiler_contract_selects_generation(self) -> None:
+        decision = self.classify("crates/hex_map/tests/schematic_compile.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(decision.concerns, ("map_generation", "clippy"))
+        self.assertIn("schematic-map-compiler-contract", decision.matched_rules)
+
     def test_map_publication_selects_unit_and_contract_evidence(self) -> None:
         decision = self.classify("crates/hex_map/src/grid.rs")
         self.assertFalse(decision.full)
@@ -491,15 +497,18 @@ class TestScopeTests(unittest.TestCase):
             self.assertEqual(command[command.index("--package") + 1], "hex_map")
         self.assertIn("--lib", unit)
         self.assertIn("--lib", generation)
+        self.assertEqual(
+            generation[generation.index("--test") + 1], "schematic_compile"
+        )
         self.assertEqual(contracts[contracts.index("--test") + 1], "contracts")
 
     def test_map_partition_contract_freezes_current_evidence(self) -> None:
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 119, "map_generation": 506, "map_contracts": 97},
+            {"map_unit": 137, "map_generation": 567, "map_contracts": 106},
         )
-        self.assertEqual(partition["expected_ignored"], 32)
+        self.assertEqual(partition["expected_ignored"], 33)
 
     def test_map_commands_share_the_optimized_test_profile(self) -> None:
         for concern in ("map_unit", "map_generation", "map_contracts"):

@@ -194,6 +194,8 @@
         "--package",
         "hex_map",
         "--lib",
+        "--test",
+        "schematic_compile",
         "--cargo-profile",
         "map-test",
         "--profile",
@@ -275,11 +277,11 @@
     "map": {
       "concerns": ["map_unit", "map_generation", "map_contracts"],
       "expected_counts": {
-        "map_unit": 119,
-        "map_generation": 506,
-        "map_contracts": 97
+        "map_unit": 137,
+        "map_generation": 567,
+        "map_contracts": 106
       },
-      "expected_ignored": 32,
+      "expected_ignored": 33,
       "full_command": [
         "cargo",
         "nextest",
@@ -328,6 +330,12 @@
       ],
       "full": true,
       "reason": "Validation infrastructure changes require the complete gate."
+    },
+    {
+      "name": "schematic-map-compiler-contract",
+      "patterns": ["crates/hex_map/tests/schematic_compile.rs"],
+      "concerns": ["map_generation", "clippy"],
+      "reason": "The public schematic-to-map compiler corpus belongs to deterministic map generation rather than the generic publication-contract target."
     },
     {
       "name": "map-contract-tests",
