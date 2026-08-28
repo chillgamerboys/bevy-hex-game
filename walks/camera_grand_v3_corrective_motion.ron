@@ -1,0 +1,128 @@
+// Temporal visual acceptance for the Grand V3 corrective terrain pass.
+//
+// This is deliberately separate from the broad static camera itinerary. It
+// follows one explorer through six high-risk boundaries in both directions so
+// movement can expose flicker, holes, unstable caps, and one-sided seams. Every
+// recording step is fail-closed: the click destination, bounded image sequence,
+// idle wait, and exact arrival proof are contiguous.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Grand V3 Baseline", seed: Some(1592598566)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+
+    // Character camera, one explorer. The long temporal routes are visual
+    // diagnostics rather than formation-routing benchmarks.
+    Key("C"),
+    AssertCameraMode(Character),
+    Key("F"),
+    AwaitButton("Party Movement Mode"),
+    Click(name: "Party Movement Mode"),
+    Key("Escape"),
+
+    // 1-4. Inspect the lower and upper waterfall approaches independently. The
+    // plunge is deliberately not an ordinary route: a base <-> crown click would
+    // either preserve the rejected ramp or detour through an unrelated upper pass.
+    ClickAnchor(name: "grand_v3.valley_lake", expected: (q: 66, r: -10, level: 20)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 66, r: -10, level: 20)),
+    ClickAnchor(name: "grand_v3.waterfall_base", expected: (q: 99, r: -11, level: 16)),
+    CaptureWhileMoving(prefix: "01-waterfall-lower-to-base-motion", every_frames: 38, capture_count: 16),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 99, r: -11, level: 16)),
+    OrbitCamera(yaw_turns: 0.5),
+    ClickAnchor(name: "grand_v3.valley_lake", expected: (q: 66, r: -10, level: 20)),
+    CaptureWhileMoving(prefix: "02-waterfall-base-to-lower-motion", every_frames: 38, capture_count: 16),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 66, r: -10, level: 20)),
+    OrbitCamera(yaw_turns: -0.5),
+
+    ClickAnchor(name: "grand_v3.mountain_lake", expected: (q: 77, r: -77, level: 151)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 77, r: -77, level: 151)),
+    ClickAnchor(name: "grand_v3.waterfall_crown", expected: (q: 99, r: -77, level: 151)),
+    CaptureWhileMoving(prefix: "03-waterfall-upper-to-crown-motion", every_frames: 26, capture_count: 16),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 99, r: -77, level: 151)),
+    OrbitCamera(yaw_turns: 0.5),
+    ClickAnchor(name: "grand_v3.mountain_lake", expected: (q: 77, r: -77, level: 151)),
+    CaptureWhileMoving(prefix: "04-waterfall-crown-to-upper-motion", every_frames: 26, capture_count: 16),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 77, r: -77, level: 151)),
+    OrbitCamera(yaw_turns: -0.5),
+
+    // 5-6. Tunnel mouth <-> midpoint: catch the cap stripe, entrance reveal,
+    // roof holes, cutaway churn, and crystal/light flicker.
+    ClickAnchor(name: "grand_v3.tunnel_mouth", expected: (q: 22, r: 31, level: 7)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 22, r: 31, level: 7)),
+    ClickAnchor(name: "grand_v3.tunnel_midpoint", expected: (q: 22, r: -47, level: 6)),
+    CaptureWhileMoving(prefix: "05-tunnel-inbound-motion", every_frames: 28, capture_count: 32),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 22, r: -47, level: 6)),
+    OrbitCamera(yaw_turns: 0.5),
+    ClickAnchor(name: "grand_v3.tunnel_mouth", expected: (q: 22, r: 31, level: 7)),
+    CaptureWhileMoving(prefix: "06-tunnel-outbound-motion", every_frames: 28, capture_count: 32),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 22, r: 31, level: 7)),
+    OrbitCamera(yaw_turns: -0.5),
+
+    // 7-8. Crystal threshold <-> chamber: catch the former support-skirt gap
+    // and coplanar crystal/terrain flicker from both directions.
+    ClickAnchor(name: "grand_v3.ascent_threshold", expected: (q: -10, r: -115, level: 6)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: -10, r: -115, level: 6)),
+    ClickAnchor(name: "crystal_ascent.bottom_chamber", expected: (q: 6, r: -124, level: 6)),
+    CaptureWhileMoving(prefix: "07-crystal-threshold-chamber-motion", every_frames: 24, capture_count: 12),
+    AwaitPartyIdle(max_frames: 7200),
+    AssertSelectedAt(expected: (q: 6, r: -124, level: 6)),
+    OrbitCamera(yaw_turns: 0.5),
+    ClickAnchor(name: "grand_v3.ascent_threshold", expected: (q: -10, r: -115, level: 6)),
+    CaptureWhileMoving(prefix: "08-crystal-chamber-threshold-motion", every_frames: 24, capture_count: 12),
+    AwaitPartyIdle(max_frames: 7200),
+    AssertSelectedAt(expected: (q: -10, r: -115, level: 6)),
+    OrbitCamera(yaw_turns: -0.5),
+
+    // 9-10. Upper stair corner <-> contraction: catch step undersides, thin
+    // supports, wall clipping, and transient shroud seams at changing heights.
+    ClickAnchor(name: "crystal_ascent.corner_landing", expected: (q: 33, r: -122, level: 134)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 33, r: -122, level: 134)),
+    ClickAnchor(name: "crystal_ascent.upper_contraction", expected: (q: 22, r: -113, level: 138)),
+    CaptureWhileMoving(prefix: "09-crystal-corner-contraction-motion", every_frames: 16, capture_count: 12),
+    AwaitPartyIdle(max_frames: 4800),
+    AssertSelectedAt(expected: (q: 22, r: -113, level: 138)),
+    OrbitCamera(yaw_turns: 0.5),
+    ClickAnchor(name: "crystal_ascent.corner_landing", expected: (q: 33, r: -122, level: 134)),
+    CaptureWhileMoving(prefix: "10-crystal-contraction-corner-motion", every_frames: 16, capture_count: 12),
+    AwaitPartyIdle(max_frames: 4800),
+    AssertSelectedAt(expected: (q: 33, r: -122, level: 134)),
+    OrbitCamera(yaw_turns: -0.5),
+
+    // 11-12. Crystal summit <-> Frozen Woods exit: catch the old side-opening,
+    // snow transition discontinuities, and boundary holes at close range.
+    ClickAnchor(name: "crystal_ascent.upper_exit", expected: (q: 53, r: -148, level: 150)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 18000),
+    AssertSelectedAt(expected: (q: 53, r: -148, level: 150)),
+    ClickAnchor(name: "grand_v3.frozen_exit", expected: (q: 56, r: -151, level: 152)),
+    CaptureWhileMoving(prefix: "11-crystal-frozen-exit-motion", every_frames: 12, capture_count: 4),
+    AwaitPartyIdle(max_frames: 1200),
+    AssertSelectedAt(expected: (q: 56, r: -151, level: 152)),
+    OrbitCamera(yaw_turns: 0.5),
+    ClickAnchor(name: "crystal_ascent.upper_exit", expected: (q: 53, r: -148, level: 150)),
+    CaptureWhileMoving(prefix: "12-frozen-crystal-exit-motion", every_frames: 12, capture_count: 4),
+    AwaitPartyIdle(max_frames: 1200),
+    AssertSelectedAt(expected: (q: 53, r: -148, level: 150)),
+    OrbitCamera(yaw_turns: -0.5),
+
+    Settle(5),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

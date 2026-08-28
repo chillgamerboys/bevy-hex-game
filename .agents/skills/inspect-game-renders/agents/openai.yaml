@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect Game Renders"
+  short_description: "Catch map defects with fresh visual passes"
+  default_prompt: "Use $inspect-game-renders to capture and inspect the latest map-render changes from multiple views."

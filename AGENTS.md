@@ -115,6 +115,15 @@ and hot-file overlap rather than opening one PR per ticket.
   CI-equivalent gate on the combined wave candidate. Run the automated visual walk
   and human runtime route only when the candidate affects presentation or experience;
   a logic-only candidate records the exact-head hook-backed classification instead.
+- Use `$inspect-game-renders` after every materially different map render and before
+  showing or approving changed map presentation. Require a fresh full-footprint frame,
+  changed-region views from multiple camera modes and azimuths, and a motion pass for
+  flicker, popping, translucent/emissive content, or camera collision. A cropped,
+  stale, or mechanically completed but uninspected pack is not visual evidence.
+- Routine screenshot and visual-walk automation must use the repository's windowless
+  render targets so it never opens, activates, or focuses a native game window on the
+  shared workstation. Launch a visible game only when the user explicitly asks to play
+  or agrees to a named live motion review.
 
 ## Code review rules
 

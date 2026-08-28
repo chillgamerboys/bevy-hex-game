@@ -67,6 +67,14 @@ HEX_REVIEW_VIEW=default \
 cargo run --release -p hex_game --features map-review
 ```
 
+Automated captures are deliberately windowless: when `HEX_REVIEW_CAPTURE` (or a
+visual-walk automation request) is present, the app keeps its logical primary window
+for UI layout but replaces Winit with Bevy's schedule runner and renders only to the
+image target. Routine agent review must use this path so it never creates, activates,
+or focuses a native macOS window while someone is using the workstation. Launch a
+visible game only for an explicitly requested play session or approved live motion
+review.
+
 `HEX_REVIEW_VIEW` accepts `default`, `rotated`, `rear`, or `top-down` and requires
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
 `map`, `character`, or `first-person` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
@@ -75,6 +83,8 @@ cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds a
 freezes liquid presentation there; captures default to `0.0`, while launches without a
 capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
 an exact generated anchor before framing and requires a capture.
+`HEX_REVIEW_CHARACTER_RADIUS_SCALE` accepts a finite value in `[1, 20]` for Character
+captures and pulls the review camera back without changing shipped camera settings.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
 while ordinary gameplay keeps every cave roof opaque and collision-active; it also
 requires a capture.
