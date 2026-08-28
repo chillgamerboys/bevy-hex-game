@@ -23,9 +23,9 @@ use hex_assets::{
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, InteriorRegions,
-    MapAnchorId, MapAnchors, MapViewHint, PartyFormation, ResolvedMapSeed, Screen, Sextant,
-    SimSeeds, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
-    UnitId,
+    MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint, PartyFormation, ResolvedMapSeed,
+    Screen, Sextant, SimSeeds, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
+    TraversalBlockers, UnitId,
 };
 use hex_map::{MapSettings, TerrainSettings};
 use hex_units::{
@@ -434,6 +434,7 @@ fn apply_selected_scenario(
     // new settings request prevents a failed generation from reusing old anchors or a
     // stale readiness marker.
     commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<MapObservationAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
     commands.remove_resource::<MapViewHint>();
@@ -787,6 +788,9 @@ pub(crate) mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
+    #[cfg(feature = "test-support")]
+    use std::time::Duration;
+
     use bevy::app::PluginsState;
     use bevy::asset::AssetPlugin;
     use bevy::prelude::*;
@@ -812,24 +816,22 @@ pub(crate) mod tests {
         LightDomain, LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
         PartyMovementMode, PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat,
         ResolvedMapSeed, Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions,
-        SubstanceId, TerrainChunkRoot, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
-        Turn, UnitId,
+        SubstanceId, TerrainChunkRoot, TerrainReady, TerrainRenderBatch, TilePos,
+        TraversalBlockers, TraversalProfile, Turn, UnitId, MAX_TERRAIN_PICK_RUNS_PER_BATCH,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
-        export_world_snapshot_v1, CurrentWorldSnapshotV1, GenerationReport, MapSettings,
-        ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
+        export_world_snapshot_v1, terrain_chunk_key, CurrentWorldSnapshotV1, GenerationReport,
+        MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
     };
     use hex_perception::{
-        can_observe, can_observe_with_authored_objects, resolve_observations_with_authored_objects,
-        FactionMapKnowledge, FactionObservations, LightSourceSnapshot, ObservedUnit,
+        can_observe, can_observe_with_authored_objects, FactionMapKnowledge, FactionObservations,
         ResolvedIllumination, SurfaceSnapshots,
     };
     use hex_units::{
         either_in_reach, plan_formation_move, plan_formation_move_with_occupancy,
         route_with_occupancy, Archetype, AuthoredObjectOccupancy, Body, Downed, Enemy, Faction,
-        Footing, FootingCache, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
-        TerrainRevision, UnitOccupancy,
+        Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy, UnitOccupancy,
     };
     use hex_world::TimeOfDay;
 
@@ -841,7 +843,11 @@ pub(crate) mod tests {
         RunBottom, TerrainEdit, TreeOccluder,
     };
     #[cfg(feature = "test-support")]
-    use hex_units::Standing;
+    use hex_perception::{
+        resolve_observations_with_authored_objects, LightSourceSnapshot, ObservedUnit,
+    };
+    #[cfg(feature = "test-support")]
+    use hex_units::{FootingCache, Standing, TerrainRevision};
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
@@ -850,6 +856,15 @@ pub(crate) mod tests {
         validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
         ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
     };
+
+    #[cfg(feature = "test-support")]
+    mod grand_v3_crystal_contract;
+
+    #[cfg(feature = "test-support")]
+    mod grand_v3_edit_contract;
+
+    #[cfg(feature = "test-support")]
+    mod grand_v3_idle_contract;
 
     fn library() -> ScenarioLibrary {
         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -3024,23 +3039,29 @@ pub(crate) mod tests {
         semantic_plan_fingerprint: Option<u64>,
         map_fingerprint: u64,
         recipe_metrics: Option<ProceduralRecipeMetrics>,
+        reported_reachable_surfaces: u32,
+        reported_reachable_elevation_levels: u32,
         columns: usize,
         material_runs: usize,
         resident_chunks: usize,
         grid_entities: usize,
         tile_entities: usize,
+        terrain_render_batches: usize,
+        terrain_batched_runs: usize,
+        maximum_terrain_batch_runs: usize,
+        maximum_resident_chunk_columns: usize,
         total_entities: usize,
         object_instances: usize,
         gameplay_lights: usize,
         point_lights: usize,
         #[cfg_attr(
             not(feature = "test-support"),
-            expect(dead_code, reason = "the extended proxy probe is feature-gated")
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
         )]
         snapshot_export_elapsed: std::time::Duration,
         #[cfg_attr(
             not(feature = "test-support"),
-            expect(dead_code, reason = "the extended proxy probe is feature-gated")
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
         )]
         snapshot_encode_elapsed: std::time::Duration,
         snapshot_encoded_bytes: usize,
@@ -3070,12 +3091,12 @@ pub(crate) mod tests {
         setup_elapsed: std::time::Duration,
         #[cfg_attr(
             not(feature = "test-support"),
-            expect(dead_code, reason = "the extended proxy probe is feature-gated")
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
         )]
         reentry_setup_elapsed: std::time::Duration,
         #[cfg_attr(
             not(feature = "test-support"),
-            expect(dead_code, reason = "the extended proxy probe is feature-gated")
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
         )]
         reentry_generation_and_materialization_micros: u64,
         runtime: RuntimeWorldObservation,
@@ -3083,7 +3104,7 @@ pub(crate) mod tests {
 
     #[cfg(feature = "test-support")]
     #[derive(Debug)]
-    struct TraversalProxyProbe {
+    struct TraversalRuntimeProbe {
         party_unit: UnitId,
         party_start: TilePos,
         footing_build_elapsed: std::time::Duration,
@@ -3095,6 +3116,8 @@ pub(crate) mod tests {
         reach_worst: std::time::Duration,
         reachable_surfaces: usize,
         reachable_special_surfaces: usize,
+        reachable_ordinary_surfaces: usize,
+        reachable_ordinary_elevation_levels: usize,
         path_target: TilePos,
         path_cost: u32,
         path_warmup_samples: usize,
@@ -3105,8 +3128,12 @@ pub(crate) mod tests {
 
     #[cfg(feature = "test-support")]
     #[derive(Debug)]
-    struct EditProxyProbe {
+    struct EditRuntimeProbe {
         edit_target: TilePos,
+        edit_chunk: (i32, i32),
+        edit_chunk_columns: usize,
+        edit_chunk_runs: usize,
+        original_run_levels: i32,
         edit_warmup_updates: usize,
         edit_samples: usize,
         edit_total_updates: usize,
@@ -3120,9 +3147,32 @@ pub(crate) mod tests {
         edit_knowledge_publications: u64,
     }
 
+    #[derive(Debug)]
+    struct TerrainRuntimeTopology {
+        resident_chunks: usize,
+        grid_entities: usize,
+        tile_entities: usize,
+        terrain_render_batches: usize,
+        terrain_batched_runs: usize,
+        maximum_terrain_batch_runs: usize,
+        maximum_resident_chunk_columns: usize,
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug, Clone, Copy)]
+    struct CheckpointEditTarget {
+        position: TilePos,
+        original: SubstanceId,
+        chunk: (i32, i32),
+        chunk_columns: usize,
+        chunk_runs: usize,
+        original_run_levels: i32,
+        baseline_column_runs: usize,
+    }
+
     #[cfg(feature = "test-support")]
     #[derive(Debug)]
-    struct PerceptionProxyProbe {
+    struct PerceptionRuntimeProbe {
         warmup_samples: usize,
         samples: usize,
         p95: std::time::Duration,
@@ -3133,11 +3183,203 @@ pub(crate) mod tests {
 
     #[cfg(feature = "test-support")]
     #[derive(Debug)]
-    struct RuntimeProxyProbes {
-        traversal: TraversalProxyProbe,
-        perception: PerceptionProxyProbe,
+    struct RuntimeGateProbes {
+        traversal: TraversalRuntimeProbe,
+        perception: PerceptionRuntimeProbe,
         camera: hex_world::camera::test_support::CharacterCollisionProfile,
-        edit: EditProxyProbe,
+        edit: EditRuntimeProbe,
+    }
+
+    /// Validates the complete headless terrain-presentation projection while it is live.
+    ///
+    /// Raw material runs and logical presentation runs are deliberately different
+    /// quantities: cutaway ownership may split one raw run into multiple logical
+    /// [`HexTile`] entities. The combined render batches must nevertheless cover every
+    /// logical entity exactly once, under the same chunk and substance authority.
+    fn observe_terrain_runtime_topology(
+        app: &mut App,
+        scenario_name: &'static str,
+    ) -> TerrainRuntimeTopology {
+        const MAX_CHUNK_COLUMNS: usize = 16 * 16;
+
+        let expected_chunk_columns = {
+            let map = app.world().resource::<VoxelMap>();
+            let mut by_chunk = BTreeMap::<(i32, i32), usize>::new();
+            for (coord, _column) in map.columns() {
+                *by_chunk.entry(terrain_chunk_key(coord)).or_default() += 1;
+            }
+            by_chunk
+        };
+        let maximum_resident_chunk_columns = expected_chunk_columns
+            .values()
+            .copied()
+            .max()
+            .unwrap_or_default();
+        assert!(
+            maximum_resident_chunk_columns <= MAX_CHUNK_COLUMNS,
+            "{scenario_name} resident chunk exceeded the fixed {MAX_CHUNK_COLUMNS}-column slot bound: \
+             {maximum_resident_chunk_columns}"
+        );
+
+        let world = app.world_mut();
+        let grid_entities = world
+            .query_filtered::<Entity, With<HexGrid>>()
+            .iter(world)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            grid_entities.len(),
+            1,
+            "{scenario_name} must publish exactly one HexGrid before TerrainReady"
+        );
+        let grid = grid_entities
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("{scenario_name} did not publish its sole HexGrid"));
+
+        let mut roots = BTreeMap::<(i32, i32), Entity>::new();
+        let mut root_query = world.query::<(Entity, &TerrainChunkRoot, Option<&ChildOf>)>();
+        for (entity, root, parent) in root_query.iter(world) {
+            let key = (root.q, root.r);
+            let parent = parent
+                .unwrap_or_else(|| panic!("{scenario_name} terrain chunk {key:?} is orphaned"));
+            assert_eq!(
+                parent.parent(),
+                grid,
+                "{scenario_name} terrain chunk {key:?} is not parented to the sole HexGrid"
+            );
+            assert!(
+                expected_chunk_columns.contains_key(&key),
+                "{scenario_name} published unexpected terrain chunk {key:?}"
+            );
+            assert!(
+                roots.insert(key, entity).is_none(),
+                "{scenario_name} published duplicate terrain chunk {key:?}"
+            );
+        }
+        let expected_keys = expected_chunk_columns.keys().copied().collect::<Vec<_>>();
+        let actual_keys = roots.keys().copied().collect::<Vec<_>>();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "{scenario_name} terrain chunk roots do not exactly cover VoxelMap storage"
+        );
+
+        let mut logical_tiles = BTreeMap::<Entity, (TilePos, HexSpan, SubstanceId, Entity)>::new();
+        let mut tile_query = world.query_filtered::<
+            (Entity, &TilePos, &HexSpan, &SubstanceId, Option<&ChildOf>),
+            With<HexTile>,
+        >();
+        for (entity, position, span, substance, parent) in tile_query.iter(world) {
+            let key = terrain_chunk_key(position.coord);
+            let expected_parent = *roots.get(&key).unwrap_or_else(|| {
+                panic!(
+                    "{scenario_name} logical terrain run {entity:?} belongs to absent chunk {key:?}"
+                )
+            });
+            let parent = parent.unwrap_or_else(|| {
+                panic!("{scenario_name} logical terrain run {entity:?} is orphaned")
+            });
+            assert_eq!(
+                parent.parent(),
+                expected_parent,
+                "{scenario_name} logical terrain run {entity:?} has the wrong chunk parent"
+            );
+            assert!(
+                logical_tiles
+                    .insert(entity, (*position, *span, *substance, parent.parent()))
+                    .is_none(),
+                "{scenario_name} observed duplicate logical terrain entity {entity:?}"
+            );
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut terrain_render_batches = 0_usize;
+        let mut terrain_batched_runs = 0_usize;
+        let mut maximum_terrain_batch_runs = 0_usize;
+        let mut batch_query = world.query::<(Entity, &TerrainRenderBatch, Option<&ChildOf>)>();
+        for (batch_entity, batch, parent) in batch_query.iter(world) {
+            terrain_render_batches = terrain_render_batches.saturating_add(1);
+            let batch_key = (batch.chunk().q, batch.chunk().r);
+            let expected_parent = *roots.get(&batch_key).unwrap_or_else(|| {
+                panic!(
+                    "{scenario_name} terrain batch {batch_entity:?} belongs to absent chunk \
+                     {batch_key:?}"
+                )
+            });
+            let parent = parent.unwrap_or_else(|| {
+                panic!("{scenario_name} terrain batch {batch_entity:?} is orphaned")
+            });
+            assert_eq!(
+                parent.parent(),
+                expected_parent,
+                "{scenario_name} terrain batch {batch_entity:?} has the wrong chunk parent"
+            );
+
+            let batch_runs = batch.runs().len();
+            assert!(
+                (1..=MAX_TERRAIN_PICK_RUNS_PER_BATCH).contains(&batch_runs),
+                "{scenario_name} terrain batch {batch_entity:?} has invalid run count {batch_runs}"
+            );
+            terrain_batched_runs = terrain_batched_runs.saturating_add(batch_runs);
+            maximum_terrain_batch_runs = maximum_terrain_batch_runs.max(batch_runs);
+            for run in batch.runs() {
+                let Some((position, span, substance, logical_parent)) =
+                    logical_tiles.get(&run.entity())
+                else {
+                    panic!(
+                        "{scenario_name} terrain batch {batch_entity:?} references unknown logical \
+                         run {:?}",
+                        run.entity()
+                    );
+                };
+                assert_eq!(
+                    run.position(),
+                    *position,
+                    "{scenario_name} batch position drifted from logical run {:?}",
+                    run.entity()
+                );
+                assert_eq!(
+                    run.span(),
+                    *span,
+                    "{scenario_name} batch span drifted from logical run {:?}",
+                    run.entity()
+                );
+                assert_eq!(
+                    batch.substance(),
+                    *substance,
+                    "{scenario_name} batch substance drifted from logical run {:?}",
+                    run.entity()
+                );
+                assert_eq!(
+                    *logical_parent,
+                    expected_parent,
+                    "{scenario_name} batch crossed chunk ownership for logical run {:?}",
+                    run.entity()
+                );
+                assert!(
+                    seen.insert(run.entity()),
+                    "{scenario_name} logical terrain run {:?} appears in multiple render batches",
+                    run.entity()
+                );
+            }
+        }
+        if let Some(missing) = logical_tiles.keys().find(|entity| !seen.contains(entity)) {
+            panic!("{scenario_name} logical terrain run {missing:?} is absent from render batches");
+        }
+        assert_eq!(
+            terrain_batched_runs,
+            logical_tiles.len(),
+            "{scenario_name} render-batch coverage must equal logical terrain cardinality"
+        );
+
+        TerrainRuntimeTopology {
+            resident_chunks: roots.len(),
+            grid_entities: grid_entities.len(),
+            tile_entities: logical_tiles.len(),
+            terrain_render_batches,
+            terrain_batched_runs,
+            maximum_terrain_batch_runs,
+            maximum_resident_chunk_columns,
+        }
     }
 
     fn observe_runtime_world(
@@ -3154,35 +3396,17 @@ pub(crate) mod tests {
                     .sum::<usize>(),
             )
         };
-        let (
-            grid_entities,
-            resident_chunks,
-            tile_entities,
-            total_entities,
-            object_instances,
-            gameplay_lights,
-            point_lights,
-        ) = {
+        let terrain = observe_terrain_runtime_topology(app, scenario_name);
+        assert!(
+            material_runs <= terrain.tile_entities,
+            "{scenario_name} raw material runs cannot exceed cutaway-aware logical runs"
+        );
+        let (total_entities, object_instances, gameplay_lights, point_lights) = {
             let world = app.world_mut();
-            let grid_entities = world
-                .query_filtered::<Entity, With<HexGrid>>()
-                .iter(world)
-                .count();
-            let resident_chunks = world
-                .query_filtered::<Entity, With<TerrainChunkRoot>>()
-                .iter(world)
-                .count();
-            let tile_entities = world
-                .query_filtered::<Entity, With<HexTile>>()
-                .iter(world)
-                .count();
             let object_instances = world.query::<&ObjectInstance>().iter(world).count();
             let gameplay_lights = world.query::<&GameplayLight>().iter(world).count();
             let point_lights = world.query::<&PointLight>().iter(world).count();
             (
-                grid_entities,
-                resident_chunks,
-                tile_entities,
                 world.iter_entities().count(),
                 object_instances,
                 gameplay_lights,
@@ -3211,7 +3435,38 @@ pub(crate) mod tests {
             .unwrap_or_else(|error| panic!("{scenario_name} snapshot should encode: {error}"));
         let snapshot_encode_elapsed = snapshot_encode_started.elapsed();
 
-        let surface_snapshots = app.world().resource::<SurfaceSnapshots>().len();
+        let surface_snapshots = {
+            let surfaces = app.world().resource::<SurfaceSnapshots>();
+            let biomes = app.world().resource::<BiomeRegions>();
+            if let Some((position, _snapshot)) = surfaces
+                .iter()
+                .find(|(position, snapshot)| snapshot.is_solid && biomes.get(*position).is_none())
+            {
+                panic!(
+                    "{scenario_name} exposed solid gameplay surface {position:?} has no exact biome projection"
+                );
+            }
+            let map = app.world().resource::<VoxelMap>();
+            let table = app.world().resource::<SubstanceTable>();
+            if let Some((position, substance, headroom)) =
+                biomes.iter().find_map(|(position, _region)| {
+                    let substance = map.get(position);
+                    let headroom = map
+                        .column(position.coord)
+                        .map(|column| column.headroom_above(position.level))
+                        .unwrap_or_default();
+                    (!table.is_solid(substance)
+                        || (surfaces.get(position).is_none() && headroom.0 > 0))
+                        .then_some((position, substance, headroom))
+                })
+            {
+                panic!(
+                    "{scenario_name} biome surface {position:?} has substance {substance:?}, \
+                     headroom {headroom:?}, and no valid solid-surface projection"
+                );
+            }
+            surfaces.len()
+        };
         let illumination_surfaces = app.world().resource::<ResolvedIllumination>().len();
         let player_observed_surfaces = app
             .world()
@@ -3235,11 +3490,17 @@ pub(crate) mod tests {
             semantic_plan_fingerprint: report.semantic_plan_fingerprint,
             map_fingerprint: report.map_fingerprint,
             recipe_metrics: report.recipe_metrics,
+            reported_reachable_surfaces: report.metrics.reachable_surfaces,
+            reported_reachable_elevation_levels: report.metrics.reachable_elevation_levels,
             columns,
             material_runs,
-            resident_chunks,
-            grid_entities,
-            tile_entities,
+            resident_chunks: terrain.resident_chunks,
+            grid_entities: terrain.grid_entities,
+            tile_entities: terrain.tile_entities,
+            terrain_render_batches: terrain.terrain_render_batches,
+            terrain_batched_runs: terrain.terrain_batched_runs,
+            maximum_terrain_batch_runs: terrain.maximum_terrain_batch_runs,
+            maximum_resident_chunk_columns: terrain.maximum_resident_chunk_columns,
             total_entities,
             object_instances,
             gameplay_lights,
@@ -3297,7 +3558,7 @@ pub(crate) mod tests {
     fn checkpoint_traversal_probe(
         app: &mut App,
         scenario_name: &'static str,
-    ) -> TraversalProxyProbe {
+    ) -> TraversalRuntimeProbe {
         const REACH_SAMPLES: usize = 20;
         const PATH_SAMPLES: usize = 20;
 
@@ -3371,10 +3632,23 @@ pub(crate) mod tests {
         assert_eq!(measured_reach.cost(party_start.pos), Some(0));
         let reachable_surfaces = measured_reach.surfaces().count();
         let special = app.world().resource::<SpecialMovementRegions>();
-        let reachable_special_surfaces = measured_reach
-            .surfaces()
-            .filter(|standing| special.get(standing.pos).is_some())
-            .count();
+        let mut reachable_special_surfaces = 0_usize;
+        let mut reachable_ordinary_surfaces = 0_usize;
+        let mut reachable_ordinary_elevations = BTreeSet::new();
+        for standing in measured_reach.surfaces() {
+            if special.get(standing.pos).is_some() {
+                reachable_special_surfaces = reachable_special_surfaces.saturating_add(1);
+            } else {
+                reachable_ordinary_surfaces = reachable_ordinary_surfaces.saturating_add(1);
+                reachable_ordinary_elevations.insert(standing.pos.level);
+            }
+        }
+        assert_eq!(
+            reachable_surfaces,
+            reachable_ordinary_surfaces.saturating_add(reachable_special_surfaces),
+            "{scenario_name} Reach surface partition is incomplete"
+        );
+        let reachable_ordinary_elevation_levels = reachable_ordinary_elevations.len();
         let path_target = measured_reach
             .surfaces()
             .max_by_key(|standing| {
@@ -3420,7 +3694,7 @@ pub(crate) mod tests {
         }
         let (path_p95, path_worst) = checkpoint_p95_and_worst(&mut path_timings);
 
-        TraversalProxyProbe {
+        TraversalRuntimeProbe {
             party_unit,
             party_start: party_start.pos,
             footing_build_elapsed,
@@ -3432,6 +3706,8 @@ pub(crate) mod tests {
             reach_worst,
             reachable_surfaces,
             reachable_special_surfaces,
+            reachable_ordinary_surfaces,
+            reachable_ordinary_elevation_levels,
             path_target: path_target.pos,
             path_cost,
             path_warmup_samples: 1,
@@ -3445,7 +3721,7 @@ pub(crate) mod tests {
     fn checkpoint_perception_probe(
         app: &mut App,
         scenario_name: &'static str,
-    ) -> PerceptionProxyProbe {
+    ) -> PerceptionRuntimeProbe {
         const SAMPLES: usize = 20;
 
         let illumination = app.world().resource::<ResolvedIllumination>().clone();
@@ -3528,7 +3804,7 @@ pub(crate) mod tests {
         }
         let (p95, worst) = checkpoint_p95_and_worst(&mut timings);
         let measured = measured.expect("the checkpoint records perception samples");
-        PerceptionProxyProbe {
+        PerceptionRuntimeProbe {
             warmup_samples: 1,
             samples: timings.len(),
             p95,
@@ -3572,19 +3848,32 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn checkpoint_edit_target(
-        app: &mut App,
-        scenario_name: &'static str,
-    ) -> (TilePos, SubstanceId) {
+    fn checkpoint_edit_target(app: &mut App, scenario_name: &'static str) -> CheckpointEditTarget {
         let table = app.world().resource::<SubstanceTable>().clone();
         let blockers = app.world().resource::<TraversalBlockers>().clone();
         let special = app.world().resource::<SpecialMovementRegions>().clone();
-        let top_voxels = app
-            .world()
-            .resource::<VoxelMap>()
-            .columns()
-            .filter_map(|(coord, column)| column.surface().map(|level| TilePos::new(coord, level)))
-            .collect::<BTreeSet<_>>();
+        let (top_voxels, chunk_columns, chunk_runs) = {
+            let map = app.world().resource::<VoxelMap>();
+            let mut top_voxels = BTreeMap::<TilePos, (i32, usize)>::new();
+            let mut chunk_columns = BTreeMap::<(i32, i32), usize>::new();
+            let mut chunk_runs = BTreeMap::<(i32, i32), usize>::new();
+            for (coord, column) in map.columns() {
+                let chunk = terrain_chunk_key(coord);
+                *chunk_columns.entry(chunk).or_default() += 1;
+                let runs = hex_map::runs(column);
+                *chunk_runs.entry(chunk).or_default() += runs.len();
+                let Some(surface) = column.surface() else {
+                    continue;
+                };
+                let Some(top_run) = runs.last().copied() else {
+                    continue;
+                };
+                if top_run.top - 1 == surface && top_run.levels() >= 1 {
+                    top_voxels.insert(TilePos::new(coord, surface), (top_run.levels(), runs.len()));
+                }
+            }
+            (top_voxels, chunk_columns, chunk_runs)
+        };
         let mut excluded_coords = BTreeSet::new();
         {
             let snapshot = app.world().resource::<CurrentWorldSnapshotV1>().snapshot();
@@ -3687,9 +3976,9 @@ pub(crate) mod tests {
                 .collect::<BTreeSet<_>>()
         };
         // The localized rebuild probe deliberately avoids stacked semantic columns.
-        // Removing and replacing the upper surface of one of those columns can
-        // legitimately transfer its biome identity to the newly exposed lower run;
-        // that is a different contract from restoring one ordinary dry voxel exactly.
+        // Replacing a dry diggable cap keeps the exposed surface fixed. The exact raw-run
+        // projection depends on the material directly below it, while restoring the cap
+        // must always recover the exact baseline snapshot.
         let single_biome_coords = {
             let mut counts = BTreeMap::<HexCoord, usize>::new();
             for (position, _region) in app.world().resource::<BiomeRegions>().iter() {
@@ -3707,8 +3996,10 @@ pub(crate) mod tests {
             tiles
                 .iter(world)
                 .filter_map(|(position, substance, headroom)| {
+                    let (original_run_levels, baseline_column_runs) =
+                        top_voxels.get(position).copied()?;
+                    let chunk = terrain_chunk_key(position.coord);
                     (headroom.0 > 0
-                        && top_voxels.contains(position)
                         && table.is_solid(*substance)
                         && table.is_diggable(*substance)
                         && !actor_positions.contains(position)
@@ -3716,13 +4007,27 @@ pub(crate) mod tests {
                         && single_biome_coords.contains(&position.coord)
                         && !blockers.contains(*position)
                         && special.get(*position).is_none())
-                    .then_some((*position, *substance))
+                    .then(|| CheckpointEditTarget {
+                        position: *position,
+                        original: *substance,
+                        chunk,
+                        chunk_columns: chunk_columns.get(&chunk).copied().unwrap_or_default(),
+                        chunk_runs: chunk_runs.get(&chunk).copied().unwrap_or_default(),
+                        original_run_levels,
+                        baseline_column_runs,
+                    })
                 })
                 .collect::<Vec<_>>()
         };
-        candidates.sort_unstable_by_key(|(position, _)| *position);
+        candidates.sort_unstable_by(|left, right| {
+            right
+                .chunk_runs
+                .cmp(&left.chunk_runs)
+                .then_with(|| right.chunk_columns.cmp(&left.chunk_columns))
+                .then_with(|| left.position.cmp(&right.position))
+        });
         candidates.into_iter().next().unwrap_or_else(|| {
-            panic!("{scenario_name} should expose a dry diggable top-voxel edit target")
+            panic!("{scenario_name} should expose a dry diggable cap in a dense chunk")
         })
     }
 
@@ -3737,12 +4042,14 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn checkpoint_edit_probe(app: &mut App, scenario_name: &'static str) -> EditProxyProbe {
+    fn checkpoint_edit_probe(app: &mut App, scenario_name: &'static str) -> EditRuntimeProbe {
         const WARMUP_EDITS: usize = 4;
         const MEASURED_EDITS: usize = 20;
         const TOTAL_EDITS: usize = WARMUP_EDITS + MEASURED_EDITS;
 
-        let (edit_target, original) = checkpoint_edit_target(app, scenario_name);
+        let target = checkpoint_edit_target(app, scenario_name);
+        let edit_target = target.position;
+        let original = target.original;
         let replacement = ["dirt", "stone", "gravel", "grass"]
             .into_iter()
             .filter_map(|name| app.world().resource::<SubstanceTable>().id(name))
@@ -3760,6 +4067,16 @@ pub(crate) mod tests {
             .unwrap_or_else(|| {
                 panic!("{scenario_name} needs a second solid diggable checkpoint substance")
             });
+        let mutated_column_runs = {
+            let mut column = app
+                .world()
+                .resource::<VoxelMap>()
+                .column(edit_target.coord)
+                .expect("the edit target column remains resident")
+                .clone();
+            column.set(edit_target.level, replacement);
+            hex_map::runs(&column).len()
+        };
         let baseline_snapshot = app
             .world()
             .resource::<CurrentWorldSnapshotV1>()
@@ -3796,6 +4113,22 @@ pub(crate) mod tests {
                 app.world().resource::<VoxelMap>().get(edit_target),
                 expected,
                 "{scenario_name} edit {edit_index} did not settle in one update"
+            );
+            let current_column_runs = hex_map::runs(
+                app.world()
+                    .resource::<VoxelMap>()
+                    .column(edit_target.coord)
+                    .expect("the edit target column remains resident"),
+            )
+            .len();
+            let expected_column_runs = if mutate {
+                mutated_column_runs
+            } else {
+                target.baseline_column_runs
+            };
+            assert_eq!(
+                current_column_runs, expected_column_runs,
+                "{scenario_name} edit {edit_index} must match the exact predicted raw-run projection"
             );
             let roots_after = checkpoint_chunk_roots(app);
             assert!(
@@ -3901,8 +4234,12 @@ pub(crate) mod tests {
         assert_eq!(edit_observation_resolutions, total_edits);
         assert_eq!(edit_knowledge_publications, total_edits);
 
-        EditProxyProbe {
+        EditRuntimeProbe {
             edit_target,
+            edit_chunk: target.chunk,
+            edit_chunk_columns: target.chunk_columns,
+            edit_chunk_runs: target.chunk_runs,
+            original_run_levels: target.original_run_levels,
             edit_warmup_updates: WARMUP_EDITS,
             edit_samples: edit_timings.len(),
             edit_total_updates: TOTAL_EDITS,
@@ -3918,11 +4255,11 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn observe_runtime_proxy_probes(
+    fn observe_runtime_gate_probes(
         app: &mut App,
         scenario_name: &'static str,
         runtime: &RuntimeWorldObservation,
-    ) -> RuntimeProxyProbes {
+    ) -> RuntimeGateProbes {
         let traversal = checkpoint_traversal_probe(app, scenario_name);
         let perception = checkpoint_perception_probe(app, scenario_name);
         let camera = checkpoint_camera_probe(app, scenario_name);
@@ -3931,7 +4268,7 @@ pub(crate) mod tests {
         assert_eq!(camera.queries, 10_000, "{scenario_name}");
         assert_ne!(camera.result_checksum, 0, "{scenario_name}");
         let edit = checkpoint_edit_probe(app, scenario_name);
-        RuntimeProxyProbes {
+        RuntimeGateProbes {
             traversal,
             perception,
             camera,
@@ -3953,11 +4290,32 @@ pub(crate) mod tests {
         );
         assert_eq!(rebuilt.map_fingerprint, initial.map_fingerprint);
         assert_eq!(rebuilt.recipe_metrics, initial.recipe_metrics);
+        assert_eq!(
+            rebuilt.reported_reachable_surfaces,
+            initial.reported_reachable_surfaces
+        );
+        assert_eq!(
+            rebuilt.reported_reachable_elevation_levels,
+            initial.reported_reachable_elevation_levels
+        );
         assert_eq!(rebuilt.columns, initial.columns);
         assert_eq!(rebuilt.material_runs, initial.material_runs);
         assert_eq!(rebuilt.resident_chunks, initial.resident_chunks);
         assert_eq!(rebuilt.grid_entities, initial.grid_entities);
         assert_eq!(rebuilt.tile_entities, initial.tile_entities);
+        assert_eq!(
+            rebuilt.terrain_render_batches,
+            initial.terrain_render_batches
+        );
+        assert_eq!(rebuilt.terrain_batched_runs, initial.terrain_batched_runs);
+        assert_eq!(
+            rebuilt.maximum_terrain_batch_runs,
+            initial.maximum_terrain_batch_runs
+        );
+        assert_eq!(
+            rebuilt.maximum_resident_chunk_columns,
+            initial.maximum_resident_chunk_columns
+        );
         // The complete app world also contains session/service entities whose lifetime
         // intentionally spans screen transitions. Map-owned entity categories above must
         // rebuild exactly; record the whole-world count for capacity analysis without
@@ -4085,7 +4443,7 @@ pub(crate) mod tests {
             !app.world().contains_resource::<AuthoredObjectOccupancy>(),
             "{scenario_name}"
         );
-        let (grids, chunks, tiles, objects, gameplay_lights, point_lights) = {
+        let (grids, chunks, tiles, render_batches, objects, gameplay_lights, point_lights) = {
             let world = app.world_mut();
             let grids = world
                 .query_filtered::<Entity, With<HexGrid>>()
@@ -4099,14 +4457,34 @@ pub(crate) mod tests {
                 .query_filtered::<Entity, With<HexTile>>()
                 .iter(world)
                 .count();
+            let render_batches = world
+                .query_filtered::<Entity, With<TerrainRenderBatch>>()
+                .iter(world)
+                .count();
             let objects = world.query::<&ObjectInstance>().iter(world).count();
             let gameplay_lights = world.query::<&GameplayLight>().iter(world).count();
             let point_lights = world.query::<&PointLight>().iter(world).count();
-            (grids, chunks, tiles, objects, gameplay_lights, point_lights)
+            (
+                grids,
+                chunks,
+                tiles,
+                render_batches,
+                objects,
+                gameplay_lights,
+                point_lights,
+            )
         };
         assert_eq!(
-            (grids, chunks, tiles, objects, gameplay_lights, point_lights),
-            (0, 0, 0, 0, 0, 0),
+            (
+                grids,
+                chunks,
+                tiles,
+                render_batches,
+                objects,
+                gameplay_lights,
+                point_lights,
+            ),
+            (0, 0, 0, 0, 0, 0, 0),
             "{scenario_name} left map presentation entities after teardown"
         );
     }
@@ -4167,19 +4545,33 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn print_large_world_checkpoint(profile: &MacroRuntimeProfile, probes: &RuntimeProxyProbes) {
+    fn print_large_world_headless_checkpoint(
+        profile: &MacroRuntimeProfile,
+        probes: &RuntimeGateProbes,
+    ) {
         let runtime = &profile.runtime;
         let traversal = &probes.traversal;
         let perception = &probes.perception;
         let camera = probes.camera;
         let edit = &probes.edit;
+        let ordinary_route_validation = if matches!(
+            runtime.recipe_metrics.as_ref(),
+            Some(ProceduralRecipeMetrics::GrandV3(_))
+        ) {
+            "compiler_validated_runtime_projection_matched"
+        } else {
+            "not_part_of_grand_v3_assertion"
+        };
         eprintln!(
-            "LARGE_WORLD_CHECKPOINT scenario={:?} generator_version={} seed={} \
+            "LARGE_WORLD_HEADLESS_CHECKPOINT harness=headless_minimal_plugins \
+             full_app_capture_rss_evidence=separate scenario={:?} generator_version={} seed={} \
              setup_ns={} reentry_setup_ns={} v3_build_us={} reentry_v3_build_us={} \
              settings_fingerprint={} semantic_plan_fingerprint={:?} map_fingerprint={} \
              columns={} material_runs={} resident_chunks={} grid_entities={} \
-             tile_entities={} total_entities={} object_instances={} gameplay_lights={} \
-             point_lights={} snapshot_export_ns={} snapshot_encode_ns={} \
+             tile_entities={} terrain_render_batches={} terrain_batched_runs={} \
+             maximum_terrain_batch_runs={} maximum_resident_chunk_columns={} total_entities={} \
+             object_instances={} gameplay_lights={} point_lights={} \
+             snapshot_export_ns={} snapshot_encode_ns={} \
              snapshot_encoded_bytes={} snapshot_fingerprint={} snapshot_columns={} \
              snapshot_runs={} snapshot_damage={} snapshot_anchors={} \
              snapshot_interior_surfaces={} snapshot_interior_roofs={} \
@@ -4189,23 +4581,27 @@ pub(crate) mod tests {
              player_known_surfaces={} perception_frames_checked={} \
              perception_surface_rebuilds={} perception_illumination_resolutions={} \
              perception_observation_resolutions={} perception_knowledge_publications={} \
-             traversal_semantics=production_footing ordinary_route_validated=false \
+             traversal_scope=party_reach_and_farthest_path ordinary_route_validation={} \
+             reported_reachable_surfaces={} reported_reachable_elevation_levels={} \
              party_unit={} party_start_q={} party_start_r={} party_start_level={} \
              footing_build_ns={} footing_cache_hit_ns={} footing_cache_builds={} \
              reach_warmup_samples={} reach_samples={} \
              reach_p95_ns={} reach_worst_ns={} \
              reachable_surfaces={} reachable_special_surfaces={} \
+             reachable_ordinary_surfaces={} reachable_ordinary_elevation_levels={} \
              path_target_q={} path_target_r={} path_target_level={} path_cost={} \
              path_warmup_samples={} path_samples={} path_p95_ns={} path_worst_ns={} \
              perception_solver_warmup_samples={} perception_solver_samples={} \
              perception_solver_p95_ns={} perception_solver_worst_ns={} \
              perception_solver_player_surfaces={} perception_solver_hostile_surfaces={} \
-             camera_projection=full_public camera_columns={} camera_spans={} \
+             camera_projection=isolated_full_public_helper camera_columns={} camera_spans={} \
              camera_supports={} camera_queries={} camera_index_build_ns={} \
              camera_index_rebuild_p95_ns={} camera_index_rebuild_worst_ns={} \
              camera_query_p95_ns={} camera_query_worst_ns={} camera_checksum={} \
-             edit_timing_scope=end_to_end_update_including_perception edit_target_q={} \
-             edit_target_r={} edit_target_level={} edit_warmup_updates={} edit_samples={} \
+             edit_timing_scope=headless_map_perception_update edit_mutation=top_run_split_restore \
+             edit_chunk_q={} edit_chunk_r={} edit_chunk_columns={} edit_chunk_runs={} \
+             edit_original_run_levels={} edit_target_q={} edit_target_r={} edit_target_level={} \
+             edit_warmup_updates={} edit_samples={} \
              edit_total_updates={} edit_p95_ns={} edit_worst_ns={} \
              edit_chunk_roots_replaced_per_update={} \
              edit_frames_checked={} edit_surface_rebuilds={} \
@@ -4226,6 +4622,10 @@ pub(crate) mod tests {
             runtime.resident_chunks,
             runtime.grid_entities,
             runtime.tile_entities,
+            runtime.terrain_render_batches,
+            runtime.terrain_batched_runs,
+            runtime.maximum_terrain_batch_runs,
+            runtime.maximum_resident_chunk_columns,
             runtime.total_entities,
             runtime.object_instances,
             runtime.gameplay_lights,
@@ -4255,6 +4655,9 @@ pub(crate) mod tests {
             runtime.perception.illumination_resolutions,
             runtime.perception.observation_resolutions,
             runtime.perception.knowledge_publications,
+            ordinary_route_validation,
+            runtime.reported_reachable_surfaces,
+            runtime.reported_reachable_elevation_levels,
             traversal.party_unit.0,
             traversal.party_start.coord.x(),
             traversal.party_start.coord.y(),
@@ -4268,6 +4671,8 @@ pub(crate) mod tests {
             traversal.reach_worst.as_nanos(),
             traversal.reachable_surfaces,
             traversal.reachable_special_surfaces,
+            traversal.reachable_ordinary_surfaces,
+            traversal.reachable_ordinary_elevation_levels,
             traversal.path_target.coord.x(),
             traversal.path_target.coord.y(),
             traversal.path_target.level,
@@ -4292,6 +4697,11 @@ pub(crate) mod tests {
             camera.query_p95.as_nanos(),
             camera.query_worst.as_nanos(),
             camera.result_checksum,
+            edit.edit_chunk.0,
+            edit.edit_chunk.1,
+            edit.edit_chunk_columns,
+            edit.edit_chunk_runs,
+            edit.original_run_levels,
             edit.edit_target.coord.x(),
             edit.edit_target.coord.y(),
             edit.edit_target.level,
@@ -4349,13 +4759,18 @@ pub(crate) mod tests {
             assert!(runtime.generation_and_materialization_micros > 0);
             assert!(runtime.material_runs >= runtime.columns);
             assert!(runtime.tile_entities >= runtime.material_runs);
+            assert!(runtime.terrain_render_batches > 0);
+            assert_eq!(runtime.terrain_batched_runs, runtime.tile_entities);
+            assert!(runtime.maximum_terrain_batch_runs <= MAX_TERRAIN_PICK_RUNS_PER_BATCH);
+            assert!(runtime.maximum_resident_chunk_columns <= 16 * 16);
             assert!(runtime.total_entities >= runtime.tile_entities);
             assert!(runtime.illumination_surfaces > 0);
             assert!((1..=2).contains(&runtime.perception.illumination_resolutions));
             assert!((1..=2).contains(&runtime.perception.observation_resolutions));
             eprintln!(
                 "MACRO_RUNTIME scenario={:?} setup={:?} generation_and_materialization_us={} \
-                 columns={} material_runs={} tile_entities={} total_entities={} \
+                 columns={} material_runs={} tile_entities={} terrain_render_batches={} \
+                 total_entities={} \
                  object_instances={} point_lights={} illumination_surfaces={} \
                  illumination_resolutions={} observation_resolutions={}",
                 profile.scenario_name,
@@ -4364,6 +4779,7 @@ pub(crate) mod tests {
                 runtime.columns,
                 runtime.material_runs,
                 runtime.tile_entities,
+                runtime.terrain_render_batches,
                 runtime.total_entities,
                 runtime.object_instances,
                 runtime.point_lights,
@@ -4376,23 +4792,40 @@ pub(crate) mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    #[ignore = "manual release-mode Grand V3 proxy/Crystal Mountain runtime checkpoint"]
-    fn grand_v3_proxy_checkpoint_compares_to_crystal_mountain() {
+    #[ignore = "manual release-mode headless Grand V3 performance gate and Crystal Mountain comparison"]
+    fn grand_v3_headless_runtime_gate_compares_to_crystal_mountain() {
+        // This intentionally deterministic MinimalPlugins harness covers map authority,
+        // logical presentation, movement, perception, and isolated camera-query helpers.
+        // Full AppPlugin rendering, fog, capture review, RSS, and peak-footprint evidence
+        // remain separate release artifacts and are not claimed by this checkpoint.
         assert!(
             !std::hint::black_box(cfg!(debug_assertions)),
-            "run the Grand V3 proxy checkpoint with `cargo test --release -p hex_game \
-             --features test-support --lib scenarios::tests::grand_v3_proxy_checkpoint_compares_to_crystal_mountain \
+            "run the headless Grand V3 performance gate with `cargo test --release -p hex_game \
+             --features test-support --lib scenarios::tests::grand_v3_headless_runtime_gate_compares_to_crystal_mountain \
              -- --ignored --exact --nocapture --test-threads=1`"
         );
 
         let (grand, grand_probes) =
             macro_runtime_profile_with_probe("Grand V3 Baseline", |app, runtime| {
-                observe_runtime_proxy_probes(app, "Grand V3 Baseline", runtime)
+                observe_runtime_gate_probes(app, "Grand V3 Baseline", runtime)
             });
         let (crystal, crystal_probes) =
             macro_runtime_profile_with_probe("Crystal Mountain", |app, runtime| {
-                observe_runtime_proxy_probes(app, "Crystal Mountain", runtime)
+                observe_runtime_gate_probes(app, "Crystal Mountain", runtime)
             });
+
+        assert_eq!(
+            u32::try_from(grand_probes.traversal.reachable_ordinary_surfaces)
+                .expect("Grand V3 runtime ordinary reachability should fit the report contract"),
+            grand.runtime.reported_reachable_surfaces,
+            "Grand V3 compiler reachability changed during runtime materialization or publication"
+        );
+        assert_eq!(
+            u32::try_from(grand_probes.traversal.reachable_ordinary_elevation_levels)
+                .expect("Grand V3 runtime elevation reachability should fit the report contract"),
+            grand.runtime.reported_reachable_elevation_levels,
+            "Grand V3 reachable elevation levels changed during runtime materialization or publication"
+        );
 
         for (profile, probes) in [(&grand, &grand_probes), (&crystal, &crystal_probes)] {
             let runtime = &profile.runtime;
@@ -4410,9 +4843,23 @@ pub(crate) mod tests {
             assert!(runtime.material_runs >= runtime.columns);
             assert!(runtime.resident_chunks > 0);
             assert!(runtime.tile_entities >= runtime.material_runs);
+            assert!(
+                runtime.terrain_render_batches > 0,
+                "{} should render solid terrain through combined batches",
+                profile.scenario_name
+            );
+            assert_eq!(
+                runtime.terrain_batched_runs, runtime.tile_entities,
+                "{} render batches must cover every logical terrain run exactly once",
+                profile.scenario_name
+            );
+            assert!(
+                runtime.maximum_terrain_batch_runs <= MAX_TERRAIN_PICK_RUNS_PER_BATCH,
+                "{} exceeded the shared render-batch lookup cap",
+                profile.scenario_name
+            );
+            assert!(runtime.maximum_resident_chunk_columns <= 16 * 16);
             assert!(runtime.total_entities >= runtime.tile_entities);
-            assert!(runtime.snapshot_export_elapsed > std::time::Duration::ZERO);
-            assert!(runtime.snapshot_encode_elapsed > std::time::Duration::ZERO);
             assert!(runtime.snapshot_encoded_bytes > 0);
             assert_ne!(runtime.snapshot_fingerprint, 0);
             assert_eq!(runtime.snapshot_columns, runtime.columns);
@@ -4425,43 +4872,40 @@ pub(crate) mod tests {
             assert!(runtime.perception.knowledge_publications > 0);
             assert_eq!(traversal.reach_warmup_samples, 1);
             assert_eq!(traversal.reach_samples, 20);
-            assert!(traversal.footing_build_elapsed > std::time::Duration::ZERO);
-            assert!(traversal.footing_cache_hit_elapsed > std::time::Duration::ZERO);
             assert_eq!(traversal.footing_cache_builds, 1);
-            assert!(traversal.reach_p95 > std::time::Duration::ZERO);
             assert!(traversal.reach_worst >= traversal.reach_p95);
             assert!(traversal.reachable_surfaces > 0);
             assert!(traversal.reachable_special_surfaces <= traversal.reachable_surfaces);
             assert_eq!(traversal.path_warmup_samples, 1);
             assert_eq!(traversal.path_samples, 20);
-            assert!(traversal.path_p95 > std::time::Duration::ZERO);
             assert!(traversal.path_worst >= traversal.path_p95);
             assert!(traversal.path_cost > 0);
             assert_eq!(perception.warmup_samples, 1);
             assert_eq!(perception.samples, 20);
-            assert!(perception.p95 > std::time::Duration::ZERO);
             assert!(perception.worst >= perception.p95);
             assert_eq!(perception.player_surfaces, runtime.player_observed_surfaces);
             assert_eq!(camera.columns, runtime.columns);
             assert_eq!(camera.spans, runtime.tile_entities);
             assert!(camera.supports > 0);
             assert_eq!(camera.queries, 10_000);
-            assert!(camera.index_build > std::time::Duration::ZERO);
             assert!(camera.index_rebuild_worst >= camera.index_rebuild_p95);
             assert!(camera.query_worst >= camera.query_p95);
             assert_ne!(camera.result_checksum, 0);
             assert_eq!(edit.edit_warmup_updates, 4);
             assert_eq!(edit.edit_samples, 20);
             assert_eq!(edit.edit_total_updates, 24);
-            assert!(edit.edit_p95 > std::time::Duration::ZERO);
             assert!(edit.edit_worst >= edit.edit_p95);
+            assert_eq!(edit.edit_chunk, terrain_chunk_key(edit.edit_target.coord));
+            assert!((1..=16 * 16).contains(&edit.edit_chunk_columns));
+            assert!(edit.edit_chunk_runs > 0);
+            assert!(edit.original_run_levels > 0);
             assert_eq!(edit.edit_chunk_roots_replaced_per_update, 1);
             assert_eq!(edit.edit_frames_checked, 24);
             assert_eq!(edit.edit_surface_rebuilds, 24);
             assert_eq!(edit.edit_illumination_resolutions, 24);
             assert_eq!(edit.edit_observation_resolutions, 24);
             assert_eq!(edit.edit_knowledge_publications, 24);
-            print_large_world_checkpoint(profile, probes);
+            print_large_world_headless_checkpoint(profile, probes);
         }
 
         let grand_runtime = &grand.runtime;
@@ -4473,32 +4917,144 @@ pub(crate) mod tests {
         assert_eq!(metrics.schematic_cells, 217);
         assert_eq!(metrics.world_columns, 105_469);
         assert_eq!(metrics.resident_chunks, 444);
+        assert!(metrics.ordinary_surfaces > 0);
+        assert!(metrics.water_columns > 0);
+        assert!(metrics.liquid_bodies > 0);
+        assert!(metrics.maximum_surface > metrics.minimum_surface);
         assert_eq!(grand_runtime.columns, 105_469);
         assert_eq!(grand_runtime.resident_chunks, 444);
-        assert_eq!(grand_runtime.tile_entities, grand_runtime.material_runs);
-        assert_eq!(grand_runtime.snapshot_biome_regions, 105_469);
-        assert_eq!(grand_runtime.surface_snapshots, 105_469);
-        assert_eq!(grand_runtime.object_instances, 0);
-        assert_eq!(grand_runtime.gameplay_lights, 0);
-        assert_eq!(grand_runtime.point_lights, 0);
-        assert_eq!(grand_runtime.snapshot_interior_surfaces, 0);
-        assert_eq!(grand_runtime.snapshot_interior_roofs, 0);
-        assert_eq!(grand_runtime.snapshot_blockers, 0);
-        assert_eq!(grand_runtime.snapshot_lights, 0);
-        assert_eq!(grand_runtime.snapshot_objects, 0);
+        assert!(grand_runtime.material_runs <= grand_runtime.tile_entities);
+        assert_eq!(
+            grand_runtime.terrain_batched_runs,
+            grand_runtime.tile_entities
+        );
+        assert_eq!(grand_runtime.maximum_resident_chunk_columns, 16 * 16);
+        assert!(
+            grand_runtime.snapshot_biome_regions >= grand_runtime.columns,
+            "stacked bridges, Crystal stairs, and tunnel surfaces may add exact biome projections"
+        );
+        assert!(
+            grand_runtime.snapshot_biome_regions >= grand_runtime.surface_snapshots,
+            "biome metadata may additionally retain authored surfaces without positive headroom"
+        );
+        assert!(grand_runtime.object_instances > 0);
+        assert!(grand_runtime.gameplay_lights > 0);
+        assert!(grand_runtime.point_lights > 0);
+        assert!(grand_runtime.snapshot_interior_surfaces > 0);
+        assert!(grand_runtime.snapshot_interior_roofs > 0);
+        assert!(grand_runtime.snapshot_blockers > 0);
+        assert!(grand_runtime.snapshot_lights > 0);
+        assert!(grand_runtime.snapshot_objects > 0);
         assert!(grand_runtime.snapshot_anchors > 0);
         assert!(grand_runtime.snapshot_special_regions > 0);
         assert!(grand_runtime.snapshot_liquids > 0);
+
+        const SETUP_BUDGET: Duration = Duration::from_secs(5);
+        const BUILD_BUDGET: Duration = Duration::from_millis(2_500);
+        const SNAPSHOT_BUDGET_BYTES: usize = 16 * 1024 * 1024;
+        const SNAPSHOT_EXPORT_BUDGET: Duration = Duration::from_millis(100);
+        const SNAPSHOT_ENCODE_BUDGET: Duration = Duration::from_millis(50);
+        const FOOTING_BUILD_BUDGET: Duration = Duration::from_millis(20);
+        const FOOTING_CACHE_HIT_BUDGET: Duration = Duration::from_micros(100);
+        const REACH_AND_PATH_BUDGET: Duration = Duration::from_millis(50);
+        const PERCEPTION_BUDGET: Duration = Duration::from_millis(50);
+        const CAMERA_BUILD_BUDGET: Duration = Duration::from_millis(50);
+        const CAMERA_QUERY_BUDGET: Duration = Duration::from_micros(5);
+        const LOCAL_EDIT_BUDGET: Duration = Duration::from_millis(100);
+
+        assert!(
+            grand.setup_elapsed <= SETUP_BUDGET,
+            "Grand V3 initial setup exceeded {SETUP_BUDGET:?}: {:?}",
+            grand.setup_elapsed
+        );
+        assert!(
+            grand.reentry_setup_elapsed <= SETUP_BUDGET,
+            "Grand V3 re-entry setup exceeded {SETUP_BUDGET:?}: {:?}",
+            grand.reentry_setup_elapsed
+        );
+        let grand_build =
+            Duration::from_micros(grand_runtime.generation_and_materialization_micros);
+        let grand_reentry_build =
+            Duration::from_micros(grand.reentry_generation_and_materialization_micros);
+        assert!(
+            grand_build <= BUILD_BUDGET,
+            "Grand V3 initial build exceeded {BUILD_BUDGET:?}: {grand_build:?}"
+        );
+        assert!(
+            grand_reentry_build <= BUILD_BUDGET,
+            "Grand V3 re-entry build exceeded {BUILD_BUDGET:?}: {grand_reentry_build:?}"
+        );
+        assert!(
+            grand_runtime.snapshot_encoded_bytes <= SNAPSHOT_BUDGET_BYTES,
+            "Grand V3 snapshot exceeded 16 MiB: {} bytes",
+            grand_runtime.snapshot_encoded_bytes
+        );
+        assert!(
+            grand_runtime.snapshot_export_elapsed <= SNAPSHOT_EXPORT_BUDGET,
+            "Grand V3 snapshot export exceeded {SNAPSHOT_EXPORT_BUDGET:?}: {:?}",
+            grand_runtime.snapshot_export_elapsed
+        );
+        assert!(
+            grand_runtime.snapshot_encode_elapsed <= SNAPSHOT_ENCODE_BUDGET,
+            "Grand V3 snapshot encoding exceeded {SNAPSHOT_ENCODE_BUDGET:?}: {:?}",
+            grand_runtime.snapshot_encode_elapsed
+        );
+        assert!(
+            grand_probes.traversal.footing_build_elapsed <= FOOTING_BUILD_BUDGET,
+            "Grand V3 cold Footing build exceeded {FOOTING_BUILD_BUDGET:?}: {:?}",
+            grand_probes.traversal.footing_build_elapsed
+        );
+        assert!(
+            grand_probes.traversal.footing_cache_hit_elapsed <= FOOTING_CACHE_HIT_BUDGET,
+            "Grand V3 Footing cache hit exceeded {FOOTING_CACHE_HIT_BUDGET:?}: {:?}",
+            grand_probes.traversal.footing_cache_hit_elapsed
+        );
+        assert!(
+            grand_probes.traversal.reach_p95 <= REACH_AND_PATH_BUDGET,
+            "Grand V3 Reach p95 exceeded {REACH_AND_PATH_BUDGET:?}: {:?}",
+            grand_probes.traversal.reach_p95
+        );
+        assert!(
+            grand_probes.traversal.path_p95 <= REACH_AND_PATH_BUDGET,
+            "Grand V3 A* p95 exceeded {REACH_AND_PATH_BUDGET:?}: {:?}",
+            grand_probes.traversal.path_p95
+        );
+        assert!(
+            grand_probes.perception.p95 <= PERCEPTION_BUDGET,
+            "Grand V3 perception p95 exceeded {PERCEPTION_BUDGET:?}: {:?}",
+            grand_probes.perception.p95
+        );
+        assert!(
+            grand_probes.camera.index_build <= CAMERA_BUILD_BUDGET,
+            "Grand V3 camera index build exceeded {CAMERA_BUILD_BUDGET:?}: {:?}",
+            grand_probes.camera.index_build
+        );
+        assert!(
+            grand_probes.camera.index_rebuild_p95 <= CAMERA_BUILD_BUDGET,
+            "Grand V3 camera index rebuild p95 exceeded {CAMERA_BUILD_BUDGET:?}: {:?}",
+            grand_probes.camera.index_rebuild_p95
+        );
+        assert!(
+            grand_probes.camera.query_p95 <= CAMERA_QUERY_BUDGET,
+            "Grand V3 camera query p95 exceeded {CAMERA_QUERY_BUDGET:?}: {:?}",
+            grand_probes.camera.query_p95
+        );
+        assert!(
+            grand_probes.edit.edit_p95 <= LOCAL_EDIT_BUDGET,
+            "Grand V3 local edit p95 exceeded {LOCAL_EDIT_BUDGET:?}: {:?}",
+            grand_probes.edit.edit_p95
+        );
 
         let crystal_runtime = &crystal.runtime;
         assert_eq!(crystal_runtime.seed, 1_592_598_566);
         assert_eq!(crystal_runtime.columns, 18_019);
 
         eprintln!(
-            "LARGE_WORLD_CHECKPOINT_RATIO numerator={:?} denominator={:?} scale=1000 \
+            "LARGE_WORLD_HEADLESS_CHECKPOINT_RATIO harness=headless_minimal_plugins \
+             numerator={:?} denominator={:?} scale=1000 \
              setup_x1000={} reentry_setup_x1000={} v3_build_x1000={} \
              columns_x1000={} material_runs_x1000={} resident_chunks_x1000={} \
-             tile_entities_x1000={} total_entities_x1000={} \
+             tile_entities_x1000={} terrain_render_batches_x1000={} total_entities_x1000={} \
              snapshot_export_x1000={} snapshot_encode_x1000={} \
              snapshot_encoded_bytes_x1000={} surface_snapshots_x1000={} \
              illumination_surfaces_x1000={} footing_build_x1000={} \
@@ -4528,6 +5084,10 @@ pub(crate) mod tests {
                 crystal_runtime.resident_chunks
             ),
             ratio_thousand_usize(grand_runtime.tile_entities, crystal_runtime.tile_entities),
+            ratio_thousand_usize(
+                grand_runtime.terrain_render_batches,
+                crystal_runtime.terrain_render_batches
+            ),
             ratio_thousand_usize(grand_runtime.total_entities, crystal_runtime.total_entities),
             ratio_thousand_u128(
                 grand_runtime.snapshot_export_elapsed.as_nanos(),

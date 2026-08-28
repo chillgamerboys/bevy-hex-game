@@ -450,5 +450,24 @@
                 radius: 4,
             ),
         ),
+        (
+            id: "grand-v3-baseline",
+            display_name: "Grand V3 Baseline",
+            description: "A complete eight-ring mountain-to-sea world with archipelagoes, a river valley, frozen peaks, two upper routes, and Crystal Ascent.",
+            tags: ["Grand V3", "Large", "Exploration"],
+            preview: "ui/sandbox/grand-v3-baseline.png",
+            scenario: "Grand V3 Baseline",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            // Schema-v2 Sandbox retains both staging regions even though the
+            // packaged Grand V3 Baseline scenario intentionally has no enemies.
+            hostile_region: (
+                center: Anchor("grand_v3.natural_pass"),
+                radius: 4,
+            ),
+        ),
     ],
 )

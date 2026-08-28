@@ -292,7 +292,21 @@ mod tests {
         assert_eq!(mountain_range.scenario, "Mountain Range");
         assert_eq!(mountain_range.fixed_seed, Some(129_704_046));
         assert_eq!(mountain_range.preview, "ui/sandbox/mountain-range.png");
-        assert_eq!(catalog.maps.len(), 26);
+        let grand_v3 = catalog
+            .get("grand-v3-baseline")
+            .expect("Grand V3 Baseline should be selectable in Sandbox");
+        assert_eq!(grand_v3.scenario, "Grand V3 Baseline");
+        assert_eq!(grand_v3.fixed_seed, Some(1_592_598_566));
+        assert_eq!(grand_v3.preview, "ui/sandbox/grand-v3-baseline.png");
+        assert_eq!(
+            grand_v3.player_region.center,
+            SandboxRegionCenter::Anchor("party_start".to_owned())
+        );
+        assert_eq!(
+            grand_v3.hostile_region.center,
+            SandboxRegionCenter::Anchor("grand_v3.natural_pass".to_owned())
+        );
+        assert_eq!(catalog.maps.len(), 27);
         assert_eq!(
             catalog
                 .maps
@@ -326,6 +340,7 @@ mod tests {
                 "seven-regions",
                 "two-rings",
                 "mountain-range",
+                "grand-v3-baseline",
             ]
         );
 

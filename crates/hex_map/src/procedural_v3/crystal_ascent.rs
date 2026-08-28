@@ -120,6 +120,31 @@ pub(crate) fn macro_upper_terminal_approach_coords(
         .collect()
 }
 
+/// Resolves four-wide rows immediately outside the authored summit boundary.
+///
+/// Composite worlds use these rows to join the exact radius-32 landmark to its
+/// surrounding biome without rotating the landmark from its lower terminal alone.
+/// Offset one is the first row wholly outside the claimed Crystal site.
+pub(crate) fn macro_upper_terminal_outward_rows(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    summit_level: Level,
+    outside_depth: u32,
+) -> Result<Vec<BTreeSet<HexCoord>>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (1..=outside_depth)
+        .map(|offset| {
+            let radius = SITE_RADIUS
+                .checked_add(offset)
+                .ok_or_else(|| "Crystal summit outward-row radius overflowed".to_owned())?;
+            radial_pad(radius, 3, 4, summit_level)
+                .into_iter()
+                .map(|position| frame.to_world(position.coord))
+                .collect()
+        })
+        .collect()
+}
+
 /// Resolves the exact world-space lower terminal for a Macro landmark.
 pub(crate) fn macro_lower_terminal_coords(
     mask: &BTreeSet<HexCoord>,
@@ -401,7 +426,7 @@ fn construct_patch_with_streams(
 
     let base = settings.base_level;
     let summit = base.saturating_add(settings.rise_levels);
-    let composite = patch.layout().kind == LayoutKind::Macro;
+    let composite = patch.layout().kind.is_composite();
     let mut masses = local_mask
         .iter()
         .copied()

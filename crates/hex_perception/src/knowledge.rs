@@ -105,6 +105,24 @@ impl FactionKnowledge {
             .map(|(position, known)| (*position, *known))
     }
 
+    /// Iterates remembered and observed surfaces in one inclusive axial-row range.
+    ///
+    /// Both endpoints share `q`; the ordered exact-position map therefore resolves
+    /// the complete range, including stacked surfaces, with one tree lookup.
+    pub(crate) fn surfaces_in_axial_row(
+        &self,
+        minimum: HexCoord,
+        maximum: HexCoord,
+    ) -> impl Iterator<Item = (TilePos, KnownSurface)> + '_ {
+        debug_assert_eq!(minimum.x(), maximum.x());
+        debug_assert!(minimum.y() <= maximum.y());
+        let bottom = TilePos::new(minimum, i32::MIN);
+        let top = TilePos::new(maximum, i32::MAX);
+        self.surfaces
+            .range(bottom..=top)
+            .map(|(position, known)| (*position, *known))
+    }
+
     /// Returns a currently observed unit.
     #[must_use]
     pub fn unit(&self, id: UnitId) -> Option<ObservedUnit> {

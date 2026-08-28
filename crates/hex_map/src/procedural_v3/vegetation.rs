@@ -122,13 +122,6 @@ impl GrassVegetationSpec {
 pub(super) struct SnowyVegetationSet {
     pub(super) small_broadleaf: VegetationObjectSpec,
     pub(super) tall_narrow: VegetationObjectSpec,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the snowy old-growth variant is catalogued for galleries; sparse frozen landforms deliberately use smaller trees"
-        )
-    )]
     pub(super) old_growth: VegetationObjectSpec,
     pub(super) grass_tuft: VegetationObjectSpec,
 }
@@ -736,12 +729,26 @@ pub(super) struct VegetationObjectSpec {
     blocker_footprint: Vec<LocalAxialCoord>,
     occupied: Vec<LocalVoxelCoord>,
     rigid: BTreeSet<LocalVoxelCoord>,
+    blocker_footprint_is_unique: bool,
+    occupied_is_unique: bool,
 }
 
 #[derive(Debug)]
 pub(super) struct ProjectedVegetationVolume {
     pub(super) cells: BTreeSet<TilePos>,
     pub(super) structural_cells: BTreeSet<TilePos>,
+}
+
+/// One object rotation reduced to root-relative offsets for repeated clearance probes.
+///
+/// Grand V3 evaluates tens of thousands of candidate roots. Rotating every local
+/// voxel again for each root is pure duplicate work: the authored object and its
+/// pivot are immutable. Accepted objects still use the canonical exact projection
+/// methods below; this compact form only accelerates the equivalent rejection test.
+#[derive(Debug)]
+pub(super) struct VegetationClearanceProjection {
+    blocker_offsets: Vec<LocalAxialCoord>,
+    occupied_offsets: Vec<(LocalAxialCoord, i32)>,
 }
 
 impl VegetationObjectSpec {
@@ -762,15 +769,25 @@ impl VegetationObjectSpec {
             )
         })?;
         validate_object(blueprint, expected_category, expected_blocker_cells, recipe)?;
+        let occupied = blueprint
+            .placements
+            .iter()
+            .map(|placement| placement.position)
+            .collect::<Vec<_>>();
         Ok(Self {
             id,
             origin: blueprint.origin,
             blocker_footprint: blueprint.blocker_footprint.clone(),
-            occupied: blueprint
-                .placements
+            blocker_footprint_is_unique: blueprint
+                .blocker_footprint
                 .iter()
-                .map(|placement| placement.position)
-                .collect(),
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == blueprint.blocker_footprint.len(),
+            occupied_is_unique: occupied.iter().copied().collect::<BTreeSet<_>>().len()
+                == occupied.len(),
+            occupied,
             rigid: blueprint
                 .placements
                 .iter()
@@ -823,6 +840,159 @@ impl VegetationObjectSpec {
         }
         (projected.len() == self.blocker_footprint.len()).then_some(projected)
     }
+
+    /// Checks the same exact placement predicates as [`Self::project_blockers`]
+    /// and [`Self::project_visual_volume`] without allocating their projected
+    /// sets for a candidate that will be discarded.
+    ///
+    /// Grand V3 evaluates many possible roots before it constructs the much
+    /// smaller accepted forest. Object-local cells are preflighted for
+    /// uniqueness once at catalog resolution, so a rigid rotation remains
+    /// injective and the allocation-free walk is equivalent to constructing the
+    /// two sets and querying them.
+    pub(super) fn projection_is_clear(
+        &self,
+        root: TilePos,
+        rotation: HexObjectRotation,
+        surfaces: &BTreeMap<HexCoord, TilePos>,
+        reserved: &BTreeSet<HexCoord>,
+        occupied_visual: &BTreeSet<TilePos>,
+        occupied_blockers: &BTreeSet<TilePos>,
+    ) -> bool {
+        if !self.blocker_footprint_is_unique || !self.occupied_is_unique {
+            return false;
+        }
+        for local in &self.blocker_footprint {
+            let Some(rotated) = rotation.rotate_axial(*local, self.origin.axial()) else {
+                return false;
+            };
+            let Some(coord) = project_coord(root.coord, rotated, self.origin.axial()) else {
+                return false;
+            };
+            let Some(support) = surfaces.get(&coord).copied() else {
+                return false;
+            };
+            if support.level != root.level
+                || reserved.contains(&coord)
+                || occupied_blockers.contains(&support)
+            {
+                return false;
+            }
+        }
+
+        let Some(visual_origin_level) = root.level.checked_add(1) else {
+            return false;
+        };
+        for local in &self.occupied {
+            let Some(rotated) = rotation.rotate_voxel(*local, self.origin) else {
+                return false;
+            };
+            let Some(coord) = project_coord(root.coord, rotated.axial(), self.origin.axial())
+            else {
+                return false;
+            };
+            let Some(relative_level) = rotated.level.checked_sub(self.origin.level) else {
+                return false;
+            };
+            let Some(level) = visual_origin_level.checked_add(relative_level) else {
+                return false;
+            };
+            let position = TilePos::new(coord, level);
+            if occupied_visual.contains(&position)
+                || reserved.contains(&coord)
+                || surfaces
+                    .get(&coord)
+                    .is_none_or(|support| level <= support.level)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub(super) fn clearance_projections(&self) -> [Option<VegetationClearanceProjection>; 6] {
+        if !self.blocker_footprint_is_unique || !self.occupied_is_unique {
+            return std::array::from_fn(|_| None);
+        }
+        std::array::from_fn(|steps| {
+            let rotation = HexObjectRotation::new(u8::try_from(steps).ok()?).ok()?;
+            let blocker_offsets = self
+                .blocker_footprint
+                .iter()
+                .map(|local| {
+                    let rotated = rotation.rotate_axial(*local, self.origin.axial())?;
+                    Some(LocalAxialCoord::new(
+                        rotated.q.checked_sub(self.origin.q)?,
+                        rotated.r.checked_sub(self.origin.r)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let occupied_offsets = self
+                .occupied
+                .iter()
+                .map(|local| {
+                    let rotated = rotation.rotate_voxel(*local, self.origin)?;
+                    Some((
+                        LocalAxialCoord::new(
+                            rotated.q.checked_sub(self.origin.q)?,
+                            rotated.r.checked_sub(self.origin.r)?,
+                        ),
+                        rotated.level.checked_sub(self.origin.level)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(VegetationClearanceProjection {
+                blocker_offsets,
+                occupied_offsets,
+            })
+        })
+    }
+
+    pub(super) fn precomputed_projection_is_clear(
+        root: TilePos,
+        projection: &VegetationClearanceProjection,
+        surfaces: &BTreeMap<HexCoord, TilePos>,
+        reserved: &BTreeSet<HexCoord>,
+        occupied_visual: &BTreeSet<TilePos>,
+        occupied_blockers: &BTreeSet<TilePos>,
+    ) -> bool {
+        for offset in &projection.blocker_offsets {
+            let Some(coord) = project_offset(root.coord, *offset) else {
+                return false;
+            };
+            let Some(support) = surfaces.get(&coord).copied() else {
+                return false;
+            };
+            if support.level != root.level
+                || reserved.contains(&coord)
+                || occupied_blockers.contains(&support)
+            {
+                return false;
+            }
+        }
+
+        let Some(visual_origin_level) = root.level.checked_add(1) else {
+            return false;
+        };
+        for (offset, relative_level) in &projection.occupied_offsets {
+            let Some(coord) = project_offset(root.coord, *offset) else {
+                return false;
+            };
+            let Some(level) = visual_origin_level.checked_add(*relative_level) else {
+                return false;
+            };
+            let position = TilePos::new(coord, level);
+            if occupied_visual.contains(&position)
+                || reserved.contains(&coord)
+                || surfaces
+                    .get(&coord)
+                    .is_none_or(|support| level <= support.level)
+            {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 fn is_structural_part(category: ObjectCategory, part: &ObjectPart) -> bool {
@@ -843,6 +1013,13 @@ fn project_coord(
     Some(HexCoord::from_axial(
         world_origin.x().checked_add(delta_q)?,
         world_origin.y().checked_add(delta_r)?,
+    ))
+}
+
+fn project_offset(world_origin: HexCoord, offset: LocalAxialCoord) -> Option<HexCoord> {
+    Some(HexCoord::from_axial(
+        world_origin.x().checked_add(offset.q)?,
+        world_origin.y().checked_add(offset.r)?,
     ))
 }
 
@@ -1098,6 +1275,8 @@ pub(crate) mod tests {
             blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
             occupied: vec![LocalVoxelCoord::new(0, 0, 0), LocalVoxelCoord::new(1, 0, 1)],
             rigid: BTreeSet::from([LocalVoxelCoord::new(0, 0, 0)]),
+            blocker_footprint_is_unique: true,
+            occupied_is_unique: true,
         };
         let root = TilePos::new(HexCoord::from_axial(4, -2), 12);
         for steps in 0..6 {
@@ -1109,6 +1288,106 @@ pub(crate) mod tests {
             assert_eq!(cells.structural_cells.len(), 1);
             assert!(cells.cells.contains(&TilePos::new(root.coord, 13)));
             assert!(cells.cells.iter().any(|cell| cell.level == 14));
+        }
+    }
+
+    #[test]
+    fn allocation_free_clearance_matches_exact_projected_sets() {
+        let trees = TemperateVegetationSet::resolve(runtime_art_catalog(), "clearance fixture")
+            .expect("tracked trees should resolve");
+        let root = TilePos::new(HexCoord::from_axial(4, -2), 12);
+        let supports = root
+            .coord
+            .within_radius(12)
+            .into_iter()
+            .map(|coord| (coord, TilePos::new(coord, root.level)))
+            .collect::<BTreeMap<_, _>>();
+
+        for object in [
+            &trees.small_broadleaf,
+            &trees.tall_narrow,
+            &trees.old_growth,
+        ] {
+            let clearance_projections = object.clearance_projections();
+            for steps in 0..6 {
+                let rotation =
+                    HexObjectRotation::new(steps).expect("fixture rotation should be valid");
+                let clearance = clearance_projections[usize::from(rotation.steps())]
+                    .as_ref()
+                    .expect("fixture rotation should have a cached clearance projection");
+                let blockers = object
+                    .project_blockers(root, rotation, &supports)
+                    .expect("fixture blockers should project");
+                let visual = object
+                    .project_visual_volume(root, rotation)
+                    .expect("fixture visual volume should project");
+
+                let exact = |reserved: &BTreeSet<HexCoord>,
+                             occupied_visual: &BTreeSet<TilePos>,
+                             occupied_blockers: &BTreeSet<TilePos>| {
+                    blockers.iter().all(|position| {
+                        !reserved.contains(&position.coord) && !occupied_blockers.contains(position)
+                    }) && visual.cells.is_disjoint(occupied_visual)
+                        && visual.cells.iter().all(|voxel| {
+                            !reserved.contains(&voxel.coord)
+                                && supports
+                                    .get(&voxel.coord)
+                                    .is_some_and(|support| voxel.level > support.level)
+                        })
+                };
+                let cases = [
+                    (BTreeSet::new(), BTreeSet::new(), BTreeSet::new()),
+                    (
+                        BTreeSet::from([root.coord]),
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                    (
+                        BTreeSet::new(),
+                        BTreeSet::from([*visual
+                            .cells
+                            .first()
+                            .expect("fixture visual should not be empty")]),
+                        BTreeSet::new(),
+                    ),
+                    (
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                        BTreeSet::from([*blockers
+                            .first()
+                            .expect("fixture blockers should not be empty")]),
+                    ),
+                ];
+                for (reserved, occupied_visual, occupied_blockers) in cases {
+                    let expected = exact(&reserved, &occupied_visual, &occupied_blockers);
+                    assert_eq!(
+                        object.projection_is_clear(
+                            root,
+                            rotation,
+                            &supports,
+                            &reserved,
+                            &occupied_visual,
+                            &occupied_blockers,
+                        ),
+                        expected,
+                        "legacy object={} rotation={steps}",
+                        object.id
+                    );
+                    assert_eq!(
+                        VegetationObjectSpec::precomputed_projection_is_clear(
+                            root,
+                            clearance,
+                            &supports,
+                            &reserved,
+                            &occupied_visual,
+                            &occupied_blockers,
+                        ),
+                        expected,
+                        "precomputed object={} rotation={steps}",
+                        object.id
+                    );
+                }
+            }
         }
     }
 

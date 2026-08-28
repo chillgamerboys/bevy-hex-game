@@ -7,7 +7,7 @@
 //! an identity.
 
 use hex_core::{HexCoord, IlluminationLevel, MapViewHint, TilePos};
-use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::settings::{
     EdgeLiquidSettings, MacroAccessSettings, MacroAxisSettings, MacroBoundarySideSettings,
@@ -59,6 +59,15 @@ impl FingerprintEncoder {
     #[must_use]
     pub(crate) const fn new() -> Self {
         Self { bytes: Vec::new() }
+    }
+
+    /// Starts an empty canonical payload with storage reserved for a known-large
+    /// encoding. Capacity is not part of the byte or fingerprint contract.
+    #[must_use]
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(capacity),
+        }
     }
 
     /// Writes an enum or union variant tag.
@@ -469,6 +478,17 @@ pub(crate) fn semantic_plan_fingerprint(plan: &GeneratedWorldPlan) -> Result<u64
         encoder.tile_pos(*position);
     }
     encode_view_hint(&mut encoder, plan.view_hint)?;
+    // Append-only conditional extension preserves every established V3 byte
+    // stream as an exact prefix while giving review-only surfaces their own
+    // deterministic identity.
+    if !plan.observation_anchors.is_empty() {
+        encoder.tag(254);
+        encoder.collection_count(plan.observation_anchors.len())?;
+        for (name, position) in &plan.observation_anchors {
+            encoder.str(name)?;
+            encoder.tile_pos(*position);
+        }
+    }
     Ok(encoder.finish_semantic_plan())
 }
 
@@ -1251,16 +1271,12 @@ fn encode_view_hint(
 fn fingerprint(domain: &[u8], payload: &[u8]) -> u64 {
     let domain_len = u64::try_from(domain.len()).unwrap_or(u64::MAX);
     let payload_len = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-    let capacity = 8_usize
-        .saturating_add(domain.len())
-        .saturating_add(8)
-        .saturating_add(payload.len());
-    let mut framed = Vec::with_capacity(capacity);
-    framed.extend_from_slice(&domain_len.to_le_bytes());
-    framed.extend_from_slice(domain);
-    framed.extend_from_slice(&payload_len.to_le_bytes());
-    framed.extend_from_slice(payload);
-    xxh3_64(&framed)
+    let mut hasher = Xxh3::new();
+    hasher.update(&domain_len.to_le_bytes());
+    hasher.update(domain);
+    hasher.update(&payload_len.to_le_bytes());
+    hasher.update(payload);
+    hasher.digest()
 }
 
 #[cfg(test)]
@@ -1385,6 +1401,7 @@ mod tests {
             biome_regions: BTreeMap::from([(surface, BiomeRegionId(0))]),
             interiors: InteriorPlan::default(),
             anchors: BTreeMap::from([("party_start".to_owned(), surface)]),
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((0.0, 8.0, 8.0), (0.0, 0.0, 0.0)),
         }
     }
@@ -1401,6 +1418,30 @@ mod tests {
         assert_ne!(settings, semantic);
         assert_ne!(settings, materialized);
         assert_ne!(semantic, materialized);
+    }
+
+    #[test]
+    fn streamed_domain_frame_matches_the_legacy_contiguous_encoding() {
+        let domain = b"test-domain";
+        let payload = b"canonical payload spanning the streamed frame";
+        let mut legacy_frame = Vec::new();
+        legacy_frame.extend_from_slice(
+            &u64::try_from(domain.len())
+                .expect("the test domain length fits")
+                .to_le_bytes(),
+        );
+        legacy_frame.extend_from_slice(domain);
+        legacy_frame.extend_from_slice(
+            &u64::try_from(payload.len())
+                .expect("the test payload length fits")
+                .to_le_bytes(),
+        );
+        legacy_frame.extend_from_slice(payload);
+
+        assert_eq!(
+            fingerprint(domain, payload),
+            xxhash_rust::xxh3::xxh3_64(&legacy_frame)
+        );
     }
 
     #[test]
@@ -1421,6 +1462,47 @@ mod tests {
         assert_ne!(
             semantic_plan_fingerprint(&first).expect("first source identity fingerprints"),
             semantic_plan_fingerprint(&second).expect("second source identity fingerprints")
+        );
+    }
+
+    #[test]
+    fn conditional_observation_anchor_identity_is_ordered_and_leaves_empty_legacy_unchanged() {
+        let legacy = compact_world();
+        let legacy_fingerprint =
+            semantic_plan_fingerprint(&legacy).expect("the compact legacy world fingerprints");
+        let surface = *legacy
+            .volume
+            .surfaces
+            .first_key_value()
+            .expect("the compact world has one exact surface")
+            .0;
+
+        let mut first = legacy.clone();
+        first
+            .observation_anchors
+            .insert("review.z".to_owned(), surface);
+        first
+            .observation_anchors
+            .insert("review.a".to_owned(), surface);
+        let mut repeated = legacy.clone();
+        repeated
+            .observation_anchors
+            .insert("review.a".to_owned(), surface);
+        repeated
+            .observation_anchors
+            .insert("review.z".to_owned(), surface);
+
+        assert_eq!(
+            semantic_plan_fingerprint(&legacy).expect("legacy identity remains encodable"),
+            legacy_fingerprint
+        );
+        assert_eq!(
+            semantic_plan_fingerprint(&first).expect("observation identities fingerprint"),
+            semantic_plan_fingerprint(&repeated).expect("ordered identities fingerprint")
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&first).expect("observation identities fingerprint"),
+            legacy_fingerprint
         );
     }
 
@@ -2724,6 +2806,10 @@ mod tests {
             plan.anchors
                 .insert("enemy_start".to_owned(), TilePos::ORIGIN);
         }
+        fn mutate_observation_anchors(plan: &mut GeneratedWorldPlan) {
+            plan.observation_anchors
+                .insert("review_target".to_owned(), TilePos::ORIGIN);
+        }
         fn mutate_view(plan: &mut GeneratedWorldPlan) {
             plan.view_hint.eye.0 = 1.0;
         }
@@ -2735,7 +2821,7 @@ mod tests {
         );
         let baseline_fingerprint =
             semantic_plan_fingerprint(&baseline).expect("the baseline encodes");
-        let mutations: [(&str, fn(&mut GeneratedWorldPlan)); 11] = [
+        let mutations: [(&str, fn(&mut GeneratedWorldPlan)); 12] = [
             ("layout", mutate_layout),
             ("volume", mutate_volume),
             ("liquids", mutate_liquids),
@@ -2746,6 +2832,7 @@ mod tests {
             ("biome memberships", mutate_biomes),
             ("interiors", mutate_interiors),
             ("anchors", mutate_anchors),
+            ("observation anchors", mutate_observation_anchors),
             ("view hint", mutate_view),
         ];
 

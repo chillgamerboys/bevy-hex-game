@@ -5,7 +5,7 @@
 //! internal seam once so neighboring recipes cannot generate competing borders.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::fmt;
 
 use hex_core::{BiomeRegionId, HexCoord, Level};
@@ -42,10 +42,13 @@ pub(crate) enum LayoutKind {
 }
 
 impl LayoutKind {
-    /// Whether this layout stitches multiple independently generated patches.
+    /// Whether this layout combines more than one stable patch namespace.
     #[must_use]
     pub(crate) const fn is_composite(self) -> bool {
-        matches!(self, Self::Ring7 | Self::Ring19 | Self::Macro)
+        matches!(
+            self,
+            Self::Ring7 | Self::Ring19 | Self::Macro | Self::Schematic
+        )
     }
 }
 
@@ -381,7 +384,11 @@ impl ResolvedLayoutPlan {
             }
         }
 
-        let mut covered = BTreeSet::new();
+        // Coverage is queried only for membership/cardinality while patches and
+        // masks themselves retain canonical BTree iteration. A hash index avoids
+        // O(log n) insertion for every one of Grand V3's 105,469 columns without
+        // changing which ordered patch/coordinate reports an overlap.
+        let mut covered = HashSet::with_capacity(self.footprint.len());
         let mut biome_regions = BTreeSet::new();
         for (id, patch) in &self.patches {
             if self.kind == LayoutKind::Ring19
@@ -404,8 +411,10 @@ impl ResolvedLayoutPlan {
                 ));
             }
             if patch.rotation_turns > 5
-                || (!matches!(self.kind, LayoutKind::Ring19 | LayoutKind::Macro)
-                    && patch.rotation_turns != 0)
+                || (!matches!(
+                    self.kind,
+                    LayoutKind::Ring19 | LayoutKind::Macro | LayoutKind::Schematic
+                ) && patch.rotation_turns != 0)
             {
                 issues.push(LayoutIssue::InvalidPatchRotation(*id, patch.rotation_turns));
             }
@@ -435,7 +444,9 @@ impl ResolvedLayoutPlan {
                 issues.push(LayoutIssue::IncompletePatchEdges(*id));
             }
         }
-        if covered != self.footprint {
+        if covered.len() != self.footprint.len()
+            || self.footprint.iter().any(|coord| !covered.contains(coord))
+        {
             issues.push(LayoutIssue::IncompleteCoverage);
         }
 
@@ -524,19 +535,35 @@ fn resolve_schematic(
         .into_iter()
         .enumerate()
         .map(|(index, coord)| {
+            let coarse_coord = HexCoord::from_axial(coord.q(), coord.r());
             let center = HexCoord::from_axial(coord.q() * pitch, coord.r() * pitch);
-            (PatchId(u32::try_from(index).unwrap_or(u32::MAX)), center)
+            (
+                PatchId(u32::try_from(index).unwrap_or(u32::MAX)),
+                coarse_coord,
+                center,
+            )
         })
         .collect::<Vec<_>>();
+    let coarse_by_coord = coarse
+        .iter()
+        .map(|(id, coarse_coord, center)| (*coarse_coord, (*id, *center)))
+        .collect::<BTreeMap<_, _>>();
+    let candidate_offsets = HexCoord::ORIGIN.within_radius(2);
     let mut masks = coarse
         .iter()
-        .map(|(id, _)| (*id, BTreeSet::new()))
+        .map(|(id, _, _)| (*id, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
     for coord in &footprint {
-        let owner = coarse
-            .iter()
-            .min_by_key(|(id, center)| (center.distance(*coord), id.0))
-            .map(|(id, _)| *id)
+        let owner = nearest_schematic_owner(*coord, pitch, &coarse_by_coord, &candidate_offsets)
+            // The radius-two candidate proof is exhaustively pinned below. Keep
+            // the full ordered fallback so malformed future constants fail
+            // safely instead of leaving a hole in ownership.
+            .or_else(|| {
+                coarse
+                    .iter()
+                    .min_by_key(|(id, _, center)| (center.distance(*coord), id.0))
+                    .map(|(id, _, _)| *id)
+            })
             .ok_or_else(|| LayoutValidationError::one(LayoutIssue::InvalidFootprint))?;
         masks.entry(owner).or_default().insert(*coord);
     }
@@ -562,6 +589,26 @@ fn resolve_schematic(
         shared_edges: BTreeMap::new(),
         boundary_liquid_outlets: BTreeMap::new(),
     })
+}
+
+fn nearest_schematic_owner(
+    coord: HexCoord,
+    pitch: i32,
+    coarse_by_coord: &BTreeMap<HexCoord, (PatchId, HexCoord)>,
+    candidate_offsets: &[HexCoord],
+) -> Option<PatchId> {
+    let base = HexCoord::from_axial(coord.x().div_euclid(pitch), coord.y().div_euclid(pitch));
+    candidate_offsets
+        .iter()
+        .filter_map(|offset| {
+            let candidate = HexCoord::from_axial(
+                base.x().checked_add(offset.x())?,
+                base.y().checked_add(offset.y())?,
+            );
+            coarse_by_coord.get(&candidate).copied()
+        })
+        .min_by_key(|(id, center)| (center.distance(coord), id.0))
+        .map(|(id, _)| id)
 }
 
 fn resolve_single(
@@ -3337,16 +3384,20 @@ fn connected(mask: &BTreeSet<HexCoord>) -> bool {
     let Some(start) = mask.first().copied() else {
         return false;
     };
-    let mut reached = BTreeSet::from([start]);
+    // Connectivity has no ordering semantics. Consume a hash-indexed remainder
+    // so each cell and neighbor probe is expected O(1), while the BTree-backed
+    // authored mask remains the canonical stored/serialized form.
+    let mut remaining = mask.iter().copied().collect::<HashSet<_>>();
+    remaining.remove(&start);
     let mut frontier = VecDeque::from([start]);
     while let Some(coord) = frontier.pop_front() {
         for neighbor in coord.neighbors() {
-            if mask.contains(&neighbor) && reached.insert(neighbor) {
+            if remaining.remove(&neighbor) {
                 frontier.push_back(neighbor);
             }
         }
     }
-    reached.len() == mask.len()
+    remaining.is_empty()
 }
 
 fn validate_resolved_edge(
@@ -3994,6 +4045,35 @@ mod tests {
             panic!("shipped Crystal Mountain settings should use procedural V3");
         };
         settings
+    }
+
+    #[test]
+    fn schematic_local_owner_candidates_match_the_canonical_full_search() {
+        let pitch = 22_i32;
+        let coarse = hex_schematic::canonical_coordinates()
+            .into_iter()
+            .enumerate()
+            .map(|(index, coord)| {
+                let id = PatchId(u32::try_from(index).expect("217 ids fit u32"));
+                let coarse_coord = HexCoord::from_axial(coord.q(), coord.r());
+                let center = HexCoord::from_axial(coord.q() * pitch, coord.r() * pitch);
+                (coarse_coord, (id, center))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let candidate_offsets = HexCoord::ORIGIN.within_radius(2);
+        for coord in HexCoord::ORIGIN.within_radius(V3_SCHEMATIC_GRID_RADIUS) {
+            let local =
+                nearest_schematic_owner(coord, pitch, &coarse, candidate_offsets.as_slice());
+            let exhaustive = coarse
+                .values()
+                .copied()
+                .min_by_key(|(id, center)| (center.distance(coord), id.0))
+                .map(|(id, _)| id);
+            assert_eq!(
+                local, exhaustive,
+                "radius-two candidate neighborhood changed canonical owner at {coord:?}"
+            );
+        }
     }
 
     fn crystal_ascent_macro_settings() -> ProceduralV3Settings {

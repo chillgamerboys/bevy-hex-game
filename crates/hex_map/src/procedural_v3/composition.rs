@@ -258,11 +258,12 @@ impl GeneratedPatchPlan {
             biome_regions: self.biome_regions.clone(),
             interiors: self.interiors.clone(),
             anchors: self.anchors.clone(),
+            observation_anchors: BTreeMap::new(),
             view_hint: self.view_hint,
         }
     }
 
-    fn namespace(
+    pub(crate) fn namespace(
         mut self,
         layout_kind: LayoutKind,
         namespace_names: bool,
@@ -708,6 +709,7 @@ pub(crate) fn merge_world(
         biome_regions,
         interiors,
         anchors,
+        observation_anchors: BTreeMap::new(),
         view_hint: settings.view_hint,
     })
 }

@@ -27,7 +27,7 @@
 //! input plugin's frame clear, so `just_pressed` is visible to every `Update`
 //! reader in the same frame.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -63,9 +63,23 @@ const UI_DEBUG_ENV: &str = "HEX_WALK_UI_DEBUG";
 const DATA_ENV: &str = "HEX_GAME_DATA_DIR";
 const REVIEW_INDEX_FILE: &str = "review-index.md";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+/// The windowless walk owns deterministic simulation time. Renderer readback and
+/// PNG encoding may take arbitrarily long wall-clock time without advancing a
+/// character farther between two requested evidence frames.
+const WALK_FRAME_DURATION: Duration = Duration::from_nanos(16_666_667);
 const WALK_TIME_SCALE: f32 = 12.0;
+/// Temporal evidence runs at shipped simulation speed. Ordinary setup and the
+/// uncaptured remainder of long routes retain the accelerated walk speed.
+const TEMPORAL_CAPTURE_TIME_SCALE: f32 = 1.0;
 const MAX_ORBIT_YAW_TURNS: f32 = 0.5;
 const MAX_ORBIT_PITCH_FRACTION: f32 = 1.0;
+/// A temporal diagnostic is intentionally a small bounded image sequence, not
+/// an unbounded video recorder.
+const MAX_MOVEMENT_CAPTURE_FILES: u16 = 48;
+const MAX_MOVEMENT_CAPTURE_FILES_PER_WALK: usize = 192;
+const MAX_MOVEMENT_CAPTURE_FRAMES: u32 = 900;
+/// A terrain click can take a few schedules to publish its command and route.
+const MOVEMENT_START_GRACE_FRAMES: u8 = 8;
 /// Full render frames allowed after both cameras move to a fresh image target.
 ///
 /// Four frames let the asynchronous UI glyph atlas settle on Metal. Two frames
@@ -88,10 +102,7 @@ struct ReviewRunProvenance {
 
 impl ReviewRunProvenance {
     fn from_steps(script_path: String, run_id: String, steps: &[WalkStep]) -> Self {
-        let expected_captures = steps
-            .iter()
-            .filter(|step| matches!(step, WalkStep::Capture(_) | WalkStep::ReviewCapture { .. }))
-            .count();
+        let expected_captures = steps.iter().map(step_capture_count).sum();
         let planned_scenarios = steps
             .iter()
             .filter_map(|step| match step {
@@ -146,10 +157,41 @@ fn review_run_id() -> String {
     format!("{}-{nonce}", std::process::id())
 }
 
+fn walk_time_update_strategy() -> bevy::time::TimeUpdateStrategy {
+    bevy::time::TimeUpdateStrategy::ManualDuration(WALK_FRAME_DURATION)
+}
+
+fn walk_environment_value(name: &str) -> Result<Option<String>, String> {
+    normalize_walk_environment_value(name, env::var(name))
+}
+
+fn normalize_walk_environment_value(
+    name: &str,
+    value: Result<String, env::VarError>,
+) -> Result<Option<String>, String> {
+    match value {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(format!("{name} is not valid Unicode")),
+    }
+}
+
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
-    let script = env::var(SCRIPT_ENV).ok();
-    let out = env::var(OUT_ENV).ok();
+    let script = match walk_environment_value(SCRIPT_ENV) {
+        Ok(value) => value,
+        Err(error) => {
+            install_config_error(app, error);
+            return;
+        }
+    };
+    let out = match walk_environment_value(OUT_ENV) {
+        Ok(value) => value,
+        Err(error) => {
+            install_config_error(app, error);
+            return;
+        }
+    };
     let run_id = review_run_id();
     if let Some(out) = out.as_deref() {
         let script_label = script.as_deref().unwrap_or("<missing HEX_WALK_SCRIPT>");
@@ -219,19 +261,20 @@ pub(super) fn plugin(app: &mut App) {
         options.outline_content_box = true;
         options.outline_scrollbars = true;
     }
-    app.insert_resource(WalkState::new(
-        steps,
-        out_dir,
-        viewport,
-        diagnostic_overlays,
-        review,
-    ))
-    .add_systems(Startup, accelerate_walk_time)
-    .add_systems(
-        OnEnter(Screen::Gameplay),
-        suppress_hostiles_for_map_review.in_set(GameplaySetup::Resources),
-    )
-    .add_systems(PreUpdate, run_walk.after(InputSystems));
+    app.insert_resource(walk_time_update_strategy())
+        .insert_resource(WalkState::new(
+            steps,
+            out_dir,
+            viewport,
+            diagnostic_overlays,
+            review,
+        ))
+        .add_systems(Startup, accelerate_walk_time)
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            suppress_hostiles_for_map_review.in_set(GameplaySetup::Resources),
+        )
+        .add_systems(PreUpdate, run_walk.after(InputSystems));
 }
 
 fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
@@ -279,6 +322,7 @@ fn reject_invalid_configuration(
 
 /// One scripted action. The RON script is a `Vec<WalkStep>`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 enum WalkStep {
     /// Wait until the app is in the named screen.
     AwaitScreen(String),
@@ -332,6 +376,19 @@ enum WalkStep {
     ClickAnchor {
         name: String,
         expected: CameraRouteTile,
+    },
+    /// Record an exact, bounded PNG sequence while the movement started by the
+    /// immediately preceding [`Self::ClickAnchor`] remains authoritative.
+    ///
+    /// Frames are requested every `every_frames` deterministic 60 Hz movement
+    /// updates at 1x simulation speed and written as `<prefix>-0001.png`,
+    /// `<prefix>-0002.png`, and so on. The exact count keeps
+    /// the completed review index exhaustive; ending movement early fails and
+    /// removes this step's partial sequence instead of publishing stale evidence.
+    CaptureWhileMoving {
+        prefix: String,
+        every_frames: u32,
+        capture_count: u16,
     },
     /// Wait for every registered party member's domain movement to finish.
     ///
@@ -443,22 +500,127 @@ fn load_script(path: &str) -> Result<Vec<WalkStep>, String> {
     if steps.is_empty() {
         return Err(format!("{path} contains no steps"));
     }
-    let mut capture_names = BTreeSet::new();
+    validate_script_steps(path, &steps)?;
+    Ok(steps)
+}
+
+fn step_capture_count(step: &WalkStep) -> usize {
+    match step {
+        WalkStep::Capture(_) | WalkStep::ReviewCapture { .. } => 1,
+        WalkStep::CaptureWhileMoving { capture_count, .. } => usize::from(*capture_count),
+        _ => 0,
+    }
+}
+
+fn movement_capture_name(prefix: &str, index: u16) -> String {
+    format!("{prefix}-{:04}", u32::from(index) + 1)
+}
+
+fn movement_capture_span(every_frames: u32, capture_count: u16) -> Result<u32, String> {
+    if every_frames == 0 {
+        return Err("CaptureWhileMoving every_frames must be positive".to_owned());
+    }
+    if capture_count == 0 {
+        return Err("CaptureWhileMoving capture_count must be positive".to_owned());
+    }
+    if capture_count > MAX_MOVEMENT_CAPTURE_FILES {
+        return Err(format!(
+            "CaptureWhileMoving capture_count {capture_count} exceeds the per-step limit {MAX_MOVEMENT_CAPTURE_FILES}"
+        ));
+    }
+    let span = every_frames
+        .checked_mul(u32::from(capture_count))
+        .ok_or_else(|| "CaptureWhileMoving frame span overflowed".to_owned())?;
+    if span > MAX_MOVEMENT_CAPTURE_FRAMES {
+        return Err(format!(
+            "CaptureWhileMoving spans {span} frames, exceeding the per-step limit {MAX_MOVEMENT_CAPTURE_FRAMES}"
+        ));
+    }
+    Ok(span)
+}
+
+/// Wall-clock watchdog for one step under the windowless 60 Hz runner.
+///
+/// `AwaitPartyIdle` already owns an exact update bound. Its wall watchdog must
+/// leave enough time for that bound to run instead of silently replacing an
+/// authored 18,000-frame allowance with the generic sixty-second limit.
+fn step_timeout(step: &WalkStep) -> Duration {
+    let WalkStep::AwaitPartyIdle { max_frames } = step else {
+        return STEP_TIMEOUT;
+    };
+    let frame_budget = WALK_FRAME_DURATION
+        .checked_mul(*max_frames)
+        .unwrap_or(Duration::MAX);
+    STEP_TIMEOUT.saturating_add(frame_budget)
+}
+
+fn validate_script_steps(path: &str, steps: &[WalkStep]) -> Result<(), String> {
+    let mut capture_names = BTreeSet::<String>::new();
+    let mut movement_capture_files = 0_usize;
     for (index, step) in steps.iter().enumerate() {
         validate_step(step).map_err(|error| format!("{path} step {index}: {error}"))?;
-        let capture_name = match step {
-            WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. } => Some(name),
-            _ => None,
+        let capture_names_for_step = match step {
+            WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. } => vec![name.clone()],
+            WalkStep::CaptureWhileMoving {
+                prefix,
+                capture_count,
+                ..
+            } => {
+                let clicked_destination = match index
+                    .checked_sub(1)
+                    .and_then(|prior| steps.get(prior))
+                {
+                    Some(WalkStep::ClickAnchor { expected, .. }) => *expected,
+                    _ => {
+                        return Err(format!(
+                            "{path} step {index}: CaptureWhileMoving must immediately follow ClickAnchor"
+                        ));
+                    }
+                };
+                if !matches!(steps.get(index + 1), Some(WalkStep::AwaitPartyIdle { .. })) {
+                    return Err(format!(
+                        "{path} step {index}: CaptureWhileMoving must be followed by AwaitPartyIdle"
+                    ));
+                }
+                match steps.get(index + 2) {
+                    Some(WalkStep::AssertSelectedAt { expected })
+                        if *expected == clicked_destination => {}
+                    Some(WalkStep::AssertSelectedAt { expected }) => {
+                        return Err(format!(
+                            "{path} step {index}: CaptureWhileMoving arrival proof {expected:?} does not match ClickAnchor destination {clicked_destination:?}"
+                        ));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "{path} step {index}: CaptureWhileMoving must be followed by AwaitPartyIdle and matching AssertSelectedAt"
+                        ));
+                    }
+                }
+                movement_capture_files = movement_capture_files
+                    .checked_add(usize::from(*capture_count))
+                    .ok_or_else(|| {
+                        format!("{path} step {index}: movement capture count overflowed")
+                    })?;
+                if movement_capture_files > MAX_MOVEMENT_CAPTURE_FILES_PER_WALK {
+                    return Err(format!(
+                        "{path} step {index}: movement sequences request {movement_capture_files} files, exceeding the per-walk limit {MAX_MOVEMENT_CAPTURE_FILES_PER_WALK}"
+                    ));
+                }
+                (0..*capture_count)
+                    .map(|frame| movement_capture_name(prefix, frame))
+                    .collect()
+            }
+            _ => Vec::new(),
         };
-        if let Some(name) = capture_name {
-            if !capture_names.insert(name.as_str()) {
+        for name in capture_names_for_step {
+            if !capture_names.insert(name.clone()) {
                 return Err(format!(
                     "{path} step {index}: duplicate capture name {name:?} would overwrite evidence"
                 ));
             }
         }
     }
-    Ok(steps)
+    Ok(())
 }
 
 fn validate_step(step: &WalkStep) -> Result<(), String> {
@@ -467,6 +629,14 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         WalkStep::Key(name) => parse_key(name).map(|_| ()),
         WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. } => {
             validate_capture_name(name)
+        }
+        WalkStep::CaptureWhileMoving {
+            prefix,
+            every_frames,
+            capture_count,
+        } => {
+            validate_capture_name(prefix)?;
+            movement_capture_span(*every_frames, *capture_count).map(|_| ())
         }
         WalkStep::Click { name, .. } if name.trim().is_empty() => {
             Err("click name must not be empty".to_owned())
@@ -618,8 +788,9 @@ fn completed_review_index_markdown(
         "# Visual walk review index\n\n\
          **Capture status: COMPLETE. Human review status: UNREVIEWED.** This index includes every\n\
          persisted frame from the completed run in script order. Set each frame's result to PASS\n\
-         or FAIL and record notes before curating a smaller approval report. Static frames do not\n\
-         replace the required native motion check.\n\n\
+         or FAIL and record notes before curating a smaller approval report. Dense frame sequences\n\
+         can clear discrete renderer defects; they do not replace a required native control-feel or\n\
+         camera-comfort check.\n\n\
          ## Run provenance\n\n\
          - Run ID: <code>{}</code>\n\
          - Script: <code>{}</code>\n\
@@ -927,6 +1098,179 @@ enum CaptureOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MovementCaptureTick {
+    WaitingForMovement,
+    WaitingForInterval,
+    Capture(u16),
+}
+
+#[derive(Debug)]
+struct MovementCaptureState {
+    prefix: String,
+    every_frames: u32,
+    capture_count: u16,
+    start_grace_frames: u8,
+    observed_pending_movement: bool,
+    pending_frames: u32,
+    requested: u16,
+    outcomes: BTreeMap<u16, CaptureOutcome>,
+    failure: Option<String>,
+    /// Prevent late renderer callbacks from writing after fail-closed cleanup.
+    aborted: bool,
+}
+
+/// A fully written temporal sequence that is not evidence until the contiguous
+/// `AwaitPartyIdle` and exact `AssertSelectedAt` proof also succeed.
+///
+/// Keeping this small tombstone prevents a route that stopped early, timed out,
+/// or arrived on the wrong surface from leaving apparently complete PNGs behind.
+#[derive(Debug)]
+struct PendingMovementCaptureProof {
+    prefix: String,
+    capture_count: u16,
+}
+
+impl MovementCaptureState {
+    fn new(prefix: String, every_frames: u32, capture_count: u16) -> Self {
+        Self {
+            prefix,
+            every_frames,
+            capture_count,
+            start_grace_frames: 0,
+            observed_pending_movement: false,
+            pending_frames: 0,
+            requested: 0,
+            outcomes: BTreeMap::new(),
+            failure: None,
+            aborted: false,
+        }
+    }
+
+    fn observe_movement_frame(
+        &mut self,
+        selected_movement_is_pending: bool,
+    ) -> Result<MovementCaptureTick, String> {
+        if !selected_movement_is_pending {
+            if self.observed_pending_movement {
+                return Err(format!(
+                    "movement ended after {} of {} temporal frames were requested",
+                    self.requested, self.capture_count
+                ));
+            }
+            self.start_grace_frames = self.start_grace_frames.saturating_add(1);
+            if self.start_grace_frames > MOVEMENT_START_GRACE_FRAMES {
+                return Err(format!(
+                    "the preceding ClickAnchor did not start movement within {MOVEMENT_START_GRACE_FRAMES} frames"
+                ));
+            }
+            return Ok(MovementCaptureTick::WaitingForMovement);
+        }
+
+        self.observed_pending_movement = true;
+        self.pending_frames = self.pending_frames.saturating_add(1);
+        if self.pending_frames % self.every_frames != 0 {
+            return Ok(MovementCaptureTick::WaitingForInterval);
+        }
+        if self.requested >= self.capture_count {
+            return Err(format!(
+                "movement capture tried to exceed its exact {}-file plan",
+                self.capture_count
+            ));
+        }
+        let index = self.requested;
+        self.requested += 1;
+        Ok(MovementCaptureTick::Capture(index))
+    }
+
+    fn scheduled_all(&self) -> bool {
+        self.requested == self.capture_count
+    }
+
+    fn all_requested_finished(&self) -> bool {
+        self.outcomes.len() == usize::from(self.requested)
+    }
+
+    fn first_outcome_failure(&self) -> Option<String> {
+        self.outcomes.iter().find_map(|(index, outcome)| {
+            let name = movement_capture_name(&self.prefix, *index);
+            match outcome {
+                CaptureOutcome::Written { brightest, .. } if *brightest > 8 => None,
+                CaptureOutcome::Written { .. } => {
+                    Some(format!("temporal frame {name:?} came back black"))
+                }
+                CaptureOutcome::Failed(error) => {
+                    Some(format!("temporal frame {name:?} failed: {error}"))
+                }
+            }
+        })
+    }
+
+    fn callback_issue(&self, prefix: &str, frame_index: u16) -> Option<String> {
+        if self.aborted {
+            return Some(format!(
+                "temporal frame {frame_index} for {prefix:?} arrived after abort"
+            ));
+        }
+        if self.prefix != prefix {
+            return Some(format!(
+                "temporal frame for {prefix:?} arrived during {:?}",
+                self.prefix
+            ));
+        }
+        if frame_index >= self.requested {
+            return Some(format!(
+                "temporal frame {frame_index} arrived before its request was recorded"
+            ));
+        }
+        self.outcomes
+            .contains_key(&frame_index)
+            .then(|| format!("temporal frame {frame_index} completed more than once"))
+    }
+}
+
+fn movement_capture_path(out_dir: &std::path::Path, prefix: &str, index: u16) -> PathBuf {
+    out_dir.join(format!("{}.png", movement_capture_name(prefix, index)))
+}
+
+fn remove_capture_file_if_present(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot remove {}: {error}", path.display())),
+    }
+}
+
+fn cleanup_movement_capture_outputs(
+    out_dir: &std::path::Path,
+    prefix: &str,
+    capture_count: u16,
+) -> Result<(), String> {
+    let mut failures = Vec::new();
+    for index in 0..capture_count {
+        let path = movement_capture_path(out_dir, prefix, index);
+        if let Err(error) = remove_capture_file_if_present(&path) {
+            failures.push(error);
+        }
+        match temporary_capture_path(&path) {
+            Ok(temporary) => {
+                if let Err(error) = remove_capture_file_if_present(&temporary) {
+                    failures.push(error);
+                }
+            }
+            Err(error) => failures.push(format!(
+                "cannot resolve temporary sequence path for {}: {error}",
+                path.display()
+            )),
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureTargetPreparation {
     /// The next capture must first detach and replace the shared target.
     Refresh,
@@ -948,6 +1292,10 @@ struct WalkState {
     step_started: Instant,
     capture_requested: bool,
     capture_outcome: Option<CaptureOutcome>,
+    /// Bounded temporal recorder owned by one `CaptureWhileMoving` step.
+    movement_capture: Option<MovementCaptureState>,
+    /// Written frames awaiting the exact arrival proof required by the script.
+    pending_movement_capture_proof: Option<PendingMovementCaptureProof>,
     /// Every successfully persisted frame, in script order, for exhaustive review.
     completed_captures: Vec<String>,
     /// A button pressed by the previous step, to be reset to `None`.
@@ -998,6 +1346,8 @@ struct WalkContent<'w, 's> {
         ),
         With<Selected>,
     >,
+    buttons: Query<'w, 's, (Entity, &'static Name), With<Button>>,
+    tiles: Query<'w, 's, (Entity, &'static TilePos, &'static Headroom), With<HexTile>>,
 }
 
 #[derive(SystemParam)]
@@ -1034,6 +1384,17 @@ impl WalkContent<'_, '_> {
             }
         }
         Some(true)
+    }
+
+    /// Whether the exact selected actor targeted by `ClickAnchor` owns a live
+    /// domain route.
+    ///
+    /// Temporal evidence must not borrow an unrelated party member's movement:
+    /// that could make an ignored click look successful until a later assertion.
+    fn selected_movement_is_pending(&self) -> Option<bool> {
+        let (entity, _, _) = self.selected.single().ok()?;
+        let (_, moving, _) = self.movement.get(entity).ok()?;
+        Some(moving)
     }
 
     fn assert_selected_at(&self, expected: TilePos) -> Result<(), String> {
@@ -1095,6 +1456,8 @@ impl WalkState {
             step_started: Instant::now(),
             capture_requested: false,
             capture_outcome: None,
+            movement_capture: None,
+            pending_movement_capture_proof: None,
             completed_captures: Vec::new(),
             pressed: None,
             held_key: None,
@@ -1118,6 +1481,74 @@ impl WalkState {
         self.capture_outcome = None;
         self.capture_target = CaptureTargetPreparation::Refresh;
         self.step_started = Instant::now();
+    }
+}
+
+fn begin_temporal_capture_time(time: &mut Time<Virtual>) {
+    time.set_relative_speed(TEMPORAL_CAPTURE_TIME_SCALE);
+}
+
+fn restore_walk_time(time: &mut Time<Virtual>) {
+    time.set_relative_speed(WALK_TIME_SCALE);
+}
+
+/// Stops one temporal sequence immediately and makes any late screenshot
+/// callback harmless before removing its exact partial outputs.
+fn abort_movement_capture(
+    state: &mut WalkState,
+    time: &mut Time<Virtual>,
+    mut reason: String,
+) -> String {
+    restore_walk_time(time);
+    if let Some(mut recording) = state.movement_capture.take() {
+        recording.aborted = true;
+        if let Err(cleanup) = cleanup_movement_capture_outputs(
+            &state.out_dir,
+            &recording.prefix,
+            recording.capture_count,
+        ) {
+            reason.push_str(&format!("; active-sequence cleanup also failed: {cleanup}"));
+            // Keep the aborted tombstone so `Drop` retries exact cleanup and late
+            // renderer callbacks still cannot republish a partial frame.
+            state.movement_capture = Some(recording);
+        }
+    }
+    if let Some(proof) = state.pending_movement_capture_proof.take() {
+        if let Err(cleanup) =
+            cleanup_movement_capture_outputs(&state.out_dir, &proof.prefix, proof.capture_count)
+        {
+            reason.push_str(&format!("; arrival-proof cleanup also failed: {cleanup}"));
+            // Retain the tombstone so `Drop` gets one final exact cleanup attempt.
+            state.pending_movement_capture_proof = Some(proof);
+        }
+    }
+    reason
+}
+
+impl Drop for WalkState {
+    fn drop(&mut self) {
+        if let Some(recording) = self.movement_capture.as_ref() {
+            if let Err(error) = cleanup_movement_capture_outputs(
+                &self.out_dir,
+                &recording.prefix,
+                recording.capture_count,
+            ) {
+                error!(
+                    "visual walk could not clean aborted temporal capture {:?}: {error}",
+                    recording.prefix
+                );
+            }
+        }
+        if let Some(proof) = self.pending_movement_capture_proof.as_ref() {
+            if let Err(error) =
+                cleanup_movement_capture_outputs(&self.out_dir, &proof.prefix, proof.capture_count)
+            {
+                error!(
+                    "visual walk could not clean temporal capture {:?} after a missing arrival proof: {error}",
+                    proof.prefix
+                );
+            }
+        }
     }
 }
 
@@ -1284,11 +1715,10 @@ fn run_walk(
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
     content: WalkContent,
+    mut walk_time: ResMut<Time<Virtual>>,
     mut ui_scale: ResMut<hex_ui::UiScalePreference>,
     mut primary_window: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
     mut input: WalkInput,
-    buttons: Query<(Entity, &Name), With<Button>>,
-    tiles: Query<(Entity, &TilePos, &Headroom), With<HexTile>>,
     mut images: ResMut<Assets<Image>>,
     mut game_camera: Query<(&mut RenderTarget, &Msaa), (With<Camera3d>, Without<WalkUiCamera>)>,
     mut review_camera: Query<
@@ -1316,10 +1746,25 @@ fn run_walk(
     // Redirect the game's single camera into an explicitly scaled Bevy image.
     if state.target.is_none() {
         let Ok((mut game_target, game_msaa)) = game_camera.single_mut() else {
+            if state.movement_capture.is_some() {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    "the game camera disappeared during temporal capture".to_owned(),
+                );
+                error!("visual walk temporal capture failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
             return;
         };
         let Ok(physical_size) = state.viewport.physical_size() else {
-            error!("visual walk viewport became invalid");
+            let reason = abort_movement_capture(
+                &mut state,
+                &mut walk_time,
+                "visual walk viewport became invalid".to_owned(),
+            );
+            error!("{reason}");
             state.failed = true;
             exit.write(AppExit::error());
             return;
@@ -1359,6 +1804,7 @@ fn run_walk(
                 .id()
         };
         if let Err(reason) = install_walk_target(&mut state, &mut images, handle) {
+            let reason = abort_movement_capture(&mut state, &mut walk_time, reason);
             error!("{reason}");
             state.failed = true;
             exit.write(AppExit::error());
@@ -1391,14 +1837,27 @@ fn run_walk(
             }
         }
         if retargeted {
+            if state.movement_capture.is_some() || state.pending_movement_capture_proof.is_some() {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    "UI camera roots changed before temporal capture received its exact arrival proof"
+                        .to_owned(),
+                );
+                error!("visual walk temporal capture failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
             return;
         }
     }
     if let Some(failure) = content.failure.as_deref() {
-        error!(
-            "visual walk aborted: gameplay setup failed: {}",
-            failure.reason
+        let reason = abort_movement_capture(
+            &mut state,
+            &mut walk_time,
+            format!("gameplay setup failed: {}", failure.reason),
         );
+        error!("visual walk aborted: {reason}");
         state.failed = true;
         exit.write(AppExit::error());
         return;
@@ -1406,7 +1865,7 @@ fn run_walk(
 
     // Cleanups owed from the previous step, regardless of what runs now.
     if let Some(entity) = state.pressed.take() {
-        if buttons.contains(entity) {
+        if content.buttons.contains(entity) {
             commands.entity(entity).insert(Interaction::None);
         }
     }
@@ -1415,6 +1874,18 @@ fn run_walk(
     }
 
     let Some(step) = state.steps.get(state.cursor).cloned() else {
+        if state.movement_capture.is_some() || state.pending_movement_capture_proof.is_some() {
+            let reason = abort_movement_capture(
+                &mut state,
+                &mut walk_time,
+                "visual walk ended before temporal movement received its exact arrival proof"
+                    .to_owned(),
+            );
+            error!("visual walk refused an incomplete temporal contract: {reason}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
         let review_index = match write_completed_review_index(
             &state.out_dir,
             &state.review,
@@ -1435,6 +1906,7 @@ fn run_walk(
             state.completed_captures.len(),
             review_index.display()
         );
+        restore_walk_time(&mut walk_time);
         input.mouse.release(MouseButton::Right);
         exit.write(AppExit::Success);
         state.failed = true;
@@ -1445,13 +1917,16 @@ fn run_walk(
         _ => None,
     };
 
-    if state.step_started.elapsed() > STEP_TIMEOUT {
-        error!(
-            "visual walk timed out on step {} ({step:?}) after {:.0}s on screen {:?}",
+    let timeout = step_timeout(&step);
+    if state.step_started.elapsed() > timeout {
+        let timeout_reason = format!(
+            "step {} ({step:?}) timed out after {:.0}s on screen {:?}",
             state.cursor,
-            STEP_TIMEOUT.as_secs_f32(),
+            timeout.as_secs_f32(),
             screen.get()
         );
+        let reason = abort_movement_capture(&mut state, &mut walk_time, timeout_reason);
+        error!("visual walk timed out: {reason}");
         state.failed = true;
         exit.write(AppExit::error());
         return;
@@ -1465,19 +1940,279 @@ fn run_walk(
             }
         }
         WalkStep::AwaitTerrain => {
-            if !tiles.is_empty() {
+            if !content.tiles.is_empty() {
                 state.advance();
             }
+        }
+        WalkStep::CaptureWhileMoving {
+            ref prefix,
+            every_frames,
+            capture_count,
+        } => {
+            if state.movement_capture.is_none() {
+                if state.pending_movement_capture_proof.is_some() {
+                    let reason = abort_movement_capture(
+                        &mut state,
+                        &mut walk_time,
+                        "a new temporal sequence started before the prior arrival proof completed"
+                            .to_owned(),
+                    );
+                    error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+                if let Err(reason) =
+                    cleanup_movement_capture_outputs(&state.out_dir, prefix, capture_count)
+                {
+                    restore_walk_time(&mut walk_time);
+                    error!("visual walk could not prepare temporal capture {prefix:?}: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+                begin_temporal_capture_time(&mut walk_time);
+                state.movement_capture = Some(MovementCaptureState::new(
+                    prefix.clone(),
+                    every_frames,
+                    capture_count,
+                ));
+            }
+
+            let ready_failure = state.movement_capture.as_ref().and_then(|recording| {
+                recording
+                    .failure
+                    .clone()
+                    .or_else(|| recording.first_outcome_failure())
+            });
+            if let Some(reason) = ready_failure {
+                let reason = abort_movement_capture(&mut state, &mut walk_time, reason);
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+
+            let completed = state.movement_capture.as_ref().is_some_and(|recording| {
+                recording.scheduled_all() && recording.all_requested_finished()
+            });
+            if completed {
+                let Some(recording) = state.movement_capture.take() else {
+                    restore_walk_time(&mut walk_time);
+                    error!("visual walk lost its completed temporal-capture state");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                };
+                info!(
+                    "visual walk wrote {} temporal frames with prefix {:?}; awaiting exact arrival proof",
+                    recording.capture_count, recording.prefix
+                );
+                state.pending_movement_capture_proof = Some(PendingMovementCaptureProof {
+                    prefix: recording.prefix,
+                    capture_count: recording.capture_count,
+                });
+                restore_walk_time(&mut walk_time);
+                state.advance();
+                return;
+            }
+            if state
+                .movement_capture
+                .as_ref()
+                .is_some_and(MovementCaptureState::scheduled_all)
+            {
+                return;
+            }
+
+            let Some(snapshot) = latest_ui_tree.0.as_ref() else {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    "the UI structural snapshot disappeared during temporal capture".to_owned(),
+                );
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let issues = capture_structural_issues(
+                snapshot,
+                state.presentation.as_deref(),
+                None,
+                Some(*screen.get()),
+            );
+            if !issues.is_empty() {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    format!(
+                        "structural oracle rejected the temporal sequence:\n{}",
+                        issues.join("\n")
+                    ),
+                );
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+            let expected_logical = state.viewport.logical_size.as_vec2();
+            let logical_error = (snapshot.metrics.logical_size - expected_logical)
+                .abs()
+                .max_element();
+            if logical_error > 0.5 {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    format!(
+                        "temporal snapshot logical size {:?} did not match {:?}",
+                        snapshot.metrics.logical_size, expected_logical
+                    ),
+                );
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+
+            let Some(selected_movement_is_pending) = content.selected_movement_is_pending() else {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    "the exact selected actor disappeared during temporal capture".to_owned(),
+                );
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let Some(target) = state.target.clone() else {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    "the shared render target disappeared during temporal capture".to_owned(),
+                );
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let Ok(expected_physical) = state.viewport.physical_size() else {
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    "review viewport physical size became invalid during temporal capture"
+                        .to_owned(),
+                );
+                error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let tick = if let Some(recording) = state.movement_capture.as_mut() {
+                recording.observe_movement_frame(selected_movement_is_pending)
+            } else {
+                restore_walk_time(&mut walk_time);
+                error!("visual walk lost its temporal-capture state");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let frame_index = match tick {
+                Ok(MovementCaptureTick::Capture(index)) => index,
+                Ok(
+                    MovementCaptureTick::WaitingForMovement
+                    | MovementCaptureTick::WaitingForInterval,
+                ) => return,
+                Err(reason) => {
+                    let reason = abort_movement_capture(&mut state, &mut walk_time, reason);
+                    error!("visual walk temporal capture {prefix:?} failed: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+            };
+
+            let path = movement_capture_path(&state.out_dir, prefix, frame_index);
+            let callback_prefix = prefix.clone();
+            info!(
+                "visual walk requesting temporal frame {} at pending movement frame {}",
+                path.display(),
+                state
+                    .movement_capture
+                    .as_ref()
+                    .map_or(0, |recording| recording.pending_frames)
+            );
+            // Do not call `prepare_capture_target` here: replacing and settling
+            // the target would disrupt the fixed-interval temporal sample. This
+            // diagnostic reads the continuously rendered walk target. Advancing
+            // the step resets `capture_target`, so the next ordinary acceptance
+            // Capture still owns a fresh generation and its full stale guard.
+            let mut screenshot = Screenshot::image(target.clone());
+            screenshot.0 = RenderTarget::Image(ImageRenderTarget {
+                handle: target,
+                scale_factor: state.viewport.device_scale,
+            });
+            commands.spawn(screenshot).observe(
+                move |captured: On<ScreenshotCaptured>, mut state: ResMut<WalkState>| {
+                    let callback_error = match state.movement_capture.as_ref() {
+                        None => Some(format!(
+                            "temporal frame {frame_index} for {callback_prefix:?} arrived without an active recorder"
+                        )),
+                        Some(recording) => {
+                            recording.callback_issue(&callback_prefix, frame_index)
+                        }
+                    };
+                    if let Some(error) = callback_error {
+                        if let Some(recording) = state.movement_capture.as_mut() {
+                            if recording.failure.is_none() {
+                                recording.failure = Some(error.clone());
+                            }
+                        }
+                        error!("visual walk rejected renderer callback: {error}");
+                        return;
+                    }
+
+                    let outcome = if captured.image.size() != expected_physical {
+                        CaptureOutcome::Failed(format!(
+                            "capture size {:?} did not match review target {expected_physical:?}",
+                            captured.image.size()
+                        ))
+                    } else {
+                        match write_png(&captured.image, &path) {
+                            Ok(stats) => CaptureOutcome::Written {
+                                brightest: stats.brightest,
+                                coverage: stats.has_coverage,
+                            },
+                            Err(error) => CaptureOutcome::Failed(error),
+                        }
+                    };
+                    let Some(recording) = state.movement_capture.as_mut() else {
+                        error!("visual walk lost the recorder after validating frame {frame_index}");
+                        return;
+                    };
+                    if recording.outcomes.insert(frame_index, outcome).is_some()
+                        && recording.failure.is_none()
+                    {
+                        recording.failure =
+                            Some(format!("temporal frame {frame_index} completed more than once"));
+                    }
+                },
+            );
         }
         WalkStep::AwaitPartyIdle { max_frames } => {
             state.settled = state.settled.saturating_add(1);
             if content.party_is_idle() == Some(true) {
                 state.advance();
             } else if state.settled >= max_frames {
-                error!(
-                    "visual walk exhausted AwaitPartyIdle after {max_frames} frames; party facts: {:?}",
-                    content.party_is_idle()
+                let reason = abort_movement_capture(
+                    &mut state,
+                    &mut walk_time,
+                    format!(
+                        "visual walk exhausted AwaitPartyIdle after {max_frames} frames; party facts: {:?}",
+                        content.party_is_idle()
+                    ),
                 );
+                error!("{reason}");
                 state.failed = true;
                 exit.write(AppExit::error());
             }
@@ -1487,9 +2222,21 @@ fn run_walk(
             match content.assert_selected_at(expected) {
                 Ok(()) => {
                     info!("visual walk proved selected unit and camera focus at {expected:?}");
+                    if let Some(proof) = state.pending_movement_capture_proof.take() {
+                        for index in 0..proof.capture_count {
+                            state
+                                .completed_captures
+                                .push(movement_capture_name(&proof.prefix, index));
+                        }
+                        info!(
+                            "visual walk accepted {} temporal frames with prefix {:?}",
+                            proof.capture_count, proof.prefix
+                        );
+                    }
                     state.advance();
                 }
                 Err(reason) => {
+                    let reason = abort_movement_capture(&mut state, &mut walk_time, reason);
                     error!("visual walk rejected position evidence: {reason}");
                     state.failed = true;
                     exit.write(AppExit::error());
@@ -1632,7 +2379,8 @@ fn run_walk(
             }
         }
         WalkStep::Click { ref name, index } => {
-            let mut matches: Vec<(Entity, String)> = buttons
+            let mut matches: Vec<(Entity, String)> = content
+                .buttons
                 .iter()
                 .filter(|(_, button_name)| button_name.as_str().starts_with(name.as_str()))
                 .map(|(entity, button_name)| (entity, button_name.as_str().to_owned()))
@@ -1654,7 +2402,7 @@ fn run_walk(
         }
         WalkStep::ClickTile { q, r, level } => {
             let coord = HexCoord::from_axial(q, r);
-            match resolve_tile_click_target(tiles.iter(), coord, level) {
+            match resolve_tile_click_target(content.tiles.iter(), coord, level) {
                 Ok(None) => {}
                 Ok(Some((target, pos))) => {
                     let Ok((window, _)) = primary_window.single() else {
@@ -1679,7 +2427,7 @@ fn run_walk(
         }
         WalkStep::HoverTile { q, r, level } => {
             let coord = HexCoord::from_axial(q, r);
-            match resolve_tile_click_target(tiles.iter(), coord, level) {
+            match resolve_tile_click_target(content.tiles.iter(), coord, level) {
                 Ok(None) => {}
                 Ok(Some((target, pos))) => {
                     let Ok((window, _)) = primary_window.single() else {
@@ -1703,11 +2451,26 @@ fn run_walk(
             }
         }
         WalkStep::ClickAnchor { ref name, expected } => {
+            let starts_temporal_capture = matches!(
+                state.steps.get(state.cursor + 1),
+                Some(WalkStep::CaptureWhileMoving { .. })
+            );
+            if starts_temporal_capture && state.settled == 0 {
+                // `Time<Virtual>` advances before PreUpdate. Arm 1x speed for
+                // one complete update before issuing the click so movement
+                // cannot consume a leftover accelerated delta on its first tick.
+                begin_temporal_capture_time(&mut walk_time);
+                state.settled = 1;
+                return;
+            }
             let Some(anchors) = content.anchors.as_deref() else {
                 return;
             };
             let id = MapAnchorId::from(name.as_str());
             let Some(actual) = anchors.get(&id) else {
+                if starts_temporal_capture {
+                    restore_walk_time(&mut walk_time);
+                }
                 error!("visual walk anchor {name:?} is not published by this map");
                 state.failed = true;
                 exit.write(AppExit::error());
@@ -1715,6 +2478,9 @@ fn run_walk(
             };
             let expected = expected.position();
             if actual != expected {
+                if starts_temporal_capture {
+                    restore_walk_time(&mut walk_time);
+                }
                 error!(
                     "visual walk anchor {name:?} moved from expected {expected:?} to {actual:?}; \
                      recapture and review the route before updating its stale detector"
@@ -1723,13 +2489,17 @@ fn run_walk(
                 exit.write(AppExit::error());
                 return;
             }
-            match resolve_tile_click_target(tiles.iter(), actual.coord, Some(actual.level)) {
+            match resolve_tile_click_target(content.tiles.iter(), actual.coord, Some(actual.level))
+            {
                 Ok(None) => {}
                 Ok(Some((target, pos))) => {
                     let Ok((window, _)) = primary_window.single() else {
                         return;
                     };
                     let Some(click) = primary_tile_click(target, window) else {
+                        if starts_temporal_capture {
+                            restore_walk_time(&mut walk_time);
+                        }
                         error!("visual walk could not normalize the primary window for {step:?}");
                         state.failed = true;
                         exit.write(AppExit::error());
@@ -1738,10 +2508,16 @@ fn run_walk(
                     info!(
                         "visual walk clicking anchor {name:?} at {pos:?} through pointer picking"
                     );
+                    if starts_temporal_capture {
+                        begin_temporal_capture_time(&mut walk_time);
+                    }
                     commands.trigger(click);
                     state.advance();
                 }
                 Err(reason) => {
+                    if starts_temporal_capture {
+                        restore_walk_time(&mut walk_time);
+                    }
                     error!("visual walk refused {step:?}: {reason}");
                     state.failed = true;
                     exit.write(AppExit::error());
@@ -1749,7 +2525,8 @@ fn run_walk(
             }
         }
         WalkStep::AwaitButton(ref name) => {
-            if buttons
+            if content
+                .buttons
                 .iter()
                 .any(|(_, button_name)| button_name.as_str().starts_with(name.as_str()))
             {
@@ -1906,6 +2683,14 @@ mod tests {
     const SANDY_ISLETS_CAMERA_SCRIPT: &str = "../../walks/camera_sandy_islets.ron";
     const WOODED_ISLAND_CAMERA_SCRIPT: &str = "../../walks/camera_wooded_island.ron";
     const OCEAN_ARCHIPELAGOES_CAMERA_SCRIPT: &str = "../../walks/camera_ocean_archipelagoes.ron";
+    const GRAND_V3_BASELINE_CAMERA_SCRIPT: &str = "../../walks/camera_grand_v3_baseline.ron";
+    const GRAND_V3_CORRECTIVE_MOTION_SCRIPT: &str =
+        "../../walks/camera_grand_v3_corrective_motion.ron";
+
+    /// Supplemental temporal gates deliberately stay outside the one-static-route-
+    /// per-scenario manifest contract enforced by `CAMERA_ROUTE_SCRIPTS`.
+    const AUXILIARY_CAMERA_REVIEW_SCRIPTS: &[(&str, &str)] =
+        &[(GRAND_V3_CORRECTIVE_MOTION_SCRIPT, "Grand V3 Baseline")];
 
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
@@ -1945,6 +2730,7 @@ mod tests {
         ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
         ("../../walks/camera_mountain_range.ron", "Mountain Range"),
+        (GRAND_V3_BASELINE_CAMERA_SCRIPT, "Grand V3 Baseline"),
     ];
 
     const TWO_RINGS_ROUTE_SCRIPTS: &[&str] = &[
@@ -2003,6 +2789,13 @@ mod tests {
         record.0 = content.party_is_idle();
     }
 
+    #[derive(Resource, Default, Debug, PartialEq, Eq)]
+    struct SelectedMovementRecord(Option<bool>);
+
+    fn record_selected_movement(content: WalkContent, mut record: ResMut<SelectedMovementRecord>) {
+        record.0 = content.selected_movement_is_pending();
+    }
+
     #[derive(Resource, Default, Debug)]
     struct SelectedAtRecord(Option<Result<(), String>>);
 
@@ -2023,6 +2816,7 @@ mod tests {
         ClickTile(q: 2, r: -2, level: Some(7)),
         HoverTile(q: 3, r: -2, level: Some(7)),
         ClickAnchor(name: "bridge", expected: (q: 0, r: 0, level: 16)),
+        CaptureWhileMoving(prefix: "bridge-motion", every_frames: 3, capture_count: 4),
         AwaitPartyIdle(max_frames: 600),
         AssertSelectedAt(expected: (q: 0, r: 0, level: 16)),
         OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.1),
@@ -2045,9 +2839,36 @@ mod tests {
     }
 
     #[test]
+    fn required_walk_environment_distinguishes_absent_and_present_values() {
+        assert_eq!(
+            normalize_walk_environment_value(SCRIPT_ENV, Err(env::VarError::NotPresent)),
+            Ok(None)
+        );
+        assert_eq!(
+            normalize_walk_environment_value(SCRIPT_ENV, Ok("walk.ron".to_owned())),
+            Ok(Some("walk.ron".to_owned()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn required_walk_environment_rejects_non_unicode_values() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let error = normalize_walk_environment_value(
+            SCRIPT_ENV,
+            Err(env::VarError::NotUnicode(OsString::from_vec(vec![0xff]))),
+        )
+        .expect_err("non-Unicode automation paths must fail closed");
+        assert!(error.contains(SCRIPT_ENV));
+        assert!(error.contains("Unicode"));
+    }
+
+    #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 20);
+        assert_eq!(steps.len(), 21);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -2101,10 +2922,18 @@ mod tests {
         );
         assert_eq!(
             steps.get(12),
-            Some(&WalkStep::AwaitPartyIdle { max_frames: 600 })
+            Some(&WalkStep::CaptureWhileMoving {
+                prefix: "bridge-motion".to_owned(),
+                every_frames: 3,
+                capture_count: 4,
+            })
         );
         assert_eq!(
             steps.get(13),
+            Some(&WalkStep::AwaitPartyIdle { max_frames: 600 })
+        );
+        assert_eq!(
+            steps.get(14),
             Some(&WalkStep::AssertSelectedAt {
                 expected: CameraRouteTile {
                     q: 0,
@@ -2114,7 +2943,7 @@ mod tests {
             })
         );
         assert_eq!(
-            steps.get(14),
+            steps.get(15),
             Some(&WalkStep::OrbitCamera {
                 yaw_turns: 0.33333334,
                 pitch_fraction: -0.1,
@@ -2123,6 +2952,34 @@ mod tests {
         for step in &steps {
             validate_step(step).expect("every step validates");
         }
+        validate_script_steps("full-script.ron", &steps)
+            .expect("cross-step capture constraints should validate");
+        assert_eq!(
+            ReviewRunProvenance::from_steps(
+                "full-script.ron".to_owned(),
+                "test-run".to_owned(),
+                &steps,
+            )
+            .expected_captures,
+            6,
+            "two static frames plus four temporal frames must be indexed"
+        );
+    }
+
+    #[test]
+    fn walk_steps_reject_unknown_fields_in_temporal_capture_configuration() {
+        let error = ron::from_str::<Vec<WalkStep>>(
+            r#"[
+                CaptureWhileMoving(
+                    prefix: "motion",
+                    every_frames: 1,
+                    capture_count: 1,
+                    capture_counts: 1,
+                ),
+            ]"#,
+        )
+        .expect_err("a misspelled temporal-capture field must fail closed");
+        assert!(error.to_string().contains("capture_counts"));
     }
 
     #[test]
@@ -2274,6 +3131,42 @@ mod tests {
         assert!(validate_step(&WalkStep::AwaitPartyIdle { max_frames: 0 }).is_err());
         validate_step(&WalkStep::AwaitPartyIdle { max_frames: 1 })
             .expect("a positive frame bound is valid");
+        assert!(validate_step(&WalkStep::CaptureWhileMoving {
+            prefix: "motion".to_owned(),
+            every_frames: 0,
+            capture_count: 1,
+        })
+        .is_err());
+        assert!(validate_step(&WalkStep::CaptureWhileMoving {
+            prefix: "motion".to_owned(),
+            every_frames: 1,
+            capture_count: 0,
+        })
+        .is_err());
+        assert!(validate_step(&WalkStep::CaptureWhileMoving {
+            prefix: "../motion".to_owned(),
+            every_frames: 1,
+            capture_count: 1,
+        })
+        .is_err());
+        assert!(validate_step(&WalkStep::CaptureWhileMoving {
+            prefix: "motion".to_owned(),
+            every_frames: 1,
+            capture_count: MAX_MOVEMENT_CAPTURE_FILES + 1,
+        })
+        .is_err());
+        assert!(validate_step(&WalkStep::CaptureWhileMoving {
+            prefix: "motion".to_owned(),
+            every_frames: MAX_MOVEMENT_CAPTURE_FRAMES,
+            capture_count: 2,
+        })
+        .is_err());
+        validate_step(&WalkStep::CaptureWhileMoving {
+            prefix: "motion".to_owned(),
+            every_frames: MAX_MOVEMENT_CAPTURE_FRAMES / u32::from(MAX_MOVEMENT_CAPTURE_FILES),
+            capture_count: MAX_MOVEMENT_CAPTURE_FILES,
+        })
+        .expect("the exact bounded temporal capture limit is valid");
         assert!(validate_step(&WalkStep::ClickAnchor {
             name: " ".to_owned(),
             expected: CameraRouteTile {
@@ -2287,6 +3180,168 @@ mod tests {
             .expect("every typed camera mode should be a valid assertion");
     }
 
+    #[test]
+    fn movement_sequence_requires_click_anchor_and_owns_unique_files() {
+        let expected = CameraRouteTile {
+            q: 0,
+            r: 0,
+            level: 1,
+        };
+        let recorder = WalkStep::CaptureWhileMoving {
+            prefix: "route-motion".to_owned(),
+            every_frames: 3,
+            capture_count: 4,
+        };
+        let valid = vec![
+            WalkStep::ClickAnchor {
+                name: "route".to_owned(),
+                expected,
+            },
+            recorder.clone(),
+            WalkStep::AwaitPartyIdle { max_frames: 600 },
+            WalkStep::AssertSelectedAt { expected },
+        ];
+        validate_script_steps("valid.ron", &valid)
+            .expect("an immediately stale-checked movement recorder should validate");
+
+        let misplaced = vec![WalkStep::Settle(1), recorder.clone()];
+        let error = validate_script_steps("misplaced.ron", &misplaced)
+            .expect_err("a temporal recorder without ClickAnchor must fail closed");
+        assert!(error.contains("immediately follow ClickAnchor"));
+
+        let collision = vec![
+            WalkStep::ClickAnchor {
+                name: "route".to_owned(),
+                expected,
+            },
+            recorder.clone(),
+            WalkStep::AwaitPartyIdle { max_frames: 600 },
+            WalkStep::AssertSelectedAt { expected },
+            WalkStep::Capture("route-motion-0002".to_owned()),
+        ];
+        let error = validate_script_steps("collision.ron", &collision)
+            .expect_err("generated temporal names must not overwrite static evidence");
+        assert!(error.contains("duplicate capture name"));
+
+        let missing_arrival = vec![
+            WalkStep::ClickAnchor {
+                name: "route".to_owned(),
+                expected,
+            },
+            recorder.clone(),
+            WalkStep::AwaitPartyIdle { max_frames: 600 },
+        ];
+        let error = validate_script_steps("missing-arrival.ron", &missing_arrival)
+            .expect_err("a temporal sequence without an arrival proof must fail closed");
+        assert!(error.contains("matching AssertSelectedAt"));
+
+        let wrong_destination = CameraRouteTile {
+            q: 1,
+            r: 0,
+            level: 1,
+        };
+        let mismatched_arrival = vec![
+            WalkStep::ClickAnchor {
+                name: "route".to_owned(),
+                expected,
+            },
+            recorder,
+            WalkStep::AwaitPartyIdle { max_frames: 600 },
+            WalkStep::AssertSelectedAt {
+                expected: wrong_destination,
+            },
+        ];
+        let error = validate_script_steps("mismatched-arrival.ron", &mismatched_arrival)
+            .expect_err("a temporal sequence must prove its own clicked destination");
+        assert!(error.contains("does not match ClickAnchor destination"));
+
+        let mut excessive = Vec::new();
+        for sequence in
+            0..=MAX_MOVEMENT_CAPTURE_FILES_PER_WALK / usize::from(MAX_MOVEMENT_CAPTURE_FILES)
+        {
+            excessive.push(WalkStep::ClickAnchor {
+                name: format!("route-{sequence}"),
+                expected,
+            });
+            excessive.push(WalkStep::CaptureWhileMoving {
+                prefix: format!("route-{sequence}-motion"),
+                every_frames: 1,
+                capture_count: MAX_MOVEMENT_CAPTURE_FILES,
+            });
+            excessive.push(WalkStep::AwaitPartyIdle { max_frames: 600 });
+            excessive.push(WalkStep::AssertSelectedAt { expected });
+        }
+        let error = validate_script_steps("too-many-frames.ron", &excessive)
+            .expect_err("one walk must not expand temporal sequences without bound");
+        assert!(error.contains("per-walk limit"));
+    }
+
+    #[test]
+    fn movement_sequence_schedules_exact_fixed_intervals_and_fails_early_idle() {
+        let mut recording = MovementCaptureState::new("motion".to_owned(), 3, 4);
+        let mut scheduled = Vec::new();
+        for frame in 1..=12 {
+            let tick = recording
+                .observe_movement_frame(true)
+                .expect("pending movement should remain recordable");
+            if let MovementCaptureTick::Capture(index) = tick {
+                scheduled.push((frame, index));
+            }
+        }
+        assert_eq!(scheduled, [(3, 0), (6, 1), (9, 2), (12, 3)]);
+        assert!(recording.scheduled_all());
+
+        let mut ended = MovementCaptureState::new("short".to_owned(), 2, 3);
+        assert_eq!(
+            ended.observe_movement_frame(true),
+            Ok(MovementCaptureTick::WaitingForInterval)
+        );
+        let error = ended
+            .observe_movement_frame(false)
+            .expect_err("movement ending before the exact sequence must fail");
+        assert!(error.contains("movement ended after 0 of 3"));
+
+        let mut never_started = MovementCaptureState::new("ignored".to_owned(), 1, 1);
+        for _ in 0..MOVEMENT_START_GRACE_FRAMES {
+            assert_eq!(
+                never_started.observe_movement_frame(false),
+                Ok(MovementCaptureTick::WaitingForMovement)
+            );
+        }
+        assert!(never_started.observe_movement_frame(false).is_err());
+    }
+
+    #[test]
+    fn temporal_callback_gate_rejects_late_unrequested_and_duplicate_frames() {
+        let mut recording = MovementCaptureState::new("motion".to_owned(), 1, 2);
+        assert_eq!(
+            recording.observe_movement_frame(true),
+            Ok(MovementCaptureTick::Capture(0))
+        );
+        assert_eq!(recording.callback_issue("motion", 0), None);
+        assert!(recording
+            .callback_issue("other-motion", 0)
+            .is_some_and(|reason| reason.contains("arrived during")));
+        assert!(recording
+            .callback_issue("motion", 1)
+            .is_some_and(|reason| reason.contains("before its request")));
+
+        recording.outcomes.insert(
+            0,
+            CaptureOutcome::Written {
+                brightest: 255,
+                coverage: true,
+            },
+        );
+        assert!(recording
+            .callback_issue("motion", 0)
+            .is_some_and(|reason| reason.contains("more than once")));
+        recording.aborted = true;
+        assert!(recording
+            .callback_issue("motion", 1)
+            .is_some_and(|reason| reason.contains("after abort")));
+    }
+
     fn review_index_test_directory(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2295,6 +3350,66 @@ mod tests {
             "hex-walk-review-index-{label}-{}-{nonce}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn aborted_movement_sequence_cleans_only_its_exact_outputs() {
+        let directory = review_index_test_directory("motion-cleanup");
+        let _cleanup = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("capture directory should be creatable");
+        for index in 0..2 {
+            let path = movement_capture_path(&directory, "route", index);
+            std::fs::write(&path, b"stale frame").expect("stale frame fixture should write");
+            let temporary =
+                temporary_capture_path(&path).expect("temporary capture path should resolve");
+            std::fs::write(&temporary, b"partial frame")
+                .expect("partial frame fixture should write");
+        }
+        let unrelated = directory.join("route-not-this-sequence.png");
+        std::fs::write(&unrelated, b"keep").expect("unrelated fixture should write");
+
+        cleanup_movement_capture_outputs(&directory, "route", 2)
+            .expect("exact movement outputs should be removable");
+
+        for index in 0..2 {
+            let path = movement_capture_path(&directory, "route", index);
+            assert!(!path.exists());
+            assert!(!temporary_capture_path(&path)
+                .expect("temporary capture path should resolve")
+                .exists());
+        }
+        assert!(
+            unrelated.exists(),
+            "cleanup must not use a broad prefix glob"
+        );
+        let _cleanup = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn movement_cleanup_attempts_every_exact_output_after_one_removal_error() {
+        let directory = review_index_test_directory("motion-cleanup-error");
+        let _cleanup = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("capture directory should be creatable");
+
+        let invalid_file = movement_capture_path(&directory, "route", 0);
+        std::fs::create_dir(&invalid_file).expect("directory fixture should block remove_file");
+        let later_file = movement_capture_path(&directory, "route", 1);
+        std::fs::write(&later_file, b"stale frame").expect("later frame fixture should write");
+        let later_temporary =
+            temporary_capture_path(&later_file).expect("temporary capture path should resolve");
+        std::fs::write(&later_temporary, b"partial frame")
+            .expect("later partial frame fixture should write");
+
+        let error = cleanup_movement_capture_outputs(&directory, "route", 2)
+            .expect_err("a directory at an exact file path must be reported");
+        assert!(error.contains(&invalid_file.display().to_string()));
+        assert!(invalid_file.is_dir());
+        assert!(
+            !later_file.exists() && !later_temporary.exists(),
+            "one removal error must not leave later exact outputs behind"
+        );
+
+        let _cleanup = std::fs::remove_dir_all(directory);
     }
 
     fn review_provenance(expected_captures: usize) -> ReviewRunProvenance {
@@ -2307,6 +3422,96 @@ mod tests {
                 seed: Some(77),
             }],
         }
+    }
+
+    #[test]
+    fn visual_walk_uses_fixed_sixty_hz_time_and_step_aware_idle_watchdogs() {
+        assert!(matches!(
+            walk_time_update_strategy(),
+            bevy::time::TimeUpdateStrategy::ManualDuration(duration)
+                if duration == WALK_FRAME_DURATION
+        ));
+        assert_eq!(step_timeout(&WalkStep::Settle(1)), STEP_TIMEOUT);
+
+        let idle = WalkStep::AwaitPartyIdle { max_frames: 18_000 };
+        assert_eq!(
+            step_timeout(&idle),
+            STEP_TIMEOUT
+                + WALK_FRAME_DURATION
+                    .checked_mul(18_000)
+                    .expect("the authored frame budget fits Duration")
+        );
+        assert!(step_timeout(&idle) > Duration::from_secs(300));
+    }
+
+    #[test]
+    fn aborting_temporal_capture_restores_speed_and_removes_partial_evidence() {
+        let directory = review_index_test_directory("motion-abort-state");
+        let _cleanup = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("capture directory should be creatable");
+        let partial = movement_capture_path(&directory, "route", 0);
+        std::fs::write(&partial, b"partial frame").expect("partial frame fixture should write");
+
+        let mut state = WalkState::new(
+            Vec::new(),
+            directory.clone(),
+            hex_ui::ReviewViewport::DEFAULT,
+            false,
+            review_provenance(1),
+        );
+        state.movement_capture = Some(MovementCaptureState::new("route".to_owned(), 1, 1));
+        let mut time = Time::<Virtual>::default();
+        begin_temporal_capture_time(&mut time);
+        assert_eq!(time.relative_speed(), TEMPORAL_CAPTURE_TIME_SCALE);
+
+        let reason = abort_movement_capture(&mut state, &mut time, "fixture failure".to_owned());
+        assert_eq!(reason, "fixture failure");
+        assert_eq!(time.relative_speed(), WALK_TIME_SCALE);
+        assert!(state.movement_capture.is_none());
+        assert!(!partial.exists());
+
+        let _cleanup = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn temporal_frames_remain_fail_closed_until_the_exact_arrival_proof() {
+        let directory = review_index_test_directory("motion-arrival-proof");
+        let _cleanup = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("capture directory should be creatable");
+        for index in 0..2 {
+            std::fs::write(
+                movement_capture_path(&directory, "route", index),
+                b"completed frame awaiting route proof",
+            )
+            .expect("temporal fixture should write");
+        }
+
+        let mut state = WalkState::new(
+            Vec::new(),
+            directory.clone(),
+            hex_ui::ReviewViewport::DEFAULT,
+            false,
+            review_provenance(2),
+        );
+        state.pending_movement_capture_proof = Some(PendingMovementCaptureProof {
+            prefix: "route".to_owned(),
+            capture_count: 2,
+        });
+        let mut time = Time::<Virtual>::default();
+
+        let reason = abort_movement_capture(
+            &mut state,
+            &mut time,
+            "selected actor arrived on the wrong surface".to_owned(),
+        );
+        assert_eq!(reason, "selected actor arrived on the wrong surface");
+        assert!(state.pending_movement_capture_proof.is_none());
+        assert!(state.completed_captures.is_empty());
+        for index in 0..2 {
+            assert!(!movement_capture_path(&directory, "route", index).exists());
+        }
+
+        let _cleanup = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -2326,7 +3531,7 @@ mod tests {
 
         assert!(markdown.contains("Capture status: COMPLETE"));
         assert!(markdown.contains("Human review status: UNREVIEWED"));
-        assert!(markdown.contains("native motion check"));
+        assert!(markdown.contains("native control-feel"));
         assert!(markdown.contains("walks/camera_test.ron"));
         assert!(markdown.contains("Test Scenario"));
         assert!(markdown.contains("seed <code>91</code>"));
@@ -2623,7 +3828,7 @@ mod tests {
                 "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
             );
         }
-        assert_eq!(routes.len(), 25);
+        assert_eq!(routes.len(), 26);
 
         for route in &manifest.routes {
             assert!(
@@ -3490,6 +4695,452 @@ mod tests {
     }
 
     #[test]
+    fn grand_v3_walk_pins_the_complete_surface_and_crystal_itinerary() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_grand_v3_baseline.ron"))
+                .expect("the Grand V3 Baseline camera walk parses");
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Grand V3 Baseline".to_owned(),
+            seed: Some(1_592_598_566),
+            suppress_hostiles: false,
+        }));
+        for camera in [
+            WalkCameraMode::Map,
+            WalkCameraMode::Character,
+            WalkCameraMode::FirstPerson,
+        ] {
+            assert!(
+                steps.contains(&WalkStep::AssertCameraMode(camera)),
+                "Grand V3 Baseline omits {camera:?} review evidence"
+            );
+        }
+
+        let clicked_anchors = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ClickAnchor { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            clicked_anchors,
+            [
+                "grand_v3.archipelago",
+                "grand_v3.coastal_bridge",
+                "grand_v3.valley_bridge",
+                "grand_v3.valley_lake",
+                "grand_v3.waterfall_base",
+                "grand_v3.waterfall_crown",
+                "grand_v3.natural_pass",
+                "grand_v3.massif",
+                "grand_v3.peak_saddle",
+                "grand_v3.mountain_lake",
+                "grand_v3.frozen_woods",
+                "grand_v3.tunnel_mouth",
+                "grand_v3.tunnel_midpoint",
+                "grand_v3.gothic_transition",
+                "grand_v3.ascent_threshold",
+                "crystal_ascent.bottom_chamber",
+                "crystal_ascent.mid_flight",
+                "crystal_ascent.upper_exit",
+            ],
+            "the walk must retain the approved lowland, upper-route, tunnel, and Ascent order"
+        );
+        assert!(
+            steps
+                .windows(4)
+                .filter(|window| matches!(window.first(), Some(WalkStep::ClickAnchor { .. })))
+                .all(|window| matches!(
+                    window,
+                    [
+                        WalkStep::ClickAnchor { .. },
+                        WalkStep::Settle(5),
+                        WalkStep::AwaitPartyIdle { .. },
+                        WalkStep::AssertSelectedAt { .. },
+                    ]
+                )),
+            "every Grand V3 movement leg needs an exact stale-checked arrival proof"
+        );
+
+        let captures = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::Capture(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(captures.len(), 58);
+        assert_eq!(
+            captures.first(),
+            Some(&"01-grand-v3-complete-opaque-world-map")
+        );
+        assert_eq!(
+            captures.last(),
+            Some(&"58-grand-v3-crystal-summit-first-person")
+        );
+        for stop in captures[1..].chunks_exact(3) {
+            assert!(stop[0].ends_with("-map"), "{} is not a Map frame", stop[0]);
+            assert!(
+                stop[1].ends_with("-character"),
+                "{} is not a Character frame",
+                stop[1]
+            );
+            assert!(
+                stop[2].ends_with("-first-person"),
+                "{} is not a First Person frame",
+                stop[2]
+            );
+        }
+        assert!(steps.ends_with(&[
+            WalkStep::Settle(5),
+            WalkStep::Key("Backspace".to_owned()),
+            WalkStep::AwaitScreen("Title".to_owned()),
+        ]));
+        assert!(
+            CAMERA_ROUTE_SCRIPTS.contains(&(GRAND_V3_BASELINE_CAMERA_SCRIPT, "Grand V3 Baseline"))
+        );
+    }
+
+    #[test]
+    fn grand_v3_corrective_motion_walk_is_exact_and_bidirectional() {
+        let steps: Vec<WalkStep> = ron::from_str(include_str!(
+            "../../../walks/camera_grand_v3_corrective_motion.ron"
+        ))
+        .expect("the Grand V3 corrective motion walk parses");
+        validate_script_steps(GRAND_V3_CORRECTIVE_MOTION_SCRIPT, &steps)
+            .expect("the Grand V3 corrective motion walk validates");
+
+        assert_eq!(
+            AUXILIARY_CAMERA_REVIEW_SCRIPTS,
+            &[(GRAND_V3_CORRECTIVE_MOTION_SCRIPT, "Grand V3 Baseline")]
+        );
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Grand V3 Baseline".to_owned(),
+            seed: Some(1_592_598_566),
+            suppress_hostiles: false,
+        }));
+        assert!(steps.contains(&WalkStep::AssertCameraMode(WalkCameraMode::Character)));
+
+        let expected_sequences = [
+            (
+                "grand_v3.waterfall_base",
+                CameraRouteTile {
+                    q: 99,
+                    r: -11,
+                    level: 16,
+                },
+                "01-waterfall-lower-to-base-motion",
+                38,
+                16,
+                18_000,
+            ),
+            (
+                "grand_v3.valley_lake",
+                CameraRouteTile {
+                    q: 66,
+                    r: -10,
+                    level: 20,
+                },
+                "02-waterfall-base-to-lower-motion",
+                38,
+                16,
+                18_000,
+            ),
+            (
+                "grand_v3.waterfall_crown",
+                CameraRouteTile {
+                    q: 99,
+                    r: -77,
+                    level: 151,
+                },
+                "03-waterfall-upper-to-crown-motion",
+                26,
+                16,
+                18_000,
+            ),
+            (
+                "grand_v3.mountain_lake",
+                CameraRouteTile {
+                    q: 77,
+                    r: -77,
+                    level: 151,
+                },
+                "04-waterfall-crown-to-upper-motion",
+                26,
+                16,
+                18_000,
+            ),
+            (
+                "grand_v3.tunnel_midpoint",
+                CameraRouteTile {
+                    q: 22,
+                    r: -47,
+                    level: 6,
+                },
+                "05-tunnel-inbound-motion",
+                28,
+                32,
+                18_000,
+            ),
+            (
+                "grand_v3.tunnel_mouth",
+                CameraRouteTile {
+                    q: 22,
+                    r: 31,
+                    level: 7,
+                },
+                "06-tunnel-outbound-motion",
+                28,
+                32,
+                18_000,
+            ),
+            (
+                "crystal_ascent.bottom_chamber",
+                CameraRouteTile {
+                    q: 6,
+                    r: -124,
+                    level: 6,
+                },
+                "07-crystal-threshold-chamber-motion",
+                24,
+                12,
+                7_200,
+            ),
+            (
+                "grand_v3.ascent_threshold",
+                CameraRouteTile {
+                    q: -10,
+                    r: -115,
+                    level: 6,
+                },
+                "08-crystal-chamber-threshold-motion",
+                24,
+                12,
+                7_200,
+            ),
+            (
+                "crystal_ascent.upper_contraction",
+                CameraRouteTile {
+                    q: 22,
+                    r: -113,
+                    level: 138,
+                },
+                "09-crystal-corner-contraction-motion",
+                16,
+                12,
+                4_800,
+            ),
+            (
+                "crystal_ascent.corner_landing",
+                CameraRouteTile {
+                    q: 33,
+                    r: -122,
+                    level: 134,
+                },
+                "10-crystal-contraction-corner-motion",
+                16,
+                12,
+                4_800,
+            ),
+            (
+                "grand_v3.frozen_exit",
+                CameraRouteTile {
+                    q: 56,
+                    r: -151,
+                    level: 152,
+                },
+                "11-crystal-frozen-exit-motion",
+                12,
+                4,
+                1_200,
+            ),
+            (
+                "crystal_ascent.upper_exit",
+                CameraRouteTile {
+                    q: 53,
+                    r: -148,
+                    level: 150,
+                },
+                "12-frozen-crystal-exit-motion",
+                12,
+                4,
+                1_200,
+            ),
+        ];
+
+        let mut actual_sequences = Vec::new();
+        for (index, step) in steps.iter().enumerate() {
+            let WalkStep::CaptureWhileMoving {
+                prefix,
+                every_frames,
+                capture_count,
+            } = step
+            else {
+                continue;
+            };
+            let Some(WalkStep::ClickAnchor { name, expected }) =
+                index.checked_sub(1).and_then(|prior| steps.get(prior))
+            else {
+                panic!("{prefix} is not immediately preceded by ClickAnchor");
+            };
+            let Some(WalkStep::AwaitPartyIdle { max_frames }) = steps.get(index + 1) else {
+                panic!("{prefix} is not immediately followed by AwaitPartyIdle");
+            };
+            assert_eq!(
+                steps.get(index + 2),
+                Some(&WalkStep::AssertSelectedAt {
+                    expected: *expected,
+                }),
+                "{prefix} lacks its matching exact arrival proof"
+            );
+            actual_sequences.push((
+                name.as_str(),
+                *expected,
+                prefix.as_str(),
+                *every_frames,
+                *capture_count,
+                *max_frames,
+            ));
+        }
+        assert_eq!(actual_sequences, expected_sequences);
+
+        let captured_legs = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                let WalkStep::CaptureWhileMoving { .. } = step else {
+                    return None;
+                };
+                let source = steps[..index].iter().rev().find_map(|prior| match prior {
+                    WalkStep::AssertSelectedAt { expected } => Some(*expected),
+                    _ => None,
+                })?;
+                let destination = match steps.get(index.checked_sub(1)?)? {
+                    WalkStep::ClickAnchor { expected, .. } => *expected,
+                    _ => return None,
+                };
+                Some((source, destination))
+            })
+            .collect::<Vec<_>>();
+        let player: hex_assets::PlayerSettings =
+            ron::from_str(include_str!("../../../assets/config/player.ron"))
+                .expect("the shipped player movement settings parse");
+        let frames_per_flat_hex = f64::from(hex_core::config::HEX_SMALL_DIAMETER / player.speed)
+            / WALK_FRAME_DURATION.as_secs_f64();
+        for ((source, destination), (_, _, prefix, every_frames, capture_count, _)) in
+            captured_legs.iter().zip(&actual_sequences)
+        {
+            let minimum_route_frames = f64::from(
+                source
+                    .position()
+                    .coord
+                    .distance(destination.position().coord),
+            ) * frames_per_flat_hex;
+            let capture_span = f64::from(*every_frames * u32::from(*capture_count));
+            assert!(
+                capture_span + 8.0 < minimum_route_frames,
+                "{prefix} requests its final frame too close to the earliest possible arrival: span={capture_span}, minimum={minimum_route_frames:.2}"
+            );
+            assert!(
+                capture_span * 2.0 >= minimum_route_frames,
+                "{prefix} samples less than half of the direct endpoint bound; paired directions cannot even bracket the route ends: span={capture_span}, minimum={minimum_route_frames:.2}"
+            );
+        }
+        assert_eq!(
+            &captured_legs[..4],
+            &[
+                (
+                    CameraRouteTile {
+                        q: 66,
+                        r: -10,
+                        level: 20,
+                    },
+                    CameraRouteTile {
+                        q: 99,
+                        r: -11,
+                        level: 16,
+                    },
+                ),
+                (
+                    CameraRouteTile {
+                        q: 99,
+                        r: -11,
+                        level: 16,
+                    },
+                    CameraRouteTile {
+                        q: 66,
+                        r: -10,
+                        level: 20,
+                    },
+                ),
+                (
+                    CameraRouteTile {
+                        q: 77,
+                        r: -77,
+                        level: 151,
+                    },
+                    CameraRouteTile {
+                        q: 99,
+                        r: -77,
+                        level: 151,
+                    },
+                ),
+                (
+                    CameraRouteTile {
+                        q: 99,
+                        r: -77,
+                        level: 151,
+                    },
+                    CameraRouteTile {
+                        q: 77,
+                        r: -77,
+                        level: 151,
+                    },
+                ),
+            ],
+            "waterfall motion must inspect independent lower and upper approaches, never traverse the plunge"
+        );
+        assert_eq!(
+            actual_sequences
+                .iter()
+                .map(|(_, _, _, _, capture_count, _)| usize::from(*capture_count))
+                .sum::<usize>(),
+            184,
+            "the temporal approval gate must publish exactly 184 frames"
+        );
+
+        let orbit_reversals = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::OrbitCamera {
+                    yaw_turns,
+                    pitch_fraction,
+                } => Some((*yaw_turns, *pitch_fraction)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            orbit_reversals,
+            [
+                (0.5, 0.0),
+                (-0.5, 0.0),
+                (0.5, 0.0),
+                (-0.5, 0.0),
+                (0.5, 0.0),
+                (-0.5, 0.0),
+                (0.5, 0.0),
+                (-0.5, 0.0),
+                (0.5, 0.0),
+                (-0.5, 0.0),
+                (0.5, 0.0),
+                (-0.5, 0.0),
+            ],
+            "each forward/reverse pair must inspect opposing camera sides and restore its yaw"
+        );
+    }
+
+    #[test]
     fn obstructed_route_cards_use_explicit_open_side_azimuths() {
         let manifest: CameraRouteManifest =
             ron::from_str(include_str!("../../../walks/camera_routes.ron"))
@@ -4146,6 +5797,46 @@ mod tests {
     }
 
     #[test]
+    fn temporal_capture_tracks_only_the_selected_actors_domain_movement() {
+        let mut app = App::new();
+        app.init_resource::<SelectedMovementRecord>()
+            .add_systems(Update, record_selected_movement);
+
+        let standing = hex_units::Standing {
+            pos: TilePos::ORIGIN,
+            span: hex_core::HexSpan::new(0.0, 1.0),
+        };
+        let selected = app.world_mut().spawn((Selected, StandsOn(standing))).id();
+        let _unrelated = app
+            .world_mut()
+            .spawn(MovingTo::new(vec![standing, standing], 1.0))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<SelectedMovementRecord>().0,
+            Some(false),
+            "another entity's movement must not authorize temporal evidence"
+        );
+
+        app.world_mut()
+            .entity_mut(selected)
+            .insert(MovingTo::new(vec![standing, standing], 1.0));
+        app.update();
+        assert_eq!(
+            app.world().resource::<SelectedMovementRecord>().0,
+            Some(true)
+        );
+
+        app.world_mut().entity_mut(selected).remove::<MovingTo>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<SelectedMovementRecord>().0,
+            Some(false)
+        );
+    }
+
+    #[test]
     fn selected_position_proof_requires_authority_and_camera_projection_to_agree() {
         let mut app = App::new();
         app.init_resource::<SelectedAtRecord>()
@@ -4232,6 +5923,11 @@ mod tests {
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        .chain(
+            AUXILIARY_CAMERA_REVIEW_SCRIPTS
+                .iter()
+                .map(|(path, _)| *path),
+        )
         .chain(std::iter::once(FIRST_PERSON_CAMERA_SCRIPT))
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
@@ -4240,10 +5936,8 @@ mod tests {
             let steps: Vec<WalkStep> = ron::from_str(&text)
                 .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
             assert!(!steps.is_empty());
-            for step in &steps {
-                validate_step(step)
-                    .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
-            }
+            validate_script_steps(&path.display().to_string(), &steps)
+                .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
         }
     }
 
@@ -4347,6 +6041,11 @@ mod tests {
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        .chain(
+            AUXILIARY_CAMERA_REVIEW_SCRIPTS
+                .iter()
+                .map(|(path, _)| *path),
+        )
         .chain(std::iter::once(FIRST_PERSON_CAMERA_SCRIPT))
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);

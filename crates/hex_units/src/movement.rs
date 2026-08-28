@@ -390,15 +390,19 @@ impl Footing {
         };
 
         for (pos, span, substance, headroom) in tiles {
+            // Logical terrain publishes every material run, including buried strata
+            // and non-solid liquids. Reject those with the cheap local predicate
+            // before probing the ordered blocker and authored-volume indexes; neither
+            // can make an otherwise inadmissible surface standable.
+            if !profile.admits_surface(table.is_solid(*substance), *headroom) {
+                continue;
+            }
             if blockers.is_some_and(|blockers| blockers.contains(*pos)) {
                 continue;
             }
             if authored_objects
                 .is_some_and(|occupancy| occupancy.blocks_standing_body(*pos, profile))
             {
-                continue;
-            }
-            if !profile.admits_surface(table.is_solid(*substance), *headroom) {
                 continue;
             }
             // This run passed the solid-substance check, and its `TilePos` is already
@@ -490,14 +494,27 @@ impl Footing {
     /// away, and without a tiebreak the winner was whichever the map spawned first.
     #[must_use]
     pub fn steps_from(&self, from: Standing, coord: HexCoord) -> Vec<Standing> {
-        let mut candidates: Vec<Standing> = self
-            .at_coord(coord)
-            .iter()
-            .filter(|candidate| self.admits_step(from.pos, candidate.pos))
-            .copied()
-            .collect();
-        candidates.sort_by_key(|c| (from.pos.level_step_to(c.pos).abs(), c.pos.level));
+        let mut candidates = Vec::new();
+        self.steps_from_into(from, coord, &mut candidates);
         candidates
+    }
+
+    /// Reuses caller-owned scratch storage while preserving [`Self::steps_from`]'s
+    /// exact candidate order.
+    fn steps_from_into(&self, from: Standing, coord: HexCoord, candidates: &mut Vec<Standing>) {
+        candidates.clear();
+        candidates.extend(
+            self.at_coord(coord)
+                .iter()
+                .filter(|candidate| self.admits_step(from.pos, candidate.pos))
+                .copied(),
+        );
+        candidates.sort_by_key(|candidate| {
+            (
+                from.pos.level_step_to(candidate.pos).abs(),
+                candidate.pos.level,
+            )
+        });
     }
 
     /// The single surface a piece would step onto at `coord`: the closest in height.
@@ -767,6 +784,7 @@ fn a_star_route(
     let mut costs: HashMap<TilePos, u32> = HashMap::default();
     costs.insert(from.pos, 0_u32);
     let mut came_from: HashMap<TilePos, TilePos> = HashMap::default();
+    let mut candidates = Vec::new();
 
     while let Some(Reverse((_estimate, current_cost, _order, current_pos))) = frontier.pop() {
         if costs.get(&current_pos).copied() != Some(current_cost) {
@@ -788,7 +806,8 @@ fn a_star_route(
 
         let current = footing.at(current_pos)?;
         for neighbor_coord in current_pos.coord.neighbors() {
-            for next in footing.steps_from(current, neighbor_coord) {
+            footing.steps_from_into(current, neighbor_coord, &mut candidates);
+            for next in candidates.iter().copied() {
                 if occupancy
                     .is_some_and(|(occupied, mover)| occupied.is_occupied(next.pos, Some(mover)))
                 {

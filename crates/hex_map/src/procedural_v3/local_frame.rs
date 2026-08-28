@@ -153,7 +153,7 @@ impl LocalPatchFrame {
             center,
             scale: max_distance.min(12),
             rotation: rotation % 6,
-            compose_presentation_rotation: matches!(kind, LayoutKind::Ring19 | LayoutKind::Macro),
+            compose_presentation_rotation: kind.is_composite(),
         })
     }
 
@@ -326,6 +326,7 @@ impl LocalPatchFrame {
             biome_regions,
             interiors,
             anchors,
+            observation_anchors: BTreeMap::new(),
             view_hint,
         })
     }

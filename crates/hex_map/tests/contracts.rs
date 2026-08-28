@@ -45,7 +45,8 @@ use hex_core::{
     ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
     TerrainBatchId, TerrainChunkRoot, TerrainEdit, TerrainImpact, TerrainImpactDisposition,
     TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainReady,
-    TerrainSystems, TerrainVoxelHealth, TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
+    TerrainRenderBatch, TerrainSystems, TerrainVoxelHealth, TilePos, TraversalBlockers,
+    TreeOccluder, MAX_HEADROOM,
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
@@ -749,6 +750,34 @@ fn terrain_chunk_roots(app: &mut App) -> BTreeMap<(i32, i32), Entity> {
         "the active grid's chunk roots disagree with resident voxel storage"
     );
     found
+}
+
+fn terrain_render_batches_by_chunk(app: &mut App) -> BTreeMap<(i32, i32), BTreeSet<Entity>> {
+    let world = app.world_mut();
+    let mut batches = world.query::<(Entity, &TerrainRenderBatch)>();
+    let mut by_chunk = BTreeMap::<_, BTreeSet<_>>::new();
+    for (entity, batch) in batches.iter(world) {
+        let chunk = batch.chunk();
+        by_chunk
+            .entry((chunk.q, chunk.r))
+            .or_default()
+            .insert(entity);
+    }
+    by_chunk
+}
+
+fn terrain_render_meshes_by_chunk(app: &mut App) -> BTreeMap<(i32, i32), BTreeSet<AssetId<Mesh>>> {
+    let world = app.world_mut();
+    let mut batches = world.query::<(&TerrainRenderBatch, &Mesh3d)>();
+    let mut by_chunk = BTreeMap::<_, BTreeSet<_>>::new();
+    for (batch, mesh) in batches.iter(world) {
+        let chunk = batch.chunk();
+        by_chunk
+            .entry((chunk.q, chunk.r))
+            .or_default()
+            .insert(mesh.0.id());
+    }
+    by_chunk
 }
 
 fn published_run_bounds(app: &mut App, coord: HexCoord) -> BTreeSet<(Level, Level, SubstanceId)> {

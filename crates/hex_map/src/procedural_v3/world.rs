@@ -195,12 +195,11 @@ pub(crate) struct InteriorPlan {
 /// The complete private semantic output of one V3 world candidate.
 #[derive(Debug, Clone)]
 pub(crate) struct GeneratedWorldPlan {
-    /// Validated source-plan identity for compilers whose semantic input contains
-    /// layers that are intentionally not materialized in the current delivery.
+    /// Validated source-plan identity for compilers with an upstream semantic plan.
     ///
     /// Legacy V3 recipes leave this absent so their established fingerprints remain
-    /// byte-identical. The Grand V3 proxy records the complete schematic identity,
-    /// including access, vegetation, and future feature layers.
+    /// byte-identical. Grand V3 records the complete schematic identity independently
+    /// from its compiled voxel, route, hydrology, landmark, and vegetation projections.
     pub(crate) source_schematic_fingerprint: Option<u64>,
     pub(crate) layout: ResolvedLayoutPlan,
     pub(crate) volume: VolumePlan,
@@ -211,7 +210,15 @@ pub(crate) struct GeneratedWorldPlan {
     pub(crate) lights: BTreeMap<LightId, PlannedGameplayLight>,
     pub(crate) biome_regions: BTreeMap<TilePos, BiomeRegionId>,
     pub(crate) interiors: InteriorPlan,
+    /// Exact standable gameplay/spawn anchors.
     pub(crate) anchors: BTreeMap<String, TilePos>,
+    /// Exact solid surfaces used only as camera look-at/review landmarks.
+    ///
+    /// Unlike `anchors`, these positions may be scenic, nonstandable, or
+    /// blocked. Materialization publishes them through the distinct
+    /// `MapObservationAnchors` resource so gameplay placement cannot consume
+    /// them accidentally.
+    pub(crate) observation_anchors: BTreeMap<String, TilePos>,
     pub(crate) view_hint: MapViewHint,
 }
 
@@ -219,7 +226,7 @@ impl GeneratedWorldPlan {
     /// Checks recipe-independent relationships across every semantic layer.
     #[must_use]
     pub(crate) fn validate(&self) -> Vec<WorldValidationIssue> {
-        self.validate_internal(true, true)
+        self.validate_internal(true, true, false, false)
     }
 
     /// Checks semantic layers after the caller has validated the authoritative layout.
@@ -229,7 +236,7 @@ impl GeneratedWorldPlan {
     /// form a standalone layout.
     #[must_use]
     pub(crate) fn validate_semantic_layers(&self) -> Vec<WorldValidationIssue> {
-        self.validate_internal(false, true)
+        self.validate_internal(false, true, false, false)
     }
 
     /// Checks a Macro fragment projection without inventing a local actor anchor.
@@ -238,13 +245,26 @@ impl GeneratedWorldPlan {
     /// composed complete world remains subject to [`Self::validate`].
     #[must_use]
     pub(crate) fn validate_fragment_semantic_layers(&self) -> Vec<WorldValidationIssue> {
-        self.validate_internal(false, false)
+        self.validate_internal(false, false, false, false)
+    }
+
+    /// Checks a completed Grand Schematic world after its immutable layout and
+    /// final interior projection supplied sealed construction admissions.
+    ///
+    /// The selection layer is the only production caller. Every semantic layer
+    /// which can still change during Grand construction remains subject to the
+    /// same strict validator used by [`Self::validate`].
+    #[must_use]
+    pub(super) fn validate_grand_construction_admitted(&self) -> Vec<WorldValidationIssue> {
+        self.validate_internal(false, true, true, true)
     }
 
     fn validate_internal(
         &self,
         validate_layout: bool,
         require_actor_anchor: bool,
+        mask_connectivity_admitted: bool,
+        interior_projection_admitted: bool,
     ) -> Vec<WorldValidationIssue> {
         let mut issues = Vec::new();
 
@@ -261,7 +281,12 @@ impl GeneratedWorldPlan {
                 "resolved layout footprint does not match the semantic volume mask",
             ));
         }
-        if let Err(error) = self.volume.validate() {
+        let volume_validation = if mask_connectivity_admitted {
+            self.volume.validate_with_admitted_mask_connectivity()
+        } else {
+            self.volume.validate()
+        };
+        if let Err(error) = volume_validation {
             append_volume_issues(&mut issues, &error);
         }
 
@@ -271,7 +296,9 @@ impl GeneratedWorldPlan {
         self.validate_features_and_blockers(&mut issues);
         self.validate_structures(&mut issues);
         self.validate_biomes(&mut issues);
-        self.validate_interiors(&mut issues);
+        if !interior_projection_admitted {
+            self.validate_interiors(&mut issues);
+        }
         self.validate_lights(&mut issues);
         self.validate_anchors(require_actor_anchor, &mut issues);
         if !self.view_hint.is_valid() {
@@ -285,6 +312,10 @@ impl GeneratedWorldPlan {
     }
 
     fn validate_liquid_seams(&self, issues: &mut Vec<WorldValidationIssue>) {
+        if self.layout.shared_edges.is_empty() && self.layout.boundary_liquid_outlets.is_empty() {
+            return;
+        }
+
         let fill_runs = self.volume.fill_runs_by_top();
         let mut runs_by_coord = BTreeMap::<_, Vec<_>>::new();
         for (position, fill) in &fill_runs {
@@ -824,12 +855,19 @@ impl GeneratedWorldPlan {
                 "biome membership does not exactly cover every generated surface",
             ));
         }
-        let declared_regions: BTreeSet<_> = self
-            .layout
-            .patches
-            .values()
-            .map(|patch| patch.biome_region)
-            .collect();
+        let mut declared_regions = BTreeSet::new();
+        let mut biome_owner_by_coord = BTreeMap::new();
+        for patch in self.layout.patches.values() {
+            declared_regions.insert(patch.biome_region);
+            for coord in &patch.mask {
+                // Layout validation rejects overlaps. Retaining the first patch here
+                // preserves the former ordered `find` result on malformed plans so
+                // this cross-layer validator keeps its exact diagnostics.
+                biome_owner_by_coord
+                    .entry(*coord)
+                    .or_insert(patch.biome_region);
+            }
+        }
         for (position, region) in &self.biome_regions {
             if !declared_regions.contains(region) {
                 issues.push(WorldValidationIssue::new(
@@ -837,12 +875,7 @@ impl GeneratedWorldPlan {
                     format!("surface {position:?} names undeclared biome region {region:?}"),
                 ));
             }
-            let expected = self
-                .layout
-                .patches
-                .values()
-                .find(|patch| patch.mask.contains(&position.coord))
-                .map(|patch| patch.biome_region);
+            let expected = biome_owner_by_coord.get(&position.coord).copied();
             match expected {
                 Some(expected) if expected != *region => {
                     issues.push(WorldValidationIssue::new(
@@ -986,6 +1019,31 @@ impl GeneratedWorldPlan {
                 issues.push(WorldValidationIssue::new(
                     WorldIssueCode::Anchor,
                     format!("anchor {name:?} is occupied by a traversal blocker"),
+                ));
+            }
+        }
+        for (name, position) in &self.observation_anchors {
+            if !valid_stable_name(name) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Anchor,
+                    format!("observation anchor name {name:?} is not a stable identifier"),
+                ));
+            }
+            if self.anchors.contains_key(name) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Anchor,
+                    format!("observation anchor {name:?} collides with a walker anchor identity"),
+                ));
+            }
+            if !self.layout.footprint.contains(&position.coord)
+                || !self.volume.surfaces.contains_key(position)
+                || !self.solid_voxel_exists(*position)
+            {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Anchor,
+                    format!(
+                        "observation anchor {name:?} does not name an exact published solid surface within the footprint"
+                    ),
                 ));
             }
         }
@@ -1413,6 +1471,7 @@ mod tests {
                 )]),
             },
             anchors: BTreeMap::from([("party_start".to_owned(), floor)]),
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
         }
     }
@@ -1843,6 +1902,7 @@ mod tests {
             biome_regions: BTreeMap::new(),
             interiors: InteriorPlan::default(),
             anchors: BTreeMap::new(),
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
         }
     }
@@ -2155,6 +2215,56 @@ mod tests {
     }
 
     #[test]
+    fn observation_anchors_accept_exact_nonordinary_surfaces_without_becoming_actor_anchors() {
+        let mut plan = complete_stacked_plan();
+        let observation = TilePos::new(hex_core::HexCoord::ORIGIN, 6);
+        assert_ne!(
+            plan.volume.surfaces[&observation].access,
+            SurfaceAccess::Ordinary
+        );
+        plan.observation_anchors
+            .insert("review.roof".to_owned(), observation);
+        assert_eq!(plan.validate(), Vec::new());
+
+        plan.anchors.clear();
+        assert!(plan.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Anchor
+                && issue.detail.contains("publishes no actor anchors")
+        }));
+    }
+
+    #[test]
+    fn observation_anchors_reject_name_collisions_and_non_surfaces() {
+        let mut collision = complete_stacked_plan();
+        collision.observation_anchors.insert(
+            "party_start".to_owned(),
+            TilePos::new(hex_core::HexCoord::ORIGIN, 6),
+        );
+        assert!(collision.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Anchor && issue.detail.contains("collides")
+        }));
+
+        let mut missing = complete_stacked_plan();
+        missing.observation_anchors.insert(
+            "review.missing".to_owned(),
+            TilePos::new(hex_core::HexCoord::ORIGIN, 2),
+        );
+        assert!(missing.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Anchor
+                && issue.detail.contains("exact published solid surface")
+        }));
+
+        let mut unstable = complete_stacked_plan();
+        unstable.observation_anchors.insert(
+            "Review Target".to_owned(),
+            TilePos::new(hex_core::HexCoord::ORIGIN, 6),
+        );
+        assert!(unstable.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Anchor && issue.detail.contains("stable identifier")
+        }));
+    }
+
+    #[test]
     fn isolated_fragment_validation_skips_only_the_complete_layout_contract() {
         let mut plan = complete_stacked_plan();
         plan.layout.grid_radius = 55;
@@ -2235,6 +2345,120 @@ mod tests {
     }
 
     #[test]
+    fn grand_admitted_validation_retains_every_mutable_layer_check() {
+        let valid = complete_feature_plan();
+        assert_eq!(valid.validate(), Vec::new());
+        assert_eq!(valid.validate_grand_construction_admitted(), Vec::new());
+
+        type Mutator = fn(&mut GeneratedWorldPlan);
+        let cases: &[(WorldIssueCode, Mutator)] = &[
+            (WorldIssueCode::Volume, |plan| {
+                let VolumeElement::Solid(mass) = &mut plan
+                    .volume
+                    .columns
+                    .get_mut(&hex_core::HexCoord::ORIGIN)
+                    .expect("fixture has its column")
+                    .elements[1]
+                else {
+                    panic!("fixture has its cutaway solid");
+                };
+                mass.levels.bottom = 2;
+            }),
+            (WorldIssueCode::Volume, |plan| {
+                let VolumeElement::Solid(mass) = &mut plan
+                    .volume
+                    .columns
+                    .get_mut(&hex_core::HexCoord::ORIGIN)
+                    .expect("fixture has its column")
+                    .elements[2]
+                else {
+                    panic!("fixture has its grass cap");
+                };
+                mass.levels.top = 12;
+            }),
+            (WorldIssueCode::Liquid, |plan| {
+                plan.liquids.bodies.insert(
+                    LiquidBodyId(9),
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Water,
+                        nodes: BTreeMap::from([(
+                            TilePos::new(hex_core::HexCoord::ORIGIN, 2),
+                            LiquidNode {
+                                state: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        )]),
+                    },
+                );
+            }),
+            (WorldIssueCode::Feature, |plan| {
+                plan.features
+                    .protected_routes
+                    .get_mut("main_route")
+                    .expect("fixture has its route")
+                    .centerline
+                    .clear();
+            }),
+            (WorldIssueCode::Blocker, |plan| {
+                plan.blockers.clear();
+            }),
+            (WorldIssueCode::Structure, |plan| {
+                plan.structures
+                    .by_id
+                    .get_mut(&StructureId(0))
+                    .expect("fixture has its structure")
+                    .voxels
+                    .clear();
+            }),
+            (WorldIssueCode::Biome, |plan| {
+                plan.biome_regions.pop_last();
+            }),
+            (WorldIssueCode::Light, |plan| {
+                plan.lights
+                    .get_mut(&LightId(0))
+                    .expect("fixture has its light")
+                    .radius = 0;
+            }),
+            (WorldIssueCode::Anchor, |plan| {
+                plan.anchors.insert(
+                    "Invalid Name".to_owned(),
+                    TilePos::new(hex_core::HexCoord::ORIGIN, 0),
+                );
+            }),
+        ];
+
+        for (expected, mutate) in cases {
+            let mut plan = complete_feature_plan();
+            mutate(&mut plan);
+            let complete = plan.validate();
+            let admitted = plan.validate_grand_construction_admitted();
+            assert!(
+                complete.iter().any(|issue| issue.code == *expected),
+                "complete validation missed {expected:?}: {complete:?}"
+            );
+            assert!(
+                admitted.iter().any(|issue| issue.code == *expected),
+                "Grand admitted validation missed {expected:?}: {admitted:?}"
+            );
+        }
+
+        let mut changed_mask = complete_feature_plan();
+        let outside = hex_core::HexCoord::new_cubic(2, -2, 0);
+        changed_mask.volume.mask.insert(outside);
+        changed_mask
+            .volume
+            .columns
+            .insert(outside, VolumeColumn::default());
+        let issues = changed_mask.validate_grand_construction_admitted();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == WorldIssueCode::Layout),
+            "an admitted mask which no longer equals its layout must still fail closed: {issues:?}"
+        );
+    }
+
+    #[test]
     fn stacked_surfaces_must_use_their_owning_patch_biome() {
         let mut plan = complete_stacked_plan();
         let foreign_coord = hex_core::HexCoord::new_cubic(1, -1, 0);
@@ -2270,5 +2494,144 @@ mod tests {
             wrong_owner_count, 2,
             "both stacked surfaces must retain the horizontal patch's biome: {issues:?}"
         );
+    }
+
+    fn reference_biome_issues(plan: &GeneratedWorldPlan) -> Vec<WorldValidationIssue> {
+        let mut issues = Vec::new();
+        if plan.volume.surfaces.len() != plan.biome_regions.len()
+            || !plan
+                .volume
+                .surfaces
+                .keys()
+                .copied()
+                .eq(plan.biome_regions.keys().copied())
+        {
+            issues.push(WorldValidationIssue::new(
+                WorldIssueCode::Biome,
+                "biome membership does not exactly cover every generated surface",
+            ));
+        }
+        let declared_regions: BTreeSet<_> = plan
+            .layout
+            .patches
+            .values()
+            .map(|patch| patch.biome_region)
+            .collect();
+        for (position, region) in &plan.biome_regions {
+            if !declared_regions.contains(region) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Biome,
+                    format!("surface {position:?} names undeclared biome region {region:?}"),
+                ));
+            }
+            let expected = plan
+                .layout
+                .patches
+                .values()
+                .find(|patch| patch.mask.contains(&position.coord))
+                .map(|patch| patch.biome_region);
+            match expected {
+                Some(expected) if expected != *region => {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Biome,
+                        format!(
+                            "surface {position:?} names biome region {region:?}, but its patch \
+                             owns region {expected:?}"
+                        ),
+                    ));
+                }
+                None => {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Biome,
+                        format!("surface {position:?} is not owned by any resolved patch"),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        issues
+    }
+
+    #[test]
+    fn flattened_biome_ownership_preserves_ordered_diagnostics() {
+        let valid = complete_stacked_plan();
+
+        let mut incomplete_membership = valid.clone();
+        incomplete_membership.biome_regions.pop_last();
+
+        let mut unowned_and_undeclared = valid.clone();
+        let coord = hex_core::HexCoord::ORIGIN;
+        unowned_and_undeclared
+            .layout
+            .patches
+            .get_mut(&PatchId(0))
+            .expect("fixture has its patch")
+            .mask
+            .remove(&coord);
+        for region in unowned_and_undeclared.biome_regions.values_mut() {
+            *region = BiomeRegionId(99);
+        }
+
+        let mut overlapping = valid.clone();
+        let template = overlapping
+            .layout
+            .patches
+            .get(&PatchId(0))
+            .cloned()
+            .expect("fixture has its patch");
+        overlapping.layout.patches.insert(
+            PatchId(1),
+            ResolvedPatch {
+                biome_region: BiomeRegionId(1),
+                ..template
+            },
+        );
+        for region in overlapping.biome_regions.values_mut() {
+            *region = BiomeRegionId(1);
+        }
+
+        for plan in [
+            valid,
+            incomplete_membership,
+            unowned_and_undeclared,
+            overlapping,
+        ] {
+            let expected = reference_biome_issues(&plan);
+            let mut actual = Vec::new();
+            plan.validate_biomes(&mut actual);
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn empty_seam_contract_fast_paths_leave_independent_validation_fail_closed() {
+        let mut invalid_liquid = complete_stacked_plan();
+        invalid_liquid.liquids.bodies.insert(
+            LiquidBodyId(9),
+            LiquidBodyPlan {
+                material: FillMaterialRole::Water,
+                nodes: BTreeMap::from([(
+                    TilePos::new(hex_core::HexCoord::ORIGIN, 2),
+                    LiquidNode {
+                        state: LiquidFlowState::Still,
+                        downstream: None,
+                    },
+                )]),
+            },
+        );
+        let mut seam_issues = Vec::new();
+        invalid_liquid.validate_liquid_seams(&mut seam_issues);
+        assert!(seam_issues.is_empty());
+        assert!(invalid_liquid
+            .validate()
+            .iter()
+            .any(|issue| issue.code == WorldIssueCode::Liquid));
+
+        let mut missing_shared_contract = two_patch_liquid_plan();
+        missing_shared_contract.layout.shared_edges.clear();
+        assert!(missing_shared_contract
+            .validate()
+            .iter()
+            .any(|issue| issue.code == WorldIssueCode::Layout));
     }
 }

@@ -10,7 +10,8 @@ use hex_core::{
     UnitId,
 };
 use hex_units::{
-    terrain_and_authored_object_sight_is_clear, AuthoredObjectOccupancy, Faction, TerrainOccupancy,
+    terrain_and_authored_object_sight_is_clear, terrain_and_authored_object_sight_is_clear_cached,
+    AuthoredObjectOccupancy, Faction, SightOccupancyCache, TerrainOccupancy,
 };
 
 use crate::{
@@ -325,19 +326,27 @@ fn resolve_faction(
         lights,
         profile,
     );
+    let sight_cache = sight_cache_bounds(&observers, profile).and_then(|(minimum, maximum)| {
+        SightOccupancyCache::try_new(
+            terrain,
+            authored_objects,
+            minimum,
+            maximum,
+            usize::try_from(MAX_INDEXED_COORDINATE_PROBES).unwrap_or(usize::MAX),
+        )
+    });
 
     let mut observation = FactionObservation::new();
     for (target, target_light) in targets {
-        if observers.iter().any(|&observer| {
-            can_observe_resolved(
-                observer,
-                target,
-                target_light,
-                profile,
-                terrain,
-                authored_objects,
-            )
-        }) {
+        if any_observer_can_observe(
+            &observers,
+            target,
+            target_light,
+            profile,
+            terrain,
+            authored_objects,
+            sight_cache.as_ref(),
+        ) {
             observation.insert_surface(target);
         }
     }
@@ -348,6 +357,138 @@ fn resolve_faction(
         }
     }
     Ok(observation)
+}
+
+/// Tests the shortest candidate corridor first without changing pooled sight.
+///
+/// Observation is a boolean union, so observer evaluation order cannot affect the
+/// result. Selecting the horizontally nearest in-range observer first substantially
+/// shortens the common successful LOS query for compact parties; if it is blocked,
+/// every remaining observer is still tested in stable unit order. One character
+/// continues to own the complete seven-ray bundle.
+fn any_observer_can_observe(
+    observers: &[TilePos],
+    target: TilePos,
+    target_light: ResolvedLight,
+    profile: SightProfile,
+    terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
+    sight_cache: Option<&SightOccupancyCache<'_>>,
+) -> bool {
+    let band = profile.band(target_light.level);
+    let target_point = ExactGridPoint::voxel_top_center(target);
+    let nearest = observers
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, observer)| {
+            upper_dome_contains(
+                ExactGridPoint::standing_eye(*observer),
+                target_point,
+                band.radius,
+            )
+        })
+        .min_by_key(|(_, observer)| {
+            (
+                horizontal_distance_wide(observer.coord, target.coord),
+                *observer,
+            )
+        });
+    let Some((nearest_index, nearest_observer)) = nearest else {
+        return false;
+    };
+    if observer_sight_is_clear(
+        nearest_observer,
+        target,
+        terrain,
+        authored_objects,
+        sight_cache,
+    ) {
+        return true;
+    }
+
+    observers
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(index, _)| *index != nearest_index)
+        .filter(|(_, observer)| {
+            upper_dome_contains(
+                ExactGridPoint::standing_eye(*observer),
+                target_point,
+                band.radius,
+            )
+        })
+        .any(|(_, observer)| {
+            observer_sight_is_clear(observer, target, terrain, authored_objects, sight_cache)
+        })
+}
+
+fn observer_sight_is_clear(
+    observer: TilePos,
+    target: TilePos,
+    terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
+    sight_cache: Option<&SightOccupancyCache<'_>>,
+) -> bool {
+    sight_cache.map_or_else(
+        || terrain_and_authored_object_sight_is_clear(observer, target, terrain, authored_objects),
+        |cache| terrain_and_authored_object_sight_is_clear_cached(observer, target, cache),
+    )
+}
+
+fn horizontal_distance_wide(left: HexCoord, right: HexCoord) -> i64 {
+    let left_q = i64::from(left.x());
+    let left_r = i64::from(left.y());
+    let right_q = i64::from(right.x());
+    let right_r = i64::from(right.y());
+    let left_s = -left_q - left_r;
+    let right_s = -right_q - right_r;
+    [right_q - left_q, right_r - left_r, right_s - left_s]
+        .into_iter()
+        .map(i64::abs)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Inclusive rectangle covering every possible corridor and its one-cell fringe.
+/// Arithmetic failure selects the exact uncached query path.
+fn sight_cache_bounds(
+    observers: &[TilePos],
+    profile: SightProfile,
+) -> Option<(HexCoord, HexCoord)> {
+    let radius = profile
+        .bright
+        .radius
+        .max(profile.dim.radius)
+        .max(profile.dark.radius)
+        .checked_add(1)?;
+    let radius = i64::from(radius);
+    let mut minimum_q = i64::MAX;
+    let mut maximum_q = i64::MIN;
+    let mut minimum_r = i64::MAX;
+    let mut maximum_r = i64::MIN;
+    for observer in observers {
+        let q = i64::from(observer.coord.x());
+        let r = i64::from(observer.coord.y());
+        minimum_q = minimum_q.min(q.checked_sub(radius)?);
+        maximum_q = maximum_q.max(q.checked_add(radius)?);
+        minimum_r = minimum_r.min(r.checked_sub(radius)?);
+        maximum_r = maximum_r.max(r.checked_add(radius)?);
+    }
+    if observers.is_empty() {
+        return None;
+    }
+    Some((
+        HexCoord::from_axial(
+            i32::try_from(minimum_q).ok()?,
+            i32::try_from(minimum_r).ok()?,
+        ),
+        HexCoord::from_axial(
+            i32::try_from(maximum_q).ok()?,
+            i32::try_from(maximum_r).ok()?,
+        ),
+    ))
 }
 
 /// Materializes only target columns that can pass at least one sight band.
@@ -365,26 +506,59 @@ fn collect_faction_targets(
     exterior: ExteriorIllumination,
     lights: &[LightSourceSnapshot],
     profile: SightProfile,
-) -> BTreeMap<TilePos, ResolvedLight> {
-    let mut targets = BTreeMap::new();
-    if let Some(coords) = bounded_target_coords(observers, profile) {
-        for coord in coords {
-            for (target, target_light) in illumination.iter_at_coord(coord) {
-                targets.insert(target, target_light);
+) -> Vec<(TilePos, ResolvedLight)> {
+    let mut targets = Vec::new();
+    if let Some(ranges) = bounded_target_ranges(observers, profile) {
+        for (minimum, maximum) in ranges {
+            for (target, target_light) in illumination.iter_in_axial_row(minimum, maximum) {
+                targets.push((target, target_light));
             }
-            for (_, known) in prior_knowledge.faction(faction).surfaces_at_coord(coord) {
-                insert_remembered_target(&mut targets, known.snapshot(), exterior, lights);
+            for (_, known) in prior_knowledge
+                .faction(faction)
+                .surfaces_in_axial_row(minimum, maximum)
+            {
+                let snapshot = known.snapshot();
+                if illumination.get(snapshot.pos).is_none() {
+                    targets.push((
+                        snapshot.pos,
+                        ResolvedLight {
+                            level: resolve_illumination_at(
+                                snapshot.pos,
+                                snapshot.domain,
+                                exterior,
+                                lights,
+                            ),
+                            domain: snapshot.domain,
+                        },
+                    ));
+                }
             }
         }
     } else {
         targets.extend(illumination.iter());
         for (_, known) in prior_knowledge.faction(faction).surfaces() {
-            insert_remembered_target(&mut targets, known.snapshot(), exterior, lights);
+            let snapshot = known.snapshot();
+            if illumination.get(snapshot.pos).is_none() {
+                targets.push((
+                    snapshot.pos,
+                    ResolvedLight {
+                        level: resolve_illumination_at(
+                            snapshot.pos,
+                            snapshot.domain,
+                            exterior,
+                            lights,
+                        ),
+                        domain: snapshot.domain,
+                    },
+                ));
+            }
         }
     }
+    targets.sort_unstable_by_key(|(position, _)| *position);
     targets
 }
 
+#[cfg(test)]
 fn insert_remembered_target(
     targets: &mut BTreeMap<TilePos, ResolvedLight>,
     snapshot: crate::SurfaceSnapshot,
@@ -401,10 +575,10 @@ fn insert_remembered_target(
 
 /// Returns the deterministic union of observer disks, or `None` when bounded
 /// materialization would itself be pathological or coordinate arithmetic unsafe.
-fn bounded_target_coords(
+fn bounded_target_ranges(
     observers: &[TilePos],
     profile: SightProfile,
-) -> Option<BTreeSet<HexCoord>> {
+) -> Option<Vec<(HexCoord, HexCoord)>> {
     let radius = profile
         .bright
         .radius
@@ -427,11 +601,46 @@ fn bounded_target_coords(
         return None;
     }
 
-    let mut coords = BTreeSet::new();
+    let radius_i64 = i64::from(radius);
+    let row_capacity = observer_coords
+        .len()
+        .checked_mul(usize::try_from(radius_i64.checked_mul(2)?.checked_add(1)?).ok()?)?;
+    let mut ranges = Vec::with_capacity(row_capacity);
     for observer in observer_coords {
-        coords.extend(observer.within_radius(radius));
+        let observer_q = i64::from(observer.x());
+        let observer_r = i64::from(observer.y());
+        for delta_q in -radius_i64..=radius_i64 {
+            let delta_r_min = (-radius_i64).max(-delta_q - radius_i64);
+            let delta_r_max = radius_i64.min(-delta_q + radius_i64);
+            let q = i32::try_from(observer_q.checked_add(delta_q)?).ok()?;
+            let r_min = i32::try_from(observer_r.checked_add(delta_r_min)?).ok()?;
+            let r_max = i32::try_from(observer_r.checked_add(delta_r_max)?).ok()?;
+            ranges.push((q, r_min, r_max));
+        }
     }
-    Some(coords)
+    ranges.sort_unstable();
+
+    let mut merged: Vec<(i32, i32, i32)> = Vec::with_capacity(ranges.len());
+    for (q, r_min, r_max) in ranges {
+        if let Some((previous_q, _, previous_max)) = merged.last_mut() {
+            if *previous_q == q && i64::from(r_min) <= i64::from(*previous_max) + 1 {
+                *previous_max = (*previous_max).max(r_max);
+                continue;
+            }
+        }
+        merged.push((q, r_min, r_max));
+    }
+    Some(
+        merged
+            .into_iter()
+            .map(|(q, r_min, r_max)| {
+                (
+                    HexCoord::from_axial(q, r_min),
+                    HexCoord::from_axial(q, r_max),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn coordinate_disk_is_safe(coord: HexCoord, radius: u32) -> bool {
@@ -1227,7 +1436,7 @@ mod tests {
         let terrain = TerrainOccupancy::default();
         let authored_objects = AuthoredObjectOccupancy::default();
 
-        assert!(bounded_target_coords(&[observer_a, observer_b], profile).is_some());
+        assert!(bounded_target_ranges(&[observer_a, observer_b], profile).is_some());
         let indexed = resolve_faction(
             Faction::Player,
             &units,
@@ -1275,10 +1484,10 @@ mod tests {
         let observer = pos(-2, -3, 5);
         let target = pos(4, -3, 5);
         let sight_profile = profile(300, 300, 300);
-        assert!(bounded_target_coords(&[observer], sight_profile).is_none());
+        assert!(bounded_target_ranges(&[observer], sight_profile).is_none());
         let boundary = TilePos::new(HexCoord::from_axial(i32::MAX, 0), 5);
         assert!(
-            bounded_target_coords(&[boundary], profile(1, 1, 1)).is_none(),
+            bounded_target_ranges(&[boundary], profile(1, 1, 1)).is_none(),
             "coordinate overflow risk must select canonical full iteration"
         );
 
@@ -1326,6 +1535,34 @@ mod tests {
     }
 
     #[test]
+    fn merged_axial_ranges_equal_the_exact_union_of_observer_disks() {
+        let observers = [pos(-5, 2, 8), pos(0, 0, 8), pos(3, -1, 8)];
+        let radius = 4;
+        let ranges = bounded_target_ranges(&observers, profile(radius, 2, 1))
+            .expect("small observer disks should use bounded ranges");
+        let from_ranges = ranges
+            .iter()
+            .flat_map(|(minimum, maximum)| {
+                (minimum.y()..=maximum.y()).map(|r| HexCoord::from_axial(minimum.x(), r))
+            })
+            .collect::<BTreeSet<_>>();
+        let exact = observers
+            .iter()
+            .flat_map(|observer| observer.coord.within_radius(radius))
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(from_ranges, exact);
+        assert!(ranges.windows(2).all(|pair| match pair {
+            [(left_minimum, left_maximum), (right_minimum, _)] => {
+                left_minimum.x() < right_minimum.x()
+                    || (left_minimum.x() == right_minimum.x()
+                        && i64::from(left_maximum.y()) + 1 < i64::from(right_minimum.y()))
+            }
+            _ => true,
+        }));
+    }
+
+    #[test]
     fn radius_187_world_materializes_only_the_local_sight_disk() {
         let level = 15;
         let world_radius = 187;
@@ -1352,9 +1589,14 @@ mod tests {
         );
 
         assert_eq!(targets.len(), 3_997);
-        assert!(targets.contains_key(&observer));
-        assert!(targets.contains_key(&pos(36, 0, level)));
-        assert!(!targets.contains_key(&pos(37, 0, level)));
+        let contains = |position| {
+            targets
+                .binary_search_by_key(&position, |(target, _)| *target)
+                .is_ok()
+        };
+        assert!(contains(observer));
+        assert!(contains(pos(36, 0, level)));
+        assert!(!contains(pos(37, 0, level)));
     }
 
     #[test]

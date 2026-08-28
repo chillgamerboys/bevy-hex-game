@@ -168,6 +168,18 @@ fn current_grid(app: &mut App) -> Entity {
         .expect("one terrain grid should exist")
 }
 
+fn assert_current_snapshot_matches_live_export(app: &App, context: &str) {
+    let live = hex_map::export_world_snapshot_v1(app.world())
+        .unwrap_or_else(|error| panic!("{context} live world should export: {error}"));
+    assert_eq!(
+        app.world()
+            .resource::<hex_map::CurrentWorldSnapshotV1>()
+            .snapshot(),
+        &live,
+        "{context} incremental cache drifted from a complete export"
+    );
+}
+
 fn assert_resisted_without_rebuild(app: &mut App, target: TilePos, element: ElementId, batch: u64) {
     let original = app.world().resource::<VoxelMap>().get(target);
     assert!(
@@ -249,6 +261,7 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
         grid_before,
         "partial damage must not rebuild terrain"
     );
+    assert_current_snapshot_matches_live_export(&app, "partial terrain damage");
 
     let second = impact(2, vec![target], earth, 3);
     app.world_mut().write_message(second.clone());
@@ -273,6 +286,7 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
             assert_eq!(chunks_after[&chunk], root, "unaffected chunk {chunk:?}");
         }
     }
+    assert_current_snapshot_matches_live_export(&app, "destructive terrain damage");
 }
 
 #[test]

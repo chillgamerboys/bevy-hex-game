@@ -1,8 +1,7 @@
-// Internal Grand V3 performance proxy: compile the approved revision-2 radius-eight
-// schematic into one continuous radius-187 voxel world. This fixture intentionally
-// freezes the dramatic vertical scale for the pre-approval performance checkpoint.
-// It does not yet include final hydrology, ordinary routes, Crystal Ascent geometry,
-// or vegetation, and must not be published as the completed Sandbox map.
+// Grand V3 Baseline: compile the approved revision-2 radius-eight schematic into
+// one continuous radius-187 voxel world. The dramatic vertical scale is frozen here
+// so later palette, radius-to-height, and partial-voxel experiments can change their
+// own axes without changing the accepted biome topology.
 (
     grid_radius: 187,
     level_height: 0.4,

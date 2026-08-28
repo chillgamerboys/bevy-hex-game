@@ -242,7 +242,7 @@
         (
             name: "Grand V3 Baseline",
             category: Map,
-            blurb: "Undecorated radius-187 performance proxy for the approved eight-ring schematic; final hydrology, routes, Crystal Ascent, and vegetation await budget approval.",
+            blurb: "The complete eight-ring mountain-to-sea world joins archipelagoes, a river valley, frozen peaks, two upper routes, and Crystal Ascent.",
             world: "config/worlds/procedural-grand-v3-baseline.ron",
             generation_seed: Some(1592598566),
             encounter: "config/encounters/grand-v3-baseline-showcase.ron",

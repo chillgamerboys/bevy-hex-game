@@ -27,6 +27,7 @@ pub(super) const FOG_CAP_THICKNESS: f32 = 0.02;
 pub(super) const FOG_CAP_INSET: f32 = 0.84;
 pub(super) const FOG_CAP_LIFT: f32 = 0.08;
 pub(super) const FOG_CAP_DEPTH_BIAS: f32 = 8.0;
+const FOG_CAP_COLOR: Color = Color::srgba(0.07, 0.09, 0.18, 0.84);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct FogBatchKey {
@@ -427,7 +428,12 @@ fn fog_batch_mesh(projection: &FogBatchProjection) -> Mesh {
 
 fn fog_material() -> StandardMaterial {
     StandardMaterial {
-        base_color: Color::srgba(0.03, 0.04, 0.10, 0.72),
+        // Keep a dark tactical shroud while bounding the presentation floor over
+        // real canyon shadows. The previous 72%-black composite could drive
+        // shadowed water to near-void RGB values even though its geometry was
+        // intact; this more opaque blue floor compresses that contrast without
+        // changing observation, lighting, or the underlying PBR surface.
+        base_color: FOG_CAP_COLOR,
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         depth_bias: FOG_CAP_DEPTH_BIAS,
@@ -656,6 +662,7 @@ mod tests {
         let material = fog_material();
         assert!(material.unlit);
         assert_eq!(material.alpha_mode, AlphaMode::Blend);
+        assert_eq!(material.base_color, FOG_CAP_COLOR);
         assert!((material.depth_bias - FOG_CAP_DEPTH_BIAS).abs() < f32::EPSILON);
         let transform = fog_transform(pos(3), HexSpan::new(1.0, 2.0));
         assert!((transform.scale.x - FOG_CAP_INSET).abs() < f32::EPSILON);

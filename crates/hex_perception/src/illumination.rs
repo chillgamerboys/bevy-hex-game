@@ -113,6 +113,25 @@ impl ResolvedIllumination {
             .map(|(position, resolved)| (*position, *resolved))
     }
 
+    /// Iterates over every exact surface in one inclusive axial-row interval.
+    ///
+    /// Both endpoints must share their axial `q` component. Since [`TilePos`]
+    /// orders first by coordinate and then by level, one tree range covers every
+    /// stacked surface between the two `r` endpoints without probing each column.
+    pub(crate) fn iter_in_axial_row(
+        &self,
+        minimum: HexCoord,
+        maximum: HexCoord,
+    ) -> impl Iterator<Item = (TilePos, ResolvedLight)> + '_ {
+        debug_assert_eq!(minimum.x(), maximum.x());
+        debug_assert!(minimum.y() <= maximum.y());
+        let bottom = TilePos::new(minimum, i32::MIN);
+        let top = TilePos::new(maximum, i32::MAX);
+        self.by_surface
+            .range(bottom..=top)
+            .map(|(position, resolved)| (*position, *resolved))
+    }
+
     /// Number of exact surfaces with resolved illumination.
     #[must_use]
     pub fn len(&self) -> usize {

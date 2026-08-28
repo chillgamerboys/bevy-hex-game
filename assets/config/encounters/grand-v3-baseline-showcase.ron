@@ -1,9 +1,7 @@
-// Standard non-combat probe party for the internal Grand V3 performance proxy.
+// Standard non-combat exploration party for Grand V3 Baseline.
 //
 // The compiler publishes `party_start` on the dry coastal-lowland overlook near
-// the provisional river outlet. No Hostile roster is authored. This fixture exists
-// for benchmark and review harnesses; final hydrology, routes, Crystal Ascent, and
-// vegetation await the proxy budget decision.
+// the authoritative river outlet. No Hostile roster is authored.
 (
     name: "Grand V3 Baseline Showcase",
     rosters: [

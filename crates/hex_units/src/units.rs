@@ -37,7 +37,8 @@ use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure,
     Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode,
     PartyFormation, PartyMovementMode, Pause, PendingDecision, PresentationOcclusion, Screen,
-    SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
+    SubstanceId, TerrainReady, TerrainRenderBatch, TilePos, TraversalBlockers, TraversalProfile,
+    Turn, UnitId,
 };
 
 use crate::movement::{
@@ -73,6 +74,25 @@ pub(crate) type TileQuery<'w, 's> = Query<
     ),
     With<HexTile>,
 >;
+
+/// Adapts either a legacy/logical tile target or a combined mesh hit to the exact
+/// lightweight [`HexTile`] entity carrying gameplay's public run tuple.
+pub(crate) fn resolve_tile_pointer_target(
+    target: Entity,
+    world_position: Option<Vec3>,
+    world_normal: Option<Vec3>,
+    tiles: &TileQuery,
+    batches: &Query<&TerrainRenderBatch>,
+) -> Option<Entity> {
+    if tiles.get(target).is_ok() {
+        return Some(target);
+    }
+    let world_position = world_position?;
+    batches
+        .get(target)
+        .ok()?
+        .resolve_hit(world_position, world_normal)
+}
 
 /// Optional gameplay resources read by the global tile-click observer.
 ///
@@ -489,6 +509,7 @@ fn despawn_units(
 fn on_tile_clicked(
     event: On<Pointer<Click>>,
     tiles: TileQuery,
+    terrain_batches: Query<&TerrainRenderBatch>,
     players: Query<
         (
             &UnitId,
@@ -578,7 +599,15 @@ fn on_tile_clicked(
     // The click identifies a tile *entity*, which resolves to one specific surface
     // even where several share a coordinate. Picking is the right input for exactly
     // that reason: it never has to guess which surface was meant.
-    let clicked = event.event_target();
+    let Some(clicked) = resolve_tile_pointer_target(
+        event.event_target(),
+        event.event.hit.position,
+        event.event.hit.normal,
+        &tiles,
+        &terrain_batches,
+    ) else {
+        return;
+    };
     let Ok((pos, _, _, _)) = tiles.get(clicked) else {
         return;
     };
@@ -1650,6 +1679,7 @@ fn spawn_unit_shell(commands: &mut Commands, assets: &GameAssets, shell: UnitShe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::SystemState;
 
     fn standing(q: i32, r: i32) -> Standing {
         Standing {
@@ -1684,6 +1714,45 @@ mod tests {
         assert_eq!(registry.entity_of(UnitId(7)), None);
         assert_eq!(registry.id_of(entity), None);
         assert_eq!(registry.unregister(UnitId(7)), None);
+    }
+
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a rejected SystemState fixture is an exact unit-test setup failure"
+    )]
+    fn combined_mesh_pointer_target_resolves_to_the_exact_logical_run() {
+        let mut world = World::new();
+        let coord = HexCoord::from_axial(2, -1);
+        let position = TilePos::new(coord, 6);
+        let span = HexSpan::new(2.0, 2.8);
+        let substance = SubstanceId(3);
+        let logical = world
+            .spawn((HexTile, position, span, substance, Headroom(4)))
+            .id();
+        let batch = world
+            .spawn(TerrainRenderBatch::new(
+                hex_core::TerrainChunkRoot { q: 0, r: -1 },
+                substance,
+                vec![hex_core::TerrainPickRun::new(logical, position, span)],
+            ))
+            .id();
+        let mut state: SystemState<(TileQuery, Query<&TerrainRenderBatch>)> =
+            SystemState::new(&mut world);
+        let (tiles, batches) = state
+            .get(&world)
+            .expect("the exact pointer fixture should validate both terrain queries");
+        let hit = coord.to_world(span.top);
+
+        assert_eq!(
+            resolve_tile_pointer_target(batch, Some(hit), Some(Vec3::Y), &tiles, &batches),
+            Some(logical)
+        );
+        assert_eq!(
+            resolve_tile_pointer_target(logical, None, None, &tiles, &batches),
+            Some(logical),
+            "scripted and compatibility clicks on logical entities must remain valid"
+        );
     }
 
     #[test]

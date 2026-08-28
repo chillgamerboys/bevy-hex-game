@@ -358,6 +358,10 @@ pub(crate) fn validate_world_walker_seams(
     plan: &GeneratedWorldPlan,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
+    if plan.layout.shared_edges.is_empty() {
+        return;
+    }
+
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     for (edge_id, edge) in &plan.layout.shared_edges {
         if !valid_walker_contract(edge.walker.count, edge.walker.width, &edge.walker.ports) {
@@ -540,7 +544,54 @@ fn valid_walker_contract(count: u8, width: u32, ports: &[super::layout::Resolved
 
 #[cfg(test)]
 mod tests {
+    use hex_core::{BiomeRegionId, MapViewHint};
+
     use super::*;
+    use crate::procedural_v3::layout::{
+        HexSide, ResolvedEdgeReference, ResolvedElevationBand, ResolvedLayoutPlan,
+        ResolvedLiquidPort, ResolvedPatch, ResolvedWalkerPorts,
+    };
+    use crate::procedural_v3::liquid::LiquidPlan;
+    use crate::procedural_v3::world::{FeaturePlan, InteriorPlan, StructurePlan};
+
+    fn empty_seam_world() -> GeneratedWorldPlan {
+        let coord = HexCoord::ORIGIN;
+        let footprint = BTreeSet::from([coord]);
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
+            layout: ResolvedLayoutPlan {
+                kind: LayoutKind::Single,
+                grid_radius: 12,
+                footprint: footprint.clone(),
+                patches: BTreeMap::from([(
+                    PatchId(0),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(0),
+                        rotation_turns: 0,
+                        mask: footprint.clone(),
+                        edges,
+                    },
+                )]),
+                shared_edges: BTreeMap::new(),
+                boundary_liquid_outlets: BTreeMap::new(),
+            },
+            volume: VolumePlan::new(footprint),
+            liquids: LiquidPlan::default(),
+            features: FeaturePlan::default(),
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::new(),
+            lights: BTreeMap::new(),
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan::default(),
+            anchors: BTreeMap::new(),
+            observation_anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
+        }
+    }
 
     #[test]
     fn walker_contract_accepts_exact_explicit_width_four_without_loosening_legacy_bounds() {
@@ -580,5 +631,40 @@ mod tests {
         assert!(is_seam_closure_access(SurfaceAccess::SpecialMovement(
             ring19
         )));
+    }
+
+    #[test]
+    fn world_walker_validation_skips_only_an_empty_contract_set() {
+        let mut plan = empty_seam_world();
+        let mut issues = Vec::new();
+        validate_world_walker_seams(&plan, &mut issues);
+        assert!(issues.is_empty());
+
+        plan.layout.shared_edges.insert(
+            ResolvedEdgeId(0),
+            ResolvedEdgeContract {
+                first: (PatchId(0), HexSide::East),
+                second: (PatchId(0), HexSide::West),
+                elevation: ResolvedElevationBand {
+                    preferred: 0,
+                    min: 0,
+                    max: 0,
+                },
+                walker: ResolvedWalkerPorts {
+                    count: 1,
+                    width: 1,
+                    ports: Vec::new(),
+                },
+                liquid: ResolvedLiquidPort::Dry,
+                approach_depth: 1,
+                boundary_pairs: BTreeSet::new(),
+                protected_approaches: BTreeMap::new(),
+            },
+        );
+        validate_world_walker_seams(&plan, &mut issues);
+        assert_eq!(issues.len(), 1);
+        assert!(issues
+            .first()
+            .is_some_and(|issue| issue.detail.contains("exact declared walker-port width")));
     }
 }

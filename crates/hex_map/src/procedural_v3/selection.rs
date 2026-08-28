@@ -152,8 +152,111 @@ pub(crate) trait V3Recipe {
 /// Opaque proof that common and recipe-specific validation admitted a plan.
 #[derive(Debug)]
 pub(crate) struct ValidatedWorldPlan {
+    #[cfg(not(test))]
+    plan: GeneratedWorldPlan,
+    #[cfg(test)]
     pub(super) plan: GeneratedWorldPlan,
+    #[cfg(not(test))]
+    semantic_fingerprint: u64,
+    #[cfg(test)]
     pub(super) semantic_fingerprint: u64,
+    volume_admission: VolumeAdmission,
+}
+
+/// Sealed evidence that the volume passed complete-world validation.
+///
+/// Its field is private to this module, so sibling modules can consume an admitted
+/// plan but cannot manufacture the token needed by the unchecked volume projection
+/// path.
+#[derive(Debug)]
+pub(super) struct VolumeAdmission {
+    _private: (),
+}
+
+/// An owned world which passed complete-world validation but has not yet had
+/// its canonical semantic identity attached.
+#[derive(Debug)]
+pub(super) struct CompleteWorldAdmission {
+    plan: GeneratedWorldPlan,
+    volume_admission: VolumeAdmission,
+}
+
+impl ValidatedWorldPlan {
+    fn from_admitted_parts(plan: GeneratedWorldPlan, semantic_fingerprint: u64) -> Self {
+        Self {
+            plan,
+            semantic_fingerprint,
+            volume_admission: VolumeAdmission { _private: () },
+        }
+    }
+
+    /// Performs complete-world validation and seals the resulting owned plan.
+    pub(super) fn validate_complete(
+        plan: GeneratedWorldPlan,
+    ) -> Result<CompleteWorldAdmission, V3GenerationError> {
+        let issues = plan.validate();
+        if !issues.is_empty() {
+            return Err(V3GenerationError::InvalidFallback(issues));
+        }
+        Ok(CompleteWorldAdmission {
+            plan,
+            volume_admission: VolumeAdmission { _private: () },
+        })
+    }
+
+    /// Performs complete-world validation for the Grand Schematic compiler
+    /// while consuming its sealed construction evidence.
+    ///
+    /// Only the already-validated immutable layout, the layout-derived mask
+    /// connectivity, and the final reconciled interior projection are reused.
+    /// Every other common validation pass remains identical to
+    /// [`Self::validate_complete`].
+    pub(super) fn validate_grand_construction(
+        admission: super::schematic::GrandWorldConstructionAdmission,
+    ) -> Result<CompleteWorldAdmission, V3GenerationError> {
+        let plan = admission.into_plan();
+        let issues = plan.validate_grand_construction_admitted();
+        if !issues.is_empty() {
+            return Err(V3GenerationError::InvalidFallback(issues));
+        }
+        Ok(CompleteWorldAdmission {
+            plan,
+            volume_admission: VolumeAdmission { _private: () },
+        })
+    }
+
+    /// Borrows the immutable admitted semantic plan.
+    pub(super) fn plan(&self) -> &GeneratedWorldPlan {
+        &self.plan
+    }
+
+    /// Returns the canonical semantic identity attached at admission.
+    pub(super) const fn semantic_fingerprint(&self) -> u64 {
+        self.semantic_fingerprint
+    }
+
+    /// Borrows the sealed evidence required by unchecked volume projection.
+    pub(super) const fn volume_admission(&self) -> &VolumeAdmission {
+        &self.volume_admission
+    }
+
+    /// Consumes the proof after every admission-gated projection has completed.
+    pub(super) fn into_parts(self) -> (GeneratedWorldPlan, u64) {
+        (self.plan, self.semantic_fingerprint)
+    }
+}
+
+impl CompleteWorldAdmission {
+    /// Attaches canonical identity without reopening the validated owned world.
+    pub(super) fn fingerprint(self) -> Result<ValidatedWorldPlan, V3GenerationError> {
+        let semantic_fingerprint =
+            semantic_plan_fingerprint(&self.plan).map_err(V3GenerationError::Fingerprint)?;
+        Ok(ValidatedWorldPlan {
+            plan: self.plan,
+            semantic_fingerprint,
+            volume_admission: self.volume_admission,
+        })
+    }
 }
 
 /// Selected complete world plus deterministic runner provenance.
@@ -245,10 +348,7 @@ where
         let semantic_fingerprint =
             semantic_plan_fingerprint(&selected.plan).map_err(V3GenerationError::Fingerprint)?;
         return Ok(ValidatedWorldSelection {
-            validated: ValidatedWorldPlan {
-                plan: selected.plan,
-                semantic_fingerprint,
-            },
+            validated: ValidatedWorldPlan::from_admitted_parts(selected.plan, semantic_fingerprint),
             metrics: selected.metrics,
             selected_candidate: Some(selected.candidate),
             candidates_evaluated: CANDIDATE_COUNT,
@@ -273,10 +373,7 @@ where
     notes.push(CandidateNote::FallbackSelected);
 
     Ok(ValidatedWorldSelection {
-        validated: ValidatedWorldPlan {
-            plan: fallback,
-            semantic_fingerprint,
-        },
+        validated: ValidatedWorldPlan::from_admitted_parts(fallback, semantic_fingerprint),
         metrics,
         selected_candidate: None,
         candidates_evaluated: CANDIDATE_COUNT,
@@ -600,6 +697,7 @@ mod tests {
                 }
                 anchors
             },
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((1.0, 2.0, 1.0), (0.0, 0.0, 0.0)),
         }
     }

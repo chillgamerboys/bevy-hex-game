@@ -89,6 +89,82 @@ fn terrain_edits_reject_every_malformed_chunk_root_topology() {
 }
 
 #[test]
+fn terrain_edit_replaces_only_the_affected_chunk_mesh_batches() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let (coord, run) = {
+        let world = app.world();
+        let map = world.resource::<VoxelMap>();
+        let table = world.resource::<SubstanceTable>();
+        map.columns()
+            .find_map(|(coord, column)| {
+                let crosses_chunk_seam = coord.neighbors().into_iter().any(|neighbour| {
+                    map.column(neighbour).is_some()
+                        && terrain_chunk_key(neighbour) != terrain_chunk_key(coord)
+                });
+                if !crosses_chunk_seam {
+                    return None;
+                }
+                hex_map::runs(column)
+                    .into_iter()
+                    .find(|run| table.is_diggable(run.substance))
+                    .map(|run| (coord, run))
+            })
+            .expect("the map should expose a diggable run on a chunk seam")
+    };
+    let target = TilePos::new(coord, run.top - 1);
+    let roots_before = terrain_chunk_roots(&mut app);
+    let before = terrain_render_batches_by_chunk(&mut app);
+    let meshes_before = terrain_render_meshes_by_chunk(&mut app);
+    let affected = terrain_chunk_key(coord);
+    assert!(
+        coord.neighbors().into_iter().any(|neighbour| {
+            before.contains_key(&terrain_chunk_key(neighbour))
+                && terrain_chunk_key(neighbour) != affected
+        }),
+        "the fixture should exercise a cross-chunk mesh dependency"
+    );
+    let mesh_asset_count_before = app.world().resource::<Assets<Mesh>>().len();
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+    app.update();
+
+    let roots_after = terrain_chunk_roots(&mut app);
+    assert_ne!(roots_before.get(&affected), roots_after.get(&affected));
+    for (chunk, root) in &roots_before {
+        if *chunk != affected {
+            assert_eq!(roots_after.get(chunk), Some(root));
+        }
+    }
+
+    let after = terrain_render_batches_by_chunk(&mut app);
+    let meshes_after = terrain_render_meshes_by_chunk(&mut app);
+    assert_ne!(before.get(&affected), after.get(&affected));
+    for (chunk, entities) in &before {
+        if *chunk != affected {
+            assert_eq!(after.get(chunk), Some(entities));
+            assert_eq!(meshes_after.get(chunk), meshes_before.get(chunk));
+        }
+    }
+    for retired in meshes_before.get(&affected).into_iter().flatten() {
+        assert!(
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(*retired)
+                .is_none(),
+            "the affected chunk retained a retired combined mesh asset"
+        );
+    }
+    let mesh_asset_count_after = app.world().resource::<Assets<Mesh>>().len();
+    assert!(
+        mesh_asset_count_after <= mesh_asset_count_before.saturating_add(1),
+        "retired chunk meshes leaked instead of being replaced: before={mesh_asset_count_before}, after={mesh_asset_count_after}"
+    );
+}
+
+#[test]
 fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
     let mut app = v3_forest_app();
     enter_gameplay(&mut app);

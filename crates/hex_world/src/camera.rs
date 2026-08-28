@@ -22,6 +22,14 @@ use crate::{
 /// Sky-dome radius, in world units. Comfortably inside the camera's default
 /// 1000-unit far plane and far outside the configured zoom range plus the terrain.
 const SKY_DOME_RADIUS: f32 = 500.0;
+/// Keeps a generated map and its complete framed footprint inside the camera-owned sky.
+///
+/// The Grand V3 overview sits farther than the legacy fixed dome radius from its
+/// focus. A radius proportional to the active orbit remains behind every point
+/// admitted by the 40-degree map-view cone while staying inside the generated
+/// far-plane override (`2.0 * orbit radius`). Character and First Person radii
+/// remain small enough to retain the legacy 500-unit dome exactly.
+const SKY_DOME_MAP_RADIUS_MULTIPLIER: f32 = 1.5;
 
 /// Distance from a unit-hex centre to any one of its six faces.
 const HEX_FACE_DISTANCE: f32 = HEX_CIRCUMRADIUS * 0.866_025_4;
@@ -33,6 +41,12 @@ const CHARACTER_UPWARD_COMPOSITION_ALLOWANCE: f32 = std::f32::consts::PI / 12.0;
 const FIRST_PERSON_LOOK_DISTANCE: f32 = 1.0;
 /// Extra room beyond a generated map's initial frame for deliberate zooming out.
 const MAP_VIEW_ZOOM_HEADROOM: f32 = 1.1;
+/// Keeps the complete generated world beyond the focus inside perspective depth.
+///
+/// `MapViewHint` describes an eye-to-focus distance, while terrain on the far side
+/// of that focus is deeper still. Doubling the hinted distance conservatively covers
+/// that far-side geometry as well as the ten-percent Map zoom headroom.
+const MAP_VIEW_FAR_HEADROOM: f32 = 2.0;
 /// Approximate pixels per logical scroll line on macOS trackpads.
 ///
 /// `MouseScrollUnit::Pixel` delivers raw pixel deltas that can be hundreds of
@@ -220,6 +234,17 @@ impl CameraPose {
 
 #[derive(Resource, Debug, Default)]
 struct SavedMapCamera(Option<CameraPose>);
+
+/// One generated-map far-plane override and the projection value it replaced.
+///
+/// The global camera survives gameplay sessions. Retaining the prior value lets a
+/// later authored map without a [`MapViewHint`] recover its exact legacy projection
+/// instead of inheriting the preceding generated world's enlarged depth range.
+#[derive(Component, Debug, Clone, Copy)]
+struct MapViewFarPlaneOverride {
+    baseline: f32,
+    applied: f32,
+}
 
 /// One rendered terrain run in the camera's public obstruction projection.
 #[derive(Debug, Clone, Copy)]
@@ -458,18 +483,26 @@ fn default_sky_params() -> SkyParams {
 
 /// Applies generated map framing, or the designer-authored fallback, on every entry.
 fn frame_gameplay_camera(
+    mut commands: Commands,
     settings: Res<CameraSettings>,
     hint: Option<Res<MapViewHint>>,
-    cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    cameras: Query<(
+        Entity,
+        &mut Transform,
+        &mut PanOrbitCamera,
+        Option<&mut Projection>,
+        Option<&MapViewFarPlaneOverride>,
+    )>,
 ) {
     let to_vec3 = |(x, y, z)| Vec3::new(x, y, z);
     let fallback_eye = to_vec3(settings.gameplay_eye);
     let fallback_focus = to_vec3(settings.gameplay_focus);
-    let (eye, focus, what) = match hint.as_deref() {
+    let (eye, focus, what, hinted_depth) = match hint.as_deref() {
         Some(hint) if hint.is_valid() => (
             to_vec3(hint.eye),
             to_vec3(hint.focus),
             "generated map view hint",
+            Some(to_vec3(hint.eye).distance(to_vec3(hint.focus))),
         ),
         Some(_) => {
             warn!("generated map view hint must contain finite, distinct points; using camera.ron");
@@ -477,15 +510,17 @@ fn frame_gameplay_camera(
                 fallback_eye,
                 fallback_focus,
                 "gameplay_eye and gameplay_focus",
+                None,
             )
         }
         None => (
             fallback_eye,
             fallback_focus,
             "gameplay_eye and gameplay_focus",
+            None,
         ),
     };
-    frame_camera(cameras, eye, focus, what);
+    frame_camera(&mut commands, cameras, eye, focus, what, hinted_depth);
 }
 
 fn reset_camera_mode(
@@ -1278,10 +1313,18 @@ fn set_sky(mut domes: Query<&mut Visibility, With<SkyDome>>, wanted: Visibility)
 ///
 /// `what` names the settings being applied, so a bad edit says which pair to look at.
 fn frame_camera(
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    commands: &mut Commands,
+    mut cameras: Query<(
+        Entity,
+        &mut Transform,
+        &mut PanOrbitCamera,
+        Option<&mut Projection>,
+        Option<&MapViewFarPlaneOverride>,
+    )>,
     eye: Vec3,
     focus: Vec3,
     what: &str,
+    hinted_depth: Option<f32>,
 ) {
     let offset = eye - focus;
 
@@ -1299,12 +1342,61 @@ fn frame_camera(
         Vec3::Y
     };
 
-    for (mut transform, mut camera) in &mut cameras {
+    for (entity, mut transform, mut camera, mut projection, far_override) in &mut cameras {
         transform.translation = eye;
         transform.look_at(focus, up);
         camera.focus = focus;
         camera.radius = offset.length();
+        reconcile_map_view_far_plane(
+            commands,
+            entity,
+            projection.as_deref_mut(),
+            far_override.copied(),
+            hinted_depth,
+        );
     }
+}
+
+/// Applies generated framing depth without leaking it into later authored maps.
+fn reconcile_map_view_far_plane(
+    commands: &mut Commands,
+    entity: Entity,
+    projection: Option<&mut Projection>,
+    current: Option<MapViewFarPlaneOverride>,
+    hinted_depth: Option<f32>,
+) {
+    let Some(Projection::Perspective(perspective)) = projection else {
+        if current.is_some() {
+            commands.entity(entity).remove::<MapViewFarPlaneOverride>();
+        }
+        return;
+    };
+
+    let wanted_hint = hinted_depth
+        .map(|distance| distance * MAP_VIEW_FAR_HEADROOM)
+        .filter(|distance| distance.is_finite() && *distance > f32::EPSILON);
+    let Some(wanted_hint) = wanted_hint else {
+        if let Some(current) = current {
+            if perspective.far.to_bits() == current.applied.to_bits() {
+                perspective.far = current.baseline;
+            }
+            commands.entity(entity).remove::<MapViewFarPlaneOverride>();
+        }
+        return;
+    };
+
+    // An external projection edit wins. Rebase the generated override around that
+    // newly authored value instead of restoring a stale value on the next map.
+    let baseline = current
+        .filter(|current| perspective.far.to_bits() == current.applied.to_bits())
+        .map_or(perspective.far, |current| current.baseline);
+    let applied = baseline.max(wanted_hint);
+    if perspective.far.to_bits() != applied.to_bits() {
+        perspective.far = applied;
+    }
+    commands
+        .entity(entity)
+        .insert(MapViewFarPlaneOverride { baseline, applied });
 }
 
 /// Build sky parameters from settings. `to_color(..).to_linear()` converts the
@@ -1361,12 +1453,14 @@ pub(crate) fn apply_sky_material(
 
 /// Keep the dome centred on the camera so the camera never reaches its far wall.
 fn follow_camera(
-    camera: Query<&Transform, (With<PanOrbitCamera>, Without<SkyDome>)>,
+    camera: Query<(&Transform, &PanOrbitCamera), Without<SkyDome>>,
     mut domes: Query<&mut Transform, With<SkyDome>>,
 ) {
-    let Ok(cam) = camera.single() else {
+    let Ok((cam, orbit)) = camera.single() else {
         return;
     };
+    let radius = sky_dome_radius(orbit.radius);
+    let wanted_scale = Vec3::splat(radius);
     for mut dome in &mut domes {
         // Guarded because writing through `Mut` marks the transform changed even when
         // the value is identical, which would re-propagate and re-extract the dome
@@ -1374,6 +1468,18 @@ fn follow_camera(
         if dome.translation.distance_squared(cam.translation) > f32::EPSILON {
             dome.translation = cam.translation;
         }
+        if dome.scale.distance_squared(wanted_scale) > f32::EPSILON {
+            dome.scale = wanted_scale;
+        }
+    }
+}
+
+fn sky_dome_radius(camera_radius: f32) -> f32 {
+    let expanded = camera_radius * SKY_DOME_MAP_RADIUS_MULTIPLIER;
+    if expanded.is_finite() {
+        SKY_DOME_RADIUS.max(expanded)
+    } else {
+        SKY_DOME_RADIUS
     }
 }
 
@@ -1901,6 +2007,28 @@ mod tests {
 
     fn publish_generated_view(mut commands: Commands) {
         commands.insert_resource(MapViewHint::new((12.0, 36.0, -18.0), (2.0, 5.0, -1.0)));
+    }
+
+    /// Reproduces the public framing geometry of the radius-187 Grand V3 map.
+    ///
+    /// The camera crate cannot depend on `hex_map`, so the fixture owns only the
+    /// published world-space contract: radius, V3 height ceiling, level height,
+    /// 16:9 review aspect, and the resulting valid `MapViewHint`.
+    fn grand_v3_map_view_hint() -> MapViewHint {
+        const RADIUS: f32 = 187.0;
+        const MAXIMUM_WORLD_HEIGHT: f32 = 256.0 * 0.4;
+        const REVIEW_ASPECT: f32 = 16.0 / 9.0;
+
+        let half_width = f32::sqrt(3.0).mul_add(RADIUS, 2.0);
+        let half_depth = 1.5_f32.mul_add(RADIUS, 2.0);
+        let required_vertical_half_extent = half_depth.max(half_width / REVIEW_ASPECT);
+        let distance = ((required_vertical_half_extent + MAXIMUM_WORLD_HEIGHT * 0.3 + 12.0)
+            / 20.0_f32.to_radians().tan())
+            * 1.1;
+        let direction = Vec3::new(-0.45, 0.82, 0.35).normalize();
+        let focus = Vec3::Y * (MAXIMUM_WORLD_HEIGHT * 0.35);
+        let eye = focus + direction * distance;
+        MapViewHint::new((eye.x, eye.y, eye.z), (focus.x, focus.y, focus.z))
     }
 
     fn rotation_at_pitch(angle: f32) -> Quat {
@@ -3670,6 +3798,122 @@ mod tests {
     }
 
     #[test]
+    fn grand_v3_hint_frames_the_complete_radius_187_boundary_inside_far_depth() {
+        const GRAND_V3_RADIUS: u32 = 187;
+        const GRAND_V3_COLUMNS: usize = 105_469;
+        const GRAND_V3_BOUNDARY_COLUMNS: usize = 6 * 187;
+        const MAXIMUM_WORLD_HEIGHT: f32 = 256.0 * 0.4;
+        const REVIEW_ASPECT: f32 = 16.0 / 9.0;
+        const HEX_CORNERS: [(f32, f32); 6] = [
+            (0.0, 1.0),
+            (0.866_025_4, 0.5),
+            (0.866_025_4, -0.5),
+            (0.0, -1.0),
+            (-0.866_025_4, -0.5),
+            (-0.866_025_4, 0.5),
+        ];
+
+        let hint = grand_v3_map_view_hint();
+        let baseline_far = 1_000.0;
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder
+            .app_mut()
+            .insert_resource(camera_settings())
+            .insert_resource(hint)
+            .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                Projection::Perspective(bevy::camera::PerspectiveProjection {
+                    aspect_ratio: REVIEW_ASPECT,
+                    far: baseline_far,
+                    ..default()
+                }),
+            ))
+            .id();
+        let mut app = builder.build();
+
+        enter(&mut app, Screen::Gameplay);
+
+        let camera_entity = app.world().entity(camera);
+        let transform = camera_entity
+            .get::<Transform>()
+            .expect("the generated frame should retain its transform");
+        let projection = camera_entity
+            .get::<Projection>()
+            .expect("the generated frame should retain its projection");
+        let Projection::Perspective(perspective) = projection else {
+            panic!("the generated frame should remain perspective");
+        };
+        let hinted_distance = Vec3::from(hint.eye).distance(Vec3::from(hint.focus));
+        let expected_far = baseline_far.max(hinted_distance * MAP_VIEW_FAR_HEADROOM);
+        let expected_sky_radius = sky_dome_radius(hinted_distance);
+        assert!((perspective.far - expected_far).abs() < 1e-4);
+
+        let view_from_world = transform.to_matrix().inverse();
+        let tan_half_fov = (perspective.fov * 0.5).tan();
+        let footprint = hex_core::HexCoord::ORIGIN.within_radius(GRAND_V3_RADIUS);
+        assert_eq!(footprint.len(), GRAND_V3_COLUMNS);
+        let mut boundary_columns = 0_usize;
+        let mut maximum_depth = 0.0_f32;
+        let mut maximum_scene_distance = 0.0_f32;
+        let mut maximum_projected_extent = 0.0_f32;
+        for coord in footprint
+            .into_iter()
+            .filter(|coord| coord.distance(hex_core::HexCoord::ORIGIN) == GRAND_V3_RADIUS)
+        {
+            boundary_columns = boundary_columns.saturating_add(1);
+            let center = coord.to_world(0.0);
+            for height in [0.0, MAXIMUM_WORLD_HEIGHT] {
+                for (offset_x, offset_z) in HEX_CORNERS {
+                    let point = Vec3::new(
+                        center.x + offset_x * HEX_CIRCUMRADIUS,
+                        height,
+                        center.z + offset_z * HEX_CIRCUMRADIUS,
+                    );
+                    let view = view_from_world.transform_point3(point);
+                    let depth = -view.z;
+                    assert!(
+                        depth >= perspective.near && depth <= perspective.far,
+                        "Grand V3 boundary point {point:?} has camera depth {depth}, outside {:?}",
+                        perspective.near..=perspective.far
+                    );
+                    let horizontal = view.x.abs() / (depth * tan_half_fov * REVIEW_ASPECT);
+                    let vertical = view.y.abs() / (depth * tan_half_fov);
+                    let extent = horizontal.max(vertical);
+                    assert!(
+                        extent <= 1.0,
+                        "Grand V3 boundary point {point:?} projects outside the frame at {extent}"
+                    );
+                    maximum_depth = maximum_depth.max(depth);
+                    maximum_scene_distance =
+                        maximum_scene_distance.max(transform.translation.distance(point));
+                    maximum_projected_extent = maximum_projected_extent.max(extent);
+                }
+            }
+        }
+        assert_eq!(boundary_columns, GRAND_V3_BOUNDARY_COLUMNS);
+        assert!(
+            maximum_depth > baseline_far,
+            "the fixture must reproduce the old 1,000-unit far-plane clipping"
+        );
+        assert!(maximum_depth < perspective.far);
+        assert!(
+            maximum_scene_distance < expected_sky_radius,
+            "the camera-centred sky dome would occlude Grand V3 terrain: \
+             scene distance {maximum_scene_distance}, dome radius {expected_sky_radius}"
+        );
+        assert!(expected_sky_radius < perspective.far);
+        assert!(maximum_projected_extent < 1.0);
+    }
+
+    #[test]
     fn invalid_generated_view_uses_camera_settings() {
         let mut builder = HeadlessAppBuilder::new()
             .with_minimal_plugins()
@@ -4193,6 +4437,76 @@ mod tests {
         assert_eq!(restored.1, original.1);
         assert!((restored.2 - original.2).abs() < f32::EPSILON);
         assert_eq!(perspective_projection(&app, camera), original_projection);
+    }
+
+    #[test]
+    fn generated_far_depth_survives_character_cycle_then_releases_for_hintless_map() {
+        let mut app = sky_app();
+        let hint = grand_v3_map_view_hint();
+        app.insert_resource(hint);
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::new(3.0, 2.0, -1.0)),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<PanOrbitCamera>>()
+            .single(app.world())
+            .expect("the production fixture should own one camera");
+        let authored_far = 777.0;
+        {
+            let mut camera_entity = app.world_mut().entity_mut(camera);
+            let mut projection = camera_entity
+                .get_mut::<Projection>()
+                .expect("the production camera should retain its projection");
+            let Projection::Perspective(perspective) = &mut *projection else {
+                panic!("the production camera should remain perspective");
+            };
+            perspective.far = authored_far;
+        }
+
+        enter(&mut app, Screen::Gameplay);
+        let generated_pose = camera_pose(&app, camera);
+        let generated_projection = perspective_projection(&app, camera);
+        assert!(generated_projection.2 > authored_far);
+        assert!(app
+            .world()
+            .entity(camera)
+            .contains::<MapViewFarPlaneOverride>());
+
+        press_camera_cycle_through_input_plugin(&mut app);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+        assert_eq!(
+            perspective_projection(&app, camera).2,
+            generated_projection.2
+        );
+        press_camera_cycle_through_input_plugin(&mut app);
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+        assert_eq!(
+            perspective_projection(&app, camera).2,
+            generated_projection.2
+        );
+        press_camera_cycle_through_input_plugin(&mut app);
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        assert_eq!(camera_pose(&app, camera), generated_pose);
+        assert_eq!(perspective_projection(&app, camera), generated_projection);
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
+
+        enter(&mut app, Screen::Title);
+        app.world_mut().remove_resource::<MapViewHint>();
+        enter(&mut app, Screen::Gameplay);
+
+        assert_eq!(perspective_projection(&app, camera).2, authored_far);
+        assert!(
+            !app.world()
+                .entity(camera)
+                .contains::<MapViewFarPlaneOverride>(),
+            "a hint-less authored map must not inherit generated depth"
+        );
     }
 
     #[test]

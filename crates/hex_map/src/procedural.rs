@@ -122,7 +122,7 @@ pub enum ProceduralRecipeMetrics {
     MountainRange(MountainRangeMetrics),
     /// Whole-ocean topology, scenic islands, and playable-home-island measurements.
     OceanArchipelago(OceanArchipelagoMetrics),
-    /// Radius-187 schematic ownership and representative proxy measurements.
+    /// Radius-187 schematic ownership and compiled-world measurements.
     GrandV3(GrandV3Metrics),
 }
 
@@ -730,7 +730,7 @@ pub struct OceanArchipelagoMetrics {
     pub tree_roots: u32,
 }
 
-/// Exact deterministic measurements for the Grand V3 performance checkpoint.
+/// Exact deterministic measurements for one compiled Grand V3 baseline.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct GrandV3Metrics {
     /// Coarse semantic cells retained as stable biome identities.
@@ -743,7 +743,7 @@ pub struct GrandV3Metrics {
     pub ordinary_surfaces: u32,
     /// Horizontal columns carrying authored liquid.
     pub water_columns: u32,
-    /// Connected still-water bodies in the checkpoint proxy.
+    /// Connected authored liquid bodies in the compiled world.
     pub liquid_bodies: u32,
     /// Lowest exposed solid surface.
     pub minimum_surface: Level,

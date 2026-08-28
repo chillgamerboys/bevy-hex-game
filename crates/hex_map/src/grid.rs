@@ -1,4 +1,4 @@
-//! Builds the voxel world, and turns it into tile entities.
+//! Builds the voxel world, publishes logical tile entities, and batches terrain draws.
 //!
 //! Storage and generation are private to `hex_map`; rendered terrain reaches other
 //! crates as entities carrying [`HexTile`](hex_core::HexTile),
@@ -8,13 +8,18 @@
 //! The substance table itself is shared through `hex_assets` because gameplay also
 //! reads its behavior flags.
 //!
-//! Keeping that boundary narrow is what lets the map be rebuilt without touching
-//! gameplay. A richer map means producing different voxels in the terrain builder;
-//! it does not change what a tile *is* to anyone else.
+//! Logical runs remain independent of the combined meshes that draw them. Keeping
+//! that boundary narrow is what lets the map rebuild one render chunk without
+//! touching gameplay. A richer map means producing different voxels in the terrain
+//! builder; it does not change what a tile *is* to anyone else.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::Indices;
+use bevy::picking::Pickable;
+use bevy::render::render_resource::PrimitiveTopology;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
 use hex_assets::{
@@ -24,11 +29,12 @@ use hex_assets::{
 use hex_core::{
     AuthoritativeSystems, BiomeRegions, CutawayOccluder, DamagedVoxels, GameplayLight,
     GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
-    InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
-    PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SimulationRole,
+    InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint,
+    PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SimulationRole,
     SpecialMovementRegions, SubstanceId, TerrainChunkRoot, TerrainEdit, TerrainImpact,
     TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult,
-    TerrainReady, TerrainSystems, TilePos, TraversalBlockers, TraversalProfile, TreeOccluder,
+    TerrainPickRun, TerrainReady, TerrainRenderBatch, TerrainSystems, TilePos, TraversalBlockers,
+    TraversalProfile, TreeOccluder, MAX_TERRAIN_PICK_RUNS_PER_BATCH,
 };
 use hex_multiplayer::AuthorityBoundary;
 
@@ -80,9 +86,37 @@ struct PendingTerrainImpacts(Vec<PendingTerrainImpact>);
 #[derive(Resource, Debug, Default)]
 struct PendingTerrainEdits(Vec<TerrainEdit>);
 
-/// Whether map-owned truth changed since the current reconnect cache was published.
+/// Map-owned truth awaiting publication into the reconnect cache.
+///
+/// Initial construction needs a complete export. Accepted edits retain their exact
+/// changed coordinates so the existing cache can reproject only local consequences.
 #[derive(Resource, Debug, Default)]
-struct WorldSnapshotDirty(bool);
+struct WorldSnapshotDirty {
+    full_refresh: bool,
+    changed_coords: BTreeSet<HexCoord>,
+}
+
+impl WorldSnapshotDirty {
+    fn mark_full(&mut self) {
+        self.full_refresh = true;
+        self.changed_coords.clear();
+    }
+
+    fn mark_changed(&mut self, changed_coords: BTreeSet<HexCoord>) {
+        if !self.full_refresh {
+            self.changed_coords.extend(changed_coords);
+        }
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.full_refresh || !self.changed_coords.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.full_refresh = false;
+        self.changed_coords.clear();
+    }
+}
 
 /// A validated resource candidate waiting for the ordinary grid publication pass.
 #[derive(Resource, Debug)]
@@ -154,6 +188,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<OceanArchipelagoMetrics>()
         .register_type::<crate::procedural::GrandV3Metrics>()
         .init_resource::<MaterialCache>()
+        .init_resource::<TerrainMeshCache>()
         .init_resource::<DamagedVoxels>()
         .init_resource::<TerrainDamageState>()
         .init_resource::<PendingTerrainEdits>()
@@ -276,7 +311,7 @@ fn generate_world(
     edits.clear();
     impacts.clear();
     outcomes.clear();
-    snapshot_dirty.0 = true;
+    snapshot_dirty.mark_full();
     replication_state.set_last_applied_sequence(None);
     commands.remove_resource::<GameplaySetupFailure>();
     commands.remove_resource::<TerrainReady>();
@@ -285,6 +320,7 @@ fn generate_world(
     commands.remove_resource::<MapPresentationProjection>();
     liquid_render::clear_material_cache(&mut commands);
     commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<MapObservationAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
     commands.remove_resource::<TraversalBlockers>();
@@ -349,6 +385,7 @@ fn generate_world(
         };
         commands.insert_resource(map);
         commands.insert_resource(MapAnchors::new());
+        commands.insert_resource(MapObservationAnchors::new());
         commands.insert_resource(SpecialMovementRegions::new());
         commands.insert_resource(InteriorRegions::new());
         commands.insert_resource(PendingTerrainPublication);
@@ -399,6 +436,7 @@ fn generate_world(
             }
             commands.insert_resource(generated.map);
             commands.insert_resource(anchors);
+            commands.insert_resource(MapObservationAnchors::new());
             commands.insert_resource(generated.report);
         }
         crate::settings::ProceduralSettings::V2(v2) => {
@@ -428,6 +466,7 @@ fn generate_world(
             );
             commands.insert_resource(generated.map);
             commands.insert_resource(generated.anchors);
+            commands.insert_resource(MapObservationAnchors::new());
             commands.insert_resource(generated.special_regions);
             commands.insert_resource(generated.interiors);
             commands.insert_resource(generated.view_hint);
@@ -462,6 +501,7 @@ fn generate_world(
             );
             commands.insert_resource(generated.map);
             commands.insert_resource(generated.anchors);
+            commands.insert_resource(generated.observation_anchors);
             commands.insert_resource(generated.special_regions);
             commands.insert_resource(generated.interiors);
             commands.insert_resource(generated.blockers);
@@ -496,9 +536,10 @@ fn stage_campaign_world_restore(
     let public_fingerprint = snapshot.public_fingerprint;
 
     damage_state.restore(damage, damaged_voxels);
-    snapshot_dirty.0 = false;
+    snapshot_dirty.clear();
     commands.insert_resource(map);
     commands.insert_resource(anchors);
+    commands.insert_resource(MapObservationAnchors::new());
     commands.insert_resource(interiors);
     commands.insert_resource(special_regions);
     commands.insert_resource(biome_regions);
@@ -543,6 +584,8 @@ fn teardown_map(
     mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
     mut snapshot_dirty: ResMut<WorldSnapshotDirty>,
     mut replication_state: ResMut<WorldReplicationStateV1>,
+    mut terrain_meshes: ResMut<TerrainMeshCache>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for entity in &grids {
         commands.entity(entity).despawn();
@@ -553,10 +596,11 @@ fn teardown_map(
     edits.clear();
     impacts.clear();
     outcomes.clear();
-    snapshot_dirty.0 = false;
+    snapshot_dirty.clear();
     replication_state.set_last_applied_sequence(None);
     commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<MapObservationAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
     commands.remove_resource::<TraversalBlockers>();
@@ -571,15 +615,18 @@ fn teardown_map(
     commands.remove_resource::<PendingInitialSnapshotPublication>();
     commands.remove_resource::<CampaignWorldRestoreResultV2>();
     liquid_render::clear_material_cache(&mut commands);
+    terrain_meshes.reset_for_world(&mut meshes);
     commands.remove_resource::<TerrainReady>();
 }
 
-/// Spawns one entity per contiguous run of substance.
+/// Publishes one lightweight logical entity per contiguous run of substance and
+/// bounded combined render meshes per resident chunk.
 ///
-/// **Voxel storage does not mean voxel rendering.** One entity per voxel at radius 20
-/// with bedrock depth would be tens of thousands; merging vertical runs of the same
-/// substance keeps it to a handful per column. It is also why targeting has to be
-/// positional — a voxel inside a run has no entity of its own.
+/// Logical run entities retain gameplay's exact public tuple. They deliberately carry
+/// no mesh or material: rendering thousands of independent PBR entities was the
+/// radius-187 bottleneck. Chunk children combine those prisms by substance and
+/// cutaway ownership while [`TerrainRenderBatch`] maps pointer hits back to the same
+/// logical run entities.
 fn spawn_grid(
     mut commands: Commands,
     assets: Res<GameAssets>,
@@ -599,6 +646,7 @@ fn spawn_grid(
         &mut commands,
         &assets,
         &mut presentation_assets.terrain_materials,
+        &mut presentation_assets.terrain_meshes,
         &mut presentation_assets.materials,
         &mut presentation_assets.meshes,
         &mut presentation_assets.liquid_materials,
@@ -702,6 +750,7 @@ fn discard_staged_campaign_world(
     damage_state.reset(damaged_voxels);
     commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<MapObservationAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
     commands.remove_resource::<TraversalBlockers>();
@@ -721,6 +770,7 @@ fn build_grid(
     commands: &mut Commands,
     assets: &GameAssets,
     palette_materials: &mut MaterialCache,
+    terrain_meshes: &mut TerrainMeshCache,
     materials: &mut Assets<StandardMaterial>,
     meshes: &mut Assets<Mesh>,
     liquid_materials: &mut Assets<LiquidMaterial>,
@@ -732,7 +782,9 @@ fn build_grid(
     presentation: Option<&MapPresentationProjection>,
     art_catalog: Option<&RuntimeArtCatalog>,
 ) -> Result<(), MapPresentationError> {
-    let mesh = assets.hex_tile.clone();
+    // Keep construction ordered behind the accepted shared asset set even though
+    // terrain geometry is now baked directly rather than instancing `hex.glb`.
+    let _accepted_hex_mesh = assets.hex_tile.id();
     // Crystal asset resolution happens before any presentation entities are
     // queued, so a missing or incompatible dependency cannot leave a partial map.
     let prepared_crystals =
@@ -743,6 +795,7 @@ fn build_grid(
     // lifecycle boundary at which every terrain material must be resolved again.
     // Local chunk edits deliberately keep using the refreshed cache below.
     palette_materials.reset_for_world(materials);
+    terrain_meshes.reset_for_world(meshes);
     let mut children = liquid_render::spawn_presentations(
         commands,
         meshes,
@@ -769,25 +822,22 @@ fn build_grid(
             HexGrid,
         ))
         .id();
-    let chunk_roots = map
-        .chunk_coords()
-        .map(|chunk| {
-            (
-                chunk,
-                spawn_terrain_chunk(
-                    commands,
-                    &mesh,
-                    palette_materials,
-                    materials,
-                    map,
-                    table,
-                    settings,
-                    interiors,
-                    chunk,
-                ),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut chunk_roots = BTreeMap::new();
+    for chunk in map.chunk_coords() {
+        let root = spawn_terrain_chunk(
+            commands,
+            palette_materials,
+            terrain_meshes,
+            materials,
+            meshes,
+            map,
+            table,
+            settings,
+            interiors,
+            chunk,
+        )?;
+        chunk_roots.insert(chunk, root);
+    }
     debug_assert_eq!(chunk_roots.len(), map.chunk_count());
     commands
         .entity(grid)
@@ -803,15 +853,16 @@ fn build_grid(
 )]
 fn spawn_terrain_chunk(
     commands: &mut Commands,
-    mesh: &Handle<Mesh>,
     palette_materials: &mut MaterialCache,
+    terrain_meshes: &mut TerrainMeshCache,
     materials: &mut Assets<StandardMaterial>,
+    meshes: &mut Assets<Mesh>,
     map: &VoxelMap,
     table: &SubstanceTable,
     settings: &MapSettings,
     interiors: Option<&InteriorRegions>,
     chunk: crate::voxel::TerrainChunkCoord,
-) -> Entity {
+) -> Result<Entity, MapPresentationError> {
     let root = commands
         .spawn((
             Transform::default(),
@@ -823,11 +874,25 @@ fn spawn_terrain_chunk(
             },
         ))
         .id();
+    let chunk_columns = map.columns_in_chunk(chunk).collect::<Vec<_>>();
+    let mut relevant_coords = BTreeSet::new();
+    for (coord, _column) in &chunk_columns {
+        relevant_coords.insert(*coord);
+        relevant_coords.extend(coord.neighbors());
+    }
+    let projected_columns = relevant_coords
+        .into_iter()
+        .filter_map(|coord| {
+            map.column(coord)
+                .map(|column| (coord, projected_runs(coord, column, interiors)))
+        })
+        .collect::<BTreeMap<_, _>>();
+
     let mut children = Vec::new();
-    for (coord, column) in map.columns_in_chunk(chunk) {
-        for projected in projected_runs(coord, column, interiors) {
+    let mut batches = BTreeMap::<TerrainBatchKey, Vec<PendingTerrainRun>>::new();
+    for (coord, column) in chunk_columns {
+        for projected in projected_columns.get(&coord).into_iter().flatten().copied() {
             let run = projected.run;
-            let material = palette_materials.get_or_create(run.substance, table, materials);
             let span = span_for(run.bottom, run.top, settings.level_height);
 
             // Only the map can measure this: a run knows its own extent but nothing
@@ -840,16 +905,16 @@ fn spawn_terrain_chunk(
             // surface out, putting a dependency on the map straight back into movement.
             // Voxels inside the run are addressed by `TilePos`, not by this entity.
             let position = TilePos::new(coord, run.top - 1);
+            let transform = Transform {
+                translation: coord.to_world(span.centre()),
+                scale: Vec3::new(1., span.height(), 1.),
+                ..default()
+            };
             let mut tile = commands.spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material),
-                Transform {
-                    translation: coord.to_world(span.centre()),
-                    scale: Vec3::new(1., span.height(), 1.),
-                    ..default()
-                },
+                transform,
                 // A roof run can be hidden independently of the grid that owns it.
                 Visibility::Inherited,
+                Pickable::IGNORE,
                 Name::new("HexTile"),
                 HexTile,
                 coord,
@@ -862,11 +927,62 @@ fn spawn_terrain_chunk(
             if let Some(region) = projected.cutaway {
                 tile.insert((CutawayOccluder(region), PresentationOcclusion::default()));
             }
-            children.push(tile.id());
+            let entity = tile.id();
+            children.push(entity);
+            batches
+                .entry(TerrainBatchKey {
+                    substance: run.substance,
+                    cutaway: projected.cutaway,
+                })
+                .or_default()
+                .push(PendingTerrainRun {
+                    entity,
+                    position,
+                    span,
+                    bottom: run.bottom,
+                    top: run.top,
+                    cutaway: projected.cutaway,
+                });
         }
     }
+
+    let chunk_marker = TerrainChunkRoot {
+        q: chunk.q,
+        r: chunk.r,
+    };
+    let mut chunk_mesh_handles = Vec::new();
+    for (key, runs) in batches {
+        let material = palette_materials.get_or_create(key.substance, table, materials);
+        for (partition, runs) in runs.chunks(MAX_TERRAIN_PICK_RUNS_PER_BATCH).enumerate() {
+            let mesh = combined_terrain_mesh(runs, &projected_columns, settings.level_height)
+                .map_err(MapPresentationError::TerrainMesh)?;
+            let mesh = meshes.add(mesh);
+            chunk_mesh_handles.push(mesh.clone());
+            let lookup = runs
+                .iter()
+                .map(|run| TerrainPickRun::new(run.entity, run.position, run.span))
+                .collect();
+            let mut batch = commands.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material.clone()),
+                Transform::default(),
+                Visibility::Inherited,
+                Pickable::default(),
+                TerrainRenderBatch::new(chunk_marker, key.substance, lookup),
+                Name::new(format!(
+                    "TerrainBatch[{},{},{}:{}]",
+                    chunk.q, chunk.r, key.substance.0, partition
+                )),
+            ));
+            if let Some(region) = key.cutaway {
+                batch.insert((CutawayOccluder(region), PresentationOcclusion::default()));
+            }
+            children.push(batch.id());
+        }
+    }
+    terrain_meshes.replace_chunk(chunk, chunk_mesh_handles, meshes);
     commands.entity(root).add_children(&children);
-    root
+    Ok(root)
 }
 
 fn spawn_gameplay_lights(
@@ -904,6 +1020,7 @@ enum MapPresentationError {
     Liquid(LiquidPresentationError),
     Feature(FeaturePresentationError),
     Crystal(CrystalPresentationError),
+    TerrainMesh(String),
     TerrainGridMissing,
     MultipleTerrainGrids,
     TerrainChunkTopology(String),
@@ -913,6 +1030,7 @@ enum MapPresentationError {
 #[derive(SystemParam)]
 struct MapPresentationAssets<'w> {
     terrain_materials: ResMut<'w, MaterialCache>,
+    terrain_meshes: ResMut<'w, TerrainMeshCache>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
@@ -936,7 +1054,7 @@ struct WorldSnapshotSources<'w> {
 }
 
 impl WorldSnapshotSources<'_> {
-    fn export(&self) -> Result<hex_multiplayer::WorldSnapshotV1, crate::WorldSnapshotError> {
+    fn parts(&self) -> Result<WorldExportParts<'_>, crate::WorldSnapshotError> {
         let map = self
             .map
             .as_deref()
@@ -971,7 +1089,7 @@ impl WorldSnapshotSources<'_> {
                 .ok_or(crate::WorldSnapshotError::WorldUnavailable(
                     "SpecialMovementRegions",
                 ))?;
-        export_from_parts(WorldExportParts {
+        Ok(WorldExportParts {
             map,
             table,
             settings,
@@ -986,22 +1104,41 @@ impl WorldSnapshotSources<'_> {
             art_catalog: self.art_catalog.as_deref(),
         })
     }
+
+    fn export(&self) -> Result<hex_multiplayer::WorldSnapshotV1, crate::WorldSnapshotError> {
+        export_from_parts(self.parts()?)
+    }
 }
 
 fn publish_current_world_snapshot(
     mut commands: Commands,
     sources: WorldSnapshotSources,
+    mut current: Option<ResMut<CurrentWorldSnapshotV1>>,
     mut dirty: ResMut<WorldSnapshotDirty>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
-    if !dirty.0 {
+    if !dirty.is_dirty() {
         return;
     }
-    match sources.export() {
-        Ok(snapshot) => {
+
+    let published = if dirty.full_refresh || current.is_none() {
+        sources.export().map(|snapshot| {
             commands.insert_resource(CurrentWorldSnapshotV1::new(snapshot));
-            dirty.0 = false;
-        }
+        })
+    } else {
+        current
+            .as_deref_mut()
+            .ok_or(crate::WorldSnapshotError::WorldUnavailable(
+                "CurrentWorldSnapshotV1",
+            ))
+            .and_then(|current| {
+                sources.parts().and_then(|parts| {
+                    current.refresh_changed_coordinates(parts, &dirty.changed_coords)
+                })
+            })
+    };
+    match published {
+        Ok(()) => dirty.clear(),
         Err(error) => {
             error!("cannot publish current world snapshot: {error}");
             commands.remove_resource::<CurrentWorldSnapshotV1>();
@@ -1229,7 +1366,7 @@ fn commit_prepared_world_snapshot(
     runtime.edits.clear();
     runtime.impacts.clear();
     runtime.terrain_outcomes.clear();
-    runtime.dirty.0 = false;
+    runtime.dirty.clear();
     runtime
         .replication_state
         .set_last_applied_sequence(staged_sequence);
@@ -1242,6 +1379,7 @@ fn commit_prepared_world_snapshot(
     liquid_render::clear_material_cache(commands);
     commands.insert_resource(map);
     commands.insert_resource(anchors);
+    commands.insert_resource(MapObservationAnchors::new());
     commands.insert_resource(interiors);
     commands.insert_resource(special_regions);
     commands.insert_resource(biome_regions);
@@ -1282,6 +1420,7 @@ fn spawn_imported_snapshot_grid(
             &mut commands,
             &assets,
             &mut presentation_assets.terrain_materials,
+            &mut presentation_assets.terrain_meshes,
             &mut presentation_assets.materials,
             &mut presentation_assets.meshes,
             &mut presentation_assets.liquid_materials,
@@ -1328,6 +1467,7 @@ impl fmt::Display for MapPresentationError {
             Self::Liquid(error) => write!(formatter, "liquid presentation failed: {error}"),
             Self::Feature(error) => write!(formatter, "feature presentation failed: {error}"),
             Self::Crystal(error) => write!(formatter, "crystal presentation failed: {error}"),
+            Self::TerrainMesh(error) => write!(formatter, "terrain mesh batching failed: {error}"),
             Self::TerrainGridMissing => formatter.write_str("terrain grid root is missing"),
             Self::MultipleTerrainGrids => {
                 formatter.write_str("more than one terrain grid root is active")
@@ -1348,6 +1488,7 @@ impl std::error::Error for MapPresentationError {
             Self::Liquid(error) => Some(error),
             Self::Feature(error) => Some(error),
             Self::Crystal(error) => Some(error),
+            Self::TerrainMesh(_) => None,
             Self::TerrainGridMissing
             | Self::MultipleTerrainGrids
             | Self::TerrainChunkTopology(_)
@@ -1365,6 +1506,240 @@ impl std::error::Error for MapPresentationError {
 struct ProjectedRun {
     run: SubstanceRun,
     cutaway: Option<InteriorRegionId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TerrainBatchKey {
+    substance: SubstanceId,
+    cutaway: Option<InteriorRegionId>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingTerrainRun {
+    entity: Entity,
+    position: TilePos,
+    span: HexSpan,
+    bottom: hex_core::Level,
+    top: hex_core::Level,
+    cutaway: Option<InteriorRegionId>,
+}
+
+#[derive(Debug, Default)]
+struct TerrainRawMesh {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+}
+
+impl TerrainRawMesh {
+    fn vertex(&mut self, position: Vec3, normal: Vec3, uv: [f32; 2]) -> Result<u32, String> {
+        let index = u32::try_from(self.positions.len())
+            .map_err(|_error| "terrain mesh vertex index overflowed u32".to_owned())?;
+        self.positions.push(position.to_array());
+        self.normals.push(normal.to_array());
+        self.uvs.push(uv);
+        Ok(index)
+    }
+
+    fn cap(&mut self, coord: HexCoord, y: f32, top: bool) -> Result<(), String> {
+        let centre = coord.to_world(y);
+        let normal = if top { Vec3::Y } else { Vec3::NEG_Y };
+        let centre_index = self.vertex(centre, normal, [0.5, 0.5])?;
+        let mut corner_indices = [0u32; 6];
+        for (slot, corner) in corner_indices.iter_mut().zip(terrain_hex_corners()) {
+            *slot = self.vertex(
+                centre + corner,
+                normal,
+                [0.5 + corner.x * 0.5, 0.5 + corner.z * 0.5],
+            )?;
+        }
+        let mut emit_triangle = |current: u32, next: u32| {
+            if top {
+                self.indices.extend([centre_index, current, next]);
+            } else {
+                self.indices.extend([centre_index, next, current]);
+            }
+        };
+        for pair in corner_indices.windows(2) {
+            let [current, next] = pair else {
+                return Err("terrain cap corner partition was malformed".to_owned());
+            };
+            emit_triangle(*current, *next);
+        }
+        let first = corner_indices
+            .first()
+            .copied()
+            .ok_or_else(|| "terrain cap has no first corner".to_owned())?;
+        let last = corner_indices
+            .last()
+            .copied()
+            .ok_or_else(|| "terrain cap has no last corner".to_owned())?;
+        emit_triangle(last, first);
+        Ok(())
+    }
+
+    fn side(
+        &mut self,
+        coord: HexCoord,
+        [first, second]: [Vec3; 2],
+        normal: Vec3,
+        bottom: f32,
+        top: f32,
+    ) -> Result<(), String> {
+        let base = coord.to_world(0.0);
+        let first_bottom = base + first + Vec3::Y * bottom;
+        let second_bottom = base + second + Vec3::Y * bottom;
+        let second_top = base + second + Vec3::Y * top;
+        let first_top = base + first + Vec3::Y * top;
+        let a = self.vertex(first_bottom, normal, [0.0, bottom])?;
+        let b = self.vertex(second_bottom, normal, [1.0, bottom])?;
+        let c = self.vertex(second_top, normal, [1.0, top])?;
+        let d = self.vertex(first_top, normal, [0.0, top])?;
+        self.indices.extend([a, b, c, a, c, d]);
+        Ok(())
+    }
+
+    fn into_mesh(self) -> Result<Mesh, String> {
+        if self.positions.is_empty() || self.indices.is_empty() {
+            return Err("terrain batch produced no visible geometry".to_owned());
+        }
+        if !self
+            .positions
+            .iter()
+            .flatten()
+            .chain(self.normals.iter().flatten())
+            .chain(self.uvs.iter().flatten())
+            .all(|component| component.is_finite())
+        {
+            return Err("terrain batch produced non-finite geometry".to_owned());
+        }
+        Ok(Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
+        .with_inserted_indices(Indices::U32(self.indices)))
+    }
+}
+
+fn terrain_hex_corners() -> [Vec3; 6] {
+    let radius = hex_core::config::HEX_CIRCUMRADIUS;
+    let inradius = 0.5 * hex_core::config::HEX_SMALL_DIAMETER;
+    [
+        Vec3::new(0.0, 0.0, -radius),
+        Vec3::new(-inradius, 0.0, -0.5 * radius),
+        Vec3::new(-inradius, 0.0, 0.5 * radius),
+        Vec3::new(0.0, 0.0, radius),
+        Vec3::new(inradius, 0.0, 0.5 * radius),
+        Vec3::new(inradius, 0.0, -0.5 * radius),
+    ]
+}
+
+fn terrain_hex_sides() -> [([Vec3; 2], Vec3); 6] {
+    let [north, north_west, south_west, south, south_east, north_east] = terrain_hex_corners();
+    [
+        ([south_east, north_east], Vec3::X),
+        ([south, south_east], Vec3::new(0.5, 0.0, 0.866_025_4)),
+        ([south_west, south], Vec3::new(-0.5, 0.0, 0.866_025_4)),
+        ([north_west, south_west], Vec3::NEG_X),
+        ([north, north_west], Vec3::new(-0.5, 0.0, -0.866_025_4)),
+        ([north_east, north], Vec3::new(0.5, 0.0, -0.866_025_4)),
+    ]
+}
+
+fn owner_at(
+    projected: Option<&[ProjectedRun]>,
+    level: hex_core::Level,
+    owner: Option<InteriorRegionId>,
+) -> bool {
+    projected.is_some_and(|runs| {
+        runs.iter()
+            .any(|run| run.cutaway == owner && run.run.bottom <= level && level < run.run.top)
+    })
+}
+
+fn exposed_intervals(
+    bottom: hex_core::Level,
+    top: hex_core::Level,
+    neighbour: Option<&[ProjectedRun]>,
+    owner: Option<InteriorRegionId>,
+) -> Vec<(hex_core::Level, hex_core::Level)> {
+    let mut cursor = bottom;
+    let mut exposed = Vec::new();
+    let occluders = neighbour
+        .into_iter()
+        .flatten()
+        .filter(|run| run.cutaway == owner && run.run.top > bottom && run.run.bottom < top);
+    for occluder in occluders {
+        let occluder_bottom = occluder.run.bottom.max(bottom);
+        let occluder_top = occluder.run.top.min(top);
+        if cursor < occluder_bottom {
+            exposed.push((cursor, occluder_bottom));
+        }
+        cursor = cursor.max(occluder_top);
+        if cursor >= top {
+            break;
+        }
+    }
+    if cursor < top {
+        exposed.push((cursor, top));
+    }
+    exposed
+}
+
+fn combined_terrain_mesh(
+    runs: &[PendingTerrainRun],
+    projected_columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
+    level_height: f32,
+) -> Result<Mesh, String> {
+    let mut combined = TerrainRawMesh::default();
+    for run in runs {
+        // Retaining each run's top cap preserves material boundaries and guarantees
+        // every logical run has one exact pick surface in its bounded batch. Buried
+        // caps remain depth-occluded; edits rebuild the chunk before exposure.
+        combined.cap(run.position.coord, run.span.top, true)?;
+        if run.bottom > 0
+            && !owner_at(
+                projected_columns
+                    .get(&run.position.coord)
+                    .map(Vec::as_slice),
+                run.bottom - 1,
+                run.cutaway,
+            )
+        {
+            combined.cap(run.position.coord, run.span.bottom, false)?;
+        }
+        for (neighbour, (side_corners, side_normal)) in run
+            .position
+            .coord
+            .neighbors()
+            .into_iter()
+            .zip(terrain_hex_sides())
+        {
+            // Resident chunk meshes own their seam walls permanently. Depending on
+            // another chunk's columns here would force an otherwise local edit to
+            // replace neighbouring roots just to repair one culled face.
+            let neighbour_runs =
+                if terrain_chunk_coord(neighbour) == terrain_chunk_coord(run.position.coord) {
+                    projected_columns.get(&neighbour).map(Vec::as_slice)
+                } else {
+                    None
+                };
+            for (bottom, top) in exposed_intervals(run.bottom, run.top, neighbour_runs, run.cutaway)
+            {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "V3 levels remain far below f32's exact integer range"
+                )]
+                let (bottom, top) = (bottom as f32 * level_height, top as f32 * level_height);
+                combined.side(run.position.coord, side_corners, side_normal, bottom, top)?;
+            }
+        }
+    }
+    combined.into_mesh()
 }
 
 fn projected_runs(
@@ -1429,6 +1804,36 @@ fn span_for(bottom: hex_core::Level, top: hex_core::Level, level_height: f32) ->
 #[derive(Resource, Default)]
 struct MaterialCache {
     by_substance: Vec<(SubstanceId, Handle<StandardMaterial>)>,
+}
+
+/// Owns generated combined meshes so chunk replacement and teardown remove assets
+/// as well as entities. Otherwise repeated digging would leak one mesh allocation per
+/// retired batch even though its chunk root had been despawned.
+#[derive(Resource, Default)]
+struct TerrainMeshCache {
+    by_chunk: BTreeMap<TerrainChunkCoord, Vec<Handle<Mesh>>>,
+}
+
+impl TerrainMeshCache {
+    fn reset_for_world(&mut self, meshes: &mut Assets<Mesh>) {
+        for handle in self.by_chunk.values().flatten() {
+            let _removed = meshes.remove(handle.id());
+        }
+        self.by_chunk.clear();
+    }
+
+    fn replace_chunk(
+        &mut self,
+        chunk: TerrainChunkCoord,
+        handles: Vec<Handle<Mesh>>,
+        meshes: &mut Assets<Mesh>,
+    ) {
+        if let Some(retired) = self.by_chunk.insert(chunk, handles) {
+            for handle in retired {
+                let _removed = meshes.remove(handle.id());
+            }
+        }
+    }
 }
 
 impl MaterialCache {
@@ -1645,8 +2050,8 @@ fn apply_terrain_changes(
         }
     };
     let mut changed = false;
-    let mut snapshot_changed = false;
     let mut changed_coords = BTreeSet::new();
+    let mut snapshot_changed_coords = BTreeSet::new();
     for edit in edits.0.drain(..) {
         let semantic_projection_protected = presentation.as_deref().is_some_and(|projection| {
             projection.protects_liquid_edit(edit.pos())
@@ -1656,8 +2061,8 @@ fn apply_terrain_changes(
         if apply_terrain_edit(&mut map, &table, &edit, semantic_projection_protected) {
             damage_state.forget_voxel(edit.pos(), &mut damaged_voxels);
             changed = true;
-            snapshot_changed = true;
             changed_coords.insert(edit.pos().coord);
+            snapshot_changed_coords.insert(edit.pos().coord);
             if let Some(interiors) = interiors.as_deref_mut() {
                 // A replacement is new material, not part of the authored roof even
                 // when it remains solid. Removing only this voxel keeps both original
@@ -1696,14 +2101,15 @@ fn apply_terrain_changes(
                 })
             },
         );
-        snapshot_changed |= matches!(
-            &resolved.outcome.result,
-            TerrainImpactResult::Applied(voxels)
-                if voxels.iter().any(|voxel| matches!(
+        if let TerrainImpactResult::Applied(voxels) = &resolved.outcome.result {
+            snapshot_changed_coords.extend(voxels.iter().filter_map(|voxel| {
+                matches!(
                     voxel.disposition,
                     TerrainImpactDisposition::Damaged | TerrainImpactDisposition::Destroyed
-                ))
-        );
+                )
+                .then_some(voxel.pos.coord)
+            }));
+        }
         for position in &resolved.destroyed {
             changed = true;
             changed_coords.insert(position.coord);
@@ -1714,9 +2120,7 @@ fn apply_terrain_changes(
         outcomes.write(resolved.outcome);
     }
 
-    if snapshot_changed {
-        snapshot_dirty.0 = true;
-    }
+    snapshot_dirty.mark_changed(snapshot_changed_coords);
 
     if !changed {
         return;
@@ -1816,24 +2220,29 @@ fn apply_terrain_changes(
         .copied()
         .map(terrain_chunk_coord)
         .collect::<BTreeSet<_>>();
-    let mesh = assets.hex_tile.clone();
-    let replacements = affected_chunks
-        .iter()
-        .copied()
-        .map(|chunk| {
-            spawn_terrain_chunk(
-                &mut commands,
-                &mesh,
-                &mut presentation_assets.terrain_materials,
-                &mut presentation_assets.materials,
-                &map,
-                &table,
-                &settings,
-                interiors.as_deref(),
-                chunk,
-            )
-        })
-        .collect::<Vec<_>>();
+    let _accepted_hex_mesh = assets.hex_tile.id();
+    let mut replacements = Vec::with_capacity(affected_chunks.len());
+    for chunk in affected_chunks.iter().copied() {
+        match spawn_terrain_chunk(
+            &mut commands,
+            &mut presentation_assets.terrain_materials,
+            &mut presentation_assets.terrain_meshes,
+            &mut presentation_assets.materials,
+            &mut presentation_assets.meshes,
+            &map,
+            &table,
+            &settings,
+            interiors.as_deref(),
+            chunk,
+        ) {
+            Ok(root) => replacements.push(root),
+            Err(error) => {
+                fail_presentation_setup(&mut commands, &error);
+                terrain_presentation.next_screen.set(Screen::Title);
+                return;
+            }
+        }
+    }
     commands.entity(grid).add_children(&replacements);
     for chunk in &affected_chunks {
         if let Some(entity) = existing_chunk_roots.get(chunk) {
@@ -2150,6 +2559,97 @@ mod tests {
                     cutaway: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn combined_mesh_culls_shared_sides_but_keeps_cutaway_boundaries() {
+        let origin = HexCoord::ORIGIN;
+        let [east, _south_east, _south_west, west_across_chunk_seam, _north_west, _north_east] =
+            origin.neighbors();
+        let substance = SubstanceId(1);
+        let current = ProjectedRun {
+            run: SubstanceRun {
+                bottom: 0,
+                top: 1,
+                substance,
+            },
+            cutaway: None,
+        };
+        let pending = PendingTerrainRun {
+            entity: Entity::from_raw_u32(1).expect("fixture entity"),
+            position: TilePos::new(origin, 0),
+            span: HexSpan::new(0.0, 1.0),
+            bottom: 0,
+            top: 1,
+            cutaway: None,
+        };
+        let same_owner = BTreeMap::from([(origin, vec![current]), (east, vec![current])]);
+        let culled = combined_terrain_mesh(&[pending], &same_owner, 1.0)
+            .expect("same-owner neighbours should mesh");
+        assert_eq!(culled.count_vertices(), 7 + 5 * 4);
+        assert_eq!(
+            culled.indices().expect("indexed terrain mesh").len(),
+            18 + 5 * 6
+        );
+
+        let other_region = ProjectedRun {
+            cutaway: Some(InteriorRegionId(9)),
+            ..current
+        };
+        let different_owner = BTreeMap::from([(origin, vec![current]), (east, vec![other_region])]);
+        let retained = combined_terrain_mesh(&[pending], &different_owner, 1.0)
+            .expect("different cutaway owners should retain their boundary");
+        assert_eq!(retained.count_vertices(), 7 + 6 * 4);
+        assert_eq!(
+            retained.indices().expect("indexed terrain mesh").len(),
+            18 + 6 * 6
+        );
+
+        let cross_chunk = BTreeMap::from([
+            (origin, vec![current]),
+            (west_across_chunk_seam, vec![current]),
+        ]);
+        let retained_seam = combined_terrain_mesh(&[pending], &cross_chunk, 1.0)
+            .expect("chunk seam walls should remain independent");
+        assert_eq!(retained_seam.count_vertices(), 7 + 6 * 4);
+        assert_eq!(
+            retained_seam.indices().expect("indexed terrain mesh").len(),
+            18 + 6 * 6
+        );
+    }
+
+    #[test]
+    fn combined_mesh_side_order_matches_canonical_hex_neighbours() {
+        let origin = HexCoord::ORIGIN;
+        let centre = origin.to_world(0.0);
+        let [north, north_west, _south_west, _south, _south_east, _north_east] =
+            terrain_hex_corners();
+        let inradius = 0.5 * hex_core::config::HEX_SMALL_DIAMETER;
+        for (side, (neighbour, ([first, second], normal))) in origin
+            .neighbors()
+            .into_iter()
+            .zip(terrain_hex_sides())
+            .enumerate()
+        {
+            let direction = (neighbour.to_world(0.0) - centre).normalize();
+            assert!(
+                normal.dot(direction) > 1.0 - 1.0e-5,
+                "side {side} normal {normal:?} disagrees with neighbour {neighbour:?}"
+            );
+            let midpoint = (first + second) * 0.5;
+            assert!(
+                (midpoint.dot(normal) - inradius).abs() < 1.0e-5,
+                "side {side} corner pair does not lie on its outward face"
+            );
+            assert!(
+                (second - first).cross(Vec3::Y).dot(normal) > 0.0,
+                "side {side} triangle winding points inward"
+            );
+        }
+        assert!(
+            north.cross(north_west).dot(Vec3::Y) > 0.0,
+            "top-cap triangle winding points downward"
         );
     }
 

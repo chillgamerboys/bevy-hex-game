@@ -30,16 +30,17 @@
 //!
 //! # Columns
 //!
-//! There is one voxel [`Column`] per coordinate. Rendering merges each contiguous
-//! non-air material run into an entity carrying a [`HexSpan`](hex_core::HexSpan) with
-//! a `bottom` and a `top`. Floating platforms, water, overhangs, and bridges are
-//! separate runs within that same column.
+//! There is one voxel [`Column`] per coordinate. Each contiguous non-air material run
+//! publishes a lightweight logical entity carrying a [`HexSpan`](hex_core::HexSpan)
+//! with a `bottom` and a `top`; bounded chunk/material/cutaway meshes combine those
+//! prisms for rendering and resolve pointer hits back to the logical entity. Floating
+//! platforms, water, overhangs, and bridges remain separate runs within one column.
 
 use bevy::prelude::*;
-use hex_assets::SubstanceTable;
+use hex_assets::{RuntimeArtCatalog, SubstanceTable};
 use hex_core::{
-    BiomeRegions, InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions,
-    TraversalBlockers,
+    BiomeRegions, InteriorRegions, MapAnchors, MapObservationAnchors, MapViewHint,
+    SpecialMovementRegions, TraversalBlockers,
 };
 
 mod crystal_render;
@@ -111,14 +112,16 @@ pub use world_snapshot::{
 /// Public, fully compiled result of compiling one exact Grand V3 schematic.
 ///
 /// Presentation descriptors remain map-owned implementation detail, while review
-/// tools receive every gameplay-authoritative projection and the same generation
-/// report used by runtime setup.
+/// tools receive every gameplay-authoritative projection, the separate scenic
+/// landmark projection, and the same generation report used by runtime setup.
 #[derive(Debug)]
 pub struct CompiledSchematicMap {
     /// Exact chunk-native voxel storage.
     pub map: VoxelMap,
-    /// Stable authored and review anchors.
+    /// Stable authored standable gameplay anchors.
     pub anchors: MapAnchors,
+    /// Stable scenic camera/review landmarks that are not placement targets.
+    pub observation_anchors: MapObservationAnchors,
     /// Exact special-movement memberships.
     pub special_regions: SpecialMovementRegions,
     /// Exact interior memberships.
@@ -174,6 +177,7 @@ impl CompiledSchematicMap {
     pub fn publish(self, world: &mut World) {
         world.insert_resource(self.map);
         world.insert_resource(self.anchors);
+        world.insert_resource(self.observation_anchors);
         world.insert_resource(self.special_regions);
         world.insert_resource(self.interiors);
         world.insert_resource(self.blockers);
@@ -196,16 +200,81 @@ impl std::fmt::Display for SchematicCompileError {
 
 impl std::error::Error for SchematicCompileError {}
 
+/// Deterministic evidence from the lightweight Grand V3 fine-topology gate.
+///
+/// This admission deliberately stops before authored-object construction,
+/// vegetation, presentation, and voxel materialization. It does resolve the
+/// complete radius-187 ownership masks, seeded coast, directed hydrology,
+/// bridges, natural-pass grading and threshold admission, and the exact
+/// four-wide tunnel splice used by the full compiler. The complete compiler
+/// separately proves the final two upper routes as blocker-aware graph cuts
+/// after Crystal construction and decoration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrandV3TopologyAdmission {
+    /// Semantic identity of the exact schematic plan admitted.
+    pub schematic_fingerprint: u64,
+    /// Number of canonical radius-eight schematic cells.
+    pub schematic_cells: u32,
+    /// Number of fine radius-187 columns assigned exactly once.
+    pub fine_columns: u32,
+    /// Number of non-empty fine biome owners after the Crystal site claim.
+    pub fine_owners: u32,
+    /// Ordered rows in the exact three-wide waterfall/river ribbon.
+    pub hydrology_rows: u32,
+    /// Unique fine cells in that ribbon after legal bend overlap.
+    pub hydrology_cells: u32,
+    /// Exact lane count at the single semantic sea outlet.
+    pub hydrology_outlet_lanes: u32,
+    /// Exact authored river crossings admitted before route grading.
+    pub river_bridges: u32,
+    /// Fine ordinary surfaces reserved by the seeded natural pass.
+    pub natural_pass_surfaces: u32,
+    /// Exact physical width selected by the independent `pass_width` stream.
+    pub natural_pass_width: u32,
+    /// Ordered rows in the exact four-wide tunnel splice.
+    pub tunnel_rows: u32,
+    /// Unique fine cells covered by those tunnel rows.
+    pub tunnel_cells: u32,
+    /// Declared upper-region routes whose fine terminal authorities resolve:
+    /// natural pass and Crystal/tunnel.
+    ///
+    /// This lightweight gate does not construct the complete Crystal route;
+    /// full compilation proves both routes independently connect and that no
+    /// third lower-to-upper route survives their removal.
+    pub upper_routes: u32,
+}
+
+/// Admits the seed-dependent fine topology of one validated Grand V3 plan.
+///
+/// Unlike [`compile_schematic`], this boundary does not load art or materialize
+/// gameplay projections. It is intended for broad deterministic corpora that
+/// must still exercise real fine ownership, hydrology, and route solvers.
+pub fn admit_schematic_topology(
+    plan: &SchematicPlanV1,
+    settings: &MapSettings,
+) -> Result<GrandV3TopologyAdmission, SchematicCompileError> {
+    settings.validate().map_err(SchematicCompileError)?;
+    let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &settings.terrain else {
+        return Err(SchematicCompileError(
+            "schematic topology admission requires procedural V3 map settings".to_owned(),
+        ));
+    };
+    procedural_v3::admit_schematic_topology(plan, settings.grid_radius, settings.level_height, v3)
+        .map_err(|error| SchematicCompileError(error.to_string()))
+}
+
 /// Compiles a validated reference or generated schematic without rerunning the
 /// schematic planner's 32-candidate selection.
 ///
 /// The selected map settings must use the Grand V3 schematic layout. Substance
-/// resolution and solidity are taken from the accepted runtime table so this path
-/// cannot diverge from normal gameplay materialization.
+/// resolution and solidity are taken from the accepted runtime table, and authored
+/// landmark geometry is resolved from the same accepted runtime art catalog used by
+/// gameplay, so this path cannot diverge from normal materialization.
 pub fn compile_schematic(
     plan: &SchematicPlanV1,
     settings: &MapSettings,
     substances: &SubstanceTable,
+    art_catalog: &RuntimeArtCatalog,
 ) -> Result<CompiledSchematicMap, SchematicCompileError> {
     settings.validate().map_err(SchematicCompileError)?;
     let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &settings.terrain else {
@@ -222,11 +291,13 @@ pub fn compile_schematic(
         v3,
         &palette,
         &|substance| substances.is_solid(substance),
+        art_catalog,
     )
     .map_err(|error| SchematicCompileError(error.to_string()))?;
     Ok(CompiledSchematicMap {
         map: compiled.map,
         anchors: compiled.anchors,
+        observation_anchors: compiled.observation_anchors,
         special_regions: compiled.special_regions,
         interiors: compiled.interiors,
         blockers: compiled.blockers,

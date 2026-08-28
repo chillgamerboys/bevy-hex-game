@@ -2664,6 +2664,7 @@ mod tests {
                 ASCENT_THRESHOLD_ANCHOR.to_owned(),
                 fixture_destination().anchor,
             )]),
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
         }
     }

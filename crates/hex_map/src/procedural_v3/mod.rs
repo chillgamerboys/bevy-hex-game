@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use hex_assets::RuntimeArtCatalog;
 use hex_core::{
-    BiomeRegions, InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
-    TraversalBlockers,
+    BiomeRegions, InteriorRegions, MapAnchors, MapObservationAnchors, MapViewHint,
+    SpecialMovementRegions, SubstanceId, TraversalBlockers,
 };
 
 use crate::procedural::{
@@ -81,6 +81,10 @@ mod river_terrain;
 mod routing;
 mod sandy_islets;
 mod schematic;
+pub(crate) use schematic::admit_schematic_topology;
+mod schematic_crystal;
+mod schematic_ecology;
+mod schematic_highlands;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -246,6 +250,7 @@ pub(crate) fn ensure_recipe_available(
 pub(crate) struct ProceduralBuild {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: MapAnchors,
+    pub(crate) observation_anchors: MapObservationAnchors,
     pub(crate) special_regions: SpecialMovementRegions,
     pub(crate) interiors: InteriorRegions,
     pub(crate) blockers: TraversalBlockers,
@@ -664,18 +669,25 @@ pub(crate) fn build(
                 },
             )
         }
-        V3LayoutSettings::Schematic(_) => finish_build(
-            schematic::generate(grid_radius, level_height, settings, seed)?,
-            grid_radius,
-            level_height,
-            settings,
-            seed,
-            palette,
-            is_solid,
-            started,
-            schematic_report_metrics,
-            |metrics| ProceduralRecipeMetrics::GrandV3(schematic_recipe_metrics(metrics)),
-        ),
+        V3LayoutSettings::Schematic(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Grand V3 requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                schematic::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                schematic_report_metrics,
+                |metrics| ProceduralRecipeMetrics::GrandV3(schematic_recipe_metrics(metrics)),
+            )
+        }
     }
 }
 
@@ -692,10 +704,11 @@ pub(crate) fn compile_schematic_plan(
     settings: &ProceduralV3Settings,
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
+    art_catalog: &RuntimeArtCatalog,
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let started = Instant::now();
     finish_build(
-        schematic::compile_schematic(plan, settings, grid_radius, level_height)?,
+        schematic::compile_schematic(plan, settings, grid_radius, level_height, art_catalog)?,
         grid_radius,
         level_height,
         settings,
@@ -714,9 +727,8 @@ fn schematic_report_metrics(metrics: &schematic::SchematicWorldMetrics) -> Tacti
             .maximum_surface
             .saturating_sub(metrics.minimum_surface),
         barrier_cells: metrics.water_columns,
-        // The proxy labels ordinary surfaces but intentionally does not compile the
-        // final route graph yet. Do not present authored intent as proven reachability.
-        reachable_surfaces: 0,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
         environment_signature_percent: 0,
         ..Default::default()
     }
@@ -1004,11 +1016,20 @@ fn finish_build<M>(
         used_fallback,
         notes,
     } = selection;
+    let materialization_started = Instant::now();
     let materialized = materialize::materialize(validated, palette, is_solid)
         .map_err(V3GenerationError::Materialization)?;
+    if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
+        eprintln!(
+            "v3 profile: materialization={:?} total_before_report={:?}",
+            materialization_started.elapsed(),
+            started.elapsed()
+        );
+    }
     let MaterializedV3World {
         map,
         anchors,
+        observation_anchors,
         special_regions,
         interiors,
         blockers,
@@ -1052,6 +1073,7 @@ fn finish_build<M>(
     Ok(ProceduralBuild {
         map,
         anchors,
+        observation_anchors,
         special_regions,
         interiors,
         blockers,
