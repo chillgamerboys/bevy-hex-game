@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "scenario": "Grand V3 Baseline",
+  "seed": 1592598566,
+  "baseline": {
+    "world": "assets/config/worlds/procedural-grand-v3-baseline.ron",
+    "palette": "assets/art/palette.ron",
+    "scenarios": "assets/config/scenarios.ron",
+    "default_lighting": "assets/config/lighting.ron",
+    "overcast_lighting": "assets/config/lighting/overcast.ron",
+    "level_height": 0.4
+  },
+  "captures": [
+    {
+      "id": "01-world-topdown",
+      "filename": "01-world-topdown.png",
+      "camera": "map",
+      "view": "top-down"
+    },
+    {
+      "id": "02-massif-oblique",
+      "filename": "02-massif-oblique.png",
+      "camera": "map",
+      "view": "default",
+      "focus_anchor": "grand_v3.massif"
+    },
+    {
+      "id": "03-waterfall-character",
+      "filename": "03-waterfall-character.png",
+      "camera": "character",
+      "view": "rotated",
+      "focus_anchor": "grand_v3.waterfall_base"
+    },
+    {
+      "id": "04-tunnel-first-person",
+      "filename": "04-tunnel-first-person.png",
+      "camera": "first-person",
+      "view": "default",
+      "focus_anchor": "grand_v3.tunnel_mouth"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "e00-baseline",
+      "label": "Shipped noon baseline",
+      "axis": "baseline",
+      "time_hours": 12.0
+    },
+    {
+      "id": "l01-midnight",
+      "label": "Clear midnight",
+      "axis": "lighting",
+      "time_hours": 0.0
+    },
+    {
+      "id": "l02-dawn",
+      "label": "Clear dawn",
+      "axis": "lighting",
+      "time_hours": 6.5
+    },
+    {
+      "id": "l03-golden",
+      "label": "Clear golden hour",
+      "axis": "lighting",
+      "time_hours": 16.5
+    },
+    {
+      "id": "l04-overcast",
+      "label": "Static overcast",
+      "axis": "lighting",
+      "lighting_asset": "assets/config/lighting/overcast.ron"
+    },
+    {
+      "id": "h01-flat-030",
+      "label": "Level height 0.30",
+      "axis": "level_height",
+      "time_hours": 12.0,
+      "level_height": 0.3
+    },
+    {
+      "id": "h02-tall-055",
+      "label": "Level height 0.55",
+      "axis": "level_height",
+      "time_hours": 12.0,
+      "level_height": 0.55
+    },
+    {
+      "id": "p01-muted-earth",
+      "label": "Muted earth world palette",
+      "axis": "palette",
+      "time_hours": 12.0,
+      "palette": "tools/visual_experiments/palettes/p01-muted-earth.json"
+    },
+    {
+      "id": "p02-high-separation",
+      "label": "High-separation world palette",
+      "axis": "palette",
+      "time_hours": 12.0,
+      "palette": "tools/visual_experiments/palettes/p02-high-separation.json"
+    }
+  ]
+}

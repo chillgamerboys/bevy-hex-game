@@ -26,6 +26,7 @@ doc or the code, not drift.
 | Running Sandbox multiplayer on one local network | [development/lan-multiplayer-testing.md](development/lan-multiplayer-testing.md) |
 | Running Direct multiplayer between remote testers | [development/remote-multiplayer-testing.md](development/remote-multiplayer-testing.md) |
 | Adding or reviewing map tests | [development/map-testing.md](development/map-testing.md) |
+| Comparing Grand V3 lighting, voxel-height, or palette candidates | [development/grand-v3-visual-experiments.md](development/grand-v3-visual-experiments.md) |
 | Taking ownership of the map | [development/onboarding.md](development/onboarding.md) |
 | Changing game values without writing Rust | [development/config.md](development/config.md) |
 | Deciding what a mechanic should do | [design/game.md](design/game.md) |
@@ -78,6 +79,7 @@ doc or the code, not drift.
 | [development/lan-multiplayer-testing.md](development/lan-multiplayer-testing.md) | Same-network testers and multiplayer reviewers | Zero-configuration mDNS/DNS-SD discovery procedure and LAN acceptance route | Shared integration/testing |
 | [development/remote-multiplayer-testing.md](development/remote-multiplayer-testing.md) | Remote testers and multiplayer reviewers | Temporary Tailscale procedure for exercising the real Direct transport without public addressing or router configuration | Shared integration/testing |
 | [development/map-testing.md](development/map-testing.md) | Map contributors and reviewers | Unit/generation/publication partitions, owner fixtures, corpus budgets, scope selection, and stress/visual boundaries | World owner |
+| [development/grand-v3-visual-experiments.md](development/grand-v3-visual-experiments.md) | Map and art reviewers | Deterministic isolated one-factor Grand V3 visual experiment packs and their evidence boundary | World owner / shared presentation |
 | [development/wave-7-tempo-decision.md](development/wave-7-tempo-decision.md) | Gameplay contributors and reviewers | Bounded evidence and rationale for retaining the shipped movement/action tempo during Wave 7 | Gameplay owner |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
