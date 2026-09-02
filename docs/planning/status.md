@@ -7,6 +7,30 @@ with the code, the code is right and this needs an edit.
 What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 [the design](../design/game.md). This is the gap between them.
 
+## In delivery
+
+Four map candidates are published as one draft dependency stack and are not yet claims
+about `dev`. [PR #210](https://github.com/chillgamerboys/bevy-hex-game/pull/210)
+adds Crystal Mountain and its cross-biome tunnel; its last CI run is otherwise green but
+has a cancelled macOS build. [PR #211](https://github.com/chillgamerboys/bevy-hex-game/pull/211)
+adds Arid biomes and Desert Oasis Rings; its map tests completed before the old numeric
+partition assertion failed, and its macOS build was cancelled.
+[PR #212](https://github.com/chillgamerboys/bevy-hex-game/pull/212)
+adds Coastal islands and Ocean Archipelagoes and has a green automated head.
+[PR #213](https://github.com/chillgamerboys/bevy-hex-game/pull/213) contains corrective
+geometry and review hardening; its map tests likewise completed before a numeric partition
+assertion failed.
+
+All four PRs remain draft. Their green manual-sign-off jobs are draft deferrals, not
+named-human runtime evidence. They must land in order #210 → #211 → #212 → #213 with
+current-head CI and exact-head human presentation/motion review. The live ordering and
+blockers are recorded in the
+[biome stack reconciliation](biome-stack-reconciliation.md).
+
+Grand V3, Garden, route reauthoring, time-cycle work, and subtle-geometry experiments remain
+local or unpublished. Their tests and artifacts do not make them delivered features, and
+their mixed working trees are not suitable for whole-tree commits.
+
 ## What is built
 
 A playable skeleton. Workspace boundaries enforced by Cargo, CI on three platforms,
