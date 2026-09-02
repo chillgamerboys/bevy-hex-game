@@ -598,6 +598,49 @@ def _libtest_summary_counts(output: str) -> dict[str, int]:
     }
 
 
+def _unittest_summary_counts(output: str) -> dict[str, int]:
+    """Read the outer unittest result and distinguish skipped from executed tests."""
+
+    without_ansi = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    summaries = list(
+        re.finditer(
+            r"(?m)^\s*Ran\s+(\d+)\s+tests?\s+in\s+[^\r\n]+\s*$",
+            without_ansi,
+        )
+    )
+    if not summaries:
+        return {
+            "executed_test_count": 0,
+            "ignored_test_count": 0,
+            "selected_count": 0,
+            "unittest_status_count": 0,
+            "unittest_summary_count": 0,
+        }
+
+    outer = summaries[-1]
+    selected = int(outer.group(1))
+    statuses = list(
+        re.finditer(
+            r"(?m)^\s*(?:OK|FAILED)(?:\s+\(([^)]*)\))?\s*$",
+            without_ansi[outer.end() :],
+        )
+    )
+    skipped = 0
+    if statuses:
+        details = statuses[-1].group(1) or ""
+        skipped_match = re.search(r"(?:^|,\s*)skipped=(\d+)(?:,|$)", details)
+        if skipped_match is not None:
+            skipped = int(skipped_match.group(1))
+
+    return {
+        "executed_test_count": max(selected - skipped, 0),
+        "ignored_test_count": skipped,
+        "selected_count": selected,
+        "unittest_status_count": len(statuses),
+        "unittest_summary_count": len(summaries),
+    }
+
+
 def _replay_captured_output(result: subprocess.CompletedProcess[str]) -> None:
     """Preserve ordinary command output after a short command is captured for evidence."""
 
@@ -737,18 +780,15 @@ def run_concern(
             )
 
         if _is_unittest_command(command):
-            reported_counts = re.findall(
-                r"\bRan\s+(\d+)\s+tests?\b",
-                result.stdout + result.stderr,
-            )
-            # A test may itself exercise a unittest subprocess. The runner's own
-            # summary is last, after every captured child-test diagnostic.
-            selected_count = int(reported_counts[-1]) if reported_counts else 0
-            record["selected_count"] = selected_count
-            if result.returncode == 0 and selected_count == 0:
+            counts = _unittest_summary_counts(result.stdout + "\n" + result.stderr)
+            record.update(counts)
+            if result.returncode == 0 and (
+                counts["unittest_status_count"] == 0
+                or counts["executed_test_count"] == 0
+            ):
                 print(
                     "test scope error: unittest command reported success without "
-                    f"running tests: {shlex.join(command)}",
+                    f"executing tests: {shlex.join(command)}",
                     file=sys.stderr,
                 )
                 returncode = 4

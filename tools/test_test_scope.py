@@ -27,24 +27,47 @@ SPEC.loader.exec_module(test_scope)
 def toml_table(source: str, name: str) -> str:
     """Return one top-level TOML table without requiring Python 3.11 tomllib."""
 
-    marker = f"[{name}]"
-    if marker not in source:
-        raise AssertionError(f"missing TOML table {marker}")
-    body = source.split(marker, maxsplit=1)[1]
-    return body.split("\n[", maxsplit=1)[0]
+    marker = re.search(
+        rf"(?m)^[ \t]*\[{re.escape(name)}\][ \t]*(?:#.*)?$",
+        source,
+    )
+    if marker is None:
+        raise AssertionError(f"missing TOML table [{name}]")
+    body = source[marker.end() :]
+    next_table = re.search(r"(?m)^[ \t]*\[", body)
+    return body if next_table is None else body[: next_table.start()]
 
 
 def toml_table_keys(source: str, name: str) -> set[str]:
     """Return assignment keys in one simple top-level TOML table."""
 
-    return set(re.findall(r"(?m)^([A-Za-z0-9_-]+)\s*=", toml_table(source, name)))
+    assignment = re.compile(
+        r'''^[ \t]*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_-]+)[ \t]*='''
+    )
+    keys: set[str] = set()
+    for line in toml_table(source, name).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        match = assignment.match(line)
+        if match is None:
+            raise AssertionError(f"unsupported TOML assignment in [{name}]: {line}")
+        raw_key = match.group(1)
+        if raw_key.startswith('"'):
+            key = json.loads(raw_key)
+        elif raw_key.startswith("'"):
+            key = raw_key[1:-1]
+        else:
+            key = raw_key
+        keys.add(key)
+    return keys
 
 
 def toml_string_array(source: str, table: str, key: str) -> list[str]:
     """Read one string array used by the focused manifest contract tests."""
 
     match = re.search(
-        rf"(?ms)^{re.escape(key)}\s*=\s*\[(.*?)\]",
+        rf"(?ms)^[ \t]*{re.escape(key)}[ \t]*=[ \t]*\[(.*?)\]",
         toml_table(source, table),
     )
     if match is None:
@@ -943,6 +966,37 @@ class TestScopeTests(unittest.TestCase):
 
         self.assertEqual(returncode, 4)
 
+    def test_unittest_success_with_only_skipped_tests_is_rejected(self) -> None:
+        definition = {
+            "command": [sys.executable, "-m", "unittest", "skipped_suite.py"]
+        }
+        execution = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                "Ran 7 tests in 0.001s\n\nOK\n"
+                "nested trailing output without a newline"
+            ),
+            stderr="Ran 2 tests in 0.000s\n\nOK (skipped=2)\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess, "run", return_value=execution
+            ):
+                returncode = test_scope.run_concern(
+                    "selector", definition, timing_path
+                )
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 4)
+        evidence = timing["commands"][0]
+        self.assertEqual(evidence["selected_count"], 2)
+        self.assertEqual(evidence["executed_test_count"], 0)
+        self.assertEqual(evidence["ignored_test_count"], 2)
+        self.assertEqual(evidence["unittest_summary_count"], 2)
+        self.assertEqual(evidence["exit_code"], 4)
+
     def test_unittest_uses_the_outermost_reported_test_count(self) -> None:
         definition = {
             "command": [sys.executable, "-m", "unittest", "nested_suite.py"]
@@ -984,6 +1038,23 @@ class TestScopeTests(unittest.TestCase):
             "hex_perception",
         }
         self.assertTrue(forbidden.isdisjoint(dependencies))
+
+    def test_toml_dependency_oracle_includes_indented_and_quoted_keys(self) -> None:
+        manifest = """\
+[dependencies]
+bevy = { version = "0.18" }
+  hex_map = { path = "../hex_map" }
+\tserde = { version = "1" }
+"hex_world" = { path = "../hex_world" }
+'hex_units' = { path = "../hex_units" }
+
+[dev-dependencies]
+hex_test_support = { path = "../hex_test_support" }
+"""
+        self.assertEqual(
+            toml_table_keys(manifest, "dependencies"),
+            {"bevy", "hex_map", "serde", "hex_units", "hex_world"},
+        )
 
     def test_residual_excludes_every_owned_gameplay_partition(self) -> None:
         command = self.config["concerns"]["residual"]["command"]
