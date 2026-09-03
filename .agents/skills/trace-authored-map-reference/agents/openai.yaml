@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace Authored Map Reference"
+  short_description: "Turn map sketches into approved exact oracles"
+  default_prompt: "Use $trace-authored-map-reference to transcribe this map reference exactly before changing generation code."
