@@ -87,7 +87,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Test the fail-closed selector
-        run: python3 -m unittest tools/test_test_scope.py
+        run: python3 tools/test_scope.py run selector
       - name: Upload scope decision
         if: always()
         uses: actions/upload-artifact@v4
@@ -223,6 +223,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # Prove selection identity before spending minutes executing a partition.
+      # The listing compiles the same targets, so subsequent runs reuse its output.
+      - name: Preflight exhaustive map partitions
+        if: needs.changes.outputs.full == 'true'
+        run: python3 tools/test_scope.py check-partitions map
       - name: Map unit contracts
         if: needs.changes.outputs.map_unit == 'true'
         shell: bash
@@ -247,9 +252,6 @@ jobs:
           python3 tools/test_scope.py run map_contracts \
             --timing-out map-contracts-timing.json \
             2>&1 | tee map-contracts-timing.log
-      - name: Verify exhaustive map partitions
-        if: needs.changes.outputs.full == 'true'
-        run: python3 tools/test_scope.py check-partitions map
       - name: Upload map timing artifacts
         if: always() && (needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true')
         uses: actions/upload-artifact@v4
@@ -371,14 +373,14 @@ jobs:
             target/nextest/gameplay-app/junit.xml
           if-no-files-found: error
 
-  # The two Unix platforms we intend to ship. Windows retains the same exact
-  # shipping build below, split only so a cold dependency cache can be published
-  # without crossing either job's 30-minute ceiling.
+  # The two Unix platforms we intend to ship. A cold macOS ThinLTO build sits at
+  # the old 30-minute whole-job ceiling, so retain enough room for the exact
+  # shipping build and its cache post-save. Windows keeps the split build below.
   build:
     name: Build (${{ matrix.os }})
     needs: changes
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

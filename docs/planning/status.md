@@ -9,24 +9,38 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-The **Crystal Mountain** wave is implemented on its delivery branch and is not yet a
-claim about `dev`. Its selectable radius-77 Macro candidate places the existing
-base-6/rise-144 Crystal Ascent at world origin, surrounds its level-150 summit with a
-five-cell temperate Forest basin and higher inner/outer ridges, and makes one
-four-wide level-6 tunnel the only ordinary route from the mountain foot to that basin.
-The landmark mask contains its complete radius-32 site while retaining the protruding
-central-cell fringe as summit terrain. The tunnel crosses the outer and inner mountain
-instances before joining the landmark, then shares one Dark interior and light domain
-with the complete Ascent; of the tunnel route floors, only its eight-cell boundary
-apron remains exterior.
+Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
+established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
+restored the locked dependency graph and 45-minute macOS shipping budget,
+[PR #215](https://github.com/chillgamerboys/bevy-hex-game/pull/215) replaced numeric
+partition pins with identity-based fail-closed selection, and
+[PR #217](https://github.com/chillgamerboys/bevy-hex-game/pull/217) published the isolated
+case-backed development skills, and [PR #218](https://github.com/chillgamerboys/bevy-hex-game/pull/218)
+reconciled the repository delivery records. This branch refresh is based on post-#218
+`dev` at `495a73dcbe7edbab6d993867d91b15979fa6ce81`. These tooling and documentation
+deliveries do not deliver biome content.
 
-The branch now contains the defaulted surface-walker, spanning-feature, and anchor
-contracts; authored summit-port alignment; reserve/merge/carve/finalize composition;
-exact subsurface seam closures; unified interior, tunnel crystals, anchors and
-validators; selectable non-combat content; and review-cutaway feature reconciliation.
-The remaining acceptance work is the combined CI-equivalent gate, deterministic
-captures and benchmarks, named human camera/play review, and publication of the
-reviewed candidate to `dev`.
+Four map candidates remain one draft dependency stack. The #210 refresh contains the
+post-reconciliation `dev` base, but its prior `74deb7f` hosted rollup and local captures
+are historical; the refreshed head still requires current-head CI and exact-head human
+findings. At their published heads, #211 has a failed Map partitions job and cancelled
+macOS build; #212's historical hosted matrix is green; and #213 has a failed Map
+partitions job. #215's identity selector is retained on #210 with the three Crystal
+required-ignored identities, but none of the old check rollups proves a refreshed head.
+The successful manual-sign-off jobs are draft/source-lane deferrals: all four still
+require named-human exact-head presentation, motion/control-feel, and play findings.
+They must land #210 → #211 → #212 → #213 under the
+[biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
+
+The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
+only after #213 lands; they are not merge-ready. Garden's published foundation plus nine
+local commits are near-ready after its two integration-golden repairs, current-base
+reconciliation, complete gate, and exact-head walk. Generic review/provenance and
+capture-sequence tooling, Grand structural review, route revision 3, time-cycle work, and
+subtle-geometry work remain unpublished and in progress; their inherited dirty snapshots
+are not suitable for whole-tree commits.
+Rejected Outpost checkpoint `f4f0e4c` is preserved only as
+`archive/outpost-rejected-f4f0e4c`; the replacement design has not started.
 
 ## What is built
 
@@ -459,7 +473,10 @@ deterministic simulation, and model/headless-app partitions. One fail-closed con
 map selects exact packages, targets, and features for narrow pull requests. Map
 validation uses the same authority for unit, deterministic generation, and real-plugin
 publication contracts, with all PR seeds preserved under an optimized test-only
-profile. Unknown paths, unclassified shared core/assets, other world crates, or
+profile. Map partition preflight compares enumerated test identities, requires an
+exhaustive and disjoint ordinary set plus exactly one match for every declared
+ignored-test pattern, and fails closed when a canonical command executes no tests.
+Unknown paths, unclassified shared core/assets, other world crates, or
 selector-command/CI-topology changes promote to the complete gate. The combined
 terrain-impact source stays full because it also carries an application-consumed
 health projection. Trajectory/volume-only changes instead run their pure/direct

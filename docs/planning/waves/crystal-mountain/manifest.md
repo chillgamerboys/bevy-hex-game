@@ -2,9 +2,11 @@
 
 - Status: `integrating`
 - Wave branch: `wave/crystal-mountain`
-- Refreshed base: `origin/dev @ fc55bd5` before final validation
-- Prerequisite: Crystal Ascent and First Person through `7da9cd29` landed on `dev`
-  before this wave's final refresh
+- Original published head: `74deb7f84d92e2088c63eafc1d5988c63171896d`
+- Original stack base: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
+- Refresh base: `origin/dev @ 495a73dcbe7edbab6d993867d91b15979fa6ce81`
+- Prerequisite: the refresh base contains the delivered Crystal Ascent and First Person
+  implementation
 - Coordinator: Codex / world integration
 - Epic: Crystal Mountain and cross-biome tunnel
 - Shippable outcome: one selectable radius-77 mountain whose only ordinary foot-to-basin
@@ -154,7 +156,7 @@ one wave rather than unrelated PRs.
     - crates/hex_game/src/save.rs (embedded Crystal Mountain path allowlist only)
     - crates/hex_game/src/walk.rs (Crystal Mountain review route only)
     - crates/hex_assets/src/sandbox.rs (Crystal Mountain catalog regression only)
-    - .config/test-scopes.json (map partition-count refresh only)
+    - .config/test-scopes.json (exactly three Crystal required-ignored identities only)
     - .github/workflows/stress.yaml (Crystal Mountain ignored acceptance jobs only)
     - tools/test_test_scope.py (Crystal Mountain selector regression only)
     - assets/ui/sandbox/crystal-mountain.png
@@ -236,6 +238,7 @@ one wave rather than unrelated PRs.
 | L3 | `e6a638c` | review cutaway hides and restores exact overlying roof trees |
 | L4 | `b9d7361`, `044b088`, `5686748` | selectable content, docs, preview, and deterministic camera route |
 | Refresh | `b887ecb`, `8bd1fe3` (`origin/dev @ fc55bd5`) | multiplayer/VFX additions retained additively before final gates and lockfile refreshed |
+| Post-reconciliation refresh | additive merge commit recorded after conflict resolution (`origin/dev @ 495a73dc`) | identity selection retained; all prior local, hosted, capture, and human evidence reset |
 
 `merged-to-wave` records only that each lane's commits are present on the composed branch.
 It does not record candidate acceptance. The release build, selector-chosen complete gate,
@@ -317,6 +320,16 @@ name the exact `wave/crystal-mountain` candidate SHA it exercised. A later commi
 every applicable row until it is rerun. Static frames may establish only rendered geometry,
 lighting, cutaway, and camera composition; the typed map/runtime rows establish all exact
 world and gameplay facts.
+
+| Evidence axis | Current refreshed state |
+|---|---|
+| Local evidence | `PENDING` on the final refreshed head; the old full gate and 28 captures at `74deb7f` are historical |
+| Hosted CI | `PENDING`; the old rollup was green except for a cancelled macOS build and cannot validate the refresh |
+| Exact-head human | `PENDING`; the successful draft check was a deferral, not human approval |
+| Delivered to `dev` | `NO`; the refreshed head is not yet an ancestor of `origin/dev` |
+
+The base and planning-document changes in this refresh invalidate all 28 old captures as
+current-head evidence. Regenerate them against the final candidate before readiness.
 
 | Evidence | Required record | Candidate head / result |
 |---|---|---|
