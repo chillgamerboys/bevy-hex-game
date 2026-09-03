@@ -8,8 +8,8 @@ description: Convert a sketch, screenshot, diagram, or other authored Hex Game m
 Create an exact source-of-truth transcription before implementation. This skill owns
 reference interpretation and approval; it does not own the later generator design.
 
-Read the authored-map cases in
-`docs/development/problem-solving-casebook.md` before starting.
+Read the
+[authored-map cases](../../../docs/development/problem-solving-casebook.md) before starting.
 
 ## 1. Freeze implementation while the source is disputed
 

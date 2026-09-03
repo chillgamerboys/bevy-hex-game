@@ -12,8 +12,9 @@ visually correct.
 Review the composed candidate. Any later code or asset change that can affect a reviewed
 surface makes the affected verdict stale.
 
-Read `references/review-checklist.md` and the visual-evidence cases in
-`docs/development/problem-solving-casebook.md` before reviewing.
+Read the [review checklist](references/review-checklist.md) and the
+[visual-evidence cases](../../../docs/development/problem-solving-casebook.md) before
+reviewing.
 
 ## Evidence Boundary
 
@@ -44,9 +45,9 @@ A cropped “whole map” image is a failed matrix entry, not a partial pass.
 
 ## 2. Capture fresh exact-head evidence
 
-Launch source builds through Cargo as required by `AGENTS.md`. Create a new, uniquely
-named directory under `.context/` for the exact head and matrix; never overwrite an old
-approved pack in place.
+Launch source builds through Cargo as required by [AGENTS.md](../../../AGENTS.md). Create a
+new, uniquely named directory under `.context/` for the exact head and matrix; never
+overwrite an old approved pack in place.
 
 An approval pack must come from one committed candidate whose tracked and untracked source
 state is clean. Derive its new output directory from the full HEAD and matrix identifier,
@@ -72,7 +73,8 @@ capture set exists; it is still `UNREVIEWED` until independent inspection.
 Inspect every full-resolution frame individually, then inspect one contact sheet covering
 the entire matrix. Do not rely on thumbnails alone.
 
-For each frame, use `references/review-checklist.md` and write a specific verdict:
+For each frame, use the [review checklist](references/review-checklist.md) and write a
+specific verdict:
 
 - `PASS`: named visible criteria are present and no relevant defect is seen.
 - `FAIL`: name the defect, location, and affected matrix entries.

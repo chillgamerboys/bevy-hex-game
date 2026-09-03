@@ -8,11 +8,13 @@ description: Diagnose and safely recover disk or memory capacity in this Rust/Ca
 Recover only reconstructible build state, and prove the original gate afterward. This
 skill does not authorize deleting source worktrees or broad filesystem cleanup.
 
-Read the storage cases in `docs/development/problem-solving-casebook.md` before acting.
+Read the
+[storage cases](../../../docs/development/problem-solving-casebook.md) before acting.
 
 ## 1. Audit without changing state
 
-Run:
+Run the bundled [read-only audit helper](scripts/audit_cargo_storage.py) from the repository
+root:
 
 ```sh
 python3 .agents/skills/recover-cargo-capacity/scripts/audit_cargo_storage.py

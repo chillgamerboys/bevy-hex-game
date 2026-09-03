@@ -8,10 +8,12 @@ description: Plan, implement, and checkpoint very large or cross-biome Hex Game 
 Treat a large world feature as one authoritative composition with multiple evidence lanes,
 not as decorative patches that happen to overlap.
 
-Read `AGENTS.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/contracts.md`, the relevant
-map/world design documents, and the large-world cases in
-`docs/development/problem-solving-casebook.md`. Use `$plan-parallel-work` before splitting
-implementation across lanes.
+Read [AGENTS.md](../../../AGENTS.md), [CLAUDE.md](../../../CLAUDE.md),
+[the architecture contract](../../../docs/architecture.md),
+[the cross-owner contracts](../../../docs/contracts.md), the relevant map/world design
+documents, and the
+[large-world cases](../../../docs/development/problem-solving-casebook.md). Use
+`$plan-parallel-work` before splitting implementation across lanes.
 
 ## 1. Lock the authored contract and budgets
 
