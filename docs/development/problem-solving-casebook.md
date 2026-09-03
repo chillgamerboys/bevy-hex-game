@@ -1,27 +1,28 @@
 # Hex Development Problem-Solving Casebook
 
-## Scope and current truth
+## Scope and historical observation
 
-This casebook distills the complete **Plan hex game visibility** development task
+This casebook is a historical snapshot covering the complete observed history of the
+**Plan hex game visibility** development task
 (`019fd5b0-1cfb-7c53-bf05-20c2d5b9db49`) from its initial visibility design through the
-active Grand V3 compiler wave. It records both successful and unsuccessful approaches so
-that later agents can reuse the procedures without inheriting false confidence from the
-original narration.
+Grand V3 compiler wave that was active at the stated observation cutoff. It records both
+successful and unsuccessful approaches so that later agents can reuse the procedures
+without treating the snapshot as current repository state or inheriting false confidence
+from the original narration.
 
 - **Observation cutoff:** `2026-08-25 23:20:53 PDT` (`wait_threads` cursor
   `ce1699c9-6148-4697-a1e0-685fbf23c6ab:1`, followed by a newest-page refresh).
 - **Coverage:** five history pages, 43 unique human turn IDs, and 60 human-authored
   messages. Environment-context injections are excluded. Seven turns contain multiple
   mid-response steering messages: T02, T17, T20, T21, T22, T28, and T43.
-- **Source checkout at observation:**
-  `/Users/alberto/Documents/Codex/2026-08-05/this/work/crystal-ascent`, branch
-  `wave/grand-v3-schematic`, committed checkpoint `dcf917536aaca7e43b9eee35e75141eb442a9c3f`,
-  with extensive tracked and untracked Grand V3 work in progress.
-- **Latest committed checkpoint:** the full-scale Grand V3 proxy exists at radius 187 with
-  105,469 columns and 444 resident chunks. It reached `TerrainReady` in 1.794 seconds and
-  measured 1.52 GB maximum RSS, but perception p95 was 56.7 ms against a 50 ms target and
-  local-edit p95 was 192.4 ms against a 100 ms target.
-- **Last attributable detailed active-state gate:**
+- **Source state at observation:** branch `wave/grand-v3-schematic` at committed checkpoint
+  `dcf917536aaca7e43b9eee35e75141eb442a9c3f`, with extensive tracked and untracked Grand V3
+  work in progress.
+- **Latest committed checkpoint at the cutoff:** the full-scale Grand V3 proxy exists at
+  radius 187 with 105,469 columns and 444 resident chunks. It reached `TerrainReady` in
+  1.794 seconds and measured 1.52 GB maximum RSS, but perception p95 was 56.7 ms against a
+  50 ms target and local-edit p95 was 192.4 ms against a 100 ms target.
+- **Last attributable detailed gate at the cutoff:**
   `CARGO_INCREMENTAL=0 HEX_GRAND_PROFILE=1 cargo test -p hex_map --test schematic_compile public_exact_schematic_boundary_compiles_publishes_and_exports -- --exact --nocapture --test-threads=1`
   failed after 5.33 seconds. The exact error was: `ordinary cell 19 has no dry same-region
   connector to the foothill network (498 candidates, lower/upper attempts [0, 24], 24 paths
@@ -31,10 +32,10 @@ original narration.
   with 348 summarized items; its newest task snapshot exposed a later failed command marker
   (`exec-621df9d5-4104-47f4-84e4-4cf9c08f`) but not enough output to classify that command.
   Therefore cell 19 is the last detailed gate, not a claim about the newest dirty files.
-- **Active-turn warning:** every statement about T43 is provisional through the cutoff.
-  A temporary 8.7-second end-to-end compile succeeded earlier in T43, but subsequent
+- **Historical active-turn warning:** every statement about T43 is provisional through the
+  cutoff. A temporary 8.7-second end-to-end compile succeeded earlier in T43, but subsequent
   stronger invariants and route changes exposed new failures. Later exact-state evidence
-  governs current truth.
+  supersedes this historical observation.
 
 Proof dispositions in this document are `verified-success`, `verified-failure`,
 `provisional`, and `superseded`. Evidence strength is tracked separately as `acceptance`,
@@ -115,10 +116,10 @@ distinct human messages within that turn, so the message counts sum to 60.
 | EV16 | A literal 217-cell transcription was approved, then revision 2 corrected the peak chains and regenerated both corpora. | T38–T39. | acceptance, direct | Validates the radius-eight reference contract, not later voxel compilation. |
 | EV17 | The user noticed that implementation planning had stopped asking material questions; the recovered plan added a full-scale proxy and approval checkpoint. | T40–T42. | acceptance | Process correction, not implementation proof. |
 | EV18 | The full-scale proxy established real memory, timing, perception, and edit costs without shrinking the world. | T43; commits `03c3a0c`, `dcf9175`. | direct | Content and final rendering were intentionally incomplete. |
-| EV19 | Stage profiling found a 37.4-second quadratic route-sealing scan; a coordinate index reduced it to 24.7 ms and exact compile reached topology validation in 3.55 seconds. | T43 active dirty state. | direct, diagnostic | Later edits changed the exact dirty state; the total compiler still missed its target. |
-| EV20 | Parallel optimized builds repeatedly filled the disk; narrow incremental-cache cleanup restored room temporarily. | T43 active dirty state; reported 14 GiB artifacts and less than 1 GiB free. | direct, diagnostic | Capacity recovery did not eliminate the concurrency pattern that recreated pressure. |
+| EV19 | Stage profiling found a 37.4-second quadratic route-sealing scan; a coordinate index reduced it to 24.7 ms and exact compile reached topology validation in 3.55 seconds. | T43 dirty state active at the cutoff. | direct, diagnostic | Later edits changed the exact dirty state; the total compiler still missed its target. |
+| EV20 | Parallel optimized builds repeatedly filled the disk; narrow incremental-cache cleanup restored room temporarily. | T43 dirty state active at the cutoff; reported 14 GiB artifacts and less than 1 GiB free. | direct, diagnostic | Capacity recovery did not eliminate the concurrency pattern that recreated pressure. |
 | EV21 | A cropped proxy image was presented as a whole-map view and immediately rejected; the camera hint was then traced to a hand-tuned proxy pose. | T43 user correction and bounds diagnosis. | acceptance, diagnostic | A corrected full-map capture had not yet passed at the cutoff. |
-| EV22 | Stronger fail-closed route validation successively exposed cells 63, 92, and 19. | T43; last attributable exact `schematic_compile` output quoted in Current truth. | direct | Further route edits followed; the final refresh showed a newer failed command marker without classifiable output. |
+| EV22 | Stronger fail-closed route validation successively exposed cells 63, 92, and 19. | T43; last attributable exact `schematic_compile` output quoted in Scope and historical observation. | direct | Further route edits followed; the final refresh showed a newer failed command marker without classifiable output. |
 
 ## Episode cards
 
@@ -437,21 +438,21 @@ distinct human messages within that turn, so the message counts sum to 60.
   architecture. Measure before decoration, publish misses numerically, and require approval for
   any architectural response.
 
-### A18 — Keep the live Grand compiler fail-closed (active T43)
+### A18 — Keep the live Grand compiler fail-closed (T43 active at the cutoff)
 
 - **Goal and constraints:** Complete chunk rendering/picking, perception indexing, hydrology,
   bridges, tunnel, Crystal integration, ordinary routes, captures, and a playable baseline
   without shrinking the world or weakening gates.
 - **Worked:** Parallel lanes uncovered coarse coastlines, hard-coded passes, light/route
   projection errors, and tunnel-contract gaps before review. Profiling replaced a 37.4-second
-  quadratic scan with a 24.7 ms indexed pass. Exact validators now cover three-lane hydrology,
+  quadratic scan with a 24.7 ms indexed pass. At the cutoff, exact validators covered three-lane hydrology,
   two bridges, four-wide tunnel body, clearance, roof thickness, materials, unified interior,
   route cuts, and bounds-derived camera framing.
 - **Failed or unproved:** Parallel optimized builds repeatedly exhausted disk. A cropped proxy
   was shown as if it covered the whole map and was withdrawn after user correction. An
-  8.7-second exact compile was only temporary; later strengthening exposed cells 63, 92, and
-  currently 19. No fresh full-map multi-angle/motion pack or playable candidate had passed at
-  the cutoff.
+  8.7-second exact compile was only temporary; later strengthening exposed cells 63 and 92,
+  then cell 19 at the cutoff. No fresh full-map multi-angle/motion pack or playable candidate
+  had passed at the cutoff.
 - **Exposure:** Stage timings, exact compiler failures, user rejection of the screenshot, and
   capacity measurements.
 - **Recovery:** Preserve every failure as a targeted production-shaped regression, optimize
@@ -493,20 +494,20 @@ distinct human messages within that turn, so the message counts sum to 60.
 | Thin instruction pointers | Any agent begins map, render, Cargo recovery, or retrospective work. | All | `AGENTS.md` and `CLAUDE.md` should route to canonical skills and this casebook without duplicating their bodies. Claude-specific adapters should remain thin and point to the repository skill. | Repository root plus thin Claude adapters. |
 
 The repository skills above are deliberately focused. The visibility radii, Crystal geometry,
-specific PR order, individual cell IDs, and current Grand compiler heuristics remain product
+specific PR order, individual cell IDs, and then-current Grand compiler heuristics remain product
 contracts or case evidence rather than reusable skills. The durable procedures are oracle
 tracing, global feature integration and scale checkpoints, safe Cargo recovery, visual
 inspection, and read-only retrospective distillation.
 
-## Active T43 provisional caveat and open claims
+## T43 provisional caveat at the observation cutoff
 
 T43 must not be summarized as “the Grand map is complete.” At the cutoff:
 
 1. The last attributable exact compiler test failed at natural-pass/ordinary-route
    construction for cell 19. Previous cell-63 and cell-92 failures and the temporary
-   8.7-second green compile are useful attempt history, not current success. Further route
-   edits and a newer unclassified failed command marker mean the newest dirty state has no
-   verified disposition yet.
+   8.7-second green compile are useful attempt history, not success at the cutoff. Further route
+   edits and a newer unclassified failed command marker mean the newest dirty state observed at
+   the cutoff had no verified disposition.
 2. The full-scale proxy is a verified architecture checkpoint, but its perception and local-edit
    budgets missed and its screenshot predated final hydrology, tunnel, vegetation, and Crystal
    integration.
@@ -519,8 +520,9 @@ T43 must not be summarized as “the Grand map is complete.” At the cutoff:
 6. Runtime chunking, exact picking, perception, lifecycle, snapshot, corpus, CI-equivalent, and
    playable-candidate gates were not complete at the cutoff.
 
-When refreshing this casebook, append new evidence rather than rewriting these facts. Update the
-cutoff, current dirty/committed state, latest exact command and output, T43 message count if new
-steers arrived, and A18's disposition. Promote T43 to `verified-success` only after the exact
-compiler, required corpus, approved performance budgets, fresh full-resolution stills, native
-motion review, playable launch, and final repository gate all pass on the same identified state.
+Preserve this original cutoff snapshot and its evidence dispositions unchanged. Record future
+work in dated addenda with their own observation cutoff, identified dirty or committed state,
+exact commands and outputs, additional human steers, and updated dispositions. A later addendum
+may promote T43 to `verified-success` only after the exact compiler, required corpus, approved
+performance budgets, fresh full-resolution stills, native motion review, playable launch, and
+final repository gate all pass on the same identified state.
