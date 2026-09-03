@@ -152,6 +152,14 @@
             encounter: "config/encounters/crystal-ascent-showcase.ron",
         ),
         (
+            name: "Crystal Mountain",
+            category: Map,
+            blurb: "A crystal-lit tunnel crosses beneath an enclosing mountain into the 144-level Crystal Ascent and a high wooded basin.",
+            world: "config/worlds/procedural-crystal-mountain.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/crystal-mountain-showcase.ron",
+        ),
+        (
             name: "Seven Regions",
             category: Map,
             blurb: "One connected V3 world joining hills, mountains, waterfall, forest, fort, caves, and sky islands.",

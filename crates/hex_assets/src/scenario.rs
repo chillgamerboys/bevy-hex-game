@@ -314,8 +314,8 @@ mod tests {
     /// Whether that encounter places its units through generated *anchors* is a
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
-    /// Procedural Hills, the additive vegetation biomes, Crystal Ascent, and the
-    /// composite wave map deliberately share one canonical review seed so their visual
+    /// Procedural Hills, the additive vegetation biomes, the crystal landmarks, and the
+    /// composite wave maps deliberately share one canonical review seed so their visual
     /// differences are directly comparable. Mountain Range likewise shares the Mountains
     /// review seed so the single-patch and macro-world massifs can be compared directly.
     #[test]
@@ -331,8 +331,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            15,
-            "the scenario library should include all fifteen generated maps"
+            16,
+            "the scenario library should include all sixteen generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
@@ -356,6 +356,7 @@ mod tests {
                     1_592_598_566,
                     BTreeSet::from([
                         "Crystal Ascent",
+                        "Crystal Mountain",
                         "Deep Forest",
                         "Prairie",
                         "Procedural Hills",

@@ -318,6 +318,13 @@ fn clear_fog_presentation(
     state.initialized = false;
 }
 
+/// Exact fog-cap positions exposed only to crate-owned composition tests.
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) fn fog_overlay_positions(world: &mut World) -> BTreeSet<TilePos> {
+    let mut overlays = world.query::<&FogOverlay>();
+    overlays.iter(world).map(|overlay| overlay.0).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

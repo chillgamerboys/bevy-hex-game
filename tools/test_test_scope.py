@@ -546,6 +546,18 @@ class TestScopeTests(unittest.TestCase):
             "crystal_ascent_boundary_rise_benchmark_tracks_timing_and_plan_counts",
             patterns,
         )
+        crystal_patterns = {
+            "*procedural_v3::macro_world::tests::"
+            "crystal_mountain_constructs_as_one_valid_world_in_all_six_global_rotations",
+            "*procedural_v3::macro_world::tests::"
+            "crystal_mountain_release_corpus_validates_32_seeds",
+            "*procedural_v3::macro_world::tests::"
+            "crystal_mountain_generation_benchmark_p95_stays_within_existing_macro_budget",
+        }
+        self.assertEqual(
+            {pattern for pattern in patterns if "crystal_mountain_" in pattern},
+            crystal_patterns,
+        )
         self.assertEqual(
             partition["all_tests_command"][:3],
             ["cargo", "nextest", "list"],

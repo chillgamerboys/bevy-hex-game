@@ -451,6 +451,229 @@ fn mountain_range_materializes_the_authored_macro_world() {
     assert_eq!(second_anchors, first_anchors);
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the tracked Crystal Mountain review world is a compile-time integration fixture"
+)]
+fn v3_crystal_mountain_app() -> App {
+    let mut app = test_app();
+    let settings: MapSettings = ron::from_str(include_str!(
+        "../../../../assets/config/worlds/procedural-crystal-mountain.ron"
+    ))
+    .expect("tracked Crystal Mountain settings should parse");
+    app.insert_resource(settings);
+    app.insert_resource(ResolvedMapSeed(1_592_598_566));
+    app.insert_resource(runtime_art_catalog());
+    app
+}
+
+#[test]
+fn crystal_mountain_materializes_and_reenters_with_exact_runtime_projections() {
+    const RADIUS_77_COLUMNS: usize = 1 + 3 * 77 * 78;
+
+    let mut app = v3_crystal_mountain_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "Crystal Mountain setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert_eq!(app.world().resource::<VoxelMap>().len(), RADIUS_77_COLUMNS);
+    let first_tile_count = tile_count(&mut app);
+    assert!(first_tile_count >= RADIUS_77_COLUMNS);
+
+    let report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 1_592_598_566);
+    let Some(ProceduralRecipeMetrics::Macro(metrics)) = report.recipe_metrics.as_ref() else {
+        panic!(
+            "Crystal Mountain should publish generic Macro metrics, got {:?}",
+            report.recipe_metrics
+        );
+    };
+    assert_eq!(metrics.world_columns, 18_019);
+    assert_eq!(metrics.macro_cells, 37);
+    assert_eq!(metrics.biome_regions, 4);
+    assert!(metrics.ordinary_surfaces > 0);
+    assert!(metrics.reachable_surfaces > 0);
+    assert!(metrics.critical_route_steps > 144);
+    assert_eq!(
+        report.metrics.critical_route_steps,
+        metrics.critical_route_steps
+    );
+
+    let first_anchors = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect::<BTreeMap<_, _>>();
+    for required in [
+        "party_start",
+        "crystal_mountain.foot_apron",
+        "crystal_mountain.tunnel_mouth",
+        "crystal_mountain.midpoint",
+        "crystal_mountain.gothic_transition",
+        "crystal_mountain.ascent_threshold",
+        "crystal_mountain.summit_exit",
+        "crystal_mountain.basin_clearing",
+        "crystal_mountain.ridge",
+    ] {
+        assert!(
+            first_anchors.contains_key(required),
+            "Crystal Mountain omitted anchor {required:?}"
+        );
+    }
+
+    let first_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    assert_eq!(
+        first_biomes
+            .values()
+            .copied()
+            .collect::<BTreeSet<BiomeRegionId>>()
+            .len(),
+        4,
+        "Crystal Mountain should retain four logical biome owners"
+    );
+    let first_interior_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let first_interior_roofs: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+    assert!(!first_interior_floors.is_empty());
+    assert!(!first_interior_roofs.is_empty());
+    assert_eq!(
+        first_interior_floors
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1,
+        "the tunnel and Crystal Ascent must materialize as one interior"
+    );
+    assert_eq!(
+        first_interior_roofs
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1,
+        "the tunnel and Crystal Ascent roof must share that interior"
+    );
+    let first_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
+    let first_objects = object_instance_snapshot(&mut app);
+    let first_blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let first_view = *app.world().resource::<MapViewHint>();
+    assert!(first_view.is_valid());
+    assert!(!first_lights.is_empty());
+    assert!(!first_objects.is_empty());
+    assert!(!first_blockers.is_empty());
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    for absent in [
+        app.world().contains_resource::<VoxelMap>(),
+        app.world().contains_resource::<MapAnchors>(),
+        app.world().contains_resource::<InteriorRegions>(),
+        app.world().contains_resource::<TraversalBlockers>(),
+        app.world().contains_resource::<BiomeRegions>(),
+        app.world().contains_resource::<GenerationReport>(),
+        app.world().contains_resource::<TerrainReady>(),
+    ] {
+        assert!(!absent);
+    }
+    assert!(object_instance_snapshot(&mut app).is_empty());
+    let lights_after_exit = {
+        let world = app.world_mut();
+        let mut lights = world.query::<&GameplayLight>();
+        lights.iter(world).count()
+    };
+    assert_eq!(lights_after_exit, 0);
+
+    enter_gameplay(&mut app);
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(
+        second_report.settings_fingerprint,
+        report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, report.map_fingerprint);
+    assert_eq!(second_report.metrics, report.metrics);
+    assert_eq!(second_report.recipe_metrics, report.recipe_metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+
+    let second_anchors = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect::<BTreeMap<_, _>>();
+    let second_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    let second_interior_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let second_interior_roofs: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+    let second_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
+    let second_objects = object_instance_snapshot(&mut app);
+    let second_blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_biomes, first_biomes);
+    assert_eq!(second_interior_floors, first_interior_floors);
+    assert_eq!(second_interior_roofs, first_interior_roofs);
+    assert_eq!(second_lights, first_lights);
+    assert_eq!(second_objects, first_objects);
+    assert_eq!(second_blockers, first_blockers);
+}
+
 #[test]
 fn macro_world_generation_is_not_coupled_to_mountain_range_instance_names() {
     let mut app = v3_mountain_range_app();

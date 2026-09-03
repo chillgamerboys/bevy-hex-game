@@ -232,6 +232,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-crystal-ascent.ron"),
     ),
     (
+        "config/worlds/procedural-crystal-mountain.ron",
+        include_str!("../../../assets/config/worlds/procedural-crystal-mountain.ron"),
+    ),
+    (
         "config/worlds/procedural-deep-forest.ron",
         include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
     ),
@@ -302,6 +306,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/encounters/crystal-ascent-showcase.ron",
         include_str!("../../../assets/config/encounters/crystal-ascent-showcase.ron"),
+    ),
+    (
+        "config/encounters/crystal-mountain-showcase.ron",
+        include_str!("../../../assets/config/encounters/crystal-mountain-showcase.ron"),
     ),
     (
         "config/encounters/open-ground.ron",
@@ -3817,7 +3825,7 @@ mod tests {
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0x5DF9_C632_EA7D_97D3);
+        assert_eq!(example.scenario_digest, 0xF8E1_3246_74EB_146E);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 

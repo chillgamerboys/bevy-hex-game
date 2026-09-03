@@ -43,6 +43,8 @@ jobs:
             filter: procedural_v3::forest::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
           - name: v3-waterfall
             filter: procedural_v3::waterfall::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v3-crystal-mountain
+            filter: procedural_v3::macro_world::tests::crystal_mountain_release_corpus_validates_32_seeds
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -87,7 +89,9 @@ jobs:
             time cargo test --release --package hex_ai tests::baseline_ai_radius_team_matrix_release_benchmark -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_units formation::tests::six_member_formation_benchmark_matrix -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_perception runtime::tests::radius_40_recomputation_benchmark -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_perception runtime::tests::radius_40_dense_walls_and_six_observers_benchmark -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_perception runtime::tests::radius_40_ten_thousand_idle_frames_reuse_every_projection -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_game --features test-support scenarios::tests::shipped_large_maps_character_collision_release_timing -- --ignored --exact --nocapture --test-threads=1
           } 2>&1 | tee performance.log
       - uses: actions/upload-artifact@v4
         if: always()

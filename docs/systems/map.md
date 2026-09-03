@@ -48,7 +48,9 @@ the rendered run entity.
 
 A piece on a bridge **cannot step down** to the ground beneath it. Getting down means
 walking a ramp of adjacent surfaces that descends one level at a time, or using an
-ability that explicitly bypasses the rule — a teleport, a tunnel.
+ability that explicitly bypasses the rule — for example, teleportation or a future
+tunnelling ability. A physically authored tunnel such as Crystal Mountain's remains
+ordinary adjacent-surface movement.
 
 This is a design decision, and it means a position is a `TilePos`, never a `HexCoord`.
 There is one `Column` per coordinate, but separate material runs within it are
@@ -216,6 +218,17 @@ material. A cutaway tag does not remove or make terrain transparent, change voxe
 storage, or change traversal. Ordinary gameplay keeps tagged roof segments opaque and
 collision-active. Explicit map-review capture tooling may hide every tagged segment in
 the selected exact interior while leaving other regions and adjacent walls intact.
+
+A V3 spanning feature may cross several horizontal biome owners, but it does not
+create a second coordinate or ownership model. Crystal Mountain's globally carved
+tunnel publishes each level-6 floor with the `BiomeRegionId` of the patch that owns
+that horizontal column, while its exact roofed floors and roof voxels share the one
+authored `InteriorRegionId` that also contains Crystal Ascent. The tunnel therefore
+creates no synthetic "tunnel biome," and the mountain surface above it remains a
+separate stack-safe `TilePos` with its existing biome membership. The spanning planner
+reserves the passage before patch decoration and carves it once after fragment merge;
+consumers still receive only the ordinary `TilePos`, `BiomeRegions`,
+`InteriorRegions`, `TraversalBlockers`, and terrain-occupancy contracts.
 
 The plan also publishes a `MapViewHint` so camera setup can frame the generated
 geometry after terrain and actors exist. V1 keeps its frozen single-height plan and
@@ -426,6 +439,8 @@ pending cast; those deterministic policies belong to gameplay and are pinned in
   costs nobody anything. The live gameplay adapter keeps an elemental cast pending
   until the ordered map answer, but mana/action payment remains gameplay policy rather
   than a property of the map.
-- **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
-  but not implemented. When they are, they belong in `hex_units` as explicit
-  exceptions to the step rule, not as changes to it.
+- **Whether stacked surfaces ever connect.** Teleport and the tunnel movement ability
+  are named in the design but not implemented. When they are, they belong in
+  `hex_units` as explicit exceptions to the step rule, not as changes to it. An
+  authored physical passage such as Crystal Mountain's tunnel is ordinary adjacent
+  terrain and does not implement that ability.

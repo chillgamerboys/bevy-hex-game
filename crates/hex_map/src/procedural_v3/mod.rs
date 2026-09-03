@@ -50,6 +50,7 @@ mod layout;
 mod local_frame;
 mod macro_alpine;
 mod macro_landform;
+mod macro_spanning;
 mod macro_world;
 pub(crate) use layout::HexSide;
 #[expect(

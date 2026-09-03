@@ -407,6 +407,7 @@ mod tests {
     struct MockSettings {
         force_fallback: bool,
         invalid_fallback: bool,
+        common_invalid: bool,
         repairs_before_valid: u8,
         no_change_mutates: bool,
         changed_without_mutation: bool,
@@ -418,6 +419,7 @@ mod tests {
     #[derive(Default)]
     struct MockRecipe {
         constructions: Cell<u8>,
+        validations: Cell<u8>,
         repair_calls: Cell<u8>,
         fallback_calls: Cell<u8>,
     }
@@ -447,7 +449,11 @@ mod tests {
                     V3GenerationError::RecipeContract("construction exploded".to_owned()),
                 ));
             }
-            Ok(mock_plan(0, false))
+            let mut plan = mock_plan(0, false);
+            if settings.common_invalid {
+                plan.biome_regions.clear();
+            }
+            Ok(plan)
         }
 
         fn validate(
@@ -455,6 +461,8 @@ mod tests {
             settings: &Self::Settings,
             plan: &GeneratedWorldPlan,
         ) -> WorldValidation<Self::Metrics> {
+            self.validations
+                .set(self.validations.get().saturating_add(1));
             let marker = marker(plan);
             let fallback = marker == u8::MAX;
             if (fallback && settings.invalid_fallback)
@@ -513,7 +521,7 @@ mod tests {
         fn canonical_fallback(
             &self,
             context: FallbackContext,
-            _settings: &Self::Settings,
+            settings: &Self::Settings,
         ) -> Result<GeneratedWorldPlan, V3GenerationError> {
             if context.grid_radius != 12 {
                 return Err(V3GenerationError::RecipeContract(
@@ -522,7 +530,11 @@ mod tests {
             }
             self.fallback_calls
                 .set(self.fallback_calls.get().saturating_add(1));
-            Ok(mock_plan(u8::MAX, true))
+            let mut plan = mock_plan(u8::MAX, true);
+            if settings.common_invalid {
+                plan.biome_regions.clear();
+            }
+            Ok(plan)
         }
     }
 
@@ -702,6 +714,33 @@ mod tests {
         .expect_err("fallback must pass hard validation");
 
         assert!(matches!(error, V3GenerationError::InvalidFallback(_)));
+    }
+
+    #[test]
+    fn common_validation_rejects_candidates_and_fallback_before_recipe_validation() {
+        let settings = MockSettings {
+            common_invalid: true,
+            ..Default::default()
+        };
+        let recipe = MockRecipe::default();
+        let mut proof = mock_plan(0, false);
+        proof.biome_regions.clear();
+        assert!(matches!(
+            recipe.validate(&settings, &proof),
+            WorldValidation::Valid(0)
+        ));
+        recipe.validations.set(0);
+
+        let error = run_recipe(&recipe, &settings, 12, 1)
+            .expect_err("the common-invalid fallback must fail closed");
+        assert!(matches!(error, V3GenerationError::InvalidFallback(_)));
+        assert_eq!(recipe.constructions.get(), CANDIDATE_COUNT);
+        assert_eq!(recipe.fallback_calls.get(), 1);
+        assert_eq!(
+            recipe.validations.get(),
+            0,
+            "recipe-specific validation must never admit a common-invalid plan"
+        );
     }
 
     #[test]

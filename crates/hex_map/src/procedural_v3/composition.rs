@@ -60,11 +60,32 @@ impl GeneratedPatchPlan {
         &self,
         layout: &ResolvedLayoutPlan,
     ) -> Vec<PatchValidationIssue> {
+        self.validate_against_internal(layout, true)
+    }
+
+    fn validate_against_valid_layout(
+        &self,
+        layout: &ResolvedLayoutPlan,
+    ) -> Vec<PatchValidationIssue> {
+        self.validate_against_internal(layout, false)
+    }
+
+    fn validate_against_internal(
+        &self,
+        layout: &ResolvedLayoutPlan,
+        validate_layout: bool,
+    ) -> Vec<PatchValidationIssue> {
         let mut issues = Vec::new();
-        if let Err(error) = layout.validate() {
-            issues.extend(error.issues().iter().map(|issue| {
-                PatchValidationIssue::new(self.patch_id, PatchIssueCode::Layout, issue.to_string())
-            }));
+        if validate_layout {
+            if let Err(error) = layout.validate() {
+                issues.extend(error.issues().iter().map(|issue| {
+                    PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Layout,
+                        issue.to_string(),
+                    )
+                }));
+            }
         }
 
         let Some(resolved_patch) = layout.patches.get(&self.patch_id) else {
@@ -552,8 +573,14 @@ pub(crate) enum LiquidSeamIssue {
     MissingMergedNode(TilePos),
 }
 
-/// Merges complete patch fragments into one strict whole-world semantic plan.
-pub(crate) fn compose_world(
+/// Merges complete patch fragments into one whole-world semantic plan.
+///
+/// The returned plan has passed layout, fragment, namespacing, collision, and
+/// liquid-seam checks, but it has deliberately not passed final whole-world
+/// validation yet. World-spanning authored features use this narrow stage to
+/// mutate the combined semantic volume exactly once, after patch-local work is
+/// complete and before the normal strict validator admits the result.
+pub(crate) fn merge_world(
     layout: ResolvedLayoutPlan,
     fragments: Vec<GeneratedPatchPlan>,
     settings: WorldCompositionSettings,
@@ -580,7 +607,7 @@ pub(crate) fn compose_world(
         }
     }
     for (patch, fragment) in &by_patch {
-        let issues = fragment.validate_against(&layout);
+        let issues = fragment.validate_against_valid_layout(&layout);
         if !issues.is_empty() {
             return Err(WorldCompositionError::InvalidPatch {
                 patch: *patch,
@@ -666,7 +693,7 @@ pub(crate) fn compose_world(
         insert_unique(&mut anchors, alias, position, CollisionKind::Anchor)?;
     }
 
-    let world = GeneratedWorldPlan {
+    Ok(GeneratedWorldPlan {
         layout,
         volume,
         liquids,
@@ -678,13 +705,29 @@ pub(crate) fn compose_world(
         interiors,
         anchors,
         view_hint: settings.view_hint,
-    };
+    })
+}
+
+/// Runs the unchanged strict whole-world validator after any world-owned
+/// spanning-feature finalization has completed.
+pub(crate) fn finalize_world(
+    world: GeneratedWorldPlan,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
     let issues = world.validate();
     if issues.is_empty() {
         Ok(world)
     } else {
         Err(WorldCompositionError::FinalValidation(issues))
     }
+}
+
+/// Merges and immediately validates a world with no spanning-feature pass.
+pub(crate) fn compose_world(
+    layout: ResolvedLayoutPlan,
+    fragments: Vec<GeneratedPatchPlan>,
+    settings: WorldCompositionSettings,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
+    finalize_world(merge_world(layout, fragments, settings)?)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1178,6 +1221,31 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| { issue.code == PatchIssueCode::Semantic(WorldIssueCode::Biome) }));
+    }
+
+    #[test]
+    fn merge_world_still_rejects_semantically_invalid_fragments_after_layout_preflight() {
+        let layout = ring7_layout();
+        let mut fragments = complete_fragments(&layout);
+        let fragment = fragments
+            .first_mut()
+            .expect("the complete Ring7 fixture should have a center fragment");
+        let position = *fragment
+            .biome_regions
+            .keys()
+            .next()
+            .expect("the center fragment should publish a surface biome");
+        fragment.biome_regions.insert(position, BiomeRegionId(99));
+
+        let error = merge_world(layout, fragments, composition_settings())
+            .expect_err("merge must retain every fragment semantic check");
+        assert!(matches!(
+            error,
+            WorldCompositionError::InvalidPatch { patch: PatchId(0), issues }
+                if issues.iter().any(|issue| {
+                    issue.code == PatchIssueCode::Semantic(WorldIssueCode::Biome)
+                })
+        ));
     }
 
     #[test]

@@ -196,6 +196,20 @@ mod tests {
             crystal_ascent.hostile_region.center,
             SandboxRegionCenter::Anchor("crystal_ascent.upper_exit".to_owned())
         );
+        let crystal_mountain = catalog
+            .get("crystal-mountain")
+            .expect("Crystal Mountain should be selectable in Sandbox");
+        assert_eq!(crystal_mountain.scenario, "Crystal Mountain");
+        assert_eq!(crystal_mountain.fixed_seed, Some(1_592_598_566));
+        assert_eq!(crystal_mountain.preview, "ui/sandbox/crystal-mountain.png");
+        assert_eq!(
+            crystal_mountain.player_region.center,
+            SandboxRegionCenter::Anchor("crystal_mountain.foot_apron".to_owned())
+        );
+        assert_eq!(
+            crystal_mountain.hostile_region.center,
+            SandboxRegionCenter::Anchor("crystal_mountain.basin_clearing".to_owned())
+        );
         assert!(catalog.get("seven-regions").is_some());
         let two_rings = catalog
             .get("two-rings")
@@ -209,7 +223,7 @@ mod tests {
         assert_eq!(mountain_range.scenario, "Mountain Range");
         assert_eq!(mountain_range.fixed_seed, Some(129_704_046));
         assert_eq!(mountain_range.preview, "ui/sandbox/mountain-range.png");
-        assert_eq!(catalog.maps.len(), 18);
+        assert_eq!(catalog.maps.len(), 19);
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))

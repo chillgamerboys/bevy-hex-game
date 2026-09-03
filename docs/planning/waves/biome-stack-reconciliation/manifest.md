@@ -3,7 +3,7 @@
 - Status: integrating
 - Cutoff: 2026-09-02 America/Los_Angeles
 - Original stack base: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
-- Post-#217 reconciliation base: `4c97b75151b1a6f4e1ea1972976e1d9512ed8c45`
+- Post-#218 stack-refresh base: `495a73dcbe7edbab6d993867d91b15979fa6ce81`
 - Merge target: `dev` only
 - Required order: #210 → #211 → #212 → #213
 
@@ -43,13 +43,14 @@ delivered work.
 
 | Order and PR | Published head and base | Local evidence | Hosted CI | Exact-head human | Delivered / remaining blocker |
 |---|---|---|---|---|---|
-| 1. [#210](https://github.com/chillgamerboys/bevy-hex-game/pull/210), `wave/crystal-mountain` | `74deb7f84d92e2088c63eafc1d5988c63171896d`; declared base `dev`, merge/original-stack base `fc55bd5` | PR body records a local full gate and 28 captures; source release ledger remains unreconciled | Historical head green except cancelled macOS; branch now conflicts with `dev` | Pending; draft job is a deferral | No; merge current `dev`, reconcile its manifest/selector identities, rerun every platform, and record Crystal presentation/motion/control/play findings |
+| 1. [#210](https://github.com/chillgamerboys/bevy-hex-game/pull/210), `wave/crystal-mountain` | Original `74deb7f84d92e2088c63eafc1d5988c63171896d`; refresh base `495a73dc`; additive merge `2e175917` | `PENDING` on the final refreshed head; the old full gate and 28 captures are historical | `PENDING`; the old head was green except cancelled macOS | `PENDING`; the draft job was a deferral | No; base refresh and selector reconciliation are complete, but all-platform CI, refreshed captures/acceptance, and exact-head findings remain |
 | 2. [#211](https://github.com/chillgamerboys/bevy-hex-game/pull/211), `wave/desert-biomes` | `441c22cc6968478993e920a1a575fa086edc05ee`; `wave/crystal-mountain` at `74deb7f` | Source records a local full gate and 22 frames | Historical Map partitions failed under the retired count check; macOS cancelled | Pending; source-lane job is a deferral | No; #210 must land, then retarget/refresh, reconcile, rerun, and record Desert/Oasis findings |
 | 3. [#212](https://github.com/chillgamerboys/bevy-hex-game/pull/212), `wave/island-biomes` | `09bc0ebc28be9bb800dadb1f2e6d9a31f01cb3c8`; `wave/desert-biomes` at `441c22c` | Source records a local full gate and 17 captures | Historical published-head matrix green | Pending; source-lane job is a deferral | No; #211 must land, then retarget/refresh, reconcile, rerun, and record Island presentation/motion/control/play findings |
 | 4. [#213](https://github.com/chillgamerboys/bevy-hex-game/pull/213), `fix/biome-feedback` | `63aed363e5ba394c4404e9b168967548960e851e`; `wave/island-biomes` at `09bc0ebc` | PR body records focused/full gates and 56 stills | Historical Map partitions failed under the retired count check | Native Crystal/Desert/Island flicker/motion/control findings pending | No; #212 must land, then retarget/refresh, preserve all three manifests, rerun, and record findings |
 
-None of the four published heads contains current `dev`; none is delivered. The original
-unique footprints were measured against each immediate parent: 25 commits/52 files for #210,
+The refreshed #210 branch contains the recorded post-#218 `dev` base; #211–#213 do not,
+and none of the four candidates is delivered. The original unique footprints were measured
+against each immediate parent: 25 commits/52 files for #210,
 3/61 for #211, 6/62 for #212, and 2/27 for #213. Shared hotspots include
 `.config/test-scopes.json`, map and scenario definitions, save fixtures, procedural generators,
 camera routes, status/roadmap documents, and the source-wave manifests. Later branches extend
@@ -66,6 +67,7 @@ any biome content.
 | [#216](https://github.com/chillgamerboys/bevy-hex-game/pull/216) | `2c31eb892095379677fdf9ade71a186ba5348c99` | `aaf2f7b7edc80122cb0e802a79d323e80c64dfd4` | Locked `chacha20` to the viable `0.10.2` graph and restored the 45-minute macOS shipping-build budget. Post-merge `dev` run `33694018317` passed. |
 | [#215](https://github.com/chillgamerboys/bevy-hex-game/pull/215) | `6bba227c5c19f4edb316535fb3ea6061f93b84ce` | `a5eef67eb016f6b88bc2da425238dbb213b813e4` | Replaced partition counts with declared test identities and required ignored patterns; added selector preflight and fail-closed zero-test/ignored-only behavior. Post-merge `dev` run `33704463781` passed. |
 | [#217](https://github.com/chillgamerboys/bevy-hex-game/pull/217) | `93bf6499b476f9c67431d8bf3c8370e24a012f35` | `4c97b75151b1a6f4e1ea1972976e1d9512ed8c45` | Published four isolated case-backed development workflows without their eleven Grand ancestors; exact-head checks and the logic-only manual-runtime `N/A` passed. Post-merge `dev` run `33708389913` was still running at this cutoff. |
+| [#218](https://github.com/chillgamerboys/bevy-hex-game/pull/218) | `7808ce99157845cef7e0cc2f26f8ce9e420f5fbc` | `495a73dcbe7edbab6d993867d91b15979fa6ce81` | Reconciled status, roadmap, and wave records against repository and GitHub truth before the stack refresh began. |
 
 ## Evidence axes and downstream readiness
 
@@ -82,7 +84,8 @@ human approved, and what is reachable from `origin/dev`.
 
 | Outcome | Local / attributable state | GitHub state | Exact-head human state | `dev` state and classification |
 |---|---|---|---|---|
-| #210–#213 biome stack | Four fully committed published heads with explicit parent ancestry | Four draft PRs; displayed rollups are pre-refresh evidence | Missing; draft jobs are deferrals | Absent; in progress |
+| #210 Crystal Mountain | Original committed head plus additive current-base merge `2e175917` | Draft PR; refreshed-head checks pending | Missing; draft job was a deferral | Absent; base-refreshed, still in progress |
+| #211–#213 biome stack | Three fully committed published heads with explicit parent ancestry, not yet refreshed | Three draft PRs; displayed rollups are pre-refresh evidence | Missing; draft/source-lane jobs are deferrals | Absent; blocked behind #210 |
 | Grand V3 committed checkpoints | Sixteen clean commits from `a065223` through `3a6e331`, already containing all four original PR heads | No Grand PR | Missing | Absent; mechanically packageable as three drafts only after #213 |
 | Garden | Nine local commits above its published branch plus two dirty integration-golden edits | No PR | Earlier walk is stale | Absent; near-ready only after clean post-#213 reconstruction, current-base golden repairs, complete gate, and exact-head walk |
 | Generic review tooling | Candidate hunks exist inside the inherited dirty Grand snapshot | No PR | Not applicable until clean extraction | Absent; split into provenance hardening and capture sequences |
@@ -126,9 +129,9 @@ historical delivery records whose source and merge commits remain ancestors of c
 
 ## Remaining integration procedure
 
-1. Merge current `dev` into #210 without rewriting its published history. Resolve the
-   selector and planning hotspots semantically, rerun every platform, record exact-head
-   Crystal findings, mark ready, audit, and merge with a GitHub merge commit.
+1. #210 base refresh is complete at additive merge `2e175917` without rewriting its
+   published history. Rerun every platform, record exact-head Crystal findings, mark ready,
+   audit, and merge with a GitHub merge commit.
 2. Verify both #210's original and refreshed heads are ancestors of `origin/dev`.
 3. Retarget #211 to `dev`, merge updated `dev` into it, reconcile its manifest, rerun under
    identity selection, obtain Desert/Oasis findings, audit, and merge.

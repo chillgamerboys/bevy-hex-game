@@ -1598,6 +1598,7 @@ mod tests {
 
     const FIRST_PERSON_CAMERA_SCRIPT: &str = "../../walks/camera_first_person.ron";
     const CRYSTAL_ASCENT_CAMERA_SCRIPT: &str = "../../walks/camera_crystal_ascent.ron";
+    const CRYSTAL_MOUNTAIN_CAMERA_SCRIPT: &str = "../../walks/camera_crystal_mountain.ron";
 
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
@@ -1617,6 +1618,10 @@ mod tests {
         ("../../walks/camera_prairie.ron", "Prairie"),
         ("../../walks/camera_fort.ron", "Fort"),
         ("../../walks/camera_crystal_ascent.ron", "Crystal Ascent"),
+        (
+            "../../walks/camera_crystal_mountain.ron",
+            "Crystal Mountain",
+        ),
         ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
         ("../../walks/camera_mountain_range.ron", "Mountain Range"),
@@ -2157,7 +2162,7 @@ mod tests {
                 "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
             );
         }
-        assert_eq!(routes.len(), 17);
+        assert_eq!(routes.len(), 18);
 
         for route in &manifest.routes {
             assert!(
@@ -2339,6 +2344,106 @@ mod tests {
             WalkStep::AwaitScreen("Title".to_owned()),
         ]));
         assert!(CAMERA_ROUTE_SCRIPTS.contains(&(CRYSTAL_ASCENT_CAMERA_SCRIPT, "Crystal Ascent")));
+    }
+
+    #[test]
+    fn crystal_mountain_walk_proves_the_spanning_route_and_all_camera_modes() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_crystal_mountain.ron"))
+                .expect("the Crystal Mountain camera walk should parse");
+        for step in &steps {
+            validate_step(step).expect("the Crystal Mountain camera walk should validate");
+        }
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Crystal Mountain".to_owned(),
+            seed: Some(1_592_598_566),
+            suppress_hostiles: false,
+        }));
+        let anchor_clicks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ClickAnchor { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            anchor_clicks,
+            vec![
+                "crystal_mountain.tunnel_mouth",
+                "crystal_mountain.midpoint",
+                "crystal_mountain.gothic_transition",
+                "crystal_mountain.ascent_threshold",
+                "crystal_ascent.bottom_chamber",
+                "crystal_ascent.mid_flight",
+                "crystal_mountain.summit_exit",
+                "crystal_mountain.basin_clearing",
+            ]
+        );
+        assert!(steps
+            .windows(3)
+            .filter(|window| { matches!(window.first(), Some(WalkStep::ClickAnchor { .. })) })
+            .all(|window| matches!(
+                window,
+                [
+                    WalkStep::ClickAnchor { .. },
+                    WalkStep::Settle(5),
+                    WalkStep::AwaitPartyIdle { .. },
+                ]
+            )));
+        let captures = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::Capture(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            captures,
+            vec![
+                "01-crystal-mountain-opaque-massif-map",
+                "02-crystal-mountain-rear-ridge-basin-map",
+                "03-crystal-mountain-foot-portal-map",
+                "04-crystal-mountain-foot-portal-character",
+                "05-crystal-mountain-foot-portal-first-person",
+                "06-crystal-mountain-natural-tunnel-map",
+                "07-crystal-mountain-natural-tunnel-character",
+                "08-crystal-mountain-natural-tunnel-first-person",
+                "09-crystal-mountain-gothic-transition-map",
+                "10-crystal-mountain-gothic-transition-character",
+                "11-crystal-mountain-gothic-transition-first-person",
+                "12-crystal-mountain-crystal-chamber-map",
+                "13-crystal-mountain-crystal-chamber-character",
+                "14-crystal-mountain-crystal-chamber-first-person",
+                "15-crystal-mountain-mid-ascent-map",
+                "16-crystal-mountain-mid-ascent-character",
+                "17-crystal-mountain-mid-ascent-first-person",
+                "18-crystal-mountain-summit-exit-map",
+                "19-crystal-mountain-summit-exit-character",
+                "20-crystal-mountain-summit-exit-first-person",
+                "21-crystal-mountain-wooded-basin-map",
+                "22-crystal-mountain-wooded-basin-character",
+                "23-crystal-mountain-wooded-basin-first-person",
+            ]
+        );
+        for camera in [
+            WalkCameraMode::Map,
+            WalkCameraMode::Character,
+            WalkCameraMode::FirstPerson,
+        ] {
+            assert!(
+                steps.contains(&WalkStep::AssertCameraMode(camera)),
+                "Crystal Mountain must capture {camera:?} evidence"
+            );
+        }
+        assert!(steps.ends_with(&[
+            WalkStep::Settle(5),
+            WalkStep::Key("Backspace".to_owned()),
+            WalkStep::AwaitScreen("Title".to_owned()),
+        ]));
+        assert!(
+            CAMERA_ROUTE_SCRIPTS.contains(&(CRYSTAL_MOUNTAIN_CAMERA_SCRIPT, "Crystal Mountain"))
+        );
     }
 
     #[test]
@@ -2755,6 +2860,7 @@ mod tests {
             let mut movement_steps = 0_usize;
             let mut pending_proof = None;
             let mut saw_idle_after_click = false;
+            let mut proved_manifested_start = false;
             for step in &steps {
                 let destination = match step {
                     WalkStep::ClickAnchor { name, expected } => {
@@ -2810,23 +2916,48 @@ mod tests {
                         saw_idle_after_click = true;
                     }
                     WalkStep::AssertSelectedAt { expected } if require_exact_arrival_proof => {
-                        let clicked = pending_proof.take().unwrap_or_else(|| {
-                            panic!(
+                        if let Some(clicked) = pending_proof.take() {
+                            assert!(
+                                saw_idle_after_click,
+                                "{} proves {clicked:?} before awaiting party idle",
+                                path.display()
+                            );
+                            assert_eq!(
+                                *expected,
+                                clicked,
+                                "{} proves a different surface than it clicked",
+                                path.display()
+                            );
+                        } else {
+                            assert_eq!(
+                                movement_steps,
+                                0,
                                 "{} proves a position without a pending movement",
                                 path.display()
-                            )
-                        });
-                        assert!(
-                            saw_idle_after_click,
-                            "{} proves {clicked:?} before awaiting party idle",
-                            path.display()
-                        );
-                        assert_eq!(
-                            *expected,
-                            clicked,
-                            "{} proves a different surface than it clicked",
-                            path.display()
-                        );
+                            );
+                            assert!(
+                                !proved_manifested_start,
+                                "{} proves its initial position more than once",
+                                path.display()
+                            );
+                            let manifested_start = route
+                                .points
+                                .first()
+                                .map(|point| match &point.destination {
+                                    CameraRouteDestination::Anchor { expected, .. }
+                                    | CameraRouteDestination::Exact(expected) => *expected,
+                                })
+                                .unwrap_or_else(|| {
+                                    panic!("{} has no manifested route start", path.display())
+                                });
+                            assert_eq!(
+                                *expected,
+                                manifested_start,
+                                "{} proves an initial position other than its first manifested route point",
+                                path.display()
+                            );
+                            proved_manifested_start = true;
+                        }
                     }
                     WalkStep::Capture(name) => assert!(
                         pending_proof.is_none(),

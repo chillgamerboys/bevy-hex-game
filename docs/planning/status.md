@@ -15,19 +15,21 @@ restored the locked dependency graph and 45-minute macOS shipping budget,
 [PR #215](https://github.com/chillgamerboys/bevy-hex-game/pull/215) replaced numeric
 partition pins with identity-based fail-closed selection, and
 [PR #217](https://github.com/chillgamerboys/bevy-hex-game/pull/217) published the isolated
-case-backed development skills. This reconciliation is based on post-#217 `dev` at
-`4c97b75151b1a6f4e1ea1972976e1d9512ed8c45`. The #217 source-head matrix and exact-head
-no-runtime-change `N/A` passed; post-merge run `33708389913` was still running at this
-cutoff. These tooling deliveries do not deliver biome content.
+case-backed development skills, and [PR #218](https://github.com/chillgamerboys/bevy-hex-game/pull/218)
+reconciled the repository delivery records. This branch refresh is based on post-#218
+`dev` at `495a73dcbe7edbab6d993867d91b15979fa6ce81`. These tooling and documentation
+deliveries do not deliver biome content.
 
-Four map candidates remain one draft dependency stack, and no published head contains
-current `dev`. At their published heads, #210 is green except for a cancelled macOS build
-and now conflicts with `dev`; #211 has a failed Map partitions job and cancelled macOS
-build; #212's historical hosted matrix is green; and #213 has a failed Map partitions job.
-#215 repairs the count-based selector on `dev`, but none of those old check rollups proves a
-refreshed head. Their successful manual-sign-off jobs are draft/source-lane deferrals: all
-four still require named-human exact-head presentation, motion/control-feel, and play
-findings. They must land #210 → #211 → #212 → #213 under the
+Four map candidates remain one draft dependency stack. The #210 refresh contains the
+post-reconciliation `dev` base, but its prior `74deb7f` hosted rollup and local captures
+are historical; the refreshed head still requires current-head CI and exact-head human
+findings. At their published heads, #211 has a failed Map partitions job and cancelled
+macOS build; #212's historical hosted matrix is green; and #213 has a failed Map
+partitions job. #215's identity selector is retained on #210 with the three Crystal
+required-ignored identities, but none of the old check rollups proves a refreshed head.
+The successful manual-sign-off jobs are draft/source-lane deferrals: all four still
+require named-human exact-head presentation, motion/control-feel, and play findings.
+They must land #210 → #211 → #212 → #213 under the
 [biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
 
 The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
@@ -68,8 +70,10 @@ seed-independent, publishes stable lower/chamber/upper anchors, an upper
 corner-landing review anchor, and terminal pads, and
 validates exact handoff edges, ordinary traversal, one-level transitions, turning-pad
 headroom, per-crystal light pairs, and the absence of non-handoff cross-loop shortcuts.
-The standalone party starts on the exterior apron facing inward. Macro composition
-remains deferred.
+The standalone party starts on the exterior apron facing inward. Arbitrary Macro
+placement remains rejected; the in-delivery Crystal Mountain candidate is the one
+specialized composition that constructs the landmark at world origin, aligns its
+authored summit approach, and joins its lower aperture to the global tunnel.
 
 V3 now has fifteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
 Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,

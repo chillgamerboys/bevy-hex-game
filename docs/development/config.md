@@ -102,8 +102,8 @@ The optional review overrides are:
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
-`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
-`HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
+`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`,
+`HEX_REVIEW_CUTAWAY`, and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
 The focus override resolves the anchor's full `TilePos`, not just its horizontal
 coordinate, so it can target an underground floor beneath a surface. It also applies
 the selected actor's normal solidity and headroom rules. An unknown anchor or one the
@@ -362,9 +362,85 @@ terrain: Procedural((
 reserved headroom must all fit at or below V3's level-256 ceiling. That ceiling does
 not change the retained V1/V2 validation limits. The landmark's three stair circuits,
 four-wide routes, entrance, chamber, shaft, oculus, lights, and summit clearing are
-recipe invariants rather than additional tuning fields. Crystal Ascent currently
-requires `TemperateGrassland`, rejects overlays and Macro placement, and varies only
-crystal presentation and summit trees with the scenario seed.
+recipe invariants rather than additional tuning fields. Crystal Ascent requires
+`TemperateGrassland`, rejects overlays, and varies only crystal presentation and
+summit trees with the scenario seed. The standalone world still owns the complete
+radius-40 footprint. Macro may dispatch the recipe only through Crystal Mountain's
+specialized landmark mask: it must contain the complete radius-32 authored site and
+may retain the protruding fringe inherited from the landmark's central seven atomic
+cells. In composite mode that outside-site fringe is authored at the level-150 crown
+rather than clipped or filled at the standalone base level. An arbitrary Macro
+instance still cannot stretch, clip, or relocate the landmark.
+
+**Compose Crystal Mountain with a cross-biome tunnel.** The selectable configuration
+uses a radius-three `Macro` layout over a radius-77 map. Four logical instances
+own all 37 atomic cells: the central seven-cell Crystal Ascent landmark, five
+consecutive radius-two Forest cells at level 149–151, the remaining radius-two inner
+mountain wall, and the complete radius-three outer ridge. Crystal Ascent keeps
+`base_level: 6`, `rise_levels: 144`, and `rotation_turns: 0`.
+
+Macro's defaulted extensions separate surface connectivity from a feature that crosses
+several biomes:
+
+- `walker_connections` declares ordinary surface ports without making them part of the
+  legacy `critical_route`; Crystal Mountain aligns the exact authored four-wide
+  Crystal summit terminal and inward trail with the Forest approach at level 150;
+- `spanning_features` declares the ordered instance route and exact dimensions of the
+  level-6, four-wide tunnel from the world boundary to Crystal Ascent's lower aperture;
+  and
+- `anchor_aliases` publishes stable world-level names for an instance anchor.
+
+An empty `critical_route` is valid only when exactly one spanning feature supplies the
+canonical route. Existing Macro files omit all three defaulted collections and keep
+their former settings fingerprint byte-for-byte. The tunnel's instance order is
+`outer-mountain`, `inner-mountain`, then `crystal-ascent`; its six clear levels and
+three solid roof levels are validated independently from the surface walker port. See
+the shipped `config/worlds/procedural-crystal-mountain.ron` for the complete cell
+roster. The new fields have this exact shape:
+
+```ron
+walker_connections: [
+    (first_instance: "crystal-ascent", second_instance: "summit-forest", width: 4, level: 150),
+],
+spanning_features: [
+    Tunnel((
+        name: "crystal_mountain.tunnel",
+        canonical_route: true,
+        instance_route: ["outer-mountain", "inner-mountain", "crystal-ascent"],
+        boundary_terminal: (instance: "outer-mountain", side: West),
+        destination_anchor: (instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+        floor_level: 6,
+        width: 4,
+        clearance: 6,
+        roof_thickness: 3,
+    )),
+],
+anchor_aliases: [
+    (alias: "crystal_mountain.ascent_threshold", instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+],
+critical_route: [],
+```
+
+Walker widths are `2..=4`. The initial tunnel implementation is deliberately fixed at
+width `4`, floor level `6`, and clearance `6`, with a roof thickness of at least `3`.
+A tunnel route contains at least two unique, pairwise-adjacent non-aquatic instances.
+Its boundary terminal belongs to the first route instance, its destination to the
+last, and the complete vertical reservation must remain inside V3's level-256 ceiling.
+
+The configuration resolves into exact geometry before ordinary fragments are
+decorated. The authored destination is constructed first; the global planner reserves
+the tunnel ribbon, widened mouth, and crystal alcoves in every crossed patch so local
+liquids and vegetation cannot occupy them. Composition then merges the fragments,
+carves the passage once, retains the authored summit approach, publishes review
+anchors, and runs the normal final classification and validation pass. At each crossed
+biome boundary, only the declared four subsurface lane pairs remain ordinary;
+incidental level-6 seam contacts beside the ribbon are closed under a world-owned
+special-movement region.
+
+The eight-wide open boundary apron is exterior. Its first roofed four-wide row and the
+four-wide summit threshold are the eight registered entrances of one world-owned
+interior containing the tunnel and Crystal Ascent. Crystal Ascent's lower aperture is
+therefore an internal handoff, not a second light domain or exterior entrance.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,
