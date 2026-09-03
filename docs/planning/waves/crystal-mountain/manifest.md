@@ -5,6 +5,7 @@
 - Original published head: `74deb7f84d92e2088c63eafc1d5988c63171896d`
 - Original stack base: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Refresh base: `origin/dev @ 495a73dcbe7edbab6d993867d91b15979fa6ce81`
+- Additive refresh merge: `2e175917201d005b11a8b6a207963acf13bc35bc`
 - Prerequisite: the refresh base contains the delivered Crystal Ascent and First Person
   implementation
 - Coordinator: Codex / world integration
@@ -238,7 +239,7 @@ one wave rather than unrelated PRs.
 | L3 | `e6a638c` | review cutaway hides and restores exact overlying roof trees |
 | L4 | `b9d7361`, `044b088`, `5686748` | selectable content, docs, preview, and deterministic camera route |
 | Refresh | `b887ecb`, `8bd1fe3` (`origin/dev @ fc55bd5`) | multiplayer/VFX additions retained additively before final gates and lockfile refreshed |
-| Post-reconciliation refresh | additive merge commit recorded after conflict resolution (`origin/dev @ 495a73dc`) | identity selection retained; all prior local, hosted, capture, and human evidence reset |
+| Post-reconciliation refresh | `2e175917201d005b11a8b6a207963acf13bc35bc` (`origin/dev @ 495a73dc`) | identity selection retained; all prior local, hosted, capture, and human evidence reset |
 
 `merged-to-wave` records only that each lane's commits are present on the composed branch.
 It does not record candidate acceptance. The release build, selector-chosen complete gate,
@@ -368,6 +369,8 @@ in status, roadmap, a PR description, or a screenshot caption.
 - 2026-08-10: initial four-lane implementation wave approved by the user.
 - 2026-08-20: coordinator reconciled the live queue metadata, selector vocabulary, lane
   ownership, and pending-evidence state after integration; no locked decision was amended.
+- 2026-09-02: merged post-#218 `dev` additively at `2e175917`; retained exactly three
+  Crystal required-ignored identities and reset every current-head evidence axis.
 
 ## Close-out
 
