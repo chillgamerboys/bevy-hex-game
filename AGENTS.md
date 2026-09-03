@@ -134,6 +134,10 @@ and hot-file overlap rather than opening one PR per ticket.
   CI-equivalent gate on the combined wave candidate. Run the automated visual walk
   and human runtime route only when the candidate affects presentation or experience;
   a logic-only candidate records the exact-head hook-backed classification instead.
+- Automated presentation review must not open, activate, or focus a visible native game
+  window or begin screen recording without explicit user approval. If noninteractive
+  capture is unavailable or regresses, record the review as blocked instead of substituting
+  a visible launch.
 
 ## Code review rules
 

@@ -9,6 +9,9 @@ Treat pixels as a required presentation test. A successful capture command prove
 that frames were produced; it does not prove that those frames are complete, current, or
 visually correct.
 
+Review the composed candidate. Any later code or asset change that can affect a reviewed
+surface makes the affected verdict stale.
+
 Read `references/review-checklist.md` and the visual-evidence cases in
 `docs/development/problem-solving-casebook.md` before reviewing.
 
@@ -24,8 +27,10 @@ Do not use a still to clear motion, or pixels to infer exact world logic.
 
 ## 1. Define the review matrix
 
-Record the exact commit or dirty-state identifier, scenario, seed, authored-source
-revision, and changed presentation surfaces. Include at minimum:
+Record the full commit SHA—or, for diagnostic scratch only, a dirty-state identifier—plus
+the scenario, seed, authored-source revision, and changed presentation surfaces. For
+authored work, name the approved sketch or written composition contract and list its
+non-negotiable silhouettes and spatial relationships before capture. Include at minimum:
 
 - one whole-footprint overview that visibly contains the complete map;
 - Map, Character, and First Person views when those cameras can expose the change;
@@ -43,13 +48,24 @@ Launch source builds through Cargo as required by `AGENTS.md`. Create a new, uni
 named directory under `.context/` for the exact head and matrix; never overwrite an old
 approved pack in place.
 
+An approval pack must come from one committed candidate whose tracked and untracked source
+state is clean. Derive its new output directory from the full HEAD and matrix identifier,
+and fail before launch if that exact directory already exists. A dirty-state capture is
+scratch evidence only: label it `UNAPPROVABLE-DIRTY` and recapture after committing.
+
+Do not open, activate, or focus a visible native game window or start screen recording
+unless the user explicitly requested play or approved a named live review. If a
+noninteractive capture path is unavailable or regresses, stop and report the review as
+blocked instead of silently substituting a visible launch.
+
 Use the repository's `map-review` capture hooks for deterministic single frames and
 `visual-walk` for scripted routes. Record the commands, scenario, seed, view, logical
 canvas, device scale, capture time, and completion status. Hash every matrix file, and
 reject unexpected identical hashes across different matrix entries.
 
-At run start, invalidate any prior review index. A complete command exit means the
-mechanical capture set exists; it is still `UNREVIEWED` until independent inspection.
+Before a run, mark any prior review index stale or use a fresh directory so an aborted
+rerun cannot leave old approval authoritative. A complete command exit means the mechanical
+capture set exists; it is still `UNREVIEWED` until independent inspection.
 
 ## 3. Inspect in two scales
 
@@ -65,8 +81,11 @@ For each frame, use `references/review-checklist.md` and write a specific verdic
 - `HUMAN-MOTION-PENDING`: static review is complete but the required native motion route
   has not been judged.
 
-Have a fresh-eyes reviewer challenge the full-resolution notes and contact sheet before
-selecting hero images. A generic repeated PASS note is not evidence.
+Give a fresh-eyes reviewer the raw frames or video, scenario and seed, and changed-surface
+list—not an expected verdict. Have that reviewer challenge the full-resolution notes and
+contact sheet before hero selection. If no independent reviewer is available, perform only
+a preliminary pass and leave final approval explicitly pending. A generic repeated PASS
+note is not evidence.
 
 ## 4. Close defects through the right invariant
 
@@ -93,6 +112,9 @@ entries were recaptured after repair, and every required motion route is explici
 or left visibly pending. A pending route may make the static pack ready for motion review,
 but it prevents an overall presentation PASS and every flicker-free, animation, or
 camera-feel claim.
+
+Report the full head, scenario and seed, commands, output directory, artifact names and
+hashes, motion method, per-artifact verdicts and findings, and every remaining human check.
 
 ## Stop Conditions
 
