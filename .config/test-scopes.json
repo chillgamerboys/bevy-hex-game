@@ -274,12 +274,37 @@
   "partition_checks": {
     "map": {
       "concerns": ["map_unit", "map_generation", "map_contracts"],
-      "expected_counts": {
-        "map_unit": 109,
-        "map_generation": 440,
-        "map_contracts": 94
-      },
-      "expected_ignored": 29,
+      "required_ignored_patterns": [
+        "*procedural::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural::tests::procedural_radius_benchmark_meets_the_radius_40_target",
+        "*procedural_v2::hills::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v2::hills::tests::print_v2_hills_review_reports",
+        "*procedural_v2::hills::tests::v2_hills_radius_benchmark_meets_the_radius_40_target",
+        "*procedural_v2::mountains::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v2::mountains::tests::expanded_ten_thousand_seed_corpora_have_less_than_one_percent_fallbacks",
+        "*procedural_v2::mountains::tests::mountain_radius_benchmark_tracks_the_radius_40_target",
+        "*procedural_v2::mountains::tests::expanded_mountain_radius_benchmark_tracks_the_radius_40_target",
+        "*procedural_v2::caves::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v2::caves::tests::expanded_ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v2::caves::tests::cave_radius_benchmark_tracks_the_radius_40_target",
+        "*procedural_v2::sky::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v2::sky::tests::layered_sky_radius_benchmark_tracks_the_radius_40_target",
+        "*procedural_v3::macro_world::tests::mountain_range_release_corpus_validates_128_seeds",
+        "*procedural_v3::macro_world::tests::mountain_range_stress_corpus_keeps_fallbacks_below_one_percent",
+        "*procedural_v3::macro_world::tests::mountain_range_generation_p95_stays_within_two_and_a_half_times_ring19",
+        "*procedural_v3::caves::tests::one_hundred_twenty_eight_seed_corpus_keeps_exact_sparse_vegetation",
+        "*procedural_v3::caves::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v3::caves::tests::caves_full_build_benchmark_tracks_median_and_p95",
+        "*procedural_v3::ring19::tests::ring19_generation_p95_stays_within_three_and_a_half_times_ring7",
+        "*procedural_v3::forest::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v3::forest::tests::forest_full_build_benchmark_tracks_median_and_p95",
+        "*procedural_v3::fort::tests::fixed_corpus_builds_valid_forts_at_supported_radii",
+        "*procedural_v3::ring7::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v3::waterfall::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
+        "*procedural_v3::waterfall::tests::waterfall_full_build_benchmark_tracks_median_and_p95",
+        "*procedural_v3::crystal_ascent::tests::crystal_ascent_boundary_rise_benchmark_tracks_timing_and_plan_counts",
+        "*terrain_edits::one_hundred_localized_terrain_edits_stay_within_the_interactive_budget"
+      ],
       "full_command": [
         "cargo",
         "nextest",
@@ -287,18 +312,20 @@
         "--package",
         "hex_map",
         "--cargo-profile",
-        "map-test"
+        "map-test",
+        "--ignore-default-filter"
       ],
       "all_tests_command": [
         "cargo",
-        "test",
+        "nextest",
+        "list",
         "--package",
         "hex_map",
-        "--all-features",
-        "--profile",
+        "--cargo-profile",
         "map-test",
-        "--",
-        "--list"
+        "--ignore-default-filter",
+        "--run-ignored",
+        "all"
       ]
     }
   },

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -20,6 +22,57 @@ if SPEC is None or SPEC.loader is None:
 test_scope = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = test_scope
 SPEC.loader.exec_module(test_scope)
+
+
+def toml_table(source: str, name: str) -> str:
+    """Return one top-level TOML table without requiring Python 3.11 tomllib."""
+
+    marker = re.search(
+        rf"(?m)^[ \t]*\[{re.escape(name)}\][ \t]*(?:#.*)?$",
+        source,
+    )
+    if marker is None:
+        raise AssertionError(f"missing TOML table [{name}]")
+    body = source[marker.end() :]
+    next_table = re.search(r"(?m)^[ \t]*\[", body)
+    return body if next_table is None else body[: next_table.start()]
+
+
+def toml_table_keys(source: str, name: str) -> set[str]:
+    """Return assignment keys in one simple top-level TOML table."""
+
+    assignment = re.compile(
+        r'''^[ \t]*("(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_-]+)[ \t]*='''
+    )
+    keys: set[str] = set()
+    for line in toml_table(source, name).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        match = assignment.match(line)
+        if match is None:
+            raise AssertionError(f"unsupported TOML assignment in [{name}]: {line}")
+        raw_key = match.group(1)
+        if raw_key.startswith('"'):
+            key = json.loads(raw_key)
+        elif raw_key.startswith("'"):
+            key = raw_key[1:-1]
+        else:
+            key = raw_key
+        keys.add(key)
+    return keys
+
+
+def toml_string_array(source: str, table: str, key: str) -> list[str]:
+    """Read one string array used by the focused manifest contract tests."""
+
+    match = re.search(
+        rf"(?ms)^[ \t]*{re.escape(key)}[ \t]*=[ \t]*\[(.*?)\]",
+        toml_table(source, table),
+    )
+    if match is None:
+        raise AssertionError(f"missing TOML array {table}.{key}")
+    return re.findall(r'"([^"]+)"', match.group(1))
 
 
 class TestScopeTests(unittest.TestCase):
@@ -308,6 +361,12 @@ class TestScopeTests(unittest.TestCase):
                 "partition check map has invalid all_tests_command",
             ),
             (
+                lambda config: config["partition_checks"]["map"].update(
+                    required_ignored_patterns=[]
+                ),
+                "partition check map has invalid concerns or ignored patterns",
+            ),
+            (
                 lambda config: config["concerns"]["app"].update(
                     postflight_command=[]
                 ),
@@ -457,14 +516,12 @@ class TestScopeTests(unittest.TestCase):
         )
 
     def test_game_test_support_forwards_ui_test_support(self) -> None:
-        manifest = tomllib.loads(
-            (ROOT / "crates" / "hex_game" / "Cargo.toml").read_text(
-                encoding="utf-8"
-            )
+        manifest = (ROOT / "crates" / "hex_game" / "Cargo.toml").read_text(
+            encoding="utf-8"
         )
         self.assertIn(
             "hex_ui/test-support",
-            manifest["features"]["test-support"],
+            toml_string_array(manifest, "features", "test-support"),
         )
 
     def test_map_commands_select_package_and_target_before_filters(self) -> None:
@@ -478,13 +535,484 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn("--lib", generation)
         self.assertEqual(contracts[contracts.index("--test") + 1], "contracts")
 
-    def test_map_partition_contract_freezes_current_evidence(self) -> None:
+    def test_map_partition_contract_uses_identities_not_frozen_counts(self) -> None:
         partition = self.config["partition_checks"]["map"]
-        self.assertEqual(
-            partition["expected_counts"],
-            {"map_unit": 109, "map_generation": 440, "map_contracts": 94},
+        self.assertNotIn("expected_counts", partition)
+        self.assertNotIn("expected_ignored", partition)
+        patterns = partition["required_ignored_patterns"]
+        self.assertEqual(len(patterns), len(set(patterns)))
+        self.assertIn(
+            "*procedural_v3::crystal_ascent::tests::"
+            "crystal_ascent_boundary_rise_benchmark_tracks_timing_and_plan_counts",
+            patterns,
         )
-        self.assertEqual(partition["expected_ignored"], 29)
+        self.assertEqual(
+            partition["all_tests_command"][:3],
+            ["cargo", "nextest", "list"],
+        )
+        self.assertEqual(
+            partition["all_tests_command"][-2:],
+            ["--run-ignored", "all"],
+        )
+        for command_name in ("full_command", "all_tests_command"):
+            self.assertIn(
+                "--ignore-default-filter",
+                partition[command_name],
+            )
+
+    def test_required_ignored_patterns_name_every_retained_map_gate(self) -> None:
+        candidates: list[str] = []
+        crate = ROOT / "crates" / "hex_map"
+        paths = (
+            *crate.joinpath("src").rglob("*.rs"),
+            *crate.joinpath("tests").rglob("*.rs"),
+        )
+        for path in paths:
+            source = path.read_text(encoding="utf-8")
+            ignored_functions = re.findall(
+                r'#\[ignore(?:\s*=\s*"[^"]*")?\]\s*'
+                r"(?:#\[[^\]]+\]\s*)*fn\s+([A-Za-z0-9_]+)",
+                source,
+            )
+            relative = path.relative_to(crate)
+            for function in ignored_functions:
+                if relative.parts[0] == "src":
+                    module = "::".join(relative.with_suffix("").parts[1:])
+                    identity = f"ignored {module}::tests::{function}"
+                elif relative.as_posix() == "tests/schematic_compile.rs":
+                    identity = f"ignored {function}"
+                elif relative.parts[:2] == ("tests", "contracts"):
+                    identity = f"ignored {relative.stem}::{function}"
+                else:
+                    identity = f"ignored {function}"
+                candidates.append(identity)
+
+        patterns = self.config["partition_checks"]["map"][
+            "required_ignored_patterns"
+        ]
+        for pattern in patterns:
+            with self.subTest(pattern=pattern):
+                matches = [
+                    identity
+                    for identity in candidates
+                    if fnmatch.fnmatchcase(identity, pattern)
+                ]
+                self.assertEqual(len(matches), 1, matches)
+        for identity in candidates:
+            with self.subTest(identity=identity):
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(identity, pattern)
+                        for pattern in patterns
+                    )
+                )
+
+    def test_partition_completeness_accepts_new_tests_without_count_edits(self) -> None:
+        config = self.fresh_config()
+        config["partition_checks"]["map"]["required_ignored_patterns"] = [
+            "*required_stress"
+        ]
+        full = {"map unit_a", "map generation_a", "map generation_new", "map contract_a"}
+        listings = (
+            full,
+            {"map unit_a"},
+            {"map generation_a", "map generation_new"},
+            {"map contract_a"},
+            full | {"map required_stress", "map optional_new_stress"},
+        )
+        with mock.patch.object(test_scope, "_listed_tests", side_effect=listings):
+            evidence = test_scope.check_partitions("map", config)
+
+        self.assertEqual(evidence["full_count"], 4)
+        self.assertEqual(
+            evidence["partition_counts"],
+            {"map_unit": 1, "map_generation": 2, "map_contracts": 1},
+        )
+        self.assertEqual(evidence["ignored_count"], 2)
+
+    def test_partition_completeness_rejects_overlap_and_union_gaps(self) -> None:
+        config = self.fresh_config()
+        config["partition_checks"]["map"]["required_ignored_patterns"] = [
+            "*required_stress"
+        ]
+        cases = (
+            (
+                (
+                    {"unit", "generation"},
+                    {"unit"},
+                    {"unit"},
+                    {"generation"},
+                ),
+                "overlaps existing tests",
+            ),
+            (
+                (
+                    {"unit", "generation", "contract"},
+                    {"unit"},
+                    {"generation"},
+                    set(),
+                ),
+                "partition union differs from full test set",
+            ),
+        )
+        for listings, expected in cases:
+            with self.subTest(expected=expected), mock.patch.object(
+                test_scope, "_listed_tests", side_effect=listings
+            ):
+                with self.assertRaisesRegex(
+                    test_scope.ScopeConfigurationError, expected
+                ):
+                    test_scope.check_partitions("map", config)
+
+    def test_partition_completeness_requires_named_ignored_stress_tests(self) -> None:
+        config = self.fresh_config()
+        config["partition_checks"]["map"]["required_ignored_patterns"] = [
+            "*required_stress"
+        ]
+        full = {"unit", "generation", "contract"}
+        listings = (
+            full,
+            {"unit"},
+            {"generation"},
+            {"contract"},
+            full | {"renamed stress"},
+        )
+        with mock.patch.object(test_scope, "_listed_tests", side_effect=listings):
+            with self.assertRaisesRegex(
+                test_scope.ScopeConfigurationError,
+                "required ignored test pattern must match exactly one",
+            ):
+                test_scope.check_partitions("map", config)
+
+    def test_partition_listing_keeps_cargo_stderr_live(self) -> None:
+        result = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="hex_map::hex_map one_test\n",
+            stderr=None,
+        )
+        command = ["cargo", "nextest", "list", "--package", "hex_map"]
+        with mock.patch.object(
+            test_scope.subprocess, "run", return_value=result
+        ) as run_mock:
+            identities = test_scope._listed_tests(command)
+
+        self.assertEqual(identities, {"hex_map::hex_map one_test"})
+        call = run_mock.call_args
+        self.assertIs(call.kwargs["stdout"], subprocess.PIPE)
+        self.assertNotIn("capture_output", call.kwargs)
+        self.assertNotIn("stderr", call.kwargs)
+
+    def test_run_records_exact_selection_provenance(self) -> None:
+        definition = {
+            "command": [
+                "cargo",
+                "nextest",
+                "run",
+                "--package",
+                "hex_map",
+                "--profile",
+                "map-unit",
+            ]
+        }
+        selection = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="hex_map::hex_map test_one\nhex_map::hex_map test_two\n",
+            stderr="",
+        )
+        execution = subprocess.CompletedProcess(args=[], returncode=0)
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess,
+                "run",
+                side_effect=(selection, execution),
+            ) as run_mock, mock.patch.object(
+                test_scope.time,
+                "monotonic",
+                side_effect=(0.0, 1.0, 2.0, 5.0, 6.0, 10.0, 12.0, 15.0),
+            ):
+                returncode = test_scope.run_concern("map_unit", definition, timing_path)
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(run_mock.call_count, 2)
+        selection_call = run_mock.call_args_list[0]
+        self.assertIs(selection_call.kwargs["stdout"], subprocess.PIPE)
+        self.assertNotIn("capture_output", selection_call.kwargs)
+        self.assertNotIn("stderr", selection_call.kwargs)
+        evidence = timing["commands"][0]
+        self.assertEqual(evidence["command"], definition["command"])
+        self.assertEqual(evidence["selected_count"], 2)
+        self.assertEqual(evidence["selection_elapsed_seconds"], 3.0)
+        self.assertEqual(evidence["execution_elapsed_seconds"], 4.0)
+        self.assertEqual(evidence["elapsed_seconds"], 11.0)
+        self.assertEqual(timing["elapsed_seconds"], 15.0)
+        self.assertEqual(
+            evidence["selection_command"][:3],
+            ["cargo", "nextest", "list"],
+        )
+        self.assertEqual(
+            evidence["selected_identity_sha256"],
+            test_scope._identity_fingerprint(
+                {"hex_map::hex_map test_one", "hex_map::hex_map test_two"}
+            ),
+        )
+
+    def test_run_rejects_zero_selected_tests_before_execution(self) -> None:
+        definition = {
+            "command": ["cargo", "nextest", "run", "--package", "hex_map"]
+        }
+        selection = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess, "run", return_value=selection
+            ) as run_mock:
+                returncode = test_scope.run_concern(
+                    "map_unit", definition, timing_path
+                )
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 4)
+        self.assertEqual(run_mock.call_count, 1)
+        self.assertEqual(timing["exit_code"], 4)
+        self.assertEqual(timing["commands"][0]["selected_count"], 0)
+        self.assertFalse(timing["commands"][0]["executed"])
+
+    def test_selection_failure_replays_stdout_without_duplicating_stderr(self) -> None:
+        definition = {
+            "command": ["cargo", "nextest", "run", "--package", "hex_map"]
+        }
+        selection = subprocess.CompletedProcess(
+            args=[],
+            returncode=101,
+            stdout="captured selection stdout\n",
+            stderr="already streamed cargo stderr\n",
+        )
+        with mock.patch.object(
+            test_scope.subprocess, "run", return_value=selection
+        ) as run_mock, mock.patch.object(
+            test_scope, "_replay_captured_stdout"
+        ) as replay_stdout, mock.patch.object(
+            test_scope, "_replay_captured_output"
+        ) as replay_both:
+            returncode = test_scope.run_concern("selection-failure", definition)
+
+        self.assertEqual(returncode, 101)
+        replay_stdout.assert_called_once_with(selection)
+        replay_both.assert_not_called()
+        call = run_mock.call_args
+        self.assertIs(call.kwargs["stdout"], subprocess.PIPE)
+        self.assertNotIn("capture_output", call.kwargs)
+        self.assertNotIn("stderr", call.kwargs)
+
+    def test_libtest_followup_is_listed_with_its_name_filter(self) -> None:
+        command = [
+            "cargo",
+            "test",
+            "--package",
+            "hex_ui",
+            "--lib",
+            "dev_time::tests::",
+        ]
+        selection = test_scope._selection_command(command)
+
+        self.assertIsNotNone(selection)
+        listed, format_name = selection
+        self.assertEqual(format_name, "libtest")
+        self.assertEqual(listed[-2:], ["--", "--list"])
+        self.assertIn("dev_time::tests::", listed)
+        self.assertEqual(
+            test_scope._parse_listed_tests(
+                "dev_time::tests::first: test\n0 tests, 0 benchmarks\n",
+                format_name,
+            ),
+            {"dev_time::tests::first"},
+        )
+        self.assertIsNone(
+            test_scope._selection_command(
+                ["cargo", "test", "--package", "hex_game", "--no-run"]
+            )
+        )
+
+    def test_cargo_test_sums_all_final_libtest_summaries(self) -> None:
+        definition = {
+            "command": ["cargo", "test", "--package", "hex_ui", "focused"]
+        }
+        selection = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="suite::focused_one: test\nsuite::focused_two: test\n",
+            stderr="",
+        )
+        execution = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                "\x1b[32mtest result: ok. 0 passed; 0 failed; 1 ignored; "
+                "0 measured; 1 filtered out\x1b[0m\n"
+                "test result: ok. 2 passed; 0 failed; 0 ignored; "
+                "0 measured; 0 filtered out\n"
+            ),
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess,
+                "run",
+                side_effect=(selection, execution),
+            ) as run_mock:
+                returncode = test_scope.run_concern(
+                    "cargo-test", definition, timing_path
+                )
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 0)
+        evidence = timing["commands"][0]
+        self.assertEqual(evidence["libtest_summary_count"], 2)
+        self.assertEqual(evidence["passed_test_count"], 2)
+        self.assertEqual(evidence["failed_test_count"], 0)
+        self.assertEqual(evidence["ignored_test_count"], 1)
+        self.assertEqual(evidence["executed_test_count"], 2)
+        self.assertTrue(run_mock.call_args_list[1].kwargs["capture_output"])
+        self.assertTrue(run_mock.call_args_list[1].kwargs["text"])
+
+    def test_cargo_test_ignored_only_success_is_rejected(self) -> None:
+        definition = {
+            "command": ["cargo", "test", "--package", "hex_ui", "ignored_only"]
+        }
+        selection = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="suite::ignored_only: test\n",
+            stderr="",
+        )
+        execution = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                "test result: ok. 0 passed; 0 failed; 1 ignored; "
+                "0 measured; 9 filtered out\n"
+            ),
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess,
+                "run",
+                side_effect=(selection, execution),
+            ):
+                returncode = test_scope.run_concern(
+                    "ignored-only", definition, timing_path
+                )
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 4)
+        evidence = timing["commands"][0]
+        self.assertEqual(evidence["selected_count"], 1)
+        self.assertEqual(evidence["executed_test_count"], 0)
+        self.assertEqual(evidence["ignored_test_count"], 1)
+        self.assertEqual(evidence["exit_code"], 4)
+
+    def test_cargo_test_no_run_remains_a_compile_only_preflight(self) -> None:
+        definition = {
+            "command": [
+                "cargo",
+                "test",
+                "--package",
+                "hex_game",
+                "--lib",
+                "--no-run",
+            ]
+        }
+        execution = subprocess.CompletedProcess(args=[], returncode=0)
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess, "run", return_value=execution
+            ) as run_mock:
+                returncode = test_scope.run_concern(
+                    "compile-only", definition, timing_path
+                )
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(run_mock.call_count, 1)
+        evidence = timing["commands"][0]
+        self.assertNotIn("selection_command", evidence)
+        self.assertNotIn("executed_test_count", evidence)
+        self.assertTrue(evidence["executed"])
+
+    def test_unittest_success_with_zero_tests_is_rejected(self) -> None:
+        definition = {
+            "command": [sys.executable, "-m", "unittest", "missing_suite.py"]
+        }
+        execution = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr="Ran 0 tests in 0.000s\n\nOK\n",
+        )
+        with mock.patch.object(
+            test_scope.subprocess, "run", return_value=execution
+        ):
+            returncode = test_scope.run_concern("selector", definition)
+
+        self.assertEqual(returncode, 4)
+
+    def test_unittest_success_with_only_skipped_tests_is_rejected(self) -> None:
+        definition = {
+            "command": [sys.executable, "-m", "unittest", "skipped_suite.py"]
+        }
+        execution = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                "Ran 7 tests in 0.001s\n\nOK\n"
+                "nested trailing output without a newline"
+            ),
+            stderr="Ran 2 tests in 0.000s\n\nOK (skipped=2)\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = pathlib.Path(directory) / "timing.json"
+            with mock.patch.object(
+                test_scope.subprocess, "run", return_value=execution
+            ):
+                returncode = test_scope.run_concern(
+                    "selector", definition, timing_path
+                )
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(returncode, 4)
+        evidence = timing["commands"][0]
+        self.assertEqual(evidence["selected_count"], 2)
+        self.assertEqual(evidence["executed_test_count"], 0)
+        self.assertEqual(evidence["ignored_test_count"], 2)
+        self.assertEqual(evidence["unittest_summary_count"], 2)
+        self.assertEqual(evidence["exit_code"], 4)
+
+    def test_unittest_uses_the_outermost_reported_test_count(self) -> None:
+        definition = {
+            "command": [sys.executable, "-m", "unittest", "nested_suite.py"]
+        }
+        execution = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="nested failure injection: Ran 0 tests\n",
+            stderr="Ran 7 tests in 0.001s\n\nOK\n",
+        )
+        with mock.patch.object(
+            test_scope.subprocess, "run", return_value=execution
+        ):
+            returncode = test_scope.run_concern("selector", definition)
+
+        self.assertEqual(returncode, 0)
 
     def test_map_commands_share_the_optimized_test_profile(self) -> None:
         for concern in ("map_unit", "map_generation", "map_contracts"):
@@ -494,11 +1022,12 @@ class TestScopeTests(unittest.TestCase):
             )
 
     def test_hex_ui_manifest_enforces_the_presentation_dependency_ceiling(self) -> None:
-        manifest = tomllib.loads(
-            (ROOT / "crates" / "hex_ui" / "Cargo.toml").read_text(encoding="utf-8")
+        manifest = (ROOT / "crates" / "hex_ui" / "Cargo.toml").read_text(
+            encoding="utf-8"
         )
         allowed = {"bevy", "hex_assets", "hex_core", "hex_gameplay_model", "serde"}
-        self.assertEqual(set(manifest["dependencies"]), allowed)
+        dependencies = toml_table_keys(manifest, "dependencies")
+        self.assertEqual(dependencies, allowed)
         forbidden = {
             "hex_game",
             "hex_combat",
@@ -508,7 +1037,24 @@ class TestScopeTests(unittest.TestCase):
             "hex_world",
             "hex_perception",
         }
-        self.assertTrue(forbidden.isdisjoint(manifest["dependencies"]))
+        self.assertTrue(forbidden.isdisjoint(dependencies))
+
+    def test_toml_dependency_oracle_includes_indented_and_quoted_keys(self) -> None:
+        manifest = """\
+[dependencies]
+bevy = { version = "0.18" }
+  hex_map = { path = "../hex_map" }
+\tserde = { version = "1" }
+"hex_world" = { path = "../hex_world" }
+'hex_units' = { path = "../hex_units" }
+
+[dev-dependencies]
+hex_test_support = { path = "../hex_test_support" }
+"""
+        self.assertEqual(
+            toml_table_keys(manifest, "dependencies"),
+            {"bevy", "hex_map", "serde", "hex_units", "hex_world"},
+        )
 
     def test_residual_excludes_every_owned_gameplay_partition(self) -> None:
         command = self.config["concerns"]["residual"]["command"]
@@ -665,8 +1211,22 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn("tools/test_scope.py run map_generation", map_job)
         self.assertIn("tools/test_scope.py run map_contracts", map_job)
         self.assertIn("tools/test_scope.py check-partitions map", map_job)
+        self.assertLess(
+            map_job.index("tools/test_scope.py check-partitions map"),
+            map_job.index("tools/test_scope.py run map_unit"),
+        )
         self.assertNotIn("--workspace", map_job)
         self.assertNotIn("outputs.residual", map_job)
+
+    def test_ci_runs_selector_through_its_zero_test_guard(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
+            encoding="utf-8"
+        )
+        selector_step = workflow.split(
+            "- name: Test the fail-closed selector", maxsplit=1
+        )[1].split("- name:", maxsplit=1)[0]
+        self.assertIn("python3 tools/test_scope.py run selector", selector_step)
+        self.assertNotIn("python3 -m unittest", selector_step)
 
     def test_gameplay_ci_runs_the_canonical_trajectory_concern(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(

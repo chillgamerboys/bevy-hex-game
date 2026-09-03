@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -107,20 +109,21 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
         if not isinstance(name, str) or not name or not isinstance(definition, dict):
             raise ScopeConfigurationError("partition checks need named objects")
         partition_concerns = definition.get("concerns")
-        expected_counts = definition.get("expected_counts")
+        required_ignored_patterns = definition.get("required_ignored_patterns")
         if (
             not isinstance(partition_concerns, list)
             or not partition_concerns
             or set(partition_concerns) - set(all_concerns)
-            or not isinstance(expected_counts, dict)
-            or set(expected_counts) != set(partition_concerns)
+            or not isinstance(required_ignored_patterns, list)
+            or not required_ignored_patterns
+            or len(required_ignored_patterns) != len(set(required_ignored_patterns))
             or not all(
-                isinstance(value, int) and value >= 0
-                for value in expected_counts.values()
+                isinstance(pattern, str) and pattern
+                for pattern in required_ignored_patterns
             )
         ):
             raise ScopeConfigurationError(
-                f"partition check {name} has invalid concerns or counts"
+                f"partition check {name} has invalid concerns or ignored patterns"
             )
         for command_name in ("full_command", "all_tests_command"):
             partition_command = definition.get(command_name)
@@ -134,10 +137,6 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
                 raise ScopeConfigurationError(
                     f"partition check {name} has invalid {command_name}"
                 )
-        if not isinstance(definition.get("expected_ignored"), int):
-            raise ScopeConfigurationError(
-                f"partition check {name} needs expected_ignored"
-            )
 
     for concern, definition in concerns.items():
         if not isinstance(definition, dict):
@@ -417,24 +416,96 @@ def check_workspace_graph(concern: str, config: dict[str, Any]) -> None:
         )
 
 
+def _nextest_oneline_command(command: list[str]) -> list[str]:
+    """Make a nextest list command emit only stable, machine-readable identities."""
+
+    rendered = list(command)
+    if rendered[:3] == ["cargo", "nextest", "list"]:
+        if "--message-format" not in rendered and not any(
+            value.startswith("--message-format=") for value in rendered
+        ):
+            rendered.extend(("--message-format", "oneline"))
+        if "--color" not in rendered and not any(
+            value.startswith("--color=") for value in rendered
+        ):
+            rendered.extend(("--color", "never"))
+    return rendered
+
+
+def _selection_command(
+    command: list[str],
+) -> Optional[tuple[list[str], str]]:
+    """Return the non-executing selection command for a canonical test command."""
+
+    if command[:3] == ["cargo", "nextest", "run"]:
+        listed = list(command)
+        listed[2] = "list"
+        return _nextest_oneline_command(listed), "nextest"
+    if command[:2] == ["cargo", "test"] and "--no-run" not in command:
+        listed = list(command)
+        if "--" in listed:
+            listed.append("--list")
+        else:
+            listed.extend(("--", "--list"))
+        return listed, "libtest"
+    return None
+
+
+def _parse_listed_tests(output: str, format_name: str) -> set[str]:
+    """Parse stable test identities from one supported listing format."""
+
+    if format_name == "nextest":
+        return {
+            line.strip()
+            for line in output.splitlines()
+            if line.strip() and not line.startswith("warning:")
+        }
+    if format_name == "libtest":
+        return {
+            line.strip()[: -len(": test")]
+            for line in output.splitlines()
+            if line.strip().endswith(": test")
+        }
+    raise ScopeConfigurationError(f"unknown test listing format: {format_name}")
+
+
+def _identity_fingerprint(identities: Iterable[str]) -> str:
+    """Fingerprint an identity set without inflating timing artifacts with every name."""
+
+    canonical = "\n".join(sorted(identities)).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _listed_tests(command: list[str]) -> set[str]:
-    """Run one list command and return its stable test identities."""
+    """Run one nextest list command and return its stable test identities."""
+
+    listed = _nextest_oneline_command(command)
+    if listed[:3] != ["cargo", "nextest", "list"]:
+        raise ScopeConfigurationError(
+            f"partition listing is not a nextest list command: {shlex.join(command)}"
+        )
 
     result = subprocess.run(
-        command,
+        listed,
         cwd=REPOSITORY_ROOT,
         check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
     )
-    return {
-        line.strip()
-        for line in result.stdout.splitlines()
-        if line.strip() and not line.startswith("warning:")
-    }
+    tests = _parse_listed_tests(result.stdout, "nextest")
+    print(
+        "scope partition selection: "
+        f"selected_count={len(tests)} command={shlex.join(listed)}",
+        flush=True,
+    )
+    if not tests:
+        raise ScopeConfigurationError(
+            f"test listing selected zero tests: {shlex.join(listed)}"
+        )
+    return tests
 
 
-def check_partitions(name: str, config: dict[str, Any]) -> None:
+def check_partitions(name: str, config: dict[str, Any]) -> dict[str, Any]:
     """Prove a configured test partition is exhaustive and disjoint."""
 
     definition = config.get("partition_checks", {}).get(name)
@@ -443,6 +514,7 @@ def check_partitions(name: str, config: dict[str, Any]) -> None:
 
     full = _listed_tests(definition["full_command"])
     selected: set[str] = set()
+    partition_counts: dict[str, int] = {}
     for concern in definition["concerns"]:
         command = list(config["concerns"][concern]["command"])
         if command[:3] != ["cargo", "nextest", "run"]:
@@ -451,11 +523,7 @@ def check_partitions(name: str, config: dict[str, Any]) -> None:
             )
         command[2] = "list"
         tests = _listed_tests(command)
-        expected = definition["expected_counts"][concern]
-        if len(tests) != expected:
-            raise ScopeConfigurationError(
-                f"partition {concern} has {len(tests)} tests, expected {expected}"
-            )
+        partition_counts[concern] = len(tests)
         overlap = selected & tests
         if overlap:
             raise ScopeConfigurationError(
@@ -470,13 +538,294 @@ def check_partitions(name: str, config: dict[str, Any]) -> None:
         )
 
     all_tests = _listed_tests(definition["all_tests_command"])
-    discoverable = {line for line in all_tests if line.endswith(": test")}
-    ignored = len(discoverable) - len(full)
-    if ignored != definition["expected_ignored"]:
+    if not full <= all_tests:
         raise ScopeConfigurationError(
-            f"partition has {ignored} ignored tests, expected "
-            f"{definition['expected_ignored']}"
+            "ordinary full test set is not contained in the ignored-inclusive set: "
+            f"missing={sorted(full - all_tests)}"
         )
+    ignored = all_tests - full
+    for pattern in definition["required_ignored_patterns"]:
+        matches = sorted(
+            identity
+            for identity in ignored
+            if fnmatch.fnmatchcase(identity, pattern)
+        )
+        if len(matches) != 1:
+            raise ScopeConfigurationError(
+                "required ignored test pattern must match exactly one ignored identity: "
+                f"pattern={pattern!r}, matches={matches}"
+            )
+
+    return {
+        "full_count": len(full),
+        "full_identity_sha256": _identity_fingerprint(full),
+        "ignored_count": len(ignored),
+        "ignored_identity_sha256": _identity_fingerprint(ignored),
+        "partition_counts": partition_counts,
+    }
+
+
+def _is_unittest_command(command: list[str]) -> bool:
+    """Return whether a command uses Python's built-in unittest runner."""
+
+    return len(command) >= 3 and command[1:3] == ["-m", "unittest"]
+
+
+def _is_executed_cargo_test_command(command: list[str]) -> bool:
+    """Return whether Cargo will execute rather than only compile libtest targets."""
+
+    return command[:2] == ["cargo", "test"] and "--no-run" not in command
+
+
+def _libtest_summary_counts(output: str) -> dict[str, int]:
+    """Sum every final libtest result line emitted by a cargo test command."""
+
+    without_ansi = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    summaries = re.findall(
+        r"(?m)^\s*test result:\s+(?:ok|FAILED)\.\s+"
+        r"(\d+)\s+passed;\s+(\d+)\s+failed;\s+(\d+)\s+ignored;",
+        without_ansi,
+    )
+    passed = sum(int(summary[0]) for summary in summaries)
+    failed = sum(int(summary[1]) for summary in summaries)
+    ignored = sum(int(summary[2]) for summary in summaries)
+    return {
+        "executed_test_count": passed + failed,
+        "failed_test_count": failed,
+        "ignored_test_count": ignored,
+        "libtest_summary_count": len(summaries),
+        "passed_test_count": passed,
+    }
+
+
+def _unittest_summary_counts(output: str) -> dict[str, int]:
+    """Read the outer unittest result and distinguish skipped from executed tests."""
+
+    without_ansi = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    summaries = list(
+        re.finditer(
+            r"(?m)^\s*Ran\s+(\d+)\s+tests?\s+in\s+[^\r\n]+\s*$",
+            without_ansi,
+        )
+    )
+    if not summaries:
+        return {
+            "executed_test_count": 0,
+            "ignored_test_count": 0,
+            "selected_count": 0,
+            "unittest_status_count": 0,
+            "unittest_summary_count": 0,
+        }
+
+    outer = summaries[-1]
+    selected = int(outer.group(1))
+    statuses = list(
+        re.finditer(
+            r"(?m)^\s*(?:OK|FAILED)(?:\s+\(([^)]*)\))?\s*$",
+            without_ansi[outer.end() :],
+        )
+    )
+    skipped = 0
+    if statuses:
+        details = statuses[-1].group(1) or ""
+        skipped_match = re.search(r"(?:^|,\s*)skipped=(\d+)(?:,|$)", details)
+        if skipped_match is not None:
+            skipped = int(skipped_match.group(1))
+
+    return {
+        "executed_test_count": max(selected - skipped, 0),
+        "ignored_test_count": skipped,
+        "selected_count": selected,
+        "unittest_status_count": len(statuses),
+        "unittest_summary_count": len(summaries),
+    }
+
+
+def _replay_captured_output(result: subprocess.CompletedProcess[str]) -> None:
+    """Preserve ordinary command output after a short command is captured for evidence."""
+
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr, flush=True)
+
+
+def _replay_captured_stdout(result: subprocess.CompletedProcess[str]) -> None:
+    """Replay stdout when stderr was inherited live by the child process."""
+
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+
+
+def run_concern(
+    concern: str,
+    definition: dict[str, Any],
+    timing_out: Optional[pathlib.Path] = None,
+) -> int:
+    """Run one concern, failing closed when a test command selects zero tests."""
+
+    commands = [
+        *(
+            [("preflight", definition["preflight_command"])]
+            if "preflight_command" in definition
+            else []
+        ),
+        ("command", definition["command"]),
+        *(
+            [("postflight", definition["postflight_command"])]
+            if "postflight_command" in definition
+            else []
+        ),
+    ]
+    environment = os.environ.copy()
+    environment.update(definition.get("environment", {}))
+    started = time.monotonic()
+    returncode = 0
+    command_evidence: list[dict[str, Any]] = []
+
+    for label, command in commands:
+        command = list(command)
+        record: dict[str, Any] = {
+            "command": command,
+            "executed": False,
+            "execution_elapsed_seconds": 0.0,
+            "label": label,
+            "rendered_command": shlex.join(command),
+            "selection_elapsed_seconds": 0.0,
+        }
+        command_started = time.monotonic()
+        selection = _selection_command(command)
+        if selection is not None:
+            selection_command, format_name = selection
+            record["selection_command"] = selection_command
+            record["rendered_selection_command"] = shlex.join(selection_command)
+            print(
+                f"scope selection [{concern}/{label}]: "
+                f"{shlex.join(selection_command)}",
+                flush=True,
+            )
+            selection_started = time.monotonic()
+            selection_result = subprocess.run(
+                selection_command,
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                check=False,
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            record["selection_elapsed_seconds"] = round(
+                time.monotonic() - selection_started, 3
+            )
+            record["selection_exit_code"] = selection_result.returncode
+            if selection_result.returncode != 0:
+                _replay_captured_stdout(selection_result)
+                returncode = selection_result.returncode
+                record["exit_code"] = returncode
+                record["elapsed_seconds"] = round(
+                    time.monotonic() - command_started, 3
+                )
+                command_evidence.append(record)
+                break
+            identities = _parse_listed_tests(selection_result.stdout, format_name)
+            selected_count = len(identities)
+            record["selected_count"] = selected_count
+            record["selected_identity_sha256"] = _identity_fingerprint(identities)
+            print(
+                f"scope selected [{concern}/{label}]: count={selected_count} "
+                f"sha256={record['selected_identity_sha256']}",
+                flush=True,
+            )
+            if selected_count == 0:
+                print(
+                    "test scope error: canonical test command selected zero tests: "
+                    f"{shlex.join(command)}",
+                    file=sys.stderr,
+                )
+                returncode = 4
+                record["exit_code"] = returncode
+                record["elapsed_seconds"] = round(
+                    time.monotonic() - command_started, 3
+                )
+                command_evidence.append(record)
+                break
+
+        print(
+            f"scope {label} [{concern}]: {shlex.join(command)}",
+            flush=True,
+        )
+        record["executed"] = True
+        execution_started = time.monotonic()
+        if _is_unittest_command(command) or _is_executed_cargo_test_command(command):
+            result = subprocess.run(
+                command,
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            record["execution_elapsed_seconds"] = round(
+                time.monotonic() - execution_started, 3
+            )
+            _replay_captured_output(result)
+        else:
+            result = subprocess.run(
+                command,
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                check=False,
+            )
+            record["execution_elapsed_seconds"] = round(
+                time.monotonic() - execution_started, 3
+            )
+
+        if _is_unittest_command(command):
+            counts = _unittest_summary_counts(result.stdout + "\n" + result.stderr)
+            record.update(counts)
+            if result.returncode == 0 and (
+                counts["unittest_status_count"] == 0
+                or counts["executed_test_count"] == 0
+            ):
+                print(
+                    "test scope error: unittest command reported success without "
+                    f"executing tests: {shlex.join(command)}",
+                    file=sys.stderr,
+                )
+                returncode = 4
+            else:
+                returncode = result.returncode
+        elif _is_executed_cargo_test_command(command):
+            counts = _libtest_summary_counts(result.stdout + "\n" + result.stderr)
+            record.update(counts)
+            if result.returncode == 0 and counts["executed_test_count"] == 0:
+                print(
+                    "test scope error: cargo test reported success without "
+                    f"running tests: {shlex.join(command)}",
+                    file=sys.stderr,
+                )
+                returncode = 4
+            else:
+                returncode = result.returncode
+        else:
+            returncode = result.returncode
+
+        record["exit_code"] = returncode
+        record["elapsed_seconds"] = round(time.monotonic() - command_started, 3)
+        command_evidence.append(record)
+        if returncode != 0:
+            break
+
+    timing = {
+        "commands": command_evidence,
+        "concern": concern,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "exit_code": returncode,
+    }
+    rendered_timing = json.dumps(timing, sort_keys=True)
+    print(f"scope timing: {rendered_timing}")
+    if timing_out is not None:
+        write_output(timing_out, rendered_timing + "\n")
+    return returncode
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -558,47 +907,11 @@ def main() -> int:
                 raise ScopeConfigurationError(
                     f"unknown concern: {arguments.concern}"
                 )
-            commands = [
-                *(
-                    [("preflight", definition["preflight_command"])]
-                    if "preflight_command" in definition
-                    else []
-                ),
-                ("command", definition["command"]),
-                *(
-                    [("postflight", definition["postflight_command"])]
-                    if "postflight_command" in definition
-                    else []
-                ),
-            ]
-            environment = os.environ.copy()
-            environment.update(definition.get("environment", {}))
-            started = time.monotonic()
-            returncode = 0
-            for label, command in commands:
-                print(
-                    f"scope {label} [{arguments.concern}]: {shlex.join(command)}",
-                    flush=True,
-                )
-                result = subprocess.run(
-                    command,
-                    cwd=REPOSITORY_ROOT,
-                    env=environment,
-                    check=False,
-                )
-                returncode = result.returncode
-                if returncode != 0:
-                    break
-            timing = {
-                "concern": arguments.concern,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-                "exit_code": returncode,
-            }
-            rendered_timing = json.dumps(timing, sort_keys=True)
-            print(f"scope timing: {rendered_timing}")
-            if arguments.timing_out is not None:
-                write_output(arguments.timing_out, rendered_timing + "\n")
-            return returncode
+            return run_concern(
+                arguments.concern,
+                definition,
+                arguments.timing_out,
+            )
         if arguments.subcommand == "selected-tests":
             decision = classify(
                 changed_paths(arguments.base, arguments.head), config
@@ -617,8 +930,9 @@ def main() -> int:
             print(f"{arguments.concern} workspace dependency graph is within ceiling")
             return 0
         if arguments.subcommand == "check-partitions":
-            check_partitions(arguments.name, config)
+            evidence = check_partitions(arguments.name, config)
             print(f"{arguments.name} test partitions are exhaustive and disjoint")
+            print(f"partition evidence: {json.dumps(evidence, sort_keys=True)}")
             return 0
 
         if arguments.paths_file is not None:
