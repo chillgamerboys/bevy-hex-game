@@ -24,6 +24,11 @@ size and cache tag. Also inspect `git status` yourself in every cleanup candidat
 `manual-validation-required` classification is evidence for review, never cleanup
 authorization or proof that a path is exclusively Cargo-owned.
 
+The audit reports ignored paths inside a discovered Cargo target separately from ignored
+paths elsewhere. A target-contained ignore does not protect an otherwise clean owner by
+itself; any ignored path outside those normalized target boundaries remains possible review
+evidence and protects the worktree.
+
 Classify the failure before cleaning:
 
 - **Disk capacity:** target profiles or duplicate worktrees consume the filesystem.

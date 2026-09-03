@@ -177,7 +177,25 @@ def parse_worktrees(repo: Path) -> List[Dict[str, Any]]:
     return entries
 
 
-def status_snapshot(worktree: Path) -> Dict[str, Any]:
+def normalized_path(path: Path) -> Path:
+    """Return an absolute, lexically normalized path without following symlinks."""
+
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def path_is_within(path: Path, root: Path) -> bool:
+    """Return whether path is root or one of its descendants."""
+
+    candidate = normalized_path(path)
+    boundary = normalized_path(root)
+    try:
+        candidate.relative_to(boundary)
+    except ValueError:
+        return False
+    return True
+
+
+def status_snapshot(worktree: Path, target_roots: Sequence[Path]) -> Dict[str, Any]:
     code, out, err = git(
         [
             "status",
@@ -195,7 +213,17 @@ def status_snapshot(worktree: Path) -> Dict[str, Any]:
             "protected_reasons": ["worktree status inspection failed"],
         }
 
-    counts = {"tracked": 0, "unmerged": 0, "untracked": 0, "ignored": 0}
+    normalized_targets = sorted(
+        {normalized_path(root) for root in target_roots}, key=lambda path: str(path)
+    )
+    counts = {
+        "tracked": 0,
+        "unmerged": 0,
+        "untracked": 0,
+        "ignored": 0,
+        "ignored_within_target": 0,
+        "ignored_other": 0,
+    }
     samples: Dict[str, List[str]] = {key: [] for key in counts}
     branch: Dict[str, Any] = {}
     for raw in out.split(b"\0"):
@@ -229,13 +257,22 @@ def status_snapshot(worktree: Path) -> Dict[str, Any]:
             counts["ignored"] += 1
             if len(samples["ignored"]) < 5:
                 samples["ignored"].append(item[2:])
+            ignored_path = normalized_path(worktree / item[2:])
+            category = (
+                "ignored_within_target"
+                if any(path_is_within(ignored_path, root) for root in normalized_targets)
+                else "ignored_other"
+            )
+            counts[category] += 1
+            if len(samples[category]) < 5:
+                samples[category].append(item[2:])
 
     protected = []
     if counts["tracked"] or counts["unmerged"]:
         protected.append("tracked or unmerged changes")
     if counts["untracked"]:
         protected.append("untracked files")
-    if counts["ignored"]:
+    if counts["ignored_other"]:
         protected.append("ignored files may contain review evidence")
     if branch.get("ahead", 0):
         protected.append("commits ahead of upstream")
@@ -245,6 +282,7 @@ def status_snapshot(worktree: Path) -> Dict[str, Any]:
         "branch": branch,
         "status_counts": counts,
         "samples": samples,
+        "target_roots": [str(path) for path in normalized_targets],
         "protected_reasons": protected,
     }
 
@@ -314,6 +352,26 @@ def discover_target_roots(worktrees: Iterable[Dict[str, Any]]) -> List[Dict[str,
                     "discovery_confidence": [confidence],
                 }
     return list(found.values())
+
+
+def target_roots_by_worktree(
+    discoveries: Iterable[Dict[str, Any]],
+) -> Dict[str, List[Path]]:
+    """Index canonical and lexical target roots by their owning worktree."""
+
+    indexed: Dict[str, Dict[str, Path]] = {}
+    for discovery in discoveries:
+        roots = {
+            str(normalized_path(Path(path))): normalized_path(Path(path))
+            for path in [discovery["path"], *discovery["lexical_paths"]]
+        }
+        for owner in discovery["worktrees"]:
+            owner_key = str(normalized_path(Path(owner)))
+            indexed.setdefault(owner_key, {}).update(roots)
+    return {
+        owner: [roots[key] for key in sorted(roots)]
+        for owner, roots in indexed.items()
+    }
 
 
 def cache_tag_snapshot(target: Path) -> Dict[str, Any]:
@@ -563,10 +621,15 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
         raise RuntimeError(f"not a Git repository: {decode(err).strip()}")
     repo = Path(decode(out).strip()).resolve()
     worktrees = parse_worktrees(repo)
+    target_discoveries = discover_target_roots(worktrees)
+    worktree_target_roots = target_roots_by_worktree(target_discoveries)
     worktree_details = []
     for entry in worktrees:
         path = Path(entry["path"])
-        status = status_snapshot(path)
+        status = status_snapshot(
+            path,
+            worktree_target_roots.get(str(normalized_path(path)), []),
+        )
         metadata_reasons = []
         if entry.get("detached"):
             metadata_reasons.append("detached worktree")
@@ -596,7 +659,7 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
             repo_stat.st_dev,
             protected_paths,
         )
-        for discovery in discover_target_roots(worktrees)
+        for discovery in target_discoveries
     ]
     process_after = running_rust_processes()
     active_after = process_after["processes"]
@@ -665,7 +728,7 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
         "target_roots": targets,
         "recommendations": [
             "Stop or coordinate duplicate active builds before considering cleanup.",
-            "Protect every dirty, untracked, ignored, ahead, detached, or no-upstream worktree.",
+            "Protect every dirty, untracked, ignored-evidence, ahead, detached, or no-upstream worktree.",
             "Choose the smallest exact inactive Cargo artifact candidate that restores capacity.",
             "Revalidate path, device, inode, mtime, size, tag, and processes immediately before action.",
             "After authorized cleanup, rerun this audit and the identical failed verification gate.",
@@ -708,7 +771,9 @@ def print_human(report: Dict[str, Any]) -> None:
             f"  {item['path']} | {branch.get('name', item.get('branch', 'detached'))} | "
             f"HEAD {branch.get('head', item.get('HEAD', 'unknown'))} | "
             f"tracked={counts.get('tracked', '?')} untracked={counts.get('untracked', '?')} "
-            f"ignored={counts.get('ignored', '?')} ahead={branch.get('ahead', '?')}"
+            f"ignored_target={counts.get('ignored_within_target', '?')} "
+            f"ignored_other={counts.get('ignored_other', '?')} "
+            f"ahead={branch.get('ahead', '?')}"
         )
         for reason in status.get("protected_reasons", []):
             print(f"    PROTECT: {reason}")
