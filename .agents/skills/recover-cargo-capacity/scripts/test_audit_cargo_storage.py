@@ -27,6 +27,11 @@ APPEARED_PROCESS = {
     "processes": [{"pid": 4242, "rss_bytes": 4096, "process": "rustc"}],
     "error": None,
 }
+RSS_CHANGED_PROCESS = {
+    "ok": True,
+    "processes": [{"pid": 4242, "rss_bytes": 8192, "process": "rustc"}],
+    "error": None,
+}
 FILESYSTEM = {
     "bytes_total": 10_000,
     "bytes_used": 4_000,
@@ -145,7 +150,7 @@ class PathBoundaryTests(unittest.TestCase):
         )
 
     def test_target_roots_are_normalized_and_indexed_by_owner(self) -> None:
-        owner = Path("/tmp/cargo-audit/repo")
+        owner = Path(tempfile.gettempdir()).resolve() / "cargo-audit" / "repo"
         target = owner / "target"
         configured = owner / "build" / ".." / "cargo-cache"
         discoveries = [
@@ -161,7 +166,11 @@ class PathBoundaryTests(unittest.TestCase):
             },
         ]
 
-        indexed = AUDIT.target_roots_by_worktree(discoveries)
+        protected = {
+            "worktree_roots": [str(AUDIT.normalized_path(owner))],
+            "git_metadata": [str(AUDIT.normalized_path(owner / ".git"))],
+        }
+        indexed = AUDIT.target_roots_by_worktree(discoveries, protected)
 
         self.assertEqual(set(indexed), {str(AUDIT.normalized_path(owner))})
         self.assertEqual(
@@ -174,6 +183,49 @@ class PathBoundaryTests(unittest.TestCase):
 
 
 class IgnoredPathClassificationTests(RepositoryTestCase):
+    def test_unsafe_configured_root_cannot_mask_ignored_evidence(self) -> None:
+        self.repository.write(
+            ".cargo/config.toml",
+            '[build]\ntarget-dir = "."\n',
+        )
+        self.repository.write(".gitignore", "/target/\n/.context/\n")
+        self.repository.commit_and_sync("configure unsafe and conventional targets")
+        target = self.repository.write(
+            "target/CACHEDIR.TAG",
+            f"{AUDIT.CACHE_SIGNATURE}\n",
+        ).parent
+        self.repository.write(".context/review/frame.png", "durable evidence\n")
+
+        with (
+            mock.patch.object(AUDIT, "running_rust_processes", return_value=EMPTY_PROCESS_SCAN),
+            mock.patch.object(AUDIT, "du_bytes", return_value=512),
+            mock.patch.object(AUDIT, "filesystem_snapshot", return_value=FILESYSTEM),
+            mock.patch.object(AUDIT, "memory_snapshot", return_value=MEMORY),
+        ):
+            report = AUDIT.audit(self.repository.path)
+
+        owner = next(
+            item
+            for item in report["worktrees"]
+            if Path(item["path"]).resolve() == self.repository.path.resolve()
+        )
+        counts = owner["status"]["status_counts"]
+        self.assertEqual(counts["ignored_within_target"], 1)
+        self.assertEqual(counts["ignored_other"], 1)
+        self.assert_protected_for(owner["status"], "ignored files")
+        conventional = next(
+            item
+            for item in report["target_roots"]
+            if Path(item["canonical_path"]) == target.resolve()
+        )
+        self.assertEqual(conventional["classification"], "WORKTREE STATE—PROTECT")
+        self.assertTrue(
+            all(
+                not candidate["candidate_requires_manual_validation"]
+                for candidate in conventional["candidates"]
+            )
+        )
+
     def test_only_normalized_conventional_target_is_not_protected(self) -> None:
         self.configure_ignores("/target/\n")
         self.repository.write("target/debug/dependency.rlib", "reconstructible\n")
@@ -367,6 +419,25 @@ class TargetEligibilityTests(unittest.TestCase):
         self.assertTrue(snapshot["tag"]["exact"])
         self.assertTrue(snapshot["candidates"][-1]["candidate_requires_manual_validation"])
 
+    def test_profile_roots_are_reported_as_manual_candidates(self) -> None:
+        target = self.owner / "target-profiles"
+        self.write_valid_tag(target)
+        (target / "debug" / "incremental").mkdir(parents=True)
+        (target / "release").mkdir()
+
+        snapshot = self.snapshot(target)
+
+        candidates = {candidate["kind"]: candidate for candidate in snapshot["candidates"]}
+        self.assertIn("debug incremental artifacts", candidates)
+        self.assertIn("debug profile artifacts", candidates)
+        self.assertIn("release profile artifacts", candidates)
+        self.assertTrue(
+            all(
+                candidate["candidate_requires_manual_validation"]
+                for candidate in candidates.values()
+            )
+        )
+
     def test_missing_cache_tag_is_ineligible(self) -> None:
         target = self.owner / "target-missing-tag"
         target.mkdir()
@@ -500,6 +571,13 @@ class AuditProcessRaceTests(RepositoryTestCase):
                 for reason in candidate["reasons"]
             )
         )
+
+    def test_rss_change_does_not_claim_process_set_changed(self) -> None:
+        report = self.run_audit_with_scans([APPEARED_PROCESS, RSS_CHANGED_PROCESS])
+        target = self.only_target(report)
+
+        self.assertFalse(report["process_snapshot_changed"])
+        self.assertEqual(target["classification"], "ACTIVE/LOCKED—DO NOT TOUCH")
 
     def test_failed_process_scans_protect_every_candidate(self) -> None:
         report = self.run_audit_with_scans([FAILED_PROCESS_SCAN, FAILED_PROCESS_SCAN])

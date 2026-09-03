@@ -356,11 +356,15 @@ def discover_target_roots(worktrees: Iterable[Dict[str, Any]]) -> List[Dict[str,
 
 def target_roots_by_worktree(
     discoveries: Iterable[Dict[str, Any]],
+    protected_paths: Dict[str, List[str]],
 ) -> Dict[str, List[Path]]:
-    """Index canonical and lexical target roots by their owning worktree."""
+    """Index only safety-bounded target roots by their owning worktree."""
 
     indexed: Dict[str, Dict[str, Path]] = {}
     for discovery in discoveries:
+        canonical = Path(discovery["path"])
+        if unsafe_target_reasons(canonical, discovery, protected_paths):
+            continue
         roots = {
             str(normalized_path(Path(path))): normalized_path(Path(path))
             for path in [discovery["path"], *discovery["lexical_paths"]]
@@ -549,6 +553,21 @@ def target_snapshot(
         tag_valid and not active_reason and not owner_protected and not unsafe_reasons
     )
 
+    def cleanup_candidate(path: Path, kind: str) -> Dict[str, Any]:
+        return {
+            "path": str(path.resolve()),
+            "kind": kind,
+            "bytes": du_bytes(path),
+            "automatic_eligibility": False,
+            "candidate_requires_manual_validation": manually_reviewable,
+            "reasons": []
+            if manually_reviewable
+            else (["invalid or missing target-root cache tag"] if not tag_valid else [])
+            + (["Rust/Cargo/link process was observed globally"] if active else [])
+            + (["build-process inspection failed"] if not process_scan_ok else [])
+            + protection_reasons,
+        }
+
     for profile_name in ("debug", "release"):
         profile = lexical / profile_name
         if not profile.is_dir() or profile.is_symlink():
@@ -556,20 +575,14 @@ def target_snapshot(
         incremental = profile / "incremental"
         if incremental.is_dir() and not incremental.is_symlink():
             candidates.append(
-                {
-                    "path": str(incremental.resolve()),
-                    "kind": f"{profile_name} incremental artifacts",
-                    "bytes": du_bytes(incremental),
-                    "automatic_eligibility": False,
-                    "candidate_requires_manual_validation": manually_reviewable,
-                    "reasons": []
-                    if manually_reviewable
-                    else (["invalid or missing target-root cache tag"] if not tag_valid else [])
-                    + (["Rust/Cargo/link process is active"] if active else [])
-                    + (["build-process inspection failed"] if not process_scan_ok else [])
-                    + protection_reasons,
-                }
+                cleanup_candidate(
+                    incremental,
+                    f"{profile_name} incremental artifacts",
+                )
             )
+        candidates.append(
+            cleanup_candidate(profile, f"{profile_name} profile artifacts")
+        )
 
     candidates.append(
         {
@@ -581,7 +594,7 @@ def target_snapshot(
             "reasons": []
             if manually_reviewable
             else (["invalid or missing exact target-root cache tag"] if not tag_valid else [])
-            + (["Rust/Cargo/link process is active"] if active else [])
+            + (["Rust/Cargo/link process was observed globally"] if active else [])
             + (["build-process inspection failed"] if not process_scan_ok else [])
             + protection_reasons,
         }
@@ -622,7 +635,11 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
     repo = Path(decode(out).strip()).resolve()
     worktrees = parse_worktrees(repo)
     target_discoveries = discover_target_roots(worktrees)
-    worktree_target_roots = target_roots_by_worktree(target_discoveries)
+    protected_paths = registered_protected_paths(worktrees)
+    worktree_target_roots = target_roots_by_worktree(
+        target_discoveries,
+        protected_paths,
+    )
     worktree_details = []
     for entry in worktrees:
         path = Path(entry["path"])
@@ -649,7 +666,6 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
         detail["path"]: detail["status"] for detail in worktree_details
     }
     repo_stat = repo.stat()
-    protected_paths = registered_protected_paths(worktrees)
     targets = [
         target_snapshot(
             discovery,
@@ -667,7 +683,9 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
         process["pid"]: process for process in [*active_before, *active_after]
     }
     active = list(active_by_pid.values())
-    process_snapshot_changed = active_before != active_after
+    process_snapshot_changed = {
+        (process["pid"], process["process"]) for process in active_before
+    } != {(process["pid"], process["process"]) for process in active_after}
     process_scan_ok = process_before["ok"] and process_after["ok"]
     if (active_after and not active_before) or not process_after["ok"]:
         for target in targets:
@@ -688,7 +706,8 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
     warnings = []
     if active:
         warnings.append(
-            "Rust/Cargo/link processes were observed; do not clean any target from this snapshot."
+            "Rust/Cargo/link processes were observed globally; this audit does not prove which "
+            "target they use, so do not clean any target from this snapshot."
         )
     if process_snapshot_changed:
         warnings.append("The build-process snapshot changed during the audit; rerun when idle.")
@@ -727,7 +746,7 @@ def audit(repo_argument: Path) -> Dict[str, Any]:
         "worktrees": worktree_details,
         "target_roots": targets,
         "recommendations": [
-            "Stop or coordinate duplicate active builds before considering cleanup.",
+            "Establish ownership and coordinate observed builds before stopping any duplicate process.",
             "Protect every dirty, untracked, ignored-evidence, ahead, detached, or no-upstream worktree.",
             "Choose the smallest exact inactive Cargo artifact candidate that restores capacity.",
             "Revalidate path, device, inode, mtime, size, tag, and processes immediately before action.",
@@ -773,8 +792,11 @@ def print_human(report: Dict[str, Any]) -> None:
             f"tracked={counts.get('tracked', '?')} untracked={counts.get('untracked', '?')} "
             f"ignored_target={counts.get('ignored_within_target', '?')} "
             f"ignored_other={counts.get('ignored_other', '?')} "
-            f"ahead={branch.get('ahead', '?')}"
+            f"upstream={branch.get('upstream', 'none')} "
+            f"ahead={branch.get('ahead', '?')} behind={branch.get('behind', '?')}"
         )
+        for sample in status.get("samples", {}).get("ignored_other", []):
+            print(f"    IGNORED EVIDENCE: {sample}")
         for reason in status.get("protected_reasons", []):
             print(f"    PROTECT: {reason}")
 
@@ -786,6 +808,13 @@ def print_human(report: Dict[str, Any]) -> None:
             f"same_repo_device={target['same_device_as_repo']} | "
             f"free={human_bytes(target['filesystem']['bytes_free'])}"
         )
+        identity = target.get("identity")
+        if identity:
+            print(
+                "    identity: "
+                f"device={identity['device']} inode={identity['inode']} "
+                f"mtime_ns={identity['mtime_ns']}"
+            )
         for candidate in target["candidates"]:
             state = (
                 "manual-validation-required"
