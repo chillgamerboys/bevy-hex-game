@@ -1,7 +1,8 @@
 //! Pure, renderer-independent contracts for deterministic world schematics.
 //!
-//! This crate plans one coarse radius-eight hex grid. It deliberately knows
-//! nothing about runtime V3 patches, voxel dimensions, materials, or colours.
+//! The original modules preserve the frozen V3 coarse schematic contract.
+//! [`v4`] compiles reusable authored regions into independent world packages.
+//! Neither path depends on rendering, filesystem loading, or gameplay scheduling.
 
 pub mod fingerprint;
 pub mod generator;
@@ -9,6 +10,7 @@ pub mod metrics;
 pub mod model;
 pub mod template;
 pub mod validate;
+pub mod v4;
 
 pub use fingerprint::semantic_fingerprint;
 pub use generator::{

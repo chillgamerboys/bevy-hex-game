@@ -3,9 +3,10 @@ name = "hex_schematic"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "Pure deterministic contracts and tooling for radius-eight world schematics."
+description = "Pure deterministic schematic and reusable regional world compilation."
 
 [dependencies]
+hex_world_contracts = { path = "../hex_world_contracts" }
 atomicwrites = { workspace = true }
 ron = { workspace = true }
 rustix = { workspace = true }

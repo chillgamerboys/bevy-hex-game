@@ -2,7 +2,7 @@
 
 ## Header
 
-- Status: planning
+- Status: implementation
 - Wave branch: `wave/v4-foundation`
 - Verified `origin/dev`: `495a73dcbe7edbab6d993867d91b15979fa6ce81`
 - Selected V3 reference: `bc06a8969532b807ec677928eee304bc28399386` (PR #219)
@@ -69,7 +69,7 @@ lanes:
     selector: {concerns: [residual, clippy, docs, shipping], full: true}
     evidence: logic-only
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: integrated
     pr: null
   - id: L2
     title: Runtime-loaded region authoring and compiler
@@ -85,7 +85,7 @@ lanes:
     selector: {concerns: [map_generation, residual, clippy, docs], full: false}
     evidence: logic-only
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: building
     pr: null
   - id: L3
     title: Residency, queries, edits and persistence
@@ -101,7 +101,23 @@ lanes:
     selector: {concerns: [residual, clippy, docs, shipping], full: true}
     evidence: logic-only
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: building
+    pr: null
+  - id: L4
+    title: Resident terrain presentation adapter
+    order: orders/L4-presentation.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: feat/v4-presentation
+    owns: [crates/hex_map/src/v4, crates/hex_map/src/grid.rs, crates/hex_map/src/lib.rs, crates/hex_map/Cargo.toml]
+    dispatch_blockers: []
+    merge_blockers: [L1]
+    fences: []
+    selector: {concerns: [map_contracts, clippy, docs], full: false}
+    evidence: static-presentation
+    sizing: {model: inherited, effort: inherited}
+    state: building
     pr: null
 ```
 
@@ -109,7 +125,8 @@ lanes:
 
 L1 owns only its new crate. L2 owns V4 authoring modules and V4 fixture content. L3
 owns only its new runtime crate. The coordinator owns workspace wiring, shared
-documentation, supported tools, combined tests and Bevy integration. Shared existing
+documentation, supported tools, combined tests and application integration. L4 owns
+the isolated map presentation adapter and necessary internal grid extraction. Shared existing
 files are edited by the coordinator only. Workers use separate source worktrees;
 their source commits are inspected and integrated additively.
 
@@ -158,6 +175,8 @@ Repair exact failures and preserve their evidence. Do not edit other active chec
 ## Injection log
 
 - 2026-09-04: initial implementation authorization; no later scope changes.
+- 2026-09-04: shared contracts integrated as `bcb3e2b`; 22 contract tests and
+  focused Clippy passed in the source lane. L4 dispatches after L1 frees its worker.
 
 ## Close-out
 
