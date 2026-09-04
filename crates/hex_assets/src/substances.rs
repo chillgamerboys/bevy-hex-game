@@ -947,18 +947,18 @@ mod tests {
             SubstanceTable::from_file(&file, &palette).expect("shipped substances should resolve");
 
         for (substance_name, swatch_name, expected) in [
-            ("grass", "terrain/grass", (0.35, 0.62, 0.30)),
-            ("dirt", "terrain/dirt", (0.45, 0.33, 0.22)),
-            ("stone", "terrain/stone", (0.55, 0.55, 0.58)),
-            ("gravel", "terrain/gravel", (0.42, 0.40, 0.36)),
-            ("sand", "terrain/sand", (0.76, 0.66, 0.42)),
-            ("water", "liquid/water", (0.08, 0.32, 0.65)),
-            ("metal", "structure/metal", (0.30, 0.34, 0.40)),
-            ("snow", "terrain/snow", (0.82, 0.88, 0.92)),
-            ("ice", "terrain/ice", (0.42, 0.72, 0.88)),
-            ("basalt", "terrain/basalt", (0.20, 0.22, 0.24)),
-            ("lava", "liquid/lava", (0.90, 0.20, 0.04)),
-            ("bedrock", "terrain/bedrock", (0.25, 0.24, 0.28)),
+            ("grass", "terrain/grass", (0.25, 0.70, 0.16)),
+            ("dirt", "terrain/dirt", (0.52, 0.25, 0.10)),
+            ("stone", "terrain/stone", (0.55, 0.57, 0.64)),
+            ("gravel", "terrain/gravel", (0.46, 0.38, 0.27)),
+            ("sand", "terrain/sand", (0.92, 0.70, 0.20)),
+            ("water", "liquid/water", (0.02, 0.24, 0.76)),
+            ("metal", "structure/metal", (0.22, 0.30, 0.46)),
+            ("snow", "terrain/snow", (0.91, 0.96, 1.00)),
+            ("ice", "terrain/ice", (0.33, 0.82, 0.98)),
+            ("basalt", "terrain/basalt", (0.09, 0.11, 0.14)),
+            ("lava", "liquid/lava", (1.00, 0.17, 0.01)),
+            ("bedrock", "terrain/bedrock", (0.19, 0.16, 0.25)),
         ] {
             let id = table
                 .id(substance_name)

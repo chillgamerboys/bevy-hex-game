@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import pathlib
@@ -106,6 +107,7 @@ class VisualExperimentSweepTests(unittest.TestCase):
             visual_experiments.EXPECTED_PROFILE_IDS,
         )
         self.assertEqual(sweep.axis_order, visual_experiments.SWEEP_AXIS_ORDER)
+        self.assertEqual(sweep.status, "historical")
         broad = sweep.tier("broad")
         golden = sweep.tier("golden")
         self.assertEqual(len(broad.looks), 243)
@@ -146,6 +148,15 @@ class VisualExperimentSweepTests(unittest.TestCase):
             ),
         )
 
+    def test_historical_sweep_validates_but_cannot_capture(self) -> None:
+        registry = visual_experiments.load_registry()
+        sweep = visual_experiments.load_sweep_spec(registry=registry)
+        with self.assertRaisesRegex(
+            visual_experiments.ExperimentError,
+            "historical review provenance",
+        ):
+            visual_experiments.require_capturable_sweep(sweep)
+
     def test_sweep_rejects_matrix_drift_and_unknown_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root, registry, path = self.make_fixture(directory)
@@ -166,10 +177,30 @@ class VisualExperimentSweepTests(unittest.TestCase):
             ):
                 visual_experiments.load_sweep_spec(path, registry, root)
 
+            raw.pop("surprise")
+            raw["status"] = "active"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "must remain historical",
+            ):
+                visual_experiments.load_sweep_spec(path, registry, root)
+
+            raw["status"] = "historical"
+            raw.pop("status")
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "missing fields.*status"
+            ):
+                visual_experiments.load_sweep_spec(path, registry, root)
+
     def test_sweep_composes_height_palette_light_haze_and_runtime_edge(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root, registry, path = self.make_fixture(directory)
-            sweep = visual_experiments.load_sweep_spec(path, registry, root)
+            sweep = dataclasses.replace(
+                visual_experiments.load_sweep_spec(path, registry, root),
+                status="active",
+            )
             look = next(
                 item
                 for item in sweep.tier("broad").looks
@@ -257,7 +288,7 @@ class VisualExperimentSweepTests(unittest.TestCase):
                 tuple(capture.id for capture in registry.captures[:6]),
             )
 
-    def test_selection_cli_validates_and_dry_runs_without_output(self) -> None:
+    def test_selection_cli_validates_but_refuses_historical_capture(self) -> None:
         registry = visual_experiments.load_registry()
         sweep = visual_experiments.load_sweep_spec(registry=registry)
         with tempfile.TemporaryDirectory() as directory:
@@ -281,9 +312,11 @@ class VisualExperimentSweepTests(unittest.TestCase):
             self.assertEqual(validation["render_count"], 1)
 
             output_root = root / "dry-run-output"
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                result = visual_experiments.main(
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error), self.assertRaises(
+                SystemExit
+            ) as raised:
+                visual_experiments.main(
                     [
                         "run-selection",
                         "--selection",
@@ -296,10 +329,8 @@ class VisualExperimentSweepTests(unittest.TestCase):
                         "--dry-run",
                     ]
                 )
-            self.assertEqual(result, 0)
-            plan = json.loads(output.getvalue())
-            self.assertEqual(plan["mode"], "selection-dry-run")
-            self.assertEqual(plan["render_count"], 1)
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("historical review provenance", error.getvalue())
             self.assertFalse(output_root.exists())
 
     def test_material_interior_and_geometric_matrices_resolve_runtime(self) -> None:
@@ -489,7 +520,9 @@ class VisualExperimentSweepTests(unittest.TestCase):
 
     def test_existing_valid_shard_resumes_without_build_or_capture(self) -> None:
         registry = visual_experiments.load_registry()
-        sweep = visual_experiments.load_sweep_spec(registry=registry)
+        sweep = dataclasses.replace(
+            visual_experiments.load_sweep_spec(registry=registry), status="active"
+        )
         tier = sweep.tier("golden")
         with tempfile.TemporaryDirectory() as directory:
             output_root = pathlib.Path(directory) / "sweeps"
@@ -533,7 +566,10 @@ class VisualExperimentSweepTests(unittest.TestCase):
     def test_fake_complete_shard_publishes_and_then_resumes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root, registry, path = self.make_fixture(directory)
-            sweep = visual_experiments.load_sweep_spec(path, registry, root)
+            sweep = dataclasses.replace(
+                visual_experiments.load_sweep_spec(path, registry, root),
+                status="active",
+            )
             tier = sweep.tier("golden")
             provenance = {
                 "git_head": "a" * 40,
@@ -606,7 +642,10 @@ class VisualExperimentSweepTests(unittest.TestCase):
     def test_fake_selection_shard_publishes_and_resumes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root, registry, path = self.make_fixture(directory)
-            sweep = visual_experiments.load_sweep_spec(path, registry, root)
+            sweep = dataclasses.replace(
+                visual_experiments.load_sweep_spec(path, registry, root),
+                status="active",
+            )
             base_id = sweep.tier("broad").looks[0].id
             selection_path = self.write_selection(
                 root,

@@ -82,7 +82,7 @@ INITIAL_SCREEN_PROFILE_IDS = (
     "e00-baseline",
     "l03-golden",
     "l05-soft-fill-noon",
-    "z01-haze-light",
+    "z02-haze-medium",
     "v03-fog-observed-only",
     "v04-fog-softened",
     "m01-matte-terrain",
@@ -224,6 +224,7 @@ class ProfileSpec:
     crystal_light_profile: Optional[str]
     level_height: Optional[float]
     palette: Optional[str]
+    baseline_alias: bool
 
 
 @dataclass(frozen=True)
@@ -302,6 +303,7 @@ class SweepSpec:
 
     path: pathlib.Path
     id: str
+    status: str
     registry: str
     axis_order: Tuple[str, ...]
     axes: Mapping[str, Tuple[Mapping[str, Any], ...]]
@@ -707,6 +709,28 @@ def load_lighting_candidate(path: pathlib.Path) -> Tuple[str, Dict[str, Any]]:
 
 
 def patch_cycle_noon_lighting(text: str, overrides: Mapping[str, Any]) -> str:
+    block_start, block_end, block = _cycle_noon_block(text)
+    for field, value in overrides.items():
+        replacement = (
+            "(" + ", ".join(_format_float(channel) for channel in value) + ")"
+            if isinstance(value, list)
+            else _format_float(value)
+        )
+        pattern = re.compile(
+            rf"^(?P<indent>\s*){re.escape(field)}:\s*.*?,\s*$", re.MULTILINE
+        )
+        block, count = pattern.subn(
+            lambda match: f'{match.group("indent")}{field}: {replacement},',
+            block,
+        )
+        if count != 1:
+            raise ExperimentError(
+                f"default lighting noon keyframe needs exactly one {field} field"
+            )
+    return text[:block_start] + block + text[block_end:]
+
+
+def _cycle_noon_block(text: str) -> Tuple[int, int, str]:
     markers = list(
         re.finditer(r"^\s*time_hours:\s*12\.0,\s*$", text, re.MULTILINE)
     )
@@ -729,31 +753,34 @@ def patch_cycle_noon_lighting(text: str, overrides: Mapping[str, Any]) -> str:
                 break
     if block_end is None:
         raise ExperimentError("default lighting noon keyframe is unterminated")
-    block = text[block_start:block_end]
-    for field, value in overrides.items():
-        replacement = (
-            "(" + ", ".join(_format_float(channel) for channel in value) + ")"
-            if isinstance(value, list)
-            else _format_float(value)
-        )
+    return block_start, block_end, text[block_start:block_end]
+
+
+def cycle_noon_lighting_values(text: str, fields: Iterable[str]) -> Dict[str, Any]:
+    """Read selected typed values from the unique noon keyframe."""
+
+    _, _, block = _cycle_noon_block(text)
+    values: Dict[str, Any] = {}
+    for field in fields:
         pattern = re.compile(
-            rf"^(?P<indent>\s*){re.escape(field)}:\s*[^,\n]+(?:,[^\n]*)?,\s*$",
-            re.MULTILINE,
+            rf"^\s*{re.escape(field)}:\s*(?P<value>.*),\s*$", re.MULTILINE
         )
-        # RGB tuples contain commas, while scalar fields do not. Matching the
-        # complete authored line keeps the patch deliberately narrow.
-        pattern = re.compile(
-            rf"^(?P<indent>\s*){re.escape(field)}:\s*.*?,\s*$", re.MULTILINE
-        )
-        block, count = pattern.subn(
-            lambda match: f'{match.group("indent")}{field}: {replacement},',
-            block,
-        )
-        if count != 1:
+        matches = list(pattern.finditer(block))
+        if len(matches) != 1:
             raise ExperimentError(
                 f"default lighting noon keyframe needs exactly one {field} field"
             )
-    return text[:block_start] + block + text[block_end:]
+        raw = matches[0].group("value").strip()
+        if LIGHTING_OVERRIDE_FIELDS[field] == "rgb":
+            if not raw.startswith("(") or not raw.endswith(")"):
+                raise ExperimentError(f"default lighting noon {field} must be RGB")
+            channels = [part.strip() for part in raw[1:-1].split(",")]
+            if len(channels) != 3:
+                raise ExperimentError(f"default lighting noon {field} must be RGB")
+            values[field] = [float(channel) for channel in channels]
+        else:
+            values[field] = float(raw)
+    return values
 
 
 def load_registry(
@@ -828,8 +855,8 @@ def load_registry(
             prefix="assets",
         )
     baseline_height = _number(baseline["level_height"], context="baseline.level_height")
-    if baseline_height != 0.4:
-        raise ExperimentError("baseline.level_height must remain the shipped 0.4")
+    if baseline_height != 0.35:
+        raise ExperimentError("baseline.level_height must remain the shipped 0.35")
     baseline["level_height"] = baseline_height
 
     world_text = (repository_root / baseline["world"]).read_text(encoding="utf-8")
@@ -1047,6 +1074,7 @@ def load_registry(
                 "crystal_light_profile",
                 "level_height",
                 "palette",
+                "baseline_alias",
             ),
             required=("id", "label", "axis"),
         )
@@ -1119,6 +1147,9 @@ def load_registry(
             else None
         )
         palette = profile_raw.get("palette")
+        baseline_alias = profile_raw.get("baseline_alias", False)
+        if not isinstance(baseline_alias, bool):
+            raise ExperimentError(f"profile {profile_id} baseline_alias must be boolean")
         if axis == "baseline":
             if time_hours != 12.0 or any(
                 item is not None
@@ -1273,13 +1304,21 @@ def load_registry(
                 context=f"profile {profile_id} palette",
                 prefix="tools/visual_experiments/palettes",
             )
-            palette_id, _ = load_palette_candidate(
+            palette_id, colors = load_palette_candidate(
                 repository_root / palette, baseline_colors
             )
             if palette_id != profile_id:
                 raise ExperimentError(
                     f"palette {palette} id {palette_id!r} does not match {profile_id!r}"
                 )
+            semantic_alias = colors == baseline_colors
+            if semantic_alias != baseline_alias:
+                qualifier = (
+                    "must declare baseline_alias"
+                    if semantic_alias
+                    else "is not a baseline alias"
+                )
+                raise ExperimentError(f"palette profile {profile_id} {qualifier}")
         if lighting_candidate is not None:
             lighting_candidate = _existing_regular_file(
                 repository_root,
@@ -1309,6 +1348,24 @@ def load_registry(
                 raise ExperimentError(
                     f"lighting profile {profile_id} must change a non-haze light field"
                 )
+            baseline_values = cycle_noon_lighting_values(
+                (repository_root / baseline["default_lighting"]).read_text(
+                    encoding="utf-8"
+                ),
+                overrides,
+            )
+            semantic_alias = overrides == baseline_values
+            if semantic_alias != baseline_alias:
+                qualifier = (
+                    "must declare baseline_alias"
+                    if semantic_alias
+                    else "is not a baseline alias"
+                )
+                raise ExperimentError(f"lighting profile {profile_id} {qualifier}")
+        elif baseline_alias and palette is None:
+            raise ExperimentError(
+                f"profile {profile_id} may alias only a palette or lighting candidate"
+            )
         profiles.append(
             ProfileSpec(
                 profile_id,
@@ -1323,6 +1380,7 @@ def load_registry(
                 crystal_light_profile,
                 level_height,
                 palette,
+                baseline_alias,
             )
         )
     visibility_modes = tuple(
@@ -1582,13 +1640,35 @@ def load_sweep_spec(
     raw = _strict_object(
         _read_json(path, context="sweep spec"),
         context="sweep spec",
-        allowed=("version", "id", "registry", "axis_order", "axes", "tiers"),
-        required=("version", "id", "registry", "axis_order", "axes", "tiers"),
+        allowed=(
+            "version",
+            "id",
+            "status",
+            "registry",
+            "axis_order",
+            "axes",
+            "tiers",
+        ),
+        required=(
+            "version",
+            "id",
+            "status",
+            "registry",
+            "axis_order",
+            "axes",
+            "tiers",
+        ),
     )
     if raw["version"] != 1:
         raise ExperimentError("sweep spec version must be 1")
     if raw["id"] != "night-aesthetic-v1":
         raise ExperimentError("sweep id must remain 'night-aesthetic-v1'")
+    status = raw["status"]
+    if status != "historical":
+        raise ExperimentError(
+            "sweep 'night-aesthetic-v1' must remain historical because its "
+            "captured recipes predate the promoted baseline"
+        )
     registry_relative = _safe_relative_path(
         raw["registry"], context="sweep.registry"
     )
@@ -1729,6 +1809,7 @@ def load_sweep_spec(
     semantic = {
         "version": raw["version"],
         "id": raw["id"],
+        "status": status,
         "registry": registry_relative,
         "axis_order": list(SWEEP_AXIS_ORDER),
         "axes": axes,
@@ -1744,12 +1825,23 @@ def load_sweep_spec(
     return SweepSpec(
         path=path.resolve(),
         id=raw["id"],
+        status=status,
         registry=registry_relative,
         axis_order=SWEEP_AXIS_ORDER,
         axes=axes,
         tiers=tiers,
         semantic_sha256=sha256_bytes(canonical_json(semantic).encode("utf-8")),
     )
+
+
+def require_capturable_sweep(sweep: SweepSpec) -> None:
+    """Reject captures from retained review provenance after its baseline moved."""
+
+    if sweep.status != "active":
+        raise ExperimentError(
+            f"sweep {sweep.id!r} is historical review provenance and cannot be "
+            "rerun against the promoted baseline"
+        )
 
 
 def _parse_selection_capture(raw: Any, *, context: str) -> CaptureSpec:
@@ -2471,6 +2563,11 @@ def _asset_relative(path: str) -> str:
 
 
 def expected_resolved_axis(registry: Registry, profile: ProfileSpec) -> Dict[str, Any]:
+    if profile.baseline_alias:
+        return {
+            "kind": "promoted-baseline-alias",
+            "source": profile.lighting_candidate or profile.palette,
+        }
     if profile.axis == "visibility":
         return {"kind": "review-fog-mode", "mode": profile.fog_mode}
     if profile.axis == "materials":
@@ -2550,7 +2647,7 @@ def apply_profile(
         )
         modified.append(_asset_relative(relative))
 
-    if profile.palette is not None:
+    if profile.palette is not None and not profile.baseline_alias:
         palette_id, colors = load_palette_candidate(
             repository_root / profile.palette,
             parse_palette_colors(
@@ -2570,7 +2667,7 @@ def apply_profile(
         modified.append(_asset_relative(relative))
 
     lighting_overrides = None
-    if profile.lighting_candidate is not None:
+    if profile.lighting_candidate is not None and not profile.baseline_alias:
         candidate_id, lighting_overrides = load_lighting_candidate(
             repository_root / profile.lighting_candidate
         )
@@ -2668,6 +2765,7 @@ def sweep_profile(look: SweepLook) -> ProfileSpec:
         crystal_light_profile=None,
         level_height=float(height["level_height"]),
         palette=str(palette["palette"]) if "palette" in palette else None,
+        baseline_alias=False,
     )
 
 
@@ -2861,6 +2959,7 @@ def selection_profile(recipe: SelectionRecipe) -> ProfileSpec:
         ),
         level_height=base.level_height,
         palette=base.palette,
+        baseline_alias=False,
     )
 
 
@@ -3113,6 +3212,24 @@ def comparison_report_metadata(
         "selection_id": selection_id,
         "baseline_profile_id": baseline_id if baseline_id in profile_ids else None,
         "profile_ids": list(profile_ids),
+        "profile_behaviors": [
+            {
+                "id": profile.id,
+                "label": profile.label,
+                "axis": profile.axis,
+                "time_hours": profile.time_hours,
+                "lighting_asset": profile.lighting_asset,
+                "lighting_candidate": profile.lighting_candidate,
+                "fog_mode": profile.fog_mode,
+                "material_treatment": profile.material_treatment,
+                "edge_treatment": profile.edge_treatment,
+                "crystal_light_profile": profile.crystal_light_profile,
+                "level_height": profile.level_height,
+                "palette": profile.palette,
+                "baseline_alias": profile.baseline_alias,
+            }
+            for profile in profiles
+        ],
         "capture_ids": list(capture_ids),
         "render_count": len(profile_ids) * len(capture_ids),
         "comparison_count": len(candidates) * len(capture_ids),
@@ -3907,11 +4024,11 @@ def validate_complete_pack(
         expected_modified_paths = []
         if profile.level_height is not None:
             expected_modified_paths.append(registry.baseline["world"])
-        if profile.palette is not None:
+        if profile.palette is not None and not profile.baseline_alias:
             expected_modified_paths.append(registry.baseline["palette"])
         if profile.lighting_asset is not None:
             expected_modified_paths.append(registry.baseline["scenarios"])
-        if profile.lighting_candidate is not None:
+        if profile.lighting_candidate is not None and not profile.baseline_alias:
             expected_modified_paths.append(registry.baseline["default_lighting"])
         expected_profile_fields = {
             "id",
@@ -4895,6 +5012,7 @@ def run_sweep_shard(
 ) -> Tuple[pathlib.Path, bool]:
     """Capture one atomic shard; return ``(path, resumed)``."""
 
+    require_capturable_sweep(sweep)
     looks = tier.looks_for_shard(shard)
     captures_by_id = {capture.id: capture for capture in registry.captures}
     captures = tuple(captures_by_id[capture_id] for capture_id in tier.capture_ids)
@@ -5472,6 +5590,7 @@ def run_selection_shard(
 ) -> Tuple[pathlib.Path, bool]:
     """Capture one adaptive selection shard atomically or validate its resume."""
 
+    require_capturable_sweep(sweep)
     recipes = selection.recipes_for_shard(shard)
     output = selection_shard_output(output_root, sweep, selection, shard)
     asset_source_digest = tree_digest(repository_root / "assets")
@@ -6292,6 +6411,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     end="",
                 )
                 return 0
+            require_capturable_sweep(sweep)
             limits = _resource_limits_from_arguments(arguments)
             selection.recipes_for_shard(arguments.shard)
             output_root = resolve_sweep_output_root(arguments.output_root)
@@ -6346,6 +6466,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             "schema_version": 1,
                             "status": "valid",
                             "sweep_id": sweep.id,
+                            "sweep_status": sweep.status,
                             "semantic_sha256": sweep.semantic_sha256,
                             "canonical_profile_ids": [
                                 profile.id for profile in registry.profiles
@@ -6377,6 +6498,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     end="",
                 )
                 return 0
+            require_capturable_sweep(sweep)
             limits = _resource_limits_from_arguments(arguments)
             tier = sweep.tier(arguments.tier)
             tier.looks_for_shard(arguments.shard)

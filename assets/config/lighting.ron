@@ -6,8 +6,8 @@
 // edit the keyframes for time-varying light, colour, sky, fog, and exposure. Only the
 // cloud shape fields are inherited unchanged by every cycle keyframe.
 //
-// The values below are the game's shipped noon look. Sky fill and haze are off at
-// this baseline, although non-noon cycle keyframes can enable them.
+// The values below are the game's flat noon baseline. Sky fill and haze are off there,
+// although cycle keyframes can enable them.
 (
     // The static/noon key light baseline. Its colour and angle decide the shape of
     // everything: shadows are what model flat-shaded terrain.
@@ -152,7 +152,7 @@
                 sun_halo_strength: 0.65,
                 moon_halo_strength: 0.0,
             ),
-            // This keyframe deliberately reproduces every shipped noon lighting value.
+            // Selected clear-noon anchor: the flat baseline with light atmospheric haze.
             (
                 time_hours: 12.0,
                 sun_azimuth_degrees: 38.172066,
@@ -169,7 +169,7 @@
                 cloud_color: (0.97, 0.98, 1.0),
                 fog_color: (0.62, 0.72, 0.82),
                 fog_sun_color: (1.0, 0.78, 0.50),
-                fog_density: 0.0,
+                fog_density: 0.0003,
                 exposure_ev100: 9.7,
                 sun_halo_strength: 0.12,
                 moon_halo_strength: 0.0,
@@ -190,7 +190,7 @@
                 cloud_color: (1.0, 0.88, 0.80),
                 fog_color: (0.60, 0.67, 0.76),
                 fog_sun_color: (1.0, 0.65, 0.35),
-                fog_density: 0.0002,
+                fog_density: 0.0003,
                 exposure_ev100: 9.2,
                 sun_halo_strength: 0.38,
                 moon_halo_strength: 0.0,

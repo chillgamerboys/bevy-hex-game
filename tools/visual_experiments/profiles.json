@@ -8,7 +8,7 @@
     "scenarios": "assets/config/scenarios.ron",
     "default_lighting": "assets/config/lighting.ron",
     "overcast_lighting": "assets/config/lighting/overcast.ron",
-    "level_height": 0.4
+    "level_height": 0.35
   },
   "captures": [
     {
@@ -138,10 +138,11 @@
     },
     {
       "id": "z01-haze-light",
-      "label": "Light distance haze",
+      "label": "Promoted light-haze baseline control",
       "axis": "haze",
       "time_hours": 12.0,
-      "lighting_candidate": "tools/visual_experiments/lighting/z01-haze-light.json"
+      "lighting_candidate": "tools/visual_experiments/lighting/z01-haze-light.json",
+      "baseline_alias": true
     },
     {
       "id": "z02-haze-medium",
@@ -250,10 +251,11 @@
     },
     {
       "id": "p02-high-separation",
-      "label": "High-separation world palette",
+      "label": "Promoted high-separation baseline control",
       "axis": "palette",
       "time_hours": 12.0,
-      "palette": "tools/visual_experiments/palettes/p02-high-separation.json"
+      "palette": "tools/visual_experiments/palettes/p02-high-separation.json",
+      "baseline_alias": true
     }
   ]
 }

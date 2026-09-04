@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import dataclasses
 import json
 import os
 import pathlib
@@ -184,6 +185,34 @@ class VisualExperimentTests(unittest.TestCase):
             path.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(
                 visual_experiments.ExperimentError, "mixes experiment axes"
+            ):
+                visual_experiments.load_registry(path, root)
+
+    def test_registry_requires_explicit_markers_for_promoted_baseline_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, path, raw = self.make_fixture(directory)
+            palette = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "p02-high-separation"
+            )
+            palette.pop("baseline_alias")
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "must declare baseline_alias"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            palette["baseline_alias"] = True
+            haze = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "z01-haze-light"
+            )
+            haze["baseline_alias"] = False
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "must declare baseline_alias"
             ):
                 visual_experiments.load_registry(path, root)
 
@@ -632,7 +661,7 @@ class VisualExperimentTests(unittest.TestCase):
                 "e00-baseline": [],
                 "l04-overcast": ["assets/config/scenarios.ron"],
                 "l05-soft-fill-noon": ["assets/config/lighting.ron"],
-                "z01-haze-light": ["assets/config/lighting.ron"],
+                "z01-haze-light": [],
                 "v02-fog-dimmed": [],
                 "m01-matte-terrain": [],
                 "e01-micro-bevel-004": [],
@@ -640,7 +669,7 @@ class VisualExperimentTests(unittest.TestCase):
                 "h01-flat-030": [
                     "assets/config/worlds/procedural-grand-v3-baseline.ron"
                 ],
-                "p02-high-separation": ["assets/art/palette.ron"],
+                "p02-high-separation": [],
             }
             for profile_id, changed in expected.items():
                 with self.subTest(profile=profile_id):
@@ -1260,6 +1289,8 @@ class VisualExperimentTests(unittest.TestCase):
             root, path, _ = self.make_fixture(directory)
             registry = visual_experiments.load_registry(path, root)
             profile = registry.profile("e00-baseline")
+            alias = registry.profile("p02-high-separation")
+            profiles = (profile, alias)
             provenance = {
                 "git_head": "a" * 40,
                 "worktree_dirty": False,
@@ -1281,7 +1312,7 @@ class VisualExperimentTests(unittest.TestCase):
                 visual_experiments.run_matrix(
                     repository_root=root,
                     registry=registry,
-                    profiles=(profile,),
+                    profiles=profiles,
                     provenance=provenance,
                     output=output,
                     source_hashes=source_hashes,
@@ -1291,6 +1322,16 @@ class VisualExperimentTests(unittest.TestCase):
             self.assertEqual(
                 len(list((output / "profiles" / profile.id).glob("*.png"))), 8
             )
+            self.assertEqual(
+                len(list((output / "profiles" / alias.id).glob("*.png"))), 8
+            )
+            manifest = json.loads(
+                (output / "manifest.json").read_text(encoding="utf-8")
+            )
+            alias_state = next(
+                item for item in manifest["profiles"] if item["id"] == alias.id
+            )
+            self.assertEqual(alias_state["modified_assets"], [])
             self.assertFalse((output / "runtime").exists())
             self.assertIn(
                 "COMPLETE CAPTURE SET",
@@ -1307,7 +1348,7 @@ class VisualExperimentTests(unittest.TestCase):
                 visual_experiments.ExperimentError, "file set differs"
             ):
                 visual_experiments.validate_complete_pack(
-                    output, registry, (profile,)
+                    output, registry, profiles
                 )
 
             (output / "unexpected.txt").unlink()
@@ -1324,7 +1365,7 @@ class VisualExperimentTests(unittest.TestCase):
                 visual_experiments.ExperimentError, "schema/status"
             ):
                 visual_experiments.validate_complete_pack(
-                    output, registry, (profile,)
+                    output, registry, profiles
                 )
 
     def test_candidate_html_pairs_every_capture_with_baseline_by_axis(self) -> None:
@@ -1457,6 +1498,18 @@ class VisualExperimentTests(unittest.TestCase):
             profiles, registry.captures_for("screen")
         )
         self.assertNotEqual(first["semantic_sha256"], changed["semantic_sha256"])
+
+        baseline = registry.profile("e00-baseline")
+        alias = registry.profile("p02-high-separation")
+        alias_report = visual_experiments.comparison_report_metadata(
+            (baseline, alias), captures
+        )
+        redefined_alias = visual_experiments.comparison_report_metadata(
+            (baseline, dataclasses.replace(alias, baseline_alias=False)), captures
+        )
+        self.assertNotEqual(
+            alias_report["semantic_sha256"], redefined_alias["semantic_sha256"]
+        )
 
     def test_matrix_failure_leaves_no_published_or_staged_pack(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

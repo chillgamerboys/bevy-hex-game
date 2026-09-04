@@ -746,7 +746,6 @@ fn clear_session_resources(mut commands: Commands) {
     commands.remove_resource::<ResolvedMapSeed>();
     commands.remove_resource::<SimSeeds>();
     commands.remove_resource::<ScenarioTimeOverride>();
-    commands.remove_resource::<TimeOfDay>();
     commands.remove_resource::<ActiveScenario>();
 }
 
@@ -1748,6 +1747,9 @@ pub(crate) mod tests {
             )
                 .chain(),
         );
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<GlobalAmbientLight>()
+            .add_plugins(hex_world::sky::plugin);
         app.insert_resource(lighting);
         app.insert_resource(ScenarioTimeOverride(Some(18.5)));
         app.add_systems(

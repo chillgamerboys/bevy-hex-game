@@ -25,7 +25,7 @@ one-factor profiles:
 | `l04-overcast` | Shipped static `config/lighting/overcast.ron` |
 | `l05-soft-fill-noon` | Softer clear-noon key lighting and brighter fill |
 | `l06-high-contrast-noon` | Stronger clear-noon directional contrast |
-| `z01-haze-light` | Light clear-noon atmospheric haze |
+| `z01-haze-light` | Promoted light-haze baseline equivalence control |
 | `z02-haze-medium` | Medium clear-noon atmospheric haze |
 | `i01-crystal-tight` | Set every generated crystal point-light range to `3.0` |
 | `i02-crystal-broad` | Set every generated crystal point-light range to `7.0` |
@@ -41,7 +41,7 @@ one-factor profiles:
 | `h01-flat-030` | `level_height: 0.30` |
 | `h02-tall-055` | `level_height: 0.55` |
 | `p01-muted-earth` | Complete muted-earth world palette |
-| `p02-high-separation` | Complete high-separation world palette |
+| `p02-high-separation` | Promoted high-separation baseline equivalence control |
 
 The two candidate palettes live under `tools/visual_experiments/palettes/`, outside
 the shipped asset tree. They contain exactly the shipped swatch vocabulary and only
@@ -83,8 +83,16 @@ rather than changing the canonical one-factor profiles.
 
 The separate strict specification
 `tools/visual_experiments/sweeps/night-aesthetic-v1.json` composes presentation axes
-without weakening or editing the canonical twenty-four-profile registry. Validate both
-contracts before capture:
+without weakening or editing the canonical twenty-four-profile registry. It is now
+retained as **historical review provenance**: the selected high-separation palette and
+light noon haze were promoted to the shipped baseline, so its former `pshipped` versus
+`pseparate` and `z000` versus `z003` axes no longer produce distinct current renders.
+Its golden-hour haze implementation also targeted the noon anchor. The tool therefore
+allows validation and report inspection but refuses new broad, golden, or adaptive
+captures from this specification. Create a new sweep against the promoted baseline for
+future experiments.
+
+Validate both historical and canonical contracts with:
 
 ```sh
 python3 tools/visual_experiments.py validate
@@ -92,15 +100,17 @@ python3 tools/visual_experiments.py validate-sweep \
   --spec tools/visual_experiments/sweeps/night-aesthetic-v1.json
 ```
 
-The mandatory `broad` tier is the exact Cartesian product of three voxel heights
-(`0.30`, `0.35`, `0.40`), three noon light rigs (balanced, soft-fill, high-contrast),
-three palettes (shipped, muted earth, high separation), three haze states (`0`,
-`0.0003`, `0.0007`), and three normal responses (current, `0.04`, `0.08`). It therefore
-contains exactly 243 stable look IDs. Contiguous one-based shards keep one height per
-81-look capture boundary. The optional `golden` tier replaces the three noon rigs with
-one `16.5`-hour state and contains one additional 81-look shard.
+At the time of the original review, the `broad` tier described the Cartesian product
+of three voxel heights (`0.30`, `0.35`, `0.40`), three noon light rigs (balanced,
+soft-fill, high-contrast), three palettes (shipped, muted earth, high separation),
+three haze states (`0`, `0.0003`, `0.0007`), and three normal responses (current,
+`0.04`, `0.08`). It therefore contains exactly 243 stable recipe IDs (not 243 distinct
+renders against today's promoted baseline). Contiguous one-based shards keep one height
+per 81-look capture boundary. The optional `golden` tier replaces the three noon rigs
+with one `16.5`-hour state and contains one additional 81-look shard.
 
-Inspect a shard without creating output or invoking Cargo:
+The former capture command is shown only for provenance; it now fails before creating
+output or invoking Cargo:
 
 ```sh
 python3 tools/visual_experiments.py run-sweep \
@@ -111,7 +121,7 @@ python3 tools/visual_experiments.py run-sweep \
   --dry-run
 ```
 
-Remove `--dry-run` to capture. The destination is
+Historical outputs used the destination
 `<output-root>/night-aesthetic-v1/<tier>/shard-NN`. Each shard is staged privately and
 published with an atomic no-replace rename only after all 81 PNGs, sidecars, hashes,
 and indexes validate. Repeating the exact command validates and resumes an already
@@ -241,7 +251,7 @@ exact resume checks as `run-sweep`. Published selection manifests are also accep
 ### Initial screening set
 
 Use the named `initial` selection for the first bounded pass. It retains the noon
-baseline and nine candidates: golden hour, soft-fill noon, light haze, observed-only and
+baseline and nine candidates: golden hour, soft-fill noon, medium haze, observed-only and
 softened visibility, matte terrain, both voxel-height ratios, and muted earth. This is
 the smallest canonical selection that covers outdoor light, atmosphere, tactical
 visibility, materials, both sides of the voxel-height experiment, and palette without
@@ -292,7 +302,7 @@ sidecars.
 Validation reads the strict JSON schemas and the referenced sources. It rejects unknown
 fields, unsafe paths, incomplete palettes, unknown or repeated tactical-fog modes, mixed
 experiment axes, a non-static overcast file, drift from the canonical Grand
-scenario/world/lighting/palette paths or seed, and drift from the shipped `0.4` baseline.
+scenario/world/lighting/palette paths or seed, and drift from the shipped `0.35` baseline.
 It writes nothing and does not invoke Cargo:
 
 ```sh
@@ -315,7 +325,10 @@ python3 tools/visual_experiments.py run \
 Run the focused tool tests without building the game:
 
 ```sh
-python3 -m unittest tools/test_visual_experiments.py -v
+python3 -m unittest \
+  tools/test_visual_experiments.py \
+  tools/test_visual_experiment_sweeps.py \
+  -v
 ```
 
 ## Capture a pack

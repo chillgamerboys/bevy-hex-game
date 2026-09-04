@@ -48,6 +48,8 @@ default = []
 # Store-neutral EOS integration. Merely compiling this feature does not load an EOS
 # runtime or open a socket; a configured application flow must install the backend.
 online = ["dep:hex_online"]
+# Local render-only time override shared by the ordinary development build.
+dev-time-preview = ["hex_ui/dev-tools", "hex_world/dev-time-preview"]
 # Development tooling: world inspector, debug overlays, and live asset reload so
 # editing a file under assets/config/ takes effect without restarting.
 # `bevy/dynamic_linking` links Bevy as a shared library instead of statically
@@ -60,7 +62,7 @@ dev = [
     "bevy/file_watcher",
     "bevy/dynamic_linking",
     "hex_core/dev-input",
-    "hex_ui/dev-tools",
+    "dev-time-preview",
 ]
 # Deterministic procedural-map launch and renderer capture automation. Kept
 # separate from `dev` so review packs exercise an otherwise release-shaped build.

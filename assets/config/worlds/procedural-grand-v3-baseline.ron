@@ -4,7 +4,7 @@
 // own axes without changing the accepted biome topology.
 (
     grid_radius: 187,
-    level_height: 0.4,
+    level_height: 0.35,
     terrain: Procedural((
         generator_version: 3,
         layout: Schematic((

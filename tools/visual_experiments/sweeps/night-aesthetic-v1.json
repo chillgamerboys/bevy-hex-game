@@ -1,6 +1,7 @@
 {
   "version": 1,
   "id": "night-aesthetic-v1",
+  "status": "historical",
   "registry": "tools/visual_experiments/profiles.json",
   "axis_order": [
     "height",
@@ -23,7 +24,7 @@
       },
       {
         "id": "h040",
-        "label": "0.40 shipped height ratio",
+        "label": "Legacy 0.40 height ratio",
         "level_height": 0.4
       }
     ],

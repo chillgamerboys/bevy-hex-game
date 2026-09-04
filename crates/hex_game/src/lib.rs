@@ -30,7 +30,7 @@ mod casting;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod creation_store;
-#[cfg(feature = "dev")]
+#[cfg(feature = "dev-time-preview")]
 mod dev_time_controls;
 mod fog;
 mod menus;
@@ -322,11 +322,10 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((
-            hex_dev::plugin,
-            content_debug::plugin,
-            dev_time_controls::plugin,
-        ));
+        app.add_plugins((hex_dev::plugin, content_debug::plugin));
+
+        #[cfg(feature = "dev-time-preview")]
+        app.add_plugins(dev_time_controls::plugin);
     }
 }
 
