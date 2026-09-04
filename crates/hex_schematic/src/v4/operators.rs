@@ -28,7 +28,8 @@ pub(super) fn stack(level: i32, cap: &str, strata: &StrataSpec) -> OpResult<Vec<
     if !(1..=65_535).contains(&level) {
         return Err(format!("terrain level {level} outside 1..=65535"));
     }
-    let soil_bottom = (i64::from(level) - i64::from(strata.soil_depth)).max(1) as i32;
+    let soil_bottom = i32::try_from((i64::from(level) - i64::from(strata.soil_depth)).max(1))
+        .map_err(|error| error.to_string())?;
     let mut runs = vec![run(0, 1, &strata.bedrock)];
     if soil_bottom > 1 {
         runs.push(run(1, soil_bottom, &strata.rock));
@@ -84,7 +85,7 @@ fn smooth_noise(seed: u64, id: &str, p: WorldHex, amplitude: u32) -> OpResult<i3
             sum += value * wq * wr;
         }
     }
-    Ok((sum / (scale * scale)) as i32)
+    i32::try_from(sum / (scale * scale)).map_err(|error| error.to_string())
 }
 
 pub(super) fn base(region: &RegionSpec, recipe: &RegionRecipe, seed: u64) -> OpResult<RegionBuild> {
@@ -225,7 +226,13 @@ fn shoulders(
         let (old, cap) = terrain(build, p)?;
         let level = i64::from(target)
             + (i64::from(old) - i64::from(target)) * i64::from(d) / i64::from(width);
-        set_terrain(build, p, level as i32, &cap, recipe)?;
+        set_terrain(
+            build,
+            p,
+            i32::try_from(level).map_err(|error| error.to_string())?,
+            &cap,
+            recipe,
+        )?;
     }
     Ok(())
 }
@@ -347,9 +354,11 @@ fn controlled_line(points: &[GradePoint], falls: &[usize]) -> OpResult<Vec<Grade
             let level = if falls.contains(&segment) && i < steps {
                 a.level
             } else {
-                (i64::from(a.level)
-                    + (i64::from(b.level) - i64::from(a.level)) * i as i64 / steps as i64)
-                    as i32
+                i32::try_from(
+                    i64::from(a.level)
+                        + (i64::from(b.level) - i64::from(a.level)) * i as i64 / steps as i64,
+                )
+                .map_err(|error| error.to_string())?
             };
             output.push(GradePoint { column: p, level });
         }
@@ -580,11 +589,27 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
         }
     }
     for (p, level) in deck {
+        if build
+            .liquids
+            .get(&p)
+            .is_some_and(|liquid| level - bridge.thickness as i32 + 1 < liquid.top)
+        {
+            return Err(format!(
+                "bridge {} intersects liquid at {p:?}; raise the deck",
+                bridge.id
+            ));
+        }
         let columns = build
             .columns
             .get_mut(&p)
             .ok_or_else(|| format!("bridge {} leaves region", bridge.id))?;
         let bottom = level - bridge.thickness as i32 + 1;
+        if columns.last().is_some_and(|run| run.top > level + 1) {
+            return Err(format!(
+                "bridge {} is buried beneath terrain at {p:?}",
+                bridge.id
+            ));
+        }
         // Endpoints can be rooted in solid abutments; crossing intervals must retain air/water below.
         volume::replace(columns, bottom, level + 1, Some(&bridge.material))?;
         build.reserved.insert(p);
@@ -611,9 +636,15 @@ pub(super) fn cave(
         if build.liquids.contains_key(&p) {
             return Err(format!("cave {} intersects liquid at {p:?}", cave.id));
         }
-        let (old, cap) = terrain(build, p)?;
+        let (old, _) = terrain(build, p)?;
         if old < roof_top - 1 {
-            set_terrain(build, p, roof_top - 1, &cap, recipe)?;
+            let columns = build
+                .columns
+                .get_mut(&p)
+                .ok_or_else(|| "missing cave column".to_string())?;
+            // A vault adds only above the old exterior, preserving existing
+            // lower interiors instead of replacing the entire column stack.
+            volume::insert(columns, run(old + 1, roof_top, &recipe.strata.rock))?;
         }
         let columns = build
             .columns

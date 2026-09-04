@@ -110,6 +110,11 @@
             (id:"hub-platform",mask:(center:(q:0,r:0),radius:0),surface_level:Some(40),material:None),
             (id:"tower-platform",mask:(center:(q:115,r:-65),radius:5),surface_level:Some(52),material:Some("limestone")),
         ],
+        anchors:[
+            (id:"alpine-overlook",column:(q:-80,r:-35),level:None,role:Observation),
+            (id:"mesa-overlook",column:(q:65,r:-95),level:None,role:Observation),
+            (id:"reservoir-view",column:(q:60,r:30),level:None,role:Observation),
+        ],
         hub:(column:(q:0,r:0),level:40),
     )},
     regions:[

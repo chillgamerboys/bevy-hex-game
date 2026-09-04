@@ -2,8 +2,36 @@
 
 use std::collections::BTreeMap;
 
-use hex_world_contracts::{MaterialSpec, WorldHex};
+use hex_world_contracts::{AnchorRole, MaterialSpec, WorldHex};
 use serde::{Deserialize, Serialize};
+
+fn unique_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: Deserialize<'de> + Ord,
+    V: Deserialize<'de>,
+{
+    struct Unique<K, V>(std::marker::PhantomData<(K, V)>);
+    impl<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>> serde::de::Visitor<'de> for Unique<K, V> {
+        type Value = BTreeMap<K, V>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an authoring map with unique keys")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut access: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut result = BTreeMap::new();
+            while let Some((key, value)) = access.next_entry()? {
+                if result.insert(key, value).is_some() {
+                    return Err(serde::de::Error::custom("duplicate authoring map key"));
+                }
+            }
+            Ok(result)
+        }
+    }
+    deserializer.deserialize_map(Unique(std::marker::PhantomData))
+}
 
 /// Current authoring schema; package schemas belong to `hex_world_contracts`.
 pub const SOURCE_VERSION: u32 = 1;
@@ -21,6 +49,7 @@ pub struct WorldSpec {
     /// Explicit material catalog consumed by both compiler and runtime.
     pub materials: Vec<MaterialSpec>,
     /// Reusable geometry recipes, keyed by stable source identity.
+    #[serde(deserialize_with = "unique_map")]
     pub recipes: BTreeMap<String, RegionRecipe>,
     /// Region instances. Input order has no semantic meaning.
     pub regions: Vec<RegionSpec>,
@@ -80,6 +109,10 @@ pub struct RegionRecipe {
     /// Explicit terrain/material overrides, applied before infrastructure.
     #[serde(default)]
     pub overrides: Vec<OverrideSpec>,
+    /// Explicit gameplay or scenic locations. Observation anchors never require
+    /// terrain flattening or imply a walking route.
+    #[serde(default)]
+    pub anchors: Vec<AnchorSpec>,
     /// Exact local safe hub for generated boundary approaches.
     pub hub: GradePoint,
 }
@@ -170,6 +203,20 @@ pub struct GradePoint {
     pub column: WorldHex,
     /// Topmost occupied voxel of the controlled surface.
     pub level: i32,
+}
+
+/// A named source-authored gameplay, transit, or scenic review location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorSpec {
+    /// Stable region-local anchor identity.
+    pub id: String,
+    /// Exact local horizontal position.
+    pub column: WorldHex,
+    /// Exact level when provided; otherwise resolve the final terrain surface.
+    pub level: Option<i32>,
+    /// Whether this point requires walking access or only a scenic observation.
+    pub role: AnchorRole,
 }
 
 /// Directed liquid centerline with reproducible integer interpolation between controls.
@@ -304,6 +351,7 @@ pub struct PrefabProvenance {
     pub source_revision: String,
     /// Explicit conversion from visual style IDs to this world's material policy.
     /// Geometry parity does not imply parity with a legacy two-dimensional blocker mask.
+    #[serde(deserialize_with = "unique_map")]
     pub style_materials: BTreeMap<String, String>,
 }
 

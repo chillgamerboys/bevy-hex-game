@@ -1,6 +1,4 @@
 #![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
     clippy::indexing_slicing,
     reason = "Tests use exact independent fixture assertions and explicit failure points."
 )]
@@ -19,11 +17,11 @@ fn column(package: &WorldPackage, p: WorldHex) -> &ColumnData {
     package
         .chunks
         .get(&p.chunk())
-        .unwrap()
+        .expect("fixture invariant")
         .columns
         .iter()
         .find(|column| column.position == p)
-        .unwrap()
+        .expect("fixture invariant")
 }
 fn run(bottom: i32, top: i32, material: &str) -> VoxelRun {
     VoxelRun {
@@ -36,8 +34,8 @@ fn run(bottom: i32, top: i32, material: &str) -> VoxelRun {
 #[test]
 fn interval_cuts_preserve_lower_and_upper_stacks() {
     let mut runs = vec![run(0, 1, "bedrock"), run(1, 20, "rock")];
-    volume::replace(&mut runs, 5, 11, None).unwrap();
-    volume::insert(&mut runs, run(7, 9, "water")).unwrap();
+    volume::replace(&mut runs, 5, 11, None).expect("fixture invariant");
+    volume::insert(&mut runs, run(7, 9, "water")).expect("fixture invariant");
     assert_eq!(
         runs,
         vec![
@@ -60,15 +58,15 @@ fn integer_path_and_corridor_guarantees_are_coordinate_independent() {
         WorldHex::new(-19, 10),
         WorldHex::new(0, 22),
     ] {
-        let line = geometry::line(WorldHex::new(0, 0), end).unwrap();
+        let line = geometry::line(WorldHex::new(0, 0), end).expect("fixture invariant");
         assert_eq!(
             line.len() as u64,
-            geometry::distance(WorldHex::new(0, 0), end).unwrap() + 1
+            geometry::distance(WorldHex::new(0, 0), end).expect("fixture invariant") + 1
         );
         assert!(line
             .windows(2)
-            .all(|pair| geometry::distance(pair[0], pair[1]).unwrap() == 1));
-        let mask = geometry::ribbon(&line, 2).unwrap();
+            .all(|pair| geometry::distance(pair[0], pair[1]).expect("fixture invariant") == 1));
+        let mask = geometry::ribbon(&line, 2).expect("fixture invariant");
         let grade = geometry::grade(
             &mask,
             VoxelPosition {
@@ -80,7 +78,7 @@ fn integer_path_and_corridor_guarantees_are_coordinate_independent() {
                 level: 39,
             },
         )
-        .unwrap();
+        .expect("fixture invariant");
         assert_eq!(grade.get(&end), Some(&39));
         for (p, h) in &grade {
             for n in geometry::neighbors(*p) {
@@ -94,7 +92,7 @@ fn integer_path_and_corridor_guarantees_are_coordinate_independent() {
 
 #[test]
 fn rich_full_radius_region_has_independent_volume_and_metadata_witnesses() {
-    let compiled = compile_world_cached(&fixture("rich-region"), None).unwrap();
+    let compiled = compile_world_cached(&fixture("rich-region"), None).expect("fixture invariant");
     assert_eq!(compiled.report.columns, 105_469);
     let package = &compiled.package;
     let lake = column(package, WorldHex::new(60, 30));
@@ -133,7 +131,7 @@ fn rich_full_radius_region_has_independent_volume_and_metadata_witnesses() {
         .flat_map(|chunk| &chunk.columns)
         .flat_map(|column| &column.runs)
         .any(|run| run.top > 140));
-    package.validate().unwrap();
+    package.validate().expect("fixture invariant");
 }
 
 #[test]
@@ -148,7 +146,7 @@ fn source_validation_and_hard_override_conflicts_are_explicit() {
     source
         .recipes
         .get_mut("caldera")
-        .unwrap()
+        .expect("fixture invariant")
         .overrides
         .push(OverrideSpec {
             id: "keep-lake-dry".into(),
@@ -171,7 +169,7 @@ fn source_validation_and_hard_override_conflicts_are_explicit() {
 #[test]
 fn two_regions_seal_shared_walking_and_water_seams() {
     let source = fixture("two-regions");
-    let compiled = compile_world_cached(&source, None).unwrap();
+    let compiled = compile_world_cached(&source, None).expect("fixture invariant");
     assert_eq!(compiled.report.columns, 210_938);
     assert_eq!(compiled.package.manifest.boundaries.len(), 1);
     let boundary = &compiled.package.manifest.boundaries[0];
@@ -183,35 +181,45 @@ fn two_regions_seal_shared_walking_and_water_seams() {
     assert!(boundary.samples.iter().any(|sample| sample.required_access));
     let region0 = &compiled.package.manifest.regions[0];
     let region1 = &compiled.package.manifest.regions[1];
-    assert!(compiled.package.chunks.values().any(|chunk| chunk
-        .columns
-        .iter()
-        .any(|column| region0.contains(column.position).unwrap())
-        && chunk
-            .columns
-            .iter()
-            .any(|column| region1.contains(column.position).unwrap())));
-    compiled.package.validate().unwrap();
+    assert!(compiled
+        .package
+        .chunks
+        .values()
+        .any(|chunk| chunk.columns.iter().any(|column| region0
+            .contains(column.position)
+            .expect("fixture invariant"))
+            && chunk.columns.iter().any(|column| region1
+                .contains(column.position)
+                .expect("fixture invariant"))));
+    compiled.package.validate().expect("fixture invariant");
 }
 
 #[test]
 fn feature_edit_reuses_geometry_and_only_affected_region_package_inputs() {
     let source = fixture("two-regions");
-    let first = compile_world_cached(&source, None).unwrap();
+    let first = compile_world_cached(&source, None).expect("fixture invariant");
     let mut edit = source.clone();
-    let mut recipe = edit.recipes.get("caldera").unwrap().clone();
+    let mut recipe = edit
+        .recipes
+        .get("caldera")
+        .expect("fixture invariant")
+        .clone();
     recipe.features[0].density += 7;
     edit.recipes.insert("edited".into(), recipe);
     edit.regions[0].recipe = "edited".into();
-    let cached = compile_world_cached(&edit, Some(&first)).unwrap();
-    let clean = compile_world(&edit).unwrap();
+    let cached = compile_world_cached(&edit, Some(&first)).expect("fixture invariant");
+    let clean = compile_world(&edit).expect("fixture invariant");
     assert_eq!(cached.package, clean);
     assert_eq!(cached.report.regions_reused, 1);
     // Selecting a different recipe key intentionally changes the placement input;
     // editing the same recipe's feature stage alone is separately measured below.
     let mut same = source.clone();
-    same.recipes.get_mut("caldera").unwrap().features[0].density += 7;
-    let cached_same = compile_world_cached(&same, Some(&first)).unwrap();
+    same.recipes
+        .get_mut("caldera")
+        .expect("fixture invariant")
+        .features[0]
+        .density += 7;
+    let cached_same = compile_world_cached(&same, Some(&first)).expect("fixture invariant");
     assert!(cached_same
         .report
         .stages
@@ -227,14 +235,18 @@ fn feature_edit_reuses_geometry_and_only_affected_region_package_inputs() {
             chunk
                 .columns
                 .iter()
-                .all(|column| remote.contains(column.position).unwrap())
+                .all(|column| remote.contains(column.position).expect("fixture invariant"))
         })
         .collect::<BTreeMap<_, _>>();
     assert!(!unchanged.is_empty());
     for (coordinate, chunk) in unchanged {
         assert_eq!(
             chunk.fingerprint,
-            clean.chunks.get(coordinate).unwrap().fingerprint
+            clean
+                .chunks
+                .get(coordinate)
+                .expect("fixture invariant")
+                .fingerprint
         );
     }
 }
@@ -242,7 +254,7 @@ fn feature_edit_reuses_geometry_and_only_affected_region_package_inputs() {
 #[test]
 fn seven_complete_regions_remain_exact_and_source_order_independent() {
     let source = fixture("seven-regions");
-    let first = compile_world_cached(&source, None).unwrap();
+    let first = compile_world_cached(&source, None).expect("fixture invariant");
     assert_eq!(first.report.columns, 738_283);
     assert_eq!(first.package.manifest.regions.len(), 7);
     assert_eq!(first.package.manifest.boundaries.len(), 12);
@@ -250,9 +262,23 @@ fn seven_complete_regions_remain_exact_and_source_order_independent() {
     reordered.regions.reverse();
     reordered.connections.reverse();
     reordered.materials.reverse();
-    let second = compile_world_cached(&reordered, Some(&first)).unwrap();
+    let second = compile_world_cached(&reordered, Some(&first)).expect("fixture invariant");
     assert_eq!(second.report.regions_reused, 7);
     assert_eq!(first.package, second.package);
+    let mut seam_edit = reordered;
+    seam_edit
+        .connections
+        .first_mut()
+        .expect("one seam")
+        .water
+        .as_mut()
+        .expect("water crossing")
+        .half_width += 1;
+    let edited = compile_world_cached(&seam_edit, Some(&first)).expect("local boundary recompile");
+    assert_eq!(
+        edited.report.regions_reused, 5,
+        "one shared seam invalidates exactly its two region dependencies"
+    );
 }
 
 #[test]
@@ -280,11 +306,17 @@ fn exported_stock_prefabs_match_real_catalog_blueprint_voxels() {
     }
     let source = fixture("rich-region");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let catalog: SourceCatalog =
-        ron::from_str(&fs::read_to_string(root.join("assets/art/object_catalog.ron")).unwrap())
-            .unwrap();
+    let catalog: SourceCatalog = ron::from_str(
+        &fs::read_to_string(root.join("assets/art/object_catalog.ron")).expect("fixture invariant"),
+    )
+    .expect("fixture invariant");
     let mut exports = 0;
-    for feature in &source.recipes.get("caldera").unwrap().features {
+    for feature in &source
+        .recipes
+        .get("caldera")
+        .expect("fixture invariant")
+        .features
+    {
         let Some(provenance) = &feature.provenance else {
             assert!(feature.asset.starts_with("procedural/"));
             continue;
@@ -294,9 +326,10 @@ fn exported_stock_prefabs_match_real_catalog_blueprint_voxels() {
             provenance.source_revision,
             "bc06a8969532b807ec677928eee304bc28399386"
         );
-        let original: SourceBlueprint =
-            ron::from_str(&fs::read_to_string(root.join(&provenance.source_path)).unwrap())
-                .unwrap();
+        let original: SourceBlueprint = ron::from_str(
+            &fs::read_to_string(root.join(&provenance.source_path)).expect("fixture invariant"),
+        )
+        .expect("fixture invariant");
         assert_eq!(original.id, feature.asset);
         let expected: BTreeMap<_, _> = original
             .placements
@@ -311,7 +344,7 @@ fn exported_stock_prefabs_match_real_catalog_blueprint_voxels() {
                     provenance
                         .style_materials
                         .get(&placement.style)
-                        .unwrap()
+                        .expect("fixture invariant")
                         .clone(),
                 )
             })
@@ -337,9 +370,12 @@ fn exported_stock_prefabs_match_real_catalog_blueprint_voxels() {
 #[test]
 fn declared_directed_current_reaches_exact_opposite_region_endpoint() {
     let source = fixture("two-regions");
-    let package = compile_world(&source).unwrap();
-    let water = source.connections[0].water.as_ref().unwrap();
-    let flow = water.flow.as_ref().unwrap();
+    let package = compile_world(&source).expect("fixture invariant");
+    let water = source.connections[0]
+        .water
+        .as_ref()
+        .expect("fixture invariant");
+    let flow = water.flow.as_ref().expect("fixture invariant");
     let liquids: BTreeMap<_, _> = package
         .chunks
         .values()
@@ -362,12 +398,13 @@ fn declared_directed_current_reaches_exact_opposite_region_endpoint() {
     let mut crossed = false;
     loop {
         assert!(seen.insert(p));
-        let liquid = liquids.get(&p).unwrap();
+        let liquid = liquids.get(&p).expect("fixture invariant");
         let Some(next) = liquid.downstream.first() else {
             break;
         };
         let first = &package.manifest.regions[0];
-        crossed |= first.contains(p.column).unwrap() != first.contains(next.column).unwrap();
+        crossed |= first.contains(p.column).expect("fixture invariant")
+            != first.contains(next.column).expect("fixture invariant");
         p = *next;
     }
     assert_eq!(
@@ -378,4 +415,90 @@ fn declared_directed_current_reaches_exact_opposite_region_endpoint() {
         }
     );
     assert!(crossed);
+}
+
+#[test]
+fn malformed_runtime_source_never_silently_repairs_duplicate_or_overflowing_input() {
+    let source = fixture("rich-region");
+    let recipe = ron::ser::to_string(&source.recipes["caldera"]).expect("recipe serialization");
+    let serialized = ron::ser::to_string(&source).expect("source serialization");
+    let one = format!("recipes:{{\"caldera\":{recipe}}}");
+    let duplicate = format!("recipes:{{\"caldera\":{recipe},\"caldera\":{recipe}}}");
+    assert!(serialized.contains(&one));
+    let error = parse_world(&serialized.replace(&one, &duplicate))
+        .expect_err("duplicate map must fail")
+        .to_string();
+    assert!(error.contains("duplicate authoring map key"));
+    let mut huge = source.clone();
+    huge.recipes.get_mut("caldera").expect("recipe").biomes[0].mask = DiskMask {
+        center: WorldHex::new(i64::MAX, i64::MAX),
+        radius: u32::MAX,
+    };
+    assert!(validate_source(&huge).is_err());
+    let mut overlap = source;
+    let feature = &mut overlap.recipes.get_mut("caldera").expect("recipe").features[0];
+    feature.voxels.push(feature.voxels[0].clone());
+    assert!(validate_source(&overlap)
+        .expect_err("overlapping prefab")
+        .to_string()
+        .contains("invalid prefab prototype"));
+    let mut seams = fixture("two-regions");
+    seams.connections.clear();
+    assert!(validate_source(&seams)
+        .expect_err("touching regions need seam authority")
+        .to_string()
+        .contains("shared connection"));
+}
+
+#[test]
+fn adding_an_upper_vault_preserves_an_existing_lower_cave() {
+    let source = fixture("rich-region");
+    let mut recipe = source.recipes["caldera"].clone();
+    recipe.landforms.clear();
+    recipe.biomes.clear();
+    recipe.overrides.clear();
+    let region = RegionSpec {
+        id: "stacked".into(),
+        recipe: "caldera".into(),
+        origin: WorldHex::new(0, 0),
+        radius: 5,
+        rotation: 0,
+    };
+    let mut build = operators::base(&region, &recipe, 0).expect("small terrain");
+    let mut cave = CaveSpec {
+        id: "lower".into(),
+        rooms: vec![DiskMask {
+            center: WorldHex::new(0, 0),
+            radius: 2,
+        }],
+        path: vec![WorldHex::new(0, 0), WorldHex::new(1, 0)],
+        half_width: 0,
+        floor_level: 10,
+        clearance: 4,
+        roof_thickness: 3,
+        material: "limestone".into(),
+        entrances: vec![],
+        light_spacing: 0,
+    };
+    operators::cave(&mut build, &recipe, "stacked", &cave).expect("lower cave");
+    cave.id = "upper".into();
+    cave.floor_level = 50;
+    operators::cave(&mut build, &recipe, "stacked", &cave).expect("upper vault");
+    let runs = &build.columns[&WorldHex::new(0, 0)];
+    for (level, material) in [
+        (10, Some("limestone")),
+        (11, None),
+        (14, None),
+        (15, Some("limestone")),
+        (50, Some("limestone")),
+        (51, None),
+        (54, None),
+        (55, Some("limestone")),
+    ] {
+        assert_eq!(
+            volume::material_at(runs, level),
+            material,
+            "exact stacked level {level}"
+        );
+    }
 }

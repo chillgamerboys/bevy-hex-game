@@ -163,6 +163,7 @@ fn canonical(source: &WorldSpec) -> WorldSpec {
         recipe.caves.sort_by(|a, b| a.id.cmp(&b.id));
         recipe.features.sort_by(|a, b| a.id.cmp(&b.id));
         recipe.overrides.sort_by(|a, b| a.id.cmp(&b.id));
+        recipe.anchors.sort_by(|a, b| a.id.cmp(&b.id));
         for field in &mut recipe.landforms {
             field.centers.sort();
         }
@@ -188,6 +189,13 @@ fn canonical(source: &WorldSpec) -> WorldSpec {
     result
 }
 
+fn valid_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
 /// Validate runtime-loaded source before executing generation or allocating region columns.
 ///
 /// Bounds are per operator/region, not a world-size or total-region-count limit.
@@ -207,12 +215,12 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             format!("unsupported source version {}", source.version),
         );
     }
-    if source.id.trim().is_empty() || source.regions.is_empty() {
+    if !valid_name(&source.id) || source.regions.is_empty() {
         issue("world", "world ID and regions must be nonempty".into());
     }
     let mut materials = BTreeMap::new();
     for material in &source.materials {
-        if material.id.is_empty() || material.id == "air" {
+        if !valid_name(&material.id) || material.id.eq_ignore_ascii_case("air") {
             issue(&material.id, "material needs non-air identity".into());
         }
         if materials.insert(material.id.as_str(), material).is_some() {
@@ -229,9 +237,12 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
         }
     };
     for (key, recipe) in &source.recipes {
+        if !valid_name(key) {
+            issue(key, "invalid recipe identity".into());
+        }
         let mut ids = BTreeSet::new();
         let mut register = |id: &str| {
-            if id.is_empty() || !ids.insert(id.to_string()) {
+            if !valid_name(id) || !ids.insert(id.to_string()) {
                 issue(key, format!("empty/duplicate operator ID {id}"));
             }
         };
@@ -247,6 +258,7 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             .chain(recipe.caves.iter().map(|v| &v.id))
             .chain(recipe.features.iter().map(|v| &v.id))
             .chain(recipe.overrides.iter().map(|v| &v.id))
+            .chain(recipe.anchors.iter().map(|v| &v.id))
         {
             register(id);
         }
@@ -380,6 +392,16 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             if let Some(error) = require_material(&bridge.material, true) {
                 issue(&bridge.id, error);
             }
+            if bridge.points.windows(2).any(|pair| match pair {
+                [a, b] => !geometry::distance(a.column, b.column)
+                    .is_ok_and(|distance| distance >= u64::from(a.level.abs_diff(b.level))),
+                _ => false,
+            }) {
+                issue(
+                    &bridge.id,
+                    "bridge controls exceed ordinary one-level walking grade".into(),
+                );
+            }
         }
         for cave in &recipe.caves {
             if cave.path.len() < 2
@@ -422,6 +444,32 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
                     issue(&feature.id, error);
                 }
             }
+            let mut prototype = BTreeMap::<WorldHex, Vec<VoxelRun>>::new();
+            for voxel in &feature.voxels {
+                prototype.entry(voxel.offset).or_default().push(VoxelRun {
+                    bottom: voxel.bottom,
+                    top: voxel.top,
+                    material: voxel.material.clone(),
+                });
+            }
+            for runs in prototype.into_values() {
+                if let Err(error) = super::volume::canonicalize(runs) {
+                    issue(&feature.id, format!("invalid prefab prototype: {error}"));
+                }
+            }
+            if let Some(provenance) = &feature.provenance {
+                if provenance.source_path.is_empty()
+                    || provenance.source_revision.len() != 40
+                    || provenance.style_materials.is_empty()
+                {
+                    issue(&feature.id,"stock export needs source path, exact 40-character git revision and explicit style policy".into());
+                }
+                for material in provenance.style_materials.values() {
+                    if let Some(error) = require_material(material, true) {
+                        issue(&feature.id, error);
+                    }
+                }
+            }
         }
         for patch in &recipe.overrides {
             if patch
@@ -439,7 +487,7 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
     }
     let mut regions = BTreeMap::new();
     for region in &source.regions {
-        if region.id.is_empty() || regions.insert(region.id.as_str(), region).is_some() {
+        if !valid_name(&region.id) || regions.insert(region.id.as_str(), region).is_some() {
             issue(&region.id, "empty/duplicate region ID".into());
         }
         if region.rotation >= 6 || region.radius == 0 || region.radius > 1024 {
@@ -463,11 +511,34 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             continue;
         };
         let fits = |p: WorldHex, radius: u32| {
-            geometry::distance(p, WorldHex::new(0, 0))
-                .is_ok_and(|distance| distance + u64::from(radius) <= u64::from(region.radius))
+            geometry::distance(p, WorldHex::new(0, 0)).is_ok_and(|distance| {
+                distance
+                    .checked_add(u64::from(radius))
+                    .is_some_and(|extent| extent <= u64::from(region.radius))
+            })
         };
         if !fits(recipe.hub.column, 0) {
             issue(&region.id, "hub is outside footprint".into());
+        }
+        for anchor in &recipe.anchors {
+            if !fits(anchor.column, 0)
+                || anchor
+                    .level
+                    .is_some_and(|level| !(0..=65_535).contains(&level))
+            {
+                issue(
+                    &anchor.id,
+                    "anchor position leaves the source geometry bounds".into(),
+                );
+            }
+        }
+        for feature in &recipe.features {
+            if feature.roots.iter().any(|root| !fits(*root, 0)) {
+                issue(
+                    &feature.id,
+                    "explicit feature root leaves region footprint".into(),
+                );
+            }
         }
         for mask in recipe
             .biomes
@@ -517,7 +588,7 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
     let mut connections = BTreeSet::new();
     let mut connection_ids = BTreeSet::new();
     for connection in &source.connections {
-        if !connection_ids.insert(&connection.id) || connection.id.is_empty() {
+        if !connection_ids.insert(&connection.id) || !valid_name(&connection.id) {
             issue(&connection.id, "empty/duplicate connection ID".into());
         }
         let pair = if connection.region_a < connection.region_b {
@@ -973,6 +1044,44 @@ fn compile_geometry(
         )?;
     }
     build.reserved.insert(recipe.hub.column);
+    for anchor in &recipe.anchors {
+        let level = match anchor.level {
+            Some(level) => level,
+            None => {
+                contextual(
+                    &region.id,
+                    "anchors",
+                    operators::terrain(&build, anchor.column),
+                )?
+                .0
+            }
+        };
+        if anchor.role != AnchorRole::Observation {
+            build.reserved.insert(anchor.column);
+        }
+        build.semantics.anchors.push(WorldAnchor {
+            id: format!("{}/anchor/{}", region.id, anchor.id),
+            region_id: region.id.clone(),
+            position: VoxelPosition {
+                column: anchor.column,
+                level,
+            },
+            role: anchor.role,
+        });
+    }
+    for bridge in &recipe.bridges {
+        for (index, pin) in bridge.points.iter().enumerate() {
+            build.semantics.anchors.push(WorldAnchor {
+                id: format!("{}/bridge/{}/pin-{index}", region.id, bridge.id),
+                region_id: region.id.clone(),
+                position: VoxelPosition {
+                    column: pin.column,
+                    level: pin.level,
+                },
+                role: AnchorRole::Transit,
+            });
+        }
+    }
     build.semantics.anchors.push(WorldAnchor {
         id: format!("{}/hub", region.id),
         region_id: region.id.clone(),
@@ -982,6 +1091,24 @@ fn compile_geometry(
         },
         role: AnchorRole::Gameplay,
     });
+    for anchor in &build.semantics.anchors {
+        let kind = if anchor.id == format!("{}/hub", region.id) {
+            "entry"
+        } else {
+            match anchor.role {
+                AnchorRole::Gameplay => "gameplay-anchor",
+                AnchorRole::Transit => "transit",
+                AnchorRole::Observation => "observation",
+            }
+        };
+        build.features.push(FeatureSummary {
+            id: anchor.id.clone(),
+            region_id: region.id.clone(),
+            kind: kind.into(),
+            anchor: anchor.position,
+            asset: None,
+        });
+    }
     Ok(build)
 }
 
