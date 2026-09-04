@@ -72,7 +72,8 @@ pub use perception::{
 };
 pub use presentation::{
     CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason, PresentationSystems,
-    TargetReticleRequest, TreeFadeAmount, TreeOccluder, WorldMarkerSuppression,
+    ReviewCrystalLightProfile, ReviewEdgeTreatment, ReviewMaterialTreatment, TargetReticleRequest,
+    TreeFadeAmount, TreeOccluder, WorldMarkerSuppression,
 };
 pub use setup::GameplaySetupFailure;
 pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};

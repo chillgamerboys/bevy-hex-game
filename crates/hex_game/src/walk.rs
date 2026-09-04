@@ -4730,8 +4730,6 @@ mod tests {
                 "grand_v3.coastal_bridge",
                 "grand_v3.valley_bridge",
                 "grand_v3.valley_lake",
-                "grand_v3.waterfall_base",
-                "grand_v3.waterfall_crown",
                 "grand_v3.natural_pass",
                 "grand_v3.massif",
                 "grand_v3.peak_saddle",
@@ -4770,7 +4768,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(captures.len(), 58);
+        assert_eq!(captures.len(), 52);
         assert_eq!(
             captures.first(),
             Some(&"01-grand-v3-complete-opaque-world-map")
@@ -4823,54 +4821,6 @@ mod tests {
         assert!(steps.contains(&WalkStep::AssertCameraMode(WalkCameraMode::Character)));
 
         let expected_sequences = [
-            (
-                "grand_v3.waterfall_base",
-                CameraRouteTile {
-                    q: 99,
-                    r: -11,
-                    level: 16,
-                },
-                "01-waterfall-lower-to-base-motion",
-                38,
-                16,
-                18_000,
-            ),
-            (
-                "grand_v3.valley_lake",
-                CameraRouteTile {
-                    q: 66,
-                    r: -10,
-                    level: 20,
-                },
-                "02-waterfall-base-to-lower-motion",
-                38,
-                16,
-                18_000,
-            ),
-            (
-                "grand_v3.waterfall_crown",
-                CameraRouteTile {
-                    q: 99,
-                    r: -77,
-                    level: 151,
-                },
-                "03-waterfall-upper-to-crown-motion",
-                26,
-                16,
-                18_000,
-            ),
-            (
-                "grand_v3.mountain_lake",
-                CameraRouteTile {
-                    q: 77,
-                    r: -77,
-                    level: 151,
-                },
-                "04-waterfall-crown-to-upper-motion",
-                26,
-                16,
-                18_000,
-            ),
             (
                 "grand_v3.tunnel_midpoint",
                 CameraRouteTile {
@@ -5048,66 +4998,12 @@ mod tests {
             );
         }
         assert_eq!(
-            &captured_legs[..4],
-            &[
-                (
-                    CameraRouteTile {
-                        q: 66,
-                        r: -10,
-                        level: 20,
-                    },
-                    CameraRouteTile {
-                        q: 99,
-                        r: -11,
-                        level: 16,
-                    },
-                ),
-                (
-                    CameraRouteTile {
-                        q: 99,
-                        r: -11,
-                        level: 16,
-                    },
-                    CameraRouteTile {
-                        q: 66,
-                        r: -10,
-                        level: 20,
-                    },
-                ),
-                (
-                    CameraRouteTile {
-                        q: 77,
-                        r: -77,
-                        level: 151,
-                    },
-                    CameraRouteTile {
-                        q: 99,
-                        r: -77,
-                        level: 151,
-                    },
-                ),
-                (
-                    CameraRouteTile {
-                        q: 99,
-                        r: -77,
-                        level: 151,
-                    },
-                    CameraRouteTile {
-                        q: 77,
-                        r: -77,
-                        level: 151,
-                    },
-                ),
-            ],
-            "waterfall motion must inspect independent lower and upper approaches, never traverse the plunge"
-        );
-        assert_eq!(
             actual_sequences
                 .iter()
                 .map(|(_, _, _, _, capture_count, _)| usize::from(*capture_count))
                 .sum::<usize>(),
-            184,
-            "the temporal approval gate must publish exactly 184 frames"
+            120,
+            "the temporal approval gate must publish exactly 120 frames"
         );
 
         let orbit_reversals = steps
@@ -5123,10 +5019,6 @@ mod tests {
         assert_eq!(
             orbit_reversals,
             [
-                (0.5, 0.0),
-                (-0.5, 0.0),
-                (0.5, 0.0),
-                (-0.5, 0.0),
                 (0.5, 0.0),
                 (-0.5, 0.0),
                 (0.5, 0.0),

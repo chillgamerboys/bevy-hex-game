@@ -22,6 +22,15 @@
 //! captures; ordinary gameplay keeps every authored roof or enclosing shell intact.
 //! `HEX_REVIEW_ILLUMINATION=overlay` draws the authoritative Dark, Dim, and Bright
 //! gameplay tiers over exact interior surfaces for diagnostic captures.
+//! `HEX_REVIEW_FOG` selects a strict review-only tactical-shroud treatment while
+//! preserving authoritative hostile concealment.
+//! `HEX_REVIEW_MATERIAL` selects a strict review-only material treatment shared by
+//! terrain and authored-object presentation.
+//! `HEX_REVIEW_EDGE` selects a strict review-only voxel edge treatment. Normal-only
+//! modes are shared by terrain and authored objects; geometric modes chamfer generated
+//! terrain render meshes while leaving authoritative geometry untouched.
+//! `HEX_REVIEW_CRYSTAL_LIGHT_PROFILE` selects one strict review-only treatment for
+//! generated crystal point lights without changing authoritative illumination.
 //! Unanchored Map-camera TopDown overviews additionally fail closed unless every
 //! authoritative terrain run is represented once and every topmost boundary cap fits
 //! inside the active viewport with margin and valid near/far depth. Deliberate anchored
@@ -46,8 +55,9 @@ use hex_core::{
     config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER},
     CameraFocusTarget, CutawayOccluder, GameplaySetupFailure, Headroom, HexSpan, HexTile,
     IlluminationLevel, LightDomain, MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint,
-    PresentationOcclusion, ResolvedMapSeed, Screen, SubstanceId, TerrainPickRun, TerrainReady,
-    TerrainRenderBatch, TilePos, TraversalBlockers,
+    PresentationOcclusion, ResolvedMapSeed, ReviewCrystalLightProfile, ReviewEdgeTreatment,
+    ReviewMaterialTreatment, Screen, SubstanceId, TerrainPickRun, TerrainReady, TerrainRenderBatch,
+    TilePos, TraversalBlockers,
 };
 use hex_map::LiquidVisualTime;
 use hex_perception::ResolvedIllumination;
@@ -55,7 +65,9 @@ use hex_units::{Body, Footing, Selected, Standing, StandsOn};
 use hex_world::{CameraMode, CameraSystems, PanOrbitCamera};
 
 use crate::capture::{prepare_capture_path, write_png};
-use crate::fog::{FOG_CAP_DEPTH_BIAS, FOG_CAP_INSET, FOG_CAP_LIFT, FOG_CAP_THICKNESS};
+use crate::fog::{
+    FogPresentationMode, FOG_CAP_DEPTH_BIAS, FOG_CAP_INSET, FOG_CAP_LIFT, FOG_CAP_THICKNESS,
+};
 use crate::scenarios::ScenarioToLoad;
 
 const SCENARIO_ENV: &str = "HEX_REVIEW_SCENARIO";
@@ -71,6 +83,10 @@ const LOOK_AT_OFFSET_ENV: &str = "HEX_REVIEW_LOOK_AT_OFFSET";
 const CHARACTER_RADIUS_SCALE_ENV: &str = "HEX_REVIEW_CHARACTER_RADIUS_SCALE";
 const CUTAWAY_ENV: &str = "HEX_REVIEW_CUTAWAY";
 const ILLUMINATION_ENV: &str = "HEX_REVIEW_ILLUMINATION";
+const FOG_ENV: &str = "HEX_REVIEW_FOG";
+const MATERIAL_ENV: &str = "HEX_REVIEW_MATERIAL";
+const EDGE_ENV: &str = "HEX_REVIEW_EDGE";
+const CRYSTAL_LIGHT_PROFILE_ENV: &str = "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE";
 const SETTLE_FRAMES: u32 = 90;
 const CAPTURE_WIDTH: u32 = 1920;
 const CAPTURE_HEIGHT: u32 = 1080;
@@ -113,6 +129,12 @@ pub(super) fn plugin(app: &mut App) {
     {
         app.insert_resource(time);
     }
+    if let Some(mode) = request.fog_mode {
+        app.insert_resource(mode);
+    }
+    app.insert_resource(request.material_treatment);
+    app.insert_resource(request.edge_treatment);
+    app.insert_resource(request.crystal_light_profile);
     app.insert_resource(request).add_systems(
         Update,
         launch_review_scenario.run_if(in_state(Screen::Title)),
@@ -167,6 +189,10 @@ struct ReviewRequest {
     seed: Option<u64>,
     time_hours: Option<f32>,
     liquid_phase_seconds: Option<f32>,
+    fog_mode: Option<FogPresentationMode>,
+    material_treatment: ReviewMaterialTreatment,
+    edge_treatment: ReviewEdgeTreatment,
+    crystal_light_profile: ReviewCrystalLightProfile,
     capture: Option<ReviewCapture>,
     launched: bool,
 }
@@ -176,6 +202,10 @@ impl ReviewRequest {
         let radius_scale = environment_value(CHARACTER_RADIUS_SCALE_ENV)?;
         let look_at_anchor = environment_value(LOOK_AT_ANCHOR_ENV)?;
         let look_at_offset = environment_value(LOOK_AT_OFFSET_ENV)?;
+        let fog_mode = environment_value(FOG_ENV)?;
+        let material_treatment = environment_value(MATERIAL_ENV)?;
+        let edge_treatment = environment_value(EDGE_ENV)?;
+        let crystal_light_profile = environment_value(CRYSTAL_LIGHT_PROFILE_ENV)?;
         Self::from_values(
             environment_value(SCENARIO_ENV)?,
             environment_value(SEED_ENV)?,
@@ -190,6 +220,69 @@ impl ReviewRequest {
         )
         .and_then(|request| Self::with_character_radius_scale(request, radius_scale))
         .and_then(|request| Self::with_anchor_look_at(request, look_at_anchor, look_at_offset))
+        .and_then(|request| Self::with_fog_mode(request, fog_mode))
+        .and_then(|request| Self::with_material_treatment(request, material_treatment))
+        .and_then(|request| Self::with_edge_treatment(request, edge_treatment))
+        .and_then(|request| Self::with_crystal_light_profile(request, crystal_light_profile))
+    }
+
+    fn with_edge_treatment(
+        mut request: Option<Self>,
+        value: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{EDGE_ENV} requires {SCENARIO_ENV}"))?;
+        request_ref.edge_treatment = parse_review_edge_treatment(&value)?;
+        Ok(request)
+    }
+
+    fn with_crystal_light_profile(
+        mut request: Option<Self>,
+        value: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{CRYSTAL_LIGHT_PROFILE_ENV} requires {SCENARIO_ENV}"))?;
+        request_ref.crystal_light_profile = parse_review_crystal_light_profile(&value)?;
+        Ok(request)
+    }
+
+    fn with_material_treatment(
+        mut request: Option<Self>,
+        value: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{MATERIAL_ENV} requires {SCENARIO_ENV}"))?;
+        request_ref.material_treatment = parse_review_material_treatment(&value)?;
+        Ok(request)
+    }
+
+    fn with_fog_mode(
+        mut request: Option<Self>,
+        value: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{FOG_ENV} requires {SCENARIO_ENV}"))?;
+        request_ref.fog_mode = Some(
+            FogPresentationMode::parse_review(&value)
+                .map_err(|error| format!("{FOG_ENV} {error}"))?,
+        );
+        Ok(request)
     }
 
     fn with_character_radius_scale(
@@ -363,9 +456,48 @@ impl ReviewRequest {
             seed,
             time_hours,
             liquid_phase_seconds,
+            fog_mode: None,
+            material_treatment: ReviewMaterialTreatment::Current,
+            edge_treatment: ReviewEdgeTreatment::Current,
+            crystal_light_profile: ReviewCrystalLightProfile::Current,
             capture,
             launched: false,
         }))
+    }
+}
+
+fn parse_review_crystal_light_profile(value: &str) -> Result<ReviewCrystalLightProfile, String> {
+    match value {
+        "i01-crystal-tight" => Ok(ReviewCrystalLightProfile::Tight),
+        "i02-crystal-broad" => Ok(ReviewCrystalLightProfile::Broad),
+        "i03-heart-feature-shadow" => Ok(ReviewCrystalLightProfile::HeartFeatureShadow),
+        value => Err(format!(
+            "{CRYSTAL_LIGHT_PROFILE_ENV} must be i01-crystal-tight, i02-crystal-broad, or i03-heart-feature-shadow; got {value:?}"
+        )),
+    }
+}
+
+fn parse_review_material_treatment(value: &str) -> Result<ReviewMaterialTreatment, String> {
+    match value {
+        "current" => Ok(ReviewMaterialTreatment::Current),
+        "matte-terrain" => Ok(ReviewMaterialTreatment::MatteTerrain),
+        "unified-matte" => Ok(ReviewMaterialTreatment::UnifiedMatte),
+        value => Err(format!(
+            "{MATERIAL_ENV} must be current, matte-terrain, or unified-matte; got {value:?}"
+        )),
+    }
+}
+
+fn parse_review_edge_treatment(value: &str) -> Result<ReviewEdgeTreatment, String> {
+    match value {
+        "current" => Ok(ReviewEdgeTreatment::Current),
+        "micro-bevel-004" => Ok(ReviewEdgeTreatment::MicroBevel04),
+        "micro-bevel-008" => Ok(ReviewEdgeTreatment::MicroBevel08),
+        "geometric-bevel-004" => Ok(ReviewEdgeTreatment::GeometricBevel04),
+        "geometric-bevel-008" => Ok(ReviewEdgeTreatment::GeometricBevel08),
+        value => Err(format!(
+            "{EDGE_ENV} must be current, micro-bevel-004, micro-bevel-008, geometric-bevel-004, or geometric-bevel-008; got {value:?}"
+        )),
     }
 }
 
@@ -510,9 +642,12 @@ fn launch_review_scenario(
     };
 
     info!(
-        "review automation launching scenario {:?} with seed {:?}",
+        "review automation launching scenario {:?} with seed {:?}, material treatment {:?}, edge treatment {:?}, and crystal light profile {:?}",
         scenario.name,
-        resolved_seed.map(|seed| seed.0)
+        resolved_seed.map(|seed| seed.0),
+        request.material_treatment,
+        request.edge_treatment,
+        request.crystal_light_profile,
     );
     commands.insert_resource(ScenarioToLoad {
         scenario,
@@ -2216,6 +2351,265 @@ mod tests {
         )
         .expect("empty review configuration should be valid")
         .is_none());
+    }
+
+    #[test]
+    fn review_fog_mode_is_strict_and_requires_a_review_launch() {
+        for (value, expected) in [
+            ("current", FogPresentationMode::Current),
+            ("none", FogPresentationMode::NoTerrainShading),
+            ("dimmed", FogPresentationMode::Dimmed),
+            (
+                "observed-only",
+                FogPresentationMode::ObservedOnlyApproximation,
+            ),
+            ("softened", FogPresentationMode::SoftenedTwoBand),
+        ] {
+            assert_eq!(FogPresentationMode::parse_review(value), Ok(expected));
+        }
+        for invalid in ["", " current", "current ", "DIMMED", "mysterious"] {
+            assert!(
+                FogPresentationMode::parse_review(invalid).is_err(),
+                "{invalid:?} must not be normalized into a review fog mode"
+            );
+        }
+
+        let request = ReviewRequest::from_values(
+            Some("Grand V3 Baseline".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("scenario-only review request parses");
+        let configured = ReviewRequest::with_fog_mode(request, Some("dimmed".to_owned()))
+            .expect("known fog mode parses")
+            .expect("review request remains present");
+        assert_eq!(configured.fog_mode, Some(FogPresentationMode::Dimmed));
+
+        let unknown = ReviewRequest::with_fog_mode(Some(configured), Some(" dimmed".to_owned()))
+            .expect_err("unknown fog mode fails closed");
+        assert!(unknown.contains(FOG_ENV));
+        assert!(
+            ReviewRequest::with_fog_mode(None, Some("current".to_owned()))
+                .expect_err("fog without a review launch fails closed")
+                .contains(SCENARIO_ENV)
+        );
+    }
+
+    #[test]
+    fn review_material_treatment_is_strict_and_requires_a_review_launch() {
+        for (value, expected) in [
+            ("current", ReviewMaterialTreatment::Current),
+            ("matte-terrain", ReviewMaterialTreatment::MatteTerrain),
+            ("unified-matte", ReviewMaterialTreatment::UnifiedMatte),
+        ] {
+            assert_eq!(parse_review_material_treatment(value), Ok(expected));
+        }
+        for invalid in [
+            "",
+            " current",
+            "current ",
+            "MATTE-TERRAIN",
+            "matte_terrain",
+            "mysterious",
+        ] {
+            assert!(
+                parse_review_material_treatment(invalid).is_err(),
+                "{invalid:?} must not be normalized into a material treatment"
+            );
+        }
+
+        let request = ReviewRequest::from_values(
+            Some("Grand V3 Baseline".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("scenario-only review request parses");
+        assert_eq!(
+            request
+                .as_ref()
+                .expect("scenario produces a request")
+                .material_treatment,
+            ReviewMaterialTreatment::Current,
+        );
+
+        let configured =
+            ReviewRequest::with_material_treatment(request, Some("unified-matte".to_owned()))
+                .expect("known material treatment parses")
+                .expect("review request remains present");
+        assert_eq!(
+            configured.material_treatment,
+            ReviewMaterialTreatment::UnifiedMatte,
+        );
+
+        let unknown = ReviewRequest::with_material_treatment(
+            Some(configured),
+            Some(" unified-matte".to_owned()),
+        )
+        .expect_err("unknown material treatment fails closed");
+        assert!(unknown.contains(MATERIAL_ENV));
+        assert!(
+            ReviewRequest::with_material_treatment(None, Some("current".to_owned()))
+                .expect_err("material treatment without a review launch fails closed")
+                .contains(SCENARIO_ENV)
+        );
+    }
+
+    #[test]
+    fn review_edge_treatment_is_strict_and_requires_a_review_launch() {
+        for (value, expected) in [
+            ("current", ReviewEdgeTreatment::Current),
+            ("micro-bevel-004", ReviewEdgeTreatment::MicroBevel04),
+            ("micro-bevel-008", ReviewEdgeTreatment::MicroBevel08),
+            ("geometric-bevel-004", ReviewEdgeTreatment::GeometricBevel04),
+            ("geometric-bevel-008", ReviewEdgeTreatment::GeometricBevel08),
+        ] {
+            assert_eq!(parse_review_edge_treatment(value), Ok(expected));
+        }
+        for invalid in [
+            "",
+            " current",
+            "current ",
+            "MICRO-BEVEL-004",
+            "micro_bevel_004",
+            "micro-bevel-04",
+            "geometric_bevel_004",
+            "geometric-bevel-04",
+            "mysterious",
+        ] {
+            assert!(
+                parse_review_edge_treatment(invalid).is_err(),
+                "{invalid:?} must not be normalized into an edge treatment"
+            );
+        }
+
+        let request = ReviewRequest::from_values(
+            Some("Grand V3 Baseline".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("scenario-only review request parses");
+        assert_eq!(
+            request
+                .as_ref()
+                .expect("scenario produces a request")
+                .edge_treatment,
+            ReviewEdgeTreatment::Current,
+        );
+
+        let configured =
+            ReviewRequest::with_edge_treatment(request, Some("geometric-bevel-008".to_owned()))
+                .expect("known edge treatment parses")
+                .expect("review request remains present");
+        assert_eq!(
+            configured.edge_treatment,
+            ReviewEdgeTreatment::GeometricBevel08,
+        );
+
+        let unknown = ReviewRequest::with_edge_treatment(
+            Some(configured),
+            Some(" geometric-bevel-008".to_owned()),
+        )
+        .expect_err("unknown edge treatment fails closed");
+        assert!(unknown.contains(EDGE_ENV));
+        assert!(
+            ReviewRequest::with_edge_treatment(None, Some("current".to_owned()))
+                .expect_err("edge treatment without a review launch fails closed")
+                .contains(SCENARIO_ENV)
+        );
+    }
+
+    #[test]
+    fn review_crystal_light_profile_is_strict_and_requires_a_review_launch() {
+        for (value, expected) in [
+            ("i01-crystal-tight", ReviewCrystalLightProfile::Tight),
+            ("i02-crystal-broad", ReviewCrystalLightProfile::Broad),
+            (
+                "i03-heart-feature-shadow",
+                ReviewCrystalLightProfile::HeartFeatureShadow,
+            ),
+        ] {
+            assert_eq!(parse_review_crystal_light_profile(value), Ok(expected));
+        }
+        for invalid in [
+            "",
+            "i01_crystal_tight",
+            " i01-crystal-tight",
+            "i01-crystal-tight ",
+            "I01-CRYSTAL-TIGHT",
+            "current",
+            "i04-crystal-light",
+        ] {
+            assert!(
+                parse_review_crystal_light_profile(invalid).is_err(),
+                "{invalid:?} must not be normalized into a crystal-light profile"
+            );
+        }
+
+        let request = ReviewRequest::from_values(
+            Some("Grand V3 Baseline".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("scenario-only review request parses");
+        assert_eq!(
+            request
+                .as_ref()
+                .expect("scenario produces a request")
+                .crystal_light_profile,
+            ReviewCrystalLightProfile::Current,
+        );
+
+        let configured = ReviewRequest::with_crystal_light_profile(
+            request,
+            Some("i03-heart-feature-shadow".to_owned()),
+        )
+        .expect("known crystal-light profile parses")
+        .expect("review request remains present");
+        assert_eq!(
+            configured.crystal_light_profile,
+            ReviewCrystalLightProfile::HeartFeatureShadow,
+        );
+
+        let unknown = ReviewRequest::with_crystal_light_profile(
+            Some(configured),
+            Some("i03-heart-feature-shadow ".to_owned()),
+        )
+        .expect_err("unknown crystal-light profile fails closed");
+        assert!(unknown.contains(CRYSTAL_LIGHT_PROFILE_ENV));
+        assert!(ReviewRequest::with_crystal_light_profile(
+            None,
+            Some("i01-crystal-tight".to_owned())
+        )
+        .expect_err("crystal-light profile without a review launch fails closed")
+        .contains(SCENARIO_ENV));
     }
 
     #[test]

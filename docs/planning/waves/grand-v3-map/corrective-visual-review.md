@@ -44,8 +44,10 @@ Set only the row-specific environment values in addition to that base command. C
 
 The following existing anchors are sufficient and must keep their exact meanings:
 
-- `grand_v3.waterfall_profile`: dry review surface nearest the first real plunge edge;
-- `grand_v3.waterfall_base` and `grand_v3.waterfall_crown`;
+- `grand_v3.waterfall_profile`: reachable dry gameplay/focus surface beside the long
+  descending cascade, including its upstream steps, pools, bends, and final fall;
+- `grand_v3.waterfall_base` and `grand_v3.waterfall_crown`: observation-only surfaces for
+  static Map look-at review, never actor placement or movement destinations;
 - `grand_v3.tunnel_mouth` and `grand_v3.tunnel_midpoint`;
 - `grand_v3.mountain_lake`, `grand_v3.peak_saddle`, and `grand_v3.massif`;
 - `grand_v3.frozen_woods`, `grand_v3.crystal_summit`, `grand_v3.frozen_exit`, and
@@ -73,9 +75,10 @@ incomplete until their captures pass:
 `grand_v3.treeline_transition`, and `grand_v3.peak_ridge_overlook` are gameplay
 `MapAnchors`: their rows exercise shipped cameras and therefore require ordinary live
 footing. `grand_v3.lake_island` and `grand_v3.massif_crest` are instead
-`MapObservationAnchors`: they may be scenic or inaccessible and can be consumed only by
-the review-only Map look-at camera, never scenario placement or actor relocation. Every
-anchor must resolve to exactly one rendered `HexTile` surface.
+`MapObservationAnchors`; `grand_v3.waterfall_base` and `grand_v3.waterfall_crown` have the
+same observation-only role. These anchors may be scenic or inaccessible and can be consumed
+only by the review-only Map look-at camera, never scenario placement or actor relocation.
+Every anchor must resolve to exactly one rendered `HexTile` surface.
 
 ## Static capture matrix
 
@@ -91,9 +94,9 @@ scale is review-only and must not be presented as the shipped camera distance.
 | `04-grand-v3-corrective-crystal-hidden-valley-a` | Valley view hides upper Ascent behind mantle | focus `grand_v3.crystal_mantle_overlook` | Character / `default` | radius scale `10` |
 | `05-grand-v3-corrective-crystal-hidden-valley-b` | Reverse azimuth exposes mantle thickness without a void halo | focus `grand_v3.crystal_mantle_overlook` | Character / `rear` | radius scale `10` |
 | `06-grand-v3-corrective-crystal-hidden-valley-first-person` | Shipped eye-height view does not reveal an exposed tower | focus `grand_v3.crystal_mantle_overlook` | First Person / `default` | none |
-| `07-grand-v3-corrective-waterfall-plunge-a` | Water visibly leaves a crown and falls rather than following a long ramp | look-at `grand_v3.waterfall_profile` | Map / `default` | offset `80,42,65` |
-| `08-grand-v3-corrective-waterfall-plunge-b` | Opposite side shows a vertical face, clear base, and no rear void | look-at `grand_v3.waterfall_profile` | Map / `rear` | offset `80,42,65` |
-| `09-grand-v3-corrective-waterfall-base-character` | Recessed receiving water and grounded banks at shipped distance | focus `grand_v3.waterfall_base` | Character / `counter-rotated` | none |
+| `07-grand-v3-corrective-waterfall-plunge-a` | The upstream channel visibly descends through several open-air small falls and pools before the final fall | look-at `grand_v3.waterfall_crown` | Map / `default` | offset `80,42,65` |
+| `08-grand-v3-corrective-waterfall-plunge-b` | Opposite side proves a bending eroded gorge, open fall faces, and no raised retaining walls or rear void | look-at `grand_v3.waterfall_base` | Map / `rear` | offset `80,42,65` |
+| `09-grand-v3-corrective-waterfall-profile-character` | The reachable profile frames the 24–30-level final fall and recessed receiving water between naturally feathered banks | focus `grand_v3.waterfall_profile` | Character / `rotated` | none |
 | `10-grand-v3-corrective-tunnel-mouth-a` | Exterior approach reads as concealed mountain terrain | look-at `grand_v3.tunnel_mouth` | Map / `default` | offset `34,18,42` |
 | `11-grand-v3-corrective-tunnel-mouth-b` | Reverse side shows continuous cap material and no distinct roof line | look-at `grand_v3.tunnel_mouth` | Map / `rear` | offset `34,18,42` |
 | `12-grand-v3-corrective-tunnel-mouth-character` | Entrance scale remains readable without becoming monumental | focus `grand_v3.tunnel_mouth` | Character / `rotated` | none |
@@ -106,12 +109,12 @@ scale is review-only and must not be presented as the shipped camera distance.
 | `19-grand-v3-corrective-treeline-downhill` | Dense valley to hills to sparse mountain-base gradient is visible | focus `grand_v3.treeline_transition` | Character / `default` | radius scale `10` |
 | `20-grand-v3-corrective-treeline-uphill` | Reverse azimuth shows snow increasing and trees ending before summit | focus `grand_v3.treeline_transition` | Character / `rear` | radius scale `10` |
 | `21-grand-v3-corrective-treeline-first-person` | Individual high-elevation trees stop at a credible shipped-camera boundary | focus `grand_v3.treeline_transition` | First Person / `rear` | none |
-| `22-grand-v3-corrective-peak-ridge-a` | First oblique rejects cylindrical benches and isolated pyramids | focus `grand_v3.peak_ridge_overlook` | Character / `default` | radius scale `12` |
-| `23-grand-v3-corrective-peak-ridge-b` | Opposite oblique shows both irregular connected chains and the lake outlet opening | focus `grand_v3.peak_ridge_overlook` | Character / `rear` | radius scale `12` |
+| `22-grand-v3-corrective-peak-ridge-a` | First oblique proves one continuous lower mountain body with six distinct upper crowns per chain | focus `grand_v3.peak_ridge_overlook` | Character / `default` | radius scale `12` |
+| `23-grand-v3-corrective-peak-ridge-b` | Opposite oblique shows broad overlapping slopes, V-shaped scenic saddles, separate crowns, and the lake outlet opening | focus `grand_v3.peak_ridge_overlook` | Character / `rear` | radius scale `12` |
 | `24-grand-v3-corrective-peak-saddle-first-person` | The authored saddle remains playable beneath treeless snowy summits | focus `grand_v3.peak_saddle` | First Person / `counter-rotated` | none |
-| `25-grand-v3-corrective-massif-crest-a` | Exact crest is centered in the massif body, separated from Crystal, and above every peak | look-at `grand_v3.massif_crest` | Map / `default` | offset `110,76,115` |
-| `26-grand-v3-corrective-massif-crest-b` | Reverse silhouette proves a connected, irregular mountain instead of a cone on a cylinder | look-at `grand_v3.massif_crest` | Map / `rear` | offset `110,76,115` |
-| `27-grand-v3-corrective-crystal-exit-frozen-woods` | Crystal upper route opens directly into Frozen Woods | focus `crystal_ascent.upper_exit` | Character / `rotated` | radius scale `5` |
+| `25-grand-v3-corrective-massif-crest-a` | Exact 330–350 crest is centered in the broad rising massif, separated from Crystal, and above every 260–300 peak | look-at `grand_v3.massif_crest` | Map / `default` | offset `110,76,115` |
+| `26-grand-v3-corrective-massif-crest-b` | Reverse silhouette proves continuous rising radial profiles, a small irregular crest, and no capped plateau | look-at `grand_v3.massif_crest` | Map / `rear` | offset `110,76,115` |
+| `27-grand-v3-corrective-crystal-exit-frozen-woods` | Crystal upper route opens directly into a mostly level 151–153 Frozen Woods plateau | focus `crystal_ascent.upper_exit` | Character / `rotated` | radius scale `5` |
 | `28-grand-v3-corrective-crystal-exit-first-person` | Shipped eye height sees the snowy woodland destination rather than a side opening | focus `crystal_ascent.upper_exit` | First Person / `rotated` | none |
 | `29-grand-v3-corrective-full-cutaway` | One continuous tunnel/Crystal interior is exposed without floating trees or retained roof runs | focus `grand_v3.tunnel_midpoint` | Map / `top-down` | full cutaway |
 | `30-grand-v3-corrective-illumination-overlay` | The same exact pose shows authoritative Dark/Dim/Bright coverage without changing geometry | focus `grand_v3.tunnel_midpoint` | Map / `top-down` | full cutaway + illumination overlay |
@@ -137,20 +140,17 @@ cargo run --release -p hex_game --features visual-walk
 The windowless runner advances simulation with a manual 60 Hz timestep. Setup and uncaptured
 route tails run at 12x, while every `CaptureWhileMoving` interval runs at 1x; synchronous PNG
 encoding therefore cannot move the actor farther between two requested frames. The script
-publishes exactly 184 indexed frames over twelve fail-closed sequences:
+publishes exactly 120 indexed frames over eight fail-closed sequences. Waterfall evidence is
+now the two static crown/base look-at rows plus the reachable `waterfall_profile` focus row;
+observation-only surfaces are never used as movement destinations.
 
-1. `grand_v3.valley_lake` to `grand_v3.waterfall_base` and back: inspect the recessed lower
-   approach and receiving-water edges. This route must never continue through the plunge.
-2. `grand_v3.mountain_lake` to `grand_v3.waterfall_crown` and back: inspect the upper lake
-   shore and lip independently. Keeping the upper and lower pairs separate prevents the
-   rejected waterfall ramp—or an unrelated natural-pass detour—from masquerading as evidence.
-3. `grand_v3.tunnel_mouth` to `grand_v3.tunnel_midpoint` and back: watch the cap seam,
+1. `grand_v3.tunnel_mouth` to `grand_v3.tunnel_midpoint` and back: watch the cap seam,
    repeated tunnel crystals, fog, and entrance occlusion frame by frame.
-4. `grand_v3.ascent_threshold` to `crystal_ascent.bottom_chamber` and back: watch the Crystal
+2. `grand_v3.ascent_threshold` to `crystal_ascent.bottom_chamber` and back: watch the Crystal
    foundation and emissive fixtures for holes, coplanar flicker, and visibility oscillation.
-5. `crystal_ascent.corner_landing` to `crystal_ascent.upper_contraction` and back: inspect the
+3. `crystal_ascent.corner_landing` to `crystal_ascent.upper_contraction` and back: inspect the
    carved stair supports, wall clearances, and shroud at changing heights.
-6. `crystal_ascent.upper_exit` to `grand_v3.frozen_exit` and back: prove the corrected snowy
+4. `crystal_ascent.upper_exit` to `grand_v3.frozen_exit` and back: prove the corrected snowy
    woodland connection at close range.
 
 The cadence is distance-calibrated against the shipped `5.0` world-units/second player and the
@@ -163,8 +163,6 @@ unreviewed.
 
 | Bidirectional pair | Minimum flat-route frames | Frames/request | Requests/direction | Final requested frame |
 |---|---:|---:|---:|---:|
-| valley lake ↔ waterfall base | `685.89` | `38` | `16` | `608` |
-| mountain lake ↔ waterfall crown | `457.26` | `26` | `16` | `416` |
 | tunnel mouth ↔ midpoint | `1621.20` | `28` | `32` | `896` |
 | Ascent threshold ↔ bottom chamber | `332.55` | `24` | `12` | `288` |
 | corner landing ↔ upper contraction | `228.63` | `16` | `12` | `192` |
@@ -185,6 +183,8 @@ ID. Inspect every full-resolution artifact once, then scan a complete contact sh
 fresh-eyes reviewer who did not implement the correction must challenge the recorded verdicts.
 The mechanically completed index remains `UNREVIEWED` until those two inspection passes are
 recorded. It must separately record the motion method and verdict. Any cropped overview, exposed
-Crystal tower, ramp waterfall, conspicuous tunnel cap line, straight river, generic lake
-island, trees at summit, isolated frozen biome, pyramid/cylinder peak, off-center or lower
-massif crest, hole, floating prop, or temporal flicker fails this corrective review.
+Crystal tower or exposed worked-stone arc, straight/ramp waterfall, closed fall face, raised
+gorge wall, conspicuous tunnel cap line, straight river, generic lake island, trees at summit,
+uplifted Frozen Woods, disconnected/cylindrical peak body, merged upper crowns, capped Massif
+plateau, off-center or lower Massif crest, hole, floating prop, or temporal flicker fails this
+corrective review.

@@ -78,11 +78,17 @@ The designer orientation is fixed and is never rotated as a whole. Its flat-top 
 uses `x = 1.5q` and `y = sqrt(3)(r + q/2)`: `(0,-8)` is north, `(8,-8)` north-east,
 `(8,0)` south-east, `(0,8)` south, `(-8,8)` south-west, and `(-8,0)` north-west.
 Template revision 2 is the approved cell-for-cell transcription of the source drawing and
-supersedes the earlier approximate trace.
+supersedes the earlier approximate trace. Revision 3 preserves that geography but changes
+the sealed waterfall-gorge land cell and outer Peak-backdrop shelves 127, 128, 214, and 215 from
+`Ordinary` to `Scenic`: the reachable `grand_v3.waterfall_profile` remains the gameplay
+review point, while the gorge observations and world-edge Peak shelves are visual terrain
+rather than promises of walkable footing.
 
-Revision 2 fixes twelve north-eastern sharp peaks as two six-cell chains around the
+The revision-2 geography retained by revision 3 fixes twelve north-eastern sharp peaks as two six-cell chains around the
 elevated mountain lake, with the scenic lake island inside it and the authored waterfall
-opening left in the enclosure. It also fixes the frozen-woods three-cell core and its
+opening left in the enclosure. The four narrow world-edge shelves behind the outer Peak
+feather remain Mountain backdrop without requiring another cut through the chain. It also
+fixes the frozen-woods three-cell core and its
 single mountain-shore contact, Crystal Ascent, and the straight `q = 1` tunnel from the
 Ascent to its hill terminal. The river remains an overlay over land until its one sea
 outlet rather than turning every routed cell into open water. The template bounds the
@@ -101,7 +107,7 @@ The contact sheet is self-contained, while the typed plan and validator remain t
 logical authority. Invalid output is never published.
 
 `V3LayoutSettings::Schematic` is the additive runtime compiler boundary for this plan.
-The initial strict contract accepts Grand V3 revision 2 at pitch 22 with the
+The strict compiler contract accepts Grand V3 revision 3 at pitch 22 with the
 `GrandV3BasicV1` vertical profile. Runtime generation calls the same pure
 `hex_schematic::generate(template, seed)` function once, then compiles its already-selected
 plan; V3 does not wrap it in the legacy eight-candidate voxel search. Tests and review
@@ -124,6 +130,25 @@ variable-width natural upper pass, and the tunnel/Crystal route. The exact Cryst
 landmark is compiled through its existing authored builder and retains its occupancy,
 interior, lighting, cutaway, and stable-anchor contracts. Vegetation is applied only after
 water, routes, structures, and sight-critical clearings are reserved.
+
+Grand V3's highlands are one continuous natural field rather than independent coarse-cell
+stamps. The two six-peak chains overlap through broad lower and middle slopes, split only
+above level 240 into six crowns per chain, and retain scenic V-shaped saddles below the
+ordinary route graph. Their irregular summits lie at levels 260–300. The Massif continues
+the same terraced rise to one small central crest at levels 330–350, with no capped body
+plateau. Frozen Woods overrides those uplift fields across its core: at least 70 percent of
+its surface stays within levels 151–153 and its six-row mountain blend never steps more than
+eight levels. In composite worlds, neighboring natural rock and snow begin immediately
+outside Crystal Ascent's radius-32 authored site, burying the worked exterior except at its
+declared openings; the standalone landmark is unchanged.
+
+The mountain-lake outlet descends from level 150 to the level-15 valley lake as a bending
+three-lane cascade. At least 28 upstream rows contain ordinary 0–2-level descents, six to
+eight open-air 4–10-level falls, and short pools before the final 24–30-level fall. Its
+gorge is formed only by lowering and feathering adjacent terrain; raised retaining banks
+are invalid. All V3 layouts share an inclusive level-384 ceiling, while existing layout
+settings and generated heights remain unchanged unless their own recipe requests more
+vertical space. V1/V2 limits are unchanged.
 
 The earlier undecorated radius-187 artifact remains useful as the recorded performance
 baseline in `docs/planning/waves/grand-v3-map/proxy-checkpoint.md`; it is not the semantic

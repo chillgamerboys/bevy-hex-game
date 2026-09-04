@@ -1,7 +1,7 @@
 // Temporal visual acceptance for the Grand V3 corrective terrain pass.
 //
 // This is deliberately separate from the broad static camera itinerary. It
-// follows one explorer through six high-risk boundaries in both directions so
+// follows one explorer through four high-risk boundaries in both directions so
 // movement can expose flicker, holes, unstable caps, and one-sided seams. Every
 // recording step is fail-closed: the click destination, bounded image sequence,
 // idle wait, and exact arrival proof are contiguous.
@@ -21,40 +21,7 @@
     Click(name: "Party Movement Mode"),
     Key("Escape"),
 
-    // 1-4. Inspect the lower and upper waterfall approaches independently. The
-    // plunge is deliberately not an ordinary route: a base <-> crown click would
-    // either preserve the rejected ramp or detour through an unrelated upper pass.
-    ClickAnchor(name: "grand_v3.valley_lake", expected: (q: 66, r: -10, level: 20)),
-    Settle(5),
-    AwaitPartyIdle(max_frames: 18000),
-    AssertSelectedAt(expected: (q: 66, r: -10, level: 20)),
-    ClickAnchor(name: "grand_v3.waterfall_base", expected: (q: 99, r: -11, level: 16)),
-    CaptureWhileMoving(prefix: "01-waterfall-lower-to-base-motion", every_frames: 38, capture_count: 16),
-    AwaitPartyIdle(max_frames: 18000),
-    AssertSelectedAt(expected: (q: 99, r: -11, level: 16)),
-    OrbitCamera(yaw_turns: 0.5),
-    ClickAnchor(name: "grand_v3.valley_lake", expected: (q: 66, r: -10, level: 20)),
-    CaptureWhileMoving(prefix: "02-waterfall-base-to-lower-motion", every_frames: 38, capture_count: 16),
-    AwaitPartyIdle(max_frames: 18000),
-    AssertSelectedAt(expected: (q: 66, r: -10, level: 20)),
-    OrbitCamera(yaw_turns: -0.5),
-
-    ClickAnchor(name: "grand_v3.mountain_lake", expected: (q: 77, r: -77, level: 151)),
-    Settle(5),
-    AwaitPartyIdle(max_frames: 18000),
-    AssertSelectedAt(expected: (q: 77, r: -77, level: 151)),
-    ClickAnchor(name: "grand_v3.waterfall_crown", expected: (q: 99, r: -77, level: 151)),
-    CaptureWhileMoving(prefix: "03-waterfall-upper-to-crown-motion", every_frames: 26, capture_count: 16),
-    AwaitPartyIdle(max_frames: 18000),
-    AssertSelectedAt(expected: (q: 99, r: -77, level: 151)),
-    OrbitCamera(yaw_turns: 0.5),
-    ClickAnchor(name: "grand_v3.mountain_lake", expected: (q: 77, r: -77, level: 151)),
-    CaptureWhileMoving(prefix: "04-waterfall-crown-to-upper-motion", every_frames: 26, capture_count: 16),
-    AwaitPartyIdle(max_frames: 18000),
-    AssertSelectedAt(expected: (q: 77, r: -77, level: 151)),
-    OrbitCamera(yaw_turns: -0.5),
-
-    // 5-6. Tunnel mouth <-> midpoint: catch the cap stripe, entrance reveal,
+    // Sequences 05-06. Tunnel mouth <-> midpoint: catch the cap stripe, entrance reveal,
     // roof holes, cutaway churn, and crystal/light flicker.
     ClickAnchor(name: "grand_v3.tunnel_mouth", expected: (q: 22, r: 31, level: 7)),
     Settle(5),
@@ -71,7 +38,7 @@
     AssertSelectedAt(expected: (q: 22, r: 31, level: 7)),
     OrbitCamera(yaw_turns: -0.5),
 
-    // 7-8. Crystal threshold <-> chamber: catch the former support-skirt gap
+    // Sequences 07-08. Crystal threshold <-> chamber: catch the former support-skirt gap
     // and coplanar crystal/terrain flicker from both directions.
     ClickAnchor(name: "grand_v3.ascent_threshold", expected: (q: -10, r: -115, level: 6)),
     Settle(5),
@@ -88,7 +55,7 @@
     AssertSelectedAt(expected: (q: -10, r: -115, level: 6)),
     OrbitCamera(yaw_turns: -0.5),
 
-    // 9-10. Upper stair corner <-> contraction: catch step undersides, thin
+    // Sequences 09-10. Upper stair corner <-> contraction: catch step undersides, thin
     // supports, wall clipping, and transient shroud seams at changing heights.
     ClickAnchor(name: "crystal_ascent.corner_landing", expected: (q: 33, r: -122, level: 134)),
     Settle(5),
@@ -105,7 +72,7 @@
     AssertSelectedAt(expected: (q: 33, r: -122, level: 134)),
     OrbitCamera(yaw_turns: -0.5),
 
-    // 11-12. Crystal summit <-> Frozen Woods exit: catch the old side-opening,
+    // Sequences 11-12. Crystal summit <-> Frozen Woods exit: catch the old side-opening,
     // snow transition discontinuities, and boundary holes at close range.
     ClickAnchor(name: "crystal_ascent.upper_exit", expected: (q: 53, r: -148, level: 150)),
     Settle(5),

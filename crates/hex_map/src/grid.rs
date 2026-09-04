@@ -30,7 +30,8 @@ use hex_core::{
     AuthoritativeSystems, BiomeRegions, CutawayOccluder, DamagedVoxels, GameplayLight,
     GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
     InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint,
-    PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SimulationRole,
+    PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, ReviewCrystalLightProfile,
+    ReviewEdgeTreatment, ReviewMaterialTreatment, RunBottom, Screen, SimulationRole,
     SpecialMovementRegions, SubstanceId, TerrainChunkRoot, TerrainEdit, TerrainImpact,
     TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult,
     TerrainPickRun, TerrainReady, TerrainRenderBatch, TerrainSystems, TilePos, TraversalBlockers,
@@ -146,6 +147,14 @@ struct PendingTerrainPublication;
 /// seeing [`TerrainReady`] between presentation construction and snapshot publication.
 #[derive(Resource, Debug, Clone, Copy)]
 struct PendingInitialSnapshotPublication;
+
+/// Presentation-free lifecycle owner for one chunk's logical terrain runs.
+///
+/// Logical [`HexTile`] entities are authoritative ECS facts, not scene nodes. Keeping
+/// them below an inert owner preserves recursive chunk teardown without placing every
+/// run in Bevy's transform or visibility propagation trees.
+#[derive(Component, Debug)]
+struct LogicalTerrainRuns;
 
 const MAX_WORLD_REPLICATION_REQUESTS_PER_UPDATE: usize = 64;
 
@@ -623,7 +632,8 @@ fn teardown_map(
 /// bounded combined render meshes per resident chunk.
 ///
 /// Logical run entities retain gameplay's exact public tuple. They deliberately carry
-/// no mesh or material: rendering thousands of independent PBR entities was the
+/// no scene transform, visibility, picking, mesh, or material components: rendering
+/// and traversing hundreds of thousands of independent scene entities was the
 /// radius-187 bottleneck. Chunk children combine those prisms by substance and
 /// cutaway ownership while [`TerrainRenderBatch`] maps pointer hits back to the same
 /// logical run entities.
@@ -638,6 +648,9 @@ fn spawn_grid(
     interiors: Option<Res<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
+    material_treatment: Option<Res<ReviewMaterialTreatment>>,
+    edge_treatment: Option<Res<ReviewEdgeTreatment>>,
+    crystal_light_profile: Option<Res<ReviewCrystalLightProfile>>,
     pending_campaign: Option<Res<PendingCampaignWorldPublication>>,
     mut damage_state: ResMut<TerrainDamageState>,
     mut damaged_voxels: ResMut<DamagedVoxels>,
@@ -657,6 +670,12 @@ fn spawn_grid(
         interiors.as_deref(),
         presentation.as_deref(),
         art_catalog.as_deref(),
+        material_treatment.as_deref().copied().unwrap_or_default(),
+        edge_treatment.as_deref().copied().unwrap_or_default(),
+        crystal_light_profile
+            .as_deref()
+            .copied()
+            .unwrap_or_default(),
     );
     match built {
         Ok(()) => {
@@ -781,6 +800,9 @@ fn build_grid(
     interiors: Option<&InteriorRegions>,
     presentation: Option<&MapPresentationProjection>,
     art_catalog: Option<&RuntimeArtCatalog>,
+    material_treatment: ReviewMaterialTreatment,
+    edge_treatment: ReviewEdgeTreatment,
+    crystal_light_profile: ReviewCrystalLightProfile,
 ) -> Result<(), MapPresentationError> {
     // Keep construction ordered behind the accepted shared asset set even though
     // terrain geometry is now baked directly rather than instancing `hex.glb`.
@@ -794,7 +816,7 @@ fn build_grid(
     // replaced since the previous world was presented. A full publication is the
     // lifecycle boundary at which every terrain material must be resolved again.
     // Local chunk edits deliberately keep using the refreshed cache below.
-    palette_materials.reset_for_world(materials);
+    palette_materials.reset_for_world(materials, material_treatment);
     terrain_meshes.reset_for_world(meshes);
     let mut children = liquid_render::spawn_presentations(
         commands,
@@ -811,7 +833,11 @@ fn build_grid(
         feature_render::spawn_presentations(commands, settings.level_height, presentation)
             .map_err(MapPresentationError::Feature)?,
     );
-    children.extend(crystal_render::spawn_prepared(commands, prepared_crystals));
+    children.extend(crystal_render::spawn_prepared(
+        commands,
+        prepared_crystals,
+        crystal_light_profile,
+    ));
     children.extend(spawn_gameplay_lights(commands, presentation));
 
     let grid = commands
@@ -835,6 +861,8 @@ fn build_grid(
             settings,
             interiors,
             chunk,
+            material_treatment,
+            edge_treatment,
         )?;
         chunk_roots.insert(chunk, root);
     }
@@ -862,6 +890,8 @@ fn spawn_terrain_chunk(
     settings: &MapSettings,
     interiors: Option<&InteriorRegions>,
     chunk: crate::voxel::TerrainChunkCoord,
+    material_treatment: ReviewMaterialTreatment,
+    edge_treatment: ReviewEdgeTreatment,
 ) -> Result<Entity, MapPresentationError> {
     let root = commands
         .spawn((
@@ -872,6 +902,12 @@ fn spawn_terrain_chunk(
                 q: chunk.q,
                 r: chunk.r,
             },
+        ))
+        .id();
+    let logical_root = commands
+        .spawn((
+            Name::new(format!("LogicalTerrainRuns[{},{}]", chunk.q, chunk.r)),
+            LogicalTerrainRuns,
         ))
         .id();
     let chunk_columns = map.columns_in_chunk(chunk).collect::<Vec<_>>();
@@ -888,7 +924,8 @@ fn spawn_terrain_chunk(
         })
         .collect::<BTreeMap<_, _>>();
 
-    let mut children = Vec::new();
+    let mut logical_children = Vec::new();
+    let mut rendered_children = vec![logical_root];
     let mut batches = BTreeMap::<TerrainBatchKey, Vec<PendingTerrainRun>>::new();
     for (coord, column) in chunk_columns {
         for projected in projected_columns.get(&coord).into_iter().flatten().copied() {
@@ -905,17 +942,7 @@ fn spawn_terrain_chunk(
             // surface out, putting a dependency on the map straight back into movement.
             // Voxels inside the run are addressed by `TilePos`, not by this entity.
             let position = TilePos::new(coord, run.top - 1);
-            let transform = Transform {
-                translation: coord.to_world(span.centre()),
-                scale: Vec3::new(1., span.height(), 1.),
-                ..default()
-            };
             let mut tile = commands.spawn((
-                transform,
-                // A roof run can be hidden independently of the grid that owns it.
-                Visibility::Inherited,
-                Pickable::IGNORE,
-                Name::new("HexTile"),
                 HexTile,
                 coord,
                 span,
@@ -928,7 +955,7 @@ fn spawn_terrain_chunk(
                 tile.insert((CutawayOccluder(region), PresentationOcclusion::default()));
             }
             let entity = tile.id();
-            children.push(entity);
+            logical_children.push(entity);
             batches
                 .entry(TerrainBatchKey {
                     substance: run.substance,
@@ -952,10 +979,16 @@ fn spawn_terrain_chunk(
     };
     let mut chunk_mesh_handles = Vec::new();
     for (key, runs) in batches {
-        let material = palette_materials.get_or_create(key.substance, table, materials);
+        let material =
+            palette_materials.get_or_create(key.substance, table, material_treatment, materials);
         for (partition, runs) in runs.chunks(MAX_TERRAIN_PICK_RUNS_PER_BATCH).enumerate() {
-            let mesh = combined_terrain_mesh(runs, &projected_columns, settings.level_height)
-                .map_err(MapPresentationError::TerrainMesh)?;
+            let mesh = combined_terrain_mesh_with_edge(
+                runs,
+                &projected_columns,
+                settings.level_height,
+                edge_treatment,
+            )
+            .map_err(MapPresentationError::TerrainMesh)?;
             let mesh = meshes.add(mesh);
             chunk_mesh_handles.push(mesh.clone());
             let lookup = runs
@@ -977,11 +1010,14 @@ fn spawn_terrain_chunk(
             if let Some(region) = key.cutaway {
                 batch.insert((CutawayOccluder(region), PresentationOcclusion::default()));
             }
-            children.push(batch.id());
+            rendered_children.push(batch.id());
         }
     }
     terrain_meshes.replace_chunk(chunk, chunk_mesh_handles, meshes);
-    commands.entity(root).add_children(&children);
+    commands
+        .entity(logical_root)
+        .add_children(&logical_children);
+    commands.entity(root).add_children(&rendered_children);
     Ok(root)
 }
 
@@ -1410,6 +1446,9 @@ fn spawn_imported_snapshot_grid(
     interiors: Option<Res<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
+    material_treatment: Option<Res<ReviewMaterialTreatment>>,
+    edge_treatment: Option<Res<ReviewEdgeTreatment>>,
+    crystal_light_profile: Option<Res<ReviewCrystalLightProfile>>,
     mut replication_state: ResMut<WorldReplicationStateV1>,
 ) {
     let Some(pending) = pending else {
@@ -1431,6 +1470,12 @@ fn spawn_imported_snapshot_grid(
             interiors.as_deref(),
             presentation.as_deref(),
             art_catalog.as_deref(),
+            material_treatment.as_deref().copied().unwrap_or_default(),
+            edge_treatment.as_deref().copied().unwrap_or_default(),
+            crystal_light_profile
+                .as_deref()
+                .copied()
+                .unwrap_or_default(),
         ),
         _ => Err(MapPresentationError::SnapshotResourcesMissing),
     };
@@ -1530,9 +1575,22 @@ struct TerrainRawMesh {
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    edge_treatment: ReviewEdgeTreatment,
+    geometric_bevel: Option<TerrainGeometricBevel>,
 }
 
 impl TerrainRawMesh {
+    fn with_edge_treatment(
+        edge_treatment: ReviewEdgeTreatment,
+        level_height: f32,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            edge_treatment,
+            geometric_bevel: TerrainGeometricBevel::resolve(edge_treatment, level_height)?,
+            ..Self::default()
+        })
+    }
+
     fn vertex(&mut self, position: Vec3, normal: Vec3, uv: [f32; 2]) -> Result<u32, String> {
         let index = u32::try_from(self.positions.len())
             .map_err(|_error| "terrain mesh vertex index overflowed u32".to_owned())?;
@@ -1543,14 +1601,18 @@ impl TerrainRawMesh {
     }
 
     fn cap(&mut self, coord: HexCoord, y: f32, top: bool) -> Result<(), String> {
+        if let Some(bevel) = self.geometric_bevel {
+            return self.geometric_cap(coord, y, top, bevel);
+        }
         let centre = coord.to_world(y);
         let normal = if top { Vec3::Y } else { Vec3::NEG_Y };
         let centre_index = self.vertex(centre, normal, [0.5, 0.5])?;
         let mut corner_indices = [0u32; 6];
         for (slot, corner) in corner_indices.iter_mut().zip(terrain_hex_corners()) {
+            let edge_direction = (normal + corner.normalize()).normalize();
             *slot = self.vertex(
                 centre + corner,
-                normal,
+                micro_bevel_normal(normal, edge_direction, self.edge_treatment),
                 [0.5 + corner.x * 0.5, 0.5 + corner.z * 0.5],
             )?;
         }
@@ -1579,6 +1641,110 @@ impl TerrainRawMesh {
         Ok(())
     }
 
+    fn geometric_cap(
+        &mut self,
+        coord: HexCoord,
+        y: f32,
+        top: bool,
+        bevel: TerrainGeometricBevel,
+    ) -> Result<(), String> {
+        let centre = coord.to_world(y);
+        let normal = if top { Vec3::Y } else { Vec3::NEG_Y };
+        let centre_index = self.vertex(centre, normal, [0.5, 0.5])?;
+        let mut corner_indices = [0u32; 6];
+        for (slot, corner) in corner_indices
+            .iter_mut()
+            .zip(terrain_hex_corners().map(|corner| bevel.inset_corner(corner)))
+        {
+            *slot = self.vertex(centre + corner, normal, terrain_cap_uv(corner))?;
+        }
+        let mut emit_triangle = |current: u32, next: u32| {
+            if top {
+                self.indices.extend([centre_index, current, next]);
+            } else {
+                self.indices.extend([centre_index, next, current]);
+            }
+        };
+        for pair in corner_indices.windows(2) {
+            let [current, next] = pair else {
+                return Err("terrain cap corner partition was malformed".to_owned());
+            };
+            emit_triangle(*current, *next);
+        }
+        let first = corner_indices
+            .first()
+            .copied()
+            .ok_or_else(|| "terrain cap has no first corner".to_owned())?;
+        let last = corner_indices
+            .last()
+            .copied()
+            .ok_or_else(|| "terrain cap has no last corner".to_owned())?;
+        emit_triangle(last, first);
+
+        let outer_y = if top {
+            y - bevel.depth
+        } else {
+            y + bevel.depth
+        };
+        let outer_centre = coord.to_world(outer_y);
+        for [outer_first, outer_second] in terrain_hex_ring_edges() {
+            let inner_first = bevel.inset_corner(outer_first);
+            let inner_second = bevel.inset_corner(outer_second);
+            let outer_first_position = outer_centre + outer_first;
+            let outer_second_position = outer_centre + outer_second;
+            let inner_first_position = centre + inner_first;
+            let inner_second_position = centre + inner_second;
+            if top {
+                self.quad(
+                    [
+                        outer_first_position,
+                        outer_second_position,
+                        inner_second_position,
+                        inner_first_position,
+                    ],
+                    [
+                        terrain_cap_uv(outer_first),
+                        terrain_cap_uv(outer_second),
+                        terrain_cap_uv(inner_second),
+                        terrain_cap_uv(inner_first),
+                    ],
+                )?;
+            } else {
+                self.quad(
+                    [
+                        outer_first_position,
+                        inner_first_position,
+                        inner_second_position,
+                        outer_second_position,
+                    ],
+                    [
+                        terrain_cap_uv(outer_first),
+                        terrain_cap_uv(inner_first),
+                        terrain_cap_uv(inner_second),
+                        terrain_cap_uv(outer_second),
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn quad(&mut self, positions: [Vec3; 4], uvs: [[f32; 2]; 4]) -> Result<(), String> {
+        let [first, second, third, fourth] = positions;
+        let [first_uv, second_uv, third_uv, fourth_uv] = uvs;
+        let cross = (second - first).cross(third - first);
+        if !cross.is_finite() || cross.length_squared() <= f32::EPSILON {
+            return Err("terrain bevel produced a degenerate face".to_owned());
+        }
+        let normal = cross.normalize();
+        let a = self.vertex(first, normal, first_uv)?;
+        let b = self.vertex(second, normal, second_uv)?;
+        let c = self.vertex(third, normal, third_uv)?;
+        let d = self.vertex(fourth, normal, fourth_uv)?;
+        self.indices.extend([a, b, c, a, c, d]);
+        Ok(())
+    }
+
     fn side(
         &mut self,
         coord: HexCoord,
@@ -1586,16 +1752,53 @@ impl TerrainRawMesh {
         normal: Vec3,
         bottom: f32,
         top: f32,
+        trim_bottom: bool,
+        trim_top: bool,
     ) -> Result<(), String> {
+        let (bottom, top) = self.geometric_bevel.map_or((bottom, top), |bevel| {
+            (
+                if trim_bottom {
+                    bottom + bevel.depth
+                } else {
+                    bottom
+                },
+                if trim_top { top - bevel.depth } else { top },
+            )
+        });
+        if top - bottom <= f32::EPSILON {
+            return Err("terrain bevel consumed an exposed side interval".to_owned());
+        }
         let base = coord.to_world(0.0);
         let first_bottom = base + first + Vec3::Y * bottom;
         let second_bottom = base + second + Vec3::Y * bottom;
         let second_top = base + second + Vec3::Y * top;
         let first_top = base + first + Vec3::Y * top;
-        let a = self.vertex(first_bottom, normal, [0.0, bottom])?;
-        let b = self.vertex(second_bottom, normal, [1.0, bottom])?;
-        let c = self.vertex(second_top, normal, [1.0, top])?;
-        let d = self.vertex(first_top, normal, [0.0, top])?;
+        let first_horizontal = first.normalize();
+        let second_horizontal = second.normalize();
+        let first_bottom_normal = micro_bevel_normal(
+            normal,
+            (first_horizontal + Vec3::NEG_Y).normalize(),
+            self.edge_treatment,
+        );
+        let second_bottom_normal = micro_bevel_normal(
+            normal,
+            (second_horizontal + Vec3::NEG_Y).normalize(),
+            self.edge_treatment,
+        );
+        let second_top_normal = micro_bevel_normal(
+            normal,
+            (second_horizontal + Vec3::Y).normalize(),
+            self.edge_treatment,
+        );
+        let first_top_normal = micro_bevel_normal(
+            normal,
+            (first_horizontal + Vec3::Y).normalize(),
+            self.edge_treatment,
+        );
+        let a = self.vertex(first_bottom, first_bottom_normal, [0.0, bottom])?;
+        let b = self.vertex(second_bottom, second_bottom_normal, [1.0, bottom])?;
+        let c = self.vertex(second_top, second_top_normal, [1.0, top])?;
+        let d = self.vertex(first_top, first_top_normal, [0.0, top])?;
         self.indices.extend([a, b, c, a, c, d]);
         Ok(())
     }
@@ -1625,6 +1828,56 @@ impl TerrainRawMesh {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TerrainGeometricBevel {
+    inset: f32,
+    depth: f32,
+}
+
+impl TerrainGeometricBevel {
+    fn resolve(treatment: ReviewEdgeTreatment, level_height: f32) -> Result<Option<Self>, String> {
+        let Some(fraction) = treatment.geometric_bevel_fraction() else {
+            return Ok(None);
+        };
+        if !level_height.is_finite() || level_height <= 0.0 {
+            return Err(
+                "geometric terrain bevel requires a finite positive level height".to_owned(),
+            );
+        }
+        let inset = fraction * hex_core::config::HEX_CIRCUMRADIUS;
+        // A quarter-level cap keeps top and bottom chamfers separated and leaves a
+        // positive side face even for the smallest one-level exposed interval.
+        let depth = inset.min(level_height * 0.25);
+        if !inset.is_finite()
+            || !depth.is_finite()
+            || inset <= 0.0
+            || inset >= hex_core::config::HEX_CIRCUMRADIUS
+            || depth <= 0.0
+        {
+            return Err("geometric terrain bevel resolved outside the voxel bounds".to_owned());
+        }
+        Ok(Some(Self { inset, depth }))
+    }
+
+    fn inset_corner(self, corner: Vec3) -> Vec3 {
+        let scale =
+            (hex_core::config::HEX_CIRCUMRADIUS - self.inset) / hex_core::config::HEX_CIRCUMRADIUS;
+        corner * scale
+    }
+}
+
+fn micro_bevel_normal(
+    face_normal: Vec3,
+    edge_direction: Vec3,
+    treatment: ReviewEdgeTreatment,
+) -> Vec3 {
+    let blend = treatment.normal_blend();
+    if blend == 0.0 {
+        return face_normal;
+    }
+    face_normal.lerp(edge_direction, blend).normalize()
+}
+
 fn terrain_hex_corners() -> [Vec3; 6] {
     let radius = hex_core::config::HEX_CIRCUMRADIUS;
     let inradius = 0.5 * hex_core::config::HEX_SMALL_DIAMETER;
@@ -1648,6 +1901,22 @@ fn terrain_hex_sides() -> [([Vec3; 2], Vec3); 6] {
         ([north, north_west], Vec3::new(-0.5, 0.0, -0.866_025_4)),
         ([north_east, north], Vec3::new(0.5, 0.0, -0.866_025_4)),
     ]
+}
+
+fn terrain_hex_ring_edges() -> [[Vec3; 2]; 6] {
+    let [north, north_west, south_west, south, south_east, north_east] = terrain_hex_corners();
+    [
+        [north, north_west],
+        [north_west, south_west],
+        [south_west, south],
+        [south, south_east],
+        [south_east, north_east],
+        [north_east, north],
+    ]
+}
+
+fn terrain_cap_uv(corner: Vec3) -> [f32; 2] {
+    [0.5 + corner.x * 0.5, 0.5 + corner.z * 0.5]
 }
 
 fn owner_at(
@@ -1690,26 +1959,41 @@ fn exposed_intervals(
     exposed
 }
 
+#[cfg(test)]
 fn combined_terrain_mesh(
     runs: &[PendingTerrainRun],
     projected_columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
     level_height: f32,
 ) -> Result<Mesh, String> {
-    let mut combined = TerrainRawMesh::default();
+    combined_terrain_mesh_with_edge(
+        runs,
+        projected_columns,
+        level_height,
+        ReviewEdgeTreatment::Current,
+    )
+}
+
+fn combined_terrain_mesh_with_edge(
+    runs: &[PendingTerrainRun],
+    projected_columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
+    level_height: f32,
+    edge_treatment: ReviewEdgeTreatment,
+) -> Result<Mesh, String> {
+    let mut combined = TerrainRawMesh::with_edge_treatment(edge_treatment, level_height)?;
     for run in runs {
         // Retaining each run's top cap preserves material boundaries and guarantees
         // every logical run has one exact pick surface in its bounded batch. Buried
         // caps remain depth-occluded; edits rebuild the chunk before exposure.
         combined.cap(run.position.coord, run.span.top, true)?;
-        if run.bottom > 0
+        let bottom_exposed = run.bottom > 0
             && !owner_at(
                 projected_columns
                     .get(&run.position.coord)
                     .map(Vec::as_slice),
                 run.bottom - 1,
                 run.cutaway,
-            )
-        {
+            );
+        if bottom_exposed {
             combined.cap(run.position.coord, run.span.bottom, false)?;
         }
         for (neighbour, (side_corners, side_normal)) in run
@@ -1730,12 +2014,22 @@ fn combined_terrain_mesh(
                 };
             for (bottom, top) in exposed_intervals(run.bottom, run.top, neighbour_runs, run.cutaway)
             {
+                let trim_bottom = bottom_exposed && bottom == run.bottom;
+                let trim_top = top == run.top;
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "V3 levels remain far below f32's exact integer range"
                 )]
                 let (bottom, top) = (bottom as f32 * level_height, top as f32 * level_height);
-                combined.side(run.position.coord, side_corners, side_normal, bottom, top)?;
+                combined.side(
+                    run.position.coord,
+                    side_corners,
+                    side_normal,
+                    bottom,
+                    top,
+                    trim_bottom,
+                    trim_top,
+                )?;
             }
         }
     }
@@ -1803,6 +2097,7 @@ fn span_for(bottom: hex_core::Level, top: hex_core::Level, level_height: f32) ->
 /// chance of batching.
 #[derive(Resource, Default)]
 struct MaterialCache {
+    treatment: ReviewMaterialTreatment,
     by_substance: Vec<(SubstanceId, Handle<StandardMaterial>)>,
 }
 
@@ -1837,28 +2132,46 @@ impl TerrainMeshCache {
 }
 
 impl MaterialCache {
-    fn reset_for_world(&mut self, materials: &mut Assets<StandardMaterial>) {
+    fn reset_for_world(
+        &mut self,
+        materials: &mut Assets<StandardMaterial>,
+        treatment: ReviewMaterialTreatment,
+    ) {
         for (_substance, handle) in self.by_substance.drain(..) {
             let _removed = materials.remove(handle.id());
         }
+        self.treatment = treatment;
     }
 
     fn get_or_create(
         &mut self,
         substance: SubstanceId,
         table: &SubstanceTable,
+        treatment: ReviewMaterialTreatment,
         materials: &mut Assets<StandardMaterial>,
     ) -> Handle<StandardMaterial> {
+        if self.treatment != treatment {
+            self.reset_for_world(materials, treatment);
+        }
         if let Some((_, handle)) = self.by_substance.iter().find(|(id, _)| *id == substance) {
             return handle.clone();
         }
 
         // Bright magenta makes an unknown id visibly distinct from a lighting fault.
         let color = table.get(substance).map_or((1.0, 0.0, 1.0), |s| s.color);
-        let handle = materials.add(StandardMaterial::from(to_color(color)));
+        let handle = materials.add(terrain_material(to_color(color), treatment));
         self.by_substance.push((substance, handle.clone()));
         handle
     }
+}
+
+fn terrain_material(color: Color, treatment: ReviewMaterialTreatment) -> StandardMaterial {
+    let mut material = StandardMaterial::from(color);
+    if treatment.applies_to_terrain() {
+        material.perceptual_roughness = 1.0;
+        material.metallic = 0.0;
+    }
+    material
 }
 
 /// Optional V3 exact-position consequences maintained after terrain edits.
@@ -2021,6 +2334,8 @@ fn apply_terrain_changes(
     damage_table: Option<Res<TerrainDamageTable>>,
     settings: Res<MapSettings>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
+    material_treatment: Option<Res<ReviewMaterialTreatment>>,
+    edge_treatment: Option<Res<ReviewEdgeTreatment>>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
     mut spatial: EditableSpatialConsequences,
@@ -2234,6 +2549,8 @@ fn apply_terrain_changes(
             &settings,
             interiors.as_deref(),
             chunk,
+            material_treatment.as_deref().copied().unwrap_or_default(),
+            edge_treatment.as_deref().copied().unwrap_or_default(),
         ) {
             Ok(root) => replacements.push(root),
             Err(error) => {
@@ -2479,19 +2796,29 @@ mod tests {
 
         let mut cache = MaterialCache::default();
         let mut materials = Assets::<StandardMaterial>::default();
-        let first = cache.get_or_create(stone, &first_table, &mut materials);
+        let first = cache.get_or_create(
+            stone,
+            &first_table,
+            ReviewMaterialTreatment::Current,
+            &mut materials,
+        );
         let first_color = materials
             .get(&first)
             .expect("the first cached material should exist")
             .base_color;
 
-        cache.reset_for_world(&mut materials);
+        cache.reset_for_world(&mut materials, ReviewMaterialTreatment::Current);
         assert!(
             materials.get(&first).is_none(),
             "the retired world's material remained resident"
         );
 
-        let second = cache.get_or_create(stone, &second_table, &mut materials);
+        let second = cache.get_or_create(
+            stone,
+            &second_table,
+            ReviewMaterialTreatment::Current,
+            &mut materials,
+        );
         let second_color = materials
             .get(&second)
             .expect("the refreshed material should exist")
@@ -2499,6 +2826,316 @@ mod tests {
         assert_ne!(
             first_color, second_color,
             "the stable substance id reused its stale palette colour"
+        );
+    }
+
+    #[test]
+    fn review_material_treatment_changes_only_terrain_roughness() {
+        let expected = StandardMaterial::from(Color::srgb(0.2, 0.4, 0.7));
+        let current =
+            terrain_material(Color::srgb(0.2, 0.4, 0.7), ReviewMaterialTreatment::Current);
+        assert_eq!(current.base_color, expected.base_color);
+        assert_eq!(current.perceptual_roughness, expected.perceptual_roughness);
+        assert_eq!(current.metallic, expected.metallic);
+
+        for treatment in [
+            ReviewMaterialTreatment::MatteTerrain,
+            ReviewMaterialTreatment::UnifiedMatte,
+        ] {
+            let matte = terrain_material(Color::srgb(0.2, 0.4, 0.7), treatment);
+            assert_eq!(matte.base_color, expected.base_color);
+            assert_eq!(matte.perceptual_roughness, 1.0);
+            assert_eq!(matte.metallic, 0.0);
+        }
+    }
+
+    #[test]
+    fn terrain_material_cache_replaces_assets_when_review_treatment_changes() {
+        let table = spatial_test_table_with_color(0.25, 0.5, 0.75);
+        let stone = table.id("stone").expect("stone fixture");
+        let mut cache = MaterialCache::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+
+        let current = cache.get_or_create(
+            stone,
+            &table,
+            ReviewMaterialTreatment::Current,
+            &mut materials,
+        );
+        let matte = cache.get_or_create(
+            stone,
+            &table,
+            ReviewMaterialTreatment::MatteTerrain,
+            &mut materials,
+        );
+
+        assert!(materials.get(&current).is_none());
+        assert_eq!(
+            materials
+                .get(&matte)
+                .expect("matte replacement remains resident")
+                .perceptual_roughness,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn micro_bevel_treatment_changes_only_terrain_normals_and_scales_exactly() {
+        let coord = HexCoord::ORIGIN;
+        let substance = SubstanceId(1);
+        let projected = BTreeMap::from([(
+            coord,
+            vec![ProjectedRun {
+                run: SubstanceRun {
+                    bottom: 0,
+                    top: 1,
+                    substance,
+                },
+                cutaway: None,
+            }],
+        )]);
+        let pending = PendingTerrainRun {
+            entity: Entity::from_raw_u32(1).expect("fixture entity"),
+            position: TilePos::new(coord, 0),
+            span: HexSpan::new(0.0, 0.4),
+            bottom: 0,
+            top: 1,
+            cutaway: None,
+        };
+        let current = combined_terrain_mesh_with_edge(
+            &[pending],
+            &projected,
+            0.4,
+            ReviewEdgeTreatment::Current,
+        )
+        .expect("current terrain mesh should build");
+        let subtle = combined_terrain_mesh_with_edge(
+            &[pending],
+            &projected,
+            0.4,
+            ReviewEdgeTreatment::MicroBevel04,
+        )
+        .expect("0.04 terrain mesh should build");
+        let strong = combined_terrain_mesh_with_edge(
+            &[pending],
+            &projected,
+            0.4,
+            ReviewEdgeTreatment::MicroBevel08,
+        )
+        .expect("0.08 terrain mesh should build");
+
+        let float3 = |mesh: &Mesh, attribute| {
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) =
+                mesh.attribute(attribute)
+            else {
+                unreachable!("terrain fixture needs Float32x3 attributes")
+            };
+            values.clone()
+        };
+        let positions = float3(&current, Mesh::ATTRIBUTE_POSITION);
+        assert_eq!(float3(&subtle, Mesh::ATTRIBUTE_POSITION), positions);
+        assert_eq!(float3(&strong, Mesh::ATTRIBUTE_POSITION), positions);
+        let indices = |mesh: &Mesh| {
+            mesh.indices()
+                .expect("terrain fixture remains indexed")
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(indices(&subtle), indices(&current));
+        assert_eq!(indices(&strong), indices(&current));
+
+        let shipped = float3(&current, Mesh::ATTRIBUTE_NORMAL);
+        let subtle_normals = float3(&subtle, Mesh::ATTRIBUTE_NORMAL);
+        let strong_normals = float3(&strong, Mesh::ATTRIBUTE_NORMAL);
+        let delta = |normals: &[[f32; 3]]| {
+            normals
+                .iter()
+                .zip(&shipped)
+                .map(|(actual, baseline)| Vec3::from(*actual).distance(Vec3::from(*baseline)))
+                .sum::<f32>()
+        };
+        assert!(delta(&subtle_normals) > 0.0);
+        assert!(delta(&strong_normals) > delta(&subtle_normals));
+        for normal in subtle_normals.iter().chain(&strong_normals) {
+            assert!((Vec3::from(*normal).length() - 1.0).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn geometric_bevel_treatment_adds_finite_bounded_chamfers_with_exact_cap_insets() {
+        let coord = HexCoord::ORIGIN;
+        let substance = SubstanceId(1);
+        let projected = BTreeMap::from([(
+            coord,
+            vec![ProjectedRun {
+                run: SubstanceRun {
+                    bottom: 1,
+                    top: 2,
+                    substance,
+                },
+                cutaway: None,
+            }],
+        )]);
+        let pending = PendingTerrainRun {
+            entity: Entity::from_raw_u32(1).expect("fixture entity"),
+            position: TilePos::new(coord, 1),
+            span: HexSpan::new(0.4, 0.8),
+            bottom: 1,
+            top: 2,
+            cutaway: None,
+        };
+        let current = combined_terrain_mesh_with_edge(
+            &[pending],
+            &projected,
+            0.4,
+            ReviewEdgeTreatment::Current,
+        )
+        .expect("current terrain mesh should build");
+        let subtle = combined_terrain_mesh_with_edge(
+            &[pending],
+            &projected,
+            0.4,
+            ReviewEdgeTreatment::GeometricBevel04,
+        )
+        .expect("0.04 geometric terrain mesh should build");
+        let strong = combined_terrain_mesh_with_edge(
+            &[pending],
+            &projected,
+            0.4,
+            ReviewEdgeTreatment::GeometricBevel08,
+        )
+        .expect("0.08 geometric terrain mesh should build");
+
+        let float3 = |mesh: &Mesh, attribute| {
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) =
+                mesh.attribute(attribute)
+            else {
+                unreachable!("terrain fixture needs Float32x3 attributes")
+            };
+            values.clone()
+        };
+        let bounds = |positions: &[[f32; 3]]| {
+            positions.iter().fold(
+                ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]),
+                |(mut minimum, mut maximum), position| {
+                    for (value, (minimum, maximum)) in position
+                        .iter()
+                        .zip(minimum.iter_mut().zip(maximum.iter_mut()))
+                    {
+                        *minimum = (*minimum).min(*value);
+                        *maximum = (*maximum).max(*value);
+                    }
+                    (minimum, maximum)
+                },
+            )
+        };
+        let current_positions = float3(&current, Mesh::ATTRIBUTE_POSITION);
+        let current_bounds = bounds(&current_positions);
+        let current_indices = current
+            .indices()
+            .expect("current terrain fixture remains indexed")
+            .len();
+
+        for (mesh, expected_radius) in [
+            (&subtle, hex_core::config::HEX_CIRCUMRADIUS - 0.04),
+            (&strong, hex_core::config::HEX_CIRCUMRADIUS - 0.08),
+        ] {
+            let positions = float3(mesh, Mesh::ATTRIBUTE_POSITION);
+            let normals = float3(mesh, Mesh::ATTRIBUTE_NORMAL);
+            assert!(
+                positions
+                    .iter()
+                    .flatten()
+                    .all(|component| component.is_finite()),
+                "geometric bevel emitted a non-finite position"
+            );
+            assert!(
+                normals
+                    .iter()
+                    .flatten()
+                    .all(|component| component.is_finite()),
+                "geometric bevel emitted a non-finite normal"
+            );
+            for (position, normal) in positions.iter().zip(&normals) {
+                let [x, _, z] = *position;
+                let normal = Vec3::from(*normal);
+                assert!((normal.length() - 1.0).abs() < 1.0e-5);
+                assert!(
+                    Vec2::new(normal.x, normal.z).dot(Vec2::new(x, z)) >= -1.0e-6,
+                    "geometric bevel face normal points into the voxel"
+                );
+            }
+            assert_eq!(bounds(&positions), current_bounds);
+            assert!(
+                mesh.indices()
+                    .expect("geometric terrain fixture remains indexed")
+                    .len()
+                    > current_indices
+            );
+
+            let top_radius = positions
+                .iter()
+                .filter_map(|position| {
+                    let [x, y, z] = *position;
+                    ((y - 0.8).abs() < 1.0e-6).then_some(Vec2::new(x, z).length())
+                })
+                .fold(0.0_f32, f32::max);
+            let bottom_radius = positions
+                .iter()
+                .filter_map(|position| {
+                    let [x, y, z] = *position;
+                    ((y - 0.4).abs() < 1.0e-6).then_some(Vec2::new(x, z).length())
+                })
+                .fold(0.0_f32, f32::max);
+            assert!((top_radius - expected_radius).abs() < 1.0e-6);
+            assert!((bottom_radius - expected_radius).abs() < 1.0e-6);
+
+            let indices = mesh
+                .indices()
+                .expect("geometric terrain fixture remains indexed")
+                .iter()
+                .collect::<Vec<_>>();
+            for triangle in indices.chunks_exact(3) {
+                let [first, second, third] = triangle else {
+                    unreachable!("triangle chunk is exact")
+                };
+                let first = Vec3::from(
+                    *positions
+                        .get(*first)
+                        .expect("first bevel index stays in bounds"),
+                );
+                let second = Vec3::from(
+                    *positions
+                        .get(*second)
+                        .expect("second bevel index stays in bounds"),
+                );
+                let third = Vec3::from(
+                    *positions
+                        .get(*third)
+                        .expect("third bevel index stays in bounds"),
+                );
+                assert!(
+                    (second - first).cross(third - first).length_squared() > f32::EPSILON,
+                    "geometric bevel emitted a degenerate triangle"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn geometric_bevel_rejects_invalid_vertical_scale() {
+        assert!(TerrainRawMesh::with_edge_treatment(
+            ReviewEdgeTreatment::GeometricBevel04,
+            f32::NAN,
+        )
+        .is_err());
+        assert!(
+            TerrainRawMesh::with_edge_treatment(ReviewEdgeTreatment::GeometricBevel08, 0.0)
+                .is_err()
+        );
+        assert!(
+            TerrainRawMesh::with_edge_treatment(ReviewEdgeTreatment::Current, f32::NAN).is_ok(),
+            "the shipped path must retain its prior validation boundary"
         );
     }
 

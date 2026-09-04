@@ -267,11 +267,12 @@ This is the part worth understanding before changing anything.
 
 **One entity per voxel would be tens of thousands of entities on a deep map.** Instead
 the spawn pass merges vertical runs of the same substance into one lightweight logical
-run entity. The logical entity carries the authoritative gameplay tuple but no mesh or
-material. Presentation groups bounded sets of those runs by resident chunk, substance,
-and cutaway owner into combined render meshes. Logical entity count therefore follows
-the number of substance bands, while draw-entity topology follows disposable batches
-rather than voxels or runs.
+run entity. The logical entity carries the authoritative gameplay tuple but no scene
+transform, visibility aggregate, mesh, material, or picking surface. Presentation
+groups bounded sets of those runs by resident chunk, substance, and cutaway owner into
+combined render meshes. Logical entity count therefore follows the number of substance
+bands without enrolling those facts in transform propagation or culling, while
+draw-entity topology follows disposable batches rather than voxels or runs.
 
 Two consequences:
 
@@ -313,11 +314,12 @@ The map exposes authoritative footing through lightweight logical run entities:
 (HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, ...)
 ```
 
-Those entities deliberately carry no mesh, material, or picking surface. Bounded
-`TerrainRenderBatch` children combine runs by resident chunk, substance, and cutaway
-owner; a world-space mesh hit resolves back to the exact logical run. This keeps
-movement, occupancy, snapshots, and semantic identities independent of disposable
-draw topology while preserving stacked-surface selection.
+Those entities deliberately carry no transform or visibility aggregate, mesh,
+material, or picking surface. Bounded `TerrainRenderBatch` children combine runs by
+resident chunk, substance, and cutaway owner; those disposable scene entities own
+render visibility, and a world-space mesh hit resolves back to the exact logical run.
+This keeps movement, occupancy, snapshots, and semantic identities independent of
+disposable draw topology while preserving stacked-surface selection.
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
 by `TilePos`; they are not duplicated on tile entities. Exact interior floors and
@@ -436,7 +438,7 @@ pending cast; those deterministic policies belong to gameplay and are pinned in
 | Two standable endpoints do not guarantee a step | the shared lateral aperture can still be too short |
 | Cutaway metadata names exact opaque roof voxels | rendering projects them onto disposable run segments |
 | Air is never spawned | so an air-filled cave is a gap between two entities |
-| A tile's transform must agree with its span | otherwise pieces float or sink, and **nothing errors** |
+| Render batches must agree with logical coordinates and spans | otherwise pieces float or sink, and **nothing errors** |
 | Clearing a one-voxel run **removes** an entity | only clearing the middle of a taller run adds one |
 | Digging above the top does nothing | there is nothing there to remove |
 | Building above the top leaves a gap | that is how a floating platform is made |

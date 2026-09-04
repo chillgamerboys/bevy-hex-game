@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::Indices;
 use bevy::picking::Pickable;
@@ -28,12 +29,66 @@ pub(super) const FOG_CAP_INSET: f32 = 0.84;
 pub(super) const FOG_CAP_LIFT: f32 = 0.08;
 pub(super) const FOG_CAP_DEPTH_BIAS: f32 = 8.0;
 const FOG_CAP_COLOR: Color = Color::srgba(0.07, 0.09, 0.18, 0.84);
+#[cfg(any(feature = "map-review", test))]
+const DIMMED_FOG_CAP_COLOR: Color = Color::srgba(0.09, 0.095, 0.10, 0.58);
+#[cfg(any(feature = "map-review", test))]
+const OBSERVED_ONLY_FOG_CAP_COLOR: Color = Color::srgba(0.004, 0.006, 0.012, 0.985);
+#[cfg(any(feature = "map-review", test))]
+const SOFTENED_NEAR_FOG_CAP_COLOR: Color = Color::srgba(0.07, 0.09, 0.18, 0.30);
+#[cfg(any(feature = "map-review", test))]
+const SOFTENED_FAR_FOG_CAP_COLOR: Color = Color::srgba(0.07, 0.09, 0.18, 0.56);
+
+/// Review-only terrain-shroud treatment.
+///
+/// Ordinary game builds always retain [`Self::Current`]. The map-review adapter may
+/// replace this resource before gameplay starts, but every mode deliberately leaves
+/// hostile [`PresentationOcclusionReason::Fog`] ownership unchanged.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FogPresentationMode {
+    #[default]
+    Current,
+    #[cfg(any(feature = "map-review", test))]
+    NoTerrainShading,
+    #[cfg(any(feature = "map-review", test))]
+    Dimmed,
+    #[cfg(any(feature = "map-review", test))]
+    ObservedOnlyApproximation,
+    #[cfg(any(feature = "map-review", test))]
+    SoftenedTwoBand,
+}
+
+impl FogPresentationMode {
+    #[cfg(feature = "map-review")]
+    pub(super) fn parse_review(value: &str) -> Result<Self, String> {
+        match value {
+            "current" => Ok(Self::Current),
+            "none" => Ok(Self::NoTerrainShading),
+            "dimmed" => Ok(Self::Dimmed),
+            "observed-only" => Ok(Self::ObservedOnlyApproximation),
+            "softened" => Ok(Self::SoftenedTwoBand),
+            _ => Err(format!(
+                "must be current, none, dimmed, observed-only, or softened; got {value:?}"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FogOverlayBand {
+    #[default]
+    Core,
+    #[cfg(any(feature = "map-review", test))]
+    FarBoundary,
+    #[cfg(any(feature = "map-review", test))]
+    NearBoundary,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct FogBatchKey {
     chunk_q: i32,
     chunk_r: i32,
     cutaway: Option<InteriorRegionId>,
+    band: FogOverlayBand,
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -58,7 +113,8 @@ impl FogBatchProjection {
 
 #[derive(Resource, Debug, Default)]
 struct FogPresentationState {
-    material: Option<Handle<StandardMaterial>>,
+    material_mode: Option<FogPresentationMode>,
+    materials: BTreeMap<FogOverlayBand, Handle<StandardMaterial>>,
     initialized: bool,
     #[cfg(test)]
     reconciliations: u64,
@@ -84,12 +140,23 @@ type OverlayQuery<'w, 's> = Query<
         Entity,
         &'static mut FogOverlayBatch,
         &'static Mesh3d,
+        &'static mut MeshMaterial3d<StandardMaterial>,
         Option<&'static CutawayOccluder>,
     ),
 >;
 
+#[derive(SystemParam)]
+struct RemovedTileProjection<'w, 's> {
+    tiles: RemovedComponents<'w, 's, HexTile>,
+    positions: RemovedComponents<'w, 's, TilePos>,
+    spans: RemovedComponents<'w, 's, HexSpan>,
+    headroom: RemovedComponents<'w, 's, Headroom>,
+    cutaways: RemovedComponents<'w, 's, CutawayOccluder>,
+}
+
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<FogPresentationState>()
+    app.init_resource::<FogPresentationMode>()
+        .init_resource::<FogPresentationState>()
         .add_systems(
             OnEnter(Screen::Gameplay),
             reconcile_fog.in_set(PerceptionSystems::ApplyPresentation),
@@ -110,6 +177,7 @@ pub(super) fn plugin(app: &mut App) {
 fn reconcile_fog(
     mut commands: Commands,
     knowledge: Option<Res<FactionMapKnowledge>>,
+    mode: Res<FogPresentationMode>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     tiles: TileQuery,
@@ -127,31 +195,27 @@ fn reconcile_fog(
         ),
     >,
     tile_entities: Query<(), With<HexTile>>,
-    mut removed_tiles: RemovedComponents<HexTile>,
-    mut removed_positions: RemovedComponents<TilePos>,
-    mut removed_spans: RemovedComponents<HexSpan>,
-    mut removed_headroom: RemovedComponents<Headroom>,
-    mut removed_cutaways: RemovedComponents<CutawayOccluder>,
+    mut removed: RemovedTileProjection,
     mut overlays: OverlayQuery,
     added_hostiles: Query<(), Added<Enemy>>,
     mut hostiles: Query<(&UnitId, &mut PresentationOcclusion), With<Enemy>>,
     mut state: ResMut<FogPresentationState>,
 ) {
-    let tiles_removed = removed_tiles.read().count() != 0;
+    let tiles_removed = removed.tiles.read().count() != 0;
     let mut positions_removed = false;
-    for entity in removed_positions.read() {
+    for entity in removed.positions.read() {
         positions_removed |= tile_entities.contains(entity);
     }
     let mut spans_removed = false;
-    for entity in removed_spans.read() {
+    for entity in removed.spans.read() {
         spans_removed |= tile_entities.contains(entity);
     }
     let mut headroom_removed = false;
-    for entity in removed_headroom.read() {
+    for entity in removed.headroom.read() {
         headroom_removed |= tile_entities.contains(entity);
     }
     let mut cutaways_removed = false;
-    for entity in removed_cutaways.read() {
+    for entity in removed.cutaways.read() {
         cutaways_removed |= tile_entities.contains(entity);
     }
     let tile_projection_removed =
@@ -160,6 +224,7 @@ fn reconcile_fog(
         .as_ref()
         .is_none_or(|knowledge| knowledge.is_changed());
     let inputs_changed = !state.initialized
+        || mode.is_changed()
         || knowledge_changed
         || !changed_tiles.is_empty()
         || tiles_removed
@@ -179,16 +244,35 @@ fn reconcile_fog(
         // Unit concealment remains fail-closed even if renderer assets are not ready.
         return;
     };
-    let material = state
-        .material
-        .get_or_insert_with(|| materials.add(fog_material()))
-        .clone();
+
+    if state.material_mode != Some(*mode) {
+        for material in state.materials.values() {
+            drop(materials.remove(material.id()));
+        }
+        state.materials.clear();
+        state.material_mode = Some(*mode);
+    }
 
     let surfaces = collect_current_surfaces(&tiles);
     let desired = desired_shaded_surfaces(knowledge.as_deref(), surfaces.keys().copied());
-    let desired_batches = batch_shaded_surfaces(&desired, &surfaces);
+    let desired_bands = desired_fog_bands(*mode, &desired, surfaces.keys().copied());
+    let desired_batches = batch_shaded_surfaces(&desired_bands, &surfaces);
+    let desired_materials = desired_batches
+        .keys()
+        .map(|key| key.band)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|band| {
+            let material = state
+                .materials
+                .entry(band)
+                .or_insert_with(|| materials.add(fog_material(*mode, band)))
+                .clone();
+            (band, material)
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut existing = BTreeMap::new();
-    for (entity, mut batch, mesh, cutaway) in &mut overlays {
+    for (entity, mut batch, mesh, mut material, cutaway) in &mut overlays {
         let Some(projection) = desired_batches.get(&batch.key) else {
             drop(meshes.remove(mesh.0.id()));
             commands.entity(entity).despawn();
@@ -207,6 +291,14 @@ fn reconcile_fog(
             batch.spans.clone_from(&projection.spans);
             commands.entity(entity).insert(Mesh3d(replacement));
         }
+        let Some(desired_material) = desired_materials.get(&batch.key.band) else {
+            drop(meshes.remove(mesh.0.id()));
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if material.0 != *desired_material {
+            material.0 = desired_material.clone();
+        }
         reconcile_cutaway(
             &mut commands,
             entity,
@@ -219,6 +311,9 @@ fn reconcile_fog(
         if existing.contains_key(&key) {
             continue;
         }
+        let Some(material) = desired_materials.get(&key.band).cloned() else {
+            continue;
+        };
         let mesh = meshes.add(fog_batch_mesh(&projection));
         let mut overlay = commands.spawn((
             Mesh3d(mesh),
@@ -293,12 +388,64 @@ fn desired_shaded_surfaces(
         .collect()
 }
 
-fn batch_shaded_surfaces(
+fn desired_fog_bands(
+    _mode: FogPresentationMode,
     desired: &BTreeSet<TilePos>,
+    _surfaces: impl IntoIterator<Item = TilePos>,
+) -> BTreeMap<TilePos, FogOverlayBand> {
+    #[cfg(any(feature = "map-review", test))]
+    {
+        if _mode == FogPresentationMode::NoTerrainShading {
+            return BTreeMap::new();
+        }
+        if _mode == FogPresentationMode::SoftenedTwoBand {
+            // This is intentionally a presentation-space approximation over exposed
+            // surfaces. Stacked surfaces at one horizontal coordinate share a boundary
+            // distance, which prevents a bridge deck and the ground beneath it from
+            // producing contradictory rings in the same rendered column.
+            let observed_coords = _surfaces
+                .into_iter()
+                .filter(|position| !desired.contains(position))
+                .map(|position| position.coord)
+                .collect::<BTreeSet<_>>();
+            return desired
+                .iter()
+                .copied()
+                .map(|position| {
+                    let neighbours = position.coord.neighbors();
+                    let band = if neighbours
+                        .iter()
+                        .any(|neighbour| observed_coords.contains(neighbour))
+                    {
+                        FogOverlayBand::NearBoundary
+                    } else if neighbours.iter().any(|neighbour| {
+                        neighbour
+                            .neighbors()
+                            .iter()
+                            .any(|second| observed_coords.contains(second))
+                    }) {
+                        FogOverlayBand::FarBoundary
+                    } else {
+                        FogOverlayBand::Core
+                    };
+                    (position, band)
+                })
+                .collect();
+        }
+    }
+    desired
+        .iter()
+        .copied()
+        .map(|position| (position, FogOverlayBand::Core))
+        .collect()
+}
+
+fn batch_shaded_surfaces(
+    desired: &BTreeMap<TilePos, FogOverlayBand>,
     surfaces: &BTreeMap<TilePos, CurrentSurface>,
 ) -> BTreeMap<FogBatchKey, FogBatchProjection> {
     let mut batches = BTreeMap::<FogBatchKey, FogBatchProjection>::new();
-    for &position in desired {
+    for (&position, &band) in desired {
         let Some(surface) = surfaces.get(&position) else {
             continue;
         };
@@ -308,6 +455,7 @@ fn batch_shaded_surfaces(
                 chunk_q,
                 chunk_r,
                 cutaway: surface.cutaway.map(|cutaway| cutaway.0),
+                band,
             })
             .or_default()
             .push(position, surface.span);
@@ -426,14 +574,33 @@ fn fog_batch_mesh(projection: &FogBatchProjection) -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
-fn fog_material() -> StandardMaterial {
+fn fog_material(mode: FogPresentationMode, band: FogOverlayBand) -> StandardMaterial {
+    let base_color = match (mode, band) {
+        (FogPresentationMode::Current, _) => FOG_CAP_COLOR,
+        #[cfg(any(feature = "map-review", test))]
+        (FogPresentationMode::SoftenedTwoBand, FogOverlayBand::Core) => FOG_CAP_COLOR,
+        #[cfg(any(feature = "map-review", test))]
+        (FogPresentationMode::NoTerrainShading, _) => Color::NONE,
+        #[cfg(any(feature = "map-review", test))]
+        (FogPresentationMode::Dimmed, _) => DIMMED_FOG_CAP_COLOR,
+        #[cfg(any(feature = "map-review", test))]
+        (FogPresentationMode::ObservedOnlyApproximation, _) => OBSERVED_ONLY_FOG_CAP_COLOR,
+        #[cfg(any(feature = "map-review", test))]
+        (FogPresentationMode::SoftenedTwoBand, FogOverlayBand::NearBoundary) => {
+            SOFTENED_NEAR_FOG_CAP_COLOR
+        }
+        #[cfg(any(feature = "map-review", test))]
+        (FogPresentationMode::SoftenedTwoBand, FogOverlayBand::FarBoundary) => {
+            SOFTENED_FAR_FOG_CAP_COLOR
+        }
+    };
     StandardMaterial {
         // Keep a dark tactical shroud while bounding the presentation floor over
         // real canyon shadows. The previous 72%-black composite could drive
         // shadowed water to near-void RGB values even though its geometry was
         // intact; this more opaque blue floor compresses that contrast without
         // changing observation, lighting, or the underlying PBR surface.
-        base_color: FOG_CAP_COLOR,
+        base_color,
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         depth_bias: FOG_CAP_DEPTH_BIAS,
@@ -513,7 +680,8 @@ mod tests {
 
     fn fog_app(knowledge: Option<FactionMapKnowledge>) -> App {
         let mut app = App::new();
-        app.init_resource::<FogPresentationState>()
+        app.init_resource::<FogPresentationMode>()
+            .init_resource::<FogPresentationState>()
             .insert_resource(Assets::<Mesh>::default())
             .insert_resource(Assets::<StandardMaterial>::default())
             .add_systems(Update, (clear_removed_hostile_fog, reconcile_fog));
@@ -526,7 +694,8 @@ mod tests {
     fn fog_state_app(knowledge: Option<FactionMapKnowledge>) -> App {
         let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
         let app = builder.app_mut();
-        app.init_resource::<FogPresentationState>()
+        app.init_resource::<FogPresentationMode>()
+            .init_resource::<FogPresentationState>()
             .insert_resource(Assets::<Mesh>::default())
             .insert_resource(Assets::<StandardMaterial>::default());
         plugin(app);
@@ -659,7 +828,8 @@ mod tests {
 
     #[test]
     fn fog_material_and_transform_are_presentation_only() {
-        let material = fog_material();
+        assert_eq!(FogPresentationMode::default(), FogPresentationMode::Current);
+        let material = fog_material(FogPresentationMode::Current, FogOverlayBand::Core);
         assert!(material.unlit);
         assert_eq!(material.alpha_mode, AlphaMode::Blend);
         assert_eq!(material.base_color, FOG_CAP_COLOR);
@@ -671,6 +841,80 @@ mod tests {
             (transform.translation.y - (2.0 + FOG_CAP_LIFT + FOG_CAP_THICKNESS * 0.5)).abs()
                 < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn review_fog_materials_are_exact_and_softened_bands_are_deterministic() {
+        assert_eq!(
+            fog_material(FogPresentationMode::NoTerrainShading, FogOverlayBand::Core).base_color,
+            Color::NONE
+        );
+        assert_eq!(
+            fog_material(FogPresentationMode::Dimmed, FogOverlayBand::Core).base_color,
+            DIMMED_FOG_CAP_COLOR
+        );
+        assert_eq!(
+            fog_material(
+                FogPresentationMode::ObservedOnlyApproximation,
+                FogOverlayBand::Core,
+            )
+            .base_color,
+            OBSERVED_ONLY_FOG_CAP_COLOR
+        );
+        assert_eq!(
+            fog_material(
+                FogPresentationMode::SoftenedTwoBand,
+                FogOverlayBand::NearBoundary,
+            )
+            .base_color,
+            SOFTENED_NEAR_FOG_CAP_COLOR
+        );
+        assert_eq!(
+            fog_material(
+                FogPresentationMode::SoftenedTwoBand,
+                FogOverlayBand::FarBoundary,
+            )
+            .base_color,
+            SOFTENED_FAR_FOG_CAP_COLOR
+        );
+
+        let observed = pos(0);
+        let near = pos(1);
+        let far = pos(2);
+        let core = pos(3);
+        assert_eq!(
+            desired_fog_bands(
+                FogPresentationMode::SoftenedTwoBand,
+                &BTreeSet::from([near, far, core]),
+                [observed, near, far, core],
+            ),
+            BTreeMap::from([
+                (near, FogOverlayBand::NearBoundary),
+                (far, FogOverlayBand::FarBoundary),
+                (core, FogOverlayBand::Core),
+            ])
+        );
+    }
+
+    #[test]
+    fn no_terrain_shading_still_conceals_an_unobserved_hostile() {
+        let position = pos(0);
+        let mut app = fog_app(None);
+        app.insert_resource(FogPresentationMode::NoTerrainShading);
+        spawn_surface(&mut app, position, None);
+        let hostile = app
+            .world_mut()
+            .spawn((Enemy, UnitId(7), PresentationOcclusion::default()))
+            .id();
+
+        app.update();
+
+        assert_eq!(overlay_count(&mut app), 0);
+        assert!(app
+            .world()
+            .get::<PresentationOcclusion>(hostile)
+            .expect("hostile presentation state")
+            .contains(PresentationOcclusionReason::Fog));
     }
 
     #[test]
@@ -825,26 +1069,31 @@ mod tests {
                     chunk_q: -2,
                     chunk_r: 0,
                     cutaway: None,
+                    band: FogOverlayBand::Core,
                 },
                 FogBatchKey {
                     chunk_q: -1,
                     chunk_r: 0,
                     cutaway: None,
+                    band: FogOverlayBand::Core,
                 },
                 FogBatchKey {
                     chunk_q: -1,
                     chunk_r: 0,
                     cutaway: Some(cutaway.0),
+                    band: FogOverlayBand::Core,
                 },
                 FogBatchKey {
                     chunk_q: 0,
                     chunk_r: 0,
                     cutaway: None,
+                    band: FogOverlayBand::Core,
                 },
                 FogBatchKey {
                     chunk_q: 1,
                     chunk_r: 0,
                     cutaway: None,
+                    band: FogOverlayBand::Core,
                 },
             ])
         );

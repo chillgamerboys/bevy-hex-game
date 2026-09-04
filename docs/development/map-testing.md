@@ -64,8 +64,24 @@ python3 tools/test_scope.py check-partitions map
 ```
 
 It lists the exact package and targets through nextest, rejects overlap or omission,
-and confirms ignored stress tests remain discoverable. CI publishes separate JUnit,
+and confirms every named release/stress/benchmark identity remains discoverable and
+ignored. Ordinary test totals are deliberately not frozen: adding a test is valid when
+the three disjoint identity sets still union to the full ordinary set. CI runs this
+completeness preflight before executing the partitions, then publishes separate JUnit,
 timing JSON, and logs for all three ordinary concerns.
+
+Every canonical Rust test run first lists the exact selected identities. A zero-test
+selection fails before execution, even if the underlying runner would otherwise return
+success. Cargo's libtest followups also sum every final passed/failed result, so selecting
+only ignored tests cannot produce a green zero-execution run. Timing JSON retains the exact
+execution and selection commands, selected and executed counts, identity-set fingerprint,
+and separate selection/execution durations so a green result can be traced to what it
+actually ran and where it spent time. Listings capture only their identity stream on
+stdout; Cargo compilation diagnostics remain live on stderr during a cold preflight.
+The built-in Python selector suite receives the same zero-test protection by checking
+its reported run count. That canonical Python concern also runs the fail-closed
+structural-review launcher contracts, so review-tool and compatibility-wrapper
+changes cannot bypass their mocked provenance, freshness, and failure tests.
 
 ## Evidence boundaries
 

@@ -42,6 +42,13 @@ Run source builds through Cargo. Never launch a bare `target/*/hex_game` binary.
 run in a new exact-head directory under `.context/`; do not overwrite an older approval
 pack.
 
+For a user-requested visible launch, do not shorten the wait by reusing a previously built
+`target/*/hex_game`. Launch through Cargo from the exact worktree being described, record the
+current head plus dirty digest in the launch log, and confirm startup emits no missing-font or
+missing-asset errors before telling the user it is ready. If the current tree cannot build or
+its selected world fails setup, report that blocker; never substitute an older playable binary
+and call it current.
+
 An approval pack must come from one committed, clean candidate. Record the full output of
 `git rev-parse HEAD`, require both tracked and untracked source state to be clean before the
 run, and derive the new directory name from that revision. A dirty-worktree capture is useful

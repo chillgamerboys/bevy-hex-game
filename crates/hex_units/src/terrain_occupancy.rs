@@ -61,18 +61,25 @@ pub struct TerrainOccupancy {
 /// metadata and never enter [`TerrainOccupancy`], saves, or deterministic identities.
 #[derive(Resource, Debug, Default)]
 struct TerrainOccupancyPublication {
-    coord_by_entity: HashMap<Entity, HexCoord>,
+    run_by_entity: HashMap<Entity, (TilePos, RunBottom)>,
     runs_by_coord: BTreeMap<HexCoord, Vec<(Entity, TilePos, RunBottom)>>,
+    #[cfg(test)]
+    incremental_rebuilds: u64,
 }
 
 impl TerrainOccupancyPublication {
     fn clear(&mut self) {
-        self.coord_by_entity.clear();
+        self.run_by_entity.clear();
         self.runs_by_coord.clear();
+        #[cfg(test)]
+        {
+            self.incremental_rebuilds = 0;
+        }
     }
 
     fn remove(&mut self, entity: Entity) -> Option<HexCoord> {
-        let coord = self.coord_by_entity.remove(&entity)?;
+        let (top, _bottom) = self.run_by_entity.remove(&entity)?;
+        let coord = top.coord;
         let remove_bucket = self.runs_by_coord.get_mut(&coord).is_some_and(|runs| {
             if let Some(index) = runs
                 .iter()
@@ -89,12 +96,16 @@ impl TerrainOccupancyPublication {
     }
 
     fn insert(&mut self, entity: Entity, top: TilePos, bottom: RunBottom) {
-        debug_assert!(!self.coord_by_entity.contains_key(&entity));
-        self.coord_by_entity.insert(entity, top.coord);
+        debug_assert!(!self.run_by_entity.contains_key(&entity));
+        self.run_by_entity.insert(entity, (top, bottom));
         self.runs_by_coord
             .entry(top.coord)
             .or_default()
             .push((entity, top, bottom));
+    }
+
+    fn contains_exact(&self, entity: Entity, top: TilePos, bottom: RunBottom) -> bool {
+        self.run_by_entity.get(&entity) == Some(&(top, bottom))
     }
 
     fn runs_in_column(&self, coord: HexCoord) -> impl Iterator<Item = (TilePos, RunBottom)> + '_ {
@@ -283,13 +294,12 @@ fn rebuild_terrain_occupancy(
     occupancy: Option<ResMut<TerrainOccupancy>>,
     mut publication: ResMut<TerrainOccupancyPublication>,
 ) {
-    let changed_entities = removed_tiles
+    let removed_entities = removed_tiles
         .read()
         .chain(removed_tops.read())
         .chain(removed_bottoms.read())
-        .chain(changed_runs.iter())
         .collect::<BTreeSet<_>>();
-    if changed_entities.is_empty() {
+    if removed_entities.is_empty() && changed_runs.is_empty() {
         return;
     }
 
@@ -303,29 +313,39 @@ fn rebuild_terrain_occupancy(
 
     let mut affected_coords = BTreeSet::new();
     let mut malformed = None;
-    for entity in changed_entities {
-        if let Some(coord) = publication.remove(entity) {
-            affected_coords.insert(coord);
-        }
+    for entity in removed_entities {
+        refresh_published_entity(
+            entity,
+            &runs,
+            &mut publication,
+            &mut affected_coords,
+            &mut malformed,
+        );
+    }
 
-        let Ok((_entity, top, bottom)) = runs.get(entity) else {
-            // Despawned entities and entities which no longer carry HexTile both
-            // retire their prior contribution without introducing a replacement.
-            continue;
-        };
-        let (Some(top), Some(bottom)) = (top.copied(), bottom.copied()) else {
-            malformed = Some(None);
-            continue;
-        };
-        if bottom.0 > top.level {
-            malformed = Some(Some(InvalidTerrainRun {
-                top,
-                bottom: bottom.0,
-            }));
-            continue;
-        }
-        affected_coords.insert(top.coord);
-        publication.insert(entity, top, bottom);
+    // A complete gameplay publication runs after terrain restoration, so every
+    // freshly spawned material entity is still reported as `Changed` on the first
+    // ordinary Update. Comparing the exact tuple before touching the per-column
+    // ledger turns that 400k+-entity bootstrap wave into a linear read instead of a
+    // BTreeSet build followed by remove/search/reinsert work for every run. Real
+    // edits still take the same fail-closed refresh path below.
+    let changed_entities = changed_runs
+        .iter()
+        .filter(|entity| {
+            let Ok((_entity, Some(top), Some(bottom))) = runs.get(*entity) else {
+                return true;
+            };
+            !publication.contains_exact(*entity, *top, *bottom)
+        })
+        .collect::<BTreeSet<_>>();
+    for entity in changed_entities {
+        refresh_published_entity(
+            entity,
+            &runs,
+            &mut publication,
+            &mut affected_coords,
+            &mut malformed,
+        );
     }
 
     if let Some(error) = malformed {
@@ -354,6 +374,41 @@ fn rebuild_terrain_occupancy(
             occupancy.columns.insert(coord, rebuilt);
         }
     }
+}
+
+fn refresh_published_entity(
+    entity: Entity,
+    runs: &Query<(Entity, Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    publication: &mut TerrainOccupancyPublication,
+    affected_coords: &mut BTreeSet<HexCoord>,
+    malformed: &mut Option<Option<InvalidTerrainRun>>,
+) {
+    #[cfg(test)]
+    {
+        publication.incremental_rebuilds = publication.incremental_rebuilds.saturating_add(1);
+    }
+    if let Some(coord) = publication.remove(entity) {
+        affected_coords.insert(coord);
+    }
+
+    let Ok((_entity, top, bottom)) = runs.get(entity) else {
+        // Despawned entities and entities which no longer carry HexTile both retire
+        // their prior contribution without introducing a replacement.
+        return;
+    };
+    let (Some(top), Some(bottom)) = (top.copied(), bottom.copied()) else {
+        *malformed = Some(None);
+        return;
+    };
+    if bottom.0 > top.level {
+        *malformed = Some(Some(InvalidTerrainRun {
+            top,
+            bottom: bottom.0,
+        }));
+        return;
+    }
+    affected_coords.insert(top.coord);
+    publication.insert(entity, top, bottom);
 }
 
 fn publish_complete_terrain_occupancy(
@@ -536,6 +591,25 @@ mod tests {
             .world()
             .resource::<TerrainOccupancy>()
             .contains(at(1, 0, 1)));
+    }
+
+    #[test]
+    fn gameplay_restore_does_not_incrementally_rebuild_unchanged_bootstrap_runs() {
+        let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
+        plugin(builder.app_mut());
+        let mut app = builder.build();
+        for q in 0..4_096 {
+            app.world_mut().spawn((HexTile, at(q, 0, 2), RunBottom(0)));
+        }
+
+        enter_gameplay(&mut app);
+
+        let publication = app.world().resource::<TerrainOccupancyPublication>();
+        assert_eq!(publication.run_by_entity.len(), 4_096);
+        assert_eq!(
+            publication.incremental_rebuilds, 0,
+            "the first Update must recognize the complete OnEnter publication instead of rebuilding every Added run"
+        );
     }
 
     #[test]

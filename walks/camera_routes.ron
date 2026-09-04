@@ -311,8 +311,6 @@
                 (label: "coastal bridge", destination: Anchor(name: "grand_v3.coastal_bridge", expected: (q: -5, r: 91, level: 10)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),
                 (label: "valley bridge", destination: Anchor(name: "grand_v3.valley_bridge", expected: (q: 80, r: 10, level: 15)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),
                 (label: "valley lake", destination: Anchor(name: "grand_v3.valley_lake", expected: (q: 66, r: -10, level: 20)), azimuth_turns: [0.0, 0.16666667]),
-                (label: "waterfall base", destination: Anchor(name: "grand_v3.waterfall_base", expected: (q: 99, r: -11, level: 16)), azimuth_turns: [0.0, -0.16666667]),
-                (label: "waterfall crown", destination: Anchor(name: "grand_v3.waterfall_crown", expected: (q: 99, r: -77, level: 151)), azimuth_turns: [0.0, 0.16666667]),
                 (label: "natural pass", destination: Anchor(name: "grand_v3.natural_pass", expected: (q: 143, r: -144, level: 111)), azimuth_turns: [0.0, -0.16666667]),
                 (label: "massif", destination: Anchor(name: "grand_v3.massif", expected: (q: 0, r: -44, level: 107)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "peak saddle", destination: Anchor(name: "grand_v3.peak_saddle", expected: (q: 97, r: -147, level: 151)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),

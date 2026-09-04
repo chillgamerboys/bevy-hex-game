@@ -9,7 +9,7 @@ use std::cmp::Reverse;
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet, VecDeque};
 
 use hex_assets::RuntimeArtCatalog;
-use hex_core::HexCoord;
+use hex_core::{BiomeRegionId, HexCoord, InteriorRegionId, Level, TilePos};
 use hex_schematic::{FeatureKind as SchematicFeature, NetworkKind, SchematicPlanV1};
 
 use super::composition::{GeneratedPatchPlan, WorldCompositionError};
@@ -17,7 +17,10 @@ use super::layout::{LayoutKind, PatchId, ResolvedLayoutPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::selection::WorldValidation;
 use super::vegetation::TemperateTreeSet;
-use super::world::{GeneratedWorldPlan, WorldValidationIssue};
+use super::volume::{
+    LevelInterval, SolidMass, SolidMaterialRole, SurfaceMetadata, VolumeElement, VolumePlan,
+};
+use super::world::{GeneratedWorldPlan, InteriorPlan, StructurePlan, WorldValidationIssue};
 use super::{CrystalAscentObjectSet, V3GenerationError};
 use crate::settings::V3CrystalAscentSettings;
 
@@ -475,6 +478,17 @@ pub(crate) fn merge_fragment(
         .ok_or_else(|| contract("Crystal fragment patch is absent from world layout"))?
         .mask
         .clone();
+    let rotation_turns = world
+        .layout
+        .patches
+        .get(&fragment.patch_id)
+        .map(|patch| patch.rotation_turns)
+        .ok_or_else(|| contract("Crystal fragment patch lost its authored rotation"))?;
+    let natural_shell_overburden = super::crystal_ascent::macro_composite_natural_shell_overburden(
+        &expected_mask,
+        rotation_turns,
+    )
+    .map_err(contract)?;
     if fragment.volume.mask != expected_mask {
         return Err(contract(
             "Crystal fragment does not own the exact claimed radius-32 mask",
@@ -598,7 +612,188 @@ pub(crate) fn merge_fragment(
         local_route_aliases,
         "canonical Crystal protected route",
     )?;
+    apply_composite_natural_shell_overburden(
+        &mut world.volume,
+        &mut world.biome_regions,
+        &mut world.interiors,
+        &world.structures,
+        &natural_shell_overburden,
+    )?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompositeOverburdenColumn {
+    coord: HexCoord,
+    old_surface: TilePos,
+    new_surface: TilePos,
+    metadata: SurfaceMetadata,
+    biome: BiomeRegionId,
+    interior: InteriorRegionId,
+}
+
+/// Adds a real alpine cover above the composite shell while keeping every
+/// authored shell voxel intact below it.
+///
+/// The two natural runs inherit Crystal's cutaway owner and are appended to the
+/// same interior roof authority. Thus normal views see irregular Stone/Snow
+/// shoulders, while review cutaway still exposes the authored stairs and shell.
+/// This is called only at the schematic merge boundary; the standalone recipe
+/// never receives the cover.
+fn apply_composite_natural_shell_overburden(
+    volume: &mut VolumePlan,
+    biome_regions: &mut BTreeMap<TilePos, BiomeRegionId>,
+    interiors: &mut InteriorPlan,
+    structures: &StructurePlan,
+    natural_shell_overburden: &BTreeMap<HexCoord, Level>,
+) -> Result<(), V3GenerationError> {
+    if natural_shell_overburden.is_empty() {
+        return Err(contract(
+            "composite Crystal natural overburden has an empty shell footprint",
+        ));
+    }
+
+    // Preflight the complete projection before changing one column. A malformed
+    // authored roof therefore fails the merge closed rather than leaving a
+    // partially covered landmark behind.
+    let mut planned = Vec::with_capacity(natural_shell_overburden.len());
+    for (coord, thickness) in natural_shell_overburden {
+        if !(2..=6).contains(thickness) {
+            return Err(contract(format!(
+                "composite Crystal natural overburden at {coord:?} has invalid thickness {thickness}"
+            )));
+        }
+        let (surface, metadata) = volume.top_surface_at_coord(*coord).ok_or_else(|| {
+            contract(format!(
+                "composite Crystal natural overburden has no shell surface at {coord:?}"
+            ))
+        })?;
+        let column = volume.columns.get(coord).ok_or_else(|| {
+            contract(format!(
+                "composite Crystal natural overburden has no shell column at {coord:?}"
+            ))
+        })?;
+        let highest_occupied_top = column
+            .elements
+            .iter()
+            .map(|element| match *element {
+                VolumeElement::Solid(mass) => mass.levels.top,
+                VolumeElement::Fill(fill) => fill.levels.top,
+            })
+            .max();
+        if highest_occupied_top != Some(surface.level.saturating_add(1)) {
+            return Err(contract(format!(
+                "composite Crystal natural overburden found occupied volume above {surface:?}"
+            )));
+        }
+        let cap = solid_mass_covering(volume, surface).ok_or_else(|| {
+            contract(format!(
+                "composite Crystal natural overburden found no authored roof mass at {surface:?}"
+            ))
+        })?;
+        let Some(interior) = cap.cutaway_for else {
+            return Err(contract(format!(
+                "composite Crystal natural overburden found an unowned roof at {surface:?}"
+            )));
+        };
+        if cap.material != SolidMaterialRole::WorkedStone
+            || cap.levels.top != surface.level.saturating_add(1)
+        {
+            return Err(contract(format!(
+                "composite Crystal natural overburden found a non-authored shell cap at {surface:?}"
+            )));
+        }
+        if interiors
+            .by_id
+            .get(&interior)
+            .is_none_or(|planned_interior| !planned_interior.roof_voxels.contains(&surface))
+        {
+            return Err(contract(format!(
+                "composite Crystal natural overburden roof {surface:?} is absent from its cutaway authority"
+            )));
+        }
+        if !structures.by_id.values().any(|structure| {
+            structure.kind == super::world::StructureKind::Wall
+                && structure.voxels.contains(&surface)
+        }) {
+            return Err(contract(format!(
+                "composite Crystal natural overburden has no authored shell voxel beneath {surface:?}"
+            )));
+        }
+        let new_level = surface.level.checked_add(*thickness).ok_or_else(|| {
+            contract(format!(
+                "composite Crystal natural overburden level overflowed above {surface:?}"
+            ))
+        })?;
+        if new_level > crate::settings::MAX_V3_LEVEL {
+            return Err(contract(format!(
+                "composite Crystal natural overburden exceeds the V3 ceiling at {coord:?}/{new_level}"
+            )));
+        }
+        let biome = biome_regions.get(&surface).copied().ok_or_else(|| {
+            contract(format!(
+                "composite Crystal natural overburden has no biome authority at {surface:?}"
+            ))
+        })?;
+        planned.push(CompositeOverburdenColumn {
+            coord: *coord,
+            old_surface: surface,
+            new_surface: TilePos::new(*coord, new_level),
+            metadata,
+            biome,
+            interior,
+        });
+    }
+
+    for cover in planned {
+        let column = volume
+            .columns
+            .get_mut(&cover.coord)
+            .ok_or_else(|| contract("preflighted Crystal overburden column disappeared"))?;
+        let stone_bottom = cover.old_surface.level.saturating_add(1);
+        column.elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(stone_bottom, cover.new_surface.level),
+            material: SolidMaterialRole::Stone,
+            cutaway_for: Some(cover.interior),
+        }));
+        column.elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(
+                cover.new_surface.level,
+                cover.new_surface.level.saturating_add(1),
+            ),
+            material: SolidMaterialRole::Snow,
+            cutaway_for: Some(cover.interior),
+        }));
+        let removed_surface = volume.surfaces.remove(&cover.old_surface);
+        let removed_biome = biome_regions.remove(&cover.old_surface);
+        debug_assert_eq!(removed_surface, Some(cover.metadata));
+        debug_assert_eq!(removed_biome, Some(cover.biome));
+        volume.surfaces.insert(cover.new_surface, cover.metadata);
+        biome_regions.insert(cover.new_surface, cover.biome);
+        let interior = interiors
+            .by_id
+            .get_mut(&cover.interior)
+            .ok_or_else(|| contract("preflighted Crystal cutaway authority disappeared"))?;
+        interior.roof_voxels.extend(
+            (stone_bottom..=cover.new_surface.level).map(|level| TilePos::new(cover.coord, level)),
+        );
+    }
+    Ok(())
+}
+
+fn solid_mass_covering(volume: &VolumePlan, position: TilePos) -> Option<SolidMass> {
+    volume
+        .columns
+        .get(&position.coord)?
+        .elements
+        .iter()
+        .find_map(|element| {
+            let VolumeElement::Solid(mass) = *element else {
+                return None;
+            };
+            (mass.levels.bottom <= position.level && position.level < mass.levels.top)
+                .then_some(mass)
+        })
 }
 
 fn extend_unique<K, V>(
@@ -653,6 +848,264 @@ mod tests {
     };
 
     #[test]
+    fn composite_overburden_adds_real_stone_and_snow_and_extends_cutaway_ownership() {
+        let coord = HexCoord::ORIGIN;
+        let surface = hex_core::TilePos::new(coord, 9);
+        let interior = hex_core::InteriorRegionId(7);
+        let mut volume = VolumePlan::new(BTreeSet::from([coord]));
+        volume.columns.insert(
+            coord,
+            super::super::volume::VolumeColumn {
+                elements: vec![
+                    VolumeElement::Solid(SolidMass {
+                        levels: LevelInterval::new(0, 9),
+                        material: SolidMaterialRole::WorkedStone,
+                        cutaway_for: None,
+                    }),
+                    VolumeElement::Solid(SolidMass {
+                        levels: LevelInterval::new(9, 10),
+                        material: SolidMaterialRole::WorkedStone,
+                        cutaway_for: Some(interior),
+                    }),
+                ],
+            },
+        );
+        let metadata = super::super::volume::SurfaceMetadata {
+            access: super::super::volume::SurfaceAccess::SpecialMovement(
+                hex_core::SpecialMovementRegion(7),
+            ),
+            interior: None,
+        };
+        volume.surfaces.insert(surface, metadata);
+        let biome = hex_core::BiomeRegionId(9);
+        let mut biome_regions = BTreeMap::from([(surface, biome)]);
+        let mut interiors = InteriorPlan {
+            by_id: BTreeMap::from([(
+                interior,
+                super::super::world::PlannedInterior {
+                    floors: BTreeSet::new(),
+                    entrances: BTreeSet::new(),
+                    roof_voxels: BTreeSet::from([surface]),
+                },
+            )]),
+        };
+        let structures = StructurePlan {
+            by_id: BTreeMap::from([(
+                super::super::world::StructureId(1),
+                super::super::world::PlannedStructure {
+                    kind: super::super::world::StructureKind::Wall,
+                    voxels: BTreeSet::from([surface]),
+                },
+            )]),
+        };
+
+        apply_composite_natural_shell_overburden(
+            &mut volume,
+            &mut biome_regions,
+            &mut interiors,
+            &structures,
+            &BTreeMap::from([(coord, 3)]),
+        )
+        .expect("worked shell cap accepts real composite overburden");
+
+        assert_eq!(
+            volume.columns[&coord].elements,
+            vec![
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(0, 9),
+                    material: SolidMaterialRole::WorkedStone,
+                    cutaway_for: None,
+                }),
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(9, 10),
+                    material: SolidMaterialRole::WorkedStone,
+                    cutaway_for: Some(interior),
+                }),
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(10, 12),
+                    material: SolidMaterialRole::Stone,
+                    cutaway_for: Some(interior),
+                }),
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(12, 13),
+                    material: SolidMaterialRole::Snow,
+                    cutaway_for: Some(interior),
+                }),
+            ]
+        );
+        let natural_surface = TilePos::new(coord, 12);
+        assert!(!volume.surfaces.contains_key(&surface));
+        assert_eq!(volume.surfaces.get(&natural_surface), Some(&metadata));
+        assert_eq!(biome_regions.get(&natural_surface), Some(&biome));
+        assert_eq!(
+            structures.by_id[&super::super::world::StructureId(1)].voxels,
+            BTreeSet::from([surface])
+        );
+        assert_eq!(
+            interiors.by_id[&interior].roof_voxels,
+            (9..=12)
+                .map(|level| TilePos::new(coord, level))
+                .collect::<BTreeSet<_>>()
+        );
+        volume
+            .validate()
+            .expect("real overburden remains a valid volume");
+    }
+
+    #[test]
+    fn exact_composite_fragment_buries_shell_but_preserves_openings_and_authored_structure() {
+        let plan = hex_schematic::reference_plan(
+            &hex_schematic::grand_v3_reference_template().expect("template parses"),
+            0,
+        )
+        .expect("reference validates")
+        .plan;
+        let settings = crate::settings::ProceduralV3Settings {
+            layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
+                template: V3SchematicTemplate::GrandV3,
+                template_revision: crate::settings::V3_GRAND_V3_TEMPLATE_REVISION,
+                cell_pitch: 22,
+                terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                    V3GrandV3BasicTerrainProfile::canonical(),
+                ),
+            }),
+        };
+        let mut layout = resolve_layout(187, &settings).expect("layout resolves");
+        let admission = claim_site(&plan, &mut layout, 22).expect("site claim validates");
+        let mut fragment = construct_fragment(
+            &layout,
+            admission.patch_id(),
+            0.4,
+            0,
+            crate::procedural_v3::crystal_ascent_assets::tests::runtime_art_catalog(),
+        )
+        .expect("exact composite fragment constructs");
+        let patch = layout
+            .patches
+            .get(&admission.patch_id())
+            .expect("claimed Crystal patch remains present");
+        let overburden = super::super::crystal_ascent::macro_composite_natural_shell_overburden(
+            &patch.mask,
+            patch.rotation_turns,
+        )
+        .expect("natural shell overburden resolves");
+        let openings = super::super::crystal_ascent::macro_composite_exposed_shell_opening_coords(
+            &patch.mask,
+            patch.rotation_turns,
+        )
+        .expect("authored shell openings resolve");
+        let before = fragment.volume.clone();
+        let before_structures = fragment.structures.clone();
+        let before_interiors = fragment.interiors.clone();
+        apply_composite_natural_shell_overburden(
+            &mut fragment.volume,
+            &mut fragment.biome_regions,
+            &mut fragment.interiors,
+            &fragment.structures,
+            &overburden,
+        )
+        .expect("exact composite fragment accepts its natural overburden");
+        let after = &fragment.volume;
+
+        assert_eq!(after.mask, before.mask);
+        assert_eq!(fragment.structures, before_structures);
+        for coord in &openings {
+            assert_eq!(after.columns.get(coord), before.columns.get(coord));
+            assert_eq!(
+                after.top_surface_at_coord(*coord),
+                before.top_surface_at_coord(*coord)
+            );
+        }
+        let mut distinct_thicknesses = BTreeSet::new();
+        for (coord, thickness) in &overburden {
+            distinct_thicknesses.insert(*thickness);
+            let old_surface = before
+                .top_surface_at_coord(*coord)
+                .map(|(surface, _)| surface)
+                .expect("authored shell has an exact roof surface");
+            let surface = after
+                .top_surface_at_coord(*coord)
+                .map(|(surface, _)| surface)
+                .expect("covered shell has an exact natural surface");
+            assert_eq!(surface.level, old_surface.level.saturating_add(*thickness));
+            let before_mass = solid_mass_covering(&before, old_surface)
+                .expect("authored shell cap is solid before covering");
+            let buried_mass = solid_mass_covering(after, old_surface)
+                .expect("authored shell cap remains solid below the cover");
+            let stone =
+                solid_mass_covering(after, TilePos::new(*coord, surface.level.saturating_sub(1)))
+                    .expect("natural rock underlies the snow cap");
+            let snow =
+                solid_mass_covering(after, surface).expect("natural snow caps the composite cover");
+            assert_eq!(before_mass.material, SolidMaterialRole::WorkedStone);
+            assert_eq!(buried_mass, before_mass);
+            assert_eq!(stone.material, SolidMaterialRole::Stone);
+            assert_eq!(snow.material, SolidMaterialRole::Snow);
+            assert_eq!(
+                snow.levels,
+                LevelInterval::new(surface.level, surface.level + 1)
+            );
+            assert_eq!(stone.cutaway_for, before_mass.cutaway_for);
+            assert_eq!(snow.cutaway_for, before_mass.cutaway_for);
+            let interior = snow
+                .cutaway_for
+                .expect("natural cover keeps cutaway ownership");
+            assert!(fragment.interiors.by_id[&interior]
+                .roof_voxels
+                .contains(&surface));
+            assert!(before_structures
+                .by_id
+                .values()
+                .any(|structure| structure.voxels.contains(&old_surface)));
+            assert!(!fragment
+                .structures
+                .by_id
+                .values()
+                .any(|structure| structure.voxels.contains(&surface)));
+        }
+        assert!(distinct_thicknesses.len() >= 4);
+        let before_voxels = solid_voxels(&before);
+        let after_voxels = solid_voxels(after);
+        assert!(before_voxels.is_subset(&after_voxels));
+        assert_eq!(
+            after_voxels.len().saturating_sub(before_voxels.len()),
+            overburden
+                .values()
+                .map(|thickness| usize::try_from(*thickness).unwrap_or_default())
+                .sum::<usize>()
+        );
+        assert!(fragment.interiors.by_id.iter().all(|(id, interior)| {
+            before_interiors
+                .by_id
+                .get(id)
+                .is_some_and(|before_interior| {
+                    before_interior.floors == interior.floors
+                        && before_interior.entrances == interior.entrances
+                        && before_interior.roof_voxels.is_subset(&interior.roof_voxels)
+                })
+        }));
+        after.validate().expect("covered fragment volume validates");
+    }
+
+    fn solid_voxels(volume: &VolumePlan) -> BTreeSet<hex_core::TilePos> {
+        volume
+            .columns
+            .iter()
+            .flat_map(|(coord, column)| {
+                column.elements.iter().flat_map(move |element| {
+                    let VolumeElement::Solid(mass) = *element else {
+                        return Vec::new().into_iter();
+                    };
+                    (mass.levels.bottom..mass.levels.top)
+                        .map(|level| hex_core::TilePos::new(*coord, level))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                })
+            })
+            .collect()
+    }
+
+    #[test]
     fn exact_radius_32_claim_preserves_all_217_connected_owners() {
         let plan = hex_schematic::reference_plan(
             &hex_schematic::grand_v3_reference_template().expect("template parses"),
@@ -663,7 +1116,7 @@ mod tests {
         let settings = crate::settings::ProceduralV3Settings {
             layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
                 template: V3SchematicTemplate::GrandV3,
-                template_revision: 2,
+                template_revision: crate::settings::V3_GRAND_V3_TEMPLATE_REVISION,
                 cell_pitch: 22,
                 terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
                     V3GrandV3BasicTerrainProfile::canonical(),
@@ -769,7 +1222,7 @@ mod tests {
         let settings = crate::settings::ProceduralV3Settings {
             layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
                 template: V3SchematicTemplate::GrandV3,
-                template_revision: 2,
+                template_revision: crate::settings::V3_GRAND_V3_TEMPLATE_REVISION,
                 cell_pitch: 22,
                 terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
                     V3GrandV3BasicTerrainProfile::canonical(),
@@ -803,7 +1256,7 @@ mod tests {
         let settings = crate::settings::ProceduralV3Settings {
             layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
                 template: V3SchematicTemplate::GrandV3,
-                template_revision: 2,
+                template_revision: crate::settings::V3_GRAND_V3_TEMPLATE_REVISION,
                 cell_pitch: 22,
                 terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
                     V3GrandV3BasicTerrainProfile::canonical(),

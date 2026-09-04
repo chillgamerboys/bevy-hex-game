@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import stat
 import struct
 import sys
@@ -47,6 +48,12 @@ class VisualExperimentTests(unittest.TestCase):
             for profile in registry_raw["profiles"]
             if "palette" in profile
         )
+        paths.update(
+            profile["lighting_candidate"]
+            for profile in registry_raw["profiles"]
+            if "lighting_candidate" in profile
+        )
+        paths.add(visual_experiments.INDOOR_CRYSTAL_SPEC_RELATIVE)
         registry_path = fixture / "tools" / "visual_experiments" / "profiles.json"
         registry_path.parent.mkdir(parents=True)
         registry_path.write_text(
@@ -65,11 +72,87 @@ class VisualExperimentTests(unittest.TestCase):
             tuple(profile.id for profile in registry.profiles),
             visual_experiments.EXPECTED_PROFILE_IDS,
         )
-        self.assertEqual(len(registry.captures), 4)
+        self.assertEqual(len(registry.profiles), 24)
+        self.assertEqual(registry.profile("e00-baseline").fog_mode, "current")
+        self.assertEqual(
+            registry.profile("e00-baseline").material_treatment, "current"
+        )
+        self.assertEqual(registry.profile("e00-baseline").edge_treatment, "current")
+        self.assertEqual(
+            tuple(
+                profile.fog_mode
+                for profile in registry.profiles
+                if profile.axis == "visibility"
+            ),
+            visual_experiments.VISIBILITY_CANDIDATE_MODES,
+        )
+        self.assertEqual(
+            tuple(
+                profile.material_treatment
+                for profile in registry.profiles
+                if profile.axis == "materials"
+            ),
+            visual_experiments.MATERIAL_CANDIDATE_TREATMENTS,
+        )
+        self.assertEqual(
+            tuple(
+                profile.edge_treatment
+                for profile in registry.profiles
+                if profile.axis == "edges"
+            ),
+            visual_experiments.EDGE_CANDIDATE_TREATMENTS,
+        )
+        self.assertEqual(
+            tuple(
+                profile.crystal_light_profile
+                for profile in registry.profiles
+                if profile.axis == "indoor-lighting"
+            ),
+            visual_experiments.EXPECTED_INDOOR_CRYSTAL_IDS,
+        )
+        self.assertEqual(len(registry.captures), 8)
+        self.assertEqual(
+            tuple(capture.id for capture in registry.captures),
+            (
+                "01-world-topdown",
+                "02-highlands-oblique",
+                "03-coast-river-outlet",
+                "04-garden-island-oblique",
+                "05-treeline-character",
+                "06-waterfall-character",
+                "07-tunnel-first-person",
+                "08-crystal-bottom-chamber",
+            ),
+        )
+        self.assertEqual(
+            tuple(capture.id for capture in registry.captures_for("screen")),
+            tuple(capture.id for capture in registry.captures),
+        )
+        self.assertEqual(
+            tuple(capture.id for capture in registry.captures_for("smoke")),
+            (
+                "01-world-topdown",
+                "02-highlands-oblique",
+                "03-coast-river-outlet",
+                "04-garden-island-oblique",
+            ),
+        )
         self.assertEqual(
             {capture.camera for capture in registry.captures},
             {"map", "character", "first-person"},
         )
+        coast = registry.captures[2]
+        self.assertEqual(coast.camera, "map")
+        self.assertEqual(coast.look_at_anchor, "grand_v3.coast")
+        self.assertEqual(coast.look_at_offset, (50.0, 30.0, 55.0))
+        self.assertIsNone(coast.cutaway)
+        self.assertIsNone(coast.illumination_overlay)
+        chamber = registry.captures[-1]
+        self.assertEqual(chamber.camera, "character")
+        self.assertEqual(chamber.focus_anchor, "crystal_ascent.bottom_chamber")
+        self.assertIsNone(chamber.look_at_anchor)
+        self.assertIsNone(chamber.cutaway)
+        self.assertIsNone(chamber.illumination_overlay)
 
     def test_registry_rejects_unknown_fields_and_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -82,7 +165,10 @@ class VisualExperimentTests(unittest.TestCase):
                 visual_experiments.load_registry(path, root)
 
             del raw["surprise"]
-            raw["profiles"][7]["palette"] = (
+            palette_profile = next(
+                profile for profile in raw["profiles"] if profile["id"] == "p01-muted-earth"
+            )
+            palette_profile["palette"] = (
                 "tools/visual_experiments/palettes/../p01-muted-earth.json"
             )
             path.write_text(json.dumps(raw), encoding="utf-8")
@@ -98,6 +184,208 @@ class VisualExperimentTests(unittest.TestCase):
             path.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(
                 visual_experiments.ExperimentError, "mixes experiment axes"
+            ):
+                visual_experiments.load_registry(path, root)
+
+    def test_registry_rejects_invalid_or_mixed_visibility_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, path, raw = self.make_fixture(directory)
+            visibility = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "v01-fog-none"
+            )
+            visibility["fog_mode"] = "mysterious"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "fog_mode must be one of"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            visibility["fog_mode"] = "current"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "non-current fog mode"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            visibility["fog_mode"] = "none"
+            visibility["level_height"] = 0.3
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "must change only one"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            visibility.pop("level_height")
+            lighting = next(
+                profile for profile in raw["profiles"] if profile["id"] == "l01-midnight"
+            )
+            lighting["fog_mode"] = "dimmed"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "mixes experiment axes"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            lighting.pop("fog_mode")
+            softened = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "v04-fog-softened"
+            )
+            softened["fog_mode"] = "none"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "must cover none, dimmed"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            softened["fog_mode"] = "softened"
+            baseline = next(
+                profile for profile in raw["profiles"] if profile["id"] == "e00-baseline"
+            )
+            baseline.pop("fog_mode")
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "current fog"
+            ):
+                visual_experiments.load_registry(path, root)
+
+    def test_registry_rejects_invalid_capture_sets_and_look_at_pairs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, path, raw = self.make_fixture(directory)
+            raw["capture_sets"]["smoke"].append("missing")
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "unknown captures"
+            ):
+                visual_experiments.load_registry(path, root)
+
+            raw["capture_sets"]["smoke"].pop()
+            raw["captures"][1].pop("look_at_offset")
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError, "must appear together"
+            ):
+                visual_experiments.load_registry(path, root)
+
+    def test_registry_rejects_invalid_or_mixed_material_treatments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, path, raw = self.make_fixture(directory)
+            matte = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "m01-matte-terrain"
+            )
+            matte["material_treatment"] = "glossy"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "material_treatment must be one of",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            matte["material_treatment"] = "current"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "non-current material treatment",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            matte["material_treatment"] = "matte-terrain"
+            matte["fog_mode"] = "dimmed"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "must change only one",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            matte.pop("fog_mode")
+            unified = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "m02-unified-matte"
+            )
+            unified["material_treatment"] = "matte-terrain"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "must cover matte-terrain and unified-matte",
+            ):
+                visual_experiments.load_registry(path, root)
+
+    def test_registry_rejects_invalid_or_mixed_indoor_light_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, path, raw = self.make_fixture(directory)
+            tight = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "i01-crystal-tight"
+            )
+            tight["crystal_light_profile"] = "unknown"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "crystal_light_profile must be one of",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            tight["crystal_light_profile"] = "i01-crystal-tight"
+            tight["fog_mode"] = "dimmed"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "must select only its exact crystal-light profile",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            tight.pop("fog_mode")
+            broad = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "i02-crystal-broad"
+            )
+            broad["crystal_light_profile"] = "i01-crystal-tight"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "must select only its exact crystal-light profile",
+            ):
+                visual_experiments.load_registry(path, root)
+
+    def test_registry_rejects_invalid_or_mixed_edge_treatments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, path, raw = self.make_fixture(directory)
+            bevel = next(
+                profile
+                for profile in raw["profiles"]
+                if profile["id"] == "e01-micro-bevel-004"
+            )
+            bevel["edge_treatment"] = "rounded"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "edge_treatment must be one of",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            bevel["edge_treatment"] = "current"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "non-current edge treatment",
+            ):
+                visual_experiments.load_registry(path, root)
+
+            bevel["edge_treatment"] = "micro-bevel-004"
+            bevel["fog_mode"] = "dimmed"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "must change only one",
             ):
                 visual_experiments.load_registry(path, root)
 
@@ -138,7 +426,10 @@ class VisualExperimentTests(unittest.TestCase):
     def test_palette_candidate_must_cover_every_shipped_swatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root, path, raw = self.make_fixture(directory)
-            candidate = root / raw["profiles"][7]["palette"]
+            palette_profile = next(
+                profile for profile in raw["profiles"] if profile["id"] == "p01-muted-earth"
+            )
+            candidate = root / palette_profile["palette"]
             candidate_raw = json.loads(candidate.read_text(encoding="utf-8"))
             candidate_raw["colors"].pop("terrain/grass")
             candidate.write_text(json.dumps(candidate_raw), encoding="utf-8")
@@ -177,6 +468,111 @@ class VisualExperimentTests(unittest.TestCase):
             visual_experiments.patch_scenario_lighting(
                 patched, "Grand V3 Baseline", "config/lighting/overcast.ron"
             )
+
+    def test_cycle_noon_candidate_changes_only_declared_noon_fields(self) -> None:
+        source = (ROOT / "assets" / "config" / "lighting.ron").read_text(
+            encoding="utf-8"
+        )
+        _, overrides = visual_experiments.load_lighting_candidate(
+            ROOT
+            / "tools"
+            / "visual_experiments"
+            / "lighting"
+            / "l05-soft-fill-noon.json"
+        )
+        patched = visual_experiments.patch_cycle_noon_lighting(source, overrides)
+        self.assertNotEqual(patched, source)
+        self.assertEqual(
+            len(
+                re.findall(
+                    r"^\s*time_hours:\s*12\.0,\s*$",
+                    patched,
+                    re.MULTILINE,
+                )
+            ),
+            1,
+        )
+        self.assertEqual(patched.count("default_time_hours: 12.0,"), 1)
+        self.assertIn("ambient_brightness: 115.0,", patched)
+        self.assertEqual(source.count("ambient_brightness: 115.0,"), 0)
+        # Other keyframes remain byte-identical around their authored values.
+        self.assertEqual(patched.count("ambient_brightness: 70.0,"), 1)
+        self.assertEqual(patched.count("ambient_brightness: 110.0,"), 1)
+
+    def test_active_indoor_crystal_candidates_are_exact_profiles(self) -> None:
+        active = visual_experiments.load_indoor_crystal_spec(
+            visual_experiments.INDOOR_CRYSTAL_SPEC
+        )
+        self.assertEqual(active["status"], "active")
+        self.assertEqual(
+            active["runtime_setting"],
+            "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE",
+        )
+        self.assertEqual(
+            active["baseline"], visual_experiments.INDOOR_CRYSTAL_BASELINE
+        )
+        self.assertEqual(
+            tuple(candidate["id"] for candidate in active["candidates"]),
+            visual_experiments.EXPECTED_INDOOR_CRYSTAL_IDS,
+        )
+        registry = visual_experiments.load_registry()
+        self.assertEqual(
+            tuple(
+                profile.id
+                for profile in registry.profiles
+                if profile.axis == "indoor-lighting"
+            ),
+            visual_experiments.EXPECTED_INDOOR_CRYSTAL_IDS,
+        )
+
+    def test_active_indoor_crystal_spec_rejects_contract_drift(self) -> None:
+        source = json.loads(
+            visual_experiments.INDOOR_CRYSTAL_SPEC.read_text(encoding="utf-8")
+        )
+        mutations = (
+            ("baseline", lambda raw: raw["baseline"].update({"range": 4.0})),
+            (
+                "mixed tight candidate",
+                lambda raw: raw["candidates"][0]["overrides"].update(
+                    {"shadow_maps_enabled": True}
+                ),
+            ),
+            (
+                "non-selective shadow",
+                lambda raw: raw["candidates"][2].update(
+                    {"target": "all-crystal-point-lights"}
+                ),
+            ),
+            ("unknown field", lambda raw: raw.update({"surprise": True})),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                raw = json.loads(json.dumps(source))
+                mutate(raw)
+                path = pathlib.Path(directory) / "indoor-crystal-v1.json"
+                path.write_text(json.dumps(raw), encoding="utf-8")
+                with self.assertRaises(visual_experiments.ExperimentError):
+                    visual_experiments.load_indoor_crystal_spec(path)
+
+    def test_cycle_noon_loader_rejects_crystal_point_light_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "invalid-indoor-light.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "candidate_id": "i01-crystal-tight",
+                        "base": "default-cycle",
+                        "noon_overrides": {"point_light_range": 3.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                visual_experiments.ExperimentError,
+                "unknown overrides.*point_light_range",
+            ):
+                visual_experiments.load_lighting_candidate(path)
 
     def test_palette_replacement_preserves_exact_swatch_vocabulary(self) -> None:
         registry = visual_experiments.load_registry()
@@ -235,6 +631,12 @@ class VisualExperimentTests(unittest.TestCase):
             expected = {
                 "e00-baseline": [],
                 "l04-overcast": ["assets/config/scenarios.ron"],
+                "l05-soft-fill-noon": ["assets/config/lighting.ron"],
+                "z01-haze-light": ["assets/config/lighting.ron"],
+                "v02-fog-dimmed": [],
+                "m01-matte-terrain": [],
+                "e01-micro-bevel-004": [],
+                "i02-crystal-broad": [],
                 "h01-flat-030": [
                     "assets/config/worlds/procedural-grand-v3-baseline.ron"
                 ],
@@ -252,6 +654,49 @@ class VisualExperimentTests(unittest.TestCase):
                     self.assertEqual(
                         [item["path"] for item in state["modified_assets"]], changed
                     )
+                    if profile_id in ("l05-soft-fill-noon", "z01-haze-light"):
+                        self.assertEqual(
+                            state["resolved_axis"]["source"],
+                            registry.profile(profile_id).lighting_candidate,
+                        )
+                    if profile_id == "v02-fog-dimmed":
+                        self.assertEqual(state["fog_mode"], "dimmed")
+                        self.assertEqual(
+                            state["resolved_axis"],
+                            {"kind": "review-fog-mode", "mode": "dimmed"},
+                        )
+                    if profile_id == "m01-matte-terrain":
+                        self.assertEqual(
+                            state["material_treatment"], "matte-terrain"
+                        )
+                        self.assertEqual(
+                            state["resolved_axis"],
+                            {
+                                "kind": "review-material-treatment",
+                                "treatment": "matte-terrain",
+                            },
+                        )
+                    if profile_id == "i02-crystal-broad":
+                        self.assertEqual(
+                            state["crystal_light_profile"],
+                            "i02-crystal-broad",
+                        )
+                        self.assertEqual(
+                            state["resolved_axis"],
+                            {
+                                "kind": "review-crystal-light-profile",
+                                "runtime_setting": "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE",
+                                "profile": "i02-crystal-broad",
+                                "source": visual_experiments.INDOOR_CRYSTAL_SPEC_RELATIVE,
+                                "baseline": visual_experiments.INDOOR_CRYSTAL_BASELINE,
+                                "target": "all-crystal-point-lights",
+                                "overrides": {"range": 7.0},
+                                "resolved_target_state": {
+                                    **visual_experiments.INDOOR_CRYSTAL_BASELINE,
+                                    "range": 7.0,
+                                },
+                            },
+                        )
 
     def test_capture_environment_scrubs_inherited_review_and_walk_state(self) -> None:
         registry = visual_experiments.load_registry()
@@ -261,9 +706,13 @@ class VisualExperimentTests(unittest.TestCase):
             {
                 "PATH": os.environ.get("PATH", ""),
                 "HEX_REVIEW_TIME": "wrong",
+                "HEX_REVIEW_FOG": "wrong",
+                "HEX_REVIEW_MATERIAL": "wrong",
+                "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE": "i03-heart-feature-shadow",
                 "HEX_REVIEW_CUTAWAY": "full",
                 "HEX_WALK_SCRIPT": "stale.ron",
                 "HEX_GRAND_PROFILE": "1",
+                "HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT": "1",
                 "BEVY_ASSET_ROOT": "wrong",
                 "HEX_GAME_DATA_DIR": "wrong",
                 "RUSTFLAGS": "-C target-cpu=native",
@@ -280,15 +729,291 @@ class VisualExperimentTests(unittest.TestCase):
             capture=capture,
         )
         self.assertEqual(environment["HEX_REVIEW_TIME"], "0.0")
+        self.assertEqual(environment["HEX_REVIEW_FOG"], "current")
+        self.assertEqual(environment["HEX_REVIEW_MATERIAL"], "current")
+        self.assertNotIn("HEX_REVIEW_CRYSTAL_LIGHT_PROFILE", environment)
         self.assertNotIn("HEX_REVIEW_CUTAWAY", environment)
         self.assertNotIn("HEX_WALK_SCRIPT", environment)
         self.assertNotIn("HEX_GRAND_PROFILE", environment)
+        self.assertNotIn("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT", environment)
         self.assertNotIn("RUSTFLAGS", environment)
         self.assertNotIn("RUSTUP_TOOLCHAIN", environment)
         self.assertNotIn("RUSTC", environment)
         self.assertNotIn("CARGO_BUILD_TARGET", environment)
         self.assertNotIn("WGPU_BACKEND", environment)
         self.assertEqual(environment["BEVY_ASSET_ROOT"], str(ROOT / ".context" / "stage"))
+
+    def test_structural_draft_is_strictly_opt_in_and_recorded(self) -> None:
+        registry = visual_experiments.load_registry()
+        profile = registry.profile("e00-baseline")
+        capture = registry.captures[0]
+        arguments = {
+            "staged_root": ROOT / ".context" / "stage",
+            "data_root": ROOT / ".context" / "data",
+            "capture_path": ROOT / ".context" / "capture.png",
+            "registry": registry,
+            "profile": profile,
+            "capture": capture,
+        }
+        strict = visual_experiments.build_capture_environment(
+            {"HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT": "1"},
+            **arguments,
+        )
+        self.assertNotIn("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT", strict)
+        draft = visual_experiments.build_capture_environment(
+            {},
+            allow_structural_draft=True,
+            **arguments,
+        )
+        self.assertEqual(draft["HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT"], "1")
+        tokenized = visual_experiments._tokenized_environment(
+            registry,
+            profile,
+            capture,
+            allow_structural_draft=True,
+        )
+        self.assertEqual(
+            tokenized["HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT"],
+            "1",
+        )
+        plan = visual_experiments.build_plan(
+            registry,
+            (profile,),
+            {
+                "git_head": "a" * 40,
+                "worktree_dirty": True,
+                "workspace_content_sha256": "b" * 64,
+            },
+            visual_experiments.EXPERIMENT_ROOT / "draft-plan",
+            visual_experiments.relevant_source_hashes(ROOT, registry),
+            captures=(capture,),
+            allow_structural_draft=True,
+        )
+        self.assertTrue(plan["structural_draft"])
+        self.assertTrue(plan["build"]["structural_draft"])
+        self.assertEqual(
+            plan["profiles"][0]["captures"][0]["environment"]
+            ["HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT"],
+            "1",
+        )
+
+    def test_visibility_mode_is_emitted_in_real_and_tokenized_environments(self) -> None:
+        registry = visual_experiments.load_registry()
+        capture = registry.captures[0]
+        expected = {
+            "e00-baseline": "current",
+            "v01-fog-none": "none",
+            "v02-fog-dimmed": "dimmed",
+            "v03-fog-observed-only": "observed-only",
+            "v04-fog-softened": "softened",
+        }
+        for profile_id, fog_mode in expected.items():
+            with self.subTest(profile=profile_id):
+                profile = registry.profile(profile_id)
+                environment = visual_experiments.build_capture_environment(
+                    {"HEX_REVIEW_FOG": "stale"},
+                    staged_root=ROOT / ".context" / "stage",
+                    data_root=ROOT / ".context" / "data",
+                    capture_path=ROOT / ".context" / "capture.png",
+                    registry=registry,
+                    profile=profile,
+                    capture=capture,
+                )
+                self.assertEqual(environment["HEX_REVIEW_FOG"], fog_mode)
+                self.assertEqual(
+                    visual_experiments._tokenized_environment(
+                        registry, profile, capture
+                    )["HEX_REVIEW_FOG"],
+                    fog_mode,
+                )
+
+    def test_material_treatment_is_emitted_in_real_and_tokenized_environments(self) -> None:
+        registry = visual_experiments.load_registry()
+        capture = registry.captures[0]
+        expected = {
+            "e00-baseline": "current",
+            "m01-matte-terrain": "matte-terrain",
+            "m02-unified-matte": "unified-matte",
+        }
+        for profile_id, treatment in expected.items():
+            with self.subTest(profile=profile_id):
+                profile = registry.profile(profile_id)
+                environment = visual_experiments.build_capture_environment(
+                    {"HEX_REVIEW_MATERIAL": "stale"},
+                    staged_root=ROOT / ".context" / "stage",
+                    data_root=ROOT / ".context" / "data",
+                    capture_path=ROOT / ".context" / "capture.png",
+                    registry=registry,
+                    profile=profile,
+                    capture=capture,
+                )
+                self.assertEqual(environment["HEX_REVIEW_MATERIAL"], treatment)
+                self.assertEqual(
+                    visual_experiments._tokenized_environment(
+                        registry, profile, capture
+                    )["HEX_REVIEW_MATERIAL"],
+                    treatment,
+                )
+
+    def test_edge_treatment_is_emitted_in_real_and_tokenized_environments(self) -> None:
+        registry = visual_experiments.load_registry()
+        capture = registry.captures[0]
+        expected = {
+            "e00-baseline": "current",
+            "e01-micro-bevel-004": "micro-bevel-004",
+            "e02-micro-bevel-008": "micro-bevel-008",
+        }
+        for profile_id, treatment in expected.items():
+            with self.subTest(profile=profile_id):
+                profile = registry.profile(profile_id)
+                environment = visual_experiments.build_capture_environment(
+                    {"HEX_REVIEW_EDGE": "stale"},
+                    staged_root=ROOT / ".context" / "stage",
+                    data_root=ROOT / ".context" / "data",
+                    capture_path=ROOT / ".context" / "capture.png",
+                    registry=registry,
+                    profile=profile,
+                    capture=capture,
+                )
+                self.assertEqual(environment["HEX_REVIEW_EDGE"], treatment)
+                self.assertEqual(
+                    visual_experiments._tokenized_environment(
+                        registry, profile, capture
+                    )["HEX_REVIEW_EDGE"],
+                    treatment,
+                )
+
+    def test_crystal_light_profile_is_emitted_only_for_indoor_candidates(self) -> None:
+        registry = visual_experiments.load_registry()
+        capture = registry.captures[-1]
+        for profile in registry.profiles:
+            with self.subTest(profile=profile.id):
+                environment = visual_experiments.build_capture_environment(
+                    {"HEX_REVIEW_CRYSTAL_LIGHT_PROFILE": "stale"},
+                    staged_root=ROOT / ".context" / "stage",
+                    data_root=ROOT / ".context" / "data",
+                    capture_path=ROOT / ".context" / "capture.png",
+                    registry=registry,
+                    profile=profile,
+                    capture=capture,
+                )
+                tokenized = visual_experiments._tokenized_environment(
+                    registry, profile, capture
+                )
+                if profile.axis == "indoor-lighting":
+                    self.assertEqual(
+                        environment["HEX_REVIEW_CRYSTAL_LIGHT_PROFILE"],
+                        profile.id,
+                    )
+                    self.assertEqual(
+                        tokenized["HEX_REVIEW_CRYSTAL_LIGHT_PROFILE"],
+                        profile.id,
+                    )
+                else:
+                    self.assertNotIn(
+                        "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE", environment
+                    )
+                    self.assertNotIn(
+                        "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE", tokenized
+                    )
+
+    def test_indoor_light_plan_records_exact_resolved_contract(self) -> None:
+        registry = visual_experiments.load_registry()
+        profile = registry.profile("i03-heart-feature-shadow")
+        plan = visual_experiments.build_plan(
+            registry,
+            (registry.profile("e00-baseline"), profile),
+            {
+                "git_head": "a" * 40,
+                "worktree_dirty": False,
+                "workspace_content_sha256": "b" * 64,
+            },
+            visual_experiments.EXPERIMENT_ROOT / "plan",
+            visual_experiments.relevant_source_hashes(ROOT, registry),
+            captures=(registry.captures[-1],),
+        )
+        record = plan["profiles"][1]
+        self.assertEqual(record["crystal_light_profile"], profile.id)
+        self.assertEqual(
+            record["resolved_axis"],
+            {
+                "kind": "review-crystal-light-profile",
+                "runtime_setting": "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE",
+                "profile": profile.id,
+                "source": visual_experiments.INDOOR_CRYSTAL_SPEC_RELATIVE,
+                "baseline": visual_experiments.INDOOR_CRYSTAL_BASELINE,
+                "target": "crystal-heart-offset-18",
+                "overrides": {"shadow_maps_enabled": True},
+                "resolved_target_state": {
+                    **visual_experiments.INDOOR_CRYSTAL_BASELINE,
+                    "shadow_maps_enabled": True,
+                },
+            },
+        )
+        self.assertEqual(
+            record["captures"][0]["environment"][
+                "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE"
+            ],
+            profile.id,
+        )
+        self.assertIn(
+            visual_experiments.INDOOR_CRYSTAL_SPEC_RELATIVE,
+            plan["source_hashes"],
+        )
+
+    def test_capture_environment_projects_coast_and_normal_chamber(self) -> None:
+        registry = visual_experiments.load_registry()
+        look_at = registry.captures[2]
+        environment = visual_experiments.build_capture_environment(
+            {},
+            staged_root=ROOT / ".context" / "stage",
+            data_root=ROOT / ".context" / "data",
+            capture_path=ROOT / ".context" / "capture.png",
+            registry=registry,
+            profile=registry.profile("e00-baseline"),
+            capture=look_at,
+        )
+        self.assertEqual(environment["HEX_REVIEW_LOOK_AT_ANCHOR"], "grand_v3.coast")
+        self.assertEqual(environment["HEX_REVIEW_LOOK_AT_OFFSET"], "50.0,30.0,55.0")
+        interior = registry.captures[-1]
+        environment = visual_experiments.build_capture_environment(
+            {},
+            staged_root=ROOT / ".context" / "stage",
+            data_root=ROOT / ".context" / "data",
+            capture_path=ROOT / ".context" / "capture.png",
+            registry=registry,
+            profile=registry.profile("e00-baseline"),
+            capture=interior,
+        )
+        self.assertEqual(
+            environment["HEX_REVIEW_FOCUS_ANCHOR"],
+            "crystal_ascent.bottom_chamber",
+        )
+        self.assertNotIn("HEX_REVIEW_CUTAWAY", environment)
+        self.assertNotIn("HEX_REVIEW_ILLUMINATION", environment)
+
+    def test_capture_environment_retains_optional_interior_diagnostics(self) -> None:
+        registry = visual_experiments.load_registry()
+        interior = visual_experiments.CaptureSpec(
+            id="99-interior-diagnostic",
+            filename="99-interior-diagnostic.png",
+            camera="map",
+            view="top-down",
+            focus_anchor="grand_v3.tunnel_midpoint",
+            cutaway="full",
+            illumination_overlay="overlay",
+        )
+        environment = visual_experiments.build_capture_environment(
+            {},
+            staged_root=ROOT / ".context" / "stage",
+            data_root=ROOT / ".context" / "data",
+            capture_path=ROOT / ".context" / "capture.png",
+            registry=registry,
+            profile=registry.profile("e00-baseline"),
+            capture=interior,
+        )
+        self.assertEqual(environment["HEX_REVIEW_CUTAWAY"], "full")
+        self.assertEqual(environment["HEX_REVIEW_ILLUMINATION"], "overlay")
 
     def test_overcast_capture_never_receives_a_time_override(self) -> None:
         registry = visual_experiments.load_registry()
@@ -333,6 +1058,53 @@ class VisualExperimentTests(unittest.TestCase):
                     mock.call(24680, visual_experiments.signal.SIGKILL),
                 ],
             )
+
+    def test_build_once_resolves_and_hashes_one_exact_review_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            executable = root / "hex_game"
+            executable.write_bytes(b"review-binary")
+            log = root / "build.log"
+
+            def fake_build(_command, **arguments):
+                arguments["log_path"].write_text(
+                    json.dumps(
+                        {
+                            "reason": "compiler-artifact",
+                            "target": {"name": "hex_game"},
+                            "executable": str(executable),
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                return 0
+
+            with mock.patch.object(
+                visual_experiments, "run_logged_process", side_effect=fake_build
+            ):
+                review = visual_experiments.build_review_binary(
+                    root, log_path=log, timeout_seconds=10
+                )
+            self.assertEqual(review.path, executable.resolve())
+            self.assertEqual(review.sha256, visual_experiments.sha256_file(executable))
+            self.assertEqual(
+                visual_experiments._recorded_capture_command(review),
+                ["$REVIEW_BINARY"],
+            )
+
+    def test_resource_limits_reject_disk_growth_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "large.bin").write_bytes(b"12345")
+            limits = visual_experiments.ResourceLimits(10, 10, 4, 0)
+            with self.assertRaisesRegex(visual_experiments.CaptureError, "over cap"):
+                visual_experiments._enforce_resource_limits(
+                    root,
+                    root,
+                    limits,
+                    visual_experiments.time.monotonic() + 10,
+                )
 
     def test_stable_input_load_retries_a_provenance_race(self) -> None:
         registry = visual_experiments.load_registry()
@@ -440,9 +1212,13 @@ class VisualExperimentTests(unittest.TestCase):
                         "camera": capture.camera,
                         "view": capture.view,
                         "focus_anchor": capture.focus_anchor,
+                        "look_at_anchor": capture.look_at_anchor,
+                        "look_at_offset": list(capture.look_at_offset)
+                        if capture.look_at_offset is not None
+                        else None,
                         "liquid_phase": 0.0,
-                        "cutaway": None,
-                        "illumination_overlay": None,
+                        "cutaway": capture.cutaway,
+                        "illumination_overlay": capture.illumination_overlay,
                         "command": [
                             "cargo",
                             "run",
@@ -454,6 +1230,9 @@ class VisualExperimentTests(unittest.TestCase):
                         ],
                         "environment": visual_experiments._tokenized_environment(
                             registry, profile, capture
+                        ),
+                        "runtime_report": dict(
+                            visual_experiments.RUNTIME_REPORT_PLACEHOLDER
                         ),
                     },
                     "artifact": {
@@ -510,13 +1289,19 @@ class VisualExperimentTests(unittest.TestCase):
                 )
             self.assertTrue((output / "manifest.json").is_file())
             self.assertEqual(
-                len(list((output / "profiles" / profile.id).glob("*.png"))), 4
+                len(list((output / "profiles" / profile.id).glob("*.png"))), 8
             )
             self.assertFalse((output / "runtime").exists())
             self.assertIn(
                 "COMPLETE CAPTURE SET",
                 (output / "review-index.md").read_text(encoding="utf-8"),
             )
+            html = (output / "index.html").read_text(encoding="utf-8")
+            self.assertLess(
+                html.index("Capture-first comparisons"),
+                html.index("Axis-first comparisons"),
+            )
+            self.assertIn("axis-baseline", html)
             (output / "unexpected.txt").write_text("extra", encoding="utf-8")
             with self.assertRaisesRegex(
                 visual_experiments.ExperimentError, "file set differs"
@@ -524,6 +1309,7 @@ class VisualExperimentTests(unittest.TestCase):
                 visual_experiments.validate_complete_pack(
                     output, registry, (profile,)
                 )
+
             (output / "unexpected.txt").unlink()
             sidecar = (
                 output
@@ -541,6 +1327,137 @@ class VisualExperimentTests(unittest.TestCase):
                     output, registry, (profile,)
                 )
 
+    def test_candidate_html_pairs_every_capture_with_baseline_by_axis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pack_root = pathlib.Path(directory)
+            registry = visual_experiments.load_registry()
+            profiles = visual_experiments.selected_profiles(
+                registry,
+                (
+                    "l05-soft-fill-noon",
+                    "i03-heart-feature-shadow",
+                    "v03-fog-observed-only",
+                    "p01-muted-earth",
+                ),
+            )
+            self.assertEqual(
+                tuple(profile.id for profile in profiles),
+                (
+                    "e00-baseline",
+                    "l05-soft-fill-noon",
+                    "i03-heart-feature-shadow",
+                    "v03-fog-observed-only",
+                    "p01-muted-earth",
+                ),
+            )
+            captures = registry.captures_for("smoke")
+            visual_experiments._write_html_index(
+                pack_root, registry, profiles, captures
+            )
+            rendered = (pack_root / "index.html").read_text(encoding="utf-8")
+            self.assertIn('id="axis-lighting"', rendered)
+            self.assertIn('id="axis-indoor-lighting"', rendered)
+            self.assertIn('id="axis-visibility"', rendered)
+            self.assertIn('id="axis-palette"', rendered)
+            self.assertIn("v03-fog-observed-only — 01-world-topdown — fog: observed-only", rendered)
+            self.assertIn("Baseline — 01-world-topdown — fog: current", rendered)
+            self.assertIn(
+                "i03-heart-feature-shadow — 01-world-topdown — fog: current — "
+                "material: current — edge: current — crystal: i03-heart-feature-shadow",
+                rendered,
+            )
+            for candidate in (
+                "l05-soft-fill-noon",
+                "i03-heart-feature-shadow",
+                "v03-fog-observed-only",
+                "p01-muted-earth",
+            ):
+                for capture in captures:
+                    marker = (
+                        f'data-baseline="e00-baseline" '
+                        f'data-candidate="{candidate}" data-capture="{capture.id}"'
+                    )
+                    self.assertEqual(rendered.count(marker), 1)
+                    comparison = rendered[rendered.index(marker) :]
+                    comparison = comparison[: comparison.index("</section>")]
+                    baseline_path = f"profiles/e00-baseline/{capture.filename}"
+                    candidate_path = f"profiles/{candidate}/{capture.filename}"
+                    self.assertIn(baseline_path, comparison)
+                    self.assertIn(candidate_path, comparison)
+                    self.assertLess(
+                        comparison.index(baseline_path),
+                        comparison.index(candidate_path),
+                    )
+
+    def test_candidate_only_selection_automatically_includes_baseline(self) -> None:
+        registry = visual_experiments.load_registry()
+        profiles = visual_experiments.selected_profiles(
+            registry, ("v04-fog-softened",)
+        )
+        self.assertEqual(
+            tuple(profile.id for profile in profiles),
+            ("e00-baseline", "v04-fog-softened"),
+        )
+
+    def test_initial_profile_set_is_bounded_and_covers_requested_axes(self) -> None:
+        registry = visual_experiments.load_registry()
+        profiles = visual_experiments.selected_profiles(
+            registry, (), profile_set="initial"
+        )
+        self.assertEqual(
+            tuple(profile.id for profile in profiles),
+            visual_experiments.INITIAL_SCREEN_PROFILE_IDS,
+        )
+        self.assertEqual(len(profiles), 10)
+        self.assertEqual(
+            {profile.axis for profile in profiles},
+            {
+                "baseline",
+                "lighting",
+                "haze",
+                "visibility",
+                "materials",
+                "level_height",
+                "palette",
+            },
+        )
+        with self.assertRaisesRegex(
+            visual_experiments.ExperimentError, "mutually exclusive"
+        ):
+            visual_experiments.selected_profiles(
+                registry, ("p01-muted-earth",), profile_set="initial"
+            )
+
+    def test_comparison_report_metadata_is_semantic_and_deterministic(self) -> None:
+        registry = visual_experiments.load_registry()
+        profiles = visual_experiments.selected_profiles(
+            registry, (), profile_set="initial"
+        )
+        captures = registry.captures_for("smoke")
+        first = visual_experiments.comparison_report_metadata(profiles, captures)
+        second = visual_experiments.comparison_report_metadata(profiles, captures)
+        self.assertEqual(first, second)
+        self.assertEqual(first["selection_id"], "initial")
+        self.assertEqual(first["render_count"], 40)
+        self.assertEqual(first["comparison_count"], 36)
+        self.assertEqual(
+            [axis["axis"] for axis in first["axes"]],
+            [
+                "lighting",
+                "haze",
+                "visibility",
+                "materials",
+                "level_height",
+                "palette",
+            ],
+        )
+        self.assertRegex(first["semantic_sha256"], r"^[0-9a-f]{64}$")
+
+        changed = visual_experiments.comparison_report_metadata(
+            profiles, registry.captures_for("screen")
+        )
+        self.assertNotEqual(first["semantic_sha256"], changed["semantic_sha256"])
+
     def test_matrix_failure_leaves_no_published_or_staged_pack(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root, path, _ = self.make_fixture(directory)
@@ -555,7 +1472,7 @@ class VisualExperimentTests(unittest.TestCase):
             output = root / "published" / "matrix"
 
             def fail_capture(**arguments):
-                if arguments["capture"].id == "02-massif-oblique":
+                if arguments["capture"].id == "02-highlands-oblique":
                     raise visual_experiments.CaptureError("injected capture failure")
                 return self._fake_capture(**arguments)
 

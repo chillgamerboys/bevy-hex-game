@@ -373,7 +373,10 @@ fn cutaway_snapshot(
             .filter_map(|(position, bottom, cutaway, occlusion, visibility)| {
                 if cutaway.0 == active_region {
                     assert!(occlusion.contains(PresentationOcclusionReason::InteriorCutaway));
-                    assert_eq!(visibility, Some(&Visibility::Hidden));
+                    assert_eq!(
+                        visibility, None,
+                        "logical roof runs must remain outside visibility propagation"
+                    );
                     Some((*position, bottom.0))
                 } else {
                     assert!(
@@ -389,6 +392,21 @@ fn cutaway_snapshot(
         !cutaway_roof_runs.is_empty(),
         "Grand's unified interior should publish cutaway-owned roof runs"
     );
+    {
+        let world = app.world_mut();
+        let mut rendered_roofs =
+            world.query::<(&TerrainRenderBatch, &CutawayOccluder, Option<&Visibility>)>();
+        let hidden = rendered_roofs
+            .iter(world)
+            .filter(|(_batch, cutaway, visibility)| {
+                cutaway.0 == active_region && *visibility == Some(&Visibility::Hidden)
+            })
+            .count();
+        assert!(
+            hidden > 0,
+            "the active cutaway did not hide its render batches"
+        );
+    }
 
     let (tree_roots, expected_cutaway_roots, actual_cutaway_roots) = {
         let world = app.world_mut();
@@ -435,7 +453,12 @@ fn grand_crystal_runtime_snapshot(app: &mut App) -> GrandCrystalRuntimeSnapshot 
         .map(|(id, position)| (id.as_str().to_owned(), position))
         .collect::<Vec<_>>();
     observation_anchors.sort();
-    for required in ["grand_v3.lake_island", "grand_v3.massif_crest"] {
+    for required in [
+        "grand_v3.lake_island",
+        "grand_v3.massif_crest",
+        "grand_v3.waterfall_base",
+        "grand_v3.waterfall_crown",
+    ] {
         assert!(
             observation_anchors.iter().any(|(id, _)| id == required),
             "Grand V3 omitted scenic observation anchor {required}"

@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use hex_assets::{
     HexObjectRotation, ObjectInstance, ObjectInstanceError, RuntimeArtCatalog, SrgbColor,
 };
+use hex_core::ReviewCrystalLightProfile;
 
 use crate::procedural_v3::{
     CaveCrystalAssetError, CaveCrystalKind, CaveCrystalObjectSet, CrystalAscentAssetError,
@@ -21,6 +22,9 @@ use crate::procedural_v3::{
 const POINT_LIGHT_INTENSITY_LUMENS: f32 = 4_500.0;
 const POINT_LIGHT_RANGE: f32 = 4.5;
 const POINT_LIGHT_RADIUS: f32 = 0.12;
+const TIGHT_POINT_LIGHT_RANGE: f32 = 3.0;
+const BROAD_POINT_LIGHT_RANGE: f32 = 7.0;
+const HEART_FEATURE_SHADOW_OFFSET: f32 = 18.0;
 
 /// Private identity on the transform root of one generated crystal.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,6 +318,7 @@ fn prepare_requests(
 pub(crate) fn spawn_prepared(
     commands: &mut Commands,
     prepared: Vec<PreparedCrystal>,
+    profile: ReviewCrystalLightProfile,
 ) -> Vec<Entity> {
     let mut roots = Vec::with_capacity(prepared.len());
     for crystal in prepared {
@@ -321,15 +326,8 @@ pub(crate) fn spawn_prepared(
             .point_light_offsets
             .into_iter()
             .map(|offset| {
-                let point_light = PointLight {
-                    color: crystal.point_light_color,
-                    intensity: POINT_LIGHT_INTENSITY_LUMENS,
-                    range: POINT_LIGHT_RANGE,
-                    radius: POINT_LIGHT_RADIUS,
-                    shadow_maps_enabled: false,
-                    contact_shadows_enabled: false,
-                    ..default()
-                };
+                let point_light =
+                    physical_point_light(crystal.point_light_color, crystal.kind, offset, profile);
                 let mut entity = commands.spawn((point_light, Transform::from_translation(offset)));
                 match crystal.kind {
                     PreparedCrystalKind::Cave(_) => {
@@ -380,6 +378,33 @@ pub(crate) fn spawn_prepared(
         roots.push(root);
     }
     roots
+}
+
+fn physical_point_light(
+    color: Color,
+    kind: PreparedCrystalKind,
+    offset: Vec3,
+    profile: ReviewCrystalLightProfile,
+) -> PointLight {
+    let range = match profile {
+        ReviewCrystalLightProfile::Tight => TIGHT_POINT_LIGHT_RANGE,
+        ReviewCrystalLightProfile::Broad => BROAD_POINT_LIGHT_RANGE,
+        ReviewCrystalLightProfile::Current | ReviewCrystalLightProfile::HeartFeatureShadow => {
+            POINT_LIGHT_RANGE
+        }
+    };
+    let shadow_maps_enabled = profile == ReviewCrystalLightProfile::HeartFeatureShadow
+        && kind == PreparedCrystalKind::Ascent(CrystalAscentCrystalKind::Heart)
+        && offset == Vec3::Y * HEART_FEATURE_SHADOW_OFFSET;
+    PointLight {
+        color,
+        intensity: POINT_LIGHT_INTENSITY_LUMENS,
+        range,
+        radius: POINT_LIGHT_RADIUS,
+        shadow_maps_enabled,
+        contact_shadows_enabled: false,
+        ..default()
+    }
 }
 
 fn to_color(color: SrgbColor) -> Color {
@@ -483,12 +508,19 @@ mod tests {
     }
 
     fn spawn_with_level_scale(prepared: Vec<PreparedCrystal>) -> (App, Vec<Entity>) {
+        spawn_with_profile(prepared, ReviewCrystalLightProfile::Current)
+    }
+
+    fn spawn_with_profile(
+        prepared: Vec<PreparedCrystal>,
+        profile: ReviewCrystalLightProfile,
+    ) -> (App, Vec<Entity>) {
         let mut app = App::new();
         app.add_plugins(TransformPlugin);
         let mut queue = CommandQueue::default();
         let roots = {
             let mut commands = Commands::new(&mut queue, app.world());
-            spawn_prepared(&mut commands, prepared)
+            spawn_prepared(&mut commands, prepared, profile)
         };
         queue.apply(app.world_mut());
 
@@ -569,6 +601,118 @@ mod tests {
         assert_near(light.radius, POINT_LIGHT_RADIUS);
         assert!(!light.shadow_maps_enabled);
         assert!(!light.contact_shadows_enabled);
+    }
+
+    #[test]
+    fn review_crystal_light_profiles_match_the_exact_one_factor_contract() {
+        let cave = PreparedCrystalKind::Cave(CaveCrystalKind::Spire);
+        let landing = PreparedCrystalKind::Ascent(CrystalAscentCrystalKind::Landing(
+            CaveCrystalKind::Branched,
+        ));
+        let heart = PreparedCrystalKind::Ascent(CrystalAscentCrystalKind::Heart);
+
+        for (profile, expected_range) in [
+            (ReviewCrystalLightProfile::Tight, TIGHT_POINT_LIGHT_RANGE),
+            (ReviewCrystalLightProfile::Broad, BROAD_POINT_LIGHT_RANGE),
+        ] {
+            for (kind, offset) in [
+                (cave, Vec3::Y),
+                (landing, Vec3::Y * 1.5),
+                (heart, Vec3::Y * 2.0),
+                (heart, Vec3::Y * HEART_FEATURE_SHADOW_OFFSET),
+            ] {
+                let light = physical_point_light(Color::srgb(0.2, 0.8, 1.0), kind, offset, profile);
+                assert_near(light.intensity, POINT_LIGHT_INTENSITY_LUMENS);
+                assert_near(light.range, expected_range);
+                assert_near(light.radius, POINT_LIGHT_RADIUS);
+                assert!(!light.shadow_maps_enabled);
+                assert!(!light.contact_shadows_enabled);
+            }
+        }
+
+        for (kind, offset, expected_shadow) in [
+            (cave, Vec3::Y * HEART_FEATURE_SHADOW_OFFSET, false),
+            (landing, Vec3::Y * HEART_FEATURE_SHADOW_OFFSET, false),
+            (heart, Vec3::Y * 10.0, false),
+            (heart, Vec3::Y * HEART_FEATURE_SHADOW_OFFSET, true),
+            (heart, Vec3::Y * 27.0, false),
+        ] {
+            let light = physical_point_light(
+                Color::srgb(0.2, 0.8, 1.0),
+                kind,
+                offset,
+                ReviewCrystalLightProfile::HeartFeatureShadow,
+            );
+            assert_near(light.intensity, POINT_LIGHT_INTENSITY_LUMENS);
+            assert_near(light.range, POINT_LIGHT_RANGE);
+            assert_near(light.radius, POINT_LIGHT_RADIUS);
+            assert_eq!(light.shadow_maps_enabled, expected_shadow);
+            assert!(!light.contact_shadows_enabled);
+        }
+    }
+
+    #[test]
+    fn heart_feature_shadow_publication_selects_exactly_the_local_level_18_child() {
+        let cave_id = LightId(10);
+        let landing_id = LightId(11);
+        let heart_id = LightId(12);
+        let requests = [
+            request(
+                cave_id.0,
+                HexCoord::ORIGIN,
+                2,
+                PreparedCrystalKind::Cave(CaveCrystalKind::Spire),
+                0,
+            ),
+            request(
+                landing_id.0,
+                HexCoord::from_axial(2, -1),
+                2,
+                PreparedCrystalKind::Ascent(CrystalAscentCrystalKind::Landing(
+                    CaveCrystalKind::Branched,
+                )),
+                0,
+            ),
+            request(
+                heart_id.0,
+                HexCoord::from_axial(5, -3),
+                2,
+                PreparedCrystalKind::Ascent(CrystalAscentCrystalKind::Heart),
+                0,
+            ),
+        ];
+        let prepared = prepare_requests(LEVEL_HEIGHT, &requests, Some(runtime_art_catalog()))
+            .expect("tracked crystal fixtures should preflight");
+        let (app, roots) =
+            spawn_with_profile(prepared, ReviewCrystalLightProfile::HeartFeatureShadow);
+
+        let heart_root = ascent_root(app.world(), &roots, heart_id);
+        let mut shadowed = Vec::new();
+        for root in roots {
+            for child in child_entities(app.world(), root) {
+                let entity = app.world().entity(child);
+                let light = entity
+                    .get::<PointLight>()
+                    .expect("crystal child carries its physical point light");
+                assert_near(light.intensity, POINT_LIGHT_INTENSITY_LUMENS);
+                assert_near(light.range, POINT_LIGHT_RANGE);
+                assert_near(light.radius, POINT_LIGHT_RADIUS);
+                assert!(!light.contact_shadows_enabled);
+                if light.shadow_maps_enabled {
+                    shadowed.push((root, entity.get::<Transform>().copied()));
+                }
+            }
+        }
+
+        assert_eq!(
+            shadowed,
+            vec![(
+                heart_root,
+                Some(Transform::from_translation(
+                    Vec3::Y * HEART_FEATURE_SHADOW_OFFSET
+                )),
+            )]
+        );
     }
 
     #[test]
@@ -788,7 +932,7 @@ mod tests {
         let result = prepare_requests(LEVEL_HEIGHT, &requests, Some(runtime_art_catalog())).map(
             |prepared| {
                 let mut commands = Commands::new(&mut queue, &world);
-                spawn_prepared(&mut commands, prepared)
+                spawn_prepared(&mut commands, prepared, ReviewCrystalLightProfile::Current)
             },
         );
 

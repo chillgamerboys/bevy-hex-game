@@ -56,6 +56,8 @@ mod procedural_v2;
 mod procedural_v3;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
+/// Deterministic, renderer-free structural projections for Grand V3 review.
+pub mod structural_preview;
 /// Pure construction of complete voxel maps from terrain presets.
 mod terrain;
 mod terrain_damage;

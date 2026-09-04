@@ -23,7 +23,7 @@ use serde::{Deserialize, Deserializer};
 /// Highest level admitted by the frozen V1 and V2 generators.
 pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
 /// Highest occupied voxel level admitted by V3 settings and semantic volumes.
-pub(crate) const MAX_V3_LEVEL: Level = 256;
+pub(crate) const MAX_V3_LEVEL: Level = 384;
 const SKY_UPPER_VERTICAL_BUDGET: Level = 20;
 /// Fixed shell, woodland crown, and clear-space budget above the stair rise.
 pub(crate) const CRYSTAL_ASCENT_CROWN_VERTICAL_BUDGET: Level = 24;
@@ -43,7 +43,7 @@ pub const V3_SCHEMATIC_GRID_RADIUS: u32 = 187;
 /// Exact spacing between adjacent coarse-cell centres in the first schematic compiler.
 pub const V3_SCHEMATIC_CELL_PITCH: u32 = 22;
 /// Only Grand V3 template revision admitted by the first schematic compiler.
-pub const V3_GRAND_V3_TEMPLATE_REVISION: u32 = 2;
+pub const V3_GRAND_V3_TEMPLATE_REVISION: u32 = 3;
 const MACRO_RECIPE_VALIDATION_RADIUS: u32 = 12;
 const RING19_RECIPE_VALIDATION_RADIUS: u32 = 40;
 const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
@@ -643,7 +643,9 @@ pub struct V3GrandV3BasicTerrainProfile {
     pub valley_lake_level: Level,
     /// Exact lower-chamber and tunnel-floor level of Crystal Ascent.
     pub crystal_base_level: Level,
-    /// Exact rise from Crystal Ascent's chamber to its crown.
+    /// Exact rise from Crystal Ascent's chamber to its upper-exit walking datum.
+    ///
+    /// Decorative shell and rib surfaces may extend above this level.
     pub crystal_rise_levels: Level,
 }
 
@@ -5454,7 +5456,7 @@ mod tests {
         generator_version: 3,
         layout: Schematic((
             template: GrandV3,
-            template_revision: 2,
+            template_revision: 3,
             cell_pitch: 22,
             terrain_profile: GrandV3BasicV1((
                 sea_level: 8,
@@ -7378,9 +7380,9 @@ mod tests {
                 "requires grid_radius exactly 187",
             ),
             (
+                "template_revision: 3",
                 "template_revision: 2",
-                "template_revision: 1",
-                "template_revision must be exactly 2",
+                "template_revision must be exactly 3",
             ),
             (
                 "cell_pitch: 22",
@@ -7494,14 +7496,14 @@ mod tests {
             );
         }
 
-        crystal_ascent_settings(32, 200)
+        crystal_ascent_settings(160, 200)
             .validate()
             .expect("a crown ending exactly at the inclusive V3 ceiling should validate");
-        let error = crystal_ascent_settings(33, 200)
+        let error = crystal_ascent_settings(161, 200)
             .validate()
             .expect_err("reserved crown headroom above the V3 ceiling must fail");
         assert!(
-            error.contains("cannot exceed level 256"),
+            error.contains("cannot exceed level 384"),
             "unexpected error: {error}"
         );
 
@@ -8508,21 +8510,21 @@ mod tests {
         );
 
         V3HillsSettings {
-            valley_level: 244,
+            valley_level: 372,
             max_relief: 12,
             hills_per_bank: 3,
         }
         .validate(40)
-        .expect("V3 should admit a surface exactly at its independent level-256 ceiling");
+        .expect("V3 should admit a surface exactly at its independent level-384 ceiling");
         let v3_error = V3HillsSettings {
-            valley_level: 245,
+            valley_level: 373,
             max_relief: 12,
             hills_per_bank: 3,
         }
         .validate(40)
         .expect_err("V3 must reject a surface above its independent level ceiling");
         assert!(
-            v3_error.contains("cannot exceed level 256"),
+            v3_error.contains("cannot exceed level 384"),
             "unexpected error: {v3_error}"
         );
     }

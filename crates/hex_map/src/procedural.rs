@@ -749,7 +749,7 @@ pub struct GrandV3Metrics {
     pub minimum_surface: Level,
     /// Highest exposed solid surface.
     pub maximum_surface: Level,
-    /// Selected revision-2 schematic semantic fingerprint.
+    /// Selected schematic semantic fingerprint.
     pub schematic_fingerprint: u64,
 }
 

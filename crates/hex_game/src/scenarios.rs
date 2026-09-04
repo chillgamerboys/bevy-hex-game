@@ -1201,7 +1201,10 @@ pub(crate) mod tests {
                 .filter(|(_, cutaway, _, _)| cutaway.0 == active_region)
                 .map(|(position, _, occlusion, visibility)| {
                     assert!(occlusion.contains(PresentationOcclusionReason::InteriorCutaway));
-                    assert_eq!(visibility, Some(&Visibility::Hidden));
+                    assert_eq!(
+                        visibility, None,
+                        "logical roof runs must remain outside visibility propagation"
+                    );
                     *position
                 })
                 .collect::<BTreeSet<_>>()
@@ -1210,6 +1213,21 @@ pub(crate) mod tests {
             !cutaway_roofs.is_empty(),
             "the combined tunnel/ascent interior should hide authored roof runs"
         );
+        {
+            let world = app.world_mut();
+            let mut rendered_roofs =
+                world.query::<(&TerrainRenderBatch, &CutawayOccluder, Option<&Visibility>)>();
+            let hidden = rendered_roofs
+                .iter(world)
+                .filter(|(_batch, cutaway, visibility)| {
+                    cutaway.0 == active_region && *visibility == Some(&Visibility::Hidden)
+                })
+                .count();
+            assert!(
+                hidden > 0,
+                "the active cutaway did not hide its render batches"
+            );
+        }
         let interior_regions = app.world().resource::<InteriorRegions>().clone();
         let cutaway_tree_roots = {
             let world = app.world_mut();
@@ -1342,8 +1360,9 @@ pub(crate) mod tests {
     /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
     /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
     /// coordinate that is not a hex, no two units sharing one exact surface. The two
-    /// Crystal traversal showcases and the three island review maps are approved
-    /// non-combat maps; every other scenario must still provide somebody to fight.
+    /// Crystal traversal showcases, the three island review maps, and Grand V3 are
+    /// approved non-combat maps; every other scenario must still provide somebody
+    /// to fight.
     #[test]
     fn every_scenario_names_an_encounter_that_exists_and_parses() {
         for scenario in &library().scenarios {
@@ -1358,6 +1377,7 @@ pub(crate) mod tests {
                 scenario.name.as_str(),
                 "Crystal Ascent"
                     | "Crystal Mountain"
+                    | "Grand V3 Baseline"
                     | "Sandy Islets"
                     | "Wooded Island"
                     | "Ocean Archipelagoes"
@@ -3264,28 +3284,94 @@ pub(crate) mod tests {
         );
 
         let mut logical_tiles = BTreeMap::<Entity, (TilePos, HexSpan, SubstanceId, Entity)>::new();
-        let mut tile_query = world.query_filtered::<
-            (Entity, &TilePos, &HexSpan, &SubstanceId, Option<&ChildOf>),
-            With<HexTile>,
-        >();
-        for (entity, position, span, substance, parent) in tile_query.iter(world) {
+        let mut tile_query = world.query_filtered::<(
+            Entity,
+            &TilePos,
+            &HexSpan,
+            &SubstanceId,
+            Option<&ChildOf>,
+            Option<&Transform>,
+            Option<&GlobalTransform>,
+            Option<&Visibility>,
+            Option<&InheritedVisibility>,
+            Option<&ViewVisibility>,
+        ), With<HexTile>>();
+        let logical_rows = tile_query
+            .iter(world)
+            .map(
+                |(
+                    entity,
+                    position,
+                    span,
+                    substance,
+                    parent,
+                    transform,
+                    global,
+                    visibility,
+                    inherited,
+                    view,
+                )| {
+                    (
+                        entity,
+                        *position,
+                        *span,
+                        *substance,
+                        parent.map(ChildOf::parent),
+                        transform.is_some(),
+                        global.is_some(),
+                        visibility.is_some(),
+                        inherited.is_some(),
+                        view.is_some(),
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+        for (
+            entity,
+            position,
+            span,
+            substance,
+            logical_parent,
+            has_transform,
+            has_global,
+            has_visibility,
+            has_inherited,
+            has_view,
+        ) in logical_rows
+        {
             let key = terrain_chunk_key(position.coord);
             let expected_parent = *roots.get(&key).unwrap_or_else(|| {
                 panic!(
                     "{scenario_name} logical terrain run {entity:?} belongs to absent chunk {key:?}"
                 )
             });
-            let parent = parent.unwrap_or_else(|| {
+            let logical_parent = logical_parent.unwrap_or_else(|| {
                 panic!("{scenario_name} logical terrain run {entity:?} is orphaned")
+            });
+            let owner = world.entity(logical_parent);
+            assert!(
+                owner.get::<Transform>().is_none()
+                    && owner.get::<GlobalTransform>().is_none()
+                    && owner.get::<Visibility>().is_none()
+                    && owner.get::<InheritedVisibility>().is_none()
+                    && owner.get::<ViewVisibility>().is_none(),
+                "{scenario_name} logical terrain owner entered Bevy scene propagation"
+            );
+            let parent = owner.get::<ChildOf>().unwrap_or_else(|| {
+                panic!("{scenario_name} logical terrain owner {logical_parent:?} is orphaned")
             });
             assert_eq!(
                 parent.parent(),
                 expected_parent,
-                "{scenario_name} logical terrain run {entity:?} has the wrong chunk parent"
+                "{scenario_name} logical terrain run {entity:?} has the wrong chunk owner"
+            );
+            assert!(
+                !(has_transform || has_global || has_visibility || has_inherited || has_view),
+                "{scenario_name} logical terrain run {entity:?} entered Bevy scene propagation"
             );
             assert!(
                 logical_tiles
-                    .insert(entity, (*position, *span, *substance, parent.parent()))
+                    .insert(entity, (position, span, substance, parent.parent()))
                     .is_none(),
                 "{scenario_name} observed duplicate logical terrain entity {entity:?}"
             );

@@ -1840,7 +1840,7 @@ mod tests {
             ProceduralV3Settings {
                 layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
                     template: V3SchematicTemplate::GrandV3,
-                    template_revision: 2,
+                    template_revision: crate::settings::V3_GRAND_V3_TEMPLATE_REVISION,
                     cell_pitch: 22,
                     terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
                         V3GrandV3BasicTerrainProfile::canonical(),

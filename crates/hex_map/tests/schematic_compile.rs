@@ -147,7 +147,12 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
     assert_eq!(snapshot.columns.len(), WORLD_COLUMNS);
     assert_eq!(snapshot.liquids.len(), presentation.liquids);
     assert_eq!(snapshot.version, 1);
-    for scenic in ["grand_v3.lake_island", "grand_v3.massif_crest"] {
+    for scenic in [
+        "grand_v3.lake_island",
+        "grand_v3.massif_crest",
+        "grand_v3.waterfall_base",
+        "grand_v3.waterfall_crown",
+    ] {
         assert!(
             snapshot
                 .anchors
@@ -167,8 +172,6 @@ fn assert_hero_camera_anchor_positions(compiled: &CompiledSchematicMap) {
         ("grand_v3.coastal_bridge", (-5, 91, 10)),
         ("grand_v3.valley_bridge", (80, 10, 15)),
         ("grand_v3.valley_lake", (66, -10, 20)),
-        ("grand_v3.waterfall_base", (99, -11, 16)),
-        ("grand_v3.waterfall_crown", (99, -77, 151)),
         ("grand_v3.natural_pass", (143, -144, 111)),
         ("grand_v3.massif", (0, -44, 107)),
         ("grand_v3.peak_saddle", (97, -147, 151)),
@@ -452,7 +455,11 @@ fn assert_complete_world_contract(
     let profile = V3GrandV3BasicTerrainProfile::canonical();
     assert!(metrics.minimum_surface >= profile.crystal_base_level);
     assert!(metrics.maximum_surface > profile.sharp_peak_max);
-    assert!(metrics.maximum_surface < 256);
+    assert!(
+        (330..=350).contains(&metrics.maximum_surface),
+        "the connected Massif should remain the world crest below the inclusive V3 level-384 ceiling, got {}",
+        metrics.maximum_surface
+    );
 
     let region_counts = compiled.biome_regions.iter().fold(
         BTreeMap::<_, usize>::new(),
@@ -473,8 +480,6 @@ fn assert_complete_world_contract(
         "grand_v3.valley_bridge",
         "grand_v3.coastal_bridge",
         "grand_v3.valley_lake",
-        "grand_v3.waterfall_base",
-        "grand_v3.waterfall_crown",
         "grand_v3.waterfall_profile",
         "grand_v3.mountain_lake",
         "grand_v3.frozen_woods",
@@ -498,7 +503,12 @@ fn assert_complete_world_contract(
             "compiled world omitted required anchor {anchor}"
         );
     }
-    for anchor in ["grand_v3.lake_island", "grand_v3.massif_crest"] {
+    for anchor in [
+        "grand_v3.lake_island",
+        "grand_v3.massif_crest",
+        "grand_v3.waterfall_base",
+        "grand_v3.waterfall_crown",
+    ] {
         let id = hex_core::MapAnchorId::from(anchor);
         assert!(
             compiled.anchors.get(&id).is_none(),

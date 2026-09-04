@@ -16,11 +16,12 @@ use std::time::{Duration, Instant};
 
 use hex_schematic::{
     canonical_cell_id, canonical_coordinates, generate, grand_v3_reference_template,
-    reference_plan, semantic_fingerprint, validate_plan, validate_template, BoundedRegionRule,
-    BoundedTarget, CellPlan, FeatureKind, GeneratedSchematic, LandformKind, LayerProvenance,
-    NetworkKind, NetworkNodeKind, SchematicCoord, SchematicMetricsV1, SchematicPlanV1,
-    SchematicTemplateV1, StableId, SurfaceKind, VegetationDensity, CANDIDATE_ATTEMPTS,
-    GRAND_V3_TEMPLATE_RON, SCHEMATIC_CELL_COUNT, SCHEMATIC_RADIUS, SCHEMATIC_SCHEMA_VERSION,
+    reference_plan, semantic_fingerprint, validate_plan, validate_template, AccessIntent,
+    BoundedRegionRule, BoundedTarget, CellPlan, FeatureKind, GeneratedSchematic, LandformKind,
+    LayerProvenance, NetworkKind, NetworkNodeKind, SchematicCoord, SchematicMetricsV1,
+    SchematicPlanV1, SchematicTemplateV1, StableId, SurfaceKind, VegetationDensity,
+    CANDIDATE_ATTEMPTS, GRAND_V3_TEMPLATE_RON, SCHEMATIC_CELL_COUNT, SCHEMATIC_RADIUS,
+    SCHEMATIC_SCHEMA_VERSION,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -206,6 +207,11 @@ fn grid_cli_atomically_publishes_one_neutral_complete_projection() -> TestResult
 
 #[test]
 fn packaged_template_and_reference_plan_round_trip_strictly() -> TestResult {
+    assert_eq!(
+        fs::read(packaged_template_path())?,
+        GRAND_V3_TEMPLATE_RON.as_bytes(),
+        "the embedded template must come from this checkout, not copied Cargo output"
+    );
     let template = grand_v3_reference_template()?;
     validate_template(&template)?;
     assert_eq!(template.schema_version, SCHEMATIC_SCHEMA_VERSION);
@@ -256,9 +262,46 @@ fn packaged_template_and_reference_plan_round_trip_strictly() -> TestResult {
 }
 
 #[test]
-fn packaged_template_matches_the_literal_approved_source_trace() -> TestResult {
+fn packaged_template_preserves_the_approved_trace_with_revision_three_access() -> TestResult {
     let template = grand_v3_reference_template()?;
-    assert_eq!(template.revision, 2);
+    assert_eq!(template.revision, 3);
+    let waterfall_gorge = template
+        .reference_cells
+        .iter()
+        .find(|cell| cell.id.get() == 63)
+        .expect("revision 3 retains the authored waterfall-gorge cell");
+    assert_eq!(waterfall_gorge.facts.access, AccessIntent::Scenic);
+    assert!(matches!(
+        waterfall_gorge.provenance.access,
+        LayerProvenance::Locked { .. }
+    ));
+    for cell_id in [127, 128, 214, 215] {
+        let backdrop = template
+            .reference_cells
+            .iter()
+            .find(|cell| cell.id.get() == cell_id)
+            .expect("revision 3 retains each outer Peak-backdrop shelf");
+        assert_eq!(backdrop.facts.surface, SurfaceKind::Land);
+        assert_eq!(backdrop.facts.landform, LandformKind::Mountain);
+        assert_eq!(backdrop.facts.access, AccessIntent::Scenic);
+        assert!(backdrop.facts.overlays.is_empty());
+    }
+    assert_eq!(
+        template
+            .reference_cells
+            .iter()
+            .filter(|cell| cell.facts.access == AccessIntent::Ordinary)
+            .count(),
+        175
+    );
+    assert_eq!(
+        template
+            .reference_cells
+            .iter()
+            .filter(|cell| cell.facts.access == AccessIntent::Scenic)
+            .count(),
+        42
+    );
     let expected_columns = [
         (-8, "GGGTTBBBB"),
         (-7, "GGGGGTBBOB"),

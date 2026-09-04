@@ -108,12 +108,14 @@ pub(crate) struct VolumeColumn {
 }
 
 impl VolumeColumn {
-    /// Counts implicit air from `from`, using the same saturation rule as
-    /// [`Column::headroom_above`].
+    /// Counts every clear level from `from` to the next occupied interval.
+    ///
+    /// Open sky is represented by [`Level::MAX`]. This is the semantic geometry
+    /// query for authored clearances; runtime traversal should use
+    /// [`Self::headroom_above`] and its intentional saturation instead.
     #[must_use]
-    pub(crate) fn headroom_above(&self, from: Level) -> Headroom {
-        let clear = self
-            .elements
+    fn clearance_above(&self, from: Level) -> Level {
+        self.elements
             .iter()
             .copied()
             .filter_map(|element| {
@@ -125,8 +127,14 @@ impl VolumeColumn {
                 }
             })
             .min()
-            .unwrap_or(MAX_HEADROOM)
-            .clamp(0, MAX_HEADROOM);
+            .unwrap_or(Level::MAX)
+    }
+
+    /// Counts implicit air from `from`, using the same saturation rule as
+    /// [`Column::headroom_above`].
+    #[must_use]
+    pub(crate) fn headroom_above(&self, from: Level) -> Headroom {
+        let clear = self.clearance_above(from).clamp(0, MAX_HEADROOM);
         Headroom(clear)
     }
 }
@@ -294,6 +302,19 @@ impl VolumePlan {
         self.columns
             .get(&surface.coord)
             .map(|column| column.headroom_above(surface.level.saturating_add(1)))
+    }
+
+    /// Measures the exact authored clearance above one declared surface.
+    ///
+    /// Unlike [`Self::surface_headroom`], this does not saturate at the runtime
+    /// traversal limit. Open sky is represented by [`Level::MAX`].
+    #[must_use]
+    pub(crate) fn surface_clearance(&self, surface: TilePos) -> Option<Level> {
+        self.surfaces.get(&surface)?;
+        let from = surface.level.checked_add(1)?;
+        self.columns
+            .get(&surface.coord)
+            .map(|column| column.clearance_above(from))
     }
 
     /// Iterates only the exact exposed surfaces in one horizontal column.
@@ -1033,6 +1054,32 @@ mod tests {
             Some(cave)
         );
         assert_eq!(materialized.special_regions.get(upper_surface), Some(upper));
+    }
+
+    #[test]
+    fn authored_clearance_is_not_limited_by_runtime_headroom() {
+        let coord = HexCoord::ORIGIN;
+        let mut plan = VolumePlan::new(BTreeSet::from([coord]));
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![
+            mass(0, 7, SolidMaterialRole::WorkedStone, None),
+            mass(20, 21, SolidMaterialRole::WorkedStone, None),
+        ];
+        let floor = TilePos::new(coord, 6);
+        plan.surfaces
+            .insert(floor, surface(SurfaceAccess::Ordinary, None));
+
+        assert_eq!(plan.surface_headroom(floor), Some(Headroom(MAX_HEADROOM)));
+        assert_eq!(plan.surface_clearance(floor), Some(13));
+
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements
+            .insert(1, mass(15, 16, SolidMaterialRole::Stone, None));
+        assert_eq!(plan.surface_clearance(floor), Some(8));
     }
 
     #[test]

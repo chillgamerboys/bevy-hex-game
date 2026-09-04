@@ -20,6 +20,107 @@ pub enum PresentationSystems {
     ApplyVisibility,
 }
 
+/// Resolved review-only material treatment shared by world renderers.
+///
+/// The ordinary game never inserts this resource, so every consumer must treat
+/// absence exactly like [`Self::Current`]. Keeping the resolved enum in shared
+/// presentation vocabulary lets review configuration parse the environment once
+/// while terrain and authored-object renderers remain independent of the game
+/// composition crate.
+#[derive(Resource, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub enum ReviewMaterialTreatment {
+    /// Preserve every renderer's normal material response.
+    #[default]
+    Current,
+    /// Make terrain fully rough while preserving authored-object materials.
+    MatteTerrain,
+    /// Make terrain and authored objects fully rough.
+    UnifiedMatte,
+}
+
+impl ReviewMaterialTreatment {
+    /// Whether terrain materials should use the matte treatment.
+    #[must_use]
+    pub const fn applies_to_terrain(self) -> bool {
+        matches!(self, Self::MatteTerrain | Self::UnifiedMatte)
+    }
+
+    /// Whether authored-object materials should use the matte treatment.
+    #[must_use]
+    pub const fn applies_to_objects(self) -> bool {
+        matches!(self, Self::UnifiedMatte)
+    }
+}
+
+/// Resolved review-only treatment for visible voxel edges.
+///
+/// The micro-bevel treatments change normals in terrain and authored-object render
+/// meshes. The geometric treatments add one chamfer segment to generated terrain
+/// render meshes only; arbitrary authored-object topology remains unchanged.
+/// Collision, logical picking identities, saves, and authoritative world state are
+/// independent of every treatment. Ordinary launches omit this resource and
+/// therefore retain [`Self::Current`].
+#[derive(Resource, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub enum ReviewEdgeTreatment {
+    /// Preserve the shipped hard face normals.
+    #[default]
+    Current,
+    /// Blend edge normals by exactly `0.04` toward the adjacent edge direction.
+    MicroBevel04,
+    /// Blend edge normals by exactly `0.08` toward the adjacent edge direction.
+    MicroBevel08,
+    /// Inset terrain caps by `0.04` circumradii and join them with one chamfer segment.
+    GeometricBevel04,
+    /// Inset terrain caps by `0.08` circumradii and join them with one chamfer segment.
+    GeometricBevel08,
+}
+
+impl ReviewEdgeTreatment {
+    /// Exact normal-blend weight used by voxel renderers.
+    #[must_use]
+    pub const fn normal_blend(self) -> f32 {
+        match self {
+            Self::Current | Self::GeometricBevel04 | Self::GeometricBevel08 => 0.0,
+            Self::MicroBevel04 => 0.04,
+            Self::MicroBevel08 => 0.08,
+        }
+    }
+
+    /// Horizontal terrain-cap inset as a fraction of one voxel circumradius.
+    ///
+    /// Returning `None` keeps the terrain vertex and index streams on the existing
+    /// hard-face or normal-only path.
+    #[must_use]
+    pub const fn geometric_bevel_fraction(self) -> Option<f32> {
+        match self {
+            Self::GeometricBevel04 => Some(0.04),
+            Self::GeometricBevel08 => Some(0.08),
+            Self::Current | Self::MicroBevel04 | Self::MicroBevel08 => None,
+        }
+    }
+}
+
+/// Resolved review-only treatment for generated crystal point lights.
+///
+/// This resource has presentation authority only. Authoritative [`GameplayLight`](crate::GameplayLight)
+/// publication and every simulation contract remain independent of it. Ordinary
+/// launches omit the resource and therefore resolve to [`Self::Current`].
+#[derive(Resource, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub enum ReviewCrystalLightProfile {
+    /// Preserve the shipped 4,500-lumen, 4.5-range, unshadowed rig.
+    #[default]
+    Current,
+    /// Apply the `i01-crystal-tight` range treatment to every crystal.
+    Tight,
+    /// Apply the `i02-crystal-broad` range treatment to every crystal.
+    Broad,
+    /// Apply `i03-heart-feature-shadow` only to the heart's level-18 light.
+    HeartFeatureShadow,
+}
+
 /// Presentation-only request for a world-space reticle on one authorized unit.
 ///
 /// The game adapter owns disclosure and may insert this only after deciding the unit
@@ -191,6 +292,58 @@ impl PresentationOcclusion {
 mod tests {
     use super::*;
     use crate::HexCoord;
+
+    #[test]
+    fn review_material_treatments_have_exact_renderer_scope() {
+        assert!(!ReviewMaterialTreatment::Current.applies_to_terrain());
+        assert!(!ReviewMaterialTreatment::Current.applies_to_objects());
+        assert!(ReviewMaterialTreatment::MatteTerrain.applies_to_terrain());
+        assert!(!ReviewMaterialTreatment::MatteTerrain.applies_to_objects());
+        assert!(ReviewMaterialTreatment::UnifiedMatte.applies_to_terrain());
+        assert!(ReviewMaterialTreatment::UnifiedMatte.applies_to_objects());
+    }
+
+    #[test]
+    fn review_crystal_light_profile_defaults_to_the_shipped_rig() {
+        assert_eq!(
+            ReviewCrystalLightProfile::default(),
+            ReviewCrystalLightProfile::Current
+        );
+        assert_ne!(
+            ReviewCrystalLightProfile::Tight,
+            ReviewCrystalLightProfile::Broad
+        );
+        assert_ne!(
+            ReviewCrystalLightProfile::Broad,
+            ReviewCrystalLightProfile::HeartFeatureShadow
+        );
+    }
+
+    #[test]
+    fn review_edge_treatments_are_exact_and_default_to_hard_normals() {
+        assert_eq!(ReviewEdgeTreatment::default(), ReviewEdgeTreatment::Current);
+        assert_eq!(ReviewEdgeTreatment::Current.normal_blend(), 0.0);
+        assert_eq!(ReviewEdgeTreatment::MicroBevel04.normal_blend(), 0.04);
+        assert_eq!(ReviewEdgeTreatment::MicroBevel08.normal_blend(), 0.08);
+        assert_eq!(ReviewEdgeTreatment::GeometricBevel04.normal_blend(), 0.0);
+        assert_eq!(ReviewEdgeTreatment::GeometricBevel08.normal_blend(), 0.0);
+        assert_eq!(
+            ReviewEdgeTreatment::Current.geometric_bevel_fraction(),
+            None
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::MicroBevel08.geometric_bevel_fraction(),
+            None
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::GeometricBevel04.geometric_bevel_fraction(),
+            Some(0.04)
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::GeometricBevel08.geometric_bevel_fraction(),
+            Some(0.08)
+        );
+    }
 
     #[test]
     fn canopy_marker_preserves_the_exact_stacked_root() {

@@ -1,4 +1,4 @@
-// Grand V3 Baseline: compile the approved revision-2 radius-eight schematic into
+// Grand V3 Baseline: compile the revision-3 radius-eight schematic into
 // one continuous radius-187 voxel world. The dramatic vertical scale is frozen here
 // so later palette, radius-to-height, and partial-voxel experiments can change their
 // own axes without changing the accepted biome topology.
@@ -9,7 +9,7 @@
         generator_version: 3,
         layout: Schematic((
             template: GrandV3,
-            template_revision: 2,
+            template_revision: 3,
             cell_pitch: 22,
             terrain_profile: GrandV3BasicV1((
                 sea_level: 8,

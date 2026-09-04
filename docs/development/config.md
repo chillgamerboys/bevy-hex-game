@@ -83,14 +83,16 @@ while tuning, and `--release` when you just want to play.)
 `assets/config/schematics/grand-v3-template.ron` is the strict, traced radius-eight
 world-plan template. It is a packaged planning input rather than a hot-reloaded gameplay
 setting: it owns coarse geography and authorship constraints. The map-owned
-`Schematic(GrandV3, revision 2, pitch 22, GrandV3BasicV1)` layout now consumes the same
+`Schematic(GrandV3, revision 3, pitch 22, GrandV3BasicV1)` layout consumes the same
 pure generator at runtime and owns voxel scale, elevation, materials, hydrology, ordinary
 routes, Crystal Ascent integration, and baseline vegetation. The final-palette,
 radius-to-height, and partial-voxel plant experiments remain later profiles; changing those
-experiments must not silently change the accepted revision-2 biome topology.
+experiments must not silently change the accepted revision-3 map contract.
 
-Revision 2 is the approved source transcription; revision 1 was an approximate trace and
-must not be used as visual or semantic evidence. Review projections use the fixed flat-top
+Revision 2 is the approved source transcription; revision 3 preserves its geography while
+making the sealed waterfall-gorge land cell and outer Peak-backdrop shelves 127, 128, 214, and 215
+Scenic instead of promising unavailable ordinary routes. Revision 1 was an approximate
+trace and must not be used as visual or semantic evidence. Review projections use the fixed flat-top
 source orientation (`x = 1.5q`, `y = sqrt(3)(r + q/2)`) with no whole-plan rotation. The
 locked north-eastern formation contains exactly twelve peaks in two six-cell chains, the
 mountain lake and its island, the frozen three-cell core plus its mountain-shore contact,
@@ -170,6 +172,7 @@ The optional review overrides are:
 | `HEX_REVIEW_LOOK_AT_OFFSET` | Sets the look-at camera's finite world-space `x,y,z` offset from that anchor |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
+| `HEX_REVIEW_FOG` | Review-only shroud profile: `current`, `none`, `dimmed`, `observed-only`, or `softened`; hostile concealment remains authoritative in every mode |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`,
 `HEX_REVIEW_LOOK_AT_ANCHOR`, `HEX_REVIEW_LOOK_AT_OFFSET`, `HEX_REVIEW_CUTAWAY`, and
@@ -434,7 +437,7 @@ terrain: Procedural((
 ```
 
 `rise_levels` accepts 100 through 200. `base_level`, the rise, the crown, and its
-reserved headroom must all fit at or below V3's level-256 ceiling. That ceiling does
+reserved headroom must all fit at or below V3's level-384 ceiling. That ceiling does
 not change the retained V1/V2 validation limits. The landmark's three stair circuits,
 four-wide routes, entrance, chamber, shaft, oculus, lights, and summit clearing are
 recipe invariants rather than additional tuning fields. Crystal Ascent requires
@@ -500,7 +503,7 @@ Walker widths are `2..=4`. The initial tunnel implementation is deliberately fix
 width `4`, floor level `6`, and clearance `6`, with a roof thickness of at least `3`.
 A tunnel route contains at least two unique, pairwise-adjacent non-aquatic instances.
 Its boundary terminal belongs to the first route instance, its destination to the
-last, and the complete vertical reservation must remain inside V3's level-256 ceiling.
+last, and the complete vertical reservation must remain inside V3's level-384 ceiling.
 
 The configuration resolves into exact geometry before ordinary fragments are
 decorated. The authored destination is constructed first; the global planner reserves

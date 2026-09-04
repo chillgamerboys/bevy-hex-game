@@ -95,38 +95,88 @@ fn the_grid_has_a_single_parent() {
     assert_eq!(grids, 1, "tiles should hang off exactly one grid entity");
 }
 
-/// The contract between the map and everything else: a tile carries its rendered
-/// run's span, and its transform agrees with that span.
+/// Logical terrain runs are authoritative facts, not scene or picking entities.
 ///
-/// This is the invariant gameplay leans on to place a piece on a surface, and the
-/// one a run-meshing change is most likely to break silently — the tiles would still
-/// render, just in the wrong place.
+/// World placement remains exactly reconstructible from the public coordinate/span
+/// tuple, while the bounded render batch owns the actual transform and visibility.
+/// This prevents large worlds from feeding every material run through Bevy's scene
+/// propagation and culling systems.
 #[test]
-fn every_tile_transform_matches_its_span() {
+fn logical_tiles_are_scene_free_and_retain_exact_world_geometry() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    let mut query = app
-        .world_mut()
-        .query_filtered::<(&HexSpan, &Transform), With<HexTile>>();
+    let mut query = app.world_mut().query_filtered::<(
+        &TilePos,
+        &HexSpan,
+        Option<&Transform>,
+        Option<&GlobalTransform>,
+        Option<&Visibility>,
+        Option<&InheritedVisibility>,
+        Option<&ViewVisibility>,
+        Option<&Pickable>,
+        Option<&Mesh3d>,
+        Option<&MeshMaterial3d<StandardMaterial>>,
+        &ChildOf,
+    ), With<HexTile>>();
 
     let mut checked = 0;
-    for (span, transform) in query.iter(app.world()) {
+    let mut logical_roots = BTreeSet::new();
+    for (
+        position,
+        span,
+        transform,
+        global,
+        visibility,
+        inherited,
+        view,
+        pickable,
+        mesh,
+        material,
+        parent,
+    ) in query.iter(app.world())
+    {
         assert!(
-            (transform.translation.y - span.centre()).abs() < 1e-4,
-            "tile sits at {} but its span centre is {}",
-            transform.translation.y,
-            span.centre()
+            transform.is_none(),
+            "logical run entered transform propagation"
         );
         assert!(
-            (transform.scale.y - span.height()).abs() < 1e-4,
-            "tile is {} tall but its span is {}",
-            transform.scale.y,
-            span.height()
+            global.is_none(),
+            "logical run entered global-transform propagation"
         );
+        assert!(
+            visibility.is_none() && inherited.is_none() && view.is_none(),
+            "logical run entered visibility propagation or culling"
+        );
+        assert!(
+            pickable.is_none(),
+            "logical run entered the picking backend"
+        );
+        assert!(mesh.is_none(), "logical run still owns a draw mesh");
+        assert!(material.is_none(), "logical run still owns a PBR material");
+        let centre = position.coord.to_world(span.centre());
+        assert!(
+            centre.is_finite() && span.height().is_finite() && span.height() > 0.0,
+            "logical run no longer reconstructs finite positive world geometry"
+        );
+        logical_roots.insert(parent.parent());
         checked += 1;
     }
     assert!(checked > 0, "no tiles were checked");
+    assert!(!logical_roots.is_empty());
+    for root in logical_roots {
+        let owner = app.world().entity(root);
+        assert!(owner.get::<Transform>().is_none());
+        assert!(owner.get::<GlobalTransform>().is_none());
+        assert!(owner.get::<Visibility>().is_none());
+        assert!(owner.get::<InheritedVisibility>().is_none());
+        assert!(owner.get::<ViewVisibility>().is_none());
+        let chunk = owner
+            .get::<ChildOf>()
+            .expect("logical-run owner should preserve recursive chunk lifecycle")
+            .parent();
+        assert!(app.world().get::<TerrainChunkRoot>(chunk).is_some());
+    }
 }
 
 /// Exact run entities remain gameplay's stable projection but no longer each own a
@@ -140,22 +190,28 @@ fn terrain_runs_are_lightweight_and_render_batches_cover_them_exactly_once() {
         let world = app.world_mut();
         let mut tiles = world.query_filtered::<(
             Entity,
-            &Pickable,
             &SubstanceId,
+            Option<&Transform>,
+            Option<&Visibility>,
+            Option<&Pickable>,
             Option<&Mesh3d>,
             Option<&MeshMaterial3d<StandardMaterial>>,
         ), With<HexTile>>();
         tiles
             .iter(world)
-            .map(|(entity, pickable, substance, mesh, material)| {
-                assert_eq!(*pickable, Pickable::IGNORE);
-                assert!(mesh.is_none(), "logical terrain run still owns a draw mesh");
-                assert!(
-                    material.is_none(),
-                    "logical terrain run still owns a PBR material"
-                );
-                (entity, *substance)
-            })
+            .map(
+                |(entity, substance, transform, visibility, pickable, mesh, material)| {
+                    assert!(transform.is_none());
+                    assert!(visibility.is_none());
+                    assert!(pickable.is_none());
+                    assert!(mesh.is_none(), "logical terrain run still owns a draw mesh");
+                    assert!(
+                        material.is_none(),
+                        "logical terrain run still owns a PBR material"
+                    );
+                    (entity, *substance)
+                },
+            )
             .collect::<BTreeMap<_, _>>()
     };
     assert!(!logical.is_empty());

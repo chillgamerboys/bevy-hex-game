@@ -25,8 +25,8 @@ use hex_assets::{
     ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
 };
 use hex_core::{
-    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, Screen, TilePos,
-    TreeFadeAmount, TreeOccluder,
+    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, ReviewEdgeTreatment,
+    ReviewMaterialTreatment, Screen, TilePos, TreeFadeAmount, TreeOccluder,
 };
 
 /// Marks a generated render child belonging to one authored object instance.
@@ -228,6 +228,8 @@ impl TreeFadeMaterialAssets {
 struct ObjectRenderCache {
     catalog_fingerprint: Option<u64>,
     source_generation: u64,
+    material_treatment: ReviewMaterialTreatment,
+    edge_treatment: ReviewEdgeTreatment,
     objects: BTreeMap<ObjectAssetId, CachedObject>,
     materials: BTreeMap<VoxelStyleId, CachedMaterial>,
 }
@@ -288,6 +290,8 @@ fn reconcile_objects(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cache: ResMut<ObjectRenderCache>,
+    material_treatment: Option<Res<ReviewMaterialTreatment>>,
+    edge_treatment: Option<Res<ReviewEdgeTreatment>>,
 ) {
     for entity in removed_instances.read() {
         if instances.get(entity).is_ok() {
@@ -317,16 +321,23 @@ fn reconcile_objects(
 
     let catalog_fingerprint = catalog.combined_fingerprint();
     let catalog_changed = cache.catalog_fingerprint != Some(catalog_fingerprint);
+    let material_treatment = material_treatment.as_deref().copied().unwrap_or_default();
+    let edge_treatment = edge_treatment.as_deref().copied().unwrap_or_default();
+    let material_treatment_changed = cache.material_treatment != material_treatment;
+    let edge_treatment_changed = cache.edge_treatment != edge_treatment;
     if source_changed {
         cache.source_generation = cache.source_generation.wrapping_add(1);
     }
-    if catalog_changed {
+    if catalog_changed || material_treatment_changed {
         cache.invalidate_all(&mut meshes, &mut materials);
         cache.catalog_fingerprint = Some(catalog_fingerprint);
-    } else if source_changed {
+        cache.material_treatment = material_treatment;
+    } else if source_changed || edge_treatment_changed {
         cache.invalidate_objects(&mut meshes);
     }
-    let force_rebuild = catalog_changed || source_changed;
+    cache.edge_treatment = edge_treatment;
+    let force_rebuild =
+        catalog_changed || source_changed || material_treatment_changed || edge_treatment_changed;
     let mut source_mesh = None;
 
     for (entity, instance, rendered, visibility, tree) in &instances {
@@ -393,6 +404,7 @@ fn reconcile_objects(
             &catalog,
             instance.object_id(),
             source_mesh,
+            edge_treatment,
             &mut meshes,
             &mut materials,
         ) {
@@ -495,6 +507,7 @@ fn cached_object(
     catalog: &RuntimeArtCatalog,
     object_id: &ObjectAssetId,
     source_mesh: &Mesh,
+    edge_treatment: ReviewEdgeTreatment,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> Result<CachedObject, String> {
@@ -505,7 +518,7 @@ fn cached_object(
     let blueprint = catalog
         .object(object_id)
         .ok_or_else(|| format!("runtime art catalog has no object '{object_id}'"))?;
-    let baked = bake_blueprint(source_mesh, blueprint, catalog)?;
+    let baked = bake_blueprint_with_edge(source_mesh, blueprint, catalog, edge_treatment)?;
     let mut chunks = Vec::with_capacity(baked.len());
     for (key, mesh) in baked {
         let style = catalog.style(&key.style).ok_or_else(|| {
@@ -733,7 +746,7 @@ fn cached_material(
     if let Some(cached) = cache.materials.get(id) {
         return cached.handle.clone();
     }
-    let handle = materials.add(material_for(style));
+    let handle = materials.add(material_for(style, cache.material_treatment));
     cache.materials.insert(
         id.clone(),
         CachedMaterial {
@@ -743,7 +756,10 @@ fn cached_material(
     handle
 }
 
-fn material_for(style: &ResolvedVoxelStyle) -> StandardMaterial {
+fn material_for(
+    style: &ResolvedVoxelStyle,
+    treatment: ReviewMaterialTreatment,
+) -> StandardMaterial {
     let authored = style.authored();
     let alpha_mode = match authored.surface_mode() {
         VoxelSurfaceMode::Opaque => AlphaMode::Opaque,
@@ -769,14 +785,18 @@ fn material_for(style: &ResolvedVoxelStyle) -> StandardMaterial {
         )
     });
     let color = style.base_color();
-    StandardMaterial {
+    let mut material = StandardMaterial {
         base_color: Color::srgba(color.red(), color.green(), color.blue(), alpha),
         emissive,
         alpha_mode,
         perceptual_roughness: 0.82,
         metallic: 0.0,
         ..default()
+    };
+    if treatment.applies_to_objects() {
+        material.perceptual_roughness = 1.0;
     }
+    material
 }
 
 fn bake_blueprint(
@@ -784,6 +804,21 @@ fn bake_blueprint(
     blueprint: &ObjectBlueprint,
     catalog: &RuntimeArtCatalog,
 ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+    bake_blueprint_with_edge(
+        source_mesh,
+        blueprint,
+        catalog,
+        ReviewEdgeTreatment::Current,
+    )
+}
+
+fn bake_blueprint_with_edge(
+    source_mesh: &Mesh,
+    blueprint: &ObjectBlueprint,
+    catalog: &RuntimeArtCatalog,
+    edge_treatment: ReviewEdgeTreatment,
+) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+    let treated_source = mesh_with_micro_bevel_normals(source_mesh, edge_treatment)?;
     let canopy: BTreeSet<_> = blueprint.canopy_occluders.iter().copied().collect();
     let mut groups: BTreeMap<ChunkKey, Vec<LocalVoxelCoord>> = BTreeMap::new();
     let mut occupied_by_visibility =
@@ -819,10 +854,77 @@ fn bake_blueprint(
             let occupied = occupied_by_visibility
                 .get(&key.canopy)
                 .ok_or_else(|| "object chunk lost its visibility partition".to_owned())?;
-            let mesh = merge_cells(source_mesh, blueprint.origin, &cells, occupied)?;
+            let mesh = merge_cells(&treated_source, blueprint.origin, &cells, occupied)?;
             Ok((key, mesh))
         })
         .collect()
+}
+
+fn mesh_with_micro_bevel_normals(
+    source_mesh: &Mesh,
+    treatment: ReviewEdgeTreatment,
+) -> Result<Mesh, String> {
+    let blend = treatment.normal_blend();
+    if blend == 0.0 {
+        return Ok(source_mesh.clone());
+    }
+    let positions = match source_mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(positions)) => positions,
+        Some(_) => return Err("hex mesh positions must use Float32x3 format".to_owned()),
+        None => return Err("hex mesh has no position attribute".to_owned()),
+    };
+    let normals = match source_mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+        Some(VertexAttributeValues::Float32x3(normals)) => normals,
+        Some(_) => return Err("hex mesh normals must use Float32x3 format".to_owned()),
+        None => return Err("hex mesh has no normal attribute".to_owned()),
+    };
+    if positions.len() != normals.len() {
+        return Err("hex mesh position and normal counts differ".to_owned());
+    }
+    let planes = SourcePrismPlanes::measure(positions)?;
+    let (mut min_x, mut max_x, mut min_z, mut max_z) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for position in positions {
+        min_x = min_x.min(position[0]);
+        max_x = max_x.max(position[0]);
+        min_z = min_z.min(position[2]);
+        max_z = max_z.max(position[2]);
+    }
+    let horizontal_centre = Vec2::new((min_x + max_x) * 0.5, (min_z + max_z) * 0.5);
+    let near = |left: f32, right: f32| (left - right).abs() <= planes.epsilon;
+    let mut treated_normals = Vec::with_capacity(normals.len());
+    for (position, normal) in positions.iter().zip(normals) {
+        let face_normal = Vec3::from(*normal);
+        if !face_normal.is_finite() || face_normal.length_squared() <= f32::EPSILON {
+            return Err("hex mesh contains a non-finite or zero normal".to_owned());
+        }
+        let horizontal = Vec2::new(position[0], position[2]) - horizontal_centre;
+        let horizontal = horizontal.normalize_or_zero();
+        let vertical = if near(position[1], planes.max_y) {
+            1.0
+        } else if near(position[1], planes.min_y) {
+            -1.0
+        } else {
+            0.0
+        };
+        let edge_direction = Vec3::new(horizontal.x, vertical, horizontal.y).normalize_or_zero();
+        let treated = if edge_direction == Vec3::ZERO {
+            face_normal.normalize()
+        } else {
+            face_normal
+                .normalize()
+                .lerp(edge_direction, blend)
+                .normalize()
+        };
+        treated_normals.push(treated.to_array());
+    }
+    let mut treated = source_mesh.clone();
+    treated.insert_attribute(Mesh::ATTRIBUTE_NORMAL, treated_normals);
+    Ok(treated)
 }
 
 fn merge_cells(
@@ -1440,6 +1542,15 @@ mod tests {
             unreachable!("cuboid fixture must expose Float32x3 positions")
         };
         positions
+    }
+
+    fn mesh_normals(mesh: &Mesh) -> &[[f32; 3]] {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            unreachable!("cuboid fixture must expose Float32x3 normals")
+        };
+        normals
     }
 
     fn position_centroid(mesh: &Mesh) -> Vec3 {
@@ -2429,6 +2540,158 @@ mod tests {
             );
             assert_eq!(app.world().get::<Pickable>(entity), Some(&Pickable::IGNORE));
         }
+    }
+
+    #[test]
+    fn review_material_treatment_preserves_authored_response_until_unified_matte() {
+        let catalog = fixture_catalog(0.18);
+        let style = catalog
+            .style(&style_id("test/additive"))
+            .expect("additive fixture style resolves");
+        let current = material_for(style, ReviewMaterialTreatment::Current);
+        let terrain_only = material_for(style, ReviewMaterialTreatment::MatteTerrain);
+        let unified = material_for(style, ReviewMaterialTreatment::UnifiedMatte);
+
+        assert_eq!(current.perceptual_roughness, 0.82);
+        assert_eq!(terrain_only.perceptual_roughness, 0.82);
+        assert_eq!(unified.perceptual_roughness, 1.0);
+        assert_eq!(terrain_only.base_color, current.base_color);
+        assert_eq!(unified.base_color, current.base_color);
+        assert_eq!(terrain_only.emissive, current.emissive);
+        assert_eq!(unified.emissive, current.emissive);
+        assert_eq!(terrain_only.alpha_mode, current.alpha_mode);
+        assert_eq!(unified.alpha_mode, current.alpha_mode);
+    }
+
+    #[test]
+    fn micro_bevel_treatment_changes_only_object_normals_and_scales_exactly() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let current = mesh_with_micro_bevel_normals(&source, ReviewEdgeTreatment::Current)
+            .expect("hard-normal fixture should remain valid");
+        let subtle = mesh_with_micro_bevel_normals(&source, ReviewEdgeTreatment::MicroBevel04)
+            .expect("0.04 bevel fixture should remain valid");
+        let strong = mesh_with_micro_bevel_normals(&source, ReviewEdgeTreatment::MicroBevel08)
+            .expect("0.08 bevel fixture should remain valid");
+
+        assert_eq!(mesh_positions(&current), mesh_positions(&source));
+        assert_eq!(mesh_positions(&subtle), mesh_positions(&source));
+        assert_eq!(mesh_positions(&strong), mesh_positions(&source));
+        assert_eq!(mesh_index_count(&current), mesh_index_count(&source));
+        assert_eq!(mesh_index_count(&subtle), mesh_index_count(&source));
+        assert_eq!(mesh_index_count(&strong), mesh_index_count(&source));
+        assert_eq!(mesh_normals(&current), mesh_normals(&source));
+
+        let normal_delta = |mesh: &Mesh| {
+            mesh_normals(mesh)
+                .iter()
+                .zip(mesh_normals(&source))
+                .map(|(actual, shipped)| Vec3::from(*actual).distance(Vec3::from(*shipped)))
+                .sum::<f32>()
+        };
+        let subtle_delta = normal_delta(&subtle);
+        let strong_delta = normal_delta(&strong);
+        assert!(subtle_delta > 0.0);
+        assert!(strong_delta > subtle_delta);
+        for normal in mesh_normals(&subtle).iter().chain(mesh_normals(&strong)) {
+            assert!((Vec3::from(*normal).length() - 1.0).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn terrain_geometric_bevel_modes_leave_authored_object_meshes_unchanged() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        for treatment in [
+            ReviewEdgeTreatment::GeometricBevel04,
+            ReviewEdgeTreatment::GeometricBevel08,
+        ] {
+            let treated = mesh_with_micro_bevel_normals(&source, treatment)
+                .expect("terrain-only geometric treatment preserves object meshes");
+            assert_eq!(mesh_positions(&treated), mesh_positions(&source));
+            assert_eq!(mesh_normals(&treated), mesh_normals(&source));
+            assert_eq!(mesh_index_count(&treated), mesh_index_count(&source));
+        }
+    }
+
+    #[test]
+    fn changing_review_edge_treatment_rebuilds_only_cached_object_meshes() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn(instance(
+                "effect/material-test",
+                HexCoord::ORIGIN,
+                0,
+                0.4,
+                0,
+            ))
+            .id();
+        settle(&mut app);
+        let current = chunk_handles(&app, root);
+
+        app.insert_resource(ReviewEdgeTreatment::MicroBevel04);
+        app.update();
+
+        let beveled = chunk_handles(&app, root);
+        assert_eq!(current.len(), beveled.len());
+        for (key, (old_mesh, old_material, old_entity)) in current {
+            let Some((new_mesh, new_material, new_entity)) = beveled.get(&key) else {
+                unreachable!("edge rebuild must preserve chunk key {key:?}")
+            };
+            assert_ne!(&old_mesh, new_mesh);
+            assert_eq!(&old_material, new_material);
+            assert_ne!(&old_entity, new_entity);
+            assert!(app
+                .world()
+                .resource::<Assets<Mesh>>()
+                .get(old_mesh)
+                .is_none());
+            assert!(app.world().get_entity(old_entity).is_err());
+        }
+    }
+
+    #[test]
+    fn changing_review_material_treatment_rebuilds_cached_object_materials() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn(instance(
+                "effect/material-test",
+                HexCoord::ORIGIN,
+                0,
+                0.4,
+                0,
+            ))
+            .id();
+        settle(&mut app);
+
+        let current = chunk_handles(&app, root);
+        let current_materials = current
+            .values()
+            .map(|(_, material, _)| *material)
+            .collect::<BTreeSet<_>>();
+        assert!(current_materials.iter().all(|id| {
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(*id)
+                .is_some_and(|material| material.perceptual_roughness == 0.82)
+        }));
+
+        app.insert_resource(ReviewMaterialTreatment::UnifiedMatte);
+        app.update();
+
+        let unified = chunk_handles(&app, root);
+        let unified_materials = unified
+            .values()
+            .map(|(_, material, _)| *material)
+            .collect::<BTreeSet<_>>();
+        assert!(current_materials.is_disjoint(&unified_materials));
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert!(current_materials
+            .iter()
+            .all(|material| materials.get(*material).is_none()));
+        assert!(unified_materials.iter().all(|id| materials
+            .get(*id)
+            .is_some_and(|material| material.perceptual_roughness == 1.0)));
     }
 
     #[test]

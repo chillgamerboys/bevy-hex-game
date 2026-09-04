@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "id": "night-aesthetic-v1",
+  "registry": "tools/visual_experiments/profiles.json",
+  "axis_order": [
+    "height",
+    "light",
+    "palette",
+    "haze",
+    "edge"
+  ],
+  "axes": {
+    "height": [
+      {
+        "id": "h030",
+        "label": "0.30 height ratio",
+        "level_height": 0.3
+      },
+      {
+        "id": "h035",
+        "label": "0.35 height ratio",
+        "level_height": 0.35
+      },
+      {
+        "id": "h040",
+        "label": "0.40 shipped height ratio",
+        "level_height": 0.4
+      }
+    ],
+    "light": [
+      {
+        "id": "lbalanced",
+        "label": "Balanced noon",
+        "time_hours": 12.0
+      },
+      {
+        "id": "lsoft",
+        "label": "Soft-fill noon",
+        "time_hours": 12.0,
+        "lighting_candidate": "tools/visual_experiments/lighting/l05-soft-fill-noon.json",
+        "candidate_id": "l05-soft-fill-noon"
+      },
+      {
+        "id": "lcontrast",
+        "label": "High-contrast noon",
+        "time_hours": 12.0,
+        "lighting_candidate": "tools/visual_experiments/lighting/l06-high-contrast-noon.json",
+        "candidate_id": "l06-high-contrast-noon"
+      },
+      {
+        "id": "lgolden",
+        "label": "Golden hour",
+        "time_hours": 16.5
+      }
+    ],
+    "palette": [
+      {
+        "id": "pshipped",
+        "label": "Shipped palette"
+      },
+      {
+        "id": "pearth",
+        "label": "Muted-earth palette",
+        "palette": "tools/visual_experiments/palettes/p01-muted-earth.json",
+        "candidate_id": "p01-muted-earth"
+      },
+      {
+        "id": "pseparate",
+        "label": "High-separation palette",
+        "palette": "tools/visual_experiments/palettes/p02-high-separation.json",
+        "candidate_id": "p02-high-separation"
+      }
+    ],
+    "haze": [
+      {
+        "id": "z000",
+        "label": "No added haze"
+      },
+      {
+        "id": "z003",
+        "label": "Haze density 0.0003",
+        "lighting_candidate": "tools/visual_experiments/lighting/z01-haze-light.json",
+        "candidate_id": "z01-haze-light"
+      },
+      {
+        "id": "z007",
+        "label": "Haze density 0.0007",
+        "lighting_candidate": "tools/visual_experiments/lighting/z02-haze-medium.json",
+        "candidate_id": "z02-haze-medium"
+      }
+    ],
+    "edge": [
+      {
+        "id": "ehard",
+        "label": "Current hard normals",
+        "edge_treatment": "current"
+      },
+      {
+        "id": "e004",
+        "label": "Normal blend 0.04",
+        "edge_treatment": "micro-bevel-004"
+      },
+      {
+        "id": "e008",
+        "label": "Normal blend 0.08",
+        "edge_treatment": "micro-bevel-008"
+      }
+    ]
+  },
+  "tiers": {
+    "broad": {
+      "capture_ids": [
+        "02-highlands-oblique"
+      ],
+      "shard_count": 3,
+      "axis_values": {
+        "height": [
+          "h030",
+          "h035",
+          "h040"
+        ],
+        "light": [
+          "lbalanced",
+          "lsoft",
+          "lcontrast"
+        ],
+        "palette": [
+          "pshipped",
+          "pearth",
+          "pseparate"
+        ],
+        "haze": [
+          "z000",
+          "z003",
+          "z007"
+        ],
+        "edge": [
+          "ehard",
+          "e004",
+          "e008"
+        ]
+      }
+    },
+    "golden": {
+      "capture_ids": [
+        "02-highlands-oblique"
+      ],
+      "shard_count": 1,
+      "axis_values": {
+        "height": [
+          "h030",
+          "h035",
+          "h040"
+        ],
+        "light": [
+          "lgolden"
+        ],
+        "palette": [
+          "pshipped",
+          "pearth",
+          "pseparate"
+        ],
+        "haze": [
+          "z000",
+          "z003",
+          "z007"
+        ],
+        "edge": [
+          "ehard",
+          "e004",
+          "e008"
+        ]
+      }
+    }
+  }
+}
