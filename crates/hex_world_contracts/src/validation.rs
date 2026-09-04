@@ -528,6 +528,7 @@ impl Validate for WorldManifest {
                 ));
             }
         }
+        validate_chunk_catalogue(self)?;
         ordered(self.boundaries.iter().map(|entry| &entry.id), "boundaries")?;
         let mut boundary_pairs = BTreeSet::new();
         for boundary in &self.boundaries {
@@ -596,6 +597,68 @@ impl Validate for WorldManifest {
         }
         Ok(())
     }
+}
+
+// Prove availability metadata independently of terrain packages. Rectangle/hex
+// intersection needs only integer interval arithmetic, never per-voxel iteration.
+fn validate_chunk_catalogue(manifest: &WorldManifest) -> Result<(), ContractError> {
+    let actual: BTreeSet<_> = manifest
+        .chunks
+        .iter()
+        .map(|entry| entry.coordinate)
+        .collect();
+    let mut expected = BTreeSet::new();
+    for region in &manifest.regions {
+        let radius = u128::from(region.radius);
+        let columns = 1 + 3 * radius * (radius + 1);
+        // Any one disk needs at least this many storage chunks, even when regions
+        // overlap. Reject huge malformed radii before enumerating their rectangle.
+        if columns.div_ceil(256) > actual.len() as u128 {
+            return Err(reject(
+                "chunks",
+                "catalogue cannot cover the declared region footprint",
+            ));
+        }
+        let radius = i64::from(region.radius);
+        let minimum = region.origin.checked_add(WorldHex::new(-radius, -radius))?;
+        let maximum = region.origin.checked_add(WorldHex::new(radius, radius))?;
+        for q in minimum.q.div_euclid(CHUNK_SIZE)..=maximum.q.div_euclid(CHUNK_SIZE) {
+            for r in minimum.r.div_euclid(CHUNK_SIZE)..=maximum.r.div_euclid(CHUNK_SIZE) {
+                let chunk = ChunkId { q, r };
+                let origin = chunk.origin()?;
+                let q_min =
+                    (i128::from(origin.q) - i128::from(region.origin.q)).max(-i128::from(radius));
+                let q_max = (i128::from(origin.q) + i128::from(CHUNK_SIZE - 1)
+                    - i128::from(region.origin.q))
+                .min(i128::from(radius));
+                let r_min =
+                    (i128::from(origin.r) - i128::from(region.origin.r)).max(-i128::from(radius));
+                let r_max = (i128::from(origin.r) + i128::from(CHUNK_SIZE - 1)
+                    - i128::from(region.origin.r))
+                .min(i128::from(radius));
+                if q_min <= q_max
+                    && r_min <= r_max
+                    && q_min + r_min <= i128::from(radius)
+                    && q_max + r_max >= -i128::from(radius)
+                {
+                    if !actual.contains(&chunk) {
+                        return Err(reject(
+                            "chunks",
+                            "catalogue omits a chunk intersecting the world footprint",
+                        ));
+                    }
+                    expected.insert(chunk);
+                }
+            }
+        }
+    }
+    if actual != expected {
+        return Err(reject(
+            "chunks",
+            "catalogue includes chunks outside the world footprint",
+        ));
+    }
+    Ok(())
 }
 
 impl WorldManifest {

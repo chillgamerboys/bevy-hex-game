@@ -762,3 +762,62 @@ fn residency_hysteresis_and_availability_are_explicit() {
     assert_ne!(air, QueryResult::Unloaded(ChunkId::default()));
     assert_ne!(air, QueryResult::OutsideWorld);
 }
+
+#[test]
+fn manifest_catalogue_covers_every_intersecting_chunk_and_no_extra_chunks() {
+    let package = world(WorldHex::new(-1, 15), 19);
+    let mut missing = package.manifest.clone();
+    missing.chunks.pop().expect("nonempty catalogue");
+    missing.fingerprint = fingerprint(&missing).expect("fresh checksum");
+    assert!(missing.validate().is_err());
+    let mut empty = package.manifest.clone();
+    empty.chunks.clear();
+    empty.fingerprint = fingerprint(&empty).expect("fresh checksum");
+    assert!(empty.validate().is_err());
+    let mut extra = package.manifest.clone();
+    extra.chunks.push(ChunkDescriptor {
+        coordinate: ChunkId { q: 999, r: 999 },
+        fingerprint: 12,
+        path: "chunks/outside.ron".into(),
+    });
+    extra.fingerprint = fingerprint(&extra).expect("fresh checksum");
+    assert!(extra.validate().is_err());
+}
+
+#[test]
+fn chunk_rectangle_intersection_matches_independent_fine_hex_disk_oracle() {
+    for origin in [
+        WorldHex::new(0, 0),
+        WorldHex::new(-17, 15),
+        WorldHex::new((1_i64 << 54) + 15, -31),
+    ] {
+        for radius in [0, 1, 15, 16, 31] {
+            // world() builds descriptor keys by enumerating exact fine columns;
+            // production validation instead intersects integer chunk rectangles.
+            let package = world(origin, radius);
+            package
+                .manifest
+                .validate()
+                .expect("independent disk catalogue");
+        }
+    }
+    let mut overlapping = world(WorldHex::new(2, 2), 2).manifest;
+    let mut duplicate_footprint = overlapping.regions.first().expect("region").clone();
+    duplicate_footprint.id = "region-overlap".into();
+    overlapping.regions.push(duplicate_footprint);
+    overlapping
+        .seal()
+        .expect("overlapping footprints use the union, not summed counts");
+}
+
+#[test]
+fn huge_declared_region_with_tiny_catalogue_is_rejected_without_enumeration() {
+    let mut manifest = world(WorldHex::new(0, 0), 0).manifest;
+    manifest.regions.first_mut().expect("region").radius = u32::MAX;
+    manifest.fingerprint = fingerprint(&manifest).expect("fresh checksum");
+    let error = manifest
+        .validate()
+        .expect_err("tiny catalogue cannot cover huge disk");
+    assert_eq!(error.context, "chunks");
+    assert!(error.message.contains("cannot cover"));
+}
