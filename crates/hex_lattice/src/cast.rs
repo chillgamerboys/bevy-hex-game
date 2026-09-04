@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{LatticeCoord, SpellId};
+use hex_core::{ElementId, LatticeCoord, SpellId};
 
 use crate::spec::{CellKind, LatticeSpec};
 use crate::state::{ActiveEnchantment, LatticeState};
@@ -40,12 +40,19 @@ pub enum CastBlocked {
 /// Decides whether the spell at `cell` can be cast, and if so exactly how.
 ///
 /// Binary: it returns a complete [`CastPlan`] or a [`CastBlocked`] reason, never a
-/// partial cast. A requirement is met by a distinct adjacent live gem of the right
-/// element with enough mana (and not already committed to an enchantment), or by an
-/// adjacent live *fusion* whose output matches
-/// and whose own recipe resolves the same way — recursively, and cycle-safe. The
-/// assignment is deterministic: candidates are tried in [`LatticeCoord`] order and
-/// the first complete one wins.
+/// partial cast. A requirement is met by pooling as many distinct adjacent live
+/// gems and fusions of the right element as it takes to reach its mana total — not
+/// one cell alone: a gem contributes up to its own mana, and a fusion contributes
+/// any amount its own recipe (scaled by that amount) can resolve from *its*
+/// neighbours, recursively and cycle-safe. A fusion never funds more than one
+/// requirement — that stays a single dedicated slot, and it is also the cycle guard
+/// for fusion chains. A gem funding a spell's own requirement *directly* is the same
+/// one-slot-one-source deal, but a gem reached only as a fusion's feeder is not: two
+/// sibling fusions that share a neighbouring gem may each draw part of its mana, up
+/// to the gem's own total, since the gem itself has no notion of which fusion is
+/// asking. The assignment is deterministic: candidates are tried in [`LatticeCoord`]
+/// order, greedily filling each requirement before moving to the next, and the first
+/// complete assignment wins.
 pub fn castable(
     spec: &LatticeSpec,
     state: &LatticeState,
@@ -71,6 +78,7 @@ pub fn castable(
         tables,
         &mut used,
         &mut drains,
+        false,
     ) {
         Ok(CastPlan {
             spell,
@@ -130,11 +138,21 @@ pub fn apply_cast(state: &mut LatticeState, plan: &CastPlan, tables: &impl Table
 /// Tries to satisfy `reqs` from the neighbours of `around`, extending the `used`
 /// cell set and the `drains` map. Returns whether a complete assignment was found.
 ///
-/// Each requirement claims a *distinct* adjacent cell — a spell's tier is a count
-/// of adjacent gems, not an amount of mana from fewer of them. A fusion source
-/// claims its own cell and then resolves its recipe from *its* neighbours; because
-/// a claimed cell cannot be reused, `used` doubles as the cycle guard for fusion
-/// chains.
+/// Each requirement is handed to [`draw`], which pools it from as many distinct
+/// adjacent cells as it needs; the rest of the list is what `draw` runs once its own
+/// pool is full, so a dead end anywhere downstream unwinds this requirement's
+/// choices too rather than leaving a partial draw committed. `inside_fusion` is
+/// threaded through unchanged — it says whether `reqs` is a spell's own requirement
+/// list (`false`) or a fusion's recipe, scaled for however much of it is being drawn
+/// (`true`); see [`draw`] for what that changes about gem sharing.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the list being worked through (reqs, around), the board it draws from \
+              (spec, state, tables), the in-flight assignment (used, drains), and \
+              which sharing rule applies (inside_fusion) are each load-bearing; \
+              bundling any of them would just move the count into a struct without \
+              shrinking what a caller has to supply"
+)]
 fn satisfy(
     reqs: &[Requirement],
     around: LatticeCoord,
@@ -143,10 +161,85 @@ fn satisfy(
     tables: &impl Tables,
     used: &mut BTreeSet<LatticeCoord>,
     drains: &mut BTreeMap<LatticeCoord, u16>,
+    inside_fusion: bool,
 ) -> bool {
     let Some((req, rest)) = reqs.split_first() else {
         return true;
     };
+    draw(
+        req.element,
+        req.mana,
+        around,
+        spec,
+        state,
+        tables,
+        used,
+        drains,
+        inside_fusion,
+        &mut |used, drains| {
+            satisfy(
+                rest,
+                around,
+                spec,
+                state,
+                tables,
+                used,
+                drains,
+                inside_fusion,
+            )
+        },
+    )
+}
+
+/// Pools `need` mana of `element` from the neighbours of `around`, then calls
+/// `continuation` once the pool is full.
+///
+/// Unlike a spell's requirement *list* — one distinct cell per entry — a single
+/// requirement's mana is not claimed by one cell alone: a gem contributes up to its
+/// own mana, and a fusion contributes any amount from `need` down to 1 whose scaled
+/// recipe its own neighbours can pay (tried highest first, since a smaller draw is
+/// never harder to satisfy than a larger one, so the common case fills in one try).
+/// A fusion is never claimed twice — `used` marks it spoken for the moment it
+/// contributes anything, which is also the cycle guard for fusion chains. A gem is
+/// tracked by remaining mana instead: `drains` accumulates what has already been
+/// taken from it, so a later draw only ever sees what is left. `inside_fusion`
+/// decides whether a fully-drained gem is *also* placed in `used` — at the top
+/// level (`false`) it is, keeping a spell's own requirement slots each backed by a
+/// distinct source exactly as before; inside a fusion's own recipe (`true`) it is
+/// not, so a gem two sibling fusions both neighbour can fund each of them in turn,
+/// bounded only by its own total mana. `continuation` is only invoked once the pool
+/// is exactly full, and a `false` from it unwinds this draw's choices (a used/drains
+/// snapshot for a fusion's recipe, a restore of the gem's prior drained amount and
+/// `used` membership for a gem) before the next candidate is tried — so a
+/// requirement further down the spell's list can veto a pooling choice made for an
+/// earlier one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the pool being filled (element, need), the board it draws from (spec, \
+              state, tables), the in-flight assignment (used, drains), which sharing \
+              rule applies (inside_fusion), and what to do once it's full \
+              (continuation) are each load-bearing; bundling any of them would just \
+              move the count into a struct without shrinking what a caller has to \
+              supply"
+)]
+fn draw(
+    element: ElementId,
+    need: u16,
+    around: LatticeCoord,
+    spec: &LatticeSpec,
+    state: &LatticeState,
+    tables: &impl Tables,
+    used: &mut BTreeSet<LatticeCoord>,
+    drains: &mut BTreeMap<LatticeCoord, u16>,
+    inside_fusion: bool,
+    continuation: &mut dyn FnMut(
+        &mut BTreeSet<LatticeCoord>,
+        &mut BTreeMap<LatticeCoord, u16>,
+    ) -> bool,
+) -> bool {
+    if need == 0 {
+        return continuation(used, drains);
+    }
 
     // A locked gem is spoken for by the enchantment it already hosts — its capacity
     // is committed, so it can fund no further cast. Excluding it keeps `locks`
@@ -163,33 +256,108 @@ fn satisfy(
 
     for (coord, kind) in candidates {
         match kind {
-            CellKind::Gem { element }
-                if element == req.element && state.mana(coord) >= req.mana =>
-            {
-                // `used` filters this coord out of any later candidate list, so it
-                // can appear in `drains` at most once — a plain insert/remove pair.
-                used.insert(coord);
-                drains.insert(coord, req.mana);
-                if satisfy(rest, around, spec, state, tables, used, drains) {
+            CellKind::Gem {
+                element: gem_element,
+            } if gem_element == element => {
+                // `already` is whatever an earlier draw in this same plan has taken
+                // from this gem — possible when it feeds more than one fusion, since
+                // those draws leave it out of `used`. Its remaining mana is what's
+                // left after that.
+                let already = drains.get(&coord).copied().unwrap_or(0);
+                let available = state.mana(coord).saturating_sub(already);
+                if available == 0 {
+                    continue;
+                }
+                // Taking the most this gem can usefully give is always at least as
+                // good as taking less: at the top level the cell is spoken for
+                // either way, and inside a fusion's recipe a smaller draw here would
+                // only leave more of `need` for other cells to cover without freeing
+                // anything up in return.
+                let take = available.min(need);
+                drains.insert(coord, already + take);
+                if !inside_fusion {
+                    used.insert(coord);
+                }
+                if draw(
+                    element,
+                    need - take,
+                    around,
+                    spec,
+                    state,
+                    tables,
+                    used,
+                    drains,
+                    inside_fusion,
+                    continuation,
+                ) {
                     return true;
                 }
-                used.remove(&coord);
-                drains.remove(&coord);
+                if !inside_fusion {
+                    used.remove(&coord);
+                }
+                if already == 0 {
+                    drains.remove(&coord);
+                } else {
+                    drains.insert(coord, already);
+                }
             }
-            CellKind::Fusion { output } if output == req.element => {
+            CellKind::Fusion { output } if output == element => {
                 let Some(recipe) = tables.recipe(output) else {
                     continue;
                 };
-                let used_snapshot = used.clone();
-                let drains_snapshot = drains.clone();
-                used.insert(coord);
-                if satisfy(&recipe, coord, spec, state, tables, used, drains)
-                    && satisfy(rest, around, spec, state, tables, used, drains)
-                {
-                    return true;
+                // The amount drawn from this fusion scales its recipe rather than
+                // being discarded: taking `amount` units of the fused element needs
+                // that many units of *each* of the recipe's own feeders, recursively.
+                // `amount == 1` reproduces the base recipe exactly. Tried from `need`
+                // down to 1 so the fusion first offers to close out the whole pool by
+                // itself, falling back to a smaller share only if its neighbours
+                // can't back that much.
+                let mut amount = need;
+                loop {
+                    let scaled_recipe: Vec<Requirement> = recipe
+                        .iter()
+                        .map(|feeder| Requirement {
+                            element: feeder.element,
+                            mana: feeder.mana.saturating_mul(amount),
+                        })
+                        .collect();
+                    let used_snapshot = used.clone();
+                    let drains_snapshot = drains.clone();
+                    // A fusion is always exclusive, and its own recipe always runs
+                    // with `inside_fusion = true` — a gem it draws on stays free for
+                    // any sibling fusion resolved elsewhere in this same plan.
+                    used.insert(coord);
+                    let filled = satisfy(
+                        &scaled_recipe,
+                        coord,
+                        spec,
+                        state,
+                        tables,
+                        used,
+                        drains,
+                        true,
+                    ) && draw(
+                        element,
+                        need - amount,
+                        around,
+                        spec,
+                        state,
+                        tables,
+                        used,
+                        drains,
+                        inside_fusion,
+                        continuation,
+                    );
+                    if filled {
+                        return true;
+                    }
+                    *used = used_snapshot;
+                    *drains = drains_snapshot;
+                    if amount == 1 {
+                        break;
+                    }
+                    amount -= 1;
                 }
-                *used = used_snapshot;
-                *drains = drains_snapshot;
             }
             _ => {}
         }

@@ -25,6 +25,7 @@ const AIR: ElementId = ElementId(2);
 const WATER: ElementId = ElementId(3);
 const LIGHTNING: ElementId = ElementId(10);
 const THUNDER: ElementId = ElementId(11);
+const DESTRUCTION: ElementId = ElementId(12); // synthetic triple fusion: AIR+FIRE+LIGHT
 
 const EMBER: SpellId = SpellId(0); // tier-1 fire evocation
 const FIREBALL: SpellId = SpellId(1); // tier-6 fire evocation
@@ -34,6 +35,9 @@ const FREE: SpellId = SpellId(4); // tier-0
 const WARD: SpellId = SpellId(5); // tier-1 fire enchantment, defence 0
 const AEGIS: SpellId = SpellId(6); // tier-2 fire enchantment (two funding gems)
 const HEAVY: SpellId = SpellId(7); // tier-2 fire evocation, draws 3 from each gem
+const NOVA: SpellId = SpellId(8); // tier-1, needs 6 mana of a DESTRUCTION source
+const SURGE: SpellId = SpellId(9); // tier-1, needs 4 mana of FIRE from a single requirement
+const PULSE: SpellId = SpellId(10); // tier-1, needs 2 mana of a DESTRUCTION source
 
 fn req(element: ElementId, mana: u16) -> Requirement {
     Requirement { element, mana }
@@ -58,6 +62,12 @@ impl SpellTable for Content {
             vec![req(FIRE, 1); 2]
         } else if spell == HEAVY {
             vec![req(FIRE, 3); 2]
+        } else if spell == NOVA {
+            vec![req(DESTRUCTION, 6)]
+        } else if spell == SURGE {
+            vec![req(FIRE, 4)]
+        } else if spell == PULSE {
+            vec![req(DESTRUCTION, 2)]
         } else {
             Vec::new()
         }
@@ -82,6 +92,8 @@ impl FusionTable for Content {
             Some(vec![req(LIGHT, 1), req(FIRE, 1)])
         } else if output == THUNDER {
             Some(vec![req(LIGHTNING, 1), req(WATER, 1)])
+        } else if output == DESTRUCTION {
+            Some(vec![req(AIR, 1), req(FIRE, 1), req(LIGHT, 1)])
         } else {
             None
         }
@@ -235,6 +247,305 @@ fn disabling_a_deep_feeder_kills_the_whole_fusion_chain() {
         castable(&spec, &state, spell, &Content),
         Err(CastBlocked::Unsatisfiable),
         "a dead leaf kills the fusion chain downstream"
+    );
+}
+
+/// A requirement filled by a fusion scales that fusion's recipe by the requirement's
+/// own mana instead of discarding it. Six units of a triple fusion (Destruction:
+/// Air + Fire + Metal in the shipped content, mirrored here as Air + Fire + Light)
+/// must drain six from *each* feeder — 18 underlying mana, not the recipe's base 3.
+#[test]
+fn a_fusion_requirement_drains_its_recipe_scaled_by_the_requested_mana() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fusion, ..] = spell.neighbors();
+    let feeders: Vec<LatticeCoord> = fusion
+        .neighbors()
+        .into_iter()
+        .filter(|coord| *coord != spell)
+        .take(3)
+        .collect();
+    let [air, fire, light]: [LatticeCoord; 3] = feeders
+        .try_into()
+        .expect("a hex has six neighbours, three remain besides the spell");
+
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: NOVA })
+        .with(
+            fusion,
+            CellKind::Fusion {
+                output: DESTRUCTION,
+            },
+        )
+        .with(air, gem(AIR))
+        .with(fire, gem(FIRE))
+        .with(light, gem(LIGHT));
+
+    let stats = LatticeStats::new(
+        BTreeMap::from([(AIR, 6), (FIRE, 6), (LIGHT, 6)]),
+        BTreeMap::from([(AIR, 1), (FIRE, 1), (LIGHT, 1)]),
+    );
+    let state = LatticeState::new(&spec, &stats);
+
+    let plan = castable(&spec, &state, spell, &Content)
+        .expect("full-capacity feeders cover the scaled recipe");
+    assert_eq!(plan.drains.get(&air), Some(&6));
+    assert_eq!(plan.drains.get(&fire), Some(&6));
+    assert_eq!(plan.drains.get(&light), Some(&6));
+    let total: u32 = plan.drains.values().map(|&mana| u32::from(mana)).sum();
+    assert_eq!(
+        total, 18,
+        "6 mana of a triple fusion costs 18 underlying mana, not 6"
+    );
+}
+
+/// The scaled requirement is still binary: if any one feeder falls short of the
+/// scaled amount, the whole cast is unsatisfiable — no partial draw.
+#[test]
+fn a_scaled_fusion_requirement_refuses_when_one_feeder_is_short() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fusion, ..] = spell.neighbors();
+    let feeders: Vec<LatticeCoord> = fusion
+        .neighbors()
+        .into_iter()
+        .filter(|coord| *coord != spell)
+        .take(3)
+        .collect();
+    let [air, fire, light]: [LatticeCoord; 3] = feeders
+        .try_into()
+        .expect("a hex has six neighbours, three remain besides the spell");
+
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: NOVA })
+        .with(
+            fusion,
+            CellKind::Fusion {
+                output: DESTRUCTION,
+            },
+        )
+        .with(air, gem(AIR))
+        .with(fire, gem(FIRE))
+        .with(light, gem(LIGHT));
+
+    // Light caps out one short of the scaled requirement (5 < 6).
+    let stats = LatticeStats::new(
+        BTreeMap::from([(AIR, 6), (FIRE, 6), (LIGHT, 5)]),
+        BTreeMap::from([(AIR, 1), (FIRE, 1), (LIGHT, 1)]),
+    );
+    let state = LatticeState::new(&spec, &stats);
+
+    assert_eq!(
+        castable(&spec, &state, spell, &Content),
+        Err(CastBlocked::Unsatisfiable),
+        "one short feeder refuses the whole binary cast"
+    );
+}
+
+/// Pooling applies to plain gems too, not just fusions: two Fire gems, each capped
+/// below SURGE's 4-mana requirement alone, must combine to cast it.
+#[test]
+fn a_requirement_pools_mana_across_multiple_gems() {
+    let spell = LatticeCoord::new(0, 0);
+    let neighbors = spell.neighbors();
+    let fire_a = neighbors[0];
+    let fire_b = neighbors[1];
+
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SURGE })
+        .with(fire_a, gem(FIRE))
+        .with(fire_b, gem(FIRE));
+
+    // Neither gem alone reaches SURGE's 4-mana requirement.
+    let stats = LatticeStats::new(BTreeMap::from([(FIRE, 2)]), BTreeMap::from([(FIRE, 1)]));
+    let state = LatticeState::new(&spec, &stats);
+
+    let plan = castable(&spec, &state, spell, &Content)
+        .expect("two half-funded Fire gems should pool to cover SURGE");
+    assert_eq!(plan.drains.get(&fire_a), Some(&2));
+    assert_eq!(plan.drains.get(&fire_b), Some(&2));
+    let total: u32 = plan.drains.values().map(|&mana| u32::from(mana)).sum();
+    assert_eq!(total, 4, "the pooled draw should total SURGE's 4 mana");
+}
+
+/// A requirement is not limited to one candidate cell: it pools mana from as many
+/// adjacent gems and fusions as it takes to reach its total. Two Destruction
+/// fusions, each capped by attunement to cover only half of NOVA's 6-mana
+/// requirement alone, must combine to cast it — mirroring a real lattice where a
+/// spell is ringed by several fusions of the element it needs, none individually
+/// funded enough on its own.
+#[test]
+fn a_requirement_pools_mana_across_multiple_fusion_sources() {
+    let spell = LatticeCoord::new(0, 0);
+    let neighbors = spell.neighbors();
+    let fusion_a = neighbors[0];
+    let fusion_b = neighbors[3]; // opposite side of the spell, so its feeders don't overlap fusion_a's
+
+    let feeders_a: Vec<LatticeCoord> = fusion_a
+        .neighbors()
+        .into_iter()
+        .filter(|coord| *coord != spell)
+        .take(3)
+        .collect();
+    let feeders_b: Vec<LatticeCoord> = fusion_b
+        .neighbors()
+        .into_iter()
+        .filter(|coord| *coord != spell)
+        .take(3)
+        .collect();
+    let [air_a, fire_a, light_a]: [LatticeCoord; 3] = feeders_a
+        .try_into()
+        .expect("a hex has six neighbours, three remain besides the spell");
+    let [air_b, fire_b, light_b]: [LatticeCoord; 3] = feeders_b
+        .try_into()
+        .expect("a hex has six neighbours, three remain besides the spell");
+
+    let mut fixture = vec![
+        spell, fusion_a, fusion_b, air_a, fire_a, light_a, air_b, fire_b, light_b,
+    ];
+    fixture.sort();
+    fixture.dedup();
+    assert_eq!(
+        fixture.len(),
+        9,
+        "fixture coordinates must be pairwise distinct"
+    );
+
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: NOVA })
+        .with(
+            fusion_a,
+            CellKind::Fusion {
+                output: DESTRUCTION,
+            },
+        )
+        .with(
+            fusion_b,
+            CellKind::Fusion {
+                output: DESTRUCTION,
+            },
+        )
+        .with(air_a, gem(AIR))
+        .with(fire_a, gem(FIRE))
+        .with(light_a, gem(LIGHT))
+        .with(air_b, gem(AIR))
+        .with(fire_b, gem(FIRE))
+        .with(light_b, gem(LIGHT));
+
+    // Each fusion's feeders cap at 3 — enough for half of NOVA's 6-mana draw, never
+    // the whole thing alone.
+    let stats = LatticeStats::new(
+        BTreeMap::from([(AIR, 3), (FIRE, 3), (LIGHT, 3)]),
+        BTreeMap::from([(AIR, 1), (FIRE, 1), (LIGHT, 1)]),
+    );
+    let state = LatticeState::new(&spec, &stats);
+
+    assert_eq!(
+        castable(&spec, &state, fusion_a, &Content),
+        Err(CastBlocked::NotASpell),
+        "sanity: fusion_a is a fusion cell, not itself castable"
+    );
+
+    let plan = castable(&spec, &state, spell, &Content)
+        .expect("two half-funded Destruction fusions should pool to cover NOVA");
+    // NOVA's 6-mana Destruction draw costs 3 leaf mana per unit (Air+Fire+Light), so
+    // 6 units costs 18 total — split 9 and 9 across the two fusions' feeders below.
+    let total: u32 = plan.drains.values().map(|&mana| u32::from(mana)).sum();
+    assert_eq!(
+        total, 18,
+        "the pooled draw should total NOVA's 6 Destruction units at 3 leaf mana each"
+    );
+
+    // Neither fusion alone supplies all 6 (each caps at 3), so a correct pool must
+    // have drawn from both.
+    let contributed_a = plan.drains.contains_key(&air_a)
+        || plan.drains.contains_key(&fire_a)
+        || plan.drains.contains_key(&light_a);
+    let contributed_b = plan.drains.contains_key(&air_b)
+        || plan.drains.contains_key(&fire_b)
+        || plan.drains.contains_key(&light_b);
+    assert!(
+        contributed_a && contributed_b,
+        "no single fusion supplies 6 alone, so both must have contributed: {:?}",
+        plan.drains
+    );
+}
+
+/// A gem may fund more than one fusion, split across them up to its own total mana —
+/// mirroring a real hex-ring lattice, where an "edge" gem sits between two adjacent
+/// fusion cells and neither has any other source for that element. Two sibling
+/// Destruction fusions share their only Air gem; each also has a dedicated Fire and
+/// Light gem of its own. Neither fusion could produce even one unit alone if the
+/// shared Air gem were exclusive to the other, so this only succeeds if the same gem
+/// funds both.
+#[test]
+fn a_gem_shared_between_two_fusions_funds_both() {
+    let spell = LatticeCoord::new(0, 0);
+    let fusion_a = LatticeCoord::new(-1, 0);
+    let fusion_b = LatticeCoord::new(0, -1);
+    let shared_air = LatticeCoord::new(-1, -1);
+    let fire_a = LatticeCoord::new(-2, 0);
+    let light_a = LatticeCoord::new(-2, 1);
+    let fire_b = LatticeCoord::new(0, -2);
+    let light_b = LatticeCoord::new(1, -2);
+
+    assert!(spell.is_adjacent(fusion_a));
+    assert!(spell.is_adjacent(fusion_b));
+    assert!(
+        fusion_a.is_adjacent(fusion_b),
+        "the fixture needs the two fusions themselves adjacent to share a neighbour"
+    );
+    assert!(fusion_a.is_adjacent(shared_air));
+    assert!(
+        fusion_b.is_adjacent(shared_air),
+        "shared_air must neighbour both fusions — that's the property under test"
+    );
+    assert!(!fusion_b.is_adjacent(fire_a) && !fusion_b.is_adjacent(light_a));
+    assert!(!fusion_a.is_adjacent(fire_b) && !fusion_a.is_adjacent(light_b));
+
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: PULSE })
+        .with(
+            fusion_a,
+            CellKind::Fusion {
+                output: DESTRUCTION,
+            },
+        )
+        .with(
+            fusion_b,
+            CellKind::Fusion {
+                output: DESTRUCTION,
+            },
+        )
+        .with(shared_air, gem(AIR))
+        .with(fire_a, gem(FIRE))
+        .with(light_a, gem(LIGHT))
+        .with(fire_b, gem(FIRE))
+        .with(light_b, gem(LIGHT));
+
+    // The shared Air gem caps at exactly 2 — enough for one unit from each fusion,
+    // never two units from either alone. Each dedicated Fire/Light gem caps at 1,
+    // enough for its own fusion's single unit.
+    let stats = LatticeStats::new(
+        BTreeMap::from([(AIR, 2), (FIRE, 1), (LIGHT, 1)]),
+        BTreeMap::from([(AIR, 1), (FIRE, 1), (LIGHT, 1)]),
+    );
+    let state = LatticeState::new(&spec, &stats);
+
+    let plan = castable(&spec, &state, spell, &Content)
+        .expect("the shared Air gem should fund one unit from each fusion");
+
+    assert_eq!(
+        plan.drains.get(&shared_air),
+        Some(&2),
+        "the single shared gem should be drained for both fusions' Air, not just one"
+    );
+    assert_eq!(plan.drains.get(&fire_a), Some(&1));
+    assert_eq!(plan.drains.get(&light_a), Some(&1));
+    assert_eq!(plan.drains.get(&fire_b), Some(&1));
+    assert_eq!(plan.drains.get(&light_b), Some(&1));
+    let total: u32 = plan.drains.values().map(|&mana| u32::from(mana)).sum();
+    assert_eq!(
+        total, 6,
+        "1 Air + 1 Fire + 1 Light for each of the two units"
     );
 }
 

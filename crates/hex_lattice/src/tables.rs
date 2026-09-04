@@ -11,19 +11,26 @@
 
 use hex_core::{ElementId, SpellId};
 
-/// One element requirement of a spell or fusion: a distinct adjacent gem (or live
-/// fusion output) of `element` contributing `mana`.
+/// One element requirement of a spell or fusion: `mana` of `element`, pooled from
+/// as many adjacent gems and live fusion outputs as it takes to reach that total.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Requirement {
-    /// The element the adjacent source must provide.
+    /// The element the adjacent sources must provide.
     pub element: ElementId,
-    /// How much mana that source contributes to this cast.
+    /// The total this requirement draws, possibly split across several sources.
     ///
-    /// This is the cost when a **gem** satisfies the requirement. When a fusion
-    /// satisfies it, its *recipe* is drained instead and this amount is not —
-    /// the design scales high-tier spells by recipe complexity, not volume.
-    /// Whether the two costs should be validated against each other remains a
-    /// content-design question.
+    /// A **gem** contributes up to its own mana toward the total; several gems of
+    /// the right element can each cover part of it. A **fusion** contributes any
+    /// share of the total by scaling its own recipe by that share: each of the
+    /// recipe's feeder requirements is multiplied by the amount drawn from that
+    /// fusion before being resolved (recursively, if a feeder is itself a fusion).
+    /// Drawing 1 unit from a fusion reproduces its recipe's base cost exactly, so a
+    /// tier-1 fusion draw is unaffected — only a spell that explicitly asks for more
+    /// than one unit of a fused element pays proportionally more of its underlying
+    /// feeders. No single fusion ever funds more than one requirement, and a gem
+    /// funding a requirement directly is the same one-slot-one-source deal — but a
+    /// gem reached only as a fusion's own feeder may fund more than one fusion,
+    /// split across them up to its own total mana.
     pub mana: u16,
 }
 
