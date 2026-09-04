@@ -885,7 +885,7 @@ fn compile_geometry(
         contextual(
             &region.id,
             "boundary terrain",
-            operators::check_overrides(&build, recipe, &seam.source.id),
+            operators::check_constraints(&build, recipe, &seam.source.id),
         )?;
     }
     for basin in &recipe.basins {
@@ -902,7 +902,7 @@ fn compile_geometry(
         contextual(
             &region.id,
             "basin",
-            operators::check_overrides(&build, recipe, &basin.id),
+            operators::check_constraints(&build, recipe, &basin.id),
         )?;
     }
     for channel in &recipe.channels {
@@ -919,7 +919,7 @@ fn compile_geometry(
         contextual(
             &region.id,
             "channel",
-            operators::check_overrides(&build, recipe, &channel.id),
+            operators::check_constraints(&build, recipe, &channel.id),
         )?;
     }
     for seam in seams {
@@ -955,7 +955,7 @@ fn compile_geometry(
             contextual(
                 &region.id,
                 "boundary water",
-                operators::check_overrides(&build, recipe, &seam.source.id),
+                operators::check_constraints(&build, recipe, &seam.source.id),
             )?;
         }
     }
@@ -994,7 +994,7 @@ fn compile_geometry(
             contextual(
                 &region.id,
                 "boundary route",
-                operators::check_overrides(&build, recipe, &seam.source.id),
+                operators::check_constraints(&build, recipe, &seam.source.id),
             )?;
             build.semantics.anchors.push(WorldAnchor {
                 id: format!("{}/boundary/{}", region.id, seam.source.id),
@@ -1016,7 +1016,7 @@ fn compile_geometry(
         contextual(
             &region.id,
             "route",
-            operators::check_overrides(&build, recipe, &route.id),
+            operators::check_constraints(&build, recipe, &route.id),
         )?;
     }
     for bridge in &recipe.bridges {
@@ -1028,7 +1028,7 @@ fn compile_geometry(
         contextual(
             &region.id,
             "bridge",
-            operators::check_overrides(&build, recipe, &bridge.id),
+            operators::check_constraints(&build, recipe, &bridge.id),
         )?;
     }
     for cave in &recipe.caves {
@@ -1040,7 +1040,7 @@ fn compile_geometry(
         contextual(
             &region.id,
             "cave",
-            operators::check_overrides(&build, recipe, &cave.id),
+            operators::check_constraints(&build, recipe, &cave.id),
         )?;
     }
     build.reserved.insert(recipe.hub.column);

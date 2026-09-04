@@ -30,6 +30,8 @@ Authoring is geography plus rules plus exact constraints:
    depend on stable IDs/seed/coordinates; there is no global top-K vegetation cap.
 5. Add named hard height/material overrides. They establish ground constraints;
    every modifying stage checks them and reports both conflicting operator IDs.
+   Named route ribbons likewise retain their complete exact support and headroom,
+   even when an alternate route could still connect their endpoints.
    Soft banks/shoulders avoid hard constraints. An authored core intersection fails.
 6. Declare one connection for every touching region pair. One global resolver supplies
    both neighbors' ground/water datums and walking ports. Boundary water may have
@@ -69,3 +71,8 @@ is **not** a claim to preserve the old two-dimensional `blocker_footprint` polic
 all visual-style/canopy metadata: stock rendering still consumes the original art
 catalog. `procedural/limestone-tower` is explicitly a new interval prefab and is not
 represented as an existing stock asset.
+
+Region hubs publish `entry` feature summaries for safe metadata-only bootstrap.
+Explicit Observation anchors are available for scenic reviews without authorizing
+actor placement or forcing landscape changes. These summaries are world data, not
+a gameplay visibility/disclosure grant.

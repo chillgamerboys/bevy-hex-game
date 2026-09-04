@@ -502,3 +502,67 @@ fn adding_an_upper_vault_preserves_an_existing_lower_cave() {
         );
     }
 }
+
+#[test]
+fn later_crossing_route_cannot_bury_an_earlier_protected_ribbon() {
+    let source = fixture("rich-region");
+    let mut recipe = source.recipes["caldera"].clone();
+    recipe.landforms.clear();
+    recipe.biomes.clear();
+    recipe.overrides.clear();
+    let region = RegionSpec {
+        id: "crossing".into(),
+        recipe: "caldera".into(),
+        origin: WorldHex::new(0, 0),
+        radius: 6,
+        rotation: 0,
+    };
+    let mut build = operators::base(&region, &recipe, 0).expect("flat terrain");
+    let road = RouteSpec {
+        id: "lower-road".into(),
+        points: vec![
+            GradePoint {
+                column: WorldHex::new(-4, 0),
+                level: 40,
+            },
+            GradePoint {
+                column: WorldHex::new(4, 0),
+                level: 40,
+            },
+        ],
+        half_width: 0,
+        shoulder_width: 0,
+        material: "gravel".into(),
+    };
+    operators::route(&mut build, &recipe, &road).expect("first road");
+    let crossing = RouteSpec {
+        id: "raised-crossing".into(),
+        points: vec![
+            GradePoint {
+                column: WorldHex::new(0, -4),
+                level: 50,
+            },
+            GradePoint {
+                column: WorldHex::new(0, 4),
+                level: 50,
+            },
+        ],
+        half_width: 0,
+        shoulder_width: 0,
+        material: "gravel".into(),
+    };
+    operators::route(&mut build, &recipe, &crossing)
+        .expect("second road applies before constraint verification");
+    // Both earlier endpoint surfaces still exist. The interior intersection is
+    // nevertheless no longer the authored walking ribbon and must fail.
+    for pin in &road.points {
+        assert_eq!(operators::terrain(&build, pin.column).expect("pin").0, 40);
+    }
+    let error = operators::check_constraints(&build, &recipe, &crossing.id)
+        .expect_err("buried route interior");
+    assert!(
+        error.contains("lower-road")
+            && error.contains("raised-crossing")
+            && error.contains("headroom")
+    );
+}

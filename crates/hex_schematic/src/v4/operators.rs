@@ -14,6 +14,7 @@ pub(super) struct RegionBuild {
     pub semantics: ChunkSemantics,
     pub features: Vec<FeatureSummary>,
     pub reserved: BTreeSet<WorldHex>,
+    pub routes: BTreeMap<String, BTreeMap<WorldHex, i32>>,
 }
 
 fn run(bottom: i32, top: i32, material: &str) -> VoxelRun {
@@ -134,16 +135,34 @@ pub(super) fn base(region: &RegionSpec, recipe: &RegionRecipe, seed: u64) -> OpR
                 recipe,
             )?;
         }
-        check_overrides(&build, recipe, &patch.id)?;
+        check_constraints(&build, recipe, &patch.id)?;
     }
     Ok(build)
 }
 
-pub(super) fn check_overrides(
+pub(super) fn check_constraints(
     build: &RegionBuild,
     recipe: &RegionRecipe,
     invalidator: &str,
 ) -> OpResult<()> {
+    for (route_id, levels) in &build.routes {
+        for (p, level) in levels {
+            let runs = build
+                .columns
+                .get(p)
+                .ok_or_else(|| format!("route {route_id} leaves footprint"))?;
+            let wet = build
+                .liquids
+                .get(p)
+                .is_some_and(|liquid| liquid.bottom <= *level && *level < liquid.top);
+            if wet
+                || volume::material_at(runs, *level).is_none()
+                || volume::clear_above(runs, *level).is_some_and(|clear| clear < 2)
+            {
+                return Err(format!("operator {invalidator} violates protected route {route_id} at {p:?}, required surface level {level} and two-level headroom"));
+            }
+        }
+    }
     for patch in &recipe.overrides {
         // During initial application, later overrides have not established their
         // contract yet. Other stages must preserve every authored hard override.
@@ -492,6 +511,7 @@ pub(super) fn route(
         }
     }
     shoulders(build, &levels, route.shoulder_width, recipe)?;
+    build.routes.insert(route.id.clone(), levels.clone());
     for (p, height) in levels {
         set_terrain(build, p, height, &route.material, recipe)?;
         build.reserved.insert(p);
