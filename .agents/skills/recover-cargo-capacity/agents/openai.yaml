@@ -1,0 +1,4 @@
+interface:
+  display_name: "Recover Cargo Capacity"
+  short_description: "Audit and safely recover Rust build storage"
+  default_prompt: "Use $recover-cargo-capacity to diagnose Cargo disk pressure and recover only reproducible build artifacts."

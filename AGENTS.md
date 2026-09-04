@@ -68,6 +68,25 @@ skills reuse existing tickets only when they add product or cross-owner value an
 leave lanes unlinked. After complete delivery reaches `dev`, delete eligible workflow-owned
 issues only under the durable-record and safety checks in the delivery-state contract.
 
+## Reuse development lessons
+
+The evidence ledger at `docs/development/problem-solving-casebook.md` records concrete
+successful, failed, superseded, and provisional approaches from the visibility and world
+development work. Use it for provenance; use the focused skills for execution:
+
+- `$trace-authored-map-reference` before implementing an exact map from a sketch or image;
+- `$develop-large-world-features` for global reservations, cross-biome features, or
+  full-scale world checkpoints;
+- `$recover-cargo-capacity` when Cargo builds are constrained by disk, memory, duplicate
+  worktrees, or target profiles; and
+- `$inspect-game-renders` after presentation-affecting map/render changes and before
+  calling their pixels review-ready.
+
+These skills are canonical under `.agents/skills/`; Claude commands are thin adapters.
+Do not copy the workflows into this file. An optional user-level
+`$distill-development-task` can analyze another Codex task from a separate window; it is
+read-only by default and never directs or mutates the observed task.
+
 ## Capture UI bugs before fixing them
 
 Use `$linear-ui-bug-intake` for a reproduced UI, interaction, accessibility, focus,
@@ -120,10 +139,12 @@ and hot-file overlap rather than opening one PR per ticket.
   changed-region views from multiple camera modes and azimuths, and a motion pass for
   flicker, popping, translucent/emissive content, or camera collision. A cropped,
   stale, or mechanically completed but uninspected pack is not visual evidence.
-- Routine screenshot and visual-walk automation must use the repository's windowless
-  render targets so it never opens, activates, or focuses a native game window on the
-  shared workstation. Launch a visible game only when the user explicitly asks to play
-  or agrees to a named live motion review.
+- Automated presentation review must not open, activate, or focus a visible native game
+  window or begin screen recording without explicit user approval. Routine screenshot
+  and visual-walk automation must use the repository's windowless render targets. Launch
+  a visible game only when the user explicitly asks to play or agrees to a named live
+  motion review. If noninteractive capture is unavailable or regresses, record the review
+  as blocked instead of substituting a visible launch.
 
 ## Code review rules
 

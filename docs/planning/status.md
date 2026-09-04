@@ -9,6 +9,37 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
+established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
+restored the locked dependency graph and 45-minute macOS shipping budget,
+[PR #215](https://github.com/chillgamerboys/bevy-hex-game/pull/215) replaced numeric
+partition pins with identity-based fail-closed selection, and
+[PR #217](https://github.com/chillgamerboys/bevy-hex-game/pull/217) published the isolated
+case-backed development skills. This reconciliation is based on post-#217 `dev` at
+`4c97b75151b1a6f4e1ea1972976e1d9512ed8c45`. The #217 source-head matrix and exact-head
+no-runtime-change `N/A` passed; post-merge run `33708389913` was still running at this
+cutoff. These tooling deliveries do not deliver biome content.
+
+Four map candidates remain one draft dependency stack, and no published head contains
+current `dev`. At their published heads, #210 is green except for a cancelled macOS build
+and now conflicts with `dev`; #211 has a failed Map partitions job and cancelled macOS
+build; #212's historical hosted matrix is green; and #213 has a failed Map partitions job.
+#215 repairs the count-based selector on `dev`, but none of those old check rollups proves a
+refreshed head. Their successful manual-sign-off jobs are draft/source-lane deferrals: all
+four still require named-human exact-head presentation, motion/control-feel, and play
+findings. They must land #210 → #211 → #212 → #213 under the
+[biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
+
+The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
+only after #213 lands; they are not merge-ready. Garden's published foundation plus nine
+local commits are near-ready after its two integration-golden repairs, current-base
+reconciliation, complete gate, and exact-head walk. Generic review/provenance and
+capture-sequence tooling, Grand structural review, route revision 3, time-cycle work, and
+subtle-geometry work remain unpublished and in progress; their inherited dirty snapshots
+are not suitable for whole-tree commits.
+Rejected Outpost checkpoint `f4f0e4c` is preserved only as
+`archive/outpost-rejected-f4f0e4c`; the replacement design has not started.
+
 The **Grand V3 schematic planner** has completed its revision-2 correction and received
 cell-for-cell visual approval on `wave/grand-v3-schematic`, stacked temporarily on the
 exact corrective biome head while draft PRs #210–#213 await delivery to `dev`. The
@@ -600,7 +631,10 @@ deterministic simulation, and model/headless-app partitions. One fail-closed con
 map selects exact packages, targets, and features for narrow pull requests. Map
 validation uses the same authority for unit, deterministic generation, and real-plugin
 publication contracts, with all PR seeds preserved under an optimized test-only
-profile. Unknown paths, unclassified shared core/assets, other world crates, or
+profile. Map partition preflight compares enumerated test identities, requires an
+exhaustive and disjoint ordinary set plus exactly one match for every declared
+ignored-test pattern, and fails closed when a canonical command executes no tests.
+Unknown paths, unclassified shared core/assets, other world crates, or
 selector-command/CI-topology changes promote to the complete gate. The combined
 terrain-impact source stays full because it also carries an application-consumed
 health projection. Trajectory/volume-only changes instead run their pure/direct

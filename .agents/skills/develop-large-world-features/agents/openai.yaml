@@ -1,0 +1,4 @@
+interface:
+  display_name: "Develop Large World Features"
+  short_description: "Compose cross-biome features and scale safely"
+  default_prompt: "Use $develop-large-world-features to plan and checkpoint this large or cross-biome world feature."
