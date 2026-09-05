@@ -24,7 +24,7 @@ use hex_core::{
 };
 
 pub mod campaign_authority;
-#[cfg(any(feature = "map-review", feature = "visual-walk"))]
+#[cfg(any(feature = "map-review", feature = "visual-walk", feature = "v4-world"))]
 mod capture;
 mod casting;
 #[cfg(feature = "dev")]
@@ -47,6 +47,9 @@ mod storage;
 mod terrain_health_bars;
 #[cfg(feature = "test-support")]
 pub mod test_support;
+/// Isolated V4 world-package explorer and windowless integration harness.
+#[cfg(feature = "v4-world")]
+pub mod v4;
 #[cfg(feature = "visual-walk")]
 mod walk;
 
