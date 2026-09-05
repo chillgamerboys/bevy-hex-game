@@ -3,6 +3,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{mpsc, Arc, Mutex},
     thread,
+    time::Instant,
 };
 
 use hex_world_contracts::{
@@ -119,6 +120,34 @@ pub struct RuntimeCounts {
     pub modified_chunks: usize,
 }
 
+/// Constant-memory observations of successfully admitted chunk load latency.
+///
+/// The interval is worker launch through queryable admission: source IO, decode,
+/// validation, completion queue wait, and final query-product preparation. It
+/// excludes waiting for a worker slot before launch. Failed, canceled, and stale
+/// jobs never contribute. A source replacement starts a fresh measurement epoch.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LoadTiming {
+    /// Successful current chunks admitted since construction or source replacement.
+    pub samples: u64,
+    /// Exponential moving average in milliseconds, with fixed new-sample weight 1/8.
+    pub ema_milliseconds: Option<f64>,
+    /// Largest successful launch-to-admission duration in this source epoch.
+    pub max_milliseconds: Option<f64>,
+}
+impl LoadTiming {
+    fn record(&mut self, milliseconds: f64) {
+        self.samples = self.samples.saturating_add(1);
+        self.ema_milliseconds = Some(self.ema_milliseconds.map_or(milliseconds, |previous| {
+            previous + (milliseconds - previous) / 8.0
+        }));
+        self.max_milliseconds = Some(
+            self.max_milliseconds
+                .map_or(milliseconds, |previous| previous.max(milliseconds)),
+        );
+    }
+}
+
 pub(crate) struct ResidentChunk {
     pub product: ChunkProduct,
     pub base_fingerprint: u64,
@@ -126,6 +155,7 @@ pub(crate) struct ResidentChunk {
 }
 
 struct Job {
+    launched: Instant,
     coordinate: ChunkId,
     cancellation: CancellationToken,
     handle: thread::JoinHandle<()>,
@@ -165,6 +195,7 @@ pub struct WorldRuntime {
     tickets: BTreeMap<ChunkId, u64>,
     failed: BTreeSet<ChunkId>,
     next_ticket: u64,
+    load_timing: LoadTiming,
     epoch: u64,
     sender: mpsc::SyncSender<Completion>,
     receiver: Mutex<mpsc::Receiver<Completion>>,
@@ -225,6 +256,7 @@ impl WorldRuntime {
             tickets: BTreeMap::new(),
             failed: BTreeSet::new(),
             next_ticket: 1,
+            load_timing: LoadTiming::default(),
             epoch: 0,
             sender,
             receiver: Mutex::new(receiver),
@@ -388,6 +420,10 @@ impl WorldRuntime {
                             query_columns,
                         },
                     );
+                    if let Some(job) = self.jobs.get(&completion.ticket) {
+                        self.load_timing
+                            .record(job.launched.elapsed().as_secs_f64() * 1000.0);
+                    }
                     update.loaded.push(product);
                 }
                 Err(error) => {
@@ -433,6 +469,13 @@ impl WorldRuntime {
     /// Every resident product in canonical chunk order.
     pub fn resident_chunks(&self) -> impl Iterator<Item = ChunkProduct> + '_ {
         self.resident.values().map(|chunk| chunk.product.clone())
+    }
+
+    /// Successful source-load timing for bounded directional prefetch heuristics.
+    /// No measurement exists until a current chunk has reached queryable admission.
+    #[must_use]
+    pub fn load_timing(&self) -> LoadTiming {
+        self.load_timing
     }
 
     /// Exact cardinalities; completed/canceled work still occupies a slot until pumped.
@@ -548,6 +591,7 @@ impl WorldRuntime {
         };
         self.source = source;
         self.epoch = next_epoch;
+        self.load_timing = LoadTiming::default();
         for job in self.jobs.values() {
             job.cancellation.cancel();
         }
@@ -764,6 +808,7 @@ impl WorldRuntime {
         let cancellation = CancellationToken::default();
         let worker_cancellation = cancellation.clone();
         let sender = self.sender.clone();
+        let launched = Instant::now();
         let handle = thread::Builder::new()
             .name(format!("hex-chunk-{}-{}", coordinate.q, coordinate.r))
             .spawn(move || {
@@ -794,6 +839,7 @@ impl WorldRuntime {
         self.jobs.insert(
             ticket,
             Job {
+                launched,
                 coordinate,
                 cancellation,
                 handle,

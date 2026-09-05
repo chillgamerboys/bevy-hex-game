@@ -796,6 +796,11 @@ fn malformed_save_head_is_atomic_and_corrupt_lazy_partition_never_publishes() {
     loop {
         let update = restored.pump();
         if !update.failures.is_empty() {
+            assert_eq!(
+                runtime.load_timing().samples,
+                0,
+                "failed reads are not successful ready latency"
+            );
             assert_eq!(update.failures.len(), 1);
             break;
         }
@@ -929,6 +934,11 @@ fn canceled_delayed_jobs_keep_slots_and_never_publish_stale_interest() {
     );
     assert_eq!(runtime.voxel(voxel(a, 0)), QueryResult::Unloaded(a.chunk()));
     assert_eq!(runtime.counts().resident_chunks, 1);
+    assert_eq!(
+        runtime.load_timing().samples,
+        1,
+        "canceled source work is not ready latency"
+    );
 }
 
 #[test]
@@ -2654,4 +2664,65 @@ fn changed_global_material_policy_cannot_reuse_current_chunk_revision_proofs() {
         let update = runtime.pump();
         assert!(update.loaded.is_empty() && update.changed.is_empty() && update.removed.is_empty());
     }
+}
+
+#[test]
+fn successful_load_timing_includes_delayed_source_and_admission_queue_without_sample_storage() {
+    let a = point(1, 1);
+    let b = point(80, 1);
+    let package = world(&[(a, 0), (b, 0)]);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let released = Arc::new(AtomicBool::new(false));
+    let source = ControlledSource {
+        inner: MemoryChunkSource::new(package.clone()).expect("source"),
+        calls: Arc::clone(&calls),
+        released: Arc::clone(&released),
+    };
+    let mut runtime = WorldRuntime::new(
+        Arc::new(source),
+        RuntimeConfig {
+            max_in_flight_jobs: 1,
+            ..RuntimeConfig::default()
+        },
+    )
+    .expect("runtime");
+    assert_eq!(runtime.load_timing(), LoadTiming::default());
+    runtime
+        .set_interests(vec![interest("actor", a, 0, 0)])
+        .expect("interest");
+    runtime.pump();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    thread::sleep(Duration::from_millis(20));
+    released.store(true, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        runtime.load_timing().samples,
+        0,
+        "completion alone is not admission"
+    );
+    settle(&mut runtime);
+    let first = runtime.load_timing();
+    assert_eq!(first.samples, 1);
+    assert!(first.ema_milliseconds.expect("measured EMA") >= 35.0);
+    assert!(first.max_milliseconds.expect("measured max").is_finite());
+    runtime
+        .set_interests(vec![interest("actor", b, 0, 0)])
+        .expect("second interest");
+    settle(&mut runtime);
+    let second = runtime.load_timing();
+    assert_eq!(second.samples, 2);
+    let ema = second.ema_milliseconds.expect("EMA");
+    let maximum = second.max_milliseconds.expect("maximum");
+    assert!(ema.is_finite() && ema > 0.0 && ema <= maximum);
+    assert!(maximum >= first.max_milliseconds.expect("first max"));
+    runtime
+        .replace_source(Arc::new(
+            MemoryChunkSource::new(package).expect("same policy source"),
+        ))
+        .expect("new timing epoch");
+    assert_eq!(runtime.load_timing(), LoadTiming::default());
 }

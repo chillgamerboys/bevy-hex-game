@@ -28,7 +28,8 @@ pub use knowledge::{
     ObservedSurface,
 };
 pub use runtime::{
-    ChunkProduct, LoadFailure, RuntimeConfig, RuntimeCounts, RuntimeUpdate, WorldRuntime,
+    ChunkProduct, LoadFailure, LoadTiming, RuntimeConfig, RuntimeCounts, RuntimeUpdate,
+    WorldRuntime,
 };
 pub use source::{
     publish_package, publish_revision, CancellationToken, ChunkSource, FileChunkSource, IoLimits,
