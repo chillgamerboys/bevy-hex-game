@@ -9,13 +9,14 @@ use std::{
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use hex_world_contracts::{
-    hash_serializable, ChunkId, ChunkPackage, ColumnData, WorldChange, WorldEditTransaction,
-    WorldManifest, SCHEMA_VERSION,
+    hash_serializable, ChunkId, ChunkPackage, ColumnData, ManifestIndex, WorldChange,
+    WorldEditTransaction, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    edits::{exact_column_mut, AppliedTransaction, StagedEdit},
+    edits::{exact_column_mut, StagedEdit},
+    history::{HistoryEntry, JournalDescriptor},
     source::{
         checked_existing_path, checked_relative_path, encode_bounded, read_bounded,
         read_bytes_bounded, sync_directory, write_new,
@@ -80,7 +81,7 @@ impl ChunkOverlay {
     pub(crate) fn apply(
         &self,
         package: &mut ChunkPackage,
-        manifest: &WorldManifest,
+        index: &ManifestIndex,
     ) -> RuntimeResult<()> {
         self.validate()?;
         if self.world_id != package.world_id
@@ -97,7 +98,7 @@ impl ChunkOverlay {
         }
         package.seal().map_err(RuntimeError::invalid)?;
         package
-            .validate_against_manifest(manifest)
+            .validate_with_index(index)
             .map_err(RuntimeError::invalid)?;
         if package.fingerprint != self.target_fingerprint {
             return Err(RuntimeError::invalid(
@@ -171,12 +172,9 @@ impl OverlayLocation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TransactionDescriptor {
-    id: String,
-    fingerprint: u64,
-    path: String,
+struct CheckpointLocations {
+    overlays: BTreeMap<ChunkId, OverlayLocation>,
+    journals: BTreeMap<String, (JournalDescriptor, PathBuf, IoLimits)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,7 +185,7 @@ struct SaveHead {
     manifest_fingerprint: u64,
     // Vectors keep duplicate wire keys observable rather than silently overwriting.
     partitions: Vec<OverlayDescriptor>,
-    transactions: Vec<TransactionDescriptor>,
+    transactions: Vec<JournalDescriptor>,
     fingerprint: u64,
 }
 
@@ -275,10 +273,10 @@ impl WorldRuntime {
         Ok(change)
     }
 
-    /// Restores a source-matching save head and idempotency journal atomically.
+    /// Restores a source-matching save head and lightweight journal index atomically.
     ///
-    /// Chunk terrain and saved column payloads remain lazy; their bounded worker
-    /// reads verify hashes before admission. Corrupt lazy partitions produce a
+    /// Transaction bodies, chunk terrain and saved columns remain lazy; bounded reads
+    /// verify hashes before admission or historical lookup. Corrupt lazy partitions produce a
     /// failed load, never a partially queryable chunk. Restore requires no running
     /// jobs or operation pins; resident engine products are retired on next pump.
     pub fn restore_save(&mut self, root: impl AsRef<Path>, limits: IoLimits) -> RuntimeResult<()> {
@@ -334,70 +332,70 @@ impl WorldRuntime {
             );
         }
         let mut transactions = BTreeMap::new();
+        let mut last_revisions = BTreeMap::new();
         for descriptor in head.transactions {
-            let path = checked_existing_path(&root, &descriptor.path)?;
-            let record: AppliedTransaction = read_bounded(
-                &path,
-                limits.max_transaction_bytes,
-                &CancellationToken::default(),
-            )?;
-            record.delta.validate()?;
-            record.change.validate().map_err(RuntimeError::invalid)?;
-            if hash_serializable(&record).map_err(RuntimeError::invalid)? != descriptor.fingerprint
-                || record.change.transaction_id != descriptor.id
-                || record.delta.transaction_id != descriptor.id
-                || record.delta.world_id != self.manifest.world_id
-                || record.delta.manifest_fingerprint != self.manifest.fingerprint
-                || record.request_fingerprint != record.delta.request_fingerprint
-            {
-                return Err(RuntimeError::invalid(
-                    "saved transaction identity or fingerprint mismatch",
-                ));
+            descriptor.validate(limits.max_transaction_bytes)?;
+            let _safe_path = checked_existing_path(&root, &descriptor.path)?;
+            for (coordinate, revision) in &descriptor.revisions {
+                if overlays
+                    .get(coordinate)
+                    .is_none_or(|overlay| overlay.revision() < *revision)
+                {
+                    return Err(RuntimeError::invalid(
+                        "journal index exceeds saved partition revision",
+                    ));
+                }
+                last_revisions
+                    .entry(*coordinate)
+                    .and_modify(|previous: &mut u64| *previous = (*previous).max(*revision))
+                    .or_insert(*revision);
             }
-            let expected_revisions = record
-                .delta
-                .chunks
-                .iter()
-                .map(|chunk| (chunk.coordinate, chunk.revision))
-                .collect::<BTreeMap<_, _>>();
-            let expected_columns = record
-                .delta
-                .chunks
-                .iter()
-                .flat_map(|chunk| chunk.columns.iter().map(|column| column.position))
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if record.change.revisions != expected_revisions
-                || record.change.changed_columns != expected_columns
-                || record.delta.chunks.iter().any(|chunk| {
-                    overlays
-                        .get(&chunk.coordinate)
-                        .is_none_or(|overlay| overlay.revision() < chunk.revision)
-                })
-            {
-                return Err(RuntimeError::invalid(
-                    "save journal outcome disagrees with partition revisions",
-                ));
-            }
-            transactions.insert(descriptor.id, record);
+            transactions.insert(
+                descriptor.id.clone(),
+                HistoryEntry {
+                    descriptor,
+                    body: None,
+                    disk: Some(root.clone()),
+                    limits,
+                },
+            );
+        }
+        if overlays.iter().any(|(coordinate, overlay)| {
+            last_revisions.get(coordinate).copied() != Some(overlay.revision())
+        }) {
+            return Err(RuntimeError::invalid(
+                "saved partition has no matching latest journal revision",
+            ));
         }
         self.persisted = overlays.clone();
         self.overlays = overlays;
         self.transactions = transactions;
+        self.history_order.clear();
+        self.unsaved_transactions.clear();
+        self.unsaved_transaction_bytes = 0;
         self.dirty.clear();
         self.invalidate_after_restore();
         Ok(())
     }
 
-    fn demote_persisted_unloaded(&mut self, locations: BTreeMap<ChunkId, OverlayLocation>) {
-        self.persisted = locations.clone();
+    fn demote_persisted_unloaded(&mut self, locations: CheckpointLocations) {
+        self.persisted = locations.overlays.clone();
         self.dirty.clear();
-        for (coordinate, location) in locations {
+        for (coordinate, location) in locations.overlays {
             if !self.resident.contains_key(&coordinate) {
                 self.overlays.insert(coordinate, location);
             }
         }
+        for (id, (descriptor, root, limits)) in locations.journals {
+            if let Some(entry) = self.transactions.get_mut(&id) {
+                entry.descriptor = descriptor;
+                entry.disk = Some(root);
+                entry.limits = limits;
+            }
+        }
+        self.unsaved_transactions.clear();
+        self.unsaved_transaction_bytes = 0;
+        self.trim_history_cache();
     }
 
     fn checkpoint(
@@ -405,7 +403,7 @@ impl WorldRuntime {
         root: &Path,
         limits: IoLimits,
         staged: Option<&StagedEdit>,
-    ) -> RuntimeResult<BTreeMap<ChunkId, OverlayLocation>> {
+    ) -> RuntimeResult<CheckpointLocations> {
         fs::create_dir_all(root).map_err(RuntimeError::io)?;
         let root = root.canonicalize().map_err(RuntimeError::io)?;
         if let Some(parent) = root.parent() {
@@ -445,17 +443,16 @@ impl WorldRuntime {
                 ));
             }
             for descriptor in &existing.transactions {
-                let record = self.transactions.get(&descriptor.id).or_else(|| {
-                    staged
-                        .filter(|edit| edit.applied.change.transaction_id == descriptor.id)
-                        .map(|edit| &edit.applied)
-                });
-                if record
-                    .map(hash_serializable)
-                    .transpose()
-                    .map_err(RuntimeError::invalid)?
-                    != Some(descriptor.fingerprint)
-                {
+                let fingerprint = self
+                    .transactions
+                    .get(&descriptor.id)
+                    .map(|entry| entry.descriptor.fingerprint)
+                    .or_else(|| {
+                        staged
+                            .filter(|edit| edit.journal.id == descriptor.id)
+                            .map(|edit| edit.journal.fingerprint)
+                    });
+                if fingerprint != Some(descriptor.fingerprint) {
                     return Err(RuntimeError::new(ErrorKind::Conflict, "save has acknowledged transactions absent from this authority; restore before writing"));
                 }
             }
@@ -545,28 +542,51 @@ impl WorldRuntime {
                 },
             );
         }
+        enum JournalInput<'a> {
+            Existing(&'a HistoryEntry),
+            Staged(&'a StagedEdit),
+        }
         let mut selected_transactions = self
             .transactions
             .iter()
-            .map(|(id, record)| (id.as_str(), record))
+            .map(|(id, entry)| (id.as_str(), JournalInput::Existing(entry)))
             .collect::<BTreeMap<_, _>>();
         if let Some(staged) = staged {
-            selected_transactions.insert(&staged.applied.change.transaction_id, &staged.applied);
+            selected_transactions.insert(&staged.journal.id, JournalInput::Staged(staged));
         }
         let mut transactions = Vec::new();
-        for (id, record) in selected_transactions {
-            let fingerprint = hash_serializable(record).map_err(RuntimeError::invalid)?;
-            let path = format!("transactions/{fingerprint:016x}.ron");
-            write_immutable(
-                &root,
-                &path,
-                &encode_bounded(record, limits.max_transaction_bytes)?,
-            )?;
-            transactions.push(TransactionDescriptor {
-                id: id.to_owned(),
-                fingerprint,
-                path,
+        let mut journals = BTreeMap::new();
+        for (id, input) in selected_transactions {
+            let descriptor = match &input {
+                JournalInput::Existing(entry) => &entry.descriptor,
+                JournalInput::Staged(staged) => &staged.journal,
+            };
+            descriptor.validate(limits.max_transaction_bytes)?;
+            let already_here = self.transactions.get(id).is_some_and(|entry| {
+                entry.disk.as_ref() == Some(&root)
+                    && entry.descriptor.fingerprint == descriptor.fingerprint
             });
+            if already_here {
+                let _safe_existing = checked_existing_path(&root, &descriptor.path)?;
+            } else {
+                let bytes = match &input {
+                    JournalInput::Existing(entry) => encode_bounded(
+                        entry.load(&self.manifest)?.as_ref(),
+                        limits.max_transaction_bytes,
+                    )?,
+                    JournalInput::Staged(staged) => {
+                        encode_bounded(&staged.applied, limits.max_transaction_bytes)?
+                    }
+                };
+                if bytes.len() != descriptor.bytes {
+                    return Err(RuntimeError::invalid(
+                        "journal byte count disagrees with index",
+                    ));
+                }
+                write_immutable(&root, &descriptor.path, &bytes)?;
+            }
+            transactions.push(descriptor.clone());
+            journals.insert(id.to_owned(), (descriptor.clone(), root.clone(), limits));
         }
         sync_directory(&partition_directory)?;
         sync_directory(&journal_directory)?;
@@ -588,11 +608,14 @@ impl WorldRuntime {
             })
             .map_err(RuntimeError::io)?;
         sync_directory(&root)?;
-        Ok(locations)
+        Ok(CheckpointLocations {
+            overlays: locations,
+            journals,
+        })
     }
 }
 
-fn write_immutable(root: &Path, relative: &str, bytes: &[u8]) -> RuntimeResult<()> {
+pub(crate) fn write_immutable(root: &Path, relative: &str, bytes: &[u8]) -> RuntimeResult<()> {
     let path = checked_relative_path(root, relative)?;
     if path.exists() {
         let path = checked_existing_path(root, relative)?;

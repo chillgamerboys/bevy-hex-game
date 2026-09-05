@@ -5,17 +5,30 @@
 //! caller pumps completed jobs and publishes the returned immutable products into
 //! its own engine; this crate never owns a renderer, combat clock, or ECS schedule.
 
+mod disclosure;
 mod edits;
+mod history;
+mod knowledge;
 mod persistence;
 mod runtime;
 mod source;
 
+pub use disclosure::{
+    AuthorizedInterest, DisclosureConfig, DisclosureStream, KnowledgeAck,
+    KnowledgeCheckpointCursor, KnowledgeCheckpointPage, KnowledgeReplay, SequencedKnowledgeBatch,
+};
 pub use edits::{ChunkDelta, WorldDelta};
+pub use history::HistoryCounts;
+pub use knowledge::{
+    KnowledgeConfig, KnowledgePartition, KnowledgeReceipt, KnowledgeStore, ObservedLandmark,
+    ObservedSurface,
+};
 pub use runtime::{
     ChunkProduct, LoadFailure, RuntimeConfig, RuntimeCounts, RuntimeUpdate, WorldRuntime,
 };
 pub use source::{
-    publish_package, CancellationToken, ChunkSource, FileChunkSource, IoLimits, MemoryChunkSource,
+    publish_package, publish_revision, CancellationToken, ChunkSource, FileChunkSource, IoLimits,
+    MemoryChunkSource,
 };
 
 use std::fmt;

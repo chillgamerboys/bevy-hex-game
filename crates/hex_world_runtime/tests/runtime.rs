@@ -541,11 +541,17 @@ fn delta_delivery_is_local_ordered_and_duplicate_safe() {
     server
         .apply_transaction(&edit("first", voxel(a, 0), 0, None))
         .expect("first");
-    let first = server.transaction_delta("first").expect("delta").clone();
+    let first = server
+        .transaction_delta("first")
+        .expect("lookup")
+        .expect("delta");
     server
         .apply_transaction(&edit("second", voxel(a, -1), 1, None))
         .expect("second");
-    let second = server.transaction_delta("second").expect("delta").clone();
+    let second = server
+        .transaction_delta("second")
+        .expect("lookup")
+        .expect("delta");
     let untouched = client.resident_chunk(b.chunk()).expect("unrelated").package;
     assert_eq!(
         client.apply_delta(&second).expect_err("out of order").kind,
@@ -602,7 +608,10 @@ fn durable_edit_and_remote_ack_restore_fresh_runtime_and_idempotency() {
     let change = server
         .apply_transaction_durable(&command, temp.child("server"), IoLimits::default())
         .expect("durable commit");
-    let delta = server.transaction_delta("durable").expect("delta").clone();
+    let delta = server
+        .transaction_delta("durable")
+        .expect("lookup")
+        .expect("delta");
     let mut receiver = make_runtime(package.clone());
     load(&mut receiver, vec![interest("a", at, 0, 0)]);
     assert_eq!(
@@ -1124,7 +1133,7 @@ fn no_op_commands_and_stale_save_writers_cannot_erase_durable_history() {
         .apply_transaction(&edit("air", voxel(at, 3), 0, None))
         .is_err());
     assert_eq!(first.revision(at.chunk()), Some(0));
-    assert!(first.transaction_delta("air").is_none());
+    assert!(first.transaction_delta("air").expect("lookup").is_none());
     first
         .apply_transaction_durable(
             &edit("first", voxel(at, 0), 0, None),
@@ -1247,12 +1256,19 @@ fn publication_budget_applies_to_completed_jobs_and_transaction_products() {
 }
 
 #[test]
-fn corrupt_transaction_journal_aborts_restore_before_retiring_residents() {
+fn corrupt_paged_transaction_body_fails_lookup_without_changing_residents() {
     let at = point(1, 1);
     let package = world(&[(at, 0)]);
     let temp = TempRoot::new();
     let save = temp.child("save");
-    let mut runtime = make_runtime(package);
+    let mut runtime = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package).expect("source")),
+        RuntimeConfig {
+            max_cached_transactions: 0,
+            ..RuntimeConfig::default()
+        },
+    )
+    .expect("runtime");
     load(&mut runtime, vec![interest("a", at, 0, 0)]);
     runtime
         .apply_transaction_durable(
@@ -1269,7 +1285,10 @@ fn corrupt_transaction_journal_aborts_restore_before_retiring_residents() {
         .expect("entry")
         .path();
     fs::write(journal, "(corrupt: true)").expect("corrupt journal");
-    assert!(runtime.restore_save(&save, IoLimits::default()).is_err());
+    assert!(runtime.transaction_delta("dig").is_err());
+    assert!(runtime
+        .apply_transaction(&edit("dig", voxel(at, 0), 0, None))
+        .is_err());
     assert_eq!(resident_fingerprints(&runtime), before);
 }
 
@@ -1307,5 +1326,797 @@ fn derived_object_terrain_union_does_not_reapply_the_individual_wire_run_cap() {
     assert_eq!(
         runtime.voxel(voxel(at, count * 4 - 2)),
         QueryResult::Ready(Some("stone".into()))
+    );
+}
+
+#[test]
+fn historical_bodies_page_out_and_old_transactions_remain_idempotent() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let config = RuntimeConfig {
+        max_cached_transactions: 2,
+        max_cached_transaction_bytes: 8192,
+        ..RuntimeConfig::default()
+    };
+    let mut runtime = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package.clone()).expect("source")),
+        config,
+    )
+    .expect("runtime");
+    load(&mut runtime, vec![interest("a", at, 0, 0)]);
+    for revision in 0..40 {
+        let material = (revision % 2 == 0).then_some("stone");
+        runtime
+            .apply_transaction_durable(
+                &edit(
+                    &format!("history-{revision}"),
+                    voxel(at, 2),
+                    revision,
+                    material,
+                ),
+                temp.child("save"),
+                IoLimits::default(),
+            )
+            .expect("durable history");
+        let counts = runtime.history_counts();
+        assert!(counts.cached_transactions <= 2);
+        assert!(counts.resident_body_bytes <= 8192);
+        assert_eq!(counts.unsaved_transactions, 0);
+    }
+    assert_eq!(runtime.history_counts().indexed_transactions, 40);
+    drop(runtime);
+    let mut restored = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package).expect("source")),
+        config,
+    )
+    .expect("runtime");
+    restored
+        .restore_save(temp.child("save"), IoLimits::default())
+        .expect("metadata restore");
+    assert_eq!(restored.history_counts().cached_transactions, 0);
+    let first = restored
+        .transaction_delta("history-0")
+        .expect("paged read")
+        .expect("old delta");
+    assert_eq!(restored.history_counts().resident_body_bytes, 0);
+    assert_eq!(
+        restored
+            .apply_delta(&first)
+            .expect("duplicate unloaded historical command")
+            .revisions
+            .get(&at.chunk()),
+        Some(&1)
+    );
+    assert_eq!(restored.history_counts().indexed_transactions, 40);
+}
+
+#[test]
+fn same_chunk_unsaved_history_has_independent_count_and_byte_bounds() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let mut runtime = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package.clone()).expect("source")),
+        RuntimeConfig {
+            max_unsaved_transactions: 2,
+            ..RuntimeConfig::default()
+        },
+    )
+    .expect("runtime");
+    load(&mut runtime, vec![interest("a", at, 0, 0)]);
+    runtime
+        .apply_transaction(&edit("one", voxel(at, 2), 0, Some("stone")))
+        .expect("first");
+    runtime
+        .apply_transaction(&edit("two", voxel(at, 2), 1, None))
+        .expect("second");
+    assert_eq!(
+        runtime
+            .apply_transaction(&edit("three", voxel(at, 2), 2, Some("stone")))
+            .expect_err("count bound")
+            .kind,
+        ErrorKind::Limit
+    );
+    assert_eq!(runtime.revision(at.chunk()), Some(2));
+    runtime
+        .save(temp.child("save"), IoLimits::default())
+        .expect("checkpoint");
+    runtime
+        .apply_transaction(&edit("three", voxel(at, 2), 2, Some("stone")))
+        .expect("released backlog");
+    let mut bytes = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package).expect("source")),
+        RuntimeConfig {
+            max_unsaved_transaction_bytes: 1,
+            ..RuntimeConfig::default()
+        },
+    )
+    .expect("runtime");
+    load(&mut bytes, vec![interest("a", at, 0, 0)]);
+    assert_eq!(
+        bytes
+            .apply_transaction(&edit("one", voxel(at, 2), 0, Some("stone")))
+            .expect_err("byte bound")
+            .kind,
+        ErrorKind::Limit
+    );
+    assert_eq!(bytes.revision(at.chunk()), Some(0));
+}
+
+#[test]
+fn stable_workspace_publication_retries_and_failures_preserve_current_revision() {
+    let at = point(1, 1);
+    let mut package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let workspace = temp.child("workspace");
+    let first =
+        publish_revision(&workspace, &package, IoLimits::default()).expect("initial revision");
+    assert_eq!(
+        FileChunkSource::open_workspace(
+            first.parent().expect("package directory"),
+            IoLimits::default()
+        )
+        .expect("direct immutable open")
+        .manifest()
+        .fingerprint,
+        package.manifest.fingerprint
+    );
+    assert_eq!(
+        publish_revision(&workspace, &package, IoLimits::default()).expect("retry"),
+        first
+    );
+    let original_head = fs::read(workspace.join("current.ron")).expect("head");
+    package
+        .chunks
+        .get_mut(&at.chunk())
+        .expect("chunk")
+        .columns
+        .first_mut()
+        .expect("column")
+        .runs
+        .first_mut()
+        .expect("run")
+        .bottom -= 1;
+    package.seal().expect("revised package");
+    assert!(publish_revision(
+        &workspace,
+        &package,
+        IoLimits {
+            max_chunk_bytes: 1,
+            ..IoLimits::default()
+        }
+    )
+    .is_err());
+    assert_eq!(
+        fs::read(workspace.join("current.ron")).expect("head"),
+        original_head
+    );
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(workspace.join("writer.lock"))
+        .expect("writer lock");
+    lock.lock().expect("lock");
+    assert_eq!(
+        publish_revision(&workspace, &package, IoLimits::default())
+            .expect_err("concurrent writer")
+            .kind,
+        ErrorKind::Conflict
+    );
+    lock.unlock().expect("unlock");
+    let second = publish_revision(&workspace, &package, IoLimits::default()).expect("new revision");
+    assert_ne!(first, second);
+    assert!(first.is_file());
+    assert_eq!(
+        FileChunkSource::open_workspace(&workspace, IoLimits::default())
+            .expect("current open")
+            .manifest()
+            .fingerprint,
+        package.manifest.fingerprint
+    );
+    fs::write(
+        workspace.join("current.ron"),
+        "(schema_version:1,manifest_path:\"../elsewhere/manifest.ron\")",
+    )
+    .expect("corrupt pointer");
+    assert!(FileChunkSource::open_workspace(&workspace, IoLimits::default()).is_err());
+}
+
+fn knowledge_world() -> WorldPackage {
+    let positions = [point(-1, -1), point(33, 1), point(65, 1), point(97, 1)];
+    let mut package = world(&positions.map(|position| (position, 0)));
+    for (index, position) in positions.iter().enumerate() {
+        let feature = FeatureSummary {
+            id: format!("landmark-{index}"),
+            region_id: format!("region-{index:04}"),
+            kind: "landmark".into(),
+            anchor: voxel(*position, 0),
+            asset: None,
+        };
+        package.manifest.features.push(feature.clone());
+        package
+            .chunks
+            .get_mut(&position.chunk())
+            .expect("chunk")
+            .features
+            .push(feature);
+    }
+    package.seal().expect("knowledge world");
+    package
+}
+fn knowledge_store(temp: &TempRoot, name: &str, package: &WorldPackage) -> KnowledgeStore {
+    KnowledgeStore::open(
+        temp.child(name),
+        &package.manifest,
+        IoLimits::default(),
+        KnowledgeConfig::default(),
+    )
+    .expect("knowledge store")
+}
+fn observation(principal: &str, at: WorldHex, revision: u64, level: i32) -> KnowledgePartition {
+    let mut partition = KnowledgePartition::new(principal, at.chunk());
+    partition.revision = revision;
+    partition.discovered_columns.push(at);
+    partition.surfaces.push(ObservedSurface {
+        surface: Surface {
+            position: voxel(at, level),
+            material: "stone".into(),
+            headroom: None,
+        },
+        world_revision: revision - 1,
+    });
+    partition.seal().expect("observation");
+    partition
+}
+fn remember(
+    store: &mut KnowledgeStore,
+    principal: &str,
+    id: &str,
+    partitions: Vec<KnowledgePartition>,
+) -> KnowledgeReceipt {
+    let expected = partitions
+        .iter()
+        .map(|partition| (partition.coordinate, partition.revision - 1))
+        .collect();
+    store
+        .compare_and_write(
+            principal,
+            id,
+            &expected,
+            partitions
+                .into_iter()
+                .map(|partition| (partition.coordinate, partition))
+                .collect(),
+        )
+        .expect("durable knowledge")
+}
+fn scope(principal: &str, columns: &[WorldHex]) -> AuthorizedInterest {
+    AuthorizedInterest::new(
+        principal,
+        columns.iter().map(|column| column.chunk()).collect(),
+    )
+    .expect("host authorized scope")
+}
+
+#[test]
+fn private_knowledge_has_exact_stacked_identity_and_atomic_compare_and_write() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let a = point(-1, -1);
+    let b = point(33, 1);
+    let mut store = knowledge_store(&temp, "knowledge", &package);
+    let mut other = knowledge_store(&temp, "knowledge", &package);
+    let mut ground = observation("party-a", a, 1, 0);
+    ground.landmarks.push(ObservedLandmark {
+        id: "landmark-0".into(),
+        position: voxel(a, 0),
+        world_revision: 0,
+    });
+    ground.seal().expect("landmark observation");
+    let initial = remember(
+        &mut store,
+        "party-a",
+        "a-first",
+        vec![ground.clone(), observation("party-a", b, 1, 0)],
+    );
+    remember(
+        &mut other,
+        "party-b",
+        "b-first",
+        vec![observation("party-b", a, 1, 6)],
+    );
+    store.refresh().expect("merge metadata");
+    assert_eq!(
+        store.read("party-a", a.chunk()).expect("read"),
+        Some(ground.clone())
+    );
+    assert_eq!(
+        store
+            .read("party-b", a.chunk())
+            .expect("read")
+            .expect("known")
+            .surfaces
+            .first()
+            .expect("upper support")
+            .surface
+            .position
+            .level,
+        6
+    );
+    assert_eq!(
+        store
+            .discovered_columns("party-a", a.chunk())
+            .expect("negative chunk bitmask"),
+        vec![a]
+    );
+    assert_eq!(
+        store.discovered_chunks("party-b").expect("private map"),
+        vec![a.chunk()]
+    );
+    let before = fs::read(temp.child("knowledge/knowledge.ron")).expect("head");
+    let wrong_expected = BTreeMap::from([(a.chunk(), 1), (b.chunk(), 0)]);
+    let replacements = BTreeMap::from([
+        (a.chunk(), observation("party-a", a, 2, 0)),
+        (b.chunk(), observation("party-a", b, 2, 0)),
+    ]);
+    assert!(store
+        .compare_and_write("party-a", "bad-cas", &wrong_expected, replacements)
+        .is_err());
+    assert_eq!(
+        fs::read(temp.child("knowledge/knowledge.ron")).expect("head"),
+        before
+    );
+    assert_eq!(
+        remember(
+            &mut store,
+            "party-a",
+            "a-first",
+            vec![ground, observation("party-a", b, 1, 0)]
+        ),
+        initial
+    );
+    assert!(store
+        .compare_and_write(
+            "party-a",
+            "a-first",
+            &BTreeMap::from([(a.chunk(), 0)]),
+            BTreeMap::from([(a.chunk(), observation("party-a", a, 1, 6))])
+        )
+        .is_err());
+    remember(
+        &mut store,
+        "party-a",
+        "next",
+        vec![observation("party-a", a, 2, 0)],
+    );
+    assert_eq!(
+        store
+            .read("party-a", b.chunk())
+            .expect("unrelated read")
+            .expect("partition")
+            .revision,
+        1
+    );
+    assert_eq!(
+        store
+            .read("party-b", a.chunk())
+            .expect("other party")
+            .expect("partition")
+            .revision,
+        1
+    );
+}
+
+#[test]
+fn knowledge_rejects_unregistered_or_regressed_observations_and_corrupt_files() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let at = point(-1, -1);
+    let mut store = knowledge_store(&temp, "knowledge", &package);
+    let mut known = observation("party-a", at, 1, 0);
+    known.surfaces.first_mut().expect("support").world_revision = 4;
+    known.seal().expect("known");
+    remember(&mut store, "party-a", "known", vec![known]);
+    let mut invalid = observation("party-a", at, 2, 0);
+    assert!(store
+        .compare_and_write(
+            "party-a",
+            "regression",
+            &BTreeMap::from([(at.chunk(), 1)]),
+            BTreeMap::from([(at.chunk(), invalid.clone())])
+        )
+        .is_err());
+    invalid
+        .surfaces
+        .first_mut()
+        .expect("support")
+        .world_revision = 4;
+    invalid.landmarks.push(ObservedLandmark {
+        id: "invented".into(),
+        position: voxel(at, 0),
+        world_revision: 4,
+    });
+    invalid
+        .seal()
+        .expect("well shaped unregistered observation");
+    assert!(store
+        .compare_and_write(
+            "party-a",
+            "unregistered",
+            &BTreeMap::from([(at.chunk(), 1)]),
+            BTreeMap::from([(at.chunk(), invalid)])
+        )
+        .is_err());
+    let owner_dir = fs::read_dir(temp.child("knowledge/knowledge"))
+        .expect("private partitions")
+        .next()
+        .expect("owner")
+        .expect("entry")
+        .path();
+    let file = fs::read_dir(owner_dir)
+        .expect("files")
+        .next()
+        .expect("partition")
+        .expect("entry")
+        .path();
+    fs::write(file, "corrupt remembered terrain").expect("corrupt one body");
+    let reopened = knowledge_store(&temp, "knowledge", &package);
+    assert_eq!(
+        reopened
+            .discovered_columns("party-a", at.chunk())
+            .expect("metadata without body"),
+        vec![at]
+    );
+    assert!(reopened.read("party-a", at.chunk()).is_err());
+    assert_eq!(
+        reopened
+            .read("party-b", at.chunk())
+            .expect("other principal absent"),
+        None
+    );
+    let mut wrong_source = package.clone();
+    wrong_source.manifest.compiler_version = "different-source".into();
+    wrong_source.seal().expect("source revision");
+    assert!(KnowledgeStore::open(
+        temp.child("knowledge"),
+        &wrong_source.manifest,
+        IoLimits::default(),
+        KnowledgeConfig::default()
+    )
+    .is_err());
+}
+
+#[test]
+fn disclosure_filters_principal_and_interest_then_durably_orders_and_deduplicates() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let a = point(-1, -1);
+    let b = point(33, 1);
+    let mut host = knowledge_store(&temp, "host", &package);
+    remember(
+        &mut host,
+        "party-a",
+        "a",
+        vec![
+            observation("party-a", a, 1, 0),
+            observation("party-a", b, 1, 0),
+        ],
+    );
+    remember(
+        &mut host,
+        "party-b",
+        "b",
+        vec![observation("party-b", a, 1, 6)],
+    );
+    let grant = scope("party-a", &[a]);
+    let mut stream = DisclosureStream::new(
+        "connection",
+        grant.clone(),
+        DisclosureConfig {
+            max_retained_batches: 1,
+            ..DisclosureConfig::default()
+        },
+    )
+    .expect("stream");
+    let changed = BTreeSet::from([a.chunk(), b.chunk()]);
+    let first = stream
+        .publish(&host, &changed)
+        .expect("publish")
+        .expect("first");
+    assert_eq!(first.partitions.len(), 1);
+    assert_eq!(first.partitions.first().expect("part").principal, "party-a");
+    assert_eq!(
+        first.partitions.first().expect("part").coordinate,
+        a.chunk()
+    );
+    remember(
+        &mut host,
+        "party-a",
+        "a-next",
+        vec![observation("party-a", a, 2, 0)],
+    );
+    let second = stream
+        .publish(&host, &changed)
+        .expect("publish")
+        .expect("second");
+    assert!(matches!(
+        stream.reconnect(0),
+        KnowledgeReplay::ResyncRequired
+    ));
+    assert!(
+        matches!(stream.reconnect(1), KnowledgeReplay::Replay(batches) if batches == vec![second.clone()])
+    );
+    assert_eq!(stream.retained_counts().0, 1);
+    let mut receiver = knowledge_store(&temp, "receiver", &package);
+    assert!(receiver.apply_sequence_durable(&grant, &second).is_err());
+    assert_eq!(
+        receiver.sequence("party-a", "connection").expect("cursor"),
+        0
+    );
+    assert!(receiver
+        .apply_sequence_durable(&scope("party-b", &[a]), &first)
+        .is_err());
+    assert!(receiver
+        .apply_sequence_durable(&scope("party-a", &[b]), &first)
+        .is_err());
+    let ack = receiver
+        .apply_sequence_durable(&grant, &first)
+        .expect("durable ack");
+    assert_eq!(ack.sequence, 1);
+    drop(receiver);
+    let mut receiver = knowledge_store(&temp, "receiver", &package);
+    assert_eq!(
+        receiver
+            .apply_sequence_durable(&grant, &first)
+            .expect("duplicate after restart"),
+        ack
+    );
+    let mut changed_duplicate = first.clone();
+    changed_duplicate.partitions = second.partitions.clone();
+    changed_duplicate.fingerprint = 0;
+    changed_duplicate.fingerprint =
+        hash_serializable(&changed_duplicate).expect("valid conflicting payload hash");
+    assert!(receiver
+        .apply_sequence_durable(&grant, &changed_duplicate)
+        .is_err());
+    let ack = receiver
+        .apply_sequence_durable(&grant, &second)
+        .expect("next sequence");
+    stream.acknowledge(&ack).expect("host ack");
+    assert_eq!(
+        receiver
+            .read("party-a", a.chunk())
+            .expect("received")
+            .expect("partition")
+            .revision,
+        2
+    );
+    assert_eq!(
+        receiver.read("party-a", b.chunk()).expect("hidden chunk"),
+        None
+    );
+    assert_eq!(
+        receiver
+            .read("party-b", a.chunk())
+            .expect("hidden principal"),
+        None
+    );
+    stream
+        .set_interests(BTreeSet::from([b.chunk()]))
+        .expect("scope change");
+    assert_eq!(stream.retained_counts(), (0, 0));
+    assert!(matches!(
+        stream.reconnect(1),
+        KnowledgeReplay::ResyncRequired
+    ));
+}
+
+#[test]
+fn reconnect_checkpoint_is_paged_private_and_restart_safe() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let columns = [point(-1, -1), point(33, 1), point(65, 1)];
+    let mut host = knowledge_store(&temp, "host", &package);
+    remember(
+        &mut host,
+        "party-a",
+        "known",
+        columns
+            .iter()
+            .map(|at| observation("party-a", *at, 1, 0))
+            .collect(),
+    );
+    let grant = scope("party-a", &columns);
+    let stream = DisclosureStream::resume(
+        "reconnected",
+        grant.clone(),
+        7,
+        DisclosureConfig {
+            max_partitions_per_batch: 1,
+            ..DisclosureConfig::default()
+        },
+    )
+    .expect("resumed host stream");
+    assert!(matches!(
+        stream.reconnect(0),
+        KnowledgeReplay::ResyncRequired
+    ));
+    let first = stream.checkpoint_page(&host, None).expect("first page");
+    let second = stream
+        .checkpoint_page(&host, first.next.as_ref())
+        .expect("second page");
+    let third = stream
+        .checkpoint_page(&host, second.next.as_ref())
+        .expect("third page");
+    assert!(third.next.is_none());
+    let mut receiver = knowledge_store(&temp, "receiver", &package);
+    assert!(
+        !receiver
+            .apply_checkpoint_page_durable(&grant, &first)
+            .expect("first ack")
+            .checkpoint_complete
+    );
+    assert_eq!(
+        receiver
+            .sequence("party-a", "reconnected")
+            .expect("incomplete cursor"),
+        0
+    );
+    drop(receiver);
+    let mut receiver = knowledge_store(&temp, "receiver", &package);
+    assert!(receiver
+        .apply_checkpoint_page_durable(&grant, &third)
+        .is_err());
+    receiver
+        .apply_checkpoint_page_durable(&grant, &second)
+        .expect("resumed second page");
+    let ack = receiver
+        .apply_checkpoint_page_durable(&grant, &third)
+        .expect("complete checkpoint");
+    assert_eq!(ack.sequence, 7);
+    assert!(ack.checkpoint_complete);
+    receiver
+        .apply_checkpoint_page_durable(&grant, &first)
+        .expect("old duplicate page idempotent");
+    assert_eq!(
+        receiver
+            .sequence("party-a", "reconnected")
+            .expect("cursor must not roll back"),
+        7
+    );
+    assert_eq!(
+        receiver
+            .discovered_chunks("party-a")
+            .expect("private map")
+            .len(),
+        3
+    );
+    assert!(receiver
+        .discovered_chunks("party-b")
+        .expect("other principal")
+        .is_empty());
+}
+
+#[test]
+fn checkpoint_snapshot_changes_only_for_scoped_principal_and_restarts_on_change() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let a = point(-1, -1);
+    let b = point(33, 1);
+    let hidden = point(97, 1);
+    let mut host = knowledge_store(&temp, "host", &package);
+    remember(
+        &mut host,
+        "party-a",
+        "initial",
+        vec![
+            observation("party-a", a, 1, 0),
+            observation("party-a", b, 1, 0),
+        ],
+    );
+    let stream = DisclosureStream::resume(
+        "stream",
+        scope("party-a", &[a, b]),
+        3,
+        DisclosureConfig {
+            max_partitions_per_batch: 1,
+            ..DisclosureConfig::default()
+        },
+    )
+    .expect("stream");
+    let first = stream.checkpoint_page(&host, None).expect("page");
+    remember(
+        &mut host,
+        "party-b",
+        "private",
+        vec![observation("party-b", a, 1, 6)],
+    );
+    remember(
+        &mut host,
+        "party-a",
+        "outside",
+        vec![observation("party-a", hidden, 1, 0)],
+    );
+    assert!(stream.checkpoint_page(&host, first.next.as_ref()).is_ok());
+    remember(
+        &mut host,
+        "party-a",
+        "scope-changed",
+        vec![observation("party-a", b, 2, 0)],
+    );
+    assert!(stream.checkpoint_page(&host, first.next.as_ref()).is_err());
+    assert!(stream.checkpoint_page(&host, None).is_ok());
+}
+
+#[test]
+fn disclosure_io_budget_failure_cannot_ack_or_advance_a_receiver() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let at = point(-1, -1);
+    let mut host = knowledge_store(&temp, "host", &package);
+    remember(
+        &mut host,
+        "party-a",
+        "known",
+        vec![observation("party-a", at, 1, 0)],
+    );
+    let grant = scope("party-a", &[at]);
+    let mut stream = DisclosureStream::new("stream", grant.clone(), DisclosureConfig::default())
+        .expect("stream");
+    let batch = stream
+        .publish(&host, &BTreeSet::from([at.chunk()]))
+        .expect("publish")
+        .expect("batch");
+    let mut receiver = KnowledgeStore::open(
+        temp.child("receiver"),
+        &package.manifest,
+        IoLimits {
+            max_manifest_bytes: 1,
+            ..IoLimits::default()
+        },
+        KnowledgeConfig::default(),
+    )
+    .expect("empty receiver");
+    assert!(receiver.apply_sequence_durable(&grant, &batch).is_err());
+    assert_eq!(receiver.sequence("party-a", "stream").expect("cursor"), 0);
+    assert_eq!(
+        receiver
+            .read("party-a", at.chunk())
+            .expect("unchanged memory"),
+        None
+    );
+    assert!(!temp.child("receiver/knowledge.ron").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn knowledge_and_workspace_reject_symlink_parent_escapes_before_writing() {
+    use std::os::unix::fs::symlink;
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let outside = temp.child("outside");
+    fs::create_dir(&outside).expect("outside");
+    let mut store = knowledge_store(&temp, "knowledge", &package);
+    symlink(&outside, temp.child("knowledge/knowledge")).expect("escape");
+    let at = point(-1, -1);
+    assert!(store
+        .compare_and_write(
+            "party-a",
+            "first",
+            &BTreeMap::from([(at.chunk(), 0)]),
+            BTreeMap::from([(at.chunk(), observation("party-a", at, 1, 0))])
+        )
+        .is_err());
+    assert_eq!(
+        fs::read_dir(&outside).expect("untouched outside").count(),
+        0
+    );
+    fs::create_dir(temp.child("workspace")).expect("workspace");
+    symlink(&outside, temp.child("workspace/packages")).expect("escape");
+    assert!(publish_revision(temp.child("workspace"), &package, IoLimits::default()).is_err());
+    assert_eq!(
+        fs::read_dir(&outside).expect("untouched outside").count(),
+        0
     );
 }

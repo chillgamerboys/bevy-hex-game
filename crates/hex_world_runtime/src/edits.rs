@@ -12,6 +12,7 @@ use hex_world_contracts::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    history::JournalDescriptor,
     persistence::{ChunkOverlay, OverlayLocation},
     runtime::{combined_object_columns, validate_identity, ResidentChunk},
     ChunkProduct, ErrorKind, RuntimeError, RuntimeResult, WorldRuntime,
@@ -137,6 +138,7 @@ pub(crate) struct AppliedTransaction {
 pub(crate) struct StagedEdit {
     pub chunks: BTreeMap<ChunkId, (ChunkProduct, ChunkOverlay, BTreeMap<WorldHex, ColumnData>)>,
     pub applied: AppliedTransaction,
+    pub journal: JournalDescriptor,
 }
 
 impl WorldRuntime {
@@ -153,16 +155,22 @@ impl WorldRuntime {
         Ok(self.commit_edit(staged))
     }
 
-    /// Returns the exact local replication payload of an acknowledged transaction.
-    #[must_use]
-    pub fn transaction_delta(&self, transaction_id: &str) -> Option<&WorldDelta> {
+    /// Loads one exact historical delta, using bounded IO when its body is paged out.
+    /// Unrelated transaction bodies and world chunks are never loaded by this call.
+    pub fn transaction_delta(&self, transaction_id: &str) -> RuntimeResult<Option<WorldDelta>> {
         self.transactions
             .get(transaction_id)
-            .map(|record| &record.delta)
+            .map(|entry| {
+                entry
+                    .load(&self.manifest)
+                    .map(|record| record.delta.clone())
+            })
+            .transpose()
     }
 
     /// Applies one integrity-checked local delta atomically and idempotently.
-    /// This never invokes source IO or reconstructs unrelated world chunks.
+    /// This never loads terrain from the source or reconstructs unrelated chunks.
+    /// A historical duplicate may read its one paged journal body.
     pub fn apply_delta(&mut self, delta: &WorldDelta) -> RuntimeResult<WorldChange> {
         let staged = self.stage_delta(delta)?;
         Ok(self.commit_edit(staged))
@@ -178,11 +186,19 @@ impl WorldRuntime {
                 "delta belongs to another world source",
             ));
         }
-        if let Some(applied) = self.transactions.get(&delta.transaction_id) {
-            return if applied.delta == *delta {
+        if let Some(entry) = self.transactions.get(&delta.transaction_id) {
+            return if entry.descriptor.delta_fingerprint == delta.fingerprint {
+                let applied = entry.load(&self.manifest)?;
+                if applied.delta != *delta {
+                    return Err(RuntimeError::new(
+                        ErrorKind::Conflict,
+                        "transaction identity carries a different delta",
+                    ));
+                }
                 Ok(StagedEdit {
                     chunks: BTreeMap::new(),
-                    applied: applied.clone(),
+                    applied: (*applied).clone(),
+                    journal: entry.descriptor.clone(),
                 })
             } else {
                 Err(RuntimeError::new(
@@ -227,7 +243,7 @@ impl WorldRuntime {
             }
             candidate.seal().map_err(RuntimeError::invalid)?;
             candidate
-                .validate_against_manifest(&self.manifest)
+                .validate_with_index(&self.manifest_index)
                 .map_err(RuntimeError::invalid)?;
             if candidate.fingerprint != change.target_fingerprint {
                 return Err(RuntimeError::invalid("delta target fingerprint disagrees"));
@@ -259,11 +275,13 @@ impl WorldRuntime {
             ));
         }
         let request_fingerprint = hash_serializable(transaction).map_err(RuntimeError::invalid)?;
-        if let Some(applied) = self.transactions.get(&transaction.id) {
-            return if applied.request_fingerprint == request_fingerprint {
+        if let Some(entry) = self.transactions.get(&transaction.id) {
+            return if entry.descriptor.request_fingerprint == request_fingerprint {
+                let applied = entry.load(&self.manifest)?;
                 Ok(StagedEdit {
                     chunks: BTreeMap::new(),
-                    applied: applied.clone(),
+                    applied: (*applied).clone(),
+                    journal: entry.descriptor.clone(),
                 })
             } else {
                 Err(RuntimeError::new(
@@ -380,7 +398,7 @@ impl WorldRuntime {
                 })?;
             package.seal().map_err(RuntimeError::invalid)?;
             package
-                .validate_against_manifest(&self.manifest)
+                .validate_with_index(&self.manifest_index)
                 .map_err(|error| {
                     RuntimeError::new(
                         ErrorKind::Conflict,
@@ -467,13 +485,17 @@ impl WorldRuntime {
             fingerprint: 0,
         };
         delta.seal()?;
+        let applied = AppliedTransaction {
+            request_fingerprint,
+            change,
+            delta,
+        };
+        let journal = JournalDescriptor::prepare(&applied, self.config.max_transaction_bytes)?;
+        self.check_history_budget(&journal)?;
         Ok(StagedEdit {
             chunks,
-            applied: AppliedTransaction {
-                request_fingerprint,
-                change,
-                delta,
-            },
+            applied,
+            journal,
         })
     }
 
@@ -494,8 +516,7 @@ impl WorldRuntime {
             );
         }
         let change = staged.applied.change.clone();
-        self.transactions
-            .insert(change.transaction_id.clone(), staged.applied);
+        self.cache_transaction(staged.applied, staged.journal);
         change
     }
 }

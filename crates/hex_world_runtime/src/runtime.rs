@@ -1,19 +1,19 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{mpsc, Arc, Mutex},
     thread,
 };
 
 use hex_world_contracts::{
-    ChunkDescriptor, ChunkId, ChunkPackage, ColumnData, QueryResult, RegionDescriptor,
+    ChunkDescriptor, ChunkId, ChunkPackage, ColumnData, ManifestIndex, QueryResult,
     ResidencyRequest, Surface, VoxelPosition, WorldHex, WorldManifest, WorldQuery,
 };
 
 use crate::{
-    edits::AppliedTransaction,
+    history::HistoryEntry,
     persistence::{ChunkOverlay, OverlayLocation},
-    source::{in_disk, validate_source_chunk},
+    source::{in_disk, source_index, validate_source_chunk},
     CancellationToken, ChunkSource, ErrorKind, RuntimeError, RuntimeResult,
 };
 
@@ -36,6 +36,16 @@ pub struct RuntimeConfig {
     pub max_pin_owners: usize,
     /// Maximum modified partitions awaiting a durable checkpoint, resident or not.
     pub max_unsaved_chunks: usize,
+    /// Maximum serialized body bytes for one terrain transaction.
+    pub max_transaction_bytes: usize,
+    /// Maximum uncheckpointed transaction identities with resident bodies.
+    pub max_unsaved_transactions: usize,
+    /// Maximum combined serialized bytes of uncheckpointed transaction bodies.
+    pub max_unsaved_transaction_bytes: usize,
+    /// Maximum durable recent transaction bodies retained in memory; zero disables caching.
+    pub max_cached_transactions: usize,
+    /// Maximum serialized bytes in the durable recent-body cache.
+    pub max_cached_transaction_bytes: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -49,6 +59,11 @@ impl Default for RuntimeConfig {
             max_edits_per_transaction: 4096,
             max_pin_owners: 256,
             max_unsaved_chunks: 256,
+            max_transaction_bytes: 8 * 1024 * 1024,
+            max_unsaved_transactions: 256,
+            max_unsaved_transaction_bytes: 32 * 1024 * 1024,
+            max_cached_transactions: 32,
+            max_cached_transaction_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -132,8 +147,11 @@ pub struct WorldRuntime {
     pub(crate) overlays: BTreeMap<ChunkId, OverlayLocation>,
     pub(crate) persisted: BTreeMap<ChunkId, OverlayLocation>,
     pub(crate) dirty: BTreeSet<ChunkId>,
-    pub(crate) transactions: BTreeMap<String, AppliedTransaction>,
-    regions_by_chunk: BTreeMap<ChunkId, Vec<RegionDescriptor>>,
+    pub(crate) transactions: BTreeMap<String, HistoryEntry>,
+    pub(crate) history_order: VecDeque<String>,
+    pub(crate) unsaved_transactions: BTreeSet<String>,
+    pub(crate) unsaved_transaction_bytes: usize,
+    pub(crate) manifest_index: Arc<ManifestIndex>,
     interests: Vec<ResidencyRequest>,
     desired: BTreeMap<ChunkId, u8>,
     retained: BTreeSet<ChunkId>,
@@ -152,10 +170,7 @@ pub struct WorldRuntime {
 impl WorldRuntime {
     /// Opens a validated catalogue without loading all world chunks.
     pub fn new(source: Arc<dyn ChunkSource>, config: RuntimeConfig) -> RuntimeResult<Self> {
-        source
-            .manifest()
-            .validate()
-            .map_err(RuntimeError::invalid)?;
+        let manifest_index = source_index(source.as_ref())?;
         if config.max_resident_chunks == 0
             || config.max_in_flight_jobs == 0
             || config.max_publications_per_pump == 0
@@ -164,6 +179,9 @@ impl WorldRuntime {
             || config.max_edits_per_transaction == 0
             || config.max_pin_owners == 0
             || config.max_unsaved_chunks == 0
+            || config.max_transaction_bytes == 0
+            || config.max_unsaved_transactions == 0
+            || config.max_unsaved_transaction_bytes == 0
         {
             return Err(RuntimeError::new(
                 ErrorKind::Limit,
@@ -176,7 +194,6 @@ impl WorldRuntime {
             .iter()
             .map(|descriptor| (descriptor.coordinate, descriptor.clone()))
             .collect();
-        let regions_by_chunk = index_regions(&manifest);
         let (sender, receiver) = mpsc::sync_channel(config.max_in_flight_jobs);
         Ok(Self {
             source,
@@ -188,7 +205,10 @@ impl WorldRuntime {
             persisted: BTreeMap::new(),
             dirty: BTreeSet::new(),
             transactions: BTreeMap::new(),
-            regions_by_chunk,
+            history_order: VecDeque::new(),
+            unsaved_transactions: BTreeSet::new(),
+            unsaved_transaction_bytes: 0,
+            manifest_index,
             interests: Vec::new(),
             desired: BTreeMap::new(),
             retained: BTreeSet::new(),
@@ -436,10 +456,7 @@ impl WorldRuntime {
     /// Replaces an immutable source catalogue, rejecting incompatible durable edits.
     /// Changed pinned chunks cannot be replaced. Every older job loses admission rights.
     pub fn replace_source(&mut self, source: Arc<dyn ChunkSource>) -> RuntimeResult<()> {
-        source
-            .manifest()
-            .validate()
-            .map_err(RuntimeError::invalid)?;
+        let manifest_index = source_index(source.as_ref())?;
         if source.manifest().world_id != self.manifest.world_id {
             return Err(RuntimeError::new(
                 ErrorKind::Conflict,
@@ -500,15 +517,14 @@ impl WorldRuntime {
         // Validate new interest applicability before replacing any authority state.
         let previous_descriptors = std::mem::replace(&mut self.descriptors, descriptors);
         let previous_manifest = std::mem::replace(&mut self.manifest, source.manifest().clone());
-        let previous_regions =
-            std::mem::replace(&mut self.regions_by_chunk, index_regions(&self.manifest));
+        let previous_index = std::mem::replace(&mut self.manifest_index, manifest_index);
         let planned = self.plan_interest(&self.interests, &self.pins);
         let (desired, retained) = match planned {
             Ok(planned) => planned,
             Err(error) => {
                 self.descriptors = previous_descriptors;
                 self.manifest = previous_manifest;
-                self.regions_by_chunk = previous_regions;
+                self.manifest_index = previous_index;
                 return Err(error);
             }
         };
@@ -675,13 +691,7 @@ impl WorldRuntime {
     }
 
     fn contains_column(&self, position: WorldHex) -> bool {
-        self.regions_by_chunk
-            .get(&position.chunk())
-            .is_some_and(|regions| {
-                regions
-                    .iter()
-                    .any(|region| in_disk(position, region.origin, region.radius))
-            })
+        matches!(self.manifest_index.contains(position), Ok(true))
     }
 
     fn reconcile_residency(&mut self) {
@@ -724,6 +734,7 @@ impl WorldRuntime {
             .checked_add(1)
             .ok_or_else(|| RuntimeError::new(ErrorKind::Limit, "load ticket exhausted"))?;
         let source = Arc::clone(&self.source);
+        let index = Arc::clone(&self.manifest_index);
         let descriptor = self
             .descriptors
             .get(&coordinate)
@@ -741,12 +752,12 @@ impl WorldRuntime {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     let mut package =
                         source.load_chunk_cancelled(coordinate, &worker_cancellation)?;
-                    validate_source_chunk(source.manifest(), &descriptor, &package)?;
+                    validate_source_chunk(&index, &descriptor, &package)?;
                     let overlay = overlay
                         .map(|location| location.load(&worker_cancellation))
                         .transpose()?;
                     if let Some(overlay) = &overlay {
-                        overlay.apply(&mut package, source.manifest())?;
+                        overlay.apply(&mut package, &index)?;
                     }
                     worker_cancellation.check()?;
                     Ok((package, overlay))
@@ -943,32 +954,4 @@ pub(crate) fn validate_identity(value: &str) -> RuntimeResult<()> {
         ));
     }
     Ok(())
-}
-
-// Catalogue construction happens once, outside the pump/query hot paths. Exact
-// disk membership is tested only against local candidate regions thereafter.
-fn index_regions(manifest: &WorldManifest) -> BTreeMap<ChunkId, Vec<RegionDescriptor>> {
-    manifest
-        .chunks
-        .iter()
-        .map(|descriptor| {
-            let q = i128::from(descriptor.coordinate.q) * 16;
-            let r = i128::from(descriptor.coordinate.r) * 16;
-            let regions = manifest
-                .regions
-                .iter()
-                .filter(|region| {
-                    let radius = i128::from(region.radius);
-                    let origin_q = i128::from(region.origin.q);
-                    let origin_r = i128::from(region.origin.r);
-                    q <= origin_q + radius
-                        && q + 15 >= origin_q - radius
-                        && r <= origin_r + radius
-                        && r + 15 >= origin_r - radius
-                })
-                .cloned()
-                .collect();
-            (descriptor.coordinate, regions)
-        })
-        .collect()
 }

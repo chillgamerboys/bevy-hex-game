@@ -11,8 +11,11 @@ use std::{
     },
 };
 
-use hex_world_contracts::{ChunkDescriptor, ChunkId, ChunkPackage, WorldManifest, WorldPackage};
-use serde::{de::DeserializeOwned, Serialize};
+use atomicwrites::{AllowOverwrite, AtomicFile};
+use hex_world_contracts::{
+    ChunkDescriptor, ChunkId, ChunkPackage, ManifestIndex, WorldManifest, WorldPackage,
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{ErrorKind, RuntimeError, RuntimeResult};
 
@@ -73,6 +76,11 @@ pub trait ChunkSource: Send + Sync + 'static {
     /// Complete lightweight world catalogue, without loading terrain chunk payloads.
     fn manifest(&self) -> &WorldManifest;
 
+    /// Optional shared validated catalogue index, reused by admission and queries.
+    fn manifest_index(&self) -> Option<Arc<ManifestIndex>> {
+        None
+    }
+
     /// Loads exactly one chunk synchronously for tools or the background worker.
     fn load_chunk(&self, coordinate: ChunkId) -> RuntimeResult<ChunkPackage>;
 
@@ -94,11 +102,39 @@ pub trait ChunkSource: Send + Sync + 'static {
 pub struct FileChunkSource {
     root: PathBuf,
     manifest: WorldManifest,
+    index: Arc<ManifestIndex>,
     descriptors: BTreeMap<ChunkId, ChunkDescriptor>,
     limits: IoLimits,
 }
 
 impl FileChunkSource {
+    /// Opens a stable authoring workspace's current revision, or an immutable package directory.
+    /// Workspace pointers are bounded, confined under `packages/`, and hash-checked.
+    pub fn open_workspace(workspace: impl AsRef<Path>, limits: IoLimits) -> RuntimeResult<Self> {
+        let root = workspace
+            .as_ref()
+            .canonicalize()
+            .map_err(RuntimeError::io)?;
+        if root.join("manifest.ron").is_file() {
+            return Self::open(root.join("manifest.ron"), limits);
+        }
+        let pointer: WorkspacePointer = read_bounded(
+            &checked_existing_path(&root, "current.ron")?,
+            limits.max_manifest_bytes,
+            &CancellationToken::default(),
+        )?;
+        pointer.validate()?;
+        let manifest_path = checked_existing_path(&root, &pointer.manifest_path)?;
+        let source = Self::open(manifest_path, limits)?;
+        if source.manifest.fingerprint != pointer.manifest_fingerprint
+            || source.manifest.world_id != pointer.world_id
+        {
+            return Err(RuntimeError::invalid(
+                "workspace pointer and package manifest identity disagree",
+            ));
+        }
+        Ok(source)
+    }
     /// Opens and validates only the manifest; no chunk terrain is read here.
     pub fn open(manifest_path: impl AsRef<Path>, limits: IoLimits) -> RuntimeResult<Self> {
         let manifest_path = manifest_path
@@ -114,7 +150,9 @@ impl FileChunkSource {
             limits.max_manifest_bytes,
             &CancellationToken::default(),
         )?;
-        manifest.validate().map_err(RuntimeError::invalid)?;
+        let index = Arc::new(
+            ManifestIndex::new(Arc::new(manifest.clone())).map_err(RuntimeError::invalid)?,
+        );
         let descriptors = manifest
             .chunks
             .iter()
@@ -123,6 +161,7 @@ impl FileChunkSource {
         Ok(Self {
             root,
             manifest,
+            index,
             descriptors,
             limits,
         })
@@ -140,7 +179,138 @@ impl FileChunkSource {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspacePointer {
+    schema_version: u32,
+    world_id: String,
+    manifest_fingerprint: u64,
+    manifest_path: String,
+    fingerprint: u64,
+}
+
+impl WorkspacePointer {
+    fn expected_fingerprint(&self) -> RuntimeResult<u64> {
+        let mut value = self.clone();
+        value.fingerprint = 0;
+        hex_world_contracts::hash_serializable(&value).map_err(RuntimeError::invalid)
+    }
+    fn validate(&self) -> RuntimeResult<()> {
+        if self.schema_version != hex_world_contracts::SCHEMA_VERSION
+            || self.fingerprint != self.expected_fingerprint()?
+            || self.manifest_path
+                != format!("packages/{:016x}/manifest.ron", self.manifest_fingerprint)
+        {
+            return Err(RuntimeError::invalid(
+                "invalid or escaping workspace revision pointer",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Publishes an immutable revision, then atomically advances a stable workspace pointer.
+/// Returns the immutable manifest path. Failed compilation/package publication never
+/// advances `current.ron`; concurrent publishers are serialized by an OS file lock.
+pub fn publish_revision(
+    workspace: impl AsRef<Path>,
+    package: &WorldPackage,
+    limits: IoLimits,
+) -> RuntimeResult<PathBuf> {
+    package.validate().map_err(RuntimeError::invalid)?;
+    fs::create_dir_all(workspace.as_ref()).map_err(RuntimeError::io)?;
+    let root = workspace
+        .as_ref()
+        .canonicalize()
+        .map_err(RuntimeError::io)?;
+    if root.join("manifest.ron").exists() {
+        return Err(RuntimeError::new(
+            ErrorKind::Conflict,
+            "immutable package directory cannot become an authoring workspace",
+        ));
+    }
+    let writer = lock_directory(&root)?;
+    if root.join("current.ron").exists() {
+        let prior = FileChunkSource::open_workspace(&root, limits)?;
+        if prior.manifest.world_id != package.manifest.world_id {
+            return Err(RuntimeError::new(
+                ErrorKind::Conflict,
+                "workspace belongs to a different world",
+            ));
+        }
+    }
+    let packages = root.join("packages");
+    fs::create_dir_all(&packages).map_err(RuntimeError::io)?;
+    if packages.canonicalize().map_err(RuntimeError::io)? != packages {
+        return Err(RuntimeError::invalid(
+            "workspace packages directory must not be a symlink",
+        ));
+    }
+    let revision = packages.join(format!("{:016x}", package.manifest.fingerprint));
+    publish_package(&revision, package, limits)?;
+    let mut pointer = WorkspacePointer {
+        schema_version: hex_world_contracts::SCHEMA_VERSION,
+        world_id: package.manifest.world_id.clone(),
+        manifest_fingerprint: package.manifest.fingerprint,
+        manifest_path: format!(
+            "packages/{:016x}/manifest.ron",
+            package.manifest.fingerprint
+        ),
+        fingerprint: 0,
+    };
+    pointer.fingerprint = pointer.expected_fingerprint()?;
+    pointer.validate()?;
+    atomic_write_head(&root, "current.ron", &pointer, limits.max_manifest_bytes)?;
+    drop(writer);
+    Ok(revision.join("manifest.ron"))
+}
+
+pub(crate) fn lock_directory(root: &Path) -> RuntimeResult<File> {
+    let path = root.join("writer.lock");
+    if path.exists() {
+        let _safe = checked_existing_path(root, "writer.lock")?;
+    }
+    let writer = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(RuntimeError::io)?;
+    writer.try_lock().map_err(|error| {
+        RuntimeError::new(
+            ErrorKind::Conflict,
+            format!("directory already has a writer or cannot be locked: {error}"),
+        )
+    })?;
+    Ok(writer)
+}
+
+pub(crate) fn atomic_write_head<T: Serialize>(
+    root: &Path,
+    name: &str,
+    value: &T,
+    maximum: usize,
+) -> RuntimeResult<()> {
+    let path = checked_relative_path(root, name)?;
+    let bytes = encode_bounded(value, maximum)?;
+    if let Some(parent) = root.parent() {
+        sync_directory(parent)?;
+    }
+    AtomicFile::new(path, AllowOverwrite)
+        .write(|file| {
+            file.write_all(&bytes)?;
+            file.sync_all()
+        })
+        .map_err(RuntimeError::io)?;
+    sync_directory(root)
+}
+
 impl ChunkSource for FileChunkSource {
+    fn manifest_index(&self) -> Option<Arc<ManifestIndex>> {
+        Some(Arc::clone(&self.index))
+    }
+
     fn manifest(&self) -> &WorldManifest {
         &self.manifest
     }
@@ -159,7 +329,7 @@ impl ChunkSource for FileChunkSource {
         })?;
         let path = checked_existing_path(&self.root, &descriptor.path)?;
         let chunk: ChunkPackage = read_bounded(&path, self.limits.max_chunk_bytes, cancellation)?;
-        validate_source_chunk(&self.manifest, descriptor, &chunk)?;
+        validate_source_chunk(&self.index, descriptor, &chunk)?;
         Ok(chunk)
     }
 }
@@ -168,17 +338,26 @@ impl ChunkSource for FileChunkSource {
 #[derive(Debug)]
 pub struct MemoryChunkSource {
     package: WorldPackage,
+    index: Arc<ManifestIndex>,
 }
 
 impl MemoryChunkSource {
     /// Validates the complete caller-supplied package before retaining it.
     pub fn new(package: WorldPackage) -> RuntimeResult<Self> {
         package.validate().map_err(RuntimeError::invalid)?;
-        Ok(Self { package })
+        let index = Arc::new(
+            ManifestIndex::new(Arc::new(package.manifest.clone()))
+                .map_err(RuntimeError::invalid)?,
+        );
+        Ok(Self { package, index })
     }
 }
 
 impl ChunkSource for MemoryChunkSource {
+    fn manifest_index(&self) -> Option<Arc<ManifestIndex>> {
+        Some(Arc::clone(&self.index))
+    }
+
     fn manifest(&self) -> &WorldManifest {
         &self.package.manifest
     }
@@ -250,14 +429,14 @@ pub fn publish_package(
 }
 
 pub(crate) fn validate_source_chunk(
-    manifest: &WorldManifest,
+    index: &ManifestIndex,
     descriptor: &ChunkDescriptor,
     chunk: &ChunkPackage,
 ) -> RuntimeResult<()> {
     chunk
-        .validate_against_manifest(manifest)
+        .validate_with_index(index)
         .map_err(RuntimeError::invalid)?;
-    if chunk.world_id != manifest.world_id
+    if chunk.world_id != index.manifest().world_id
         || chunk.coordinate != descriptor.coordinate
         || chunk.fingerprint != descriptor.fingerprint
     {
@@ -292,6 +471,34 @@ pub(crate) fn checked_relative_path(root: &Path, relative: &str) -> RuntimeResul
         )));
     }
     Ok(root.join(path))
+}
+
+pub(crate) fn ensure_relative_directory(root: &Path, relative: &Path) -> RuntimeResult<PathBuf> {
+    let value = relative
+        .to_str()
+        .ok_or_else(|| RuntimeError::invalid("non-UTF8 content directory"))?;
+    let _checked = checked_relative_path(root, value)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(RuntimeError::invalid("unsafe content directory"));
+        };
+        current.push(name);
+        if current.exists() {
+            let metadata = fs::symlink_metadata(&current).map_err(RuntimeError::io)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(RuntimeError::invalid(
+                    "content directory is a symlink or non-directory",
+                ));
+            }
+        } else {
+            fs::create_dir(&current).map_err(RuntimeError::io)?;
+            if let Some(parent) = current.parent() {
+                sync_directory(parent)?;
+            }
+        }
+    }
+    Ok(current)
 }
 
 pub(crate) fn checked_existing_path(root: &Path, relative: &str) -> RuntimeResult<PathBuf> {
@@ -427,4 +634,17 @@ fn sync_directory_tree(root: &Path) -> RuntimeResult<()> {
         }
     }
     sync_directory(root)
+}
+
+/// Reuses a source's validated index only when its complete manifest agrees.
+pub(crate) fn source_index(source: &dyn ChunkSource) -> RuntimeResult<Arc<ManifestIndex>> {
+    if let Some(index) = source.manifest_index() {
+        if index.manifest() != source.manifest() {
+            return Err(RuntimeError::invalid("source index and manifest disagree"));
+        }
+        return Ok(index);
+    }
+    ManifestIndex::new(Arc::new(source.manifest().clone()))
+        .map(Arc::new)
+        .map_err(RuntimeError::invalid)
 }

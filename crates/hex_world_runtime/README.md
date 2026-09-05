@@ -32,6 +32,13 @@ directory. Chunk RON files and the manifest are flushed inside a staging directo
 before a directory rename makes the package visible. Existing different packages
 are rejected. Identical retries verify all existing chunk payloads.
 
+`publish_revision(workspace, &package, limits)` maintains a stable authoring
+workspace. Revisions live under immutable `packages/{fingerprint}/manifest.ron`;
+an atomically replaced, bounded `current.ron` selects the revision only after the
+complete package is durable. OS writer locking prevents concurrent publishers.
+`FileChunkSource::open_workspace(workspace, limits)` accepts that workspace or a
+direct immutable package directory. A failed publication preserves the old pointer.
+
 `FileChunkSource::open(manifest_path, limits)` reads the manifest alone. Each job
 reads one addressed chunk within its byte budget. Wire shape, canonical ordering,
 world identity, exact declared coverage, semantic consequences, and descriptor
@@ -57,7 +64,8 @@ air clearance. Compiler-projected object occupancy is merged locally, with objec
 material taking precedence over overlapping terrain. A foreign object's root chunk
 can unload without removing its collision or support surfaces.
 
-The manifest and its region index are constructed once. Queries and interest disk
+The shared `ManifestIndex` is constructed once and retained by file sources, the
+runtime, worker admission, edited chunk validation, and the knowledge store. Queries and interest disk
 enumeration use local chunk/region entries. Normal pumps inspect active interests,
 resident chunks, and bounded jobs, without traversing the dormant chunk catalogue.
 
@@ -69,7 +77,8 @@ fingerprint. No-op commands are rejected. Ordinary edits preserve indestructible
 materials and refuse unsupported object/boundary or anchor/interior/liquid semantic
 regeneration with a concrete error. Unrelated resident products retain their `Arc`.
 
-`transaction_delta` exposes the local changed-column payload. `apply_delta` checks
+`transaction_delta(id) -> RuntimeResult<Option<WorldDelta>>` reads one owned local
+changed-column payload, from a recent cache or its paged journal file. `apply_delta` checks
 the exact source, prior revision/package fingerprint, next revision and resulting
 package fingerprint. Duplicates return the original outcome; reordered or mismatched
 messages fail atomically. These two methods change memory only.
@@ -81,21 +90,63 @@ them, then atomically replace `current.ron`. Unrelated partition files retain th
 path and are not rewritten. An OS file lock serializes writers; a stale authority
 cannot overwrite acknowledged transactions it has not restored.
 
-`restore_save` checks the exact fresh V4 source and complete idempotency journal
-before replacing authority state. Modified chunk payloads stay on disk until needed;
+`restore_save` checks the exact fresh V4 source and lightweight idempotency index
+before replacing authority state. Historical transaction bodies stay on disk and
+are validated individually when requested; corruption fails that lookup. Modified chunk payloads stay on disk until needed;
 a corrupt lazy partition fails its load and never becomes queryable. Restore requires
 drained jobs and no operation pins. Unloaded saved terrain drops its column payload.
-Unsaved partition backlog has an explicit budget; checkpointing releases it.
+Unsaved partition and transaction backlogs have explicit count/byte budgets;
+checkpointing releases them. Only a bounded recent durable transaction-body cache
+stays in memory. `history_counts` separates light history metadata, recent bodies,
+and unsaved bodies. Restoring a long history loads no transaction bodies.
+
+## Principal-private knowledge and reconnect
+
+`KnowledgeStore::open(root, &manifest, limits, config)` reads metadata only.
+`compare_and_write(principal, id, &expected_revisions, replacements)` atomically
+persists only the selected principal/chunk partitions before returning a receipt.
+A `KnowledgePartition` has an independent monotonic revision, exact discovered
+columns, observed `Surface` identities and clearances with terrain revisions, and
+observed stable landmark IDs/anchors. Terrain residency grants no observation.
+Unsupported materials, unknown landmarks, revision rollback, invalid source
+identity and conflicting idempotency IDs are rejected. Distinct writers merge
+against the locked current head; one party does not replace another party's memory.
+
+`read` loads one private partition. `discovered_chunks` and `discovered_columns`
+read only that principal's compact discovery masks; these support a private atlas
+independently of resident terrain. The public manifest geography is separate from
+these private observations. Call `refresh` when another writer changes the store.
+
+The host creates `AuthorizedInterest` after deciding the authenticated principal
+and authorized chunks. It deliberately cannot be deserialized from a client's
+claim. `DisclosureStream` sends only already-declassified partitions belonging to
+that principal within those interests. Its retained replay is bounded by count
+and bytes. Changed interests discard old-scope replay. `reconnect` returns retained
+contiguous batches or requests `checkpoint_page` calls, each bounded by partition
+count and bytes. Checkpoint fingerprints cover only the authorized private scope,
+so unrelated party updates do not invalidate a reconnect. A changed scoped snapshot
+requires restarting from the first page.
+
+Receivers call `apply_sequence_durable` or `apply_checkpoint_page_durable` with a
+host-approved scope. Gaps, conflicting duplicates and unauthorized payloads fail
+atomically. Knowledge and sequence/page progress share one durable commit. Only the
+final checkpoint page acknowledges the snapshot's sequence; interrupted paging
+resumes after restart. Sequence state is per principal and stream, independent of
+combat turns. This protocol supplies no sockets or authentication implementation.
+A host restarting a stream must use a new identity or provide a host-verified
+sequence to `DisclosureStream::resume`.
 
 ## Deliberate remaining boundaries
 
-The finite manifest/catalogue and historical transaction records are currently
-in memory. The full prior delta journal should gain independently paged lookup for
-very long sessions. Save-head metadata is rewritten as one bounded file; immutable
-orphan files are retained for crash safety until a separate garbage collector exists.
+The finite manifest/catalogue, save-head metadata, private discovery masks, and
+lightweight idempotency/sequence indexes are still in memory. Metadata heads are
+rewritten as bounded files; they should gain sharded indexes when measured session
+history warrants it. Fine terrain overlays, historical delta bodies, and private
+knowledge bodies are independently paged. Immutable orphan files remain for crash
+safety until a separate garbage collector exists.
 
-Knowledge/disclosure persistence, transport session sequence/reconnect orchestration,
-semantic terrain regeneration, actor/encounter partitions, procedural unbounded
-catalogues, and renderer asset budgets belong to their respective future adapters.
-This crate's delta protocol supplies the local revision and durable idempotency
-foundation; it does not claim to implement those larger features.
+Semantic terrain regeneration, actor/encounter partitions, procedural unbounded
+catalogues, transport authentication/sockets, and renderer asset budgets belong to
+future adapters. The host owns declassification and decides which observations are
+true; this store validates representation, registered identities and revisions,
+without reading hidden terrain to manufacture knowledge.
