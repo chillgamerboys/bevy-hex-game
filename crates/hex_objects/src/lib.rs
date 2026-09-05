@@ -821,6 +821,16 @@ fn bake_blueprint_with_edge(
     catalog: &RuntimeArtCatalog,
     edge_treatment: ReviewEdgeTreatment,
 ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+    bake_blueprint_selected(source_mesh, blueprint, catalog, edge_treatment, None)
+}
+
+fn bake_blueprint_selected(
+    source_mesh: &Mesh,
+    blueprint: &ObjectBlueprint,
+    catalog: &RuntimeArtCatalog,
+    edge_treatment: ReviewEdgeTreatment,
+    selected: Option<&BTreeSet<LocalVoxelCoord>>,
+) -> Result<Vec<(ChunkKey, Mesh)>, String> {
     let treated_source = mesh_with_micro_bevel_normals(source_mesh, edge_treatment)?;
     let canopy: BTreeSet<_> = blueprint.canopy_occluders.iter().copied().collect();
     let mut groups: BTreeMap<ChunkKey, Vec<LocalVoxelCoord>> = BTreeMap::new();
@@ -834,13 +844,15 @@ fn bake_blueprint_with_edge(
                 blueprint.id, placement.style
             )
         })?;
-        groups
-            .entry(ChunkKey {
-                style: placement.style.clone(),
-                canopy: is_canopy,
-            })
-            .or_default()
-            .push(placement.position);
+        if selected.is_none_or(|selected| selected.contains(&placement.position)) {
+            groups
+                .entry(ChunkKey {
+                    style: placement.style.clone(),
+                    canopy: is_canopy,
+                })
+                .or_default()
+                .push(placement.position);
+        }
         occupied_by_visibility.entry(is_canopy).or_default().insert(
             placement.position,
             OccupiedCell {

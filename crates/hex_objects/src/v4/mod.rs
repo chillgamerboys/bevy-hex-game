@@ -7,6 +7,9 @@
 //! `Pickable::IGNORE`; [`ResidentObjectPart`] identifies them for that integration.
 //! Unknown assets, mismatched footprints, and foreign-root occupancy without a
 //! complete source record remain explicit proxies outside this adapter.
+//! Chunk fragments are the streaming integration: each mesh contains only its
+//! owning chunk's authored voxels, while face culling consults the full blueprint.
+//! Whole-object and fragmented presentation for one ID cannot coexist.
 
 mod prepare;
 mod publish;

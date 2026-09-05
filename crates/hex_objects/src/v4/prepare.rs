@@ -1,18 +1,20 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use bevy::prelude::*;
-use hex_assets::{HexObjectRotation, ObjectAssetId, ObjectBlueprint, RuntimeArtCatalog};
+use hex_assets::{
+    HexObjectRotation, LocalVoxelCoord, ObjectAssetId, ObjectBlueprint, RuntimeArtCatalog,
+};
 use hex_core::TilePos;
-use hex_world_contracts::{ChunkSemantics, ObjectInstance, VoxelPosition, WorldHex};
+use hex_world_contracts::{ChunkId, ChunkSemantics, ObjectInstance, VoxelPosition, WorldHex};
 
 use super::ObjectPresentationError;
 
 /// Operational bounds for one local presentation window, never world admission caps.
 #[derive(Clone, Copy, Debug)]
 pub struct ObjectPresentationLimits {
-    /// Maximum simultaneously published object roots.
+    /// Maximum simultaneously published roots, counting each fragment separately.
     pub max_resident_objects: usize,
-    /// Maximum distinct baked assets with live users.
+    /// Maximum distinct baked whole assets or fragment variants with live users.
     pub max_asset_types: usize,
     /// Maximum exact voxels in one admitted object.
     pub max_voxels_per_object: usize,
@@ -76,6 +78,16 @@ pub(super) struct BakedAsset {
     pub vertices: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum AssetKey {
+    Whole(ObjectAssetId),
+    Fragment {
+        asset: ObjectAssetId,
+        rotation: u8,
+        chunk_offset: WorldHex,
+    },
+}
+
 /// Validated disposable art product, bound to one presenter's origin generation.
 ///
 /// The exact record is copied from authority; it is not reconstructed from art.
@@ -83,6 +95,8 @@ pub(super) struct BakedAsset {
 pub struct PreparedObject {
     pub(super) object: Arc<ObjectInstance>,
     pub(super) asset: ObjectAssetId,
+    pub(super) cache_key: AssetKey,
+    pub(super) clip: Option<ChunkId>,
     pub(super) revision: u64,
     pub(super) fingerprint: u64,
     pub(super) local_origin: TilePos,
@@ -91,6 +105,7 @@ pub struct PreparedObject {
     pub(super) context: Arc<()>,
     pub(super) baked: Arc<BakedAsset>,
     pub(super) voxels: usize,
+    pub(super) source_voxels: usize,
 }
 
 impl PreparedObject {
@@ -118,6 +133,55 @@ impl PreparedObject {
     pub const fn voxels(&self) -> usize {
         self.voxels
     }
+
+    /// Owning global chunk for a fragment, or none for a whole-object product.
+    pub const fn clip(&self) -> Option<ChunkId> {
+        self.clip
+    }
+
+    /// Complete exact source voxel count validated before any fragment selection.
+    pub const fn source_voxels(&self) -> usize {
+        self.source_voxels
+    }
+}
+
+pub(super) fn select_fragment(
+    object: &ObjectInstance,
+    blueprint: &ObjectBlueprint,
+    asset: ObjectAssetId,
+    clip: ChunkId,
+) -> Result<(AssetKey, BTreeSet<LocalVoxelCoord>), ObjectPresentationError> {
+    let mut selected = BTreeSet::new();
+    for placement in &blueprint.placements {
+        let offset = WorldHex::new(
+            i64::from(placement.position.q) - i64::from(blueprint.origin.q),
+            i64::from(placement.position.r) - i64::from(blueprint.origin.r),
+        )
+        .rotate_60(object.rotation)?;
+        if object.origin.column.checked_add(offset)?.chunk() == clip {
+            selected.insert(placement.position);
+        }
+    }
+    if selected.is_empty() {
+        return Err(ObjectPresentationError(
+            "object has no authored voxels in requested fragment".into(),
+        ));
+    }
+    let chunk_origin = clip.origin()?;
+    let chunk_offset = WorldHex::new(
+        i64::try_from(i128::from(chunk_origin.q) - i128::from(object.origin.column.q))
+            .map_err(|error| ObjectPresentationError(error.to_string()))?,
+        i64::try_from(i128::from(chunk_origin.r) - i128::from(object.origin.column.r))
+            .map_err(|error| ObjectPresentationError(error.to_string()))?,
+    );
+    Ok((
+        AssetKey::Fragment {
+            asset,
+            rotation: object.rotation,
+            chunk_offset,
+        },
+        selected,
+    ))
 }
 
 pub(super) fn exact_footprint(
@@ -244,17 +308,29 @@ pub(super) fn bake(
     blueprint: &ObjectBlueprint,
     catalog: &RuntimeArtCatalog,
     limits: ObjectPresentationLimits,
+    selected: Option<&BTreeSet<LocalVoxelCoord>>,
 ) -> Result<Arc<BakedAsset>, ObjectPresentationError> {
     if source
         .count_vertices()
-        .saturating_mul(blueprint.placements.len())
+        .saturating_mul(selected.map_or(blueprint.placements.len(), BTreeSet::len))
         > limits.max_vertices_per_asset
     {
         return Err(ObjectPresentationError(
             "max_vertices_per_asset exceeded before baking".into(),
         ));
     }
-    let raw = crate::bake_blueprint(source, blueprint, catalog).map_err(ObjectPresentationError)?;
+    let raw = if selected.is_some() {
+        crate::bake_blueprint_selected(
+            source,
+            blueprint,
+            catalog,
+            hex_core::ReviewEdgeTreatment::Current,
+            selected,
+        )
+    } else {
+        crate::bake_blueprint(source, blueprint, catalog)
+    }
+    .map_err(ObjectPresentationError)?;
     let mut parts = Vec::with_capacity(raw.len());
     let mut vertices = 0usize;
     for (key, mesh) in raw {

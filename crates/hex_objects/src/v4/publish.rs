@@ -6,9 +6,11 @@ use std::{
 use bevy::{light::NotShadowCaster, mesh::VertexAttributeValues, prelude::*};
 use hex_assets::{ObjectAssetId, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode};
 use hex_core::TilePos;
-use hex_world_contracts::ObjectInstance;
+use hex_world_contracts::{ChunkId, ObjectInstance};
 
-use super::prepare::{bake, exact_footprint, local_transform, BakedAsset};
+use super::prepare::{
+    bake, exact_footprint, local_transform, select_fragment, AssetKey, BakedAsset,
+};
 use super::{ObjectPresentationError, ObjectPresentationLimits, PreparedObject};
 
 /// Stable global identity on a disposable stock-art root.
@@ -20,6 +22,8 @@ pub struct ResidentObject {
     pub revision: u64,
     /// Checksum of the exact source record, including occupancy materials.
     pub fingerprint: u64,
+    /// Owning visible chunk, or none for a whole-object root.
+    pub clip: Option<ChunkId>,
 }
 
 /// Typed mesh-child identity for application-owned exact object picking.
@@ -34,6 +38,8 @@ pub struct ResidentObjectPart {
     pub revision: u64,
     /// Full exact source checksum, rechecked before resolving a hit.
     pub fingerprint: u64,
+    /// Only this chunk's authored voxels occur in a fragment mesh.
+    pub clip: Option<ChunkId>,
 }
 
 /// A current publication receipt; art does not replace authoritative occupancy.
@@ -43,6 +49,8 @@ pub struct ObjectReceipt {
     pub id: String,
     /// Authored renderer asset ID.
     pub asset: String,
+    /// Owning visible chunk, or none for a whole-object publication.
+    pub clip: Option<ChunkId>,
     /// Source owner revision.
     pub revision: u64,
     /// Checksum of the exact source object record.
@@ -53,8 +61,10 @@ pub struct ObjectReceipt {
     pub root: Entity,
     /// Bounded render-local origin supplied by the application.
     pub local_origin: TilePos,
-    /// Number of exact voxels matched against this asset.
+    /// Number of exact voxels rendered by this whole object or selected fragment.
     pub voxels: usize,
+    /// Number of exact source voxels validated before selecting a fragment.
+    pub source_voxels: usize,
     /// Shared style/canopy mesh parts instantiated by this root.
     pub meshes: usize,
     /// Vertices used by this asset; shared among its resident instances.
@@ -67,12 +77,15 @@ struct PublishedObject {
     receipt: ObjectReceipt,
     object: Arc<ObjectInstance>,
     asset: ObjectAssetId,
+    cache_key: AssetKey,
 }
+
+type ResidentKey = (String, Option<ChunkId>);
 
 struct SharedAsset {
     baked: Arc<BakedAsset>,
     parts: Vec<crate::CachedChunk>,
-    users: BTreeSet<String>,
+    users: BTreeSet<ResidentKey>,
 }
 
 struct SharedMaterial {
@@ -98,8 +111,8 @@ pub struct ResidentObjectPresenter {
     limits: ObjectPresentationLimits,
     generation: u64,
     context: Arc<()>,
-    resident: BTreeMap<String, PublishedObject>,
-    assets: BTreeMap<ObjectAssetId, SharedAsset>,
+    resident: BTreeMap<ResidentKey, PublishedObject>,
+    assets: BTreeMap<AssetKey, SharedAsset>,
     materials: BTreeMap<VoxelStyleId, SharedMaterial>,
 }
 
@@ -156,22 +169,62 @@ impl ResidentObjectPresenter {
         revision: u64,
         local_origin: TilePos,
     ) -> Result<PreparedObject, ObjectPresentationError> {
+        self.prepare_clipped(object, revision, local_origin, None)
+    }
+
+    /// Prepare only authored voxels owned by one global chunk, after full validation.
+    ///
+    /// Neighbor face culling still uses the complete blueprint. This keeps adjacent
+    /// fragments consistent while allowing the application to replace each terrain
+    /// chunk's exact proxy mask and art fragment atomically in one frame.
+    pub fn prepare_fragment(
+        &self,
+        object: &ObjectInstance,
+        revision: u64,
+        local_origin: TilePos,
+        clip: ChunkId,
+    ) -> Result<PreparedObject, ObjectPresentationError> {
+        self.prepare_clipped(object, revision, local_origin, Some(clip))
+    }
+
+    fn prepare_clipped(
+        &self,
+        object: &ObjectInstance,
+        revision: u64,
+        local_origin: TilePos,
+        clip: Option<ChunkId>,
+    ) -> Result<PreparedObject, ObjectPresentationError> {
         let asset = ObjectAssetId::new(&object.asset)
             .map_err(|error| ObjectPresentationError(error.to_string()))?;
         let blueprint = self.catalog.object(&asset).ok_or_else(|| {
             ObjectPresentationError(format!("stock catalogue has no asset '{}'", object.asset))
         })?;
-        let voxels = exact_footprint(object, blueprint, self.limits)?;
+        let source_voxels = exact_footprint(object, blueprint, self.limits)?;
         let transform =
             local_transform(object, &asset, local_origin, self.level_height, self.limits)?;
-        let baked = if let Some(cached) = self.assets.get(&asset) {
+        let (cache_key, selected) = if let Some(clip) = clip {
+            let (key, selected) = select_fragment(object, blueprint, asset.clone(), clip)?;
+            (key, Some(selected))
+        } else {
+            (AssetKey::Whole(asset.clone()), None)
+        };
+        let voxels = selected.as_ref().map_or(source_voxels, BTreeSet::len);
+        let baked = if let Some(cached) = self.assets.get(&cache_key) {
             cached.baked.clone()
         } else {
-            bake(&self.source, blueprint, &self.catalog, self.limits)?
+            bake(
+                &self.source,
+                blueprint,
+                &self.catalog,
+                self.limits,
+                selected.as_ref(),
+            )?
         };
         Ok(PreparedObject {
             object: Arc::new(object.clone()),
             asset,
+            cache_key,
+            clip,
             revision,
             fingerprint: hex_world_contracts::hash_serializable(object)?,
             local_origin,
@@ -180,6 +233,7 @@ impl ResidentObjectPresenter {
             context: self.context.clone(),
             baked,
             voxels,
+            source_voxels,
         })
     }
 
@@ -200,7 +254,11 @@ impl ResidentObjectPresenter {
 
     /// Exact source occupancy retained for the application's typed picking/mask lookup.
     pub fn object(&self, id: &str) -> Option<&ObjectInstance> {
-        self.resident.get(id).map(|object| object.object.as_ref())
+        self.resident
+            .range((id.to_owned(), None)..)
+            .next()
+            .filter(|((candidate, _), _)| candidate == id)
+            .map(|(_, object)| object.object.as_ref())
     }
 
     /// Publish one complete product after validation and budget checks.
@@ -218,7 +276,27 @@ impl ResidentObjectPresenter {
                 "prepared object has a stale or foreign origin context".into(),
             ));
         }
-        let current = self.resident.get(&prepared.object.id);
+        let key = (prepared.object.id.clone(), prepared.clip);
+        // Whole and clipped products for one ID cannot overlap. Fragment revisions
+        // may advance independently only when their exact source record is unchanged;
+        // a changed object must first retire its old fragment set atomically.
+        for ((id, clip), existing) in self.resident.range((prepared.object.id.clone(), None)..) {
+            if id != &prepared.object.id {
+                break;
+            }
+            if *clip != prepared.clip && (clip.is_none() || prepared.clip.is_none()) {
+                return Err(ObjectPresentationError(
+                    "whole-object and fragment publication cannot overlap".into(),
+                ));
+            }
+            if *clip != prepared.clip
+                && (existing.receipt.fingerprint != prepared.fingerprint
+                    || existing.receipt.local_origin != prepared.local_origin)
+            {
+                return Err(ObjectPresentationError("resident fragments disagree on full source or local origin; retire them before changing the object".into()));
+            }
+        }
+        let current = self.resident.get(&key);
         if let Some(current) = current {
             if prepared.revision < current.receipt.revision {
                 return Err(ObjectPresentationError(
@@ -244,10 +322,10 @@ impl ResidentObjectPresenter {
             ));
         }
         let drops_old_asset = current
-            .filter(|current| current.asset != prepared.asset)
-            .and_then(|current| self.assets.get(&current.asset))
+            .filter(|current| current.cache_key != prepared.cache_key)
+            .and_then(|current| self.assets.get(&current.cache_key))
             .filter(|asset| asset.users.len() == 1);
-        if !self.assets.contains_key(&prepared.asset) {
+        if !self.assets.contains_key(&prepared.cache_key) {
             let remaining_assets = self.assets.len() - usize::from(drops_old_asset.is_some());
             if remaining_assets >= self.limits.max_asset_types {
                 return Err(ObjectPresentationError("max_asset_types exceeded".into()));
@@ -269,25 +347,26 @@ impl ResidentObjectPresenter {
         world.init_resource::<Assets<Mesh>>();
         world.init_resource::<Assets<StandardMaterial>>();
         // Preserve a same-asset cache through replacement, even for its last user.
-        if let Some(current) = self.resident.remove(&prepared.object.id) {
+        if let Some(current) = self.resident.remove(&key) {
             world.despawn(current.receipt.root);
-            if current.asset != prepared.asset {
-                self.release_asset(world, &current.asset, &prepared.object.id);
+            if current.cache_key != prepared.cache_key {
+                self.release_asset(world, &current.cache_key, &key);
             }
         }
-        if !self.assets.contains_key(&prepared.asset) {
-            self.allocate_asset(world, prepared.asset.clone(), prepared.baked.clone());
+        if !self.assets.contains_key(&prepared.cache_key) {
+            self.allocate_asset(world, prepared.cache_key.clone(), prepared.baked.clone());
         }
-        let cached = self.assets.get_mut(&prepared.asset).ok_or_else(|| {
+        let cached = self.assets.get_mut(&prepared.cache_key).ok_or_else(|| {
             ObjectPresentationError("object asset allocation lost its cache entry".into())
         })?;
-        cached.users.insert(prepared.object.id.clone());
+        cached.users.insert(key.clone());
         let root = world
             .spawn((
                 ResidentObject {
                     id: prepared.object.id.clone(),
                     revision: prepared.revision,
                     fingerprint: prepared.fingerprint,
+                    clip: prepared.clip,
                 },
                 prepared.transform,
                 Visibility::default(),
@@ -299,12 +378,14 @@ impl ResidentObjectPresenter {
         let receipt = ObjectReceipt {
             id: prepared.object.id.clone(),
             asset: prepared.object.asset.clone(),
+            clip: prepared.clip,
             revision: prepared.revision,
             fingerprint: prepared.fingerprint,
             catalog_fingerprint: self.catalog.combined_fingerprint(),
             root,
             local_origin: prepared.local_origin,
             voxels: prepared.voxels,
+            source_voxels: prepared.source_voxels,
             meshes: cached.parts.len(),
             vertices: cached.baked.vertices,
             has_blend: cached
@@ -313,27 +394,43 @@ impl ResidentObjectPresenter {
                 .any(|part| part.surface_mode == VoxelSurfaceMode::Translucent),
         };
         self.resident.insert(
-            prepared.object.id.clone(),
+            key,
             PublishedObject {
                 receipt: receipt.clone(),
                 object: prepared.object,
                 asset: prepared.asset,
+                cache_key: prepared.cache_key,
             },
         );
         Ok(receipt)
     }
 
-    /// Remove one root; shared meshes/materials survive until their final user leaves.
+    /// Remove a whole-object root; fragment roots use [`Self::remove_fragment`].
     pub fn remove(&mut self, world: &mut World, id: &str) -> Option<ObjectReceipt> {
-        let object = self.resident.remove(id)?;
+        self.remove_key(world, &(id.to_owned(), None))
+    }
+
+    /// Remove only one chunk's fragment and release its final shared asset users.
+    pub fn remove_fragment(
+        &mut self,
+        world: &mut World,
+        id: &str,
+        clip: ChunkId,
+    ) -> Option<ObjectReceipt> {
+        self.remove_key(world, &(id.to_owned(), Some(clip)))
+    }
+
+    fn remove_key(&mut self, world: &mut World, key: &ResidentKey) -> Option<ObjectReceipt> {
+        let object = self.resident.remove(key)?;
         world.despawn(object.receipt.root);
-        self.release_asset(world, &object.asset, id);
+        self.release_asset(world, &object.cache_key, key);
         Some(object.receipt)
     }
 
     /// Atomically validate and move the complete current local resident set.
     ///
-    /// The mapping must contain every resident ID exactly once and no extra IDs.
+    /// The mapping must contain every distinct resident ID exactly once and no extra
+    /// IDs. All fragments of one object share that object's checked local origin.
     /// Global records, authoritative revisions, roots and shared assets remain
     /// unchanged. Any failure preserves all old transforms and prepared generations.
     /// Unload distant roots before rebasing to another bounded view neighborhood.
@@ -342,7 +439,8 @@ impl ResidentObjectPresenter {
         world: &mut World,
         placements: &BTreeMap<String, TilePos>,
     ) -> Result<Vec<ObjectReceipt>, ObjectPresentationError> {
-        if !self.resident.keys().eq(placements.keys()) {
+        let ids: BTreeSet<_> = self.resident.keys().map(|(id, _)| id).collect();
+        if !ids.iter().copied().eq(placements.keys()) {
             return Err(ObjectPresentationError(
                 "rebase placements must exactly match resident object IDs".into(),
             ));
@@ -354,8 +452,8 @@ impl ResidentObjectPresenter {
         let transforms = self
             .resident
             .iter()
-            .map(|(id, object)| {
-                let origin = placements.get(id).copied().ok_or_else(|| {
+            .map(|(key, object)| {
+                let origin = placements.get(&key.0).copied().ok_or_else(|| {
                     ObjectPresentationError("rebase lost a checked placement".into())
                 })?;
                 if world.get::<Transform>(object.receipt.root).is_none() {
@@ -370,7 +468,7 @@ impl ResidentObjectPresenter {
                     self.level_height,
                     self.limits,
                 )?;
-                Ok((id.clone(), origin, transform))
+                Ok((key.clone(), origin, transform))
             })
             .collect::<Result<Vec<_>, ObjectPresentationError>>()?;
         for (id, origin, transform) in transforms {
@@ -404,7 +502,7 @@ impl ResidentObjectPresenter {
         self.generation = 0;
     }
 
-    fn allocate_asset(&mut self, world: &mut World, id: ObjectAssetId, baked: Arc<BakedAsset>) {
+    fn allocate_asset(&mut self, world: &mut World, id: AssetKey, baked: Arc<BakedAsset>) {
         let parts = baked
             .parts
             .iter()
@@ -438,7 +536,7 @@ impl ResidentObjectPresenter {
         );
     }
 
-    fn release_asset(&mut self, world: &mut World, id: &ObjectAssetId, user: &str) {
+    fn release_asset(&mut self, world: &mut World, id: &AssetKey, user: &ResidentKey) {
         let unused = self.assets.get_mut(id).is_some_and(|asset| {
             asset.users.remove(user);
             asset.users.is_empty()
@@ -487,6 +585,7 @@ fn spawn_parts(
                     id: prepared.object.id.clone(),
                     revision: prepared.revision,
                     fingerprint: prepared.fingerprint,
+                    clip: prepared.clip,
                 },
                 crate::ObjectRenderChunk {
                     style: part.key.style.clone(),

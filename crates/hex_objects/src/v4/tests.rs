@@ -443,3 +443,259 @@ fn malformed_source_mesh_is_rejected_before_any_assets_are_published() {
             .is_err()
     );
 }
+
+fn translated(mut object: ObjectInstance, id: &str, offset: WorldHex) -> ObjectInstance {
+    object.id = id.into();
+    object.origin.column = object
+        .origin
+        .column
+        .checked_add(offset)
+        .expect("root offset");
+    for column in &mut object.occupancy {
+        column.position = column
+            .position
+            .checked_add(offset)
+            .expect("occupancy offset");
+    }
+    object
+}
+
+#[test]
+fn fragments_select_exact_rotated_chunk_cells_and_preserve_whole_neighbor_culling() {
+    let presenter = presenter(ObjectPresentationLimits::default());
+    for rotation in 0..6 {
+        let object = translated(plant("tree", rotation), "tree", WorldHex::new(15, 15));
+        let whole = presenter
+            .prepare(&object, 1, origin(0, 0, 0))
+            .expect("whole");
+        let whole_indices: usize = whole
+            .baked
+            .parts
+            .iter()
+            .map(|part| {
+                part.mesh
+                    .indices()
+                    .map_or(part.mesh.count_vertices(), bevy::mesh::Indices::len)
+            })
+            .sum();
+        let chunks: std::collections::BTreeSet<_> = object
+            .occupancy
+            .iter()
+            .map(|column| column.position.chunk())
+            .collect();
+        let mut fragment_voxels = 0;
+        let mut fragment_indices = 0;
+        for clip in chunks {
+            let fragment = presenter
+                .prepare_fragment(&object, 1, origin(0, 0, 0), clip)
+                .expect("fragment");
+            let expected_count: usize = object
+                .occupancy
+                .iter()
+                .filter(|column| column.position.chunk() == clip)
+                .flat_map(|column| &column.runs)
+                .map(|run| usize::try_from(run.top - run.bottom).expect("small fixture run"))
+                .sum();
+            assert_eq!(fragment.voxels(), expected_count);
+            assert_eq!(fragment.source_voxels(), 4);
+            assert_eq!(fragment.clip(), Some(clip));
+            assert_eq!(fragment.object(), &object);
+            fragment_voxels += fragment.voxels();
+            fragment_indices += fragment
+                .baked
+                .parts
+                .iter()
+                .map(|part| {
+                    part.mesh
+                        .indices()
+                        .map_or(part.mesh.count_vertices(), bevy::mesh::Indices::len)
+                })
+                .sum::<usize>();
+        }
+        assert_eq!(fragment_voxels, 4);
+        assert_eq!(fragment_indices, whole_indices);
+    }
+}
+
+#[test]
+fn fragment_cache_tracks_rotation_and_chunk_phase_shares_identical_local_clips() {
+    let mut presenter = presenter(ObjectPresentationLimits::default());
+    let mut world = World::new();
+    let first = translated(plant("first", 0), "first", WorldHex::new(15, 0));
+    let left = first.origin.column.chunk();
+    let right = first
+        .origin
+        .column
+        .checked_add(WorldHex::new(1, 0))
+        .expect("right")
+        .chunk();
+    let a = presenter
+        .prepare_fragment(&first, 1, origin(0, 0, 0), left)
+        .expect("left");
+    let left_raw = a.baked.clone();
+    let left_key = a.cache_key.clone();
+    let a = presenter.publish(&mut world, a).expect("publish left");
+    let b = presenter
+        .prepare_fragment(&first, 1, origin(0, 0, 0), right)
+        .expect("right");
+    assert_ne!(b.cache_key, left_key);
+    let b = presenter.publish(&mut world, b).expect("publish right");
+    assert_eq!(a.voxels, 2);
+    assert_eq!(b.voxels, 2);
+    assert_eq!(presenter.receipts().len(), 2);
+    let second = translated(first.clone(), "second", WorldHex::new(32, -16));
+    let c = presenter
+        .prepare_fragment(&second, 2, origin(32, -16, 0), second.origin.column.chunk())
+        .expect("same phase");
+    assert_eq!(c.cache_key, left_key);
+    assert!(Arc::ptr_eq(&c.baked, &left_raw));
+    let c = presenter.publish(&mut world, c).expect("publish second");
+    assert_eq!(presenter.cached_asset_count(), 2);
+    let alternate_phase = translated(first.clone(), "different-phase", WorldHex::new(-1, 0));
+    let phase_product = presenter
+        .prepare_fragment(
+            &alternate_phase,
+            1,
+            origin(0, 0, 0),
+            alternate_phase.origin.column.chunk(),
+        )
+        .expect("phase");
+    assert_ne!(phase_product.cache_key, left_key);
+    let rotated = translated(plant("rotated", 1), "rotated", WorldHex::new(15, 0));
+    let rotated = presenter
+        .prepare_fragment(&rotated, 1, origin(0, 0, 0), rotated.origin.column.chunk())
+        .expect("rotated phase");
+    assert_ne!(rotated.cache_key, left_key);
+    presenter
+        .remove_fragment(&mut world, "first", left)
+        .expect("remove left");
+    assert!(world.get_entity(a.root).is_err());
+    assert!(world.get_entity(b.root).is_ok());
+    assert!(world.get_entity(c.root).is_ok());
+    assert_eq!(presenter.cached_asset_count(), 2);
+    presenter
+        .remove_fragment(&mut world, "second", second.origin.column.chunk())
+        .expect("remove shared user");
+    assert_eq!(presenter.cached_asset_count(), 1);
+    presenter
+        .remove_fragment(&mut world, "first", right)
+        .expect("remove right");
+    assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+    assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
+}
+
+#[test]
+fn fragment_validation_rejects_corruption_outside_clip_and_disallows_whole_overlap() {
+    let mut presenter = presenter(ObjectPresentationLimits::default());
+    let mut world = World::new();
+    let object = translated(plant("tree", 0), "tree", WorldHex::new(15, 0));
+    let left = object.origin.column.chunk();
+    let mut corrupt = object.clone();
+    corrupt
+        .occupancy
+        .last_mut()
+        .expect("foreign column")
+        .runs
+        .first_mut()
+        .expect("run")
+        .top += 1;
+    assert!(presenter
+        .prepare_fragment(&corrupt, 1, origin(0, 0, 0), left)
+        .is_err());
+    assert!(presenter
+        .prepare_fragment(
+            &object,
+            1,
+            origin(0, 0, 0),
+            hex_world_contracts::ChunkId { q: 0, r: 0 }
+        )
+        .is_err());
+    let fragment = presenter
+        .prepare_fragment(&object, 1, origin(0, 0, 0), left)
+        .expect("fragment");
+    let fragment = presenter
+        .publish(&mut world, fragment)
+        .expect("publish fragment");
+    let whole = presenter
+        .prepare(&object, 1, origin(0, 0, 0))
+        .expect("whole");
+    assert!(presenter.publish(&mut world, whole).is_err());
+    assert!(world.get_entity(fragment.root).is_ok());
+    assert!(presenter.remove(&mut world, "tree").is_none());
+    presenter
+        .remove_fragment(&mut world, "tree", left)
+        .expect("retire fragment");
+    let whole = presenter
+        .prepare(&object, 1, origin(0, 0, 0))
+        .expect("whole");
+    let whole = presenter.publish(&mut world, whole).expect("publish whole");
+    let fragment = presenter
+        .prepare_fragment(&object, 1, origin(0, 0, 0), left)
+        .expect("fragment");
+    assert!(presenter.publish(&mut world, fragment).is_err());
+    assert!(world.get_entity(whole.root).is_ok());
+}
+
+#[test]
+fn fragment_rebase_moves_each_root_once_and_rejects_stale_or_inconsistent_products() {
+    let mut presenter = presenter(ObjectPresentationLimits::default());
+    let mut world = World::new();
+    let object = translated(plant("tree", 0), "tree", WorldHex::new(15, 0));
+    let left = object.origin.column.chunk();
+    let right = object
+        .origin
+        .column
+        .checked_add(WorldHex::new(1, 0))
+        .expect("right")
+        .chunk();
+    for clip in [left, right] {
+        let ready = presenter
+            .prepare_fragment(&object, 1, origin(0, 0, 0), clip)
+            .expect("prepare fragment");
+        presenter
+            .publish(&mut world, ready)
+            .expect("publish fragment");
+    }
+    let stale = presenter
+        .prepare_fragment(&object, 2, origin(0, 0, 0), right)
+        .expect("queued");
+    let roots: Vec<_> = presenter.receipts().map(|receipt| receipt.root).collect();
+    let rebased = presenter
+        .rebase(
+            &mut world,
+            &BTreeMap::from([("tree".into(), origin(20, -3, -5))]),
+        )
+        .expect("one origin per object");
+    assert_eq!(
+        rebased
+            .iter()
+            .map(|receipt| receipt.root)
+            .collect::<Vec<_>>(),
+        roots
+    );
+    assert!(rebased
+        .iter()
+        .all(|receipt| receipt.local_origin == origin(20, -3, -5)));
+    assert!(presenter.publish(&mut world, stale).is_err());
+    let conflicting = presenter
+        .prepare_fragment(&object, 2, origin(21, -3, -5), right)
+        .expect("conflicting origin prepare");
+    assert!(presenter.publish(&mut world, conflicting).is_err());
+    let mut changed = object.clone();
+    changed
+        .occupancy
+        .first_mut()
+        .expect("column")
+        .runs
+        .first_mut()
+        .expect("run")
+        .material = "timber".into();
+    let conflicting = presenter
+        .prepare_fragment(&changed, 2, origin(20, -3, -5), right)
+        .expect("changed source prepare");
+    assert!(presenter.publish(&mut world, conflicting).is_err());
+    assert_eq!(presenter.object("tree"), Some(&object));
+    presenter.clear(&mut world);
+    assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+    assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
+}
