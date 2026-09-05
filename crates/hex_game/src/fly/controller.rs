@@ -486,6 +486,57 @@ mod tests {
     }
 
     #[test]
+    fn outside_corners_slide_and_inside_corners_stop_without_penetration() {
+        for inside in [false, true] {
+            let mut world = floor(5);
+            let columns = if inside {
+                vec![HexCoord::from_axial(1, 0), HexCoord::from_axial(0, 1)]
+            } else {
+                vec![HexCoord::default()]
+            };
+            world.replace(
+                Entity::from_bits(2),
+                columns
+                    .into_iter()
+                    .map(|coord| Span {
+                        coord,
+                        bottom: 0.0,
+                        top: 3.0,
+                        material: Material::Solid,
+                    })
+                    .collect(),
+            );
+            let mut body = Body::new(if inside {
+                Vec3::ZERO
+            } else {
+                Vec3::new(-2.0, 0.0, 0.9)
+            });
+            let input = Intent {
+                direction: if inside {
+                    HexCoord::from_axial(1, 0).to_world(0.0)
+                        + HexCoord::from_axial(0, 1).to_world(0.0)
+                } else {
+                    Vec3::X
+                },
+                ..default()
+            };
+            for _ in 0..120 {
+                assert!(body.tick(input, &settings(), 0.4, &world).is_none());
+                assert!(world.clear(body.position, 0.8, 0.25), "{body:?}");
+            }
+            if inside {
+                assert!((0.59..0.64).contains(&body.position.x), "{body:?}");
+                assert!((0.33..0.38).contains(&body.position.z), "{body:?}");
+                let stopped = body.position;
+                advance(&mut body, &world, input, 120);
+                assert!(body.position.distance(stopped) < 0.005);
+            } else {
+                assert!(body.position.x > 0.5 && body.position.z > 1.25, "{body:?}");
+            }
+        }
+    }
+
+    #[test]
     fn invalid_tuning_cannot_replace_settings() {
         let source = include_str!("../../../../assets/config/exploration.ron");
         assert!(
