@@ -866,7 +866,6 @@ pub(in crate::v4) mod tests {
                 successful_object_edits: 0,
                 save_requested: false,
                 interests: Vec::new(),
-                rendered: Default::default(),
                 desired: Default::default(),
                 status: String::new(),
                 error: None,
