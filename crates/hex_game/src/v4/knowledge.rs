@@ -14,6 +14,7 @@ use bevy::prelude::Resource;
 use hex_core::{ExteriorIllumination, IlluminationLevel, SightProfile};
 use hex_perception::v4::{
     ObservationResult, ObserverFacts, ObserverRequest, PerceptionConfig, PerceptionWorld,
+    RememberedLandmark,
 };
 use hex_world_contracts::{hash_serializable, ChunkId, ManifestIndex, WorldHex};
 use hex_world_runtime::{
@@ -519,9 +520,25 @@ impl WorldKnowledge {
                         .map(|_| position)
                 })
                 .collect::<Vec<_>>();
+            let landmark_memory = state
+                .cache
+                .values()
+                .flat_map(|cached| cached.draft.landmarks.iter())
+                .filter(|fact| {
+                    request
+                        .position
+                        .column
+                        .checked_distance(fact.position.column)
+                        .is_ok_and(|distance| distance <= u64::from(radius))
+                })
+                .map(|fact| RememberedLandmark {
+                    id: fact.id.clone(),
+                    position: fact.position,
+                })
+                .collect::<Vec<_>>();
             match self
                 .perception
-                .observe_with_memory(&request, &memory, runtime)
+                .observe_with_landmark_memory(&request, &memory, &landmark_memory, runtime)
                 .map_err(|error| error.to_string())?
             {
                 ObservationResult::Ready(facts) => {
@@ -801,6 +818,12 @@ fn merge_facts(state: &mut PrincipalState, facts: &ObserverFacts) -> Result<(), 
                 .iter()
                 .map(|position| position.column.chunk()),
         )
+        .chain(
+            facts
+                .invalidated_landmarks
+                .iter()
+                .map(|fact| fact.position.column.chunk()),
+        )
         .collect::<BTreeSet<_>>();
     for coordinate in affected {
         let cached = state
@@ -825,6 +848,18 @@ fn merge_facts(state: &mut PrincipalState, facts: &ObserverFacts) -> Result<(), 
             .cloned()
             .map(|fact| (fact.id.clone(), fact))
             .collect::<BTreeMap<_, _>>();
+        let mut removed_landmarks = Vec::new();
+        for fact in &facts.invalidated_landmarks {
+            if fact.position.column.chunk() == coordinate
+                && landmarks.get(&fact.id).is_some_and(|remembered| {
+                    remembered.position == fact.position
+                        && remembered.world_revision <= fact.world_revision
+                })
+            {
+                landmarks.remove(&fact.id);
+                removed_landmarks.push(fact);
+            }
+        }
         for position in &facts.invalidated_surfaces {
             if position.column.chunk() == coordinate {
                 surfaces.remove(position);
@@ -861,6 +896,26 @@ fn merge_facts(state: &mut PrincipalState, facts: &ObserverFacts) -> Result<(), 
         if !same_content(&candidate, &cached.draft) {
             cached.draft = candidate.clone();
             cached.dirty = true;
+            // Fine memory and the compact atlas must forget the same exact fact.
+            // Do not scan or erase dormant landmarks belonging to other chunks.
+            let mut compact_changed = false;
+            for fact in removed_landmarks {
+                if state
+                    .view
+                    .landmarks
+                    .get(&fact.id)
+                    .is_some_and(|remembered| {
+                        remembered.position == fact.position
+                            && remembered.world_revision <= fact.world_revision
+                    })
+                {
+                    state.view.landmarks.remove(&fact.id);
+                    compact_changed = true;
+                }
+            }
+            if compact_changed {
+                state.view.revision = state.view.revision.saturating_add(1);
+            }
             state.install_compact(&candidate)?;
         }
     }
@@ -944,6 +999,7 @@ mod tests {
             }],
             invalidated_surfaces: vec![low],
             landmarks: Vec::new(),
+            invalidated_landmarks: Vec::new(),
             dependencies: Vec::new(),
             inspected_columns: 2,
             tested_surfaces: 2,
@@ -1100,5 +1156,216 @@ mod tests {
             .discovered(removed.column));
         drop(reopened);
         std::fs::remove_dir_all(directory).expect("remove saved fixture");
+    }
+
+    #[test]
+    fn landmark_absence_updates_only_matching_memory_and_compact_atlas() {
+        use hex_perception::v4::InvalidatedLandmark;
+        let at = position(14, 2);
+        let other = position(15, 2);
+        let coordinate = at.column.chunk();
+        let mut state = PrincipalState::new("a".into());
+        let mut partition = KnowledgePartition::new("a", coordinate);
+        partition.discovered_columns = vec![at.column, other.column];
+        partition.landmarks = vec![
+            ObservedLandmark {
+                id: "hidden".into(),
+                position: other,
+                world_revision: 3,
+            },
+            ObservedLandmark {
+                id: "tree".into(),
+                position: at,
+                world_revision: 3,
+            },
+        ];
+        partition.revision = 1;
+        partition.seal().expect("memory");
+        state.install_compact(&partition).expect("compact memory");
+        state.cache.insert(
+            coordinate,
+            CachedPartition {
+                draft: partition,
+                persisted_revision: 1,
+                dirty: false,
+            },
+        );
+        let mut facts = ObserverFacts {
+            observer_id: "a".into(),
+            principal: "a".into(),
+            position: at,
+            surfaces: vec![],
+            invalidated_surfaces: vec![],
+            landmarks: vec![],
+            invalidated_landmarks: vec![InvalidatedLandmark {
+                id: "tree".into(),
+                position: at,
+                world_revision: 2,
+            }],
+            dependencies: vec![],
+            inspected_columns: 1,
+            tested_surfaces: 0,
+        };
+        merge_facts(&mut state, &facts).expect("stale absence ignored");
+        assert_eq!(state.view.landmarks.len(), 2);
+        assert!(!state.cache[&coordinate].dirty);
+        facts.invalidated_landmarks[0].world_revision = 4;
+        facts.invalidated_landmarks[0].position = other;
+        merge_facts(&mut state, &facts).expect("wrong anchor ignored");
+        assert_eq!(state.view.landmarks.len(), 2);
+        facts.invalidated_landmarks[0].position = at;
+        let before = state.view.revision;
+        merge_facts(&mut state, &facts).expect("exact visible absence");
+        assert!(state.view.revision > before);
+        assert!(state.cache[&coordinate].dirty);
+        assert_eq!(
+            state
+                .view
+                .landmarks
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["hidden"]
+        );
+        assert_eq!(state.cache[&coordinate].draft.landmarks.len(), 1);
+        assert!(state.view.discovered(at.column));
+        state.cache.get_mut(&coordinate).expect("cache").dirty = false;
+        let before = state.view.revision;
+        merge_facts(&mut state, &facts).expect("duplicate absence");
+        assert!(!state.cache[&coordinate].dirty);
+        assert_eq!(state.view.revision, before);
+    }
+
+    #[test]
+    fn deleted_object_landmark_stays_remembered_unseen_then_is_durably_forgotten() {
+        use hex_world_contracts::{
+            ColumnData, FeatureSummary, ObjectEdit, ObjectInstance, ResidencyRequest, VoxelRun,
+            WorldObjectEditTransaction, WorldPackage,
+        };
+        use hex_world_runtime::{MemoryChunkSource, RuntimeConfig};
+        let (mut session, original) = crate::v4::walk::tests::fixture();
+        let mut package = WorldPackage {
+            manifest: original.manifest().clone(),
+            chunks: original
+                .resident_chunks()
+                .map(|product| (product.coordinate, (*product.package).clone()))
+                .collect(),
+        };
+        let at = position(15, 2);
+        let feature = FeatureSummary {
+            id: "tree".into(),
+            region_id: "a".into(),
+            kind: "tree".into(),
+            anchor: at,
+            asset: Some("test-tree".into()),
+        };
+        let object = ObjectInstance {
+            id: feature.id.clone(),
+            region_id: "a".into(),
+            asset: "test-tree".into(),
+            origin: position(15, 3),
+            rotation: 0,
+            occupancy: vec![ColumnData {
+                position: at.column,
+                runs: vec![VoxelRun {
+                    bottom: 3,
+                    top: 5,
+                    material: "stone".into(),
+                }],
+            }],
+        };
+        package.manifest.features.push(feature.clone());
+        let chunk = package.chunks.get_mut(&at.column.chunk()).expect("root");
+        chunk.features.push(feature.clone());
+        chunk.semantics.objects.push(object.clone());
+        package.seal().expect("object and landmark world");
+        let mut runtime = WorldRuntime::new(
+            Arc::new(MemoryChunkSource::new(package).expect("source")),
+            RuntimeConfig::default(),
+        )
+        .expect("runtime");
+        runtime
+            .set_interests(
+                session
+                    .actors
+                    .iter()
+                    .map(|actor| ResidencyRequest {
+                        id: actor.id.clone(),
+                        center: actor.column,
+                        radius: 3,
+                        retention_radius: 3,
+                        priority: 1,
+                    })
+                    .collect(),
+            )
+            .expect("party residency");
+        let directory = temporary_directory().expect("saved fixture");
+        let mut knowledge =
+            WorldKnowledge::open(&runtime, Some(&directory)).expect("private memory");
+        settle(&mut knowledge, &session, &mut runtime);
+        assert!(knowledge
+            .selected(&session)
+            .expect("view")
+            .landmarks
+            .contains_key("tree"));
+        assert!(knowledge.principals["a"]
+            .view
+            .current
+            .as_ref()
+            .expect("current")
+            .landmarks
+            .iter()
+            .any(|fact| fact.feature == feature));
+        session.actors[0].standing = None;
+        runtime
+            .apply_object_transaction(&WorldObjectEditTransaction {
+                id: "remove-landmark".into(),
+                expected_revisions: BTreeMap::from([(
+                    at.column.chunk(),
+                    runtime.revision(at.column.chunk()).expect("resident"),
+                )]),
+                edits: vec![ObjectEdit {
+                    before: Some(object),
+                    after: None,
+                }],
+            })
+            .expect("remove while observer unavailable");
+        for _ in 0..8 {
+            knowledge.tick(&session, &mut runtime).expect("unseen edit");
+        }
+        assert!(knowledge
+            .selected(&session)
+            .expect("remembered view")
+            .landmarks
+            .contains_key("tree"));
+        assert!(knowledge.principals["a"].cache[&at.column.chunk()]
+            .draft
+            .landmarks
+            .iter()
+            .any(|fact| fact.id == "tree"));
+        session.actors[0].standing = Some(position(14, 2));
+        settle(&mut knowledge, &session, &mut runtime);
+        assert!(!knowledge
+            .selected(&session)
+            .expect("revisited view")
+            .landmarks
+            .contains_key("tree"));
+        assert!(!knowledge.principals["a"].cache[&at.column.chunk()]
+            .draft
+            .landmarks
+            .iter()
+            .any(|fact| fact.id == "tree"));
+        drop(knowledge);
+        let mut reopened =
+            WorldKnowledge::open(&runtime, Some(&directory)).expect("reopen private memory");
+        settle(&mut reopened, &session, &mut runtime);
+        assert!(!reopened
+            .selected(&session)
+            .expect("restored view")
+            .landmarks
+            .contains_key("tree"));
+        assert_eq!(reopened.counts().persisted_batches, 0);
+        drop(reopened);
+        std::fs::remove_dir_all(directory).expect("remove fixture");
     }
 }
