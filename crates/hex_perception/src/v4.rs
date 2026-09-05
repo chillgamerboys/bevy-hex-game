@@ -139,6 +139,26 @@ pub struct VisibleLandmark {
     pub world_revision: u64,
 }
 
+/// A landmark previously observed by the requesting principal, never a catalogue dump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RememberedLandmark {
+    /// Stable authored feature identity.
+    pub id: String,
+    /// Exact previously observed anchor.
+    pub position: VoxelPosition,
+}
+
+/// A remembered asset landmark whose absence is now proved by exact current sight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidatedLandmark {
+    /// Stable remembered identity; never reveals an unobserved deleted source feature.
+    pub id: String,
+    /// Exact anchor at which the remembered object is visibly absent.
+    pub position: VoxelPosition,
+    /// Current revision of the anchor's chunk.
+    pub world_revision: u64,
+}
+
 /// Complete current observations for one observer, suitable for explicit declassification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObserverFacts {
@@ -154,6 +174,8 @@ pub struct ObserverFacts {
     pub invalidated_surfaces: Vec<VoxelPosition>,
     /// Currently visible stable landmarks, in ID order.
     pub landmarks: Vec<VisibleLandmark>,
+    /// Remembered asset landmarks visibly absent now, in ID order.
+    pub invalidated_landmarks: Vec<InvalidatedLandmark>,
     /// Local revision dependencies, in chunk order.
     pub dependencies: Vec<ChunkRevision>,
     /// Local world/outside columns examined; independent of dormant world size.
@@ -377,9 +399,25 @@ impl PerceptionWorld {
         remembered: &[VoxelPosition],
         query: &impl WorldQuery,
     ) -> Result<ObservationResult, Error> {
+        self.observe_with_landmark_memory(request, remembered, &[], query)
+    }
+
+    /// Resolve current sight and principal-owned support/landmark memory together.
+    /// Hidden, distant, or unavailable landmarks are never invalidated. Asset-free
+    /// semantic features remain authored observations independent of object edits.
+    pub fn observe_with_landmark_memory(
+        &mut self,
+        request: &ObserverRequest,
+        remembered: &[VoxelPosition],
+        remembered_landmarks: &[RememberedLandmark],
+        query: &impl WorldQuery,
+    ) -> Result<ObservationResult, Error> {
         self.validate_request(request)?;
         if remembered.len() > self.config.max_remembered_positions {
             return Err(limit("remembered support input budget exceeded"));
+        }
+        if remembered_landmarks.len() > self.config.max_landmarks_per_observer {
+            return Err(limit("remembered landmark input budget exceeded"));
         }
         if !self.index.contains(request.position.column)? {
             return Ok(ObservationResult::OutsideWorld);
@@ -396,7 +434,26 @@ impl PerceptionWorld {
         }
         memory.sort_unstable();
         memory.dedup();
-        let memory_fingerprint = hash_serializable(&memory)?;
+        let mut landmark_memory = BTreeMap::new();
+        for remembered in remembered_landmarks {
+            let Some(feature) = self.index.feature(&remembered.id) else {
+                return Err(invalid("remembered landmark is not a registered feature"));
+            };
+            if feature.anchor != remembered.position {
+                return Err(invalid(
+                    "remembered landmark anchor differs from its registry",
+                ));
+            }
+            if request
+                .position
+                .column
+                .checked_distance(remembered.position.column)?
+                <= u64::from(radius(request.profile))
+            {
+                landmark_memory.insert(remembered.id.clone(), remembered.position);
+            }
+        }
+        let memory_fingerprint = hash_serializable(&(&memory, &landmark_memory))?;
         if let Some(cached) = self.cached.get(&request.id) {
             if cached.request == *request
                 && cached.memory_fingerprint == memory_fingerprint
@@ -424,7 +481,7 @@ impl PerceptionWorld {
         if !missing.is_empty() {
             return Ok(ObservationResult::Pending(missing));
         }
-        let result = self.resolve(request, &memory, query, &footprint)?;
+        let result = self.resolve(request, &memory, &landmark_memory, query, &footprint)?;
         if let ObservationResult::Ready(facts) = &result {
             self.cache(request, memory_fingerprint, Arc::clone(facts));
         }
@@ -505,6 +562,7 @@ impl PerceptionWorld {
         &self,
         request: &ObserverRequest,
         memory: &[VoxelPosition],
+        landmark_memory: &BTreeMap<String, VoxelPosition>,
         query: &impl WorldQuery,
         footprint: &Footprint,
     ) -> Result<ObservationResult, Error> {
@@ -513,6 +571,7 @@ impl PerceptionWorld {
         let mut targets: BTreeMap<TilePos, (VoxelPosition, Option<String>)> = BTreeMap::new();
         let mut supports = BTreeMap::new();
         let mut landmarks = BTreeMap::new();
+        let mut absent_landmarks = BTreeMap::new();
         let mut lights = BTreeMap::<String, WorldLight>::new();
         let mut dependencies = Vec::new();
         let mut light_records = 0_usize;
@@ -552,6 +611,25 @@ impl PerceptionWorld {
                     .checked_distance(feature.anchor.column)?
                     <= u64::from(footprint.radius)
                 {
+                    // Compiler feature anchors name the supporting ground while
+                    // object origins start above it. Match root column, not level.
+                    let present = feature.asset.as_ref().is_none_or(|asset| {
+                        source
+                            .package
+                            .semantics
+                            .objects
+                            .binary_search_by(|object| object.id.cmp(&feature.id))
+                            .ok()
+                            .and_then(|index| source.package.semantics.objects.get(index))
+                            .is_some_and(|object| {
+                                object.asset == *asset
+                                    && object.region_id == feature.region_id
+                                    && object.origin.column == feature.anchor.column
+                            })
+                    });
+                    if !present && !landmark_memory.contains_key(&feature.id) {
+                        continue;
+                    }
                     let local = local_position(feature.anchor, request.position)?;
                     targets.insert(
                         local,
@@ -560,10 +638,24 @@ impl PerceptionWorld {
                             source.domain(feature.anchor).map(str::to_owned),
                         ),
                     );
-                    landmarks.insert(
-                        feature.id.clone(),
-                        (local, feature.clone(), source.revision),
-                    );
+                    if present {
+                        landmarks.insert(
+                            feature.id.clone(),
+                            (local, feature.clone(), source.revision),
+                        );
+                    } else {
+                        absent_landmarks.insert(
+                            feature.id.clone(),
+                            (
+                                local,
+                                InvalidatedLandmark {
+                                    id: feature.id.clone(),
+                                    position: feature.anchor,
+                                    world_revision: source.revision,
+                                },
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -818,6 +910,11 @@ impl PerceptionWorld {
                 world_revision,
             })
             .collect();
+        let invalidated_landmarks = absent_landmarks
+            .into_values()
+            .filter(|(local, _)| visible.contains(local))
+            .map(|(_, fact)| fact)
+            .collect();
         let missing = dependencies
             .iter()
             .filter(|dependency| query.revision(dependency.coordinate) != Some(dependency.revision))
@@ -833,6 +930,7 @@ impl PerceptionWorld {
             surfaces,
             invalidated_surfaces,
             landmarks,
+            invalidated_landmarks,
             dependencies,
             inspected_columns: footprint.columns.len(),
             tested_surfaces,
@@ -863,6 +961,7 @@ impl PerceptionWorld {
                     .surfaces
                     .len()
                     .saturating_add(cached.facts.landmarks.len())
+                    .saturating_add(cached.facts.invalidated_landmarks.len())
                     .saturating_add(cached.facts.invalidated_surfaces.len()),
             );
         }
@@ -879,6 +978,7 @@ impl PerceptionWorld {
             .surfaces
             .len()
             .saturating_add(facts.landmarks.len())
+            .saturating_add(facts.invalidated_landmarks.len())
             .saturating_add(facts.invalidated_surfaces.len());
         if count > self.config.max_cached_facts {
             return;

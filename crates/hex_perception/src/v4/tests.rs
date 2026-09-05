@@ -932,3 +932,222 @@ fn non_solid_terrain_and_object_volumes_match_air_in_the_exact_sight_projection(
         );
     }
 }
+
+fn asset_landmark(package: &mut WorldPackage, at: WorldHex) -> (FeatureSummary, ObjectInstance) {
+    let feature = FeatureSummary {
+        id: "tree".into(),
+        region_id: "region-0000".into(),
+        kind: "landmark".into(),
+        anchor: voxel(at, 0),
+        asset: Some("test-tree".into()),
+    };
+    let object = ObjectInstance {
+        id: feature.id.clone(),
+        region_id: feature.region_id.clone(),
+        asset: feature.asset.clone().expect("asset"),
+        origin: voxel(at, 1),
+        rotation: 0,
+        occupancy: vec![ColumnData {
+            position: at,
+            runs: vec![run(1, 3)],
+        }],
+    };
+    package.manifest.features.push(feature.clone());
+    let chunk = package.chunks.get_mut(&at.chunk()).expect("owner");
+    chunk.features.push(feature.clone());
+    chunk.semantics.objects.push(object.clone());
+    (feature, object)
+}
+
+fn remove_landmark_object(runtime: &mut WorldRuntime, object: ObjectInstance) {
+    let expected_revisions = object
+        .dependency_chunks()
+        .expect("dependencies")
+        .into_iter()
+        .map(|coordinate| (coordinate, runtime.revision(coordinate).expect("resident")))
+        .collect();
+    runtime
+        .apply_object_transaction(&hex_world_contracts::WorldObjectEditTransaction {
+            id: "remove-tree".into(),
+            expected_revisions,
+            edits: vec![hex_world_contracts::ObjectEdit {
+                before: Some(object),
+                after: None,
+            }],
+        })
+        .expect("object removal");
+}
+
+#[test]
+fn asset_landmarks_follow_live_objects_and_only_known_visible_absence_is_disclosed() {
+    let observer = request("a", point(0, 0), 0, 4);
+    let mut package = world(&[(point(0, 0), 6)], 0);
+    let (feature, object) = asset_landmark(&mut package, point(1, 0));
+    let mut semantic = feature.clone();
+    semantic.id = "semantic-anchor".into();
+    semantic.asset = None;
+    package.manifest.features.push(semantic.clone());
+    package
+        .chunks
+        .get_mut(&semantic.anchor.column.chunk())
+        .expect("owner")
+        .features
+        .push(semantic.clone());
+    package.seal().expect("asset fixture");
+    let (mut runtime, mut projection) = fixture(
+        package,
+        std::slice::from_ref(&observer),
+        PerceptionConfig::default(),
+    );
+    let initial = ready(
+        projection
+            .observe(&observer, &runtime)
+            .expect("visible object"),
+    );
+    assert!(initial.landmarks.iter().any(|fact| fact.feature == feature));
+    remove_landmark_object(&mut runtime, object);
+    flush(&mut runtime, &mut projection);
+    let current = ready(
+        projection
+            .observe(&observer, &runtime)
+            .expect("current absence"),
+    );
+    assert_eq!(
+        current
+            .landmarks
+            .iter()
+            .map(|fact| &fact.feature)
+            .collect::<Vec<_>>(),
+        vec![&semantic]
+    );
+    assert!(
+        current.invalidated_landmarks.is_empty(),
+        "never disclose an unremembered deleted source ID"
+    );
+    let memory = RememberedLandmark {
+        id: feature.id.clone(),
+        position: feature.anchor,
+    };
+    let known = ready(
+        projection
+            .observe_with_landmark_memory(&observer, &[], std::slice::from_ref(&memory), &runtime)
+            .expect("known absence"),
+    );
+    assert_eq!(
+        known.invalidated_landmarks,
+        vec![InvalidatedLandmark {
+            id: feature.id.clone(),
+            position: feature.anchor,
+            world_revision: 1,
+        }]
+    );
+    assert!(!Arc::ptr_eq(&known, &current));
+    let cached = ready(
+        projection
+            .observe_with_landmark_memory(&observer, &[], &[memory.clone(), memory], &runtime)
+            .expect("canonical duplicate memory"),
+    );
+    assert!(Arc::ptr_eq(&known, &cached));
+    assert!(ready(
+        projection
+            .observe(&observer, &runtime)
+            .expect("memory cleared")
+    )
+    .invalidated_landmarks
+    .is_empty());
+}
+
+#[test]
+fn hidden_removed_landmark_is_remembered_until_visible_and_pending_never_proves_absence() {
+    let clear_observer = request("a", point(3, -1), 0, 5);
+    let hidden_observer = request("a", point(0, 0), 0, 5);
+    let mut package = world(&[(point(0, 0), 7)], 0);
+    let (feature, object) = asset_landmark(&mut package, point(3, 0));
+    add_object(&mut package, point(1, 0), point(1, 0), 1, 8);
+    package.seal().expect("occluding object fixture");
+    let (mut runtime, mut projection) = fixture(
+        package,
+        std::slice::from_ref(&clear_observer),
+        PerceptionConfig::default(),
+    );
+    let before = ready(
+        projection
+            .observe(&clear_observer, &runtime)
+            .expect("initial view"),
+    );
+    assert!(before.landmarks.iter().any(|fact| fact.feature == feature));
+    let memory = [RememberedLandmark {
+        id: feature.id.clone(),
+        position: feature.anchor,
+    }];
+    remove_landmark_object(&mut runtime, object);
+    flush(&mut runtime, &mut projection);
+    let hidden = ready(
+        projection
+            .observe_with_landmark_memory(&hidden_observer, &[], &memory, &runtime)
+            .expect("hidden deletion"),
+    );
+    assert!(hidden.landmarks.is_empty());
+    assert!(hidden.invalidated_landmarks.is_empty());
+    projection.remove(feature.anchor.column.chunk());
+    assert!(matches!(
+        projection
+            .observe_with_landmark_memory(&clear_observer, &[], &memory, &runtime)
+            .expect("unavailable"),
+        ObservationResult::Pending(_)
+    ));
+    let product = runtime
+        .resident_chunk(feature.anchor.column.chunk())
+        .expect("authority source");
+    projection
+        .publish(product.package, product.revision)
+        .expect("restore source");
+    let revealed = ready(
+        projection
+            .observe_with_landmark_memory(&clear_observer, &[], &memory, &runtime)
+            .expect("visible absence"),
+    );
+    assert_eq!(revealed.invalidated_landmarks.len(), 1);
+    assert_eq!(revealed.invalidated_landmarks[0].id, feature.id);
+}
+
+#[test]
+fn remembered_landmarks_are_bounded_and_bound_to_exact_registered_anchors() {
+    let observer = request("a", point(0, 0), 0, 4);
+    let mut package = world(&[(point(0, 0), 6)], 0);
+    let (feature, _) = asset_landmark(&mut package, point(1, 0));
+    package.seal().expect("fixture");
+    let (runtime, mut projection) = fixture(
+        package,
+        std::slice::from_ref(&observer),
+        PerceptionConfig {
+            max_landmarks_per_observer: 1,
+            ..PerceptionConfig::default()
+        },
+    );
+    let memory = RememberedLandmark {
+        id: feature.id,
+        position: feature.anchor,
+    };
+    assert!(matches!(
+        projection.observe_with_landmark_memory(
+            &observer,
+            &[],
+            &[memory.clone(), memory.clone()],
+            &runtime
+        ),
+        Err(Error::Limit(_))
+    ));
+    assert!(matches!(
+        projection.observe_with_landmark_memory(
+            &observer,
+            &[],
+            &[RememberedLandmark {
+                position: voxel(point(2, 0), 0),
+                ..memory
+            }],
+            &runtime
+        ),
+        Err(Error::Invalid(_))
+    ));
+}
