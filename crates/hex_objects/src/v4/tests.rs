@@ -1,8 +1,3 @@
-#![expect(
-    clippy::expect_used,
-    reason = "test fixture failures require specific diagnostics"
-)]
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use bevy::{core_pipeline::oit::OrderIndependentTransparencySettings, prelude::*};
