@@ -42,6 +42,10 @@ MAX_JSON = 32 * 1024 * 1024
 MAX_LOG = 128 * 1024 * 1024
 MAX_MEMORY_PROBE_FAILURE_DETAILS = 8
 MAX_MEMORY_PROBE_DETAIL = 512
+MAX_FRAME_SAMPLES = 100_000
+MAX_GPU_SAMPLES = 10_000
+GPU_WAIT_TIMEOUT_SECONDS = 10
+GPU_COMPLETION_MECHANISM = "finite GPU wait after RenderSystems::Render; latest completed batch before next render frame"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SKIP_SOURCE_DIRS = {".git", ".context", "target", "node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache"}
 RELEVANT_ENV = {"CARGO_TARGET_DIR", "CARGO_BUILD_JOBS", "CARGO_INCREMENTAL", "RUSTFLAGS", "RUSTDOCFLAGS", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_TARGET", "CARGO_ENCODED_RUSTFLAGS", "BEVY_ASSET_ROOT"}
@@ -302,6 +306,43 @@ def strict_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def valid_timing(value: Any) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
+def validate_gpu_completion(value: Any, settle_frames: int) -> None:
+    fields = {"mechanism", "wait_timeout_seconds", "attempted_batches", "completed_batches",
+              "sample_capacity", "wait_samples_ms", "completion_intervals_ms"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ReviewError("GPU completion evidence has a missing or unsupported shape")
+    if (value["mechanism"] != GPU_COMPLETION_MECHANISM
+            or type(value["wait_timeout_seconds"]) is not int
+            or value["wait_timeout_seconds"] != GPU_WAIT_TIMEOUT_SECONDS
+            or type(value["sample_capacity"]) is not int
+            or value["sample_capacity"] != MAX_GPU_SAMPLES):
+        raise ReviewError("GPU completion mechanism, timeout or sample capacity is unsupported")
+    completed = positive_int(value["completed_batches"], "completed GPU batches", 2**64 - 1)
+    attempted = positive_int(value["attempted_batches"], "attempted GPU batches", 2**64 - 1)
+    if completed < settle_frames or attempted - completed not in (0, 1):
+        raise ReviewError("GPU completion counters are stale, incomplete or have multiple pending waits")
+    for field, expected in (("wait_samples_ms", min(completed, MAX_GPU_SAMPLES)),
+                            ("completion_intervals_ms", min(completed - 1, MAX_GPU_SAMPLES))):
+        samples = value[field]
+        if not isinstance(samples, list) or len(samples) != expected:
+            raise ReviewError(f"GPU {field} does not contain the exact bounded completed history")
+        if any(not valid_timing(sample) for sample in samples):
+            raise ReviewError(f"GPU {field} contains invalid timing values")
+    # Individual waits may be instantaneous; the completed-frame timeline must
+    # demonstrate elapsed work. Do not turn a CPU submission count into GPU proof.
+    if not any(sample > 0 for sample in value["completion_intervals_ms"]):
+        raise ReviewError("GPU completion evidence records zero elapsed completed work")
+
+
 def validate_receipt(receipt: dict[str, Any], package: dict[str, Any], walk: dict[str, Any] | None,
                      settle_frames: int = 120) -> None:
     if receipt.get("package") != package["requested_directory"] or receipt.get("world_fingerprint") != package["fingerprint"]:
@@ -316,16 +357,22 @@ def validate_receipt(receipt: dict[str, Any], package: dict[str, Any], walk: dic
     if receipt["rendered_chunks"] > receipt["resident_chunks"]:
         raise ReviewError("receipt renders more chunks than are resident")
     samples = receipt.get("frame_samples_ms")
-    if not isinstance(samples, list) or not 0 < len(samples) <= min(receipt["frames"], 100_000):
-        raise ReviewError("receipt has no bounded frame measurements")
+    if not isinstance(samples, list) or len(samples) != min(receipt["frames"], MAX_FRAME_SAMPLES):
+        raise ReviewError("receipt does not contain its complete bounded frame measurements")
+    settled_samples = receipt.get("settled_frame_samples_ms")
+    tail_length = min(settled, len(samples))
+    if (not isinstance(settled_samples, list) or len(settled_samples) != tail_length
+            or settled_samples != samples[-tail_length:]):
+        raise ReviewError("settled frame measurements do not match the exact recorded tail")
     rebase_samples = receipt.get("rebase_samples_ms")
     if not isinstance(rebase_samples, list) or len(rebase_samples) > receipt["frames"]:
         raise ReviewError("receipt has invalid rebase measurements")
-    for value in [receipt.get("elapsed_seconds"), *samples, *rebase_samples]:
-        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+    for value in [receipt.get("elapsed_seconds"), *samples, *settled_samples, *rebase_samples]:
+        if not valid_timing(value):
             raise ReviewError("invalid timing value in game receipt")
     if receipt["elapsed_seconds"] <= 0 or not any(value > 0 for value in samples):
         raise ReviewError("receipt records zero elapsed work")
+    validate_gpu_completion(receipt.get("gpu_completion"), settle_frames)
     if receipt.get("static_review") != "UNREVIEWED" or receipt.get("native_motion") != "HUMAN-MOTION-PENDING":
         raise ReviewError("game receipt improperly grants review approval")
     rows = receipt.get("scripted_walk")
@@ -848,12 +895,21 @@ def self_test() -> int:
     import copy
     import io
 
-    def game_receipt(package: str = "/world") -> dict[str, Any]:
-        return {"package": package, "world_fingerprint": "0000000000000001", "frames": 130,
-                "settled_frames": 120,
+    def game_receipt(package: str = "/world", *, frames: int = 130,
+                     settled: int = 120, completed: int | None = None) -> dict[str, Any]:
+        samples = [float(index % 3 + 1) * 10 for index in range(min(frames, MAX_FRAME_SAMPLES))]
+        completed = frames if completed is None else completed
+        return {"package": package, "world_fingerprint": "0000000000000001", "frames": frames,
+                "settled_frames": settled, "settled_frame_samples_ms": samples[-min(settled, len(samples)):],
                 "resident_chunks": 1, "rendered_chunks": 1, "mesh_publications": 1, "rendered_vertices": 12,
                 "discarded_mesh_jobs": 0, "local_queue_peak": 1, "rebase_samples_ms": [],
-                "elapsed_seconds": 0.1, "frame_samples_ms": [10.0, 20.0, 30.0],
+                "elapsed_seconds": sum(samples) / 1000.0, "frame_samples_ms": samples,
+                "gpu_completion": {"mechanism": GPU_COMPLETION_MECHANISM,
+                    "wait_timeout_seconds": GPU_WAIT_TIMEOUT_SECONDS,
+                    "attempted_batches": completed, "completed_batches": completed,
+                    "sample_capacity": MAX_GPU_SAMPLES,
+                    "wait_samples_ms": [1.0] * min(completed, MAX_GPU_SAMPLES),
+                    "completion_intervals_ms": [20.0] * min(completed - 1, MAX_GPU_SAMPLES)},
                 "static_review": "UNREVIEWED", "native_motion": "HUMAN-MOTION-PENDING", "scripted_walk": None}
 
     class DriverTests(unittest.TestCase):
@@ -905,9 +961,119 @@ def self_test() -> int:
                 validate_receipt({**receipt, "settled_frames": 119}, package, None)
             with self.assertRaises(ReviewError):
                 validate_receipt(receipt, package, None, 600)
-            validate_receipt({**receipt, "frames": 730, "settled_frames": 600}, package, None, 600)
+            validate_receipt(game_receipt(frames=730, settled=600), package, None, 600)
             with self.assertRaises(ReviewError):
                 validate_receipt({**receipt, "settled_frames": 131}, package, None)
+
+        def test_frame_measurements_require_complete_history_and_exact_settled_tail(self) -> None:
+            package = {"requested_directory": "/world", "fingerprint": "0000000000000001"}
+            for mutate in (
+                lambda receipt: receipt["frame_samples_ms"].pop(),
+                lambda receipt: receipt["frame_samples_ms"].append(10.0),
+                lambda receipt: receipt.pop("settled_frame_samples_ms"),
+                lambda receipt: receipt["settled_frame_samples_ms"].pop(),
+                lambda receipt: receipt["settled_frame_samples_ms"].append(10.0),
+                lambda receipt: receipt["settled_frame_samples_ms"].reverse(),
+                lambda receipt: receipt["frame_samples_ms"].__setitem__(0, float("inf")),
+                lambda receipt: receipt["frame_samples_ms"].__setitem__(0, True),
+                lambda receipt: receipt["frame_samples_ms"].__setitem__(0, 10**1000),
+                lambda receipt: receipt.update(elapsed_seconds=0),
+            ):
+                receipt = game_receipt()
+                mutate(receipt)
+                with self.assertRaises(ReviewError):
+                    validate_receipt(receipt, package, None)
+            # The Rust capture retains at most its first 100,000 main samples.
+            capped = game_receipt(frames=100_001, settled=600, completed=10_005)
+            validate_receipt(capped, package, None, 600)
+            self.assertEqual(len(capped["frame_samples_ms"]), 100_000)
+            self.assertEqual(len(capped["settled_frame_samples_ms"]), 600)
+
+        def test_gpu_completion_requires_current_supported_counters_and_metadata(self) -> None:
+            package = {"requested_directory": "/world", "fingerprint": "0000000000000001"}
+            for mutate in (
+                lambda receipt: receipt.pop("gpu_completion"),
+                lambda receipt: receipt.update(gpu_completion=None),
+                lambda receipt: receipt.update(gpu_completion=[]),
+                lambda receipt: receipt.update(gpu_completion={}),
+            ):
+                receipt = game_receipt()
+                mutate(receipt)
+                with self.assertRaises(ReviewError):
+                    validate_receipt(receipt, package, None)
+            for fields in (
+                {"mechanism": "CPU submission without completion"},
+                {"wait_timeout_seconds": 0}, {"wait_timeout_seconds": 10.0},
+                {"sample_capacity": 9999}, {"sample_capacity": "10000"},
+                {"completed_batches": 0}, {"completed_batches": 119},
+                {"completed_batches": True}, {"completed_batches": 130.0},
+                {"completed_batches": 2**64}, {"attempted_batches": 2**64},
+                {"attempted_batches": 129}, {"attempted_batches": 132},
+                {"attempted_batches": False}, {"error": "GPU wait failed"},
+            ):
+                with self.subTest(fields=fields):
+                    receipt = game_receipt()
+                    receipt["gpu_completion"].update(fields)
+                    with self.assertRaises(ReviewError):
+                        validate_receipt(receipt, package, None)
+            receipt = game_receipt()
+            receipt["gpu_completion"]["attempted_batches"] += 1
+            validate_receipt(receipt, package, None)  # One in-flight render wait is legitimate.
+
+        def test_gpu_timing_vectors_are_exact_bounded_and_nonzero_elapsed(self) -> None:
+            package = {"requested_directory": "/world", "fingerprint": "0000000000000001"}
+            for completed in (130, 10_000, 10_001):
+                receipt = game_receipt(frames=max(130, completed), completed=completed)
+                gpu = receipt["gpu_completion"]
+                self.assertEqual(len(gpu["wait_samples_ms"]), min(completed, 10_000))
+                self.assertEqual(len(gpu["completion_intervals_ms"]), min(completed - 1, 10_000))
+                gpu["wait_samples_ms"][0] = 0.0
+                gpu["completion_intervals_ms"][0] = 0.0
+                validate_receipt(receipt, package, None)
+                for field in ("wait_samples_ms", "completion_intervals_ms"):
+                    for invalid in (None, [], gpu[field][:-1], gpu[field] + [1.0]):
+                        bad = copy.deepcopy(receipt)
+                        bad["gpu_completion"][field] = invalid
+                        with self.assertRaises(ReviewError):
+                            validate_receipt(bad, package, None)
+            for field in ("wait_samples_ms", "completion_intervals_ms"):
+                for invalid in (-1, float("nan"), float("inf"), True, "1", 10**1000):
+                    bad = game_receipt()
+                    bad["gpu_completion"][field][0] = invalid
+                    with self.assertRaises(ReviewError):
+                        validate_receipt(bad, package, None)
+            zero = game_receipt()
+            zero["gpu_completion"]["wait_samples_ms"] = [0.0] * 130
+            zero["gpu_completion"]["completion_intervals_ms"] = [0.0] * 129
+            with self.assertRaises(ReviewError):
+                validate_receipt(zero, package, None)
+
+        def test_missing_gpu_completion_cannot_publish_an_accepted_capture(self) -> None:
+            module = sys.modules[__name__]
+            before = {"head": "a" * 40, "dirty": False, "sha256": "b" * 64}
+            with tempfile.TemporaryDirectory() as directory:
+                base = Path(directory).resolve()
+                package = base / "world"
+                package.mkdir()
+                (package / "manifest.ron").write_text("(fingerprint:1)")
+                options = parser().parse_args(["--package", str(package), "--output", str(base / "run")])
+                def fake_process(_argv: Any, _cwd: Any, _environment: Any, output: Path, _timeout: Any) -> dict[str, Any]:
+                    (output / "cargo.stdout.log").write_text("fixture only\n")
+                    (output / "cargo.stderr.log").write_text(" 12345 maximum resident set size\n")
+                    receipt = game_receipt(str(package))
+                    receipt.pop("gpu_completion")  # Old pre-completion captures are historical only.
+                    atomic_json(output / "capture.json", receipt)
+                    return {"exit_code": 0, "timed_out": False, "elapsed_seconds": 0.1}
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), \
+                     patch.object(module, "source_snapshot", return_value=before), \
+                     patch.object(module, "run_process", side_effect=fake_process), \
+                     patch.object(module, "png_coverage") as pixels:
+                    self.assertEqual(capture(options), 1)
+                    pixels.assert_not_called()
+                failed = base / "run" / before["head"] / "capture"
+                self.assertFalse((failed / "review-receipt.json").exists())
+                self.assertEqual(strict_json(failed / "failure.json")["status"], "FAILED")
+                self.assertTrue((failed / "incomplete.json").exists())
 
         def test_walk_receipts_require_complete_settled_changed_support_evidence(self) -> None:
             package = {"requested_directory": "/world", "fingerprint": "0000000000000001"}
