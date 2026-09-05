@@ -442,7 +442,7 @@ fn build_app(options: Options) -> Result<App, String> {
         gameplay_revision,
         interests: Vec::new(),
         desired: BTreeSet::new(),
-        status: "Loading nearby terrain...".into(),
+        status: "Select terrain to plan a route".into(),
         error: None,
         frames: 0,
         settled_frames: 0,
