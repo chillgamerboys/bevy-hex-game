@@ -135,8 +135,11 @@ cross-base save migration are not installed.
 
 Use `tools/v4_review.py` for windowless, source-bound captures. It checks actual work,
 exact package/script identities, completion, PNG integrity/coverage and bounded
-settled frames. It records uncapped real frame intervals and samples only its owned
-game process for RSS; RSS is not a separate GPU allocation measurement. Dirty or
+settled frames. The windowless renderer waits for each submitted GPU batch with a
+10-second timeout before starting its next render frame; successful completion and
+bounded timing histories are required in the receipt. It records application frame
+intervals and GPU completion intervals, and samples only its owned game process for
+RSS. Neither is native display delivery; RSS is not a separate GPU allocation measurement. Dirty or
 map-test captures are diagnostic, never promotion approval. Static review and typed
 motion evidence do not clear `HUMAN-MOTION-PENDING`.
 

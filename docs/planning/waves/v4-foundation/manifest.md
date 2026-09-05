@@ -335,7 +335,7 @@ exercise admission, retirement, stale intent and origin changes.
 ## Focused validation and delivery status
 
 The focused suite contains 55 schematic, 40 shared-contract, 53 runtime, 8 world-tool
-and 107 V4 engine tests (36 game, 25 map, 21 objects, 16 perception, 9 units). All
+and 109 V4 engine tests (38 game, 25 map, 21 objects, 16 perception, 9 units). All
 passed; the affected 52 game/perception tests passed again after final walk diagnostics.
 The expanded runtime locality regression also passes with 2, 4,098 and 8,194 catalogue
 chunks, fixed one- then two-chunk interests, exact source-load counts and 600 quiet
@@ -371,3 +371,12 @@ paging and a future procedural producer; presentation owns measured render budge
 cold/long-session profiling and native motion acceptance; gameplay owns encounter
 joining/merging and production online integration. The authoring owner/user supplies
 the human active-hours trial. These future consumers do not acquire terrain authority.
+
+The clean `453daa3` release matrix completed all 21 scripted cases, including
+seam reversals, three distant-party view rebases, separate party motion, and
+terrain/object edits across unloading and process restart. Its uncapped windowless
+runner showed growing RSS in long small-footprint scenes. The follow-up bounds GPU
+submission backlog with a finite completion wait and records completed-batch timing;
+this change requires a fresh exact-source capture matrix. It also hides the ordinary
+HUD while the atlas is open and increases full-region top-view framing margin.
+Windowless timings remain separate from native frame-delivery and human motion approval.

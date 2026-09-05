@@ -1370,10 +1370,19 @@ fn update_view(
     presenter: Res<TerrainPresenter>,
     options: Res<Options>,
     knowledge: Res<WorldKnowledge>,
+    atlas: Res<atlas::AtlasState>,
     mut cameras: Query<&mut Transform, With<ExplorerCamera>>,
-    mut hud: Query<&mut Text, With<ExplorerHud>>,
+    mut hud: Query<(&mut Text, &mut Node), With<ExplorerHud>>,
 ) {
-    if let Ok(mut text) = hud.single_mut() {
+    if let Ok((mut text, mut node)) = hud.single_mut() {
+        let display = if atlas.visible {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != display {
+            node.display = display;
+        }
         let counts = runtime.0.counts();
         let view = knowledge.selected(&session);
         let updated = format!(

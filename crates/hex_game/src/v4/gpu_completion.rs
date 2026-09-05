@@ -83,7 +83,7 @@ impl GpuCompletion {
     pub fn completed_batches(&self) -> Result<u64, String> {
         self.0
             .lock()
-            .map_err(|_| "windowless GPU completion state is poisoned".to_owned())?
+            .map_err(|error| format!("windowless GPU completion state is poisoned: {error}"))?
             .completed()
     }
 
@@ -92,7 +92,7 @@ impl GpuCompletion {
         let state = self
             .0
             .lock()
-            .map_err(|_| "windowless GPU completion state is poisoned".to_owned())?;
+            .map_err(|error| format!("windowless GPU completion state is poisoned: {error}"))?;
         if state.completed()? == 0 {
             return Err("windowless capture has no completed GPU batch".into());
         }
@@ -165,7 +165,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[expect(clippy::expect_used, reason = "the fixture owns an unpoisoned test mutex")]
     fn failed_completion_stays_failed_even_if_a_later_callback_succeeds() {
         let completion = GpuCompletion::default();
         assert!(completion.receipt().is_err());
