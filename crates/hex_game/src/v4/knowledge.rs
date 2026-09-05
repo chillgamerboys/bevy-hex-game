@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    sync::{mpsc, Arc, Mutex},
 };
 
 use bevy::prelude::Resource;
@@ -15,7 +15,7 @@ use hex_core::{ExteriorIllumination, IlluminationLevel, SightProfile};
 use hex_perception::v4::{
     ObservationResult, ObserverFacts, ObserverRequest, PerceptionConfig, PerceptionWorld,
 };
-use hex_world_contracts::{ChunkId, ManifestIndex, WorldHex, hash_serializable};
+use hex_world_contracts::{hash_serializable, ChunkId, ManifestIndex, WorldHex};
 use hex_world_runtime::{
     IoLimits, KnowledgeConfig, KnowledgePartition, KnowledgeReceipt, KnowledgeStore,
     ObservedLandmark, ObservedSurface, WorldRuntime,
@@ -32,6 +32,8 @@ const MAX_COMPACT_LANDMARKS: usize = 131_072;
 /// Facts exposed only for the explicitly selected owning principal.
 pub(super) struct PrincipalView {
     pub principal: String,
+    /// Changes only when compact discovery/landmark presentation changes.
+    pub revision: u64,
     /// Current complete sight, absent while this observer's inputs are pending.
     pub current: Option<Arc<ObserverFacts>>,
     /// Observed or locally restored stable landmarks; never a manifest feature dump.
@@ -104,6 +106,7 @@ impl PrincipalState {
         Self {
             view: PrincipalView {
                 principal,
+                revision: 0,
                 current: None,
                 landmarks: BTreeMap::new(),
                 landmark_catalogue_complete: false,
@@ -120,11 +123,12 @@ impl PrincipalState {
     }
 
     fn install_compact(&mut self, partition: &KnowledgePartition) -> Result<(), String> {
+        let mut changed = false;
         for column in &partition.discovered_columns {
-            mark_column(
-                self.view.discovery.entry(column.chunk()).or_default(),
-                *column,
-            );
+            let mask = self.view.discovery.entry(column.chunk()).or_default();
+            let previous = *mask;
+            mark_column(mask, *column);
+            changed |= previous != *mask;
         }
         for landmark in &partition.landmarks {
             if !self.view.landmarks.contains_key(&landmark.id)
@@ -132,12 +136,20 @@ impl PrincipalState {
             {
                 return Err("principal compact landmark budget exceeded".into());
             }
-            self.view
-                .landmarks
-                .insert(landmark.id.clone(), landmark.clone());
+            if self.view.landmarks.get(&landmark.id) != Some(landmark) {
+                self.view
+                    .landmarks
+                    .insert(landmark.id.clone(), landmark.clone());
+                changed = true;
+            }
         }
         self.unloaded_landmark_chunks.remove(&partition.coordinate);
-        self.view.landmark_catalogue_complete = self.unloaded_landmark_chunks.is_empty();
+        let complete = self.unloaded_landmark_chunks.is_empty();
+        changed |= self.view.landmark_catalogue_complete != complete;
+        self.view.landmark_catalogue_complete = complete;
+        if changed {
+            self.view.revision = self.view.revision.saturating_add(1);
+        }
         Ok(())
     }
 
@@ -674,6 +686,7 @@ impl WorldKnowledge {
                     state.unloaded_landmark_chunks = discovery.keys().copied().collect();
                     state.view.landmark_catalogue_complete = discovery.is_empty();
                     state.view.discovery = discovery;
+                    state.view.revision = state.view.revision.saturating_add(1);
                     state.catalog_loaded = true;
                 }
                 IoEvent::Read {
@@ -1027,13 +1040,11 @@ mod tests {
         assert_eq!(knowledge.counts().completed_observers, 1);
         assert!(!knowledge.idle());
         session.selected = 1;
-        assert!(
-            knowledge
-                .selected(&session)
-                .expect("second principal")
-                .current
-                .is_some()
-        );
+        assert!(knowledge
+            .selected(&session)
+            .expect("second principal")
+            .current
+            .is_some());
         session.actors.get_mut(0).expect("first actor").standing = Some(position(14, 2));
         settle(&mut knowledge, &session, &mut runtime);
         assert_eq!(knowledge.counts().completed_observers, 2);
@@ -1068,31 +1079,25 @@ mod tests {
             .cache
             .get(&removed.column.chunk())
             .expect("nearby fine memory");
-        assert!(
-            !cached
-                .draft
-                .surfaces
-                .iter()
-                .any(|fact| fact.surface.position == removed)
-        );
-        assert!(
-            cached
-                .draft
-                .surfaces
-                .iter()
-                .any(|fact| fact.surface.position == position(13, 1))
-        );
+        assert!(!cached
+            .draft
+            .surfaces
+            .iter()
+            .any(|fact| fact.surface.position == removed));
+        assert!(cached
+            .draft
+            .surfaces
+            .iter()
+            .any(|fact| fact.surface.position == position(13, 1)));
         drop(knowledge);
         let mut reopened = WorldKnowledge::open(&runtime, Some(&directory))
             .expect("reopened source-bound knowledge");
         settle(&mut reopened, &session, &mut runtime);
         assert_eq!(reopened.counts().persisted_batches, 0);
-        assert!(
-            reopened
-                .selected(&session)
-                .expect("restored private view")
-                .discovered(removed.column)
-        );
+        assert!(reopened
+            .selected(&session)
+            .expect("restored private view")
+            .discovered(removed.column));
         drop(reopened);
         std::fs::remove_dir_all(directory).expect("remove saved fixture");
     }

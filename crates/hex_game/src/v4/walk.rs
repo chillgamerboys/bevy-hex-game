@@ -6,11 +6,11 @@
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 
 use bevy::prelude::Resource;
-use hex_world_contracts::{ChunkId, QueryResult, VoxelPosition, WorldQuery};
+use hex_world_contracts::{ChunkId, QueryResult, VoxelPosition, WorldHex, WorldQuery};
 use hex_world_runtime::WorldRuntime;
 use serde::{Deserialize, Serialize};
 
-use super::{EditRequest, MoveRequest, Session};
+use super::{object_edit, EditRequest, MoveRequest, Session};
 
 const MAX_SCRIPT_BYTES: u64 = 262_144;
 const MAX_STEPS: usize = 2_048;
@@ -60,6 +60,16 @@ enum WalkStep {
         position: VoxelPosition,
         material: Option<String>,
     },
+    RemoveObject {
+        position: VoxelPosition,
+        object_id: String,
+    },
+    WaitObject {
+        column: WorldHex,
+        object_id: String,
+        present: bool,
+        max_ticks: u32,
+    },
     Save {
         max_ticks: u64,
     },
@@ -92,6 +102,7 @@ impl WalkStep {
             Self::WaitAt { position, .. }
             | Self::AssertAt { position, .. }
             | Self::EditVoxel { position, .. }
+            | Self::RemoveObject { position, .. }
             | Self::AssertVoxel { position, .. } => Some(*position),
             _ => None,
         }
@@ -103,6 +114,7 @@ impl WalkStep {
             | Self::EditVoxel { max_ticks, .. }
             | Self::Save { max_ticks }
             | Self::WaitChunk { max_ticks, .. } => Some(*max_ticks),
+            Self::WaitObject { max_ticks, .. } => Some(u64::from(*max_ticks)),
             _ => None,
         }
     }
@@ -137,6 +149,11 @@ pub(super) struct WalkReceipt {
     observed_revision: Option<u64>,
     successful_saves: u64,
     gameplay_revision: u64,
+    successful_object_edits: u64,
+    pending_object_request: Option<String>,
+    object_removal_pending: bool,
+    cancel_object_edit_pending: bool,
+    observed_object_present: Option<bool>,
 }
 
 enum PendingOperation {
@@ -155,6 +172,7 @@ pub(super) struct WalkHarness {
     checked: bool,
     pending: Option<PendingOperation>,
     issued_moves: BTreeMap<String, (VoxelPosition, VoxelPosition)>,
+    issued_object_removals: BTreeMap<String, u64>,
     verified_moves: usize,
     receipts: Vec<WalkReceipt>,
     seen_resident: std::collections::BTreeSet<ChunkId>,
@@ -203,6 +221,14 @@ impl WalkHarness {
                 return Err("walk wait budget must be 1..20000 and within script max_ticks".into());
             }
             match step {
+                WalkStep::RemoveObject { object_id, .. }
+                | WalkStep::WaitObject { object_id, .. }
+                    if object_id.trim().is_empty()
+                        || object_id.len() > 256
+                        || object_id.chars().any(char::is_control) =>
+                {
+                    return Err("walk object IDs must contain 1..256 bytes without controls".into());
+                }
                 WalkStep::MoveTo { actor, goal } => moves.push((actor, goal)),
                 WalkStep::WaitAt {
                     actor, position, ..
@@ -236,6 +262,7 @@ impl WalkHarness {
             checked: false,
             pending: None,
             issued_moves: BTreeMap::new(),
+            issued_object_removals: BTreeMap::new(),
             verified_moves: 0,
             receipts: Vec::new(),
             seen_resident: Default::default(),
@@ -260,6 +287,13 @@ impl WalkHarness {
                 if matches!(runtime.surfaces(position.column), QueryResult::OutsideWorld) {
                     return Err(format!(
                         "walk step {index}: destination {position:?} is outside the world"
+                    ));
+                }
+            }
+            if let WalkStep::WaitObject { column, .. } = step {
+                if matches!(runtime.surfaces(*column), QueryResult::OutsideWorld) {
+                    return Err(format!(
+                        "walk step {index}: object observation {column:?} is outside the world"
                     ));
                 }
             }
@@ -410,7 +444,9 @@ impl WalkHarness {
                         state.standing
                     ));
                 }
-                self.observe_move(actor, *position);
+                if state.motion.is_none() && state.requested.is_none() {
+                    self.observe_move(actor, *position);
+                }
             }
             WalkStep::EditVoxel { position, .. } => {
                 if let Some(PendingOperation::Edit { revision }) = self.pending {
@@ -460,6 +496,54 @@ impl WalkHarness {
                     return Err(format!(
                         "voxel {position:?}: expected {material:?}, got {actual:?}"
                     ));
+                }
+            }
+            WalkStep::RemoveObject {
+                position,
+                object_id,
+            } => {
+                if object_command_pending(session) {
+                    return Err("RemoveObject cannot replace a pending object command".into());
+                }
+                let Some(revision) = runtime.revision(position.column.chunk()) else {
+                    return Ok(false);
+                };
+                let selection = object_edit::selections_at(runtime, *position, revision)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .find(|selection| selection.object_id == *object_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "RemoveObject requires object {object_id:?} at the exact voxel {position:?}"
+                        )
+                    })?;
+                self.issued_object_removals
+                    .insert(object_id.clone(), session.successful_object_edits);
+                session.object_edit_requested = Some(selection);
+            }
+            WalkStep::WaitObject {
+                column,
+                object_id,
+                present,
+                ..
+            } => {
+                if object_command_pending(session) {
+                    return Ok(false);
+                }
+                if self
+                    .issued_object_removals
+                    .get(object_id)
+                    .is_some_and(|before| session.successful_object_edits <= *before)
+                {
+                    return Err(format!(
+                        "object removal {object_id:?} settled without a successful completion"
+                    ));
+                }
+                let Some(actual) = object_present(runtime, *column, object_id) else {
+                    return Ok(false);
+                };
+                if actual != *present {
+                    return Ok(false);
                 }
             }
             WalkStep::Save { .. } => {
@@ -516,7 +600,18 @@ impl WalkHarness {
     fn record(&mut self, step: WalkStep, session: &Session, runtime: &WorldRuntime) {
         let observed_chunk = match &step {
             WalkStep::WaitChunk { coordinate, .. } => Some(*coordinate),
+            WalkStep::WaitObject { column, .. } => Some(column.chunk()),
             _ => step.position().map(|position| position.column.chunk()),
+        };
+        let observed_object_present = match &step {
+            WalkStep::RemoveObject {
+                position,
+                object_id,
+            } => object_present(runtime, position.column, object_id),
+            WalkStep::WaitObject {
+                column, object_id, ..
+            } => object_present(runtime, *column, object_id),
+            _ => None,
         };
         let counts = runtime.counts();
         self.receipts.push(WalkReceipt {
@@ -547,8 +642,34 @@ impl WalkHarness {
             observed_revision: observed_chunk.and_then(|chunk| runtime.revision(chunk)),
             successful_saves: session.successful_saves,
             gameplay_revision: session.gameplay_revision,
+            successful_object_edits: session.successful_object_edits,
+            pending_object_request: session
+                .object_edit_requested
+                .as_ref()
+                .map(|selection| selection.object_id.clone()),
+            object_removal_pending: session.object_removal.is_some(),
+            cancel_object_edit_pending: session.cancel_object_edit_requested,
+            observed_object_present,
         });
     }
+}
+
+fn object_command_pending(session: &Session) -> bool {
+    session.object_edit_requested.is_some()
+        || session.object_removal.is_some()
+        || session.cancel_object_edit_requested
+}
+
+/// None means unavailable; a dormant chunk never proves an object's absence.
+fn object_present(runtime: &WorldRuntime, column: WorldHex, object_id: &str) -> Option<bool> {
+    runtime.resident_chunk(column.chunk()).map(|product| {
+        product
+            .package
+            .semantics
+            .object_influences
+            .iter()
+            .any(|influence| influence.id == object_id)
+    })
 }
 
 fn actor_index(session: &Session, actor: &str) -> Result<usize, String> {
@@ -560,14 +681,14 @@ fn actor_index(session: &Session, actor: &str) -> Result<usize, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::v4) mod tests {
     use super::*;
     use std::{collections::VecDeque, sync::Arc, time::Instant};
 
     use hex_world_contracts::*;
     use hex_world_runtime::{MemoryChunkSource, RuntimeConfig};
 
-    use crate::v4::{ExplorerActor, move_actors};
+    use crate::v4::{move_actors, ExplorerActor};
 
     fn script(steps: &str) -> WalkHarness {
         WalkHarness::parse(&format!(
@@ -583,7 +704,11 @@ mod tests {
         }
     }
 
-    fn fixture() -> (Session, WorldRuntime) {
+    pub(in crate::v4) fn fixture() -> (Session, WorldRuntime) {
+        fixture_with_objects(false)
+    }
+
+    fn fixture_with_objects(include_object: bool) -> (Session, WorldRuntime) {
         let mut chunks = BTreeMap::<ChunkId, ChunkPackage>::new();
         let mut regions = Vec::new();
         for (id, q) in [("a", 14), ("b", 100)] {
@@ -625,6 +750,35 @@ mod tests {
                         });
                 }
             }
+        }
+        if include_object {
+            let origin = VoxelPosition {
+                column: WorldHex::new(15, 1),
+                level: 3,
+            };
+            chunks
+                .get_mut(&origin.column.chunk())
+                .expect("object root chunk")
+                .semantics
+                .objects
+                .push(ObjectInstance {
+                    id: "test-tree".into(),
+                    region_id: "a".into(),
+                    asset: "test-prefab".into(),
+                    origin,
+                    rotation: 0,
+                    occupancy: [15, 16]
+                        .into_iter()
+                        .map(|q| ColumnData {
+                            position: WorldHex::new(q, 1),
+                            runs: vec![VoxelRun {
+                                bottom: 3,
+                                top: 5,
+                                material: "stone".into(),
+                            }],
+                        })
+                        .collect(),
+                });
         }
         let mut package = WorldPackage {
             manifest: WorldManifest {
@@ -706,6 +860,10 @@ mod tests {
                 actors,
                 selected: 0,
                 edit_requested: None,
+                object_edit_requested: None,
+                object_removal: None,
+                cancel_object_edit_requested: false,
+                successful_object_edits: 0,
                 save_requested: false,
                 interests: Vec::new(),
                 rendered: Default::default(),
@@ -805,11 +963,10 @@ mod tests {
         );
         walk.tick(&mut session, &mut runtime).expect("first wait");
         walk.tick(&mut session, &mut runtime).expect("bounded wait");
-        assert!(
-            walk.tick(&mut session, &mut runtime)
-                .expect_err("controller was not run")
-                .contains("timed out")
-        );
+        assert!(walk
+            .tick(&mut session, &mut runtime)
+            .expect_err("controller was not run")
+            .contains("timed out"));
         assert!(!walk.completed());
     }
 
@@ -823,11 +980,10 @@ mod tests {
             let mut walk = script(&format!(
                 "MoveTo(actor:\"{actor}\",goal:(column:(q:{q},r:0),level:2)),WaitAt(actor:\"{actor}\",position:(column:(q:{q},r:0),level:2),max_ticks:20)"
             ));
-            assert!(
-                walk.tick(&mut session, &mut runtime)
-                    .expect_err("bad request")
-                    .contains(expected)
-            );
+            assert!(walk
+                .tick(&mut session, &mut runtime)
+                .expect_err("bad request")
+                .contains(expected));
             assert!(session.actors.iter().all(|actor| actor.requested.is_none()));
         }
     }
@@ -849,5 +1005,220 @@ mod tests {
             assert!(WalkHarness::parse(&invalid).is_err(), "{invalid}");
         }
         assert!(WalkHarness::parse(&" ".repeat(MAX_SCRIPT_BYTES as usize + 1)).is_err());
+    }
+    #[test]
+    fn passing_through_a_pending_goal_does_not_verify_completed_movement() {
+        let (mut session, mut runtime) = fixture();
+        let mut walk = script(
+            r#"MoveTo(actor:"a",goal:(column:(q:17,r:0),level:2)),AssertAt(actor:"a",position:(column:(q:17,r:0),level:2))"#,
+        );
+        walk.tick(&mut session, &mut runtime)
+            .expect("owned request");
+        let actor = session.actors.first_mut().expect("actor a");
+        actor.column = position(17).column;
+        actor.standing = Some(position(17));
+        actor.motion = Some(hex_units::v4::ContinuousStep {
+            from: position(17),
+            to: position(16),
+            fraction: 0.5,
+        });
+        assert!(walk
+            .tick(&mut session, &mut runtime)
+            .expect_err("position-only observation cannot complete pending movement")
+            .contains("no successful exact movement"));
+        assert_eq!(walk.verified_moves, 0);
+        assert!(!walk.completed());
+    }
+
+    #[test]
+    fn object_commands_require_exact_selection_and_acknowledged_cross_chunk_removal() {
+        let (mut session, mut runtime) = fixture_with_objects(true);
+        let mut walk = script(
+            r#"MoveTo(actor:"a",goal:(column:(q:17,r:0),level:2)),
+            WaitAt(actor:"a",position:(column:(q:17,r:0),level:2),max_ticks:30)"#,
+        );
+        let clicked = VoxelPosition {
+            column: WorldHex::new(16, 1),
+            level: 4,
+        };
+        let remove = WalkStep::RemoveObject {
+            position: clicked,
+            object_id: "test-tree".into(),
+        };
+        let wait = WalkStep::WaitObject {
+            column: clicked.column,
+            object_id: "test-tree".into(),
+            present: false,
+            max_ticks: 20,
+        };
+        let wrong = WalkStep::RemoveObject {
+            position: clicked,
+            object_id: "missing-tree".into(),
+        };
+        assert!(walk
+            .execute(&wrong, 0, &mut session, &runtime)
+            .expect_err("wrong named influence")
+            .contains("exact voxel"));
+        let air = WalkStep::RemoveObject {
+            position: VoxelPosition {
+                level: 9,
+                ..clicked
+            },
+            object_id: "test-tree".into(),
+        };
+        assert!(walk.execute(&air, 0, &mut session, &runtime).is_err());
+        assert!(session.object_edit_requested.is_none());
+        assert!(walk
+            .execute(&remove, 0, &mut session, &runtime)
+            .expect("exact fragment pick"));
+        walk.record(remove.clone(), &session, &runtime);
+        let receipt = walk.receipts.last().expect("request receipt");
+        assert_eq!(receipt.pending_object_request.as_deref(), Some("test-tree"));
+        assert_eq!(receipt.observed_object_present, Some(true));
+        assert_eq!(receipt.successful_object_edits, 0);
+        assert!(walk
+            .execute(&remove, 0, &mut session, &runtime)
+            .expect_err("cannot replace pending command")
+            .contains("pending"));
+        assert!(!walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect("pending request"));
+        let selection = session.object_edit_requested.take().expect("typed command");
+        assert_eq!(selection.chunk, clicked.column.chunk());
+        session.object_removal = Some(
+            object_edit::ObjectRemoval::begin(
+                &mut runtime,
+                "walk-test-removal".into(),
+                selection,
+                Default::default(),
+            )
+            .expect("ordinary object owner planning"),
+        );
+        assert!(!walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect("pending planner"));
+        let transaction = match session
+            .object_removal
+            .as_mut()
+            .expect("planner")
+            .poll(&mut runtime, &[])
+            .expect("loaded complete footprint")
+        {
+            object_edit::RemovalStatus::Ready(transaction) => Some(transaction),
+            object_edit::RemovalStatus::Pending(_) => None,
+        }
+        .expect("fixture dependencies are resident");
+        runtime
+            .apply_object_transaction(&transaction)
+            .expect("ordinary runtime object edit");
+        assert!(!walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect("visible absence cannot complete while owner remains pending"));
+        session
+            .object_removal
+            .take()
+            .expect("completed planner")
+            .cancel(&mut runtime)
+            .expect("release operation pins");
+        assert!(walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect_err("must acknowledge command success")
+            .contains("successful completion"));
+        session.successful_object_edits += 1;
+        assert!(walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect("fragment removal observed"));
+        assert!(walk
+            .execute(
+                &WalkStep::WaitObject {
+                    column: WorldHex::new(15, 1),
+                    object_id: "test-tree".into(),
+                    present: false,
+                    max_ticks: 20,
+                },
+                0,
+                &mut session,
+                &runtime
+            )
+            .expect("root removal observed"));
+        walk.record(wait, &session, &runtime);
+        let receipt = walk.receipts.last().expect("settled receipt");
+        assert_eq!(receipt.observed_object_present, Some(false));
+        assert_eq!(receipt.successful_object_edits, 1);
+        assert!(receipt.pending_object_request.is_none());
+        assert!(!receipt.object_removal_pending);
+        assert!(!receipt.cancel_object_edit_pending);
+        assert!(walk
+            .execute(&remove, 0, &mut session, &runtime)
+            .expect_err("repeat removal cannot fake useful work")
+            .contains("exact voxel"));
+    }
+
+    #[test]
+    fn object_wait_never_treats_unloaded_data_or_pending_cancel_as_absence() {
+        let (mut session, mut runtime) = fixture_with_objects(true);
+        let mut walk = script(
+            r#"MoveTo(actor:"a",goal:(column:(q:17,r:0),level:2)),
+            WaitAt(actor:"a",position:(column:(q:17,r:0),level:2),max_ticks:30)"#,
+        );
+        let column = WorldHex::new(16, 1);
+        let wait = WalkStep::WaitObject {
+            column,
+            object_id: "test-tree".into(),
+            present: true,
+            max_ticks: 20,
+        };
+        session.cancel_object_edit_requested = true;
+        assert!(!walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect("cancellation pending"));
+        session.cancel_object_edit_requested = false;
+        assert!(walk
+            .execute(&wait, 0, &mut session, &runtime)
+            .expect("resident exact influence"));
+        runtime
+            .set_interests(Vec::new())
+            .expect("withdraw interests");
+        let _ = runtime.pump();
+        assert!(runtime.revision(column.chunk()).is_none());
+        assert_eq!(object_present(&runtime, column, "test-tree"), None);
+        assert!(!walk
+            .execute(
+                &WalkStep::WaitObject {
+                    column,
+                    object_id: "test-tree".into(),
+                    present: false,
+                    max_ticks: 20,
+                },
+                0,
+                &mut session,
+                &runtime
+            )
+            .expect("absence requires resident data"));
+    }
+
+    #[test]
+    fn object_source_has_strict_id_wait_and_world_bounds() {
+        let suffix = r#",MoveTo(actor:"a",goal:(column:(q:17,r:0),level:2)),
+            WaitAt(actor:"a",position:(column:(q:17,r:0),level:2),max_ticks:30)"#;
+        for command in [
+            r#"WaitObject(column:(q:16,r:1),object_id:"",present:false,max_ticks:20)"#,
+            r#"WaitObject(column:(q:16,r:1),object_id:"tree",present:false,max_ticks:0)"#,
+            r#"WaitObject(column:(q:16,r:1),object_id:"tree",present:false,max_ticks:20001)"#,
+            r#"RemoveObject(position:(column:(q:16,r:1),level:4),object_id:"tree",typo:true)"#,
+        ] {
+            assert!(WalkHarness::parse(&format!(
+                "(schema_version:1,id:\"test\",max_ticks:200,steps:[{command}{suffix}])"
+            ))
+            .is_err());
+        }
+        let (mut session, mut runtime) = fixture();
+        let mut walk = script(&format!(
+            "WaitObject(column:(q:999,r:0),object_id:\"tree\",present:false,max_ticks:20){suffix}"
+        ));
+        assert!(walk
+            .tick(&mut session, &mut runtime)
+            .expect_err("outside observation")
+            .contains("outside the world"));
     }
 }

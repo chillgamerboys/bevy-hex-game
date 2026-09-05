@@ -8,10 +8,13 @@ use hex_map::v4::{PreparedChunk, TerrainPresenter};
 use hex_world_contracts::ChunkId;
 use hex_world_runtime::{ChunkProduct, WorldRuntime};
 
+use super::art::{ArtPlan, StockArt};
+
 struct Completion {
     epoch: u64,
     product: ChunkProduct,
     prepared: Result<PreparedChunk, String>,
+    art: ArtPlan,
 }
 
 /// One view's queue; canceled work still occupies a real worker slot until it ends.
@@ -23,6 +26,7 @@ pub(super) struct MeshQueue {
     completed: VecDeque<Completion>,
     sender: mpsc::Sender<Completion>,
     receiver: Mutex<mpsc::Receiver<Completion>>,
+    pub art: Option<StockArt>,
     pub published: u64,
     pub discarded: u64,
     pub peak_pending: usize,
@@ -38,6 +42,7 @@ impl Default for MeshQueue {
             completed: VecDeque::new(),
             sender,
             receiver: Mutex::new(receiver),
+            art: None,
             published: 0,
             discarded: 0,
             peak_pending: 0,
@@ -87,6 +92,10 @@ impl MeshQueue {
             let current = runtime.resident_chunk(coordinate);
             if result.epoch != self.epoch
                 || !desired.contains(&coordinate)
+                || self
+                    .art
+                    .as_ref()
+                    .is_none_or(|art| art.signature(coordinate) != result.art.fingerprint)
                 || current.is_none_or(|current| {
                     current.revision != result.product.revision
                         || current.package.fingerprint != result.product.package.fingerprint
@@ -95,8 +104,16 @@ impl MeshQueue {
                 self.discarded += 1;
                 continue;
             }
+            let prepared = result.prepared?;
             presenter
-                .publish(world, result.prepared?)
+                .validate_publication(&prepared)
+                .map_err(|error| error.to_string())?;
+            self.art
+                .as_mut()
+                .ok_or("stock art is not ready")?
+                .publish(world, coordinate, result.art)?;
+            presenter
+                .publish(world, prepared)
                 .map_err(|error| error.to_string())?;
             self.published += 1;
             published += 1;
@@ -118,6 +135,11 @@ impl MeshQueue {
             if !desired.contains(&coordinate) {
                 continue;
             }
+            let Some(art) = &self.art else {
+                self.pending.insert(coordinate, product);
+                break;
+            };
+            let art = art.prepare(coordinate, product.revision, presenter.origin())?;
             let context = presenter.preparer();
             let sender = self.sender.clone();
             let epoch = self.epoch;
@@ -126,7 +148,11 @@ impl MeshQueue {
                 .spawn(move || {
                     let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         context
-                            .prepare(&product.package, product.revision)
+                            .prepare_with_suppressed_occupancy(
+                                &product.package,
+                                product.revision,
+                                &art.suppression,
+                            )
                             .map_err(|error| error.to_string())
                     }))
                     .unwrap_or_else(|_| Err("mesh preparation worker panicked".to_owned()));
@@ -134,6 +160,7 @@ impl MeshQueue {
                         epoch,
                         product,
                         prepared,
+                        art,
                     });
                 })
                 .map_err(|error| error.to_string())?;

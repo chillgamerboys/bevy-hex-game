@@ -8,7 +8,10 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use hex_world_contracts::{WorldHex, WorldManifest};
 
-use super::{Options, ResidentWorld, Session};
+use super::{
+    knowledge::{PrincipalView, WorldKnowledge},
+    Options, ResidentWorld, Session,
+};
 
 const SIZE: u32 = 1024;
 
@@ -18,6 +21,9 @@ pub(super) struct AtlasState {
     zoom: f32,
     pan: Vec2,
     projection: Option<AtlasProjection>,
+    base: Option<Image>,
+    texture: Option<Handle<Image>>,
+    knowledge_stamp: Option<(String, u64)>,
 }
 
 #[derive(Component)]
@@ -28,6 +34,25 @@ pub(super) struct AtlasImage;
 pub(super) struct AtlasMarker(usize);
 #[derive(Component)]
 pub(super) struct MiniMarker(usize);
+
+#[derive(Component)]
+pub(super) struct AtlasLegend;
+
+/// Filter only IDs already present in this principal's memory. This lookup does
+/// not turn the public registry into a list of discovered features.
+pub(super) fn is_summary_landmark(manifest: &WorldManifest, id: &str) -> bool {
+    manifest
+        .features
+        .binary_search_by(|feature| feature.id.as_str().cmp(id))
+        .ok()
+        .and_then(|index| manifest.features.get(index))
+        .is_some_and(|feature| {
+            matches!(
+                feature.kind.as_str(),
+                "entry" | "transit" | "gameplay-anchor" | "observation" | "ruin"
+            )
+        })
+}
 
 #[derive(Clone)]
 struct AtlasProjection {
@@ -108,7 +133,9 @@ fn image(manifest: &WorldManifest, projection: &AtlasProjection) -> Image {
             let (x, y, radius) = (
                 (normalized.x * SIZE as f32) as i32,
                 (normalized.y * SIZE as f32) as i32,
-                (12.0 / projection.side * f64::from(SIZE)).ceil() as i32,
+                (hex_world_contracts::SUMMARY_SAMPLE_PITCH as f64 / projection.side
+                    * f64::from(SIZE))
+                .ceil() as i32,
             );
             let Some(color) = colors.get(sample.material.as_str()) else {
                 continue;
@@ -137,6 +164,89 @@ fn image(manifest: &WorldManifest, projection: &AtlasProjection) -> Image {
     image
 }
 
+fn private_overlay(
+    mut image: Image,
+    manifest: &WorldManifest,
+    projection: &AtlasProjection,
+    view: &PrincipalView,
+) -> Image {
+    let Some(data) = &mut image.data else {
+        return image;
+    };
+    // Compact discovery masks are permitted to span the known map. No dormant
+    // fine terrain or another principal's memory is loaded for this overlay.
+    for chunk in view.discovered_chunks() {
+        let Ok(origin) = chunk.origin() else {
+            continue;
+        };
+        for q in 0..16 {
+            for r in 0..16 {
+                let Ok(column) = origin.checked_add(WorldHex::new(q, r)) else {
+                    continue;
+                };
+                if view.discovered(column) {
+                    mark_pixel(
+                        data,
+                        projection.relative(column),
+                        0,
+                        [65, 192, 194, 255],
+                        true,
+                    );
+                }
+            }
+        }
+    }
+    for landmark in view
+        .landmarks
+        .values()
+        .filter(|landmark| is_summary_landmark(manifest, &landmark.id))
+    {
+        mark_pixel(
+            data,
+            projection.relative(landmark.position.column),
+            2,
+            [247, 234, 154, 255],
+            false,
+        );
+    }
+    image
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "only normalized atlas presentation coordinates become bounded pixel indices"
+)]
+fn mark_pixel(data: &mut [u8], point: Vec2, radius: i32, color: [u8; 4], blend: bool) {
+    if !point.is_finite() {
+        return;
+    }
+    let x = (point.x * SIZE as f32) as i32;
+    let y = (point.y * SIZE as f32) as i32;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let (Ok(px), Ok(py)) = (u32::try_from(x + dx), u32::try_from(y + dy)) else {
+                continue;
+            };
+            if px >= SIZE || py >= SIZE {
+                continue;
+            }
+            let Ok(index) = usize::try_from((py * SIZE + px) * 4) else {
+                continue;
+            };
+            if let Some(pixel) = data.get_mut(index..index + 4) {
+                for (value, tint) in pixel.iter_mut().zip(color) {
+                    *value = if blend {
+                        u8::try_from((u16::from(*value) + u16::from(tint)) / 2).unwrap_or(255)
+                    } else {
+                        tint
+                    };
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -148,7 +258,10 @@ pub(super) fn setup(
     let Some(projection) = AtlasProjection::new(runtime.0.manifest()) else {
         return;
     };
-    let texture = images.add(image(runtime.0.manifest(), &projection));
+    let base = image(runtime.0.manifest(), &projection);
+    let texture = images.add(base.clone());
+    state.base = Some(base);
+    state.texture = Some(texture.clone());
     state.visible = options.view == "atlas";
     state.zoom = 1.0;
     state.projection = Some(projection);
@@ -227,13 +340,14 @@ pub(super) fn setup(
                     }
                 });
             parent.spawn((
-                Text::new("World atlas   ·   Drag to pan   ·   Scroll to zoom   ·   M to close"),
+                Text::new("World geography | Drag: pan | Scroll: zoom | M: close\nPrivate exploration loading..."),
                 TextFont {
-                    font_size: 17.0,
+                    font_size: FontSize::Px(17.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
                 BackgroundColor(Color::srgba(0.025, 0.05, 0.06, 0.9)),
+                AtlasLegend,
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(14),
@@ -251,6 +365,10 @@ pub(super) fn update(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     session: Res<Session>,
+    runtime: Res<ResidentWorld>,
+    knowledge: Res<WorldKnowledge>,
+    mut images: ResMut<Assets<Image>>,
+    mut legend: Query<&mut Text, With<AtlasLegend>>,
     mut state: ResMut<AtlasState>,
     mut queries: ParamSet<(
         Query<(&mut Node, &ComputedNode), With<AtlasRoot>>,
@@ -259,6 +377,28 @@ pub(super) fn update(
         Query<(&mut Node, &MiniMarker)>,
     )>,
 ) {
+    let selected = knowledge.selected(&session);
+    let stamp = selected.map(|view| (view.principal.clone(), view.revision));
+    if state.knowledge_stamp != stamp {
+        if let (Some(base), Some(texture), Some(projection)) =
+            (&state.base, &state.texture, &state.projection)
+        {
+            let updated = selected.map_or_else(
+                || base.clone(),
+                |view| private_overlay(base.clone(), runtime.0.manifest(), projection, view),
+            );
+            if let Some(image) = images.get_mut(texture) {
+                *image = updated;
+            }
+        }
+        state.knowledge_stamp = stamp;
+    }
+    if let Ok(mut text) = legend.single_mut() {
+        **text = selected.map_or_else(|| "World geography | Private exploration loading...".into(), |view| {
+            let landmarks = view.landmarks.values().filter(|landmark| is_summary_landmark(runtime.0.manifest(), &landmark.id)).count();
+            format!("World geography | Drag: pan | Scroll: zoom | M: close\n{}: {} explored columns | {} known landmarks{}\nCyan: private exploration | Yellow: known landmarks", view.principal, view.discovered_column_count(), landmarks, if view.landmark_catalogue_complete { "" } else { " (nearby restore)" })
+        });
+    }
     if keys.just_pressed(KeyCode::KeyM) {
         state.visible = !state.visible;
     }
@@ -290,6 +430,11 @@ pub(super) fn update(
         return;
     };
     for (mut node, marker) in &mut queries.p2() {
+        node.display = if marker.0 == session.selected {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if let Some(actor) = session.actors.get(marker.0) {
             let point = projection.relative(actor.column) * size;
             node.left = px(point.x - 5.0);
@@ -297,10 +442,37 @@ pub(super) fn update(
         }
     }
     for (mut node, marker) in &mut queries.p3() {
+        node.display = if marker.0 == session.selected {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if let Some(actor) = session.actors.get(marker.0) {
             let point = projection.relative(actor.column) * 190.0;
             node.left = px(point.x - 3.5);
             node.top = px(point.y - 3.5);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exploration_tint_preserves_opaque_target_and_outside_markers_do_not_write() {
+        let mut data = vec![100; usize::try_from(SIZE * SIZE * 4).expect("bounded atlas")];
+        for pixel in data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[100, 100, 100, 255]);
+        }
+        mark_pixel(&mut data, Vec2::splat(0.5), 0, [60, 200, 220, 255], true);
+        assert!(data.chunks_exact(4).all(|pixel| pixel.last() == Some(&255)));
+        assert!(data
+            .chunks_exact(4)
+            .any(|pixel| pixel == [80, 150, 160, 255]));
+        let before = data.clone();
+        mark_pixel(&mut data, Vec2::splat(-10.0), 2, [255; 4], false);
+        mark_pixel(&mut data, Vec2::splat(f32::NAN), 2, [255; 4], false);
+        assert_eq!(before, data);
     }
 }
