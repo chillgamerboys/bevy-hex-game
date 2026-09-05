@@ -4,7 +4,7 @@
 //! no legacy reconciliation, world snapshots, or screen lifecycle. Publication is
 //! deliberately opt-in: the application must atomically suppress only the matching
 //! object proxy faces and install authoritative object picking. Meshes start with
-//! `Pickable::IGNORE`; [`ResidentObjectPart`] identifies them for that integration.
+//! `Pickable::IGNORE`; [`crate::v4::ResidentObjectPart`] identifies them for that integration.
 //! Unknown assets, mismatched footprints, and foreign-root occupancy without a
 //! complete source record remain explicit proxies outside this adapter.
 //! Chunk fragments are the streaming integration: each mesh contains only its
