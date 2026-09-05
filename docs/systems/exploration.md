@@ -35,6 +35,8 @@ level height (Grand V3 is 0.35 world units). Tuning is validated on load/hot rel
 Water and lava are liquid volumes, never platforms. One-level wading is permitted;
 walking into deeper liquid is rejected. Falling into deep liquid or below the map
 returns to a still-valid last grounded position, then the original spawn if needed.
+The shore guard applies near the water surface: high bridge and cliff edges still
+allow ordinary falling over deep water, followed by recovery on entering it.
 If both supports have changed, exploration enables fly instead of repeatedly
 teleporting into invalid geometry. Falls do no damage. Swimming is deferred.
 
@@ -87,6 +89,8 @@ The [windowless exploration script](../../walks/grand_v3_exploration.ron) runs w
 and `cargo run -p hex_game --features dev,visual-walk`. It observes mode, grounding,
 displacement and re-entry through typed state, and captures both camera azimuths.
 The script is static presentation evidence; its captures do not establish motion feel.
+Its explicit 180-second gameplay-loading allowance accommodates unoptimized CI
+world construction; it does not change native loading behavior or performance gates.
 
 Later, compare the retained right-drag controls against captured-mouse third-person
 look, including cursor release, camera comfort, movement direction and quick switching.

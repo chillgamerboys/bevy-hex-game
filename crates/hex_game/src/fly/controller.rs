@@ -205,11 +205,19 @@ impl Body {
                     }
                 }
             }
-            // Reject a grounded shore step before falling into a deep liquid bed.
-            let drop = (self.position.y - world.floor).max(1.0);
-            if let Some(landing) = world.ground(self.position, height, radius, drop) {
-                if world.water_depth(landing, radius) > settings.wade_levels * level + SKIN * 4.0 {
-                    self.position = original;
+            // Reject entry at a shore. A high bridge or cliff must still allow
+            // a ledge fall; airborne deep-water entry recovers below.
+            let shore_probe = self.position - Vec3::Y * (settings.step_levels * level + SKIN * 4.0);
+            let near_water = world.water_depth(self.position, radius) > 0.0
+                || world.water_depth(shore_probe, radius) > 0.0;
+            if near_water {
+                let drop = (self.position.y - world.floor).max(1.0);
+                if let Some(landing) = world.ground(self.position, height, radius, drop) {
+                    if world.water_depth(landing, radius)
+                        > settings.wade_levels * level + SKIN * 4.0
+                    {
+                        self.position = original;
+                    }
                 }
             }
         }
@@ -639,6 +647,57 @@ mod tests {
             .expect("map recovery");
         assert!(notice.contains("Fell below"));
         assert!(body.position.distance(safe) < 0.001);
+    }
+
+    #[test]
+    fn a_high_ledge_over_deep_water_allows_falling_before_recovery() {
+        let mut world = floor(5);
+        world.replace(
+            Entity::from_bits(2),
+            vec![Span {
+                coord: HexCoord::default(),
+                bottom: 0.0,
+                top: 3.0,
+                material: Material::Solid,
+            }],
+        );
+        world.replace(
+            Entity::from_bits(3),
+            HexCoord::default()
+                .within_radius(5)
+                .into_iter()
+                .map(|coord| Span {
+                    coord,
+                    bottom: 0.0,
+                    top: 1.2,
+                    material: Material::Liquid,
+                })
+                .collect(),
+        );
+        let mut body = Body::new(Vec3::Y * 3.0);
+        advance(
+            &mut body,
+            &world,
+            Intent {
+                direction: Vec3::X,
+                ..default()
+            },
+            70,
+        );
+        assert!(
+            !body.grounded && body.position.x > 1.3 && body.position.y < 3.0,
+            "{body:?}"
+        );
+        let mut recovered = false;
+        for _ in 0..100 {
+            recovered |= body
+                .tick(Intent::default(), &settings(), 0.4, &world)
+                .is_some_and(|notice| notice.contains("Deep water"));
+        }
+        assert!(
+            recovered && body.grounded && body.position.y > 2.99,
+            "{body:?}"
+        );
     }
 
     #[test]

@@ -342,6 +342,8 @@ fn reject_invalid_configuration(
 enum WalkStep {
     /// Wait until the app is in the named screen.
     AwaitScreen(String),
+    /// Explicit bounded startup allowance for large worlds in unoptimized builds.
+    AwaitGameplay { max_seconds: u32 },
     /// Wait until validated terrain is ready (gameplay only).
     AwaitTerrain,
     /// Let this many frames pass before the next step.
@@ -572,6 +574,9 @@ fn movement_capture_span(every_frames: u32, capture_count: u16) -> Result<u32, S
 /// leave enough time for that bound to run instead of silently replacing an
 /// authored 18,000-frame allowance with the generic sixty-second limit.
 fn step_timeout(step: &WalkStep) -> Duration {
+    if let WalkStep::AwaitGameplay { max_seconds } = step {
+        return Duration::from_secs(u64::from(*max_seconds));
+    }
     let WalkStep::AwaitPartyIdle { max_frames } = step else {
         return STEP_TIMEOUT;
     };
@@ -653,6 +658,13 @@ fn validate_script_steps(path: &str, steps: &[WalkStep]) -> Result<(), String> {
 fn validate_step(step: &WalkStep) -> Result<(), String> {
     match step {
         WalkStep::AwaitScreen(name) => parse_screen(name).map(|_| ()),
+        WalkStep::AwaitGameplay { max_seconds } => {
+            if (1..=300).contains(max_seconds) {
+                Ok(())
+            } else {
+                Err("AwaitGameplay requires a timeout in 1..300 seconds".into())
+            }
+        }
         WalkStep::Key(name) => parse_key(name).map(|_| ()),
         WalkStep::HoldKeys { keys, frames } => {
             if keys.is_empty() || keys.len() > 4 || *frames == 0 || *frames > 600 {
@@ -2001,6 +2013,11 @@ fn run_walk(
                 state.advance();
             }
         }
+        WalkStep::AwaitGameplay { .. } => {
+            if *screen.get() == Screen::Gameplay {
+                state.advance();
+            }
+        }
         WalkStep::AwaitTerrain => {
             if !content.tiles.is_empty() {
                 state.advance();
@@ -3213,6 +3230,12 @@ mod tests {
         assert_eq!(parse_key("F"), Ok(KeyCode::KeyF));
         assert_eq!(parse_key("Escape"), Ok(KeyCode::Escape));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
+        assert!(validate_step(&WalkStep::AwaitGameplay { max_seconds: 0 }).is_err());
+        assert!(validate_step(&WalkStep::AwaitGameplay { max_seconds: 301 }).is_err());
+        assert_eq!(
+            step_timeout(&WalkStep::AwaitGameplay { max_seconds: 180 }),
+            Duration::from_secs(180)
+        );
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
         assert!(validate_step(&WalkStep::Capture("../overwrite".into())).is_err());
