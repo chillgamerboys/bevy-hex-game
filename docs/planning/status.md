@@ -42,13 +42,14 @@ four still require named-human exact-head presentation, motion/control-feel, and
 findings. They must land #210 → #211 → #212 → #213 under the
 [biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
 
-The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
-only after #213 lands; they are not merge-ready. Garden's published foundation plus nine
-local commits are near-ready after its two integration-golden repairs, current-base
-reconciliation, complete gate, and exact-head walk. Generic review/provenance and
-capture-sequence tooling, Grand structural review, route revision 3, time-cycle work, and
-subtle-geometry work remain unpublished and in progress; their inherited dirty snapshots
-are not suitable for whole-tree commits.
+At the earlier `4c97b75` delivery snapshot, the sixteen Grand V3 checkpoints were
+packageable only after #213, and Garden still needed its integration repairs and gates.
+Generic review/provenance, capture-sequence tooling, Grand structural review, route
+revision 3, time-cycle and subtle-geometry work were then unpublished. This is historical
+context: the selected V3 reference `bc06a89` already contains `tools/review.py`,
+`tools/test_review.py` and `tools/run_grand_v3_structural_review.sh`. Those earlier dirty
+snapshots remain unsuitable for whole-tree commits; their old publication labels do not
+describe the later #219 reference.
 Rejected Outpost checkpoint `f4f0e4c` is preserved only as
 `archive/outpost-rejected-f4f0e4c`; the replacement design has not started.
 

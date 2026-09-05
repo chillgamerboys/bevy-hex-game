@@ -178,7 +178,8 @@ lanes:
 - L3 followup: bounded historical transaction bodies, immutable authoring revisions
   behind an atomic current pointer, principal-specific knowledge partitions and
   disclosure-only reconnect batches.
-- L4 primary map presentation integrated; combined windowless verification pending.
+- L4 primary map presentation integrated; final-candidate windowless verification is
+  tracked in PR #220 separately from the historical `4457995` static captures.
 - L5: **shared presentation authority only**, `feat/v4-object-presentation`, owns new
   `crates/hex_objects/src/v4/`, its module export and dependency wiring. Reuse the
   existing asset baker and styles through typed resident ownership. Dependencies:
