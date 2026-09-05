@@ -39,6 +39,8 @@ pub(crate) struct ChunkOverlay {
     pub revision: u64,
     pub target_fingerprint: u64,
     pub columns: Vec<ColumnData>,
+    #[serde(default)]
+    pub object_state: Option<crate::object_edits::ObjectChunkState>,
     pub fingerprint: u64,
 }
 
@@ -57,7 +59,7 @@ impl ChunkOverlay {
     fn validate(&self) -> RuntimeResult<()> {
         if self.schema_version != SCHEMA_VERSION
             || self.revision == 0
-            || self.columns.is_empty()
+            || (self.columns.is_empty() && self.object_state.is_none())
             || self.columns.len() > 256
             || self.fingerprint != self.expected_fingerprint()?
         {
@@ -80,6 +82,9 @@ impl ChunkOverlay {
                 return Err(RuntimeError::invalid("partition contains foreign column"));
             }
         }
+        if let Some(state) = &self.object_state {
+            state.validate(self.coordinate)?;
+        }
         Ok(())
     }
 
@@ -100,6 +105,9 @@ impl ChunkOverlay {
         }
         for column in &self.columns {
             *exact_column_mut(package, column.position)? = column.clone();
+        }
+        if let Some(state) = &self.object_state {
+            state.apply(package)?;
         }
         package.seal().map_err(RuntimeError::invalid)?;
         package
@@ -309,6 +317,19 @@ impl WorldRuntime {
     ) -> RuntimeResult<WorldChange> {
         let staged = self.stage_transaction(transaction)?;
         let locations = self.checkpoint(root.as_ref(), limits, Some(&staged), updates)?;
+        let change = self.commit_edit(staged);
+        self.demote_persisted_unloaded(locations);
+        Ok(change)
+    }
+
+    pub(crate) fn commit_object_durable(
+        &mut self,
+        staged: StagedEdit,
+        root: &Path,
+        limits: IoLimits,
+        updates: &[AttachmentUpdate],
+    ) -> RuntimeResult<WorldChange> {
+        let locations = self.checkpoint(root, limits, Some(&staged), updates)?;
         let change = self.commit_edit(staged);
         self.demote_persisted_unloaded(locations);
         Ok(change)

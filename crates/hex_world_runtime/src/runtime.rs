@@ -30,7 +30,7 @@ pub struct RuntimeConfig {
     pub max_interests: usize,
     /// Maximum chunk coordinates examined for one interest/retention disk.
     pub max_interest_probes: usize,
-    /// Maximum exact assignments in one atomic terrain transaction.
+    /// Maximum exact terrain assignments, object edits, or affected object columns per transaction.
     pub max_edits_per_transaction: usize,
     /// Maximum independent operation pin owners.
     pub max_pin_owners: usize,
@@ -38,7 +38,7 @@ pub struct RuntimeConfig {
     pub max_unsaved_chunks: usize,
     /// Maximum opaque owner keys explicitly changed by one checkpoint operation.
     pub max_attachment_updates: usize,
-    /// Maximum serialized body bytes for one terrain transaction.
+    /// Maximum serialized body bytes for one terrain or object transaction.
     pub max_transaction_bytes: usize,
     /// Maximum uncheckpointed transaction identities with resident bodies.
     pub max_unsaved_transactions: usize,

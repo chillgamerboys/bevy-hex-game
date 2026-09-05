@@ -2598,3 +2598,6 @@ fn current_sequence_does_not_claim_new_interest_scope_is_synchronized() {
         "returning to an old scope still needs a currently issued checkpoint"
     );
 }
+
+#[path = "runtime/object_edits.rs"]
+mod object_edits;

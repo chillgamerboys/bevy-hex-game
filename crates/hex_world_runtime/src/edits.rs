@@ -1,4 +1,4 @@
-//! Atomic resident edits and exact local replication.
+//! Atomic resident terrain/object edits and exact local replication.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -6,8 +6,8 @@ use std::{
 };
 
 use hex_world_contracts::{
-    hash_serializable, ChunkId, ChunkPackage, ColumnData, VoxelPosition, VoxelRun, WorldChange,
-    WorldEditTransaction, WorldHex, SCHEMA_VERSION,
+    hash_serializable, ChunkId, ChunkPackage, ColumnData, ObjectEdit, VoxelPosition, VoxelRun,
+    WorldChange, WorldEditTransaction, WorldHex, WorldObjectEditTransaction, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,11 +32,11 @@ pub struct ChunkDelta {
     pub base_fingerprint: u64,
     /// Fingerprint of the complete package after replacing these columns.
     pub target_fingerprint: u64,
-    /// Only changed columns, sorted and unique.
+    /// Only changed terrain columns, sorted and unique; empty for object-only deltas.
     pub columns: Vec<ColumnData>,
 }
 
-/// Idempotent local terrain replication tied to an exact immutable world source.
+/// Idempotent local world replication tied to an exact immutable world source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorldDelta {
@@ -52,6 +52,10 @@ pub struct WorldDelta {
     pub request_fingerprint: u64,
     /// Changed chunks in canonical order.
     pub chunks: Vec<ChunkDelta>,
+    /// Exact atomic object operations, empty for a terrain-only transaction.
+    /// Object deltas contain revision/fingerprint chunk records with empty terrain columns.
+    #[serde(default)]
+    pub object_edits: Vec<ObjectEdit>,
     /// Hash of this value with its own fingerprint zeroed.
     pub fingerprint: u64,
 }
@@ -87,7 +91,7 @@ impl WorldDelta {
         }
         for chunk in &self.chunks {
             if chunk.base_revision.checked_add(1) != Some(chunk.revision)
-                || chunk.columns.is_empty()
+                || (chunk.columns.is_empty() && self.object_edits.is_empty())
                 || chunk.columns.len() > 256
             {
                 return Err(RuntimeError::invalid(
@@ -112,7 +116,52 @@ impl WorldDelta {
                 }
             }
         }
+        if !self.object_edits.is_empty() {
+            if self.chunks.iter().any(|chunk| !chunk.columns.is_empty()) {
+                return Err(RuntimeError::invalid(
+                    "mixed terrain/object deltas are unsupported",
+                ));
+            }
+            let transaction = self.object_transaction();
+            transaction.validate().map_err(RuntimeError::invalid)?;
+            if crate::object_edits::request_fingerprint(&transaction)? != self.request_fingerprint {
+                return Err(RuntimeError::invalid(
+                    "object delta request fingerprint disagrees",
+                ));
+            }
+        }
         Ok(())
+    }
+
+    pub(crate) fn object_transaction(&self) -> WorldObjectEditTransaction {
+        WorldObjectEditTransaction {
+            id: self.transaction_id.clone(),
+            expected_revisions: self
+                .chunks
+                .iter()
+                .map(|chunk| (chunk.coordinate, chunk.base_revision))
+                .collect(),
+            edits: self.object_edits.clone(),
+        }
+    }
+
+    pub(crate) fn changed_columns(&self) -> RuntimeResult<Vec<WorldHex>> {
+        if self.object_edits.is_empty() {
+            Ok(self
+                .chunks
+                .iter()
+                .flat_map(|chunk| chunk.columns.iter().map(|column| column.position))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect())
+        } else {
+            Ok(self
+                .object_transaction()
+                .affected_columns()
+                .map_err(RuntimeError::invalid)?
+                .into_iter()
+                .collect())
+        }
     }
 
     fn expected_fingerprint(&self) -> RuntimeResult<u64> {
@@ -207,6 +256,31 @@ impl WorldRuntime {
                 ))
             };
         }
+        if !delta.object_edits.is_empty() {
+            for change in &delta.chunks {
+                let resident = self.resident.get(&change.coordinate).ok_or_else(|| {
+                    RuntimeError::new(
+                        ErrorKind::Unavailable,
+                        "object delta requires an unloaded chunk",
+                    )
+                })?;
+                if resident.product.revision != change.base_revision
+                    || resident.product.package.fingerprint != change.base_fingerprint
+                {
+                    return Err(RuntimeError::new(
+                        ErrorKind::Conflict,
+                        "object delta base revision or fingerprint disagrees",
+                    ));
+                }
+            }
+            let staged = self.stage_object_transaction(&delta.object_transaction())?;
+            if staged.applied.delta != *delta {
+                return Err(RuntimeError::invalid(
+                    "object delta does not describe the canonical exact outcome",
+                ));
+            }
+            return Ok(staged);
+        }
         let count = delta
             .chunks
             .iter()
@@ -254,6 +328,7 @@ impl WorldRuntime {
             packages,
             delta.transaction_id.clone(),
             delta.request_fingerprint,
+            Vec::new(),
         )?;
         if staged.applied.delta != *delta {
             return Err(RuntimeError::invalid(
@@ -341,14 +416,20 @@ impl WorldRuntime {
             protect_materials(column, &replacement, &self.manifest.materials)?;
             *column = replacement;
         }
-        self.stage_packages(packages, transaction.id.clone(), request_fingerprint)
+        self.stage_packages(
+            packages,
+            transaction.id.clone(),
+            request_fingerprint,
+            Vec::new(),
+        )
     }
 
-    fn stage_packages(
+    pub(crate) fn stage_packages(
         &self,
         packages: BTreeMap<ChunkId, ChunkPackage>,
         transaction_id: String,
         request_fingerprint: u64,
+        object_edits: Vec<ObjectEdit>,
     ) -> RuntimeResult<StagedEdit> {
         let mut chunks = BTreeMap::new();
         let mut deltas = Vec::new();
@@ -365,7 +446,11 @@ impl WorldRuntime {
                 .filter(|(a, b)| a != b)
                 .map(|(column, _)| column.clone())
                 .collect::<Vec<_>>();
-            if changed.is_empty() {
+            let objects_changed = package.semantics.objects
+                != resident.product.package.semantics.objects
+                || package.semantics.object_influences
+                    != resident.product.package.semantics.object_influences;
+            if changed.is_empty() && !objects_changed {
                 continue;
             }
             for column in &changed {
@@ -380,11 +465,10 @@ impl WorldRuntime {
                         .iter()
                         .any(|object| object.origin.column == column.position)
                     || self
-                        .manifest
-                        .boundaries
-                        .iter()
-                        .flat_map(|boundary| &boundary.samples)
-                        .any(|sample| sample.a == column.position || sample.b == column.position)
+                        .manifest_index
+                        .boundary_samples_at(column.position)
+                        .next()
+                        .is_some()
                 {
                     return Err(RuntimeError::new(
                         ErrorKind::Conflict,
@@ -419,6 +503,16 @@ impl WorldRuntime {
                 }
                 None => BTreeMap::new(),
             };
+            let object_state = if objects_changed {
+                Some(crate::object_edits::ObjectChunkState::from_package(
+                    &package,
+                ))
+            } else {
+                match self.overlays.get(&coordinate) {
+                    Some(OverlayLocation::Memory(overlay)) => overlay.object_state.clone(),
+                    _ => None,
+                }
+            };
             for column in &changed {
                 overlay_columns.insert(column.position, column.clone());
                 changed_columns.insert(column.position);
@@ -431,6 +525,7 @@ impl WorldRuntime {
                 revision,
                 target_fingerprint: package.fingerprint,
                 columns: overlay_columns.into_values().collect(),
+                object_state,
                 fingerprint: 0,
             };
             overlay.seal()?;
@@ -456,13 +551,25 @@ impl WorldRuntime {
                 ),
             );
         }
+        if !object_edits.is_empty() {
+            let transaction = WorldObjectEditTransaction {
+                id: transaction_id.clone(),
+                expected_revisions: BTreeMap::new(),
+                edits: object_edits.clone(),
+            };
+            changed_columns.extend(
+                transaction
+                    .affected_columns()
+                    .map_err(RuntimeError::invalid)?,
+            );
+        }
         let change = WorldChange {
             transaction_id: transaction_id.clone(),
             revisions,
             changed_columns: changed_columns.into_iter().collect(),
         };
         if change.changed_columns.is_empty() {
-            return Err(RuntimeError::invalid("transaction makes no terrain change"));
+            return Err(RuntimeError::invalid("transaction makes no world change"));
         }
         change.validate().map_err(RuntimeError::invalid)?;
         let new_dirty = chunks
@@ -482,6 +589,7 @@ impl WorldRuntime {
             transaction_id,
             request_fingerprint,
             chunks: deltas,
+            object_edits,
             fingerprint: 0,
         };
         delta.seal()?;

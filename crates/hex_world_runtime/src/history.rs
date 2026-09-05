@@ -112,14 +112,7 @@ impl HistoryEntry {
             .iter()
             .map(|chunk| (chunk.coordinate, chunk.revision))
             .collect::<BTreeMap<_, _>>();
-        let columns = record
-            .delta
-            .chunks
-            .iter()
-            .flat_map(|chunk| chunk.columns.iter().map(|column| column.position))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
+        let columns = record.delta.changed_columns()?;
         if hash_serializable(&record).map_err(RuntimeError::invalid)? != self.descriptor.fingerprint
             || record.request_fingerprint != self.descriptor.request_fingerprint
             || record.delta.request_fingerprint != self.descriptor.request_fingerprint

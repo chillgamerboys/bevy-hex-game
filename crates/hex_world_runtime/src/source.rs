@@ -433,6 +433,24 @@ pub(crate) fn validate_source_chunk(
     descriptor: &ChunkDescriptor,
     chunk: &ChunkPackage,
 ) -> RuntimeResult<()> {
+    if chunk
+        .semantics
+        .objects
+        .iter()
+        .map(|object| object.id.as_str())
+        .chain(
+            chunk
+                .semantics
+                .object_influences
+                .iter()
+                .map(|influence| influence.id.as_str()),
+        )
+        .any(|id| id.starts_with(hex_world_contracts::RUNTIME_OBJECT_PREFIX))
+    {
+        return Err(RuntimeError::invalid(
+            "compiled source uses reserved runtime object identity",
+        ));
+    }
     chunk
         .validate_with_index(index)
         .map_err(RuntimeError::invalid)?;

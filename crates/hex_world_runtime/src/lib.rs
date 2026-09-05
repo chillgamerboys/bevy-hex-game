@@ -1,6 +1,6 @@
 //! Renderer-independent resident world authority.
 //!
-//! Immutable packages, bounded asynchronous residency, and mutable terrain journals
+//! Immutable packages, bounded asynchronous residency, and mutable terrain/object journals
 //! have separate lifetimes. Queries never turn an unavailable chunk into air. The
 //! caller pumps completed jobs and publishes the returned immutable products into
 //! its own engine; this crate never owns a renderer, combat clock, or ECS schedule.
@@ -10,6 +10,7 @@ mod disclosure;
 mod edits;
 mod history;
 mod knowledge;
+mod object_edits;
 mod persistence;
 mod runtime;
 mod source;
