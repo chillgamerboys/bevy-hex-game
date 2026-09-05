@@ -1108,7 +1108,14 @@ fn hidden_removed_landmark_is_remembered_until_visible_and_pending_never_proves_
             .expect("visible absence"),
     );
     assert_eq!(revealed.invalidated_landmarks.len(), 1);
-    assert_eq!(revealed.invalidated_landmarks[0].id, feature.id);
+    assert_eq!(
+        revealed
+            .invalidated_landmarks
+            .first()
+            .expect("one invalidated landmark")
+            .id,
+        feature.id
+    );
 }
 
 #[test]
