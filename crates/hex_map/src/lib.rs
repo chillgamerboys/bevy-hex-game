@@ -61,6 +61,8 @@ pub mod structural_preview;
 /// Pure construction of complete voxel maps from terrain presets.
 mod terrain;
 mod terrain_damage;
+/// Bounded, disposable presentation of validated resident V4 chunk packages.
+pub mod v4;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
 mod world_snapshot;

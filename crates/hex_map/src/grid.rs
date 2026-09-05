@@ -1548,9 +1548,9 @@ impl std::error::Error for MapPresentationError {
 /// voxels lets this rebuild both fragments after digging through a roof and prevents
 /// a replacement material from inheriting the old run's component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProjectedRun {
-    run: SubstanceRun,
-    cutaway: Option<InteriorRegionId>,
+pub(crate) struct ProjectedRun {
+    pub(crate) run: SubstanceRun,
+    pub(crate) cutaway: Option<InteriorRegionId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1979,20 +1979,72 @@ fn combined_terrain_mesh_with_edge(
     level_height: f32,
     edge_treatment: ReviewEdgeTreatment,
 ) -> Result<Mesh, String> {
+    terrain_mesh_from_runs(
+        runs.iter().map(|run| TerrainMeshRun {
+            position: run.position,
+            span: run.span,
+            bottom: run.bottom,
+            top: run.top,
+            cutaway: run.cutaway,
+        }),
+        projected_columns,
+        level_height,
+        edge_treatment,
+        false,
+    )
+}
+
+/// Geometry-only input shared by the legacy and resident publication adapters.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerrainMeshRun {
+    pub(crate) position: TilePos,
+    pub(crate) span: HexSpan,
+    pub(crate) bottom: i32,
+    pub(crate) top: i32,
+    pub(crate) cutaway: Option<InteriorRegionId>,
+}
+
+/// Uses the same cap, side-culling, normals, winding and batched mesh engine as V3.
+/// Columns contain exactly one source chunk, so boundaries remain closed even when
+/// the render origin is not aligned with the storage lattice. Negative bottom
+/// levels are valid; the legacy bedrock-floor convention does not apply here.
+pub(crate) fn resident_terrain_mesh(
+    runs: &[TerrainMeshRun],
+    columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
+    level_height: f32,
+) -> Result<Mesh, String> {
+    terrain_mesh_from_runs(
+        runs.iter().copied(),
+        columns,
+        level_height,
+        ReviewEdgeTreatment::Current,
+        true,
+    )
+}
+
+fn terrain_mesh_from_runs(
+    runs: impl IntoIterator<Item = TerrainMeshRun>,
+    projected_columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
+    level_height: f32,
+    edge_treatment: ReviewEdgeTreatment,
+    resident: bool,
+) -> Result<Mesh, String> {
     let mut combined = TerrainRawMesh::with_edge_treatment(edge_treatment, level_height)?;
     for run in runs {
         // Retaining each run's top cap preserves material boundaries and guarantees
         // every logical run has one exact pick surface in its bounded batch. Buried
         // caps remain depth-occluded; edits rebuild the chunk before exposure.
         combined.cap(run.position.coord, run.span.top, true)?;
-        let bottom_exposed = run.bottom > 0
-            && !owner_at(
-                projected_columns
-                    .get(&run.position.coord)
-                    .map(Vec::as_slice),
-                run.bottom - 1,
-                run.cutaway,
-            );
+        let bottom_exposed = (resident || run.bottom > 0)
+            && run.bottom.checked_sub(1).is_none_or(|below| {
+                !owner_at(
+                    projected_columns
+                        .get(&run.position.coord)
+                        .map(Vec::as_slice),
+                    below,
+                    run.cutaway,
+                )
+            });
         if bottom_exposed {
             combined.cap(run.position.coord, run.span.bottom, false)?;
         }
@@ -2006,19 +2058,20 @@ fn combined_terrain_mesh_with_edge(
             // Resident chunk meshes own their seam walls permanently. Depending on
             // another chunk's columns here would force an otherwise local edit to
             // replace neighbouring roots just to repair one culled face.
-            let neighbour_runs =
-                if terrain_chunk_coord(neighbour) == terrain_chunk_coord(run.position.coord) {
-                    projected_columns.get(&neighbour).map(Vec::as_slice)
-                } else {
-                    None
-                };
+            let neighbour_runs = if resident
+                || terrain_chunk_coord(neighbour) == terrain_chunk_coord(run.position.coord)
+            {
+                projected_columns.get(&neighbour).map(Vec::as_slice)
+            } else {
+                None
+            };
             for (bottom, top) in exposed_intervals(run.bottom, run.top, neighbour_runs, run.cutaway)
             {
                 let trim_bottom = bottom_exposed && bottom == run.bottom;
                 let trim_top = top == run.top;
                 #[expect(
                     clippy::cast_precision_loss,
-                    reason = "V3 levels remain far below f32's exact integer range"
+                    reason = "legacy levels and checked resident-local levels are within f32 exact integer range"
                 )]
                 let (bottom, top) = (bottom as f32 * level_height, top as f32 * level_height);
                 combined.side(
