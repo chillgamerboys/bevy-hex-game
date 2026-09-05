@@ -1,11 +1,11 @@
 //! Disposable, bounded presentation of validated V4 resident chunks.
 //!
 //! This adapter never installs the legacy grid plugin or a complete `VoxelMap`.
-//! [`ResidentRun`] retains exact global identity; the legacy `HexCoord`, `TilePos`
+//! [`crate::v4::ResidentRun`] retains exact global identity; the legacy `HexCoord`, `TilePos`
 //! and `SubstanceId` components are local picking mirrors, not world authority.
 //! Liquid intervals and static-object occupancy currently use exact prism geometry.
 //! Authored object assets, liquid effects and interior cutaways are not rendered.
-//! The original semantic descriptors remain available through [`TerrainPresenter::package`].
+//! The original semantic descriptors remain available through [`crate::v4::TerrainPresenter::package`].
 
 mod halo;
 mod prepare;
