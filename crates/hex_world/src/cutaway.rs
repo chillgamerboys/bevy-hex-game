@@ -262,6 +262,7 @@ fn reconcile_character_proximity(
             && match *mode {
                 CameraMode::Map => false,
                 CameraMode::Character => effective_radius.is_some_and(|radius| radius <= threshold),
+                CameraMode::Fly => false,
                 CameraMode::FirstPerson => true,
             };
 

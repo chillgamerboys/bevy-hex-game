@@ -9,6 +9,14 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Grand V3 grounded exploration** is implemented on the isolated
+`feat/grand-v3-grounded-exploration` candidate based on `bc06a896`, carrying the
+existing fly prototype. It adds continuous walking/running, jumping/falling,
+solid-body collision, bounded wading, recovery and collision-aware camera follow.
+See [exploration controls and boundaries](../systems/exploration.md). This is a
+development exploration pawn; native Grand V3 control-feel signoff, delivery to
+`dev`, and V4 integration remain separate pending work.
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,

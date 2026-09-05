@@ -56,6 +56,16 @@ use serde::Deserialize;
 use crate::capture::{install_capture, prepare_capture_path, temporary_capture_path, write_png};
 use crate::scenarios::ScenarioToLoad;
 
+/// Marks an explicitly configured windowless script; never present in native play.
+#[derive(Resource)]
+pub(crate) struct AutomatedWalk;
+
+/// Orders synthetic input before consumers that capture edges for exploration.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WalkSystems {
+    InjectInput,
+}
+
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
 const VIEWPORT_ENV: &str = "HEX_WALK_VIEWPORT";
@@ -261,7 +271,8 @@ pub(super) fn plugin(app: &mut App) {
         options.outline_content_box = true;
         options.outline_scrollbars = true;
     }
-    app.insert_resource(walk_time_update_strategy())
+    app.insert_resource(AutomatedWalk)
+        .insert_resource(walk_time_update_strategy())
         .insert_resource(WalkState::new(
             steps,
             out_dir,
@@ -274,7 +285,12 @@ pub(super) fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             suppress_hostiles_for_map_review.in_set(GameplaySetup::Resources),
         )
-        .add_systems(PreUpdate, run_walk.after(InputSystems));
+        .add_systems(
+            PreUpdate,
+            run_walk
+                .after(InputSystems)
+                .in_set(WalkSystems::InjectInput),
+        );
 }
 
 fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
@@ -429,6 +445,17 @@ enum WalkStep {
     },
     /// Press and release a supported gameplay or menu key.
     Key(String),
+    /// Hold a bounded chord through ordinary input before releasing every key.
+    HoldKeys { keys: Vec<String>, frames: u32 },
+    /// Validate exploration state separately from screenshot interpretation.
+    #[cfg(feature = "dev")]
+    AssertExplorer {
+        mode: String,
+        grounded: bool,
+        /// Distance from the preceding successful explorer observation.
+        #[serde(default)]
+        minimum_displacement: Option<f32>,
+    },
     /// Install an exact internal scenario as a review-only launch input.
     StartScenario {
         name: String,
@@ -627,6 +654,30 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
     match step {
         WalkStep::AwaitScreen(name) => parse_screen(name).map(|_| ()),
         WalkStep::Key(name) => parse_key(name).map(|_| ()),
+        WalkStep::HoldKeys { keys, frames } => {
+            if keys.is_empty() || keys.len() > 4 || *frames == 0 || *frames > 600 {
+                return Err("HoldKeys requires 1..4 keys and 1..600 frames".into());
+            }
+            for key in keys {
+                parse_key(key)?;
+            }
+            Ok(())
+        }
+        #[cfg(feature = "dev")]
+        WalkStep::AssertExplorer {
+            mode,
+            minimum_displacement,
+            ..
+        } => {
+            if matches!(mode.as_str(), "walk" | "fly")
+                && minimum_displacement
+                    .is_none_or(|distance| distance.is_finite() && distance > 0.0)
+            {
+                Ok(())
+            } else {
+                Err("Explorer mode must be walk or fly; minimum displacement must be finite and positive".into())
+            }
+        }
         WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. } => {
             validate_capture_name(name)
         }
@@ -967,6 +1018,12 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
 
 fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
+        "W" => Ok(KeyCode::KeyW),
+        "A" => Ok(KeyCode::KeyA),
+        "S" => Ok(KeyCode::KeyS),
+        "D" => Ok(KeyCode::KeyD),
+        "Space" => Ok(KeyCode::Space),
+        "Shift" => Ok(KeyCode::ShiftLeft),
         "Backspace" => Ok(KeyCode::Backspace),
         "Escape" => Ok(KeyCode::Escape),
         "B" => Ok(KeyCode::KeyB),
@@ -1168,7 +1225,7 @@ impl MovementCaptureState {
 
         self.observed_pending_movement = true;
         self.pending_frames = self.pending_frames.saturating_add(1);
-        if self.pending_frames % self.every_frames != 0 {
+        if !self.pending_frames.is_multiple_of(self.every_frames) {
             return Ok(MovementCaptureTick::WaitingForInterval);
         }
         if self.requested >= self.capture_count {
@@ -1302,6 +1359,8 @@ struct WalkState {
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
     held_key: Option<KeyCode>,
+    #[cfg(feature = "dev")]
+    last_explorer_position: Option<Vec3>,
     /// Multi-frame ordinary right-drag currently being injected.
     orbit_gesture: Option<OrbitGesture>,
     /// The Bevy image target the game and UI render into for capture.
@@ -1461,6 +1520,8 @@ impl WalkState {
             completed_captures: Vec::new(),
             pressed: None,
             held_key: None,
+            #[cfg(feature = "dev")]
+            last_explorer_position: None,
             orbit_gesture: None,
             target: None,
             retired_target: None,
@@ -1711,6 +1772,7 @@ fn capture_structural_issues(
 )]
 fn run_walk(
     mut commands: Commands,
+    #[cfg(feature = "dev")] explorer: Option<Res<crate::fly::Explorer>>,
     mut state: ResMut<WalkState>,
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
@@ -2619,6 +2681,47 @@ fn run_walk(
                     state.orbit_gesture = None;
                     state.advance();
                 }
+            }
+        }
+        WalkStep::HoldKeys { ref keys, frames } => {
+            for name in keys {
+                if let Ok(key) = parse_key(name) {
+                    if state.settled < frames {
+                        input.keys.press(key);
+                    } else {
+                        input.keys.release(key);
+                    }
+                }
+            }
+            if state.settled < frames {
+                state.settled += 1;
+            } else {
+                state.advance();
+            }
+        }
+        #[cfg(feature = "dev")]
+        WalkStep::AssertExplorer {
+            ref mode,
+            grounded,
+            minimum_displacement,
+        } => {
+            let observation = explorer.as_deref().map(crate::fly::Explorer::observation);
+            if observation.is_some_and(|(actual, on_ground, position)| {
+                actual == mode
+                    && on_ground == grounded
+                    && minimum_displacement.is_none_or(|distance| {
+                        state
+                            .last_explorer_position
+                            .is_some_and(|previous| previous.distance(position) >= distance)
+                    })
+            }) {
+                info!("exploration observation: {observation:?}");
+                state.last_explorer_position = observation.map(|(_, _, position)| position);
+                state.advance();
+            } else {
+                error!("exploration assertion failed: wanted {mode} grounded={grounded}, minimum displacement={minimum_displacement:?}, got {observation:?}");
+                state.failed = true;
+                exit.write(AppExit::error());
             }
         }
         WalkStep::Key(ref name) => {
