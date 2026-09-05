@@ -32,8 +32,9 @@ const TREELINE_BASE: Level = 96;
 const TREELINE_VARIATION: Level = 9;
 /// The mean permanent-snow threshold. Its independent fine stream keeps the
 /// snow edge from following either coarse biome borders or the tree edge.
-const SNOWLINE_BASE: Level = 136;
-const SNOWLINE_VARIATION: Level = 10;
+const SNOWLINE_BASE: Level = 200;
+const SNOWLINE_VARIATION: Level = 32;
+const SNOWLINE_CORRELATION_HEXES: u16 = 16;
 /// Exact authored summit bands from the connected highland field. Exposed rock
 /// in these bands still receives a one-voxel snow cap; otherwise a later stone
 /// grading pass can leave the highest silhouettes visibly bare even though the
@@ -514,13 +515,13 @@ fn organic_treeline(seed: u64, coord: HexCoord) -> Level {
 }
 
 fn organic_snowline(seed: u64, coord: HexCoord) -> Level {
-    SNOWLINE_BASE.saturating_add(
-        i32::try_from(
-            named_sample(seed, "grand_snowline", coord)
-                % u64::try_from(SNOWLINE_VARIATION.saturating_add(1)).unwrap_or(1),
-        )
-        .unwrap_or_default(),
-    )
+    SNOWLINE_BASE.saturating_add(crate::terrain_noise::coherent_level_offset(
+        seed,
+        b"review-snow-coherent",
+        coord,
+        SNOWLINE_CORRELATION_HEXES,
+        SNOWLINE_VARIATION,
+    ))
 }
 
 fn translate(origin: HexCoord, offset: HexCoord) -> HexCoord {
@@ -740,7 +741,7 @@ mod tests {
             cap_material_override(&crystal, high, 99),
             Some(SolidMaterialRole::Snow)
         );
-        let low_alpine = TilePos::new(HexCoord::ORIGIN, SNOWLINE_BASE - 1);
+        let low_alpine = TilePos::new(HexCoord::ORIGIN, SNOWLINE_BASE - SNOWLINE_VARIATION - 1);
         assert_eq!(
             cap_material_override(
                 &cell(LandformKind::Plateau, ClimateKind::Alpine, vec![]),

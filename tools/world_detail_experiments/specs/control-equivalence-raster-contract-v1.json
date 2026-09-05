@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "warning": "UNAPPROVABLE STRUCTURAL DRAFT — AESTHETIC REVIEW ONLY",
+  "pack_id": "grand-v3-v7c-control-equivalence-qualification-v1",
+  "scope": "omitted-versus-explicit-current-control-raster-equivalence-only",
+  "baseline_oracle_binding": {
+    "version": 1,
+    "pack_id": "grand-v3-bc06-neutral-control-baseline-oracle-v1",
+    "contract_sha256": "4aff84946a5dbaea4191318d880e6378100d4d5fb841f0eba1a0444bce25a56a",
+    "manifest_sha256": "952c7a89d8257cba15630679d2b1fe048869969f56594c02646b31ca9cda5ab4",
+    "inventory_manifest_sha256": "36dbaa153e4c8cfffbd3dce2246e6acbc9695d8f329b5e3ea997f84f2561c93d",
+    "stability_evidence_sha256": "5e45ab01723184b4563487c37fd75c001d4830927da1ce9e3a03e0cf042d6926",
+    "camera_id": "14-cascade-basin-full-height",
+    "camera_evidence_sha256": "850b49aa7cc28cce3a3f2ee3ae29815127135a9ea8dd7a3e6b96d30cacce85e9",
+    "ambiguous_pixels": [
+      {
+        "x": 993,
+        "y": 245,
+        "allowed_rgb": [[154, 144, 155], [159, 131, 134]]
+      },
+      {
+        "x": 227,
+        "y": 583,
+        "allowed_rgb": [[54, 110, 61], [56, 105, 64]]
+      },
+      {
+        "x": 324,
+        "y": 936,
+        "allowed_rgb": [[131, 111, 116], [136, 130, 141]]
+      },
+      {
+        "x": 1861,
+        "y": 964,
+        "allowed_rgb": [[146, 104, 77], [157, 99, 69]]
+      }
+    ]
+  },
+  "external_manifest_filename": "manifest.json",
+  "external_manifest_sha256": "54f1e872cb876aba2317b995daaf61c3c29674aaaea97fb03698ab58e553f940",
+  "inventory_manifest_sha256": "98136d03f4742395c177eb05bb7befe04125864570cad18114a27607f98dee7d",
+  "qualification_evidence_sha256": "f97120880f1d603dd2b9148a3e14cbab07364d339c48f7e7e3fb48aedb0e62cc",
+  "qualification_evidence_hash_convention": "SHA-256 of UTF-8 canonical compact JSON with lexicographically sorted object keys for {baseline_oracle_binding,source,asset_stage,recipe,stable_report_contract,raster_acceptance,qualified_pixels,pairs}",
+  "source_provenance_sha256": "7e7fbc09e21d61a0128018f26d22c981b33c107cee545fad141718f406e8a67e",
+  "executable_sha256": "8bda64f6d3c1cbdfc1befa2cbc6242de94157a4bdc9e4551c99be576bf11de94",
+  "asset_stage": {
+    "id": "balanced-noon-haze-0003",
+    "external_manifest_sha256": "b41c935ed5a5d84ad771cad864f0930af5b91f9e4a275b93814603997254b564",
+    "source_asset_tree_sha256": "533fb3a8ed1fe2267d4596cf71c3c46562f5a7a7500370d6a432fade83745ab2",
+    "staged_asset_tree_sha256": "a8387bcd3b2c58b5fe98e3b7f9b845edc6358125ead8f3a4d174fc34a23f888a"
+  },
+  "raster_acceptance": {
+    "coordinate_convention": "zero-based (x,y) from the top-left decoded pixel",
+    "decoded_rgb_hash_convention": "SHA-256 of exactly width*height*3 row-major bytes after Pillow convert(\"RGB\"), without dimensions or padding",
+    "rule": "Every decoded RGB pixel outside the union of the camera's clean baseline-oracle ambiguity coordinates and the separately qualified coordinates must match exactly; every differing pixel inside the union must use its exact enumerated endpoint RGB values.",
+    "broad_numeric_thresholds_allowed": false,
+    "spatial_expansion_allowed": false,
+    "baseline_oracle_contract_modified": false
+  },
+  "camera_id": "14-cascade-basin-full-height",
+  "pair_count": 3,
+  "run_count": 6,
+  "qualified_pixels": [
+    {
+      "camera_id": "14-cascade-basin-full-height",
+      "x": 1438,
+      "y": 273,
+      "allowed_rgb": [
+        [
+          164,
+          95,
+          66
+        ],
+        [
+          169,
+          133,
+          125
+        ]
+      ]
+    }
+  ],
+  "stable_capture_sha256": "8aea7dc9eeb4661b4f12d40cdedcd2a5593063fed3524607e5d56f7372158924",
+  "stable_report_sha256": "c9bc754317c8d4608cfd8d81756676d953c1e2426d49b4a8cf3a8ca45bcb26c1"
+}

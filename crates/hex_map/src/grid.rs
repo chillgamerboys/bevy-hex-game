@@ -158,9 +158,17 @@ struct LogicalTerrainRuns;
 
 const MAX_WORLD_REPLICATION_REQUESTS_PER_UPDATE: usize = 64;
 
+/// Ordered map lifecycle stages that review-only presentation must precede.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum MapLifecycleSystems {
+    Teardown,
+}
+
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
     liquid_render::plugin(app);
+    #[cfg(feature = "map-review")]
+    crate::review_world_detail_render::plugin(app);
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()
         .register_type::<TerrainChunkRoot>()
@@ -287,7 +295,10 @@ pub fn plugin(app: &mut App) {
                 .after(publish_current_world_snapshot)
                 .run_if(in_state(Screen::Gameplay)),
         )
-        .add_systems(OnExit(Screen::Gameplay), teardown_map);
+        .add_systems(
+            OnExit(Screen::Gameplay),
+            teardown_map.in_set(MapLifecycleSystems::Teardown),
+        );
 }
 
 fn terrain_world_available(

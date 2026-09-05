@@ -120,6 +120,7 @@ fn automated_capture_requested() -> bool {
         automated_capture_requested_for(
             cfg!(feature = "map-review"),
             std::env::var_os("HEX_REVIEW_CAPTURE").is_some(),
+            std::env::var_os("HEX_REVIEW_CAPTURE_PLAN").is_some(),
             cfg!(feature = "visual-walk"),
             std::env::var_os("HEX_WALK_SCRIPT").is_some(),
             std::env::var_os("HEX_WALK_OUT").is_some(),
@@ -135,11 +136,12 @@ fn automated_capture_requested() -> bool {
 const fn automated_capture_requested_for(
     map_review_enabled: bool,
     review_capture_present: bool,
+    review_capture_plan_present: bool,
     visual_walk_enabled: bool,
     walk_script_present: bool,
     walk_output_present: bool,
 ) -> bool {
-    (map_review_enabled && review_capture_present)
+    (map_review_enabled && (review_capture_present || review_capture_plan_present))
         || (visual_walk_enabled && (walk_script_present || walk_output_present))
 }
 
@@ -362,19 +364,22 @@ mod tests {
     #[test]
     fn only_required_automation_environment_starts_the_windowless_runner() {
         assert!(automated_capture_requested_for(
-            true, true, false, false, false
+            true, true, false, false, false, false
         ));
         assert!(automated_capture_requested_for(
-            false, false, true, true, false
+            true, false, true, false, false, false
         ));
         assert!(automated_capture_requested_for(
-            false, false, true, false, true
+            false, false, false, true, true, false
+        ));
+        assert!(automated_capture_requested_for(
+            false, false, false, true, false, true
         ));
         assert!(!automated_capture_requested_for(
-            true, false, true, false, false
+            true, false, false, true, false, false
         ));
         assert!(!automated_capture_requested_for(
-            false, true, false, true, true
+            false, true, true, false, true, true
         ));
     }
 }

@@ -22,6 +22,8 @@ use hex_schematic::{
 use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::schematic_ecology::{self, VegetationFamily};
+#[cfg(feature = "map-review")]
+use super::selection::ReviewSnowExceptionMasksV1;
 use super::selection::{CandidateNote, ValidatedWorldPlan, ValidatedWorldSelection};
 use super::traversal::{ordinary_surface_is_node, ordinary_transition_is_admitted, OrdinaryGraph};
 use super::vegetation::{SnowyVegetationSet, TemperateVegetationSet, VegetationObjectSpec};
@@ -35,7 +37,7 @@ use super::world::{
     PlannedInterior, PlannedLightPresentation, PlannedStructure, ProtectedFeatureRoute,
     StructureId, StructureKind, StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
-use super::V3GenerationError;
+use super::{grand_v3_structural_review_draft_enabled, V3GenerationError};
 use crate::settings::{
     ProceduralV3Settings, V3GrandV3BasicTerrainProfile, V3LayoutSettings,
     V3SchematicLayoutSettings, V3SchematicTemplate, V3SchematicTerrainProfile, MAX_V3_LEVEL,
@@ -96,11 +98,19 @@ const WATERFALL_RECEIVING_POOL_RADIUS: u32 = 8;
 pub(super) struct GrandWorldConstructionAdmission {
     plan: GeneratedWorldPlan,
     _layout: super::schematic_crystal::ClaimedSchematicLayoutAdmission,
+    #[cfg(feature = "map-review")]
+    review_snow_exception_masks: ReviewSnowExceptionMasksV1,
 }
 
 impl GrandWorldConstructionAdmission {
+    #[cfg(not(feature = "map-review"))]
     pub(super) fn into_plan(self) -> GeneratedWorldPlan {
         self.plan
+    }
+
+    #[cfg(feature = "map-review")]
+    pub(super) fn into_parts(self) -> (GeneratedWorldPlan, ReviewSnowExceptionMasksV1) {
+        (self.plan, self.review_snow_exception_masks)
     }
 }
 
@@ -3185,7 +3195,7 @@ fn build_proxy_world(
         },
     ) {
         Ok(compilation) => compilation,
-        Err(_error) if std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some() => {
+        Err(_error) if grand_v3_structural_review_draft_enabled() => {
             // The perimeter ledge is traversal scaffolding, not visible terrain
             // authority. A structural review must be able to show the current
             // highlands even when this optional route has not yet found an
@@ -3326,8 +3336,7 @@ fn build_proxy_world(
                 .map(|surface| surface.coord),
         )
         .collect::<BTreeSet<_>>();
-    let structural_review_draft =
-        std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some();
+    let structural_review_draft = grand_v3_structural_review_draft_enabled();
     if let Some(surface) = peak_saddle_support_surfaces.iter().find(|surface| {
         world
             .volume
@@ -3805,7 +3814,8 @@ fn build_proxy_world(
         maximum_surface,
         schematic_fingerprint: plan.semantic_fingerprint,
     };
-    let admitted = admit_reconciled_grand_world(world, crystal_interior, claimed_layout)?;
+    let admitted =
+        admit_reconciled_grand_world(plan, &peak_ridges, world, crystal_interior, claimed_layout)?;
     grand_profile_checkpoint(
         "interior reconciliation",
         profile_started,
@@ -4449,11 +4459,17 @@ fn compile_authoritative_hydrology(
         .ok_or_else(|| schematic_contract("river row projection starts outside hydrology"))?
         .to_vec();
 
+    let semantic_sea = semantic_sea_coords(plan, layout);
     for (coord, (bed, water, cap)) in authored_water {
         if !layout.footprint.contains(&coord) {
             return Err(schematic_contract(format!(
                 "authoritative hydrology leaves the radius-187 footprint at {coord:?}"
             )));
+        }
+        // Offshore current uses the existing ocean water column. Replacing it
+        // with a river column would raise the seabed and paint a dirt causeway.
+        if semantic_sea.contains(&coord) {
+            continue;
         }
         replace_column_surface(
             volume,
@@ -4698,11 +4714,21 @@ fn authoritative_hydrology_centerlines(
         ));
     }
 
-    let river_levels = descending_levels(
+    // Reach sea level before any of the three lanes touches the ocean. The
+    // remaining offshore current must not continue descending above the sea.
+    let coast_index = river_coords
+        .iter()
+        .position(|coord| {
+            semantic_sea.contains(coord)
+                || coord.neighbors().iter().any(|neighbor| semantic_sea.contains(neighbor))
+        })
+        .ok_or_else(|| schematic_contract("river never reaches the semantic sea"))?;
+    let mut river_levels = descending_levels(
         profile.valley_lake_level,
         profile.sea_level,
-        river_coords.len(),
+        coast_index.saturating_add(1),
     );
+    river_levels.resize(river_coords.len(), profile.sea_level);
     let river_centerline = river_coords
         .iter()
         .copied()
@@ -11836,6 +11862,8 @@ fn compile_frozen_summit_connection(
 /// foreign plan entries and foreign volume tags here makes the resulting
 /// admission equivalent to the generic cross-layer interior projection pass.
 fn admit_reconciled_grand_world(
+    _plan: &SchematicPlanV1,
+    _peak_ridges: &super::schematic_highlands::PeakRidgeAuthority,
     mut world: GeneratedWorldPlan,
     interior_id: InteriorRegionId,
     claimed_layout: super::schematic_crystal::ClaimedSchematicLayoutAdmission,
@@ -11904,10 +11932,146 @@ fn admit_reconciled_grand_world(
     }
     interior.floors = floors;
     interior.roof_voxels = roofs;
+    #[cfg(feature = "map-review")]
+    let review_snow_exception_masks = review_snow_exception_masks(_plan, _peak_ridges, &world)?;
     Ok(GrandWorldConstructionAdmission {
         plan: world,
         _layout: claimed_layout,
+        #[cfg(feature = "map-review")]
+        review_snow_exception_masks,
     })
+}
+
+/// Copies the exact resolved ownership masks for the two authored snow exceptions.
+///
+/// This is computed only after Grand's final layout has been sealed. Missing or
+/// empty overlay ownership fails the review build instead of falling back to a
+/// proximity heuristic around a scenic anchor.
+#[cfg(feature = "map-review")]
+fn review_snow_exception_masks(
+    plan: &SchematicPlanV1,
+    peak_ridges: &super::schematic_highlands::PeakRidgeAuthority,
+    world: &GeneratedWorldPlan,
+) -> Result<ReviewSnowExceptionMasksV1, V3GenerationError> {
+    fn exact_overlay_mask(
+        plan: &SchematicPlanV1,
+        world: &GeneratedWorldPlan,
+        overlay: SchematicFeature,
+        require_single_patch: bool,
+    ) -> Result<BTreeSet<HexCoord>, V3GenerationError> {
+        let patch_ids = plan
+            .cells
+            .iter()
+            .filter(|cell| has_overlay(cell, overlay))
+            .map(|cell| PatchId(u32::from(cell.id.get())))
+            .collect::<BTreeSet<_>>();
+        if patch_ids.is_empty() {
+            return Err(schematic_contract(format!(
+                "review snow exception has no authored {overlay:?} ownership patches"
+            )));
+        }
+        if require_single_patch && patch_ids.len() != 1 {
+            return Err(schematic_contract(format!(
+                "review snow exception requires exactly one authored {overlay:?} ownership patch; found {}",
+                patch_ids.len()
+            )));
+        }
+        let mut mask = BTreeSet::new();
+        for patch_id in patch_ids {
+            let patch = world.layout.patches.get(&patch_id).ok_or_else(|| {
+                schematic_contract(format!(
+                    "review snow exception {overlay:?} lost resolved patch {patch_id:?}"
+                ))
+            })?;
+            mask.extend(patch.mask.iter().copied());
+        }
+        if mask.is_empty() {
+            return Err(schematic_contract(format!(
+                "review snow exception resolved an empty {overlay:?} mask"
+            )));
+        }
+        Ok(mask)
+    }
+
+    let peak_pin_count = peak_ridges
+        .components
+        .iter()
+        .map(|component| component.summit_pins.len())
+        .sum::<usize>();
+    let mut forced_summits = peak_ridges
+        .components
+        .iter()
+        .flat_map(|component| component.summit_pins.iter())
+        .map(|(coord, level)| TilePos::new(*coord, *level))
+        .collect::<BTreeSet<_>>();
+    if forced_summits.len() != peak_pin_count {
+        return Err(schematic_contract(
+            "review snow authority found duplicate exact peak summit pins",
+        ));
+    }
+    let massif = world
+        .observation_anchors
+        .get("grand_v3.massif_crest")
+        .copied()
+        .ok_or_else(|| {
+            schematic_contract("review snow authority lost the Massif crest observation anchor")
+        })?;
+    forced_summits.insert(massif);
+    if let Some(summit) = forced_summits.iter().find(|summit| {
+        world
+            .volume
+            .top_surface_at_coord(summit.coord)
+            .is_none_or(|(surface, _)| surface != **summit)
+    }) {
+        return Err(schematic_contract(format!(
+            "review forced summit is not the final exposed surface: {summit:?}"
+        )));
+    }
+    let masks = ReviewSnowExceptionMasksV1 {
+        frozen_woods: exact_overlay_mask(plan, world, SchematicFeature::FrozenWoods, false)?,
+        garden: exact_overlay_mask(plan, world, SchematicFeature::LakeIsland, true)?,
+        forced_summits,
+    };
+    // Review anchors are observational conveniences and the Frozen-Woods one
+    // may be rebound to a nearby reachable surface. The resolved patch union
+    // above is itself the exact final ownership proof; Crystal's claimed site
+    // may legitimately consume an original coarse-cell centre.
+    let review_cell_pitch = i32::try_from(V3_SCHEMATIC_CELL_PITCH).map_err(|_| {
+        schematic_contract("review snow-exception cell pitch exceeds signed coordinate range")
+    })?;
+    // The structural-review draft intentionally skips the late corrective
+    // observation-anchor pass. The Garden's authoritative ownership still has
+    // an exact centre in the locked schematic, so validate the exception mask
+    // against that source rather than making review metadata a prerequisite.
+    let mut garden_cells = plan
+        .cells
+        .iter()
+        .filter(|cell| has_overlay(cell, SchematicFeature::LakeIsland));
+    let garden_cell = garden_cells
+        .next()
+        .ok_or_else(|| schematic_contract("review garden mask lost its authored cell"))?;
+    if garden_cells.next().is_some() {
+        return Err(schematic_contract(
+            "review garden mask has more than one authored cell",
+        ));
+    }
+    let garden_center = schematic_to_world(garden_cell.coord, review_cell_pitch);
+    if world.volume.top_surface_at_coord(garden_center).is_none() {
+        return Err(schematic_contract(
+            "review garden mask centre has no final exposed surface",
+        ));
+    }
+    if !masks.garden.contains(&garden_center) {
+        return Err(schematic_contract(
+            "review Garden mask omits its authored cell centre",
+        ));
+    }
+    if !masks.frozen_woods.is_disjoint(&masks.garden) {
+        return Err(schematic_contract(
+            "review Frozen-Woods and Garden snow-exception masks overlap",
+        ));
+    }
+    Ok(masks)
 }
 
 fn tunnel_column(
@@ -21509,7 +21673,7 @@ fn author_massif_internal_network(
         .copied()
         .collect::<Vec<_>>();
     if !blocked_representatives.is_empty() {
-        if std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some() {
+        if grand_v3_structural_review_draft_enabled() {
             // A visual structural draft must keep every coarse representative
             // reachable even when the new Massif switchback's aesthetic
             // no-touch halo still overlaps one. Relax only those exact cells;
@@ -25126,6 +25290,11 @@ fn compile_schematic_vegetation(
         .map_err(schematic_contract)?;
     let frozen =
         SnowyVegetationSet::resolve(catalog, "Grand V3 schematic").map_err(schematic_contract)?;
+    let snowy_tree_objects = [&frozen.old_growth, &frozen.small_broadleaf, &frozen.tall_narrow];
+    let snowy_clearance = snowy_tree_objects
+        .iter()
+        .map(|object| object.clearance_projections())
+        .collect::<Vec<_>>();
     let supports = world
         .volume
         .surfaces
@@ -25237,6 +25406,16 @@ fn compile_schematic_vegetation(
                 break;
             }
             let root = supports[&root_coord];
+            // Snow-covered ground uses the same authored voxel trees as the
+            // Frozen Forest. Select the template before clearance and blocker
+            // projection, because snowy old-growth has its own exact shape.
+            let snow_covered = solid_material_at(&world.volume, root)
+                == Some(SolidMaterialRole::Snow);
+            let (tree_objects, tree_clearance_projections) = if snow_covered {
+                (snowy_tree_objects.as_slice(), snowy_clearance.as_slice())
+            } else {
+                (tree_objects.as_slice(), tree_clearance_projections.as_slice())
+            };
             let family = named_sample(seed, "vegetation_tree_family", root_coord);
             let family_start = if ecology.prefer_old_growth {
                 0
@@ -25315,9 +25494,10 @@ fn compile_schematic_vegetation(
             )));
         }
 
-        // Tufts are a secondary surface detail rather than canopy authority.
-        // Keep them sparse enough to remain readable and independently seeded.
-        let grass_target = target.div_ceil(20);
+        // Denser ground cover reuses the existing one-voxel grass pattern.
+        // Its independent placement stream preserves tree positions and keeps
+        // routes, water, authored clearings and occupied canopies clear.
+        let grass_target = target.div_ceil(3);
         let mut grass_count = 0_usize;
         for root_coord in roots.iter().rev().copied() {
             if grass_count >= grass_target
@@ -29376,6 +29556,108 @@ mod tests {
         assert!(
             validate_waterfall_cliff_interface(&seam_volume, &rows, lip, &authority).is_err(),
             "an outer boundary seam above twenty-four levels must fail closed"
+        );
+    }
+
+    #[test]
+    fn reference_river_outlet_matches_sea_level_and_preserves_existing_seabed() {
+        let fixture = reference_fixture();
+        let world = &fixture.selection.validated.plan;
+        let profile = V3GrandV3BasicTerrainProfile::canonical();
+        let seed = fixture.plan.provenance.world_seed;
+        let semantic_sea = semantic_sea_coords(&fixture.plan, &world.layout);
+        let ribbon = authoritative_hydrology_centerlines(
+            &fixture.plan,
+            profile,
+            seed,
+            &world.layout,
+        )
+        .expect("reference hydrology resolves");
+        let river_rows = &ribbon.watercourse_rows[ribbon.waterfall_centerline.len() - 1..];
+        assert_eq!(river_rows.len(), ribbon.river_centerline.len());
+        let offshore = river_rows
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|position| semantic_sea.contains(&position.coord))
+            .collect::<BTreeSet<_>>();
+        assert!(offshore.len() > 3, "fixture must exercise the offshore tail");
+        for position in ribbon
+            .river_centerline
+            .iter()
+            .chain(offshore.iter())
+            .filter(|position| semantic_sea.contains(&position.coord))
+        {
+            assert_eq!(
+                position.level, profile.sea_level,
+                "river must meet the sea datum at every offshore voxel: {position:?}"
+            );
+        }
+
+        // Compare against the same pre-hydrology ocean, including its coast
+        // detail. A shallow existing inlet is valid; adding a submerged river
+        // embankment or replacing the seabed material is not.
+        let mut before = build_schematic_foundation(&fixture.plan, &world.layout, profile)
+            .expect("reference pre-hydrology foundation resolves");
+        apply_coast_detail(
+            &fixture.plan,
+            seed,
+            profile,
+            &world.layout,
+            &before.fine_index,
+            &mut before.volume,
+            &mut before.biome_regions,
+        )
+        .expect("reference pre-hydrology coast resolves");
+        let fills = world.volume.fill_runs_by_top();
+        let before_fills = before.volume.fill_runs_by_top();
+        let solid_runs = |column: &VolumeColumn| {
+            column
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    VolumeElement::Solid(solid) => Some(*solid),
+                    VolumeElement::Fill(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut depth_counts = BTreeMap::new();
+        for position in &offshore {
+            let fill = fills
+                .get(position)
+                .unwrap_or_else(|| panic!("missing offshore sea-level water at {position:?}"));
+            let expected = before_fills
+                .get(&TilePos::new(position.coord, profile.sea_level))
+                .unwrap_or_else(|| panic!("missing pre-hydrology ocean at {position:?}"));
+            assert_eq!(fill.material, FillMaterialRole::Water);
+            assert_eq!(fill.levels, expected.levels, "ocean depth changed at {position:?}");
+            assert_eq!(fill.levels.top - 1, profile.sea_level);
+            let solids = solid_runs(&world.volume.columns[&position.coord]);
+            let original_solids = solid_runs(&before.volume.columns[&position.coord]);
+            assert_eq!(solids, original_solids, "seabed changed at {position:?}");
+            let bed = solids
+                .iter()
+                .filter(|solid| solid.levels.top <= fill.levels.bottom)
+                .max_by_key(|solid| solid.levels.top)
+                .expect("offshore water has a solid seabed");
+            assert_eq!(bed.levels.top, fill.levels.bottom, "water must meet its bed");
+            let depth = fill.levels.top - fill.levels.bottom;
+            assert!(depth >= 1, "preserved coastal water must have positive depth");
+            assert!(
+                bed.levels.top - 1 <= profile.sea_level - 1,
+                "the seabed must remain submerged at {position:?}"
+            );
+            *depth_counts
+                .entry((
+                    fill.levels.top - 1,
+                    fill.levels.bottom,
+                    bed.levels.top - 1,
+                    bed.material,
+                ))
+                .or_insert(0_usize) += 1;
+        }
+        eprintln!(
+            "reference offshore voxel depth audit: (water_top, water_bottom, bed_top, bed_material) -> column_count: {depth_counts:?}"
         );
     }
 
@@ -33736,6 +34018,43 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "map-review")]
+    #[test]
+    #[ignore = "requires HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT=1"]
+    fn review_snow_masks_use_the_authored_garden_center_without_its_late_anchor() {
+        let fixture = reference_fixture();
+        let mut world = fixture.selection.validated.plan.clone();
+        let _late_garden_anchor = world.observation_anchors.remove("grand_v3.lake_island");
+        assert!(!world
+            .observation_anchors
+            .contains_key("grand_v3.lake_island"));
+
+        let settings = settings();
+        let mut layout =
+            resolve_layout(V3_SCHEMATIC_GRID_RADIUS, &settings).expect("schematic layout resolves");
+        super::super::schematic_crystal::claim_site(&fixture.plan, &mut layout, 22)
+            .expect("Crystal site claim validates");
+        let foundation = build_schematic_foundation(
+            &fixture.plan,
+            &layout,
+            V3GrandV3BasicTerrainProfile::canonical(),
+        )
+        .expect("foundation resolves peak authority");
+        let masks = review_snow_exception_masks(&fixture.plan, &foundation.peak_ridges, &world)
+            .expect("review masks do not require late corrective Garden metadata");
+        let garden_cell = fixture
+            .plan
+            .cells
+            .iter()
+            .find(|cell| has_overlay(cell, SchematicFeature::LakeIsland))
+            .expect("reference retains one authored LakeIsland cell");
+        let garden_center = schematic_to_world(
+            garden_cell.coord,
+            i32::try_from(V3_SCHEMATIC_CELL_PITCH).expect("canonical cell pitch fits i32"),
+        );
+        assert!(masks.garden.contains(&garden_center));
+    }
+
     #[test]
     fn final_content_publishes_exact_bridges_lights_hubs_and_grounded_vegetation() {
         let fixture = reference_fixture();
@@ -34358,6 +34677,7 @@ mod tests {
             world
                 .anchors
                 .values()
+                .chain(world.observation_anchors.values())
                 .flat_map(|anchor| anchor.coord.within_radius(3)),
         );
         expected_reserved.extend(
@@ -34366,10 +34686,10 @@ mod tests {
                 .values()
                 .flat_map(|light| light.origin.coord.within_radius(2)),
         );
-        assert_eq!(
-            reserved, expected_reserved,
-            "Grand vegetation exclusion authority must remain complete and exact"
-        );
+        assert!(reserved == expected_reserved,
+            "Grand vegetation exclusion authority differs: actual-only {:?}; expected-only {:?}",
+            reserved.difference(&expected_reserved).take(12).collect::<Vec<_>>(),
+            expected_reserved.difference(&reserved).take(12).collect::<Vec<_>>());
         let mut occupied_visual = BTreeSet::new();
         let mut occupied_blockers = preexisting_blockers;
 
@@ -34492,11 +34812,21 @@ mod tests {
                     "vegetation {id:?} roots inside an authored exclusion"
                 );
                 let object = match feature.kind {
-                    FeatureKind::Tree => trees
+                    FeatureKind::Tree => {
+                        let snowy = [&frozen.old_growth, &frozen.small_broadleaf, &frozen.tall_narrow];
+                        let expected = if solid_material_at(&world.volume, feature.root)
+                            == Some(SolidMaterialRole::Snow)
+                        {
+                            snowy.as_slice()
+                        } else {
+                            trees.as_slice()
+                        };
+                        expected
                         .iter()
                         .copied()
                         .find(|object| object.id == feature.object_id)
-                        .expect("tree uses the resolved climate asset"),
+                        .expect("tree uses the resolved climate and voxel-snow asset")
+                    },
                     FeatureKind::TallGrass => {
                         assert_eq!(feature.object_id, grass.id);
                         grass

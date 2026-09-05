@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "focused-4-cameras-v1",
+  "captures": [
+    {"id": "02-highlands-oblique", "filename": "02-highlands-oblique.png", "camera": "map", "view": "default", "look_at_anchor": "grand_v3.massif_crest", "look_at_offset": [110, 76, 115]},
+    {"id": "03-coast-river-outlet", "filename": "03-coast-river-outlet.png", "camera": "map", "view": "default", "look_at_anchor": "grand_v3.coast", "look_at_offset": [50, 30, 55]},
+    {"id": "14-cascade-basin-full-height", "filename": "14-cascade-basin-full-height.png", "camera": "map", "view": "default", "look_at_anchor": "grand_v3.waterfall_profile", "look_at_offset": [72, 38, 58]},
+    {"id": "16-deep-tree-shade", "filename": "16-deep-tree-shade.png", "camera": "map", "view": "rear", "look_at_anchor": "grand_v3.river_bend", "look_at_offset": [38, 18, 42]}
+  ]
+}

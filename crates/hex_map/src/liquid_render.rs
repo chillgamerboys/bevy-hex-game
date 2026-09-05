@@ -368,6 +368,12 @@ struct LiquidCapBatch {
     surfaces: Vec<LiquidSurface>,
 }
 
+/// Review-only identity used to suppress one rendered liquid role without touching
+/// authored liquid voxels, topology, logical runs, or terrain pick proxies.
+#[cfg(feature = "map-review")]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReviewLiquidPresentationRole(pub(crate) FillMaterialRole);
+
 #[derive(Debug)]
 struct PresentationPlan {
     surfaces: Vec<LiquidSurface>,
@@ -436,6 +442,10 @@ pub(crate) fn spawn_presentations(
                 Name::new("LiquidCap"),
             ))
             .id();
+        #[cfg(feature = "map-review")]
+        commands
+            .entity(entity)
+            .insert(ReviewLiquidPresentationRole(key.role));
         entities.push(entity);
     }
 
@@ -456,6 +466,10 @@ pub(crate) fn spawn_presentations(
                 Name::new(name),
             ))
             .id();
+        #[cfg(feature = "map-review")]
+        commands
+            .entity(entity)
+            .insert(ReviewLiquidPresentationRole(key.role));
         entities.push(entity);
     }
 

@@ -1,0 +1,19 @@
+{
+  "camera_ids": [
+    "02-highlands-oblique",
+    "03-coast-river-outlet",
+    "14-cascade-basin-full-height",
+    "16-deep-tree-shade"
+  ],
+  "external_manifest_filename": "manifest.json",
+  "external_manifest_sha256": "952c7a89d8257cba15630679d2b1fe048869969f56594c02646b31ca9cda5ab4",
+  "inventory_manifest_sha256": "36dbaa153e4c8cfffbd3dce2246e6acbc9695d8f329b5e3ea997f84f2561c93d",
+  "pack_id": "grand-v3-bc06-neutral-control-baseline-oracle-v1",
+  "primary_render_count": 4,
+  "source_git_head": "bc06a8969532b807ec677928eee304bc28399386",
+  "source_git_tree": "e123db60b700a40f3d1c3228d0f44d1dc4c379a7",
+  "stability_diagnostic_render_count": 22,
+  "stability_evidence_sha256": "5e45ab01723184b4563487c37fd75c001d4830927da1ce9e3a03e0cf042d6926",
+  "version": 1,
+  "warning": "UNAPPROVABLE STRUCTURAL DRAFT — AESTHETIC REVIEW ONLY"
+}

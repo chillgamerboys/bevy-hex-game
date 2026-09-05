@@ -6,6 +6,10 @@
 use super::fingerprint::semantic_plan_fingerprint;
 use super::world::{GeneratedWorldPlan, WorldValidationIssue};
 use super::V3GenerationError;
+#[cfg(feature = "map-review")]
+use hex_core::{HexCoord, TilePos};
+#[cfg(feature = "map-review")]
+use std::collections::BTreeSet;
 
 pub(crate) const CANDIDATE_COUNT: u8 = 8;
 pub(crate) const MAX_REPAIR_ROUNDS: u8 = 4;
@@ -161,6 +165,21 @@ pub(crate) struct ValidatedWorldPlan {
     #[cfg(test)]
     pub(super) semantic_fingerprint: u64,
     volume_admission: VolumeAdmission,
+    #[cfg(feature = "map-review")]
+    review_snow_exception_masks: Option<ReviewSnowExceptionMasksV1>,
+}
+
+/// Exact authored Grand-V3 snow exceptions and summits retained only for review.
+///
+/// This sidecar is deliberately excluded from [`GeneratedWorldPlan`] and its
+/// semantic/materialized fingerprints. It can therefore inform presentation
+/// without becoming a new gameplay or generation authority surface.
+#[cfg(feature = "map-review")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct ReviewSnowExceptionMasksV1 {
+    pub(super) frozen_woods: BTreeSet<HexCoord>,
+    pub(super) garden: BTreeSet<HexCoord>,
+    pub(super) forced_summits: BTreeSet<TilePos>,
 }
 
 /// Sealed evidence that the volume passed complete-world validation.
@@ -179,6 +198,8 @@ pub(super) struct VolumeAdmission {
 pub(super) struct CompleteWorldAdmission {
     plan: GeneratedWorldPlan,
     volume_admission: VolumeAdmission,
+    #[cfg(feature = "map-review")]
+    review_snow_exception_masks: Option<ReviewSnowExceptionMasksV1>,
 }
 
 impl ValidatedWorldPlan {
@@ -187,6 +208,8 @@ impl ValidatedWorldPlan {
             plan,
             semantic_fingerprint,
             volume_admission: VolumeAdmission { _private: () },
+            #[cfg(feature = "map-review")]
+            review_snow_exception_masks: None,
         }
     }
 
@@ -201,6 +224,8 @@ impl ValidatedWorldPlan {
         Ok(CompleteWorldAdmission {
             plan,
             volume_admission: VolumeAdmission { _private: () },
+            #[cfg(feature = "map-review")]
+            review_snow_exception_masks: None,
         })
     }
 
@@ -214,6 +239,9 @@ impl ValidatedWorldPlan {
     pub(super) fn validate_grand_construction(
         admission: super::schematic::GrandWorldConstructionAdmission,
     ) -> Result<CompleteWorldAdmission, V3GenerationError> {
+        #[cfg(feature = "map-review")]
+        let (plan, review_snow_exception_masks) = admission.into_parts();
+        #[cfg(not(feature = "map-review"))]
         let plan = admission.into_plan();
         let issues = plan.validate_grand_construction_admitted();
         if !issues.is_empty() {
@@ -222,6 +250,8 @@ impl ValidatedWorldPlan {
         Ok(CompleteWorldAdmission {
             plan,
             volume_admission: VolumeAdmission { _private: () },
+            #[cfg(feature = "map-review")]
+            review_snow_exception_masks: Some(review_snow_exception_masks),
         })
     }
 
@@ -240,6 +270,13 @@ impl ValidatedWorldPlan {
         &self.volume_admission
     }
 
+    /// Borrows exact authored snow-exception masks without granting authority.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(super) const fn review_snow_exception_masks(&self) -> Option<&ReviewSnowExceptionMasksV1> {
+        self.review_snow_exception_masks.as_ref()
+    }
+
     /// Consumes the proof after every admission-gated projection has completed.
     pub(super) fn into_parts(self) -> (GeneratedWorldPlan, u64) {
         (self.plan, self.semantic_fingerprint)
@@ -255,6 +292,8 @@ impl CompleteWorldAdmission {
             plan: self.plan,
             semantic_fingerprint,
             volume_admission: self.volume_admission,
+            #[cfg(feature = "map-review")]
+            review_snow_exception_masks: self.review_snow_exception_masks,
         })
     }
 }

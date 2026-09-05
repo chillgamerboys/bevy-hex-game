@@ -1588,10 +1588,6 @@ fn compile_upper_ledge_side_branch(
     })
 }
 
-fn grand_v3_structural_review_draft_enabled() -> bool {
-    std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some()
-}
-
 fn insert_route_support_mask(
     masks: &mut BTreeMap<PatchId, BTreeSet<HexCoord>>,
     plan: &SchematicPlanV1,

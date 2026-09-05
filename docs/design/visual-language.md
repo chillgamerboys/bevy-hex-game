@@ -8,6 +8,15 @@ lighting, fog, selection feedback, interface colour, and debug overlays delibera
 live outside it. Those systems change how authored colours are perceived; they do not
 define the colour of an object.
 
+## Map features remain voxel-authored
+
+All current map features, including terrain, snow, trees, grass, and water bodies,
+are made of voxels. Reuse voxel materials and existing voxel-authored templates;
+their internal catalog names do not imply permission to add separate objects.
+Introducing separate decorative or gameplay objects is an explicit future user
+decision. Ordinary rendering batches and surface shading continue to represent the
+underlying voxel geometry.
+
 ## One named palette
 
 [`assets/art/palette.ron`](../../assets/art/palette.ron) is the canonical inventory of

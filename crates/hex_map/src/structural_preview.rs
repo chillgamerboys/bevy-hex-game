@@ -16,6 +16,7 @@ use hex_core::{HexCoord, Level, MapAnchorId, MapObservationAnchors, TilePos};
 use hex_multiplayer::{WorldLiquidFlowV1, WorldSnapshotV1};
 use hex_schematic::{FeatureKind, SchematicCoord, SchematicPlanV1};
 
+use crate::procedural_v3::grand_v3_structural_review_draft_enabled;
 use crate::{V3_SCHEMATIC_CELL_PITCH, V3_SCHEMATIC_GRID_RADIUS};
 
 /// Current on-disk structural-preview schema.
@@ -339,7 +340,7 @@ pub fn build_grand_v3_structural_preview(
         .map(|positions| waterfall_rows(&positions, &fields));
     let (waterfall_centerline, waterfall_gorge_rows) = match waterfall_evidence {
         Ok(evidence) => evidence,
-        Err(error) if std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some() => {
+        Err(error) if grand_v3_structural_review_draft_enabled() => {
             eprintln!(
                 "Grand V3 structural-review draft: omitting incomplete waterfall evidence: {error}"
             );

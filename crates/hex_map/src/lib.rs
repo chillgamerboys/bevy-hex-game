@@ -54,6 +54,19 @@ mod liquid_render;
 mod procedural;
 mod procedural_v2;
 mod procedural_v3;
+/// Strict review-only world-detail profiles and capture reports.
+#[cfg(feature = "map-review")]
+pub mod review_world_detail;
+/// Pure liquid and atmospheric projections for world-detail review.
+#[cfg(feature = "map-review")]
+pub mod review_world_detail_effects;
+#[cfg(feature = "map-review")]
+mod review_world_detail_render;
+#[cfg(feature = "map-review")]
+pub use review_world_detail_render::{ReviewWorldDetailEntity, ReviewWorldDetailLifecycleSystems};
+/// Pure terrain-attached projections for world-detail review.
+#[cfg(feature = "map-review")]
+pub(crate) mod review_world_detail_terrain;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
 /// Deterministic, renderer-free structural projections for Grand V3 review.
@@ -61,6 +74,7 @@ pub mod structural_preview;
 /// Pure construction of complete voxel maps from terrain presets.
 mod terrain;
 mod terrain_damage;
+mod terrain_noise;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
 mod world_snapshot;
@@ -79,6 +93,8 @@ pub use procedural::{
     VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
     WoodedIslandMetrics as WoodedIslandReportMetrics,
 };
+#[cfg(feature = "map-review")]
+pub use review_world_detail::ReviewWorldDetailProjectionHashesV1;
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, EnvironmentSettings,

@@ -19,7 +19,7 @@ use hex_schematic::{
 };
 
 use super::layout::{PatchId, ResolvedLayoutPlan};
-use super::V3GenerationError;
+use super::{grand_v3_structural_review_draft_enabled, V3GenerationError};
 use crate::settings::{V3CrystalAscentSettings, V3GrandV3BasicTerrainProfile, MAX_V3_LEVEL};
 
 const CELL_PITCH: i32 = 22;
@@ -3376,8 +3376,7 @@ fn inner_peak_ingress_lower_body_floors(
         .get(&summit)
         .copied()
         .ok_or_else(|| contract("Grand V3 inner peak ingress summit lost its crown floor"))?;
-    let structural_review_draft =
-        std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some();
+    let structural_review_draft = grand_v3_structural_review_draft_enabled();
     if shoulder_ceiling
         .get(&summit)
         .is_none_or(|ceiling| *ceiling < summit_floor)
@@ -4074,33 +4073,31 @@ fn build_peak_field(
                 )));
             }
         }
-        let excessive_local_slope = std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT")
-            .is_none()
-            .then(|| {
-                component_levels.iter().find_map(|(coord, level)| {
-                    coord
-                        .neighbors()
-                        .into_iter()
-                        .any(|neighbor| {
-                            component_levels
-                                .get(&neighbor)
-                                .is_some_and(|neighbor_level| level.abs_diff(*neighbor_level) > 9)
-                        })
-                        .then(|| {
-                            coord.neighbors().into_iter().find_map(|neighbor| {
-                                component_levels.get(&neighbor).and_then(|neighbor_level| {
-                                    (level.abs_diff(*neighbor_level) > 9).then_some((
-                                        *coord,
-                                        *level,
-                                        neighbor,
-                                        *neighbor_level,
-                                    ))
-                                })
+        let excessive_local_slope = (!grand_v3_structural_review_draft_enabled()).then(|| {
+            component_levels.iter().find_map(|(coord, level)| {
+                coord
+                    .neighbors()
+                    .into_iter()
+                    .any(|neighbor| {
+                        component_levels
+                            .get(&neighbor)
+                            .is_some_and(|neighbor_level| level.abs_diff(*neighbor_level) > 9)
+                    })
+                    .then(|| {
+                        coord.neighbors().into_iter().find_map(|neighbor| {
+                            component_levels.get(&neighbor).and_then(|neighbor_level| {
+                                (level.abs_diff(*neighbor_level) > 9).then_some((
+                                    *coord,
+                                    *level,
+                                    neighbor,
+                                    *neighbor_level,
+                                ))
                             })
                         })
-                        .flatten()
-                })
-            });
+                    })
+                    .flatten()
+            })
+        });
         if let Some(Some((coord, level, neighbor, neighbor_level))) = excessive_local_slope {
             return Err(contract(format!(
                 "Grand V3 connected peak chain exceeds the nine-level local-slope budget at {coord:?} {level} -> {neighbor:?} {neighbor_level}"

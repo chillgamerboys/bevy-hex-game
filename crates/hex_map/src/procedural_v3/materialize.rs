@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use bevy::prelude::Resource;
+#[cfg(feature = "map-review")]
+use hex_core::HexCoord;
 use hex_core::{
     BiomeRegionId, BiomeRegions, Headroom, IlluminationLevel, InteriorRegions, MapAnchorId,
     MapAnchors, MapObservationAnchors, MapViewHint, SpecialMovementRegions, SubstanceId, TilePos,
@@ -56,6 +58,14 @@ pub(crate) struct MapPresentationProjection {
     features: BTreeMap<FeatureId, PlannedFeature>,
     structures: BTreeMap<StructureId, PlannedStructure>,
     lights: BTreeMap<LightId, PlannedGameplayLight>,
+    #[cfg(feature = "map-review")]
+    review_protected_routes: BTreeMap<String, BTreeSet<TilePos>>,
+    #[cfg(feature = "map-review")]
+    review_frozen_woods_mask: BTreeSet<HexCoord>,
+    #[cfg(feature = "map-review")]
+    review_garden_mask: BTreeSet<HexCoord>,
+    #[cfg(feature = "map-review")]
+    review_forced_summits: BTreeSet<TilePos>,
 }
 
 impl MapPresentationProjection {
@@ -83,6 +93,36 @@ impl MapPresentationProjection {
         &self.lights
     }
 
+    /// Returns the generator's exact protected route footprints for disposable
+    /// review projections. These surfaces are never published to gameplay and
+    /// exist only while the `map-review` feature is compiled.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_protected_routes(&self) -> &BTreeMap<String, BTreeSet<TilePos>> {
+        &self.review_protected_routes
+    }
+
+    /// Returns the exact union of authored Frozen-Woods ownership patches.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_frozen_woods_mask(&self) -> &BTreeSet<HexCoord> {
+        &self.review_frozen_woods_mask
+    }
+
+    /// Returns the exact authored Lake-Island garden ownership patch.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_garden_mask(&self) -> &BTreeSet<HexCoord> {
+        &self.review_garden_mask
+    }
+
+    /// Returns the exact final summit pins retained by Grand's highland authority.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_forced_summits(&self) -> &BTreeSet<TilePos> {
+        &self.review_forced_summits
+    }
+
     /// Rebuilds only the generator-neutral runtime consequences carried by a live
     /// world snapshot. Generator plans and structure recipe identities deliberately
     /// remain absent: their surviving voxel/public consequences are restored by the
@@ -97,6 +137,14 @@ impl MapPresentationProjection {
             features,
             structures: BTreeMap::new(),
             lights,
+            #[cfg(feature = "map-review")]
+            review_protected_routes: BTreeMap::new(),
+            #[cfg(feature = "map-review")]
+            review_frozen_woods_mask: BTreeSet::new(),
+            #[cfg(feature = "map-review")]
+            review_garden_mask: BTreeSet::new(),
+            #[cfg(feature = "map-review")]
+            review_forced_summits: BTreeSet::new(),
         }
     }
 
@@ -299,6 +347,11 @@ pub(crate) fn materialize(
         profile_started,
         &mut profile_previous,
     );
+    #[cfg(feature = "map-review")]
+    let review_snow_exception_masks = validated
+        .review_snow_exception_masks()
+        .cloned()
+        .unwrap_or_default();
     let (plan, admitted_semantic_fingerprint) = validated.into_parts();
     debug_assert_eq!(semantic_fingerprint, admitted_semantic_fingerprint);
     let view_hint = plan.view_hint;
@@ -308,11 +361,26 @@ pub(crate) fn materialize(
         lights,
         ..
     } = plan;
+    let features_by_id = features.by_id;
+    #[cfg(feature = "map-review")]
+    let review_protected_routes = features
+        .protected_routes
+        .into_iter()
+        .map(|(name, route)| (name, route.surfaces))
+        .collect();
     let presentation = MapPresentationProjection {
         liquids: materialized_liquids,
-        features: features.by_id,
+        features: features_by_id,
         structures: structures.by_id,
         lights,
+        #[cfg(feature = "map-review")]
+        review_protected_routes,
+        #[cfg(feature = "map-review")]
+        review_frozen_woods_mask: review_snow_exception_masks.frozen_woods,
+        #[cfg(feature = "map-review")]
+        review_garden_mask: review_snow_exception_masks.garden,
+        #[cfg(feature = "map-review")]
+        review_forced_summits: review_snow_exception_masks.forced_summits,
     };
 
     Ok(MaterializedV3World {

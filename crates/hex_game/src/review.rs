@@ -4,15 +4,18 @@
 //! `map-review` feature. Ordinary release builds neither inspect nor react to the
 //! review environment variables. In a review build, setting
 //! `HEX_REVIEW_SCENARIO` selects a scenario without automating the title-screen UI;
-//! `HEX_REVIEW_SEED` optionally replaces its configured procedural seed. Adding
-//! `HEX_REVIEW_CAPTURE` captures the renderer after the validated terrain has settled,
-//! then exits. `HEX_REVIEW_TIME` and `HEX_REVIEW_CAMERA` optionally select the cyclic
-//! lighting hour and map/character/first-person perspective for that launch.
+//! `HEX_REVIEW_SEED` optionally replaces its configured procedural seed.
+//! `HEX_REVIEW_CAPTURE_PLAN` captures the renderer after validated terrain has
+//! settled, then exits. Every automated plan requires a fresh lowercase-hex
+//! `HEX_REVIEW_LAUNCH_NONCE` and `HEX_REVIEW_SOURCE_PROVENANCE_SHA256`; the runtime
+//! binds both to its own process and executable plus the exact capture-plan bytes.
+//! `HEX_REVIEW_TIME` optionally selects the cyclic lighting hour for that launch.
 //! `HEX_REVIEW_LIQUID_PHASE` freezes liquid presentation at a deterministic phase;
 //! captures default to phase `0.0` when no explicit phase is configured.
-//! `HEX_REVIEW_FOCUS_ANCHOR` optionally relocates the selected actor to one exact
-//! generated anchor before framing. This keeps iteration tooling on the same loading
-//! and validation path as manual play while avoiding compositor-dependent screenshots.
+//! `HEX_REVIEW_FOCUS_ANCHOR` optionally resolves one exact generated anchor as a
+//! presentation-only camera target without relocating the selected actor. This keeps
+//! iteration tooling on the same loading and validation path as manual play while
+//! avoiding compositor-dependent screenshots.
 //! `HEX_REVIEW_LOOK_AT_ANCHOR` and `HEX_REVIEW_LOOK_AT_OFFSET=x,y,z` instead frame
 //! an exact generated anchor from an explicit review-only world-space offset without
 //! moving an actor or entering either gameplay character-camera mode.
@@ -31,48 +34,84 @@
 //! terrain render meshes while leaving authoritative geometry untouched.
 //! `HEX_REVIEW_CRYSTAL_LIGHT_PROFILE` selects one strict review-only treatment for
 //! generated crystal point lights without changing authoritative illumination.
+//! `HEX_REVIEW_LIFECYCLE` binds a normal capture plan to one strict provenance
+//! request and, after each real capture sequence, tears down and recreates the
+//! disposable projection in-process. Exactly 100 verified cycles atomically publish
+//! the requested hash-chained lifecycle certificate; any leak or authority change
+//! exits without a valid certificate.
 //! Unanchored Map-camera TopDown overviews additionally fail closed unless every
 //! authoritative terrain run is represented once and every topmost boundary cap fits
 //! inside the active viewport with margin and valid near/far depth. Deliberate anchored
 //! close-ups retain the ordinary terrain-visibility and pixel-coverage gates instead.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use bevy::camera::{CameraUpdateSystems, RenderTarget, ViewportConversionError};
-use bevy::light::NotShadowCaster;
+use atomicwrites::{AllowOverwrite, AtomicFile};
+use bevy::camera::{
+    Camera3dDepthTextureUsage, CameraUpdateSystems, RenderTarget, ViewportConversionError,
+};
+use bevy::core_pipeline::oit::{resolve::is_oit_supported, OrderIndependentTransparencySettings};
+use bevy::ecs::system::SystemParam;
+use bevy::light::{FogVolume, NotShadowCaster, VolumetricFog, VolumetricLight};
+use bevy::mesh::Indices;
+use bevy::pbr::{ScreenSpaceTransmission, ScreenSpaceTransmissionQuality};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use bevy::render::render_resource::TextureFormat;
+use bevy::render::render_resource::{TextureFormat, TextureUsages};
+use bevy::render::renderer::{RenderAdapter, RenderDevice};
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::transform::TransformSystems;
 use hex_assets::{CameraSettings, GameAssets, Scenario, ScenarioLibrary, SubstanceTable};
 use hex_core::{
     config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER},
-    CameraFocusTarget, CutawayOccluder, GameplaySetupFailure, Headroom, HexSpan, HexTile,
-    IlluminationLevel, LightDomain, MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint,
-    PresentationOcclusion, ResolvedMapSeed, ReviewCrystalLightProfile, ReviewEdgeTreatment,
-    ReviewMaterialTreatment, Screen, SubstanceId, TerrainPickRun, TerrainReady, TerrainRenderBatch,
-    TilePos, TraversalBlockers,
+    AuthoredObjectVoxelRuns, Busy, CameraFocusTarget, CanopyOccluder, ControlOwner,
+    CutawayOccluder, ExteriorIllumination, GameplayLight, GameplaySetup, GameplaySetupFailure,
+    Headroom, HexSpan, HexTile, IlluminationLevel, InspectionCameraSubject, KnowledgeState,
+    LightDomain, MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint,
+    PresentationOcclusion, PresentationSystems, ResolvedMapSeed, ReviewCrystalLightProfile,
+    ReviewEdgeTreatment, ReviewMaterialTreatment, RunBottom, Screen, SubstanceId,
+    TargetReticleRequest, TerrainChunkRoot, TerrainPickRun, TerrainReady, TerrainRenderBatch,
+    TilePos, TraversalBlockers, TreeOccluder,
 };
-use hex_map::LiquidVisualTime;
-use hex_perception::ResolvedIllumination;
-use hex_units::{Body, Footing, Selected, Standing, StandsOn};
-use hex_world::{CameraMode, CameraSystems, PanOrbitCamera};
+use hex_map::{
+    review_world_detail::{
+        ReviewCameraFeaturesV1, ReviewCleanupStateV1, ReviewPerformanceSampleV1,
+        ReviewRuntimeReceiptV1, ReviewWorldDetailProfileV1, ReviewWorldDetailReportV1,
+        ReviewWorldDetailRuntimeAssetEvidenceV1, ReviewWorldDetailTeardownReceiptV1,
+        ReviewWorldDetailTeardownRequestV1,
+    },
+    CurrentWorldSnapshotV1, LiquidVisualTime, ReviewWorldDetailEntity, WorldReplicationStateV1,
+};
+use hex_multiplayer::{CampaignSaveRefusalV2, CampaignSaveStateV2};
+use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
+use hex_units::{
+    Archetype, Body, Downed, Enemy, Faction, Footing, MovingTo, OutOfRangeOverlay, PathOverlay,
+    Player, RangeOverlay, Selected, Standing, StandsOn, UnitRegistry,
+};
+use hex_world::{CameraMode, CameraSystems, PanOrbitCamera, SkyRuntimeAssetEvidenceV1, TimeOfDay};
+use serde::{Deserialize, Serialize};
 
 use crate::capture::{prepare_capture_path, write_png};
 use crate::fog::{
     FogPresentationMode, FOG_CAP_DEPTH_BIAS, FOG_CAP_INSET, FOG_CAP_LIFT, FOG_CAP_THICKNESS,
 };
+use crate::save::{CampaignSaveStatusProjection, CampaignStore};
 use crate::scenarios::ScenarioToLoad;
+use crate::storage::StoragePaths;
 
 const SCENARIO_ENV: &str = "HEX_REVIEW_SCENARIO";
 const SEED_ENV: &str = "HEX_REVIEW_SEED";
 const CAPTURE_ENV: &str = "HEX_REVIEW_CAPTURE";
+const CAPTURE_PLAN_ENV: &str = "HEX_REVIEW_CAPTURE_PLAN";
+const LAUNCH_NONCE_ENV: &str = "HEX_REVIEW_LAUNCH_NONCE";
+const SOURCE_PROVENANCE_SHA256_ENV: &str = "HEX_REVIEW_SOURCE_PROVENANCE_SHA256";
 const VIEW_ENV: &str = "HEX_REVIEW_VIEW";
 const TIME_ENV: &str = "HEX_REVIEW_TIME";
 const LIQUID_PHASE_ENV: &str = "HEX_REVIEW_LIQUID_PHASE";
@@ -87,7 +126,24 @@ const FOG_ENV: &str = "HEX_REVIEW_FOG";
 const MATERIAL_ENV: &str = "HEX_REVIEW_MATERIAL";
 const EDGE_ENV: &str = "HEX_REVIEW_EDGE";
 const CRYSTAL_LIGHT_PROFILE_ENV: &str = "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE";
+const WORLD_DETAIL_ENV: &str = "HEX_REVIEW_WORLD_DETAIL";
+const LIFECYCLE_ENV: &str = "HEX_REVIEW_LIFECYCLE";
+const WORLD_DETAIL_WARNING: &str = "UNAPPROVABLE STRUCTURAL DRAFT — AESTHETIC REVIEW ONLY";
+const REVIEW_COLLIDER_STATIC_INVARIANT: &str =
+    "review projection construction has no collision-backend dependency or collider bundle";
 const SETTLE_FRAMES: u32 = 90;
+/// Genuine rendered frames retained for each report sample. The first capture
+/// gathers this window during the latter portion of its settle interval so its
+/// report is ready at the requested settle deadline.
+const PERFORMANCE_WINDOW_FRAMES: usize = 60;
+/// The two halves of the rolling p95 window must agree within this fraction.
+const PERFORMANCE_P95_DRIFT_LIMIT: f32 = 0.20;
+/// Exact logical allocation scope used by matched control/candidate comparisons.
+///
+/// GPU driver padding, render-pipeline caches, and private ECS table capacity are
+/// intentionally outside this public main-world evidence boundary.
+const REVIEW_RESIDENT_MEMORY_SCOPE: &str =
+    "all live Mesh3d vertex/index buffers; all live StandardMaterial values; all live non-capture Image texture mip payloads; renderer-evidenced liquid/review-water/sky materials; and publicly nameable review-entity component/name payloads";
 const CAPTURE_WIDTH: u32 = 1920;
 const CAPTURE_HEIGHT: u32 = 1080;
 const CAPTURE_PHASE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -122,7 +178,24 @@ pub(super) fn plugin(app: &mut App) {
         }
     };
 
-    let capture = request.capture.clone();
+    let captures = request.capture_sequence();
+    let lifecycle = match request.lifecycle.clone() {
+        Some(configuration) => {
+            let Some(runtime_receipt) = request.runtime_receipt.clone() else {
+                app.insert_resource(ReviewConfigurationError(
+                    "lifecycle automation has no validated runtime receipt".to_owned(),
+                ))
+                .add_systems(Startup, reject_invalid_configuration);
+                return;
+            };
+            Some(ReviewLifecycleProbeV1::new(
+                configuration,
+                captures.clone(),
+                runtime_receipt,
+            ))
+        }
+        None => None,
+    };
     if let Some(time) = request
         .liquid_phase_seconds
         .and_then(LiquidVisualTime::frozen_at)
@@ -135,41 +208,247 @@ pub(super) fn plugin(app: &mut App) {
     app.insert_resource(request.material_treatment);
     app.insert_resource(request.edge_treatment);
     app.insert_resource(request.crystal_light_profile);
-    app.insert_resource(request).add_systems(
-        Update,
-        launch_review_scenario.run_if(in_state(Screen::Title)),
-    );
+    app.insert_resource(request.world_detail_profile.clone());
+    if let Some(runtime_receipt) = request.runtime_receipt.clone() {
+        app.insert_resource(runtime_receipt);
+    }
+    app.insert_resource(request)
+        .add_systems(
+            Update,
+            launch_review_scenario.run_if(in_state(Screen::Title)),
+        )
+        .add_systems(
+            PostUpdate,
+            configure_review_camera_features
+                .after(PresentationSystems::ApplyMaterials)
+                // Presentation material reconciliation itself follows Bevy's
+                // bounds calculation, while CameraUpdateSystems feeds that
+                // calculation. Ordering this system before CameraUpdateSystems
+                // therefore closes a PostUpdate cycle. Camera feature components
+                // are extracted after PostUpdate, and apply_review_view already
+                // waits for the deferred restore snapshot, so configuring them
+                // here after presentation remains same-frame and deterministic.
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(
+            Last,
+            release_review_lifecycle_reentry
+                .run_if(resource_exists::<ReviewLifecycleProjectionReentryPendingV1>),
+        )
+        .add_systems(OnExit(Screen::Gameplay), restore_review_camera_features);
 
-    if let Some(capture) = capture {
-        install_capture_systems(app, capture);
+    if let Some(lifecycle) = lifecycle {
+        app.insert_resource(lifecycle);
+    }
+
+    if !captures.is_empty() {
+        install_capture_sequence(app, captures);
     }
 }
 
+#[cfg(test)]
 fn install_capture_systems(app: &mut App, capture: ReviewCapture) {
-    if capture.full_cutaway {
+    install_capture_sequence_inner(app, vec![capture], false);
+}
+
+fn install_capture_sequence(app: &mut App, captures: Vec<ReviewCapture>) {
+    install_capture_sequence_inner(app, captures, true);
+}
+
+fn install_capture_sequence_inner(
+    app: &mut App,
+    captures: Vec<ReviewCapture>,
+    install_authority_guard: bool,
+) {
+    if captures.iter().any(|capture| capture.full_cutaway) {
         hex_world::install_full_cutaway_review_override(app);
     }
-    app.insert_resource(ReviewCaptureState::new(capture))
-        .add_systems(Update, capture_watchdog)
-        .add_systems(
-            PostUpdate,
-            (
-                (
-                    relocate_review_focus,
-                    resolve_review_look_at,
-                    apply_review_view,
-                    apply_review_illumination_overlay,
-                )
-                    .chain()
-                    .before(CameraSystems::FollowCharacter)
-                    .before(TransformSystems::Propagate)
-                    .before(CameraUpdateSystems),
-                capture_settled_frame
-                    .after(TransformSystems::Propagate)
-                    .after(CameraUpdateSystems),
-            )
-                .run_if(in_state(Screen::Gameplay)),
+    app.insert_resource(ReviewCaptureState::new_many(captures));
+    if install_authority_guard {
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            capture_review_authority_baseline.in_set(GameplaySetup::Finalize),
         );
+    }
+    app.add_systems(
+        Update,
+        (
+            capture_watchdog,
+            (
+                restore_review_camera_features,
+                restore_review_capture_camera,
+            )
+                .chain()
+                .run_if(resource_exists::<ReviewLifecycleCycleTeardownPendingV1>),
+            finish_review_capture_after_teardown
+                .after(restore_review_capture_camera)
+                .run_if(in_state(Screen::Title)),
+        ),
+    )
+    .add_systems(
+        OnExit(Screen::Gameplay),
+        restore_review_capture_camera.after(restore_review_camera_features),
+    )
+    .add_systems(
+        PostUpdate,
+        (
+            (
+                resolve_review_focus_anchor,
+                resolve_review_look_at,
+                apply_review_view,
+                apply_review_illumination_overlay,
+            )
+                .chain()
+                .before(CameraSystems::FollowCharacter)
+                .before(TransformSystems::Propagate)
+                .before(CameraUpdateSystems),
+            capture_settled_frame
+                .after(configure_review_camera_features)
+                .after(TransformSystems::Propagate)
+                .after(CameraUpdateSystems),
+            finish_review_capture_after_teardown
+                .after(capture_settled_frame)
+                .after(configure_review_camera_features)
+                .run_if(resource_exists::<ReviewLifecycleCycleTeardownPendingV1>),
+        )
+            .run_if(in_state(Screen::Gameplay)),
+    );
+}
+
+#[derive(Component, Clone)]
+struct ReviewCameraFeatureRestore {
+    msaa: Msaa,
+    depth_texture_usages: Camera3dDepthTextureUsage,
+    transmission: ScreenSpaceTransmission,
+    oit: Option<OrderIndependentTransparencySettings>,
+    volumetric_fog: Option<VolumetricFog>,
+}
+
+#[derive(Component)]
+struct ReviewAddedVolumetricLight;
+
+fn configure_review_camera_features(
+    mut commands: Commands,
+    profile: Res<ReviewWorldDetailProfileV1>,
+    lifecycle_teardown: Option<Res<ReviewLifecycleCycleTeardownPendingV1>>,
+    lifecycle_reentry: Option<Res<ReviewLifecycleProjectionReentryPendingV1>>,
+    mut cameras: Query<
+        (
+            Entity,
+            &mut Camera3d,
+            &mut Msaa,
+            &mut ScreenSpaceTransmission,
+            Option<&OrderIndependentTransparencySettings>,
+            Option<&VolumetricFog>,
+            Option<&ReviewCameraFeatureRestore>,
+        ),
+        With<PanOrbitCamera>,
+    >,
+    lights: Query<
+        (
+            Entity,
+            Has<VolumetricLight>,
+            Has<ReviewAddedVolumetricLight>,
+        ),
+        With<DirectionalLight>,
+    >,
+) {
+    if lifecycle_teardown.is_some() || lifecycle_reentry.is_some() {
+        return;
+    }
+    let needs_oit = profile.requires_oit();
+    let needs_transmission = profile.requires_transmission();
+    let needs_volumetrics = profile.requires_volumetrics();
+    if !needs_oit && !needs_transmission && !needs_volumetrics {
+        return;
+    }
+
+    let Ok((entity, mut camera_3d, mut msaa, mut transmission, oit, volumetric, restore)) =
+        cameras.single_mut()
+    else {
+        return;
+    };
+    if restore.is_none() {
+        commands.entity(entity).insert(ReviewCameraFeatureRestore {
+            msaa: *msaa,
+            depth_texture_usages: camera_3d.depth_texture_usages,
+            transmission: transmission.clone(),
+            oit: oit.copied(),
+            volumetric_fog: volumetric.copied(),
+        });
+    }
+    if needs_oit || needs_transmission {
+        camera_3d.depth_texture_usages.0 |= TextureUsages::TEXTURE_BINDING.bits();
+    }
+    if needs_oit {
+        *msaa = Msaa::Off;
+        if oit.is_none() {
+            commands
+                .entity(entity)
+                .insert(OrderIndependentTransparencySettings::default());
+        }
+    }
+    if needs_transmission {
+        transmission.steps = 1;
+        transmission.quality = ScreenSpaceTransmissionQuality::Medium;
+    }
+    if needs_volumetrics && volumetric.is_none() {
+        commands.entity(entity).insert(VolumetricFog {
+            ambient_color: Color::srgb(0.72, 0.78, 0.84),
+            ambient_intensity: 0.08,
+            jitter: 0.0,
+            step_count: 64,
+        });
+    }
+
+    if needs_volumetrics {
+        for (entity, has_volumetric, added) in &lights {
+            if !has_volumetric && !added {
+                commands
+                    .entity(entity)
+                    .insert((VolumetricLight, ReviewAddedVolumetricLight));
+            }
+        }
+    }
+}
+
+fn release_review_lifecycle_reentry(mut commands: Commands) {
+    commands.remove_resource::<ReviewLifecycleProjectionReentryPendingV1>();
+}
+
+fn restore_review_camera_features(
+    mut commands: Commands,
+    mut cameras: Query<(
+        Entity,
+        &ReviewCameraFeatureRestore,
+        &mut Camera3d,
+        &mut Msaa,
+        &mut ScreenSpaceTransmission,
+    )>,
+    lights: Query<Entity, With<ReviewAddedVolumetricLight>>,
+) {
+    for (entity, restore, mut camera_3d, mut msaa, mut transmission) in &mut cameras {
+        *msaa = restore.msaa;
+        camera_3d.depth_texture_usages = restore.depth_texture_usages;
+        *transmission = restore.transmission.clone();
+        let mut camera = commands.entity(entity);
+        if let Some(oit) = restore.oit {
+            camera.insert(oit);
+        } else {
+            camera.remove::<OrderIndependentTransparencySettings>();
+        }
+        if let Some(volumetric) = restore.volumetric_fog {
+            camera.insert(volumetric);
+        } else {
+            camera.remove::<VolumetricFog>();
+        }
+        camera.remove::<ReviewCameraFeatureRestore>();
+    }
+    for entity in &lights {
+        commands
+            .entity(entity)
+            .remove::<(VolumetricLight, ReviewAddedVolumetricLight)>();
+    }
 }
 
 #[derive(Resource, Debug)]
@@ -193,7 +472,11 @@ struct ReviewRequest {
     material_treatment: ReviewMaterialTreatment,
     edge_treatment: ReviewEdgeTreatment,
     crystal_light_profile: ReviewCrystalLightProfile,
+    world_detail_profile: ReviewWorldDetailProfileV1,
     capture: Option<ReviewCapture>,
+    additional_captures: Vec<ReviewCapture>,
+    lifecycle: Option<ReviewLifecycleRequestV1>,
+    runtime_receipt: Option<ReviewRuntimeReceiptV1>,
     launched: bool,
 }
 
@@ -206,6 +489,32 @@ impl ReviewRequest {
         let material_treatment = environment_value(MATERIAL_ENV)?;
         let edge_treatment = environment_value(EDGE_ENV)?;
         let crystal_light_profile = environment_value(CRYSTAL_LIGHT_PROFILE_ENV)?;
+        let world_detail_profile = environment_value(WORLD_DETAIL_ENV)?;
+        let capture_plan = environment_value(CAPTURE_PLAN_ENV)?;
+        let receipt_capture_plan = capture_plan.clone();
+        let launch_nonce = environment_value(LAUNCH_NONCE_ENV)?;
+        let source_provenance_sha256 = environment_value(SOURCE_PROVENANCE_SHA256_ENV)?;
+        let lifecycle = environment_value(LIFECYCLE_ENV)?;
+        let has_capture_plan = capture_plan.is_some();
+        if capture_plan.is_some()
+            && [
+                CAPTURE_ENV,
+                VIEW_ENV,
+                CAMERA_ENV,
+                FOCUS_ANCHOR_ENV,
+                LOOK_AT_ANCHOR_ENV,
+                LOOK_AT_OFFSET_ENV,
+                CHARACTER_RADIUS_SCALE_ENV,
+                CUTAWAY_ENV,
+                ILLUMINATION_ENV,
+            ]
+            .into_iter()
+            .any(|name| env::var_os(name).is_some())
+        {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} is mutually exclusive with the single-capture environment"
+            ));
+        }
         Self::from_values(
             environment_value(SCENARIO_ENV)?,
             environment_value(SEED_ENV)?,
@@ -224,6 +533,184 @@ impl ReviewRequest {
         .and_then(|request| Self::with_material_treatment(request, material_treatment))
         .and_then(|request| Self::with_edge_treatment(request, edge_treatment))
         .and_then(|request| Self::with_crystal_light_profile(request, crystal_light_profile))
+        .and_then(|request| Self::with_world_detail_profile(request, world_detail_profile))
+        .and_then(|request| Self::with_capture_plan(request, capture_plan))
+        .and_then(|request| {
+            Self::with_runtime_receipt(
+                request,
+                launch_nonce,
+                source_provenance_sha256,
+                receipt_capture_plan,
+            )
+        })
+        .and_then(|request| Self::with_lifecycle(request, lifecycle, has_capture_plan))
+    }
+
+    fn with_runtime_receipt(
+        mut request: Option<Self>,
+        launch_nonce: Option<String>,
+        source_provenance_sha256: Option<String>,
+        raw_capture_plan: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let has_automated_captures = request
+            .as_ref()
+            .is_some_and(|request| !request.capture_sequence().is_empty());
+        if !has_automated_captures {
+            if launch_nonce.is_some() || source_provenance_sha256.is_some() {
+                return Err(format!(
+                    "{LAUNCH_NONCE_ENV} and {SOURCE_PROVENANCE_SHA256_ENV} are valid only with automated {CAPTURE_PLAN_ENV} captures"
+                ));
+            }
+            return Ok(request);
+        }
+
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| "automated capture lost its review request".to_owned())?;
+        let launch_nonce = launch_nonce.ok_or_else(|| {
+            format!("automated {CAPTURE_PLAN_ENV} captures require a fresh {LAUNCH_NONCE_ENV}")
+        })?;
+        let source_provenance_sha256 = source_provenance_sha256.ok_or_else(|| {
+            format!("automated {CAPTURE_PLAN_ENV} captures require {SOURCE_PROVENANCE_SHA256_ENV}")
+        })?;
+        let raw_capture_plan = raw_capture_plan.ok_or_else(|| {
+            format!(
+                "automated captures require exact UTF-8 {CAPTURE_PLAN_ENV} bytes; legacy single-capture automation cannot publish a runtime receipt"
+            )
+        })?;
+        let process_id = u64::from(std::process::id());
+        if process_id == 0 {
+            return Err("runtime process identifier is zero".to_owned());
+        }
+        let profile_sha256 = request_ref
+            .world_detail_profile
+            .profile_hash_sha256()
+            .map_err(|error| format!("cannot hash resolved world-detail profile: {error}"))?;
+        let runtime_receipt = ReviewRuntimeReceiptV1::new(
+            launch_nonce,
+            process_id,
+            runtime_executable_sha256()?,
+            source_provenance_sha256,
+            sha256_hex(raw_capture_plan.as_bytes()),
+            profile_sha256,
+        )
+        .map_err(|error| format!("invalid automated-capture runtime receipt: {error}"))?;
+        request_ref.runtime_receipt = Some(runtime_receipt);
+        Ok(request)
+    }
+
+    fn with_lifecycle(
+        mut request: Option<Self>,
+        value: Option<String>,
+        has_capture_plan: bool,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        if !has_capture_plan {
+            return Err(format!(
+                "{LIFECYCLE_ENV} requires {CAPTURE_PLAN_ENV} so every genuine cycle has a capture"
+            ));
+        }
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{LIFECYCLE_ENV} requires {SCENARIO_ENV}"))?;
+        let runtime_receipt = request_ref.runtime_receipt.as_ref().ok_or_else(|| {
+            format!("{LIFECYCLE_ENV} requires a validated automated-capture runtime receipt")
+        })?;
+        let lifecycle = ReviewLifecycleRequestV1::from_canonical_json(&value)?;
+        let profile_hash = request_ref
+            .world_detail_profile
+            .profile_hash_sha256()
+            .map_err(|error| format!("{LIFECYCLE_ENV}: cannot hash tested profile: {error}"))?;
+        if lifecycle.tested_profile_sha256 != profile_hash {
+            return Err(format!(
+                "{LIFECYCLE_ENV} tested_profile_sha256 does not match {WORLD_DETAIL_ENV}"
+            ));
+        }
+        if lifecycle.tested_profile_sha256 != runtime_receipt.profile_sha256 {
+            return Err(format!(
+                "{LIFECYCLE_ENV} tested_profile_sha256 does not match the runtime receipt"
+            ));
+        }
+        if lifecycle.source_provenance_sha256 != runtime_receipt.source_provenance_sha256 {
+            return Err(format!(
+                "{LIFECYCLE_ENV} source_provenance_sha256 does not match the runtime receipt"
+            ));
+        }
+        let captures = request_ref.capture_sequence();
+        if captures.is_empty() {
+            return Err(format!("{LIFECYCLE_ENV} requires at least one capture"));
+        }
+        if captures
+            .iter()
+            .any(|capture| capture.full_cutaway || capture.illumination_overlay)
+        {
+            return Err(format!(
+                "{LIFECYCLE_ENV} does not permit global cutaway or illumination-overlay mutations"
+            ));
+        }
+        if captures
+            .iter()
+            .any(|capture| capture.path == lifecycle.certificate_path)
+        {
+            return Err(format!(
+                "{LIFECYCLE_ENV} certificate_path must differ from every capture path"
+            ));
+        }
+        request_ref.lifecycle = Some(lifecycle);
+        Ok(request)
+    }
+
+    fn with_world_detail_profile(
+        mut request: Option<Self>,
+        value: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{WORLD_DETAIL_ENV} requires {SCENARIO_ENV}"))?;
+        request_ref.world_detail_profile = ReviewWorldDetailProfileV1::from_canonical_json(&value)
+            .map_err(|error| format!("{WORLD_DETAIL_ENV}: {error}"))?;
+        Ok(request)
+    }
+
+    fn with_capture_plan(
+        mut request: Option<Self>,
+        value: Option<String>,
+    ) -> Result<Option<Self>, String> {
+        let Some(value) = value else {
+            return Ok(request);
+        };
+        let request_ref = request
+            .as_mut()
+            .ok_or_else(|| format!("{CAPTURE_PLAN_ENV} requires {SCENARIO_ENV}"))?;
+        let captures = parse_capture_plan(&value)?;
+        let sequenced_phase = captures
+            .first()
+            .and_then(|capture| capture.liquid_phase_seconds);
+        if sequenced_phase.is_some() && request_ref.liquid_phase_seconds.is_some() {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} version 2 per-capture phases are mutually exclusive with {LIQUID_PHASE_ENV}"
+            ));
+        }
+        let mut captures = captures.into_iter();
+        request_ref.capture = captures.next();
+        request_ref.additional_captures = captures.collect();
+        request_ref.liquid_phase_seconds = sequenced_phase
+            .or(request_ref.liquid_phase_seconds)
+            .or(Some(0.0));
+        Ok(request)
+    }
+
+    fn capture_sequence(&self) -> Vec<ReviewCapture> {
+        self.capture
+            .iter()
+            .cloned()
+            .chain(self.additional_captures.iter().cloned())
+            .collect()
     }
 
     fn with_edge_treatment(
@@ -421,6 +908,8 @@ impl ReviewRequest {
                     character_radius_scale: 1.0,
                     full_cutaway: parse_review_cutaway(cutaway.as_deref())?,
                     illumination_overlay: parse_review_illumination(illumination.as_deref())?,
+                    liquid_phase_seconds,
+                    settle_frames: SETTLE_FRAMES,
                 })
             }
             None if view.is_some()
@@ -460,10 +949,268 @@ impl ReviewRequest {
             material_treatment: ReviewMaterialTreatment::Current,
             edge_treatment: ReviewEdgeTreatment::Current,
             crystal_light_profile: ReviewCrystalLightProfile::Current,
+            world_detail_profile: ReviewWorldDetailProfileV1::default(),
             capture,
+            additional_captures: Vec::new(),
+            lifecycle: None,
+            runtime_receipt: None,
             launched: false,
         }))
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ReviewLifecycleRequestV1 {
+    version: u16,
+    certificate_path: PathBuf,
+    capture_plan_sha256: String,
+    source_provenance_sha256: String,
+    profile_matrix_sha256: String,
+    tested_profile_sha256: String,
+    cycles_requested: u16,
+}
+
+impl ReviewLifecycleRequestV1 {
+    fn from_canonical_json(value: &str) -> Result<Self, String> {
+        let request: Self = serde_json::from_str(value)
+            .map_err(|error| format!("{LIFECYCLE_ENV} must be strict JSON: {error}"))?;
+        let canonical = serde_json::to_string(&request)
+            .map_err(|error| format!("{LIFECYCLE_ENV} cannot be canonicalized: {error}"))?;
+        if canonical != value {
+            return Err(format!(
+                "{LIFECYCLE_ENV} must be canonical compact JSON in schema field order"
+            ));
+        }
+        if request.version != 1 {
+            return Err(format!(
+                "{LIFECYCLE_ENV} version must be 1; got {}",
+                request.version
+            ));
+        }
+        if request.cycles_requested != 100 {
+            return Err(format!(
+                "{LIFECYCLE_ENV} cycles_requested must be exactly 100"
+            ));
+        }
+        if !request.certificate_path.is_absolute()
+            || !request
+                .certificate_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            return Err(format!(
+                "{LIFECYCLE_ENV} certificate_path must be an absolute .json path"
+            ));
+        }
+        for (field, value) in [
+            ("capture_plan_sha256", &request.capture_plan_sha256),
+            (
+                "source_provenance_sha256",
+                &request.source_provenance_sha256,
+            ),
+            ("profile_matrix_sha256", &request.profile_matrix_sha256),
+            ("tested_profile_sha256", &request.tested_profile_sha256),
+        ] {
+            if !is_lowercase_sha256(value) {
+                return Err(format!(
+                    "{LIFECYCLE_ENV} {field} must be 64 lowercase hexadecimal characters"
+                ));
+            }
+        }
+        Ok(request)
+    }
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn runtime_executable_sha256() -> Result<String, String> {
+    let current = env::current_exe()
+        .map_err(|error| format!("cannot resolve the current executable path: {error}"))?;
+    let canonical = fs::canonicalize(&current).map_err(|error| {
+        format!(
+            "cannot canonicalize current executable {}: {error}",
+            current.display()
+        )
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        format!(
+            "cannot inspect canonical current executable {}: {error}",
+            canonical.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "canonical current executable is not a regular file: {}",
+            canonical.display()
+        ));
+    }
+    let bytes = fs::read(&canonical).map_err(|error| {
+        format!(
+            "cannot read canonical current executable {}: {error}",
+            canonical.display()
+        )
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+#[expect(
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "the fixed-width SHA-256 schedule uses algorithm-defined indices, and its supported-target size/String conversions are infallible"
+)]
+fn sha256_hex(input: &[u8]) -> String {
+    const INITIAL: [u32; 8] = [
+        0x6a09_e667,
+        0xbb67_ae85,
+        0x3c6e_f372,
+        0xa54f_f53a,
+        0x510e_527f,
+        0x9b05_688c,
+        0x1f83_d9ab,
+        0x5be0_cd19,
+    ];
+    const ROUND: [u32; 64] = [
+        0x428a_2f98,
+        0x7137_4491,
+        0xb5c0_fbcf,
+        0xe9b5_dba5,
+        0x3956_c25b,
+        0x59f1_11f1,
+        0x923f_82a4,
+        0xab1c_5ed5,
+        0xd807_aa98,
+        0x1283_5b01,
+        0x2431_85be,
+        0x550c_7dc3,
+        0x72be_5d74,
+        0x80de_b1fe,
+        0x9bdc_06a7,
+        0xc19b_f174,
+        0xe49b_69c1,
+        0xefbe_4786,
+        0x0fc1_9dc6,
+        0x240c_a1cc,
+        0x2de9_2c6f,
+        0x4a74_84aa,
+        0x5cb0_a9dc,
+        0x76f9_88da,
+        0x983e_5152,
+        0xa831_c66d,
+        0xb003_27c8,
+        0xbf59_7fc7,
+        0xc6e0_0bf3,
+        0xd5a7_9147,
+        0x06ca_6351,
+        0x1429_2967,
+        0x27b7_0a85,
+        0x2e1b_2138,
+        0x4d2c_6dfc,
+        0x5338_0d13,
+        0x650a_7354,
+        0x766a_0abb,
+        0x81c2_c92e,
+        0x9272_2c85,
+        0xa2bf_e8a1,
+        0xa81a_664b,
+        0xc24b_8b70,
+        0xc76c_51a3,
+        0xd192_e819,
+        0xd699_0624,
+        0xf40e_3585,
+        0x106a_a070,
+        0x19a4_c116,
+        0x1e37_6c08,
+        0x2748_774c,
+        0x34b0_bcb5,
+        0x391c_0cb3,
+        0x4ed8_aa4a,
+        0x5b9c_ca4f,
+        0x682e_6ff3,
+        0x748f_82ee,
+        0x78a5_636f,
+        0x84c8_7814,
+        0x8cc7_0208,
+        0x90be_fffa,
+        0xa450_6ceb,
+        0xbef9_a3f7,
+        0xc671_78f2,
+    ];
+
+    let bit_len = u64::try_from(input.len())
+        .expect("in-memory SHA-256 input length fits in u64")
+        .wrapping_mul(8);
+    let mut padded = Vec::with_capacity(input.len().saturating_add(72));
+    padded.extend_from_slice(input);
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    let mut hash = INITIAL;
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0_u32; 64];
+        for (index, word) in words.iter_mut().take(16).enumerate() {
+            let offset = index * 4;
+            *word = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = hash;
+        for index in 0..64 {
+            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ ((!e) & g);
+            let temporary1 = h
+                .wrapping_add(sum1)
+                .wrapping_add(choice)
+                .wrapping_add(ROUND[index])
+                .wrapping_add(words[index]);
+            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temporary2 = sum0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temporary1);
+            d = c;
+            c = b;
+            b = a;
+            a = temporary1.wrapping_add(temporary2);
+        }
+        for (slot, value) in hash.iter_mut().zip([a, b, c, d, e, f, g, h].into_iter()) {
+            *slot = slot.wrapping_add(value);
+        }
+    }
+
+    let mut output = String::with_capacity(64);
+    for word in hash {
+        use std::fmt::Write as _;
+        write!(&mut output, "{word:08x}").expect("writing to String cannot fail");
+    }
+    output
 }
 
 fn parse_review_crystal_light_profile(value: &str) -> Result<ReviewCrystalLightProfile, String> {
@@ -707,6 +1454,353 @@ struct ReviewCapture {
     character_radius_scale: f32,
     full_cutaway: bool,
     illumination_overlay: bool,
+    liquid_phase_seconds: Option<f32>,
+    settle_frames: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewCapturePlanV1 {
+    version: u32,
+    captures: Vec<ReviewCapturePlanEntryV1>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewCapturePlanEntryV1 {
+    path: String,
+    camera: String,
+    view: String,
+    #[serde(default)]
+    focus_anchor: Option<String>,
+    #[serde(default)]
+    look_at_anchor: Option<String>,
+    #[serde(default)]
+    look_at_offset: Option<[f32; 3]>,
+    #[serde(default)]
+    character_radius_scale: Option<f32>,
+    #[serde(default)]
+    full_cutaway: bool,
+    #[serde(default)]
+    illumination_overlay: bool,
+    #[serde(default)]
+    liquid_phase_seconds: Option<f32>,
+    #[serde(default)]
+    settle_frames: Option<u32>,
+}
+
+#[derive(Resource, Debug)]
+struct ReviewLifecycleProbeV1 {
+    configuration: ReviewLifecycleRequestV1,
+    capture_templates: Vec<ReviewCapture>,
+    runtime_receipt: ReviewRuntimeReceiptV1,
+    cycles: Vec<ReviewLifecycleCycleV1>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct ReviewLifecycleCycleTeardownPendingV1;
+
+/// Holds camera feature mutation until the frame after an exact teardown receipt.
+#[derive(Resource, Debug, Default)]
+struct ReviewLifecycleProjectionReentryPendingV1;
+
+impl ReviewLifecycleProbeV1 {
+    fn new(
+        configuration: ReviewLifecycleRequestV1,
+        capture_templates: Vec<ReviewCapture>,
+        runtime_receipt: ReviewRuntimeReceiptV1,
+    ) -> Self {
+        Self {
+            configuration,
+            capture_templates,
+            runtime_receipt,
+            cycles: Vec::with_capacity(100),
+        }
+    }
+
+    fn next_cycle_index(&self) -> Result<u16, String> {
+        u16::try_from(self.cycles.len().saturating_add(1))
+            .map_err(|_error| "review lifecycle cycle index exceeds u16".to_owned())
+    }
+
+    fn previous_cycle_sha256(&self) -> String {
+        self.cycles
+            .last()
+            .map_or_else(|| "0".repeat(64), |cycle| cycle.cycle_sha256.clone())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReviewLifecycleCycleHashBodyV1 {
+    cycle_index: u16,
+    launch_nonce: String,
+    runtime_receipt_sha256: String,
+    profile_hash_sha256: String,
+    authority_before_sha256: String,
+    authority_after_sha256: String,
+    entities_remaining: u64,
+    materials_remaining: u64,
+    meshes_remaining: u64,
+    fog_density_images_remaining: u64,
+    target_images_remaining: u64,
+    terrain_material_overrides_remaining: u64,
+    liquid_visibility_overrides_remaining: u64,
+    vegetation_scale_overrides_remaining: u64,
+    camera_state_restored: bool,
+    oit_state_restored: bool,
+    transmission_state_restored: bool,
+    depth_state_restored: bool,
+    volumetric_state_restored: bool,
+    previous_cycle_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReviewLifecycleCycleV1 {
+    cycle_index: u16,
+    launch_nonce: String,
+    runtime_receipt_sha256: String,
+    profile_hash_sha256: String,
+    authority_before_sha256: String,
+    authority_after_sha256: String,
+    entities_remaining: u64,
+    materials_remaining: u64,
+    meshes_remaining: u64,
+    fog_density_images_remaining: u64,
+    target_images_remaining: u64,
+    terrain_material_overrides_remaining: u64,
+    liquid_visibility_overrides_remaining: u64,
+    vegetation_scale_overrides_remaining: u64,
+    camera_state_restored: bool,
+    oit_state_restored: bool,
+    transmission_state_restored: bool,
+    depth_state_restored: bool,
+    volumetric_state_restored: bool,
+    previous_cycle_sha256: String,
+    cycle_sha256: String,
+}
+
+impl ReviewLifecycleCycleV1 {
+    fn from_hash_body(body: ReviewLifecycleCycleHashBodyV1) -> Result<Self, String> {
+        let canonical = serde_json::to_vec(&body)
+            .map_err(|error| format!("cannot serialize lifecycle cycle hash body: {error}"))?;
+        let cycle_sha256 = sha256_hex(&canonical);
+        Ok(Self {
+            cycle_index: body.cycle_index,
+            launch_nonce: body.launch_nonce,
+            runtime_receipt_sha256: body.runtime_receipt_sha256,
+            profile_hash_sha256: body.profile_hash_sha256,
+            authority_before_sha256: body.authority_before_sha256,
+            authority_after_sha256: body.authority_after_sha256,
+            entities_remaining: body.entities_remaining,
+            materials_remaining: body.materials_remaining,
+            meshes_remaining: body.meshes_remaining,
+            fog_density_images_remaining: body.fog_density_images_remaining,
+            target_images_remaining: body.target_images_remaining,
+            terrain_material_overrides_remaining: body.terrain_material_overrides_remaining,
+            liquid_visibility_overrides_remaining: body.liquid_visibility_overrides_remaining,
+            vegetation_scale_overrides_remaining: body.vegetation_scale_overrides_remaining,
+            camera_state_restored: body.camera_state_restored,
+            oit_state_restored: body.oit_state_restored,
+            transmission_state_restored: body.transmission_state_restored,
+            depth_state_restored: body.depth_state_restored,
+            volumetric_state_restored: body.volumetric_state_restored,
+            previous_cycle_sha256: body.previous_cycle_sha256,
+            cycle_sha256,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewLifecycleCertificateV1<'a> {
+    version: u16,
+    warning: &'static str,
+    runtime_receipt: &'a ReviewRuntimeReceiptV1,
+    capture_plan_sha256: &'a str,
+    source_provenance_sha256: &'a str,
+    profile_matrix_sha256: &'a str,
+    tested_profile_sha256: &'a str,
+    cycles_requested: u16,
+    cycles_completed: u16,
+    cycles: &'a [ReviewLifecycleCycleV1],
+    final_chain_sha256: &'a str,
+}
+
+fn parse_capture_plan(value: &str) -> Result<Vec<ReviewCapture>, String> {
+    let plan: ReviewCapturePlanV1 = serde_json::from_str(value)
+        .map_err(|error| format!("{CAPTURE_PLAN_ENV} must be strict JSON: {error}"))?;
+    if !matches!(plan.version, 1 | 2) {
+        return Err(format!(
+            "{CAPTURE_PLAN_ENV} version must be 1 or 2; got {}",
+            plan.version
+        ));
+    }
+    if plan.captures.is_empty() || plan.captures.len() > 256 {
+        return Err(format!(
+            "{CAPTURE_PLAN_ENV} must contain 1..=256 captures; got {}",
+            plan.captures.len()
+        ));
+    }
+
+    let Some(first_capture) = plan.captures.first() else {
+        return Err(format!(
+            "{CAPTURE_PLAN_ENV} must contain at least one capture"
+        ));
+    };
+    let expected_cutaway = first_capture.full_cutaway;
+    let expected_illumination = first_capture.illumination_overlay;
+    let mut unique_paths = BTreeSet::new();
+    let mut captures = Vec::with_capacity(plan.captures.len());
+    for (index, entry) in plan.captures.into_iter().enumerate() {
+        let ordinal = index + 1;
+        let (liquid_phase_seconds, settle_frames) = match plan.version {
+            1 => {
+                if entry.liquid_phase_seconds.is_some() || entry.settle_frames.is_some() {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} capture {ordinal} uses v2 timing fields in a version 1 plan"
+                    ));
+                }
+                (None, SETTLE_FRAMES)
+            }
+            2 => {
+                let phase = entry.liquid_phase_seconds.ok_or_else(|| {
+                    format!(
+                        "{CAPTURE_PLAN_ENV} version 2 capture {ordinal} requires liquid_phase_seconds"
+                    )
+                })?;
+                if !phase.is_finite() {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} version 2 capture {ordinal} liquid_phase_seconds must be finite"
+                    ));
+                }
+                let settle = entry.settle_frames.ok_or_else(|| {
+                    format!("{CAPTURE_PLAN_ENV} version 2 capture {ordinal} requires settle_frames")
+                })?;
+                if !(1..=SETTLE_FRAMES).contains(&settle) {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} version 2 capture {ordinal} settle_frames must be in 1..={SETTLE_FRAMES}"
+                    ));
+                }
+                (Some(phase), settle)
+            }
+            _ => {
+                return Err(format!(
+                    "{CAPTURE_PLAN_ENV} version changed after validation; got {}",
+                    plan.version
+                ));
+            }
+        };
+        if entry.full_cutaway != expected_cutaway
+            || entry.illumination_overlay != expected_illumination
+        {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} changes full_cutaway or illumination_overlay; these global presentation modes must remain constant within one launch"
+            ));
+        }
+        if entry.path.trim().is_empty() {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} path must not be empty"
+            ));
+        }
+        let path = PathBuf::from(entry.path);
+        if !path.is_absolute() {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} path must be absolute"
+            ));
+        }
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} path must name a .png file"
+            ));
+        }
+        if !unique_paths.insert(path.clone()) {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} duplicates output path {}",
+                path.display()
+            ));
+        }
+
+        let camera = ReviewCamera::parse(&entry.camera)?;
+        let view = ReviewView::parse(&entry.view)?;
+        let focus_anchor = entry
+            .focus_anchor
+            .map(|anchor| {
+                if anchor.trim().is_empty() {
+                    Err(format!(
+                        "{CAPTURE_PLAN_ENV} capture {ordinal} focus_anchor must not be empty"
+                    ))
+                } else {
+                    Ok(anchor)
+                }
+            })
+            .transpose()?;
+        let anchor_look_at = match (entry.look_at_anchor, entry.look_at_offset) {
+            (None, None) => None,
+            (Some(anchor), Some(offset)) => {
+                if anchor.trim().is_empty() {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} capture {ordinal} look_at_anchor must not be empty"
+                    ));
+                }
+                if camera != ReviewCamera::Map {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} capture {ordinal} look_at_anchor requires camera=map"
+                    ));
+                }
+                if focus_anchor.is_some() {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} capture {ordinal} cannot combine focus_anchor and look_at_anchor"
+                    ));
+                }
+                let offset = Vec3::from_array(offset);
+                let distance = offset.length();
+                if !offset.is_finite()
+                    || !distance.is_finite()
+                    || !(1.0..=2_048.0).contains(&distance)
+                {
+                    return Err(format!(
+                        "{CAPTURE_PLAN_ENV} capture {ordinal} look_at_offset must be finite and 1..=2048 world units from its anchor"
+                    ));
+                }
+                Some(ReviewAnchorLookAt { anchor, offset })
+            }
+            _ => {
+                return Err(format!(
+                    "{CAPTURE_PLAN_ENV} capture {ordinal} must provide look_at_anchor and look_at_offset together"
+                ));
+            }
+        };
+        let character_radius_scale = entry.character_radius_scale.unwrap_or(1.0);
+        if !character_radius_scale.is_finite() || !(1.0..=20.0).contains(&character_radius_scale) {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} character_radius_scale must be finite and in [1, 20]"
+            ));
+        }
+        if character_radius_scale.to_bits() != 1.0_f32.to_bits()
+            && camera != ReviewCamera::Character
+        {
+            return Err(format!(
+                "{CAPTURE_PLAN_ENV} capture {ordinal} character_radius_scale requires camera=character"
+            ));
+        }
+
+        captures.push(ReviewCapture {
+            path,
+            view,
+            camera,
+            focus_anchor,
+            anchor_look_at,
+            character_radius_scale,
+            full_cutaway: entry.full_cutaway,
+            illumination_overlay: entry.illumination_overlay,
+            liquid_phase_seconds,
+            settle_frames,
+        });
+    }
+    Ok(captures)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -766,6 +1860,14 @@ enum ReviewCamera {
 }
 
 impl ReviewCamera {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Map => "map",
+            Self::Character => "character",
+            Self::FirstPerson => "first-person",
+        }
+    }
+
     fn parse(value: &str) -> Result<Self, String> {
         match value {
             "map" => Ok(Self::Map),
@@ -779,6 +1881,16 @@ impl ReviewCamera {
 }
 
 impl ReviewView {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Rotated => "rotated",
+            Self::CounterRotated => "counter-rotated",
+            Self::Rear => "rear",
+            Self::TopDown => "top-down",
+        }
+    }
+
     fn parse(value: &str) -> Result<Self, String> {
         match value {
             "default" => Ok(Self::Default),
@@ -796,8 +1908,17 @@ impl ReviewView {
 #[derive(Resource, Debug)]
 struct ReviewCaptureState {
     capture: ReviewCapture,
+    remaining: VecDeque<ReviewCapture>,
+    completed_captures: usize,
+    total_captures: usize,
     target: Option<Handle<Image>>,
+    camera_snapshot: Option<ReviewCameraSnapshot>,
+    teardown_requested: bool,
+    camera_restored: bool,
+    target_removed: bool,
+    final_exit_sent: bool,
     focus_relocated: bool,
+    focus_world_target: Option<Vec3>,
     anchor_look_at_target: Option<Vec3>,
     anchor_look_at_resolved: bool,
     view_applied: bool,
@@ -811,17 +1932,88 @@ struct ReviewCaptureState {
     total_tiles: usize,
     coverage_warning_logged: bool,
     full_footprint_validated: bool,
+    authority_baseline: Option<ReviewAuthoritySnapshotV1>,
+    authority_validated_captures: usize,
+    authority_pre_teardown_verified: bool,
+    authority_after_sha256: Option<String>,
+    review_entity_ids: BTreeSet<Entity>,
+    review_mesh_ids: BTreeSet<AssetId<Mesh>>,
+    review_standard_material_ids: BTreeSet<AssetId<StandardMaterial>>,
+    review_image_ids: BTreeSet<AssetId<Image>>,
+    capture_target_ids: BTreeSet<AssetId<Image>>,
+    runtime_report_paths: Vec<PathBuf>,
+    performance_frame_window_ms: VecDeque<f32>,
+    performance_resident_bytes: Option<u64>,
+    performance_sample: Option<ReviewPerformanceSampleV1>,
+}
+
+#[derive(Clone)]
+struct ReviewCameraSnapshot {
+    entity: Entity,
+    transform: Transform,
+    orbit_focus: Vec3,
+    orbit_radius: f32,
+    target: RenderTarget,
+    projection: Option<Projection>,
+    mode: CameraMode,
+    msaa: Msaa,
+    depth_texture_usages: Camera3dDepthTextureUsage,
+    transmission_steps: usize,
+    transmission_quality: ScreenSpaceTransmissionQuality,
+    oit: Option<OrderIndependentTransparencySettings>,
+    volumetric_fog: Option<VolumetricFog>,
+}
+
+impl fmt::Debug for ReviewCameraSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReviewCameraSnapshot")
+            .field("entity", &self.entity)
+            .field("target", &self.target)
+            .field("mode", &self.mode)
+            .field("msaa", &self.msaa)
+            .field("oit_present", &self.oit.is_some())
+            .field("volumetric_fog_present", &self.volumetric_fog.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ReviewCaptureState {
+    #[cfg(test)]
     fn new(capture: ReviewCapture) -> Self {
+        Self::new_many(vec![capture])
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "this private constructor's non-empty capture-sequence invariant is enforced by every caller"
+    )]
+    fn new_many(captures: Vec<ReviewCapture>) -> Self {
+        assert!(
+            !captures.is_empty(),
+            "review capture sequence must not be empty"
+        );
+        let total_captures = captures.len();
+        let mut captures = VecDeque::from(captures);
+        let capture = captures
+            .pop_front()
+            .expect("non-empty review capture sequence lost its first capture");
         let focus_relocated = capture.focus_anchor.is_none();
         let anchor_look_at_resolved = capture.anchor_look_at.is_none();
         let illumination_overlay_applied = !capture.illumination_overlay;
         Self {
             capture,
+            remaining: captures,
+            completed_captures: 0,
+            total_captures,
             target: None,
+            camera_snapshot: None,
+            teardown_requested: false,
+            camera_restored: false,
+            target_removed: false,
+            final_exit_sent: false,
             focus_relocated,
+            focus_world_target: None,
             anchor_look_at_target: None,
             anchor_look_at_resolved,
             view_applied: false,
@@ -835,7 +2027,43 @@ impl ReviewCaptureState {
             total_tiles: 0,
             coverage_warning_logged: false,
             full_footprint_validated: false,
+            authority_baseline: None,
+            authority_validated_captures: 0,
+            authority_pre_teardown_verified: false,
+            authority_after_sha256: None,
+            review_entity_ids: BTreeSet::new(),
+            review_mesh_ids: BTreeSet::new(),
+            review_standard_material_ids: BTreeSet::new(),
+            review_image_ids: BTreeSet::new(),
+            capture_target_ids: BTreeSet::new(),
+            runtime_report_paths: Vec::with_capacity(total_captures),
+            performance_frame_window_ms: VecDeque::with_capacity(PERFORMANCE_WINDOW_FRAMES),
+            performance_resident_bytes: None,
+            performance_sample: None,
         }
+    }
+
+    fn advance_capture(&mut self, now: Instant) -> Option<PathBuf> {
+        self.completed_captures = self.completed_captures.saturating_add(1);
+        let next = self.remaining.pop_front()?;
+        let illumination_overlay_already_applied = self.illumination_overlay_applied;
+        self.capture = next;
+        self.focus_relocated = self.capture.focus_anchor.is_none();
+        self.focus_world_target = None;
+        self.anchor_look_at_target = None;
+        self.anchor_look_at_resolved = self.capture.anchor_look_at.is_none();
+        self.view_applied = false;
+        self.illumination_overlay_applied =
+            !self.capture.illumination_overlay || illumination_overlay_already_applied;
+        self.settled_frames = 0;
+        self.requested = false;
+        self.phase = CapturePhase::AwaitingCamera;
+        self.phase_started = now;
+        self.visible_tiles = 0;
+        self.total_tiles = 0;
+        self.coverage_warning_logged = false;
+        self.full_footprint_validated = false;
+        Some(self.capture.path.clone())
     }
 
     fn enter_phase(&mut self, phase: CapturePhase, now: Instant) {
@@ -854,12 +2082,13 @@ enum CapturePhase {
     AwaitingTerrain,
     Settling,
     Readback,
+    AwaitingTeardown,
 }
 
 impl CapturePhase {
     const fn timeout(self) -> Duration {
         match self {
-            Self::Readback => READBACK_TIMEOUT,
+            Self::Readback | Self::AwaitingTeardown => READBACK_TIMEOUT,
             Self::AwaitingScenario
             | Self::Loading
             | Self::AwaitingCamera
@@ -876,17 +2105,2019 @@ impl CapturePhase {
             Self::AwaitingTerrain => "validated terrain readiness",
             Self::Settling => "terrain visibility and frame settling",
             Self::Readback => "GPU screenshot readback",
+            Self::AwaitingTeardown => "review teardown and camera restoration",
         }
     }
+}
+
+const AUTHORITY_FINGERPRINT_DOMAIN: &[u8] = b"crystal-ascent-review-authority-v1\0";
+
+/// Immutable gameplay evidence captured after ordinary setup has published terrain,
+/// actors, illumination, and faction knowledge, but before review projection runs.
+///
+/// Each section retains its canonical byte stream rather than only a digest. That
+/// makes equality collision-independent and lets a failed capture name the first
+/// authority surface that moved. Entity ids are included only for live ECS linkage;
+/// all collections are first sorted by their stable domain keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewAuthoritySnapshotV1 {
+    current_world: Vec<u8>,
+    replication: Vec<u8>,
+    lighting_condition: Vec<u8>,
+    illumination: Vec<u8>,
+    faction_knowledge: Vec<u8>,
+    units_and_occupancy: Vec<u8>,
+    logical_terrain: Vec<u8>,
+    terrain_picking: Vec<u8>,
+    persistence: Vec<u8>,
+}
+
+impl ReviewAuthoritySnapshotV1 {
+    fn capture(evidence: &ReviewAuthorityEvidence<'_, '_>) -> Result<Self, String> {
+        validate_authority_terrain_projection(evidence)?;
+        Ok(Self {
+            current_world: encode_current_world_authority(evidence)?,
+            replication: encode_replication_authority(evidence)?,
+            lighting_condition: encode_lighting_condition_authority(evidence)?,
+            illumination: encode_resolved_illumination_authority(evidence)?,
+            faction_knowledge: encode_faction_knowledge_authority(evidence)?,
+            units_and_occupancy: encode_unit_authority(evidence)?,
+            logical_terrain: encode_logical_terrain_authority(evidence)?,
+            terrain_picking: encode_terrain_picking_authority(evidence)?,
+            persistence: encode_persistence_authority(
+                evidence.campaign_store.as_deref(),
+                evidence.campaign_save_status.as_deref(),
+                evidence.storage_paths.as_deref(),
+            )?,
+        })
+    }
+
+    fn sections(&self) -> [(&'static str, &[u8]); 9] {
+        [
+            ("current_world", &self.current_world),
+            ("replication", &self.replication),
+            ("lighting_condition", &self.lighting_condition),
+            ("resolved_illumination", &self.illumination),
+            ("faction_knowledge", &self.faction_knowledge),
+            ("units_and_occupancy", &self.units_and_occupancy),
+            ("logical_terrain", &self.logical_terrain),
+            ("terrain_picking", &self.terrain_picking),
+            ("persistence", &self.persistence),
+        ]
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "the fixed eight-section table and in-memory section lengths fit their canonical widths on every supported target"
+    )]
+    fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = AUTHORITY_FINGERPRINT_DOMAIN.to_vec();
+        for (ordinal, (_, section)) in self.sections().into_iter().enumerate() {
+            bytes.push(u8::try_from(ordinal + 1).expect("authority section ordinal fits in u8"));
+            bytes.extend_from_slice(
+                &u64::try_from(section.len())
+                    .expect("an in-memory authority section length fits in u64")
+                    .to_le_bytes(),
+            );
+            bytes.extend_from_slice(section);
+        }
+        bytes
+    }
+
+    fn fingerprint(&self) -> String {
+        format!(
+            "{:016x}",
+            xxhash_rust::xxh3::xxh3_64(&self.canonical_bytes())
+        )
+    }
+
+    fn sha256(&self) -> String {
+        sha256_hex(&self.canonical_bytes())
+    }
+
+    fn lighting_condition_key(&self) -> String {
+        format!(
+            "{:016x}",
+            xxhash_rust::xxh3::xxh3_64(&self.lighting_condition)
+        )
+    }
+
+    fn logical_terrain_picking_fingerprint(&self) -> String {
+        fingerprint_authority_subset(
+            b"crystal-ascent-review-logical-terrain-picking-v1\0",
+            &[&self.logical_terrain, &self.terrain_picking],
+        )
+    }
+
+    fn gameplay_state_fingerprint(&self) -> String {
+        fingerprint_authority_subset(
+            b"crystal-ascent-review-gameplay-state-v1\0",
+            &[
+                &self.replication,
+                &self.lighting_condition,
+                &self.illumination,
+                &self.faction_knowledge,
+                &self.persistence,
+            ],
+        )
+    }
+
+    fn verify_unchanged(&self, current: &Self) -> Result<(), String> {
+        for ((name, baseline), (_, candidate)) in
+            self.sections().into_iter().zip(current.sections())
+        {
+            if baseline != candidate {
+                return Err(format!(
+                    "review authority changed in {name} under lighting condition {} \
+                     (baseline={:016x}, current={:016x})",
+                    self.lighting_condition_key(),
+                    xxhash_rust::xxh3::xxh3_64(baseline),
+                    xxhash_rust::xxh3::xxh3_64(candidate),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the fixed authority subsets and their in-memory byte lengths fit u64"
+)]
+fn fingerprint_authority_subset(domain: &[u8], sections: &[&[u8]]) -> String {
+    let mut bytes = domain.to_vec();
+    for (ordinal, section) in sections.iter().enumerate() {
+        bytes.extend_from_slice(
+            &u64::try_from(ordinal + 1)
+                .expect("authority subset ordinal fits in u64")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(
+            &u64::try_from(section.len())
+                .expect("authority subset length fits in u64")
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(section);
+    }
+    format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes))
+}
+
+#[derive(Default)]
+struct CanonicalAuthorityEncoder {
+    bytes: Vec<u8>,
+}
+
+impl CanonicalAuthorityEncoder {
+    fn section(tag: u8) -> Self {
+        let mut encoder = Self::default();
+        encoder
+            .bytes
+            .extend_from_slice(AUTHORITY_FINGERPRINT_DOMAIN);
+        encoder.bytes.push(tag);
+        encoder
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    fn presence(&mut self, present: bool) {
+        self.bytes.push(u8::from(present));
+    }
+
+    fn boolean(&mut self, value: bool) {
+        self.bytes.push(u8::from(value));
+    }
+
+    fn u8(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
+
+    fn u16(&mut self, value: u16) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn i32(&mut self, value: i32) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn count(&mut self, value: usize, label: &str) -> Result<(), String> {
+        let value = u64::try_from(value)
+            .map_err(|_error| format!("{label} count cannot be represented canonically as u64"))?;
+        self.u64(value);
+        Ok(())
+    }
+
+    fn byte_slice(&mut self, value: &[u8], label: &str) -> Result<(), String> {
+        self.count(value.len(), label)?;
+        self.bytes.extend_from_slice(value);
+        Ok(())
+    }
+
+    fn entity(&mut self, entity: Entity) {
+        self.u64(entity.to_bits());
+    }
+
+    fn tile_pos(&mut self, position: TilePos) {
+        self.i32(position.coord.x());
+        self.i32(position.coord.y());
+        self.i32(position.level);
+    }
+
+    fn span(&mut self, span: HexSpan, label: &str) -> Result<(), String> {
+        if !span.bottom.is_finite() || !span.top.is_finite() || span.top <= span.bottom {
+            return Err(format!("{label} has malformed span {span:?}"));
+        }
+        self.u32(span.bottom.to_bits());
+        self.u32(span.top.to_bits());
+        Ok(())
+    }
+
+    fn pickable(&mut self, pickable: Option<Pickable>) {
+        self.presence(pickable.is_some());
+        if let Some(pickable) = pickable {
+            self.boolean(pickable.should_block_lower);
+            self.boolean(pickable.is_hoverable);
+        }
+    }
+}
+
+#[derive(SystemParam)]
+struct ReviewAuthorityEvidence<'w, 's> {
+    world_snapshot: Option<Res<'w, CurrentWorldSnapshotV1>>,
+    replication: Option<Res<'w, WorldReplicationStateV1>>,
+    time_of_day: Option<Res<'w, TimeOfDay>>,
+    exterior_illumination: Option<Res<'w, ExteriorIllumination>>,
+    illumination: Option<Res<'w, ResolvedIllumination>>,
+    knowledge: Option<Res<'w, FactionMapKnowledge>>,
+    unit_registry: Option<Res<'w, UnitRegistry>>,
+    campaign_store: Option<Res<'w, CampaignStore>>,
+    campaign_save_status: Option<Res<'w, CampaignSaveStatusProjection>>,
+    storage_paths: Option<Res<'w, StoragePaths>>,
+    units: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Faction,
+            Option<&'static Body>,
+            Option<&'static StandsOn>,
+            Option<&'static MovingTo>,
+            Has<Downed>,
+        ),
+    >,
+    logical_terrain: Query<
+        'w,
+        's,
+        (
+            Entity,
+            Option<&'static TilePos>,
+            Option<&'static RunBottom>,
+            Option<&'static HexSpan>,
+            Option<&'static SubstanceId>,
+            Option<&'static Headroom>,
+            Option<&'static Pickable>,
+        ),
+        With<HexTile>,
+    >,
+    terrain_batches: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static TerrainRenderBatch,
+            Option<&'static Pickable>,
+            Has<Mesh3d>,
+            Has<MeshMaterial3d<StandardMaterial>>,
+        ),
+    >,
+}
+
+fn encode_current_world_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(1);
+    encoder.presence(evidence.world_snapshot.is_some());
+    let snapshot = evidence
+        .world_snapshot
+        .as_deref()
+        .ok_or_else(|| "CurrentWorldSnapshotV1 is unavailable at the review boundary".to_owned())?;
+    encoder.u64(snapshot.fingerprint().0);
+    Ok(encoder.finish())
+}
+
+fn encode_replication_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(2);
+    encoder.presence(evidence.replication.is_some());
+    let replication = evidence.replication.as_deref().ok_or_else(|| {
+        "WorldReplicationStateV1 is unavailable at the review boundary".to_owned()
+    })?;
+    encoder.presence(replication.last_applied_sequence().is_some());
+    if let Some(sequence) = replication.last_applied_sequence() {
+        encoder.u64(sequence.0);
+    }
+    Ok(encoder.finish())
+}
+
+fn encode_persistence_authority(
+    campaign_store: Option<&CampaignStore>,
+    campaign_save_status: Option<&CampaignSaveStatusProjection>,
+    storage_paths: Option<&StoragePaths>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(9);
+    encoder.presence(campaign_store.is_some());
+    let store = campaign_store
+        .ok_or_else(|| "CampaignStore is unavailable at the review boundary".to_owned())?;
+    // CampaignStore intentionally exposes no typed read API outside its persistence
+    // owner. Retain its complete, exact Debug projection alongside the authoritative
+    // file bytes below; this is an equality guard, not a claimed stable digest.
+    encoder.byte_slice(
+        format!("{store:?}").as_bytes(),
+        "CampaignStore Debug projection",
+    )?;
+
+    encoder.presence(campaign_save_status.is_some());
+    let status = campaign_save_status.ok_or_else(|| {
+        "CampaignSaveStatusProjection is unavailable at the review boundary".to_owned()
+    })?;
+    encoder.u64(status.operation_id);
+    encoder.presence(status.state.is_some());
+    if let Some(state) = status.state {
+        match state {
+            CampaignSaveStateV2::Saving => encoder.u8(0),
+            CampaignSaveStateV2::Saved => encoder.u8(1),
+            CampaignSaveStateV2::Refused(refusal) => {
+                encoder.u8(2);
+                encoder.u8(match refusal {
+                    CampaignSaveRefusalV2::NotAuthority => 0,
+                    CampaignSaveRefusalV2::UnsafeBoundary => 1,
+                    CampaignSaveRefusalV2::IncompleteCheckpoint => 2,
+                    CampaignSaveRefusalV2::IncompatibleContent => 3,
+                    CampaignSaveRefusalV2::StorageUnavailable => 4,
+                });
+            }
+        }
+    }
+
+    encoder.presence(storage_paths.is_some());
+    let paths = storage_paths
+        .ok_or_else(|| "StoragePaths is unavailable at the review boundary".to_owned())?;
+    match fs::read(&paths.campaigns) {
+        Ok(bytes) => {
+            encoder.presence(true);
+            encoder.byte_slice(&bytes, "campaigns file")?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            encoder.presence(false);
+        }
+        Err(error) => {
+            return Err(format!(
+                "cannot read configured campaigns file {}: {error}",
+                paths.campaigns.display()
+            ));
+        }
+    }
+    Ok(encoder.finish())
+}
+
+fn encode_lighting_condition_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(3);
+    encoder.presence(evidence.time_of_day.is_some());
+    if let Some(time) = evidence.time_of_day.as_deref() {
+        if !time.hours.is_finite() || !(0.0..24.0).contains(&time.hours) {
+            return Err(format!(
+                "TimeOfDay hours must be finite and in 0.0..24.0; got {}",
+                time.hours
+            ));
+        }
+        encoder.u32(time.hours.to_bits());
+    }
+    encoder.presence(evidence.exterior_illumination.is_some());
+    let exterior = evidence
+        .exterior_illumination
+        .as_deref()
+        .ok_or_else(|| "ExteriorIllumination is unavailable at the review boundary".to_owned())?;
+    encoder.u8(illumination_level_tag(exterior.level));
+    Ok(encoder.finish())
+}
+
+fn encode_resolved_illumination_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(4);
+    encoder.presence(evidence.illumination.is_some());
+    let illumination = evidence
+        .illumination
+        .as_deref()
+        .ok_or_else(|| "ResolvedIllumination is unavailable at the review boundary".to_owned())?;
+    if illumination.is_empty() {
+        return Err("ResolvedIllumination is empty at the review boundary".to_owned());
+    }
+    encoder.count(illumination.len(), "resolved illumination")?;
+    for (position, resolved) in illumination.iter() {
+        encoder.tile_pos(position);
+        encoder.u8(illumination_level_tag(resolved.level));
+        encode_light_domain(&mut encoder, resolved.domain);
+    }
+    Ok(encoder.finish())
+}
+
+fn encode_faction_knowledge_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(5);
+    encoder.presence(evidence.knowledge.is_some());
+    let knowledge = evidence
+        .knowledge
+        .as_deref()
+        .ok_or_else(|| "FactionMapKnowledge is unavailable at the review boundary".to_owned())?;
+    for faction in [Faction::Player, Faction::Hostile] {
+        encoder.u8(faction_tag(faction));
+        let faction_knowledge = knowledge.faction(faction);
+        encoder.count(faction_knowledge.surface_count(), "known surface")?;
+        for (position, known) in faction_knowledge.surfaces() {
+            if known.state() == KnowledgeState::Unknown {
+                return Err(format!(
+                    "{faction:?} faction knowledge stores an Unknown surface at {position:?}"
+                ));
+            }
+            if known.snapshot().pos != position || known.run_bottom().0 > position.level {
+                return Err(format!(
+                    "{faction:?} faction knowledge has an inconsistent surface tuple at {position:?}"
+                ));
+            }
+            encoder.tile_pos(position);
+            encoder.u8(knowledge_state_tag(known.state()));
+            encoder.i32(known.run_bottom().0);
+            let surface = known.snapshot();
+            encoder.tile_pos(surface.pos);
+            encoder.span(surface.span, "known terrain surface")?;
+            encoder.u16(surface.substance.0);
+            encoder.i32(surface.headroom.0);
+            encoder.boolean(surface.is_solid);
+            encoder.boolean(surface.blocked);
+            encode_light_domain(&mut encoder, surface.domain);
+        }
+        encoder.count(faction_knowledge.unit_count(), "known unit")?;
+        for (id, unit) in faction_knowledge.units() {
+            if unit.id != id {
+                return Err(format!(
+                    "{faction:?} faction knowledge key {} disagrees with observed unit id {}",
+                    id.0, unit.id.0
+                ));
+            }
+            encoder.u64(id.0);
+            encoder.u64(unit.id.0);
+            encoder.u8(faction_tag(unit.faction));
+            encoder.tile_pos(unit.pos);
+            encoder.boolean(unit.provides_sight);
+        }
+    }
+    Ok(encoder.finish())
+}
+
+fn encode_unit_authority(evidence: &ReviewAuthorityEvidence<'_, '_>) -> Result<Vec<u8>, String> {
+    let mut encoder = CanonicalAuthorityEncoder::section(6);
+    encoder.presence(evidence.unit_registry.is_some());
+    let registry = evidence
+        .unit_registry
+        .as_deref()
+        .ok_or_else(|| "UnitRegistry is unavailable at the review boundary".to_owned())?;
+    let registered = registry.iter().collect::<Vec<_>>();
+    if registered.is_empty() {
+        return Err("UnitRegistry is empty at the review boundary".to_owned());
+    }
+    encoder.count(registered.len(), "registered unit")?;
+    let mut registered_entities = BTreeSet::new();
+    let mut occupancy = BTreeMap::<TilePos, BTreeSet<u64>>::new();
+    for (id, entity) in registered {
+        if !registered_entities.insert(entity) {
+            return Err(format!(
+                "UnitRegistry maps more than one stable id to entity {entity:?}"
+            ));
+        }
+        if registry.id_of(entity) != Some(id) {
+            return Err(format!(
+                "UnitRegistry reverse mapping disagrees for unit {} on {entity:?}",
+                id.0
+            ));
+        }
+        let (_, faction, body, stands_on, moving_to, downed) =
+            evidence.units.get(entity).map_err(|_error| {
+                format!(
+                    "UnitRegistry unit {} maps to {entity:?}, which is not a live Faction entity",
+                    id.0
+                )
+            })?;
+        encoder.u64(id.0);
+        encoder.entity(entity);
+        encoder.u8(faction_tag(*faction));
+
+        encoder.presence(body.is_some());
+        let body = body.ok_or_else(|| format!("registered unit {} has no Body", id.0))?;
+        let traversal = body.traversal_profile();
+        encoder.i32(traversal.levels_tall);
+        encoder.i32(traversal.max_climb);
+        encoder.i32(traversal.max_drop);
+
+        encoder.presence(stands_on.is_some());
+        let standing = stands_on
+            .ok_or_else(|| format!("registered unit {} has no authoritative StandsOn", id.0))?
+            .0;
+        encode_standing(&mut encoder, standing, "registered unit standing")?;
+        occupancy.entry(standing.pos).or_default().insert(id.0);
+
+        encoder.presence(moving_to.is_some());
+        if let Some(moving) = moving_to {
+            if moving.path.is_empty()
+                || !moving.speed().is_finite()
+                || !moving.elapsed().is_finite()
+                || moving.elapsed() < 0.0
+                || moving.reconciled_step() >= moving.path.len()
+            {
+                return Err(format!(
+                    "registered unit {} has malformed authoritative MovingTo state",
+                    id.0
+                ));
+            }
+            encoder.count(moving.path.len(), "movement path")?;
+            for step in &moving.path {
+                encode_standing(&mut encoder, *step, "movement path step")?;
+                occupancy.entry(step.pos).or_default().insert(id.0);
+            }
+            encoder.u32(moving.speed().to_bits());
+            encoder.u64(moving.elapsed().to_bits());
+            encoder.boolean(moving.started());
+            encoder.count(moving.reconciled_step(), "reconciled movement step")?;
+        }
+        encoder.boolean(downed);
+    }
+
+    let live_units = evidence
+        .units
+        .iter()
+        .map(|(entity, _, _, _, _, _)| entity)
+        .collect::<BTreeSet<_>>();
+    if live_units != registered_entities {
+        return Err(format!(
+            "UnitRegistry/live Faction entity mismatch (registry={}, live={})",
+            registered_entities.len(),
+            live_units.len()
+        ));
+    }
+
+    encoder.count(occupancy.len(), "occupied surface")?;
+    for (position, occupants) in occupancy {
+        encoder.tile_pos(position);
+        encoder.count(occupants.len(), "surface occupant")?;
+        for unit in occupants {
+            encoder.u64(unit);
+        }
+    }
+    Ok(encoder.finish())
+}
+
+fn encode_logical_terrain_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut runs = Vec::new();
+    for (entity, position, run_bottom, span, substance, headroom, pickable) in
+        &evidence.logical_terrain
+    {
+        let position = position
+            .copied()
+            .ok_or_else(|| format!("logical HexTile {entity:?} has no authoritative TilePos"))?;
+        let run_bottom = run_bottom
+            .copied()
+            .ok_or_else(|| format!("logical HexTile {entity:?} has no RunBottom"))?;
+        let span = span
+            .copied()
+            .ok_or_else(|| format!("logical HexTile {entity:?} has no HexSpan"))?;
+        let substance = substance
+            .copied()
+            .ok_or_else(|| format!("logical HexTile {entity:?} has no SubstanceId"))?;
+        let headroom = headroom
+            .copied()
+            .ok_or_else(|| format!("logical HexTile {entity:?} has no Headroom"))?;
+        runs.push((
+            position,
+            entity,
+            run_bottom,
+            span,
+            substance,
+            headroom,
+            pickable.copied(),
+        ));
+    }
+    if runs.is_empty() {
+        return Err("no logical HexTile runs exist at the review boundary".to_owned());
+    }
+    runs.sort_by_key(|(position, entity, ..)| (*position, entity.to_bits()));
+
+    let mut encoder = CanonicalAuthorityEncoder::section(7);
+    encoder.count(runs.len(), "logical terrain run")?;
+    for (position, entity, run_bottom, span, substance, headroom, pickable) in runs {
+        encoder.tile_pos(position);
+        encoder.entity(entity);
+        encoder.i32(run_bottom.0);
+        encoder.span(span, "logical terrain run")?;
+        encoder.u16(substance.0);
+        encoder.i32(headroom.0);
+        encoder.pickable(pickable);
+    }
+    Ok(encoder.finish())
+}
+
+fn encode_terrain_picking_authority(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<Vec<u8>, String> {
+    let mut batches = evidence.terrain_batches.iter().collect::<Vec<_>>();
+    if batches.is_empty() {
+        return Err("no TerrainRenderBatch entities exist at the review boundary".to_owned());
+    }
+    batches.sort_by_key(|(entity, batch, _, _, _)| {
+        let chunk = batch.chunk();
+        (chunk.q, chunk.r, batch.substance().0, entity.to_bits())
+    });
+
+    let mut encoder = CanonicalAuthorityEncoder::section(8);
+    encoder.count(batches.len(), "terrain render batch")?;
+    for (entity, batch, pickable, has_mesh, has_material) in batches {
+        if !has_mesh || !has_material {
+            return Err(format!(
+                "TerrainRenderBatch {entity:?} is missing its mesh or material handle"
+            ));
+        }
+        let Some(pickable) = pickable.copied() else {
+            return Err(format!(
+                "TerrainRenderBatch {entity:?} has no explicit Pickable state"
+            ));
+        };
+        if pickable != Pickable::default() {
+            return Err(format!(
+                "TerrainRenderBatch {entity:?} no longer has ordinary interactive Pickable state"
+            ));
+        }
+        let chunk = batch.chunk();
+        encoder.i32(chunk.q);
+        encoder.i32(chunk.r);
+        encoder.u16(batch.substance().0);
+        encoder.entity(entity);
+        encoder.boolean(has_mesh);
+        encoder.boolean(has_material);
+        encoder.pickable(Some(pickable));
+        let runs = batch.runs().collect::<Vec<_>>();
+        encoder.count(runs.len(), "terrain pick run")?;
+        for run in runs {
+            encoder.entity(run.entity());
+            encoder.tile_pos(run.position());
+            encoder.span(run.span(), "terrain pick run")?;
+        }
+    }
+    Ok(encoder.finish())
+}
+
+fn validate_authority_terrain_projection(
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<(), String> {
+    let logical = evidence
+        .logical_terrain
+        .iter()
+        .map(|(entity, position, _, span, _, _, _)| (entity, position.copied(), span.copied()))
+        .collect::<Vec<_>>();
+    let rendered = evidence
+        .terrain_batches
+        .iter()
+        .flat_map(|(_, batch, _, _, _)| batch.runs())
+        .collect::<Vec<_>>();
+    reconcile_logical_terrain_runs(logical, rendered).map_err(|error| {
+        format!("authority terrain/picking projection is inconsistent: {error}")
+    })?;
+
+    let substances = evidence
+        .logical_terrain
+        .iter()
+        .map(|(entity, _, _, _, substance, _, _)| {
+            substance
+                .copied()
+                .map(|substance| (entity, substance))
+                .ok_or_else(|| format!("logical HexTile {entity:?} has no SubstanceId"))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    for (_, batch, _, _, _) in &evidence.terrain_batches {
+        for run in batch.runs() {
+            let substance = substances.get(&run.entity()).ok_or_else(|| {
+                format!(
+                    "TerrainRenderBatch names unknown logical entity {:?}",
+                    run.entity()
+                )
+            })?;
+            if *substance != batch.substance() {
+                return Err(format!(
+                    "TerrainRenderBatch substance {:?} disagrees with logical entity {:?} substance {:?}",
+                    batch.substance(),
+                    run.entity(),
+                    substance
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn encode_standing(
+    encoder: &mut CanonicalAuthorityEncoder,
+    standing: Standing,
+    label: &str,
+) -> Result<(), String> {
+    encoder.tile_pos(standing.pos);
+    encoder.span(standing.span, label)
+}
+
+const fn illumination_level_tag(level: IlluminationLevel) -> u8 {
+    match level {
+        IlluminationLevel::Dark => 0,
+        IlluminationLevel::Dim => 1,
+        IlluminationLevel::Bright => 2,
+    }
+}
+
+fn encode_light_domain(encoder: &mut CanonicalAuthorityEncoder, domain: LightDomain) {
+    match domain {
+        LightDomain::Exterior => encoder.u8(0),
+        LightDomain::Interior(region) => {
+            encoder.u8(1);
+            encoder.u32(region.0);
+        }
+    }
+}
+
+const fn knowledge_state_tag(state: KnowledgeState) -> u8 {
+    match state {
+        KnowledgeState::Unknown => 0,
+        KnowledgeState::Remembered => 1,
+        KnowledgeState::Observed => 2,
+    }
+}
+
+const fn faction_tag(faction: Faction) -> u8 {
+    match faction {
+        Faction::Player => 0,
+        Faction::Hostile => 1,
+    }
+}
+
+type ReviewRuntimeCameraQuery = (
+    Entity,
+    &'static Camera,
+    &'static Transform,
+    &'static GlobalTransform,
+    &'static PanOrbitCamera,
+    &'static RenderTarget,
+    Option<&'static Projection>,
+    &'static Camera3d,
+    &'static Msaa,
+    &'static ScreenSpaceTransmission,
+    Option<&'static OrderIndependentTransparencySettings>,
+    Option<&'static VolumetricFog>,
+);
+
+type ReviewEntityAllowedQuery = (
+    Option<&'static Pickable>,
+    Has<Transform>,
+    Has<GlobalTransform>,
+    Has<Visibility>,
+    Has<InheritedVisibility>,
+    Has<ViewVisibility>,
+    Option<&'static Mesh3d>,
+    Option<&'static MeshMaterial3d<StandardMaterial>>,
+    Has<NotShadowCaster>,
+    Option<&'static FogVolume>,
+    Option<&'static Name>,
+);
+
+type ReviewEntityForbiddenTerrainQuery = (
+    Has<HexTile>,
+    Has<TilePos>,
+    Has<RunBottom>,
+    Has<HexSpan>,
+    Has<SubstanceId>,
+    Has<Headroom>,
+    Has<TerrainRenderBatch>,
+    Has<TerrainChunkRoot>,
+);
+
+type ReviewEntityForbiddenUnitQuery = (
+    Has<Faction>,
+    Has<Body>,
+    Has<StandsOn>,
+    Has<MovingTo>,
+    Has<Downed>,
+    Has<Busy>,
+    Has<ControlOwner>,
+    Has<Player>,
+    Has<Enemy>,
+    Has<Archetype>,
+    Has<Selected>,
+);
+
+type ReviewEntityForbiddenPresentationQuery = (
+    Has<CameraFocusTarget>,
+    Has<InspectionCameraSubject>,
+    Has<GameplayLight>,
+    Has<AuthoredObjectVoxelRuns>,
+    Has<CutawayOccluder>,
+    Has<TreeOccluder>,
+    Has<CanopyOccluder>,
+    Has<PresentationOcclusion>,
+    Has<TargetReticleRequest>,
+    Has<RangeOverlay>,
+    Has<PathOverlay>,
+    Has<OutOfRangeOverlay>,
+);
+
+type ReviewProjectionEntityQuery = (
+    Entity,
+    ReviewEntityAllowedQuery,
+    ReviewEntityForbiddenTerrainQuery,
+    ReviewEntityForbiddenUnitQuery,
+    ReviewEntityForbiddenPresentationQuery,
+);
+
+#[derive(SystemParam)]
+struct ReviewRuntimeEvidence<'w, 's> {
+    profile: Option<Res<'w, ReviewWorldDetailProfileV1>>,
+    report: Option<Res<'w, ReviewWorldDetailReportV1>>,
+    runtime_assets: Option<Res<'w, ReviewWorldDetailRuntimeAssetEvidenceV1>>,
+    sky_assets: Option<Res<'w, SkyRuntimeAssetEvidenceV1>>,
+    liquid_visual_time: Option<Res<'w, LiquidVisualTime>>,
+    real_time: Option<Res<'w, Time<Real>>>,
+    images: Option<Res<'w, Assets<Image>>>,
+    meshes: Option<Res<'w, Assets<Mesh>>>,
+    standard_materials: Option<Res<'w, Assets<StandardMaterial>>>,
+    render_adapter: Option<Res<'w, RenderAdapter>>,
+    render_device: Option<Res<'w, RenderDevice>>,
+    authority: ReviewAuthorityEvidence<'w, 's>,
+    live_meshes: Query<'w, 's, &'static Mesh3d>,
+    live_standard_materials: Query<'w, 's, &'static MeshMaterial3d<StandardMaterial>>,
+    review_entities: Query<'w, 's, ReviewProjectionEntityQuery, With<ReviewWorldDetailEntity>>,
+    cameras: Query<'w, 's, ReviewRuntimeCameraQuery, With<PanOrbitCamera>>,
+}
+
+/// Minimal live state reconstructed when GPU readback completes. Keeping this
+/// separate from [`ReviewRuntimeEvidence`] avoids borrowing `LiquidVisualTime`
+/// immutably in the observer that advances the next capture phase.
+#[derive(SystemParam)]
+struct ReviewCaptureReadbackEvidence<'w, 's> {
+    profile: Res<'w, ReviewWorldDetailProfileV1>,
+    report: Option<Res<'w, ReviewWorldDetailReportV1>>,
+    render_adapter: Option<Res<'w, RenderAdapter>>,
+    render_device: Option<Res<'w, RenderDevice>>,
+    cameras: Query<'w, 's, ReviewRuntimeCameraQuery, With<PanOrbitCamera>>,
+}
+
+/// Immutable request-time state that must still match when Bevy delivers the
+/// asynchronous screenshot readback. The sidecar is serialized before requesting
+/// the screenshot, so this binding prevents it from describing a later camera or
+/// projection state.
+#[derive(Clone)]
+struct ReviewCaptureReadbackBindingV1 {
+    profile_hash_sha256: String,
+    projection_hashes: hex_map::review_world_detail::ReviewWorldDetailProjectionHashesV1,
+    counts: hex_map::review_world_detail::ReviewWorldDetailCountsV1,
+    camera_features: ReviewCameraFeaturesV1,
+    camera_entity: Entity,
+    transform: Transform,
+    global_transform_bits: [u32; 16],
+    orbit_focus_bits: [u32; 3],
+    orbit_radius_bits: u32,
+    render_target: RenderTarget,
+    projection: Option<Projection>,
+    clip_from_view_bits: [u32; 16],
+    msaa: Msaa,
+    depth_texture_usages: u32,
+    transmission_steps: usize,
+    transmission_quality: ScreenSpaceTransmissionQuality,
+    oit: Option<OrderIndependentTransparencySettings>,
+    volumetric_fog: Option<VolumetricFog>,
+}
+
+impl ReviewCaptureReadbackBindingV1 {
+    fn verify_same(&self, current: &Self) -> Result<(), String> {
+        if self.profile_hash_sha256 != current.profile_hash_sha256 {
+            return Err(
+                "resolved profile changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if self.projection_hashes != current.projection_hashes {
+            return Err(
+                "projection hashes changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if self.counts != current.counts {
+            return Err(
+                "projection counts changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if self.camera_features != current.camera_features {
+            return Err(
+                "camera features changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if self.camera_entity != current.camera_entity {
+            return Err(
+                "active camera identity changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if self.transform != current.transform
+            || self.global_transform_bits != current.global_transform_bits
+            || self.orbit_focus_bits != current.orbit_focus_bits
+            || self.orbit_radius_bits != current.orbit_radius_bits
+        {
+            return Err("camera pose changed between screenshot request and readback".to_owned());
+        }
+        if !render_targets_equal(&self.render_target, &current.render_target) {
+            return Err(
+                "camera render target changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if !projections_equal(self.projection.as_ref(), current.projection.as_ref())
+            || self.clip_from_view_bits != current.clip_from_view_bits
+        {
+            return Err(
+                "camera projection changed between screenshot request and readback".to_owned(),
+            );
+        }
+        if self.msaa != current.msaa
+            || self.depth_texture_usages != current.depth_texture_usages
+            || self.transmission_steps != current.transmission_steps
+            || self.transmission_quality != current.transmission_quality
+            || !oit_settings_equal(self.oit, current.oit)
+            || !volumetric_fog_equal(self.volumetric_fog, current.volumetric_fog)
+        {
+            return Err(
+                "camera renderer state changed between screenshot request and readback".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct ReviewProjectionEntityAuditV1 {
+    entities: BTreeSet<Entity>,
+    meshes: BTreeSet<AssetId<Mesh>>,
+    standard_materials: BTreeSet<AssetId<StandardMaterial>>,
+    images: BTreeSet<AssetId<Image>>,
+    public_payload_bytes: u64,
+}
+
+fn audit_review_projection_entities(
+    evidence: &ReviewRuntimeEvidence<'_, '_>,
+) -> Result<ReviewProjectionEntityAuditV1, String> {
+    let source_report = evidence
+        .report
+        .as_deref()
+        .ok_or_else(|| {
+            format!(
+                "world-detail projection report is not published; static collider contract: {REVIEW_COLLIDER_STATIC_INVARIANT}"
+            )
+        })?;
+    let expected_entities = usize::try_from(source_report.cleanup.entities_remaining)
+        .map_err(|_error| "world-detail entity count exceeds usize".to_owned())?;
+    let expected_meshes = usize::try_from(source_report.cleanup.meshes_remaining)
+        .map_err(|_error| "world-detail mesh count exceeds usize".to_owned())?;
+    let expected_images = usize::try_from(
+        evidence
+            .runtime_assets
+            .as_deref()
+            .ok_or_else(|| {
+                "renderer-owned material/image allocation evidence is unavailable".to_owned()
+            })?
+            .fog_density_image_count,
+    )
+    .map_err(|_error| "world-detail fog density image count exceeds usize".to_owned())?;
+    let mut audit = ReviewProjectionEntityAuditV1::default();
+    for (
+        id,
+        (
+            pickable,
+            has_transform,
+            has_global_transform,
+            has_visibility,
+            has_inherited_visibility,
+            has_view_visibility,
+            mesh,
+            material,
+            has_not_shadow_caster,
+            fog,
+            name,
+        ),
+        (
+            has_hex_tile,
+            has_tile_pos,
+            has_run_bottom,
+            has_hex_span,
+            has_substance,
+            has_headroom,
+            has_terrain_batch,
+            has_terrain_chunk_root,
+        ),
+        (
+            has_faction,
+            has_body,
+            has_stands_on,
+            has_moving_to,
+            has_downed,
+            has_busy,
+            has_control_owner,
+            has_player,
+            has_enemy,
+            has_archetype,
+            has_selected,
+        ),
+        (
+            has_camera_focus,
+            has_inspection_subject,
+            has_gameplay_light,
+            has_authored_runs,
+            has_cutaway,
+            has_tree_occluder,
+            has_canopy_occluder,
+            has_presentation_occlusion,
+            has_target_reticle,
+            has_range_overlay,
+            has_path_overlay,
+            has_out_of_range_overlay,
+        ),
+    ) in &evidence.review_entities
+    {
+        let pickable = pickable.ok_or_else(|| {
+            format!("review projection entity {id:?} has no explicit Pickable::IGNORE")
+        })?;
+        if *pickable != Pickable::IGNORE {
+            return Err(format!(
+                "review projection entity {id:?} is gameplay-pickable instead of Pickable::IGNORE"
+            ));
+        }
+
+        macro_rules! reject_component {
+            ($present:expr, $name:literal) => {
+                if $present {
+                    return Err(format!(
+                        "review projection entity {id:?} carries forbidden authoritative component {}",
+                        $name
+                    ));
+                }
+            };
+        }
+        reject_component!(has_hex_tile, "HexTile");
+        reject_component!(has_tile_pos, "TilePos");
+        reject_component!(has_run_bottom, "RunBottom");
+        reject_component!(has_hex_span, "HexSpan");
+        reject_component!(has_substance, "SubstanceId");
+        reject_component!(has_headroom, "Headroom");
+        reject_component!(has_terrain_batch, "TerrainRenderBatch");
+        reject_component!(has_terrain_chunk_root, "TerrainChunkRoot");
+        reject_component!(has_faction, "Faction");
+        reject_component!(has_body, "Body");
+        reject_component!(has_stands_on, "StandsOn");
+        reject_component!(has_moving_to, "MovingTo");
+        reject_component!(has_downed, "Downed");
+        reject_component!(has_busy, "Busy");
+        reject_component!(has_control_owner, "ControlOwner");
+        reject_component!(has_player, "Player");
+        reject_component!(has_enemy, "Enemy");
+        reject_component!(has_archetype, "Archetype");
+        reject_component!(has_selected, "Selected");
+        reject_component!(has_camera_focus, "CameraFocusTarget");
+        reject_component!(has_inspection_subject, "InspectionCameraSubject");
+        reject_component!(has_gameplay_light, "GameplayLight");
+        reject_component!(has_authored_runs, "AuthoredObjectVoxelRuns");
+        reject_component!(has_cutaway, "CutawayOccluder");
+        reject_component!(has_tree_occluder, "TreeOccluder");
+        reject_component!(has_canopy_occluder, "CanopyOccluder");
+        reject_component!(has_presentation_occlusion, "PresentationOcclusion");
+        reject_component!(has_target_reticle, "TargetReticleRequest");
+        reject_component!(has_range_overlay, "RangeOverlay");
+        reject_component!(has_path_overlay, "PathOverlay");
+        reject_component!(has_out_of_range_overlay, "OutOfRangeOverlay");
+
+        audit.entities.insert(id);
+        if let Some(mesh) = mesh {
+            audit.meshes.insert(mesh.0.id());
+        }
+        if let Some(material) = material {
+            audit.standard_materials.insert(material.0.id());
+        }
+        if let Some(texture) = fog.and_then(|fog| fog.density_texture.as_ref()) {
+            audit.images.insert(texture.id());
+        }
+        audit.public_payload_bytes = audit
+            .public_payload_bytes
+            .checked_add(review_entity_public_payload_bytes(
+                true,
+                has_transform,
+                has_global_transform,
+                has_visibility,
+                has_inherited_visibility,
+                has_view_visibility,
+                mesh.is_some(),
+                material.is_some(),
+                has_not_shadow_caster,
+                fog.is_some(),
+                name,
+            )?)
+            .ok_or_else(|| "review ECS payload byte count overflowed u64".to_owned())?;
+    }
+    if audit.entities.len() != expected_entities {
+        return Err(format!(
+            "ReviewWorldDetailEntity count {} disagrees with renderer-owned count {expected_entities}",
+            audit.entities.len()
+        ));
+    }
+    if audit.meshes.len() != expected_meshes {
+        return Err(format!(
+            "review marker mesh count {} disagrees with renderer-owned count {expected_meshes}",
+            audit.meshes.len()
+        ));
+    }
+    if audit.images.len() != expected_images {
+        return Err(format!(
+            "review fog image count {} disagrees with renderer-owned count {expected_images}",
+            audit.images.len()
+        ));
+    }
+    Ok(audit)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ReviewPerformanceObservationV1 {
+    frame_time_ms: f32,
+    resident_presentation_bytes: u64,
+}
+
+fn performance_sampling_start_frame(settle_frames: u32) -> u32 {
+    let window_frames = u32::try_from(PERFORMANCE_WINDOW_FRAMES).unwrap_or(u32::MAX);
+    settle_frames
+        .saturating_sub(window_frames)
+        .saturating_add(1)
+}
+
+fn measure_review_performance(
+    state: &ReviewCaptureState,
+    evidence: &ReviewRuntimeEvidence<'_, '_>,
+    review_entity_public_payload_bytes: u64,
+) -> Result<ReviewPerformanceObservationV1, String> {
+    let sampling_start_frame = performance_sampling_start_frame(state.capture.settle_frames);
+    if state.settled_frames < sampling_start_frame {
+        return Err(format!(
+            "performance sample requested at settle frame {}, before sampling frame {}",
+            state.settled_frames, sampling_start_frame
+        ));
+    }
+    let real_time = evidence
+        .real_time
+        .as_deref()
+        .ok_or_else(|| "Time<Real> is unavailable for performance sampling".to_owned())?;
+    let frame_time_ms_f64 = real_time.delta_secs_f64() * 1_000.0;
+    if !frame_time_ms_f64.is_finite() || !(frame_time_ms_f64 > 0.0 && frame_time_ms_f64 <= 10_000.0)
+    {
+        return Err(format!(
+            "immediately preceding rendered-frame duration is outside (0, 10000] ms: {frame_time_ms_f64}"
+        ));
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the validated 0..=10000 ms sample is deliberately stored by the report's f32 schema"
+    )]
+    let frame_time_ms = frame_time_ms_f64 as f32;
+
+    let mesh_ids = evidence
+        .live_meshes
+        .iter()
+        .map(|mesh| mesh.0.id())
+        .collect::<BTreeSet<_>>();
+    let mut resident_presentation_bytes = 0_u64;
+    for id in mesh_ids {
+        let mesh = evidence
+            .meshes
+            .as_deref()
+            .ok_or_else(|| "Assets<Mesh> is unavailable for performance sampling".to_owned())?
+            .get(id)
+            .ok_or_else(|| format!("live Mesh3d references missing mesh asset {id:?}"))?;
+        resident_presentation_bytes = resident_presentation_bytes
+            .checked_add(mesh_buffer_bytes(mesh)?)
+            .ok_or_else(|| "resident mesh byte count overflowed u64".to_owned())?;
+    }
+
+    let standard_material_ids = evidence
+        .live_standard_materials
+        .iter()
+        .map(|material| material.0.id())
+        .collect::<BTreeSet<_>>();
+    for id in standard_material_ids {
+        let material = evidence
+            .standard_materials
+            .as_deref()
+            .ok_or_else(|| {
+                "Assets<StandardMaterial> is unavailable for performance sampling".to_owned()
+            })?
+            .get(id)
+            .ok_or_else(|| {
+                format!("live MeshMaterial3d references missing StandardMaterial asset {id:?}")
+            })?;
+        resident_presentation_bytes = resident_presentation_bytes
+            .checked_add(
+                u64::try_from(std::mem::size_of_val(material))
+                    .map_err(|_error| "StandardMaterial allocation exceeds u64".to_owned())?,
+            )
+            .ok_or_else(|| "resident StandardMaterial byte count overflowed u64".to_owned())?;
+    }
+
+    // `Assets<Image>` is the public main-world residency boundary. Count every live
+    // texture mip payload conservatively, except the one capture target whose cost
+    // would be identical on both sides of a matched comparison. This also catches
+    // late asset growth during the stability window instead of silently selecting
+    // only textures already referenced by StandardMaterial.
+    let images = evidence
+        .images
+        .as_deref()
+        .ok_or_else(|| "Assets<Image> is unavailable for performance sampling".to_owned())?;
+    for (id, image) in images.iter() {
+        if state.capture_target_ids.contains(&id) {
+            continue;
+        }
+        resident_presentation_bytes = resident_presentation_bytes
+            .checked_add(image_texture_bytes(image)?)
+            .ok_or_else(|| "resident Image texture byte count overflowed u64".to_owned())?;
+    }
+
+    resident_presentation_bytes = resident_presentation_bytes
+        .checked_add(review_entity_public_payload_bytes)
+        .ok_or_else(|| "review ECS component byte count overflowed u64".to_owned())?;
+
+    let runtime_assets = evidence.runtime_assets.as_deref().ok_or_else(|| {
+        "renderer-owned liquid material allocation evidence is unavailable".to_owned()
+    })?;
+    validate_counted_allocation(
+        "ordinary liquid materials",
+        runtime_assets.liquid_material_count,
+        runtime_assets.liquid_material_bytes,
+    )?;
+    validate_counted_allocation(
+        "review-water materials",
+        runtime_assets.review_water_material_count,
+        runtime_assets.review_water_material_bytes,
+    )?;
+    validate_counted_allocation(
+        "fog density images",
+        runtime_assets.fog_density_image_count,
+        runtime_assets.fog_density_image_bytes,
+    )?;
+    let sky_assets = evidence
+        .sky_assets
+        .as_deref()
+        .ok_or_else(|| "sky material allocation evidence is unavailable".to_owned())?;
+    validate_counted_allocation(
+        "sky materials",
+        sky_assets.sky_material_count,
+        sky_assets.sky_material_bytes,
+    )?;
+    if sky_assets.sky_material_count == 0 {
+        return Err("matched live scene contains no evidenced sky material".to_owned());
+    }
+    for bytes in [
+        runtime_assets.liquid_material_bytes,
+        runtime_assets.review_water_material_bytes,
+        sky_assets.sky_material_bytes,
+    ] {
+        resident_presentation_bytes = resident_presentation_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| "resident presentation byte count overflowed u64".to_owned())?;
+    }
+    if resident_presentation_bytes == 0 {
+        return Err("matched live scene has zero resident presentation bytes".to_owned());
+    }
+    Ok(ReviewPerformanceObservationV1 {
+        frame_time_ms,
+        resident_presentation_bytes,
+    })
+}
+
+fn sample_review_performance(
+    state: &mut ReviewCaptureState,
+    evidence: &ReviewRuntimeEvidence<'_, '_>,
+    review_entity_public_payload_bytes: u64,
+) -> Result<Option<ReviewPerformanceSampleV1>, String> {
+    let observation =
+        measure_review_performance(state, evidence, review_entity_public_payload_bytes)?;
+    if state.performance_resident_bytes != Some(observation.resident_presentation_bytes) {
+        state.performance_resident_bytes = Some(observation.resident_presentation_bytes);
+        state.performance_frame_window_ms.clear();
+    }
+    state
+        .performance_frame_window_ms
+        .push_back(observation.frame_time_ms);
+    while state.performance_frame_window_ms.len() > PERFORMANCE_WINDOW_FRAMES {
+        state.performance_frame_window_ms.pop_front();
+    }
+    if state.performance_frame_window_ms.len() < PERFORMANCE_WINDOW_FRAMES {
+        return Ok(None);
+    }
+
+    let frame_times = state
+        .performance_frame_window_ms
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let midpoint = frame_times.len() / 2;
+    let (first_half, second_half) = frame_times.split_at(midpoint);
+    let first_p95 = nearest_rank_p95(first_half)?;
+    let second_p95 = nearest_rank_p95(second_half)?;
+    let drift = (first_p95 - second_p95).abs() / first_p95.max(second_p95);
+    if !drift.is_finite() || drift > PERFORMANCE_P95_DRIFT_LIMIT {
+        return Ok(None);
+    }
+    let frame_time_ms = nearest_rank_p95(&frame_times)?;
+    let resident_presentation_bytes = state
+        .performance_resident_bytes
+        .ok_or_else(|| {
+            format!(
+                "stable performance window lost resident-byte evidence for scope: {REVIEW_RESIDENT_MEMORY_SCOPE}"
+            )
+        })?;
+    Ok(Some(ReviewPerformanceSampleV1 {
+        frame_time_ms,
+        resident_presentation_bytes,
+        warmup_complete: true,
+    }))
+}
+
+fn nearest_rank_p95(samples: &[f32]) -> Result<f32, String> {
+    if samples.is_empty()
+        || samples
+            .iter()
+            .any(|sample| !sample.is_finite() || *sample <= 0.0)
+    {
+        return Err("p95 performance window is empty or contains an invalid frame".to_owned());
+    }
+    let mut ordered = samples.to_vec();
+    ordered.sort_by(f32::total_cmp);
+    let rank = ordered
+        .len()
+        .checked_mul(95)
+        .and_then(|value| value.checked_add(99))
+        .ok_or_else(|| "p95 performance rank overflowed usize".to_owned())?
+        / 100;
+    ordered
+        .get(rank.saturating_sub(1))
+        .copied()
+        .ok_or_else(|| "p95 performance rank fell outside the sample window".to_owned())
+}
+
+fn image_texture_bytes(image: &Image) -> Result<u64, String> {
+    let descriptor = &image.texture_descriptor;
+    if descriptor.size.width == 0
+        || descriptor.size.height == 0
+        || descriptor.size.depth_or_array_layers == 0
+        || descriptor.mip_level_count == 0
+        || descriptor.sample_count == 0
+    {
+        return Err("live Image has a zero-sized texture descriptor".to_owned());
+    }
+    let block_bytes = descriptor
+        .format
+        .block_copy_size(None)
+        .ok_or_else(|| format!("cannot size texture format {:?} exactly", descriptor.format))?;
+    let (block_width, block_height) = descriptor.format.block_dimensions();
+    let mut bytes = 0_u64;
+    for mip in 0..descriptor.mip_level_count {
+        let extent = descriptor.size.mip_level_size(mip, descriptor.dimension);
+        let blocks_wide = u64::from(extent.width.div_ceil(block_width));
+        let blocks_high = u64::from(extent.height.div_ceil(block_height));
+        let mip_bytes = blocks_wide
+            .checked_mul(blocks_high)
+            .and_then(|value| value.checked_mul(u64::from(extent.depth_or_array_layers)))
+            .and_then(|value| value.checked_mul(u64::from(block_bytes)))
+            .and_then(|value| value.checked_mul(u64::from(descriptor.sample_count)))
+            .ok_or_else(|| "Image texture mip byte count overflowed u64".to_owned())?;
+        bytes = bytes
+            .checked_add(mip_bytes)
+            .ok_or_else(|| "Image texture byte count overflowed u64".to_owned())?;
+    }
+    Ok(bytes)
+}
+
+fn review_entity_public_payload_bytes(
+    has_pickable: bool,
+    has_transform: bool,
+    has_global_transform: bool,
+    has_visibility: bool,
+    has_inherited_visibility: bool,
+    has_view_visibility: bool,
+    has_mesh: bool,
+    has_standard_material: bool,
+    has_not_shadow_caster: bool,
+    has_fog_volume: bool,
+    name: Option<&Name>,
+) -> Result<u64, String> {
+    let mut bytes = u64::try_from(std::mem::size_of::<Entity>())
+        .map_err(|_error| "Entity inline size exceeds u64".to_owned())?;
+    macro_rules! count_component {
+        ($present:expr, $component:ty) => {
+            if $present {
+                bytes =
+                    bytes
+                        .checked_add(u64::try_from(std::mem::size_of::<$component>()).map_err(
+                            |_error| "review component inline size exceeds u64".to_owned(),
+                        )?)
+                        .ok_or_else(|| {
+                            "review component inline byte count overflowed u64".to_owned()
+                        })?;
+            }
+        };
+    }
+    count_component!(true, ReviewWorldDetailEntity);
+    count_component!(has_pickable, Pickable);
+    count_component!(has_transform, Transform);
+    count_component!(has_global_transform, GlobalTransform);
+    count_component!(has_visibility, Visibility);
+    count_component!(has_inherited_visibility, InheritedVisibility);
+    count_component!(has_view_visibility, ViewVisibility);
+    count_component!(has_mesh, Mesh3d);
+    count_component!(has_standard_material, MeshMaterial3d<StandardMaterial>);
+    count_component!(has_not_shadow_caster, NotShadowCaster);
+    count_component!(has_fog_volume, FogVolume);
+    count_component!(name.is_some(), Name);
+    if has_mesh && !has_standard_material && !has_fog_volume {
+        // The sole renderer-private alternative is MeshMaterial3d<ReviewWaterMaterial>;
+        // generic Handle storage has the same inline representation.
+        bytes = bytes
+            .checked_add(
+                u64::try_from(std::mem::size_of::<Handle<StandardMaterial>>())
+                    .map_err(|_error| "review-water material handle size exceeds u64".to_owned())?,
+            )
+            .ok_or_else(|| "review-water component byte count overflowed u64".to_owned())?;
+    }
+    if let Some(name) = name {
+        bytes = bytes
+            .checked_add(
+                u64::try_from(name.as_str().len())
+                    .map_err(|_error| "review entity name length exceeds u64".to_owned())?,
+            )
+            .ok_or_else(|| "review entity name byte count overflowed u64".to_owned())?;
+    }
+    Ok(bytes)
+}
+
+fn validate_counted_allocation(label: &str, count: u64, bytes: u64) -> Result<(), String> {
+    if (count == 0) != (bytes == 0) {
+        return Err(format!(
+            "{label} evidence has inconsistent count/byte presence ({count} assets, {bytes} bytes)"
+        ));
+    }
+    Ok(())
+}
+
+fn mesh_buffer_bytes(mesh: &Mesh) -> Result<u64, String> {
+    let mut attributes = mesh
+        .try_attributes()
+        .map_err(|error| format!("mesh vertex buffers are unavailable in the main world: {error}"))?
+        .peekable();
+    if attributes.peek().is_none() {
+        return Err("live Mesh3d asset contains no vertex buffers".to_owned());
+    }
+    let mut vertex_count = None;
+    let mut bytes = 0_u64;
+    for (attribute, values) in attributes {
+        if vertex_count
+            .replace(values.len())
+            .is_some_and(|count| count != values.len())
+        {
+            return Err(format!(
+                "mesh attribute {} has a mismatched vertex count",
+                attribute.name
+            ));
+        }
+        let value_count = u64::try_from(values.len())
+            .map_err(|_error| "mesh vertex count exceeds u64".to_owned())?;
+        bytes = bytes
+            .checked_add(
+                value_count
+                    .checked_mul(attribute.format.size())
+                    .ok_or_else(|| "mesh vertex buffer byte count overflowed u64".to_owned())?,
+            )
+            .ok_or_else(|| "mesh vertex buffer byte count overflowed u64".to_owned())?;
+    }
+    if let Some(indices) = mesh
+        .try_indices_option()
+        .map_err(|error| format!("mesh index buffer is unavailable in the main world: {error}"))?
+    {
+        let index_count = u64::try_from(indices.len())
+            .map_err(|_error| "mesh index count exceeds u64".to_owned())?;
+        let index_width = match indices {
+            Indices::U16(_) => 2,
+            Indices::U32(_) => 4,
+        };
+        bytes = bytes
+            .checked_add(
+                index_count
+                    .checked_mul(index_width)
+                    .ok_or_else(|| "mesh index buffer byte count overflowed u64".to_owned())?,
+            )
+            .ok_or_else(|| "mesh index buffer byte count overflowed u64".to_owned())?;
+    }
+    Ok(bytes)
+}
+
+/// Captures the one immutable review baseline at the terminal ordinary setup
+/// boundary. `GameplaySetup` is globally chained, so Terrain, Actors, Restore,
+/// Perception, and View have all flushed before this system runs. Review world-detail
+/// projection is an `Update` system and therefore cannot have run yet.
+fn capture_review_authority_baseline(
+    evidence: ReviewAuthorityEvidence,
+    mut state: ResMut<ReviewCaptureState>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if state.failed || state.authority_baseline.is_some() {
+        return;
+    }
+    match ReviewAuthoritySnapshotV1::capture(&evidence) {
+        Ok(snapshot) => {
+            info!(
+                "captured immutable review authority baseline {} under lighting condition {}",
+                snapshot.fingerprint(),
+                snapshot.lighting_condition_key()
+            );
+            state.authority_baseline = Some(snapshot);
+        }
+        Err(error) => {
+            error!("cannot capture immutable review authority baseline: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+        }
+    }
+}
+
+fn verify_review_authority(
+    state: &ReviewCaptureState,
+    evidence: &ReviewAuthorityEvidence<'_, '_>,
+) -> Result<ReviewAuthoritySnapshotV1, String> {
+    let baseline = state.authority_baseline.as_ref().ok_or_else(|| {
+        "immutable review authority baseline was not captured before projection".to_owned()
+    })?;
+    let current = ReviewAuthoritySnapshotV1::capture(evidence)?;
+    baseline.verify_unchanged(&current)?;
+    Ok(current)
+}
+
+#[derive(SystemParam)]
+struct ReviewAuthorityTeardownEvidence<'w, 's> {
+    world_snapshot: Option<Res<'w, CurrentWorldSnapshotV1>>,
+    replication: Option<Res<'w, WorldReplicationStateV1>>,
+    time_of_day: Option<Res<'w, TimeOfDay>>,
+    exterior_illumination: Option<Res<'w, ExteriorIllumination>>,
+    illumination: Option<Res<'w, ResolvedIllumination>>,
+    knowledge: Option<Res<'w, FactionMapKnowledge>>,
+    unit_registry: Option<Res<'w, UnitRegistry>>,
+    campaign_store: Option<Res<'w, CampaignStore>>,
+    campaign_save_status: Option<Res<'w, CampaignSaveStatusProjection>>,
+    storage_paths: Option<Res<'w, StoragePaths>>,
+    units: Query<'w, 's, Entity, With<Faction>>,
+    logical_terrain: Query<'w, 's, Entity, With<HexTile>>,
+    terrain_batches: Query<'w, 's, Entity, With<TerrainRenderBatch>>,
+}
+
+#[derive(SystemParam)]
+struct ReviewLifecycleTeardownEvidence<'w, 's> {
+    receipt: Option<Res<'w, ReviewWorldDetailTeardownReceiptV1>>,
+    runtime_assets: Option<Res<'w, ReviewWorldDetailRuntimeAssetEvidenceV1>>,
+    teardown_request: Option<Res<'w, ReviewWorldDetailTeardownRequestV1>>,
+    authority: ReviewAuthorityEvidence<'w, 's>,
+    meshes: Option<Res<'w, Assets<Mesh>>>,
+    standard_materials: Option<Res<'w, Assets<StandardMaterial>>>,
+    images: Option<Res<'w, Assets<Image>>>,
+    all_entities: Query<'w, 's, Entity>,
+    cameras: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Transform,
+            &'static PanOrbitCamera,
+            &'static RenderTarget,
+            Option<&'static Projection>,
+            &'static Camera3d,
+            &'static Msaa,
+            &'static ScreenSpaceTransmission,
+            Option<&'static OrderIndependentTransparencySettings>,
+            Option<&'static VolumetricFog>,
+            Has<ReviewCameraFeatureRestore>,
+        ),
+    >,
+    camera_mode: Option<Res<'w, CameraMode>>,
+    camera_feature_restores: Query<'w, 's, Entity, With<ReviewCameraFeatureRestore>>,
+    added_volumetric_lights: Query<'w, 's, Entity, With<ReviewAddedVolumetricLight>>,
+}
+
+#[derive(Debug)]
+struct ReviewLifecycleTeardownSnapshotV1 {
+    authority_after: ReviewAuthoritySnapshotV1,
+    entities_remaining: u64,
+    materials_remaining: u64,
+    meshes_remaining: u64,
+    fog_density_images_remaining: u64,
+    target_images_remaining: u64,
+    terrain_material_overrides_remaining: u64,
+    liquid_visibility_overrides_remaining: u64,
+    vegetation_scale_overrides_remaining: u64,
+    camera_state_restored: bool,
+    oit_state_restored: bool,
+    transmission_state_restored: bool,
+    depth_state_restored: bool,
+    volumetric_state_restored: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReviewPresentationTeardownSnapshotV1 {
+    entities_remaining: u64,
+    materials_remaining: u64,
+    meshes_remaining: u64,
+    fog_density_images_remaining: u64,
+    target_images_remaining: u64,
+    terrain_material_overrides_remaining: u64,
+    liquid_visibility_overrides_remaining: u64,
+    vegetation_scale_overrides_remaining: u64,
+    camera_state_restored: bool,
+    oit_state_restored: bool,
+    transmission_state_restored: bool,
+    depth_state_restored: bool,
+    volumetric_state_restored: bool,
+}
+
+impl ReviewPresentationTeardownSnapshotV1 {
+    fn cleanup(self, completed_cycles: u16) -> ReviewCleanupStateV1 {
+        ReviewCleanupStateV1 {
+            completed_cycles,
+            entities_remaining: self.entities_remaining,
+            materials_remaining: self.materials_remaining,
+            meshes_remaining: self.meshes_remaining,
+            target_images_remaining: self.target_images_remaining,
+            camera_state_restored: self.camera_state_restored,
+            oit_state_restored: self.oit_state_restored,
+            transmission_state_restored: self.transmission_state_restored,
+            depth_state_restored: self.depth_state_restored,
+            volumetric_state_restored: self.volumetric_state_restored,
+        }
+    }
+}
+
+fn validate_review_lifecycle_teardown(
+    state: &ReviewCaptureState,
+    evidence: &ReviewLifecycleTeardownEvidence<'_, '_>,
+) -> Result<ReviewLifecycleTeardownSnapshotV1, String> {
+    let baseline = state
+        .authority_baseline
+        .as_ref()
+        .ok_or_else(|| "lifecycle teardown lost its immutable authority baseline".to_owned())?;
+    let authority_after = ReviewAuthoritySnapshotV1::capture(&evidence.authority)?;
+    baseline.verify_unchanged(&authority_after)?;
+    let presentation = validate_review_presentation_teardown(state, evidence)?;
+    Ok(ReviewLifecycleTeardownSnapshotV1 {
+        authority_after,
+        entities_remaining: presentation.entities_remaining,
+        materials_remaining: presentation.materials_remaining,
+        meshes_remaining: presentation.meshes_remaining,
+        fog_density_images_remaining: presentation.fog_density_images_remaining,
+        target_images_remaining: presentation.target_images_remaining,
+        terrain_material_overrides_remaining: presentation.terrain_material_overrides_remaining,
+        liquid_visibility_overrides_remaining: presentation.liquid_visibility_overrides_remaining,
+        vegetation_scale_overrides_remaining: presentation.vegetation_scale_overrides_remaining,
+        camera_state_restored: presentation.camera_state_restored,
+        oit_state_restored: presentation.oit_state_restored,
+        transmission_state_restored: presentation.transmission_state_restored,
+        depth_state_restored: presentation.depth_state_restored,
+        volumetric_state_restored: presentation.volumetric_state_restored,
+    })
+}
+
+fn validate_review_presentation_teardown(
+    state: &ReviewCaptureState,
+    evidence: &ReviewLifecycleTeardownEvidence<'_, '_>,
+) -> Result<ReviewPresentationTeardownSnapshotV1, String> {
+    if evidence.runtime_assets.is_some() {
+        return Err("renderer-owned live asset evidence survived projection teardown".to_owned());
+    }
+    if evidence.teardown_request.is_some() {
+        return Err("projection teardown request was not consumed".to_owned());
+    }
+    let receipt = evidence.receipt.as_deref().ok_or_else(|| {
+        "renderer did not publish a post-teardown world-detail receipt".to_owned()
+    })?;
+    if !evidence.camera_feature_restores.is_empty() {
+        return Err(format!(
+            "{} review camera feature-restore markers survived projection teardown",
+            evidence.camera_feature_restores.iter().count()
+        ));
+    }
+    let meshes = evidence
+        .meshes
+        .as_deref()
+        .ok_or_else(|| "Assets<Mesh> disappeared during lifecycle teardown".to_owned())?;
+    let standard_materials = evidence.standard_materials.as_deref().ok_or_else(|| {
+        "Assets<StandardMaterial> disappeared during lifecycle teardown".to_owned()
+    })?;
+    let images = evidence
+        .images
+        .as_deref()
+        .ok_or_else(|| "Assets<Image> disappeared during lifecycle teardown".to_owned())?;
+
+    let tracked_entities_remaining = state
+        .review_entity_ids
+        .iter()
+        .filter(|entity| evidence.all_entities.get(**entity).is_ok())
+        .count();
+    if tracked_entities_remaining != 0 {
+        return Err(format!(
+            "{tracked_entities_remaining} tracked review entities survived projection teardown"
+        ));
+    }
+    let tracked_meshes_remaining = state
+        .review_mesh_ids
+        .iter()
+        .filter(|id| meshes.get(**id).is_some())
+        .count();
+    if tracked_meshes_remaining != 0 {
+        return Err(format!(
+            "{tracked_meshes_remaining} tracked review mesh assets survived projection teardown"
+        ));
+    }
+    let tracked_materials_remaining = state
+        .review_standard_material_ids
+        .iter()
+        .filter(|id| standard_materials.get(**id).is_some())
+        .count();
+    if tracked_materials_remaining != 0 {
+        return Err(format!(
+            "{tracked_materials_remaining} tracked review StandardMaterial assets survived projection teardown"
+        ));
+    }
+    let tracked_images_remaining = state
+        .review_image_ids
+        .iter()
+        .filter(|id| images.get(**id).is_some())
+        .count();
+    if tracked_images_remaining != 0 {
+        return Err(format!(
+            "{tracked_images_remaining} tracked review fog density images survived projection teardown"
+        ));
+    }
+    let target_images_remaining = u64::try_from(
+        state
+            .capture_target_ids
+            .iter()
+            .filter(|id| images.get(**id).is_some())
+            .count(),
+    )
+    .map_err(|_error| "review target image count exceeds u64".to_owned())?;
+
+    let snapshot = state
+        .camera_snapshot
+        .as_ref()
+        .ok_or_else(|| "lifecycle teardown lost its camera snapshot".to_owned())?;
+    let camera = evidence
+        .cameras
+        .get(snapshot.entity)
+        .map_err(|_error| "review camera disappeared during lifecycle teardown".to_owned())?;
+    let (
+        entity,
+        transform,
+        orbit,
+        target,
+        projection,
+        camera_3d,
+        msaa,
+        transmission,
+        oit,
+        volumetric_fog,
+        has_feature_restore,
+    ) = camera;
+    let mode = evidence
+        .camera_mode
+        .as_deref()
+        .ok_or_else(|| "CameraMode disappeared during lifecycle teardown".to_owned())?;
+    let camera_state_restored = entity == snapshot.entity
+        && *transform == snapshot.transform
+        && orbit.focus == snapshot.orbit_focus
+        && orbit.radius.to_bits() == snapshot.orbit_radius.to_bits()
+        && render_targets_equal(target, &snapshot.target)
+        && projections_equal(projection, snapshot.projection.as_ref())
+        && *mode == snapshot.mode
+        && !has_feature_restore;
+    let oit_state_restored =
+        oit_settings_equal(oit.copied(), snapshot.oit) && *msaa == snapshot.msaa;
+    let transmission_state_restored = transmission.steps == snapshot.transmission_steps
+        && transmission.quality == snapshot.transmission_quality;
+    let depth_state_restored = camera_3d.depth_texture_usages.0 == snapshot.depth_texture_usages.0;
+    let volumetric_state_restored =
+        volumetric_fog_equal(volumetric_fog.copied(), snapshot.volumetric_fog)
+            && evidence.added_volumetric_lights.is_empty();
+
+    let entities_remaining = receipt.review_entities_remaining;
+    let materials_remaining = receipt
+        .standard_materials_remaining
+        .checked_add(receipt.review_water_materials_remaining)
+        .ok_or_else(|| "post-teardown material count overflowed u64".to_owned())?;
+    let meshes_remaining = receipt.meshes_remaining;
+    if entities_remaining != 0
+        || materials_remaining != 0
+        || meshes_remaining != 0
+        || receipt.fog_density_images_remaining != 0
+        || receipt.terrain_material_overrides_remaining != 0
+        || receipt.liquid_visibility_overrides_remaining != 0
+        || receipt.vegetation_scale_overrides_remaining != 0
+        || target_images_remaining != 0
+        || !camera_state_restored
+        || !oit_state_restored
+        || !transmission_state_restored
+        || !depth_state_restored
+        || !volumetric_state_restored
+    {
+        return Err(format!(
+            "lifecycle teardown was incomplete (entities={entities_remaining}, materials={materials_remaining}, meshes={meshes_remaining}, fog_images={}, terrain_overrides={}, liquid_overrides={}, vegetation_overrides={}, targets={target_images_remaining}, camera={camera_state_restored}, oit={oit_state_restored}, transmission={transmission_state_restored}, depth={depth_state_restored}, volumetric={volumetric_state_restored})",
+            receipt.fog_density_images_remaining,
+            receipt.terrain_material_overrides_remaining,
+            receipt.liquid_visibility_overrides_remaining,
+            receipt.vegetation_scale_overrides_remaining,
+        ));
+    }
+
+    Ok(ReviewPresentationTeardownSnapshotV1 {
+        entities_remaining,
+        materials_remaining,
+        meshes_remaining,
+        fog_density_images_remaining: receipt.fog_density_images_remaining,
+        target_images_remaining,
+        terrain_material_overrides_remaining: receipt.terrain_material_overrides_remaining,
+        liquid_visibility_overrides_remaining: receipt.liquid_visibility_overrides_remaining,
+        vegetation_scale_overrides_remaining: receipt.vegetation_scale_overrides_remaining,
+        camera_state_restored,
+        oit_state_restored,
+        transmission_state_restored,
+        depth_state_restored,
+        volumetric_state_restored,
+    })
+}
+
+fn render_targets_equal(left: &RenderTarget, right: &RenderTarget) -> bool {
+    match (left, right) {
+        (
+            RenderTarget::Window(bevy::window::WindowRef::Primary),
+            RenderTarget::Window(bevy::window::WindowRef::Primary),
+        ) => true,
+        (
+            RenderTarget::Window(bevy::window::WindowRef::Entity(left)),
+            RenderTarget::Window(bevy::window::WindowRef::Entity(right)),
+        ) => left == right,
+        (RenderTarget::Image(left), RenderTarget::Image(right)) => left == right,
+        (RenderTarget::TextureView(left), RenderTarget::TextureView(right)) => left == right,
+        (RenderTarget::None { size: left }, RenderTarget::None { size: right }) => left == right,
+        _ => false,
+    }
+}
+
+fn projections_equal(left: Option<&Projection>, right: Option<&Projection>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            std::mem::discriminant(left) == std::mem::discriminant(right)
+                && left.get_clip_from_view().to_cols_array()
+                    == right.get_clip_from_view().to_cols_array()
+        }
+        _ => false,
+    }
+}
+
+fn oit_settings_equal(
+    left: Option<OrderIndependentTransparencySettings>,
+    right: Option<OrderIndependentTransparencySettings>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.sorted_fragment_max_count == right.sorted_fragment_max_count
+                && left.fragments_per_pixel_average.to_bits()
+                    == right.fragments_per_pixel_average.to_bits()
+                && left.alpha_threshold.to_bits() == right.alpha_threshold.to_bits()
+        }
+        _ => false,
+    }
+}
+
+fn volumetric_fog_equal(left: Option<VolumetricFog>, right: Option<VolumetricFog>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.ambient_color == right.ambient_color
+                && left.ambient_intensity.to_bits() == right.ambient_intensity.to_bits()
+                && left.jitter.to_bits() == right.jitter.to_bits()
+                && left.step_count == right.step_count
+        }
+        _ => false,
+    }
+}
+
+fn validate_review_authority_teardown(
+    state: &ReviewCaptureState,
+    evidence: &ReviewAuthorityTeardownEvidence<'_, '_>,
+) -> Result<(), String> {
+    let baseline = state
+        .authority_baseline
+        .as_ref()
+        .ok_or_else(|| "immutable authority baseline is missing after teardown".to_owned())?;
+    if !state.authority_pre_teardown_verified {
+        return Err("the final pre-teardown authority boundary was not verified".to_owned());
+    }
+    if state.authority_validated_captures != state.total_captures {
+        return Err(format!(
+            "only {}/{} persisted captures passed the authority guard",
+            state.authority_validated_captures, state.total_captures
+        ));
+    }
+    if evidence.world_snapshot.is_some()
+        || evidence.time_of_day.is_some()
+        || evidence.exterior_illumination.is_some()
+        || evidence.illumination.is_some()
+        || evidence.knowledge.is_some()
+    {
+        return Err(
+            "session-owned world, lighting, or perception authority survived teardown".to_owned(),
+        );
+    }
+    let replication = evidence.replication.as_deref().ok_or_else(|| {
+        "WorldReplicationStateV1 disappeared instead of returning to its empty baseline".to_owned()
+    })?;
+    if replication.last_applied_sequence().is_some() {
+        return Err(
+            "WorldReplicationStateV1 retained an applied sequence after teardown".to_owned(),
+        );
+    }
+    let registry = evidence
+        .unit_registry
+        .as_deref()
+        .ok_or_else(|| "UnitRegistry disappeared instead of being cleared".to_owned())?;
+    if registry.iter().next().is_some() || !evidence.units.is_empty() {
+        return Err("registered or live Faction units survived teardown".to_owned());
+    }
+    if !evidence.logical_terrain.is_empty() || !evidence.terrain_batches.is_empty() {
+        return Err(
+            "logical terrain or TerrainRenderBatch picking state survived teardown".to_owned(),
+        );
+    }
+    let persistence = encode_persistence_authority(
+        evidence.campaign_store.as_deref(),
+        evidence.campaign_save_status.as_deref(),
+        evidence.storage_paths.as_deref(),
+    )?;
+    if persistence != baseline.persistence {
+        return Err(
+            "CampaignStore, save-status projection, or configured campaigns-file bytes changed during the review lifecycle"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 fn capture_watchdog(
     screen: Res<State<Screen>>,
     ready: Option<Res<TerrainReady>>,
+    failure: Option<Res<GameplaySetupFailure>>,
     mut state: ResMut<ReviewCaptureState>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed {
+        return;
+    }
+    if let Some(failure) = failure {
+        error!(
+            "review capture aborted after setup failure: {}",
+            failure.reason
+        );
+        state.failed = true;
+        exit.write(AppExit::error());
         return;
     }
 
@@ -907,6 +4138,16 @@ fn capture_timeout_diagnostic(
     terrain_ready: bool,
     now: Instant,
 ) -> Option<String> {
+    if state.teardown_requested {
+        state.enter_phase(CapturePhase::AwaitingTeardown, now);
+        return (now.duration_since(state.phase_started) >= state.phase.timeout()).then(|| {
+            format!(
+                "procedural-map review timed out during {} after {:.1}s",
+                state.phase.description(),
+                state.phase.timeout().as_secs_f32()
+            )
+        });
+    }
     let phase = if state.requested {
         CapturePhase::Readback
     } else {
@@ -955,24 +4196,22 @@ type ReviewTileQuery<'w, 's> = Query<
     With<HexTile>,
 >;
 
-/// Relocates the selected actor before the requested camera framing is applied.
-fn relocate_review_focus(
+/// Resolves a standable generated anchor into a presentation-only camera target.
+/// No actor, footing, transform, focus component, or gameplay authority is mutated.
+fn resolve_review_focus_anchor(
     mut state: ResMut<ReviewCaptureState>,
     ready: Option<Res<TerrainReady>>,
     anchors: Option<Res<MapAnchors>>,
     table: Option<Res<SubstanceTable>>,
     blockers: Option<Res<TraversalBlockers>>,
     tiles: ReviewTileQuery,
-    mut selected: Query<
-        (&Body, &mut StandsOn, &mut Transform, &mut CameraFocusTarget),
-        With<Selected>,
-    >,
+    selected: Query<&Body, With<Selected>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed || state.focus_relocated {
         return;
     }
-    let Some(anchor_name) = state.capture.focus_anchor.as_deref() else {
+    let Some(anchor_name) = state.capture.focus_anchor.clone() else {
         state.focus_relocated = true;
         return;
     };
@@ -982,12 +4221,12 @@ fn relocate_review_focus(
     let (Some(anchors), Some(table)) = (anchors, table) else {
         return;
     };
-    let Ok((body, mut standing, mut transform, mut focus)) = selected.single_mut() else {
+    let Ok(body) = selected.single() else {
         return;
     };
 
     let destination = resolve_review_focus(
-        anchor_name,
+        &anchor_name,
         &anchors,
         &table,
         *body,
@@ -1004,11 +4243,9 @@ fn relocate_review_focus(
         }
     };
 
-    standing.0 = destination;
-    transform.translation = destination.world_position();
-    focus.surface = destination.pos;
+    state.focus_world_target = Some(destination.world_position());
     info!(
-        "relocated review focus to generated anchor {:?} at {:?}",
+        "resolved review-only camera focus at generated anchor {:?} at {:?}",
         anchor_name, destination.pos
     );
     state.focus_relocated = true;
@@ -1130,14 +4367,22 @@ fn apply_review_view(
     mut state: ResMut<ReviewCaptureState>,
     settings: Res<CameraSettings>,
     hint: Option<Res<MapViewHint>>,
+    profile: Option<Res<ReviewWorldDetailProfileV1>>,
     mut images: ResMut<Assets<Image>>,
     targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
     mut camera: Query<
         (
+            Entity,
             &mut Transform,
             &mut PanOrbitCamera,
             &mut RenderTarget,
             Option<&mut Projection>,
+            Option<&Camera3d>,
+            Option<&Msaa>,
+            Option<&ScreenSpaceTransmission>,
+            Option<&OrderIndependentTransparencySettings>,
+            Option<&VolumetricFog>,
+            Option<&ReviewCameraFeatureRestore>,
         ),
         Without<CameraFocusTarget>,
     >,
@@ -1151,9 +4396,106 @@ fn apply_review_view(
     {
         return;
     }
-    let Ok((mut transform, mut orbit, mut target, mut projection)) = camera.single_mut() else {
+    let Ok((
+        camera_entity,
+        mut transform,
+        mut orbit,
+        mut target,
+        mut projection,
+        camera_3d,
+        msaa,
+        transmission,
+        oit,
+        volumetric_fog,
+        feature_restore,
+    )) = camera.single_mut()
+    else {
         return;
     };
+
+    if profile.as_deref().is_some_and(|profile| {
+        (profile.requires_oit()
+            || profile.requires_transmission()
+            || profile.requires_volumetrics())
+            && feature_restore.is_none()
+    }) {
+        // Feature configuration records the pre-review state through deferred
+        // commands. Wait one frame so the immutable camera snapshot observes that
+        // record rather than mistaking the configured state for the baseline.
+        return;
+    }
+
+    if state.camera_snapshot.is_none() {
+        let (original_msaa, depth_texture_usages, original_transmission, oit, volumetric_fog) =
+            feature_restore.map_or_else(
+                || {
+                    let default_camera_3d = Camera3d::default();
+                    let default_transmission = ScreenSpaceTransmission::default();
+                    (
+                        msaa.copied().unwrap_or_default(),
+                        camera_3d.map_or(default_camera_3d.depth_texture_usages, |camera| {
+                            camera.depth_texture_usages
+                        }),
+                        transmission.cloned().unwrap_or(default_transmission),
+                        oit.copied(),
+                        volumetric_fog.copied(),
+                    )
+                },
+                |restore| {
+                    (
+                        restore.msaa,
+                        restore.depth_texture_usages,
+                        restore.transmission.clone(),
+                        restore.oit,
+                        restore.volumetric_fog,
+                    )
+                },
+            );
+        state.camera_snapshot = Some(ReviewCameraSnapshot {
+            entity: camera_entity,
+            transform: transform.clone(),
+            orbit_focus: orbit.focus,
+            orbit_radius: orbit.radius,
+            target: target.clone(),
+            projection: projection.as_deref().cloned(),
+            mode: *mode,
+            msaa: original_msaa,
+            depth_texture_usages,
+            transmission_steps: original_transmission.steps,
+            transmission_quality: original_transmission.quality,
+            oit,
+            volumetric_fog,
+        });
+    }
+    let Some(snapshot) = state.camera_snapshot.clone() else {
+        error!("review camera snapshot was not initialized");
+        state.failed = true;
+        exit.write(AppExit::error());
+        return;
+    };
+    if snapshot.entity != camera_entity {
+        error!(
+            "review camera identity changed from {:?} to {:?}",
+            snapshot.entity, camera_entity
+        );
+        state.failed = true;
+        exit.write(AppExit::error());
+        return;
+    }
+    *transform = snapshot.transform;
+    orbit.focus = snapshot.orbit_focus;
+    orbit.radius = snapshot.orbit_radius;
+    *mode = snapshot.mode;
+    match (snapshot.projection, projection.as_deref_mut()) {
+        (Some(original), Some(current)) => *current = original,
+        (None, None) => {}
+        _ => {
+            error!("review camera projection component changed during capture");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    }
 
     if state.target.is_none() {
         let image = Image::new_target_texture(
@@ -1163,8 +4505,11 @@ fn apply_review_view(
             None,
         );
         let handle = images.add(image);
+        state.capture_target_ids.insert(handle.id());
         *target = RenderTarget::Image(handle.clone().into());
         state.target = Some(handle);
+    } else if let Some(handle) = state.target.as_ref() {
+        *target = RenderTarget::Image(handle.clone().into());
     }
 
     let fallback_eye = Vec3::from_array([
@@ -1212,16 +4557,19 @@ fn apply_review_view(
         state.view_applied = true;
         return;
     }
+    let close_camera_target = state
+        .focus_world_target
+        .or_else(|| targets.single().ok().map(|target| target.translation));
     match state.capture.camera {
         ReviewCamera::Map => *mode = CameraMode::Map,
         ReviewCamera::Character => {
-            let Ok(target) = targets.single() else {
+            let Some(target) = close_camera_target else {
                 return;
             };
             apply_character_camera_view(
                 eye,
                 focus,
-                target.translation,
+                target,
                 &settings,
                 state.capture.character_radius_scale,
                 &mut transform,
@@ -1230,13 +4578,13 @@ fn apply_review_view(
             *mode = CameraMode::Character;
         }
         ReviewCamera::FirstPerson => {
-            let Ok(target) = targets.single() else {
+            let Some(target) = close_camera_target else {
                 return;
             };
             apply_first_person_camera_view(
                 eye,
                 focus,
-                target.translation,
+                target,
                 &settings,
                 &mut transform,
                 &mut orbit,
@@ -1248,6 +4596,389 @@ fn apply_review_view(
         }
     }
     state.view_applied = true;
+}
+
+/// Restores the exact camera pose, lens, orbit state, target, and mode captured
+/// before the first review view. The temporary 1080p render target is removed
+/// only after the ordinary target is back on the camera.
+fn restore_review_capture_camera(
+    mut state: ResMut<ReviewCaptureState>,
+    mut images: ResMut<Assets<Image>>,
+    mut cameras: Query<(
+        &mut Transform,
+        &mut PanOrbitCamera,
+        &mut RenderTarget,
+        Option<&mut Projection>,
+    )>,
+    mut mode: ResMut<CameraMode>,
+) {
+    let Some(snapshot) = state.camera_snapshot.clone() else {
+        error!("review teardown has no captured camera baseline");
+        state.failed = true;
+        return;
+    };
+    let Ok((mut transform, mut orbit, mut target, mut projection)) =
+        cameras.get_mut(snapshot.entity)
+    else {
+        error!(
+            "review camera {:?} disappeared before teardown",
+            snapshot.entity
+        );
+        state.failed = true;
+        return;
+    };
+    *transform = snapshot.transform;
+    orbit.focus = snapshot.orbit_focus;
+    orbit.radius = snapshot.orbit_radius;
+    *target = snapshot.target;
+    *mode = snapshot.mode;
+    match (snapshot.projection, projection.as_deref_mut()) {
+        (Some(original), Some(current)) => *current = original,
+        (None, None) => {}
+        _ => {
+            error!("review camera projection component changed before teardown");
+            state.failed = true;
+            return;
+        }
+    }
+    state.camera_restored = true;
+    state.target_removed = state
+        .target
+        .take()
+        .is_none_or(|handle| images.remove(handle.id()).is_some());
+    if !state.target_removed {
+        error!("review render target was missing before teardown could remove it");
+        state.failed = true;
+    }
+}
+
+/// Waits until the gameplay exit systems have restored disposable map and camera
+/// state before allowing the headless capture process to exit successfully.
+fn finish_review_capture_after_teardown(
+    mut commands: Commands,
+    mut state: ResMut<ReviewCaptureState>,
+    report: Option<Res<ReviewWorldDetailReportV1>>,
+    pending_lifecycle_teardown: Option<Res<ReviewLifecycleCycleTeardownPendingV1>>,
+    mut lifecycle: Option<ResMut<ReviewLifecycleProbeV1>>,
+    lifecycle_evidence: ReviewLifecycleTeardownEvidence,
+    authority: ReviewAuthorityTeardownEvidence,
+    mut liquid_time: Option<ResMut<LiquidVisualTime>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !state.teardown_requested || state.final_exit_sent || report.is_some() {
+        return;
+    }
+    if state.failed || !state.camera_restored || !state.target_removed || state.target.is_some() {
+        error!(
+            "review teardown failed (camera_restored={}, target_removed={}, target_live={})",
+            state.camera_restored,
+            state.target_removed,
+            state.target.is_some()
+        );
+        exit.write(AppExit::error());
+        return;
+    }
+
+    if let Some(lifecycle) = lifecycle.as_deref_mut() {
+        if pending_lifecycle_teardown.is_none() {
+            error!("lifecycle probe reached its verifier without a pending teardown marker");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        if !state.authority_pre_teardown_verified
+            || state.authority_validated_captures != state.total_captures
+        {
+            error!(
+                "lifecycle cycle persisted only {}/{} authority-validated captures",
+                state.authority_validated_captures, state.total_captures
+            );
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        let teardown = match validate_review_lifecycle_teardown(&state, &lifecycle_evidence) {
+            Ok(teardown) => teardown,
+            Err(error) => {
+                error!("review lifecycle teardown verification failed: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        let Some(baseline) = state.authority_baseline.as_ref() else {
+            error!("review lifecycle teardown lost its authority baseline");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        };
+        let authority_before_sha256 = baseline.sha256();
+        let authority_after_sha256 = teardown.authority_after.sha256();
+        if state.authority_after_sha256.as_deref() != Some(authority_after_sha256.as_str()) {
+            error!(
+                "final screenshot authority evidence differs from post-projection teardown authority"
+            );
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        let cycle_index = match lifecycle.next_cycle_index() {
+            Ok(index) => index,
+            Err(error) => {
+                error!("cannot advance review lifecycle: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        if cycle_index > lifecycle.configuration.cycles_requested {
+            error!("review lifecycle attempted more cycles than requested");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        let cycle = match ReviewLifecycleCycleV1::from_hash_body(ReviewLifecycleCycleHashBodyV1 {
+            cycle_index,
+            launch_nonce: lifecycle.runtime_receipt.launch_nonce.clone(),
+            runtime_receipt_sha256: lifecycle.runtime_receipt.receipt_sha256.clone(),
+            profile_hash_sha256: lifecycle.configuration.tested_profile_sha256.clone(),
+            authority_before_sha256,
+            authority_after_sha256,
+            entities_remaining: teardown.entities_remaining,
+            materials_remaining: teardown.materials_remaining,
+            meshes_remaining: teardown.meshes_remaining,
+            fog_density_images_remaining: teardown.fog_density_images_remaining,
+            target_images_remaining: teardown.target_images_remaining,
+            terrain_material_overrides_remaining: teardown.terrain_material_overrides_remaining,
+            liquid_visibility_overrides_remaining: teardown.liquid_visibility_overrides_remaining,
+            vegetation_scale_overrides_remaining: teardown.vegetation_scale_overrides_remaining,
+            camera_state_restored: teardown.camera_state_restored,
+            oit_state_restored: teardown.oit_state_restored,
+            transmission_state_restored: teardown.transmission_state_restored,
+            depth_state_restored: teardown.depth_state_restored,
+            volumetric_state_restored: teardown.volumetric_state_restored,
+            previous_cycle_sha256: lifecycle.previous_cycle_sha256(),
+        }) {
+            Ok(cycle) => cycle,
+            Err(error) => {
+                error!("cannot hash review lifecycle cycle: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        lifecycle.cycles.push(cycle);
+
+        if lifecycle.cycles.len() < usize::from(lifecycle.configuration.cycles_requested) {
+            let captures = lifecycle.capture_templates.clone();
+            let Some(first_capture) = captures.first() else {
+                error!("review lifecycle lost its capture template");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            if let Some(phase) = first_capture.liquid_phase_seconds {
+                let Some(liquid_time) = liquid_time.as_deref_mut() else {
+                    error!("review lifecycle lost LiquidVisualTime before re-entry");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                };
+                if !liquid_time.freeze(phase) {
+                    error!("review lifecycle capture template has a non-finite liquid phase");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+            }
+            let authority_baseline = teardown.authority_after;
+            *state = ReviewCaptureState::new_many(captures);
+            state.authority_baseline = Some(authority_baseline);
+            state.enter_phase(CapturePhase::AwaitingCamera, Instant::now());
+            commands.remove_resource::<ReviewLifecycleCycleTeardownPendingV1>();
+            commands.insert_resource(ReviewLifecycleProjectionReentryPendingV1);
+            info!(
+                "verified review projection lifecycle cycle {cycle_index}/{}; re-entering the projection in-process",
+                lifecycle.configuration.cycles_requested
+            );
+            return;
+        }
+
+        let cycles_completed = match u16::try_from(lifecycle.cycles.len()) {
+            Ok(count) => count,
+            Err(_) => {
+                error!("review lifecycle completed-cycle count exceeds u16");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        let cleanup = ReviewCleanupStateV1 {
+            completed_cycles: cycles_completed,
+            entities_remaining: teardown.entities_remaining,
+            materials_remaining: teardown.materials_remaining,
+            meshes_remaining: teardown.meshes_remaining,
+            target_images_remaining: teardown.target_images_remaining,
+            camera_state_restored: teardown.camera_state_restored,
+            oit_state_restored: teardown.oit_state_restored,
+            transmission_state_restored: teardown.transmission_state_restored,
+            depth_state_restored: teardown.depth_state_restored,
+            volumetric_state_restored: teardown.volumetric_state_restored,
+        };
+        if let Err(error) = finalize_capture_runtime_report_cleanup(
+            &state.runtime_report_paths,
+            state.total_captures,
+            &cleanup,
+        ) {
+            error!("cannot finalize lifecycle runtime-report cleanup evidence: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        let Some(final_chain_sha256) = lifecycle
+            .cycles
+            .last()
+            .map(|cycle| cycle.cycle_sha256.as_str())
+        else {
+            error!("review lifecycle produced no cycle records");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        };
+        let certificate = ReviewLifecycleCertificateV1 {
+            version: 1,
+            warning: WORLD_DETAIL_WARNING,
+            runtime_receipt: &lifecycle.runtime_receipt,
+            capture_plan_sha256: &lifecycle.configuration.capture_plan_sha256,
+            source_provenance_sha256: &lifecycle.configuration.source_provenance_sha256,
+            profile_matrix_sha256: &lifecycle.configuration.profile_matrix_sha256,
+            tested_profile_sha256: &lifecycle.configuration.tested_profile_sha256,
+            cycles_requested: lifecycle.configuration.cycles_requested,
+            cycles_completed,
+            cycles: &lifecycle.cycles,
+            final_chain_sha256,
+        };
+        let certificate_json = match serde_json::to_string(&certificate) {
+            Ok(json) => json,
+            Err(error) => {
+                error!("cannot serialize review lifecycle certificate: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        if let Err(error) =
+            persist_runtime_report(&lifecycle.configuration.certificate_path, &certificate_json)
+        {
+            error!("cannot persist review lifecycle certificate: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        // Retain the teardown marker through the terminal frame so the later
+        // PostUpdate camera-feature system cannot reapply review state after the
+        // certificate's exact restoration boundary.
+        state.final_exit_sent = true;
+        info!(
+            "completed {} genuine in-process review projection lifecycles: {}",
+            cycles_completed,
+            lifecycle.configuration.certificate_path.display()
+        );
+        exit.write(AppExit::Success);
+        return;
+    }
+
+    if let Err(error) = validate_review_authority_teardown(&state, &authority) {
+        error!("review authority teardown verification failed: {error}");
+        state.failed = true;
+        exit.write(AppExit::error());
+        return;
+    }
+    let presentation_teardown =
+        match validate_review_presentation_teardown(&state, &lifecycle_evidence) {
+            Ok(teardown) => teardown,
+            Err(error) => {
+                error!("review presentation teardown verification failed: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+    let cleanup = presentation_teardown.cleanup(1);
+    if let Err(error) = finalize_capture_runtime_report_cleanup(
+        &state.runtime_report_paths,
+        state.total_captures,
+        &cleanup,
+    ) {
+        error!("cannot finalize capture runtime-report cleanup evidence: {error}");
+        state.failed = true;
+        exit.write(AppExit::error());
+        return;
+    }
+    let Some(baseline) = state.authority_baseline.as_ref() else {
+        error!("review authority teardown verification lost its baseline");
+        state.failed = true;
+        exit.write(AppExit::error());
+        return;
+    };
+    let teardown_certificate = serde_json::json!({
+        "version": 1,
+        "warning": WORLD_DETAIL_WARNING,
+        "authority_guard": {
+            "baseline_fingerprint": baseline.fingerprint(),
+            "lighting_condition_key": baseline.lighting_condition_key(),
+            "validated_captures": state.authority_validated_captures,
+            "total_captures": state.total_captures,
+            "final_pre_teardown_match": state.authority_pre_teardown_verified,
+            "world_snapshot_removed": authority.world_snapshot.is_none(),
+            "time_of_day_removed": authority.time_of_day.is_none(),
+            "exterior_illumination_removed": authority.exterior_illumination.is_none(),
+            "resolved_illumination_removed": authority.illumination.is_none(),
+            "faction_knowledge_removed": authority.knowledge.is_none(),
+            "unit_registry_cleared": authority
+                .unit_registry
+                .as_deref()
+                .is_some_and(|registry| registry.iter().next().is_none()),
+            "live_units_removed": authority.units.is_empty(),
+            "logical_terrain_removed": authority.logical_terrain.is_empty(),
+            "terrain_picking_removed": authority.terrain_batches.is_empty(),
+            "replication_sequence_cleared": authority
+                .replication
+                .as_deref()
+                .is_some_and(|replication| replication.last_applied_sequence().is_none()),
+        },
+        "presentation_cleanup": cleanup,
+    });
+    let certificate_json = match serde_json::to_string(&teardown_certificate) {
+        Ok(json) => json,
+        Err(error) => {
+            error!("cannot serialize review authority teardown certificate: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+    let certificate_path = match authority_teardown_report_path(&state.capture.path) {
+        Ok(path) => path,
+        Err(error) => {
+            error!("cannot resolve review authority teardown certificate: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+    if let Err(error) = persist_runtime_report(&certificate_path, &certificate_json) {
+        error!("cannot persist review authority teardown certificate: {error}");
+        state.failed = true;
+        exit.write(AppExit::error());
+        return;
+    }
+    info!(
+        "review teardown restored the camera, removed the temporary target, and cleared authoritative session state: {}",
+        certificate_path.display()
+    );
+    state.final_exit_sent = true;
+    exit.write(AppExit::Success);
 }
 
 /// Converts the deterministic map pose into a close pose without changing its azimuth.
@@ -1365,12 +5096,14 @@ fn apply_review_illumination_overlay(
         dim: materials.add(review_illumination_material(IlluminationLevel::Dim)),
         bright: materials.add(review_illumination_material(IlluminationLevel::Bright)),
     };
-    let mut counts = [0usize; 3];
+    let mut dark_count = 0usize;
+    let mut dim_count = 0usize;
+    let mut bright_count = 0usize;
     for surface in surfaces {
         match surface.level {
-            IlluminationLevel::Dark => counts[0] += 1,
-            IlluminationLevel::Dim => counts[1] += 1,
-            IlluminationLevel::Bright => counts[2] += 1,
+            IlluminationLevel::Dark => dark_count += 1,
+            IlluminationLevel::Dim => dim_count += 1,
+            IlluminationLevel::Bright => bright_count += 1,
         }
         let mut overlay = commands.spawn((
             Mesh3d(game_assets.hex_tile.clone()),
@@ -1389,7 +5122,7 @@ fn apply_review_illumination_overlay(
     state.illumination_overlay_applied = true;
     info!(
         "applied review illumination overlay: dark={}, dim={}, bright={}",
-        counts[0], counts[1], counts[2]
+        dark_count, dim_count, bright_count
     );
 }
 
@@ -2144,6 +5877,7 @@ fn capture_settled_frame(
     )>,
     logical_runs: Query<(Entity, Option<&TilePos>, Option<&HexSpan>), With<HexTile>>,
     review_cameras: Query<(&Camera, &GlobalTransform, &Projection), With<PanOrbitCamera>>,
+    evidence: ReviewRuntimeEvidence,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed
@@ -2154,8 +5888,13 @@ fn capture_settled_frame(
     {
         return;
     }
-    state.settled_frames += 1;
-    if state.settled_frames < SETTLE_FRAMES {
+    state.settled_frames = state.settled_frames.saturating_add(1);
+    let evidence_start_frame = if state.performance_sample.is_some() {
+        state.capture.settle_frames
+    } else {
+        performance_sampling_start_frame(state.capture.settle_frames)
+    };
+    if state.settled_frames < evidence_start_frame {
         return;
     }
 
@@ -2218,6 +5957,99 @@ fn capture_settled_frame(
         return;
     }
 
+    // Visibility diagnostics stay independently testable, but no real capture
+    // may proceed until the complete authority and renderer evidence exists.
+    let (Some(profile), Some(_report), Some(_authority_baseline)) = (
+        evidence.profile.as_deref(),
+        evidence.report.as_deref(),
+        state.authority_baseline.as_ref(),
+    ) else {
+        return;
+    };
+
+    let authority = match verify_review_authority(&state, &evidence.authority) {
+        Ok(authority) => authority,
+        Err(error) => {
+            error!("review screenshot blocked by immutable authority guard: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+
+    let projection_audit = match audit_review_projection_entities(&evidence) {
+        Ok(audit) => audit,
+        Err(error) => {
+            error!("review projection authority-component audit failed: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+    state
+        .review_entity_ids
+        .extend(projection_audit.entities.iter().copied());
+    state
+        .review_mesh_ids
+        .extend(projection_audit.meshes.iter().copied());
+    state
+        .review_standard_material_ids
+        .extend(projection_audit.standard_materials.iter().copied());
+    state
+        .review_image_ids
+        .extend(projection_audit.images.iter().copied());
+
+    let performance = if let Some(sample) = state.performance_sample {
+        sample
+    } else {
+        match sample_review_performance(
+            &mut state,
+            &evidence,
+            projection_audit.public_payload_bytes,
+        ) {
+            Ok(Some(sample)) => {
+                state.performance_sample = Some(sample);
+                sample
+            }
+            Ok(None) => return,
+            Err(error) => {
+                error!("cannot sample review performance: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        }
+    };
+    if state.settled_frames < state.capture.settle_frames {
+        return;
+    }
+
+    let (runtime_report_path, runtime_report_json) =
+        match build_capture_runtime_report(&state, &evidence, &authority, performance) {
+            Ok(report) => report,
+            Err(error) => {
+                error!("cannot build world-detail runtime report: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+    let readback_binding = match build_capture_readback_binding(
+        profile,
+        evidence.report.as_deref(),
+        evidence.render_adapter.as_deref(),
+        evidence.render_device.as_deref(),
+        &evidence.cameras,
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            error!("cannot bind world-detail report to screenshot request: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+
     if let Err(error) = prepare_capture_path(&state.capture.path) {
         error!(
             "cannot prepare review screenshot {}: {error}",
@@ -2233,19 +6065,88 @@ fn capture_settled_frame(
     };
     let output = state.capture.path.clone();
     let observer_output = output.clone();
+    let observer_report_path = runtime_report_path;
+    let observer_report_json = runtime_report_json;
+    let observer_readback_binding = readback_binding;
     commands.spawn(Screenshot::image(target)).observe(
-        move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
-            let result = persist_screenshot(&captured.image, &observer_output);
+        move |captured: On<ScreenshotCaptured>,
+              mut commands: Commands,
+              mut state: ResMut<ReviewCaptureState>,
+              authority: ReviewAuthorityEvidence,
+              readback: ReviewCaptureReadbackEvidence,
+              lifecycle: Option<Res<ReviewLifecycleProbeV1>>,
+              mut liquid_time: ResMut<LiquidVisualTime>,
+              mut next_screen: ResMut<NextState<Screen>>,
+              mut exit: MessageWriter<AppExit>| {
+            let result = build_capture_readback_binding(
+                &readback.profile,
+                readback.report.as_deref(),
+                readback.render_adapter.as_deref(),
+                readback.render_device.as_deref(),
+                &readback.cameras,
+            )
+            .and_then(|current| observer_readback_binding.verify_same(&current))
+            .and_then(|()| verify_review_authority(&state, &authority))
+            .and_then(|snapshot| {
+                persist_screenshot(&captured.image, &observer_output)?;
+                persist_runtime_report(&observer_report_path, &observer_report_json)?;
+                state
+                    .runtime_report_paths
+                    .push(observer_report_path.clone());
+                Ok(snapshot.sha256())
+            });
             match result {
-                Ok(()) => {
+                Ok(authority_after_sha256) => {
+                    state.authority_after_sha256 = Some(authority_after_sha256);
+                    state.authority_validated_captures =
+                        state.authority_validated_captures.saturating_add(1);
                     info!("review screenshot completed: {}", observer_output.display());
-                    exit.write(AppExit::Success);
+                    if let Some(next) = state.advance_capture(Instant::now()) {
+                        if state
+                            .capture
+                            .liquid_phase_seconds
+                            .is_some_and(|phase| !liquid_time.freeze(phase))
+                        {
+                            error!("next review capture has a non-finite liquid phase");
+                            state.failed = true;
+                            exit.write(AppExit::error());
+                            return;
+                        }
+                        info!(
+                            "advancing review capture sequence to {}/{}: {}",
+                            state.completed_captures + 1,
+                            state.total_captures,
+                            next.display()
+                        );
+                    } else {
+                        state.authority_pre_teardown_verified = true;
+                        state.requested = false;
+                        state.teardown_requested = true;
+                        state.enter_phase(CapturePhase::AwaitingTeardown, Instant::now());
+                        if lifecycle.is_some() {
+                            commands.insert_resource(ReviewWorldDetailTeardownRequestV1);
+                            commands.insert_resource(
+                                ReviewLifecycleCycleTeardownPendingV1::default(),
+                            );
+                            info!(
+                                "all {} review captures completed; requesting verified in-place projection teardown",
+                                state.total_captures
+                            );
+                        } else {
+                            next_screen.set(Screen::Title);
+                            info!(
+                                "all {} review captures completed; requesting verified gameplay teardown",
+                                state.total_captures
+                            );
+                        }
+                    }
                 }
                 Err(error) => {
                     error!(
                         "review screenshot failed for {}: {error}",
                         observer_output.display()
                     );
+                    state.failed = true;
                     exit.write(AppExit::error());
                 }
             }
@@ -2254,6 +6155,313 @@ fn capture_settled_frame(
     state.requested = true;
     state.enter_phase(CapturePhase::Readback, Instant::now());
     info!("requested review screenshot: {}", output.display());
+}
+
+fn build_capture_runtime_report(
+    state: &ReviewCaptureState,
+    evidence: &ReviewRuntimeEvidence<'_, '_>,
+    authority: &ReviewAuthoritySnapshotV1,
+    performance: ReviewPerformanceSampleV1,
+) -> Result<(PathBuf, String), String> {
+    let capture = &state.capture;
+    let source_report = evidence
+        .report
+        .as_deref()
+        .ok_or_else(|| "world-detail projection report is not published".to_owned())?;
+    let mut active_cameras = evidence.cameras.iter().filter(|camera| camera.1.is_active);
+    let Some((_, _, _, _, _, _, _, camera_3d, _, transmission, oit, volumetric)) =
+        active_cameras.next()
+    else {
+        return Err("no active world review camera is available".to_owned());
+    };
+    if active_cameras.next().is_some() {
+        return Err("multiple active world review cameras are available".to_owned());
+    }
+    let camera_features = resolved_review_camera_features(
+        evidence
+            .profile
+            .as_deref()
+            .ok_or_else(|| "world-detail profile is not published".to_owned())?,
+        camera_3d,
+        oit.is_some(),
+        transmission,
+        volumetric,
+        evidence.render_adapter.as_deref(),
+        evidence.render_device.as_deref(),
+    )?;
+
+    let mut report = source_report.clone();
+    report.camera_features = camera_features;
+    report.performance = performance;
+    let target = state
+        .target
+        .as_ref()
+        .ok_or_else(|| "capture report has no live target image handle".to_owned())?;
+    if evidence
+        .images
+        .as_deref()
+        .ok_or_else(|| "Assets<Image> is unavailable for capture reporting".to_owned())?
+        .get(target.id())
+        .is_none()
+    {
+        return Err("capture report target image is not live in Assets<Image>".to_owned());
+    }
+    report.cleanup.target_images_remaining = 1;
+    report.authority.logical_terrain_picking = authority.logical_terrain_picking_fingerprint();
+    report.authority.gameplay_state = authority.gameplay_state_fingerprint();
+    report.validate().map_err(|error| error.to_string())?;
+    let look_at_anchor = capture
+        .anchor_look_at
+        .as_ref()
+        .map(|look_at| look_at.anchor.as_str());
+    let look_at_offset = capture
+        .anchor_look_at
+        .as_ref()
+        .map(|look_at| look_at.offset.to_array());
+    let runtime = serde_json::json!({
+        "version": 1,
+        "warning": WORLD_DETAIL_WARNING,
+        "capture": {
+            "path": capture.path.to_string_lossy(),
+            "camera": capture.camera.as_str(),
+            "view": capture.view.as_str(),
+            "focus_anchor": capture.focus_anchor.as_deref(),
+            "look_at_anchor": look_at_anchor,
+            "look_at_offset": look_at_offset,
+            "character_radius_scale": capture.character_radius_scale,
+            "full_cutaway": capture.full_cutaway,
+            "illumination_overlay": capture.illumination_overlay,
+            "settle_frames": capture.settle_frames,
+            "time_hours": evidence.authority.time_of_day.as_deref().map(|time| time.hours),
+            "liquid_phase_seconds": evidence
+                .liquid_visual_time
+                .as_deref()
+                .map(LiquidVisualTime::phase_seconds),
+        },
+        "report": report,
+    });
+    let json = serde_json::to_string(&runtime)
+        .map_err(|error| format!("cannot serialize capture runtime report: {error}"))?;
+    Ok((runtime_report_path(&capture.path)?, json))
+}
+
+fn resolved_review_camera_features(
+    profile: &ReviewWorldDetailProfileV1,
+    camera_3d: &Camera3d,
+    has_oit: bool,
+    transmission: &ScreenSpaceTransmission,
+    volumetric: Option<&VolumetricFog>,
+    render_adapter: Option<&RenderAdapter>,
+    render_device: Option<&RenderDevice>,
+) -> Result<ReviewCameraFeaturesV1, String> {
+    let depth_texture = TextureUsages::from(camera_3d.depth_texture_usages)
+        .contains(TextureUsages::TEXTURE_BINDING);
+    let camera_features = ReviewCameraFeaturesV1 {
+        oit: operational_oit_available(has_oit, render_adapter, render_device),
+        medium_transmission: profile.requires_transmission()
+            && transmission.steps > 0
+            && transmission.quality == ScreenSpaceTransmissionQuality::Medium,
+        depth_texture,
+        volumetrics: volumetric.is_some(),
+    };
+    if profile.requires_oit() && !camera_features.oit {
+        return Err(
+            "profile requires operational OIT but the adapter/device capability preflight failed"
+                .to_owned(),
+        );
+    }
+    if profile.requires_transmission() && !camera_features.medium_transmission {
+        return Err(
+            "profile requires medium screen-space transmission but the active camera does not provide it"
+                .to_owned(),
+        );
+    }
+    if (profile.requires_oit() || profile.requires_transmission()) && !camera_features.depth_texture
+    {
+        return Err(
+            "profile requires a sampled depth texture but the active camera lacks it".to_owned(),
+        );
+    }
+    if profile.requires_volumetrics() && !camera_features.volumetrics {
+        return Err(
+            "profile requires volumetric processing but the active camera does not provide it"
+                .to_owned(),
+        );
+    }
+    Ok(camera_features)
+}
+
+fn build_capture_readback_binding(
+    profile: &ReviewWorldDetailProfileV1,
+    report: Option<&ReviewWorldDetailReportV1>,
+    render_adapter: Option<&RenderAdapter>,
+    render_device: Option<&RenderDevice>,
+    cameras: &Query<'_, '_, ReviewRuntimeCameraQuery, With<PanOrbitCamera>>,
+) -> Result<ReviewCaptureReadbackBindingV1, String> {
+    let report = report
+        .ok_or_else(|| "world-detail projection report disappeared before screenshot".to_owned())?;
+    let profile_hash_sha256 = profile
+        .profile_hash_sha256()
+        .map_err(|error| format!("cannot hash readback profile: {error}"))?;
+    if report.profile_hash_sha256 != profile_hash_sha256 {
+        return Err("world-detail report profile changed before screenshot".to_owned());
+    }
+    let mut active_cameras = cameras.iter().filter(|camera| camera.1.is_active);
+    let Some((
+        entity,
+        camera,
+        transform,
+        global_transform,
+        orbit,
+        render_target,
+        projection,
+        camera_3d,
+        msaa,
+        transmission,
+        oit,
+        volumetric_fog,
+    )) = active_cameras.next()
+    else {
+        return Err("no active world review camera is available for readback binding".to_owned());
+    };
+    if active_cameras.next().is_some() {
+        return Err(
+            "multiple active world review cameras are available for readback binding".to_owned(),
+        );
+    }
+    let camera_features = resolved_review_camera_features(
+        profile,
+        camera_3d,
+        oit.is_some(),
+        transmission,
+        volumetric_fog,
+        render_adapter,
+        render_device,
+    )?;
+    Ok(ReviewCaptureReadbackBindingV1 {
+        profile_hash_sha256,
+        projection_hashes: report.projection_hashes.clone(),
+        counts: report.counts.clone(),
+        camera_features,
+        camera_entity: entity,
+        transform: *transform,
+        global_transform_bits: global_transform
+            .to_matrix()
+            .to_cols_array()
+            .map(f32::to_bits),
+        orbit_focus_bits: orbit.focus.to_array().map(f32::to_bits),
+        orbit_radius_bits: orbit.radius.to_bits(),
+        render_target: render_target.clone(),
+        projection: projection.cloned(),
+        clip_from_view_bits: camera.clip_from_view().to_cols_array().map(f32::to_bits),
+        msaa: *msaa,
+        depth_texture_usages: camera_3d.depth_texture_usages.0,
+        transmission_steps: transmission.steps,
+        transmission_quality: transmission.quality,
+        oit: oit.copied(),
+        volumetric_fog: volumetric_fog.copied(),
+    })
+}
+
+fn operational_oit_available(
+    camera_has_settings: bool,
+    adapter: Option<&RenderAdapter>,
+    device: Option<&RenderDevice>,
+) -> bool {
+    camera_has_settings
+        && adapter
+            .zip(device)
+            .is_some_and(|(adapter, device)| is_oit_supported(adapter, device, false))
+}
+
+fn runtime_report_path(capture: &Path) -> Result<PathBuf, String> {
+    let stem = capture
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| "review capture filename is not valid UTF-8".to_owned())?;
+    let file_name = format!("{stem}.world-detail-report.json");
+    Ok(capture.with_file_name(file_name))
+}
+
+fn authority_teardown_report_path(capture: &Path) -> Result<PathBuf, String> {
+    let stem = capture
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| "review capture filename is not valid UTF-8".to_owned())?;
+    Ok(capture.with_file_name(format!("{stem}.authority-teardown-report.json")))
+}
+
+fn persist_runtime_report(path: &Path, json: &str) -> Result<(), String> {
+    prepare_capture_path(path)
+        .map_err(|error| format!("cannot prepare runtime report path: {error}"))?;
+    AtomicFile::new(path, AllowOverwrite)
+        .write(|file| file.write_all(json.as_bytes()))
+        .map_err(|error| format!("cannot atomically write runtime report: {error}"))
+}
+
+fn finalize_capture_runtime_report_cleanup(
+    paths: &[PathBuf],
+    expected_reports: usize,
+    cleanup: &ReviewCleanupStateV1,
+) -> Result<(), String> {
+    if paths.len() != expected_reports {
+        return Err(format!(
+            "only {}/{} persisted capture reports reached teardown finalization",
+            paths.len(),
+            expected_reports
+        ));
+    }
+    if paths.iter().collect::<BTreeSet<_>>().len() != paths.len() {
+        return Err("duplicate capture runtime-report paths reached teardown".to_owned());
+    }
+    if !cleanup.is_complete() || cleanup.completed_cycles == 0 {
+        return Err("capture runtime reports require a completed teardown state".to_owned());
+    }
+    for path in paths {
+        let bytes = fs::read(path).map_err(|error| {
+            format!(
+                "cannot read persisted runtime report {} for teardown finalization: {error}",
+                path.display()
+            )
+        })?;
+        let mut runtime: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            format!(
+                "cannot parse persisted runtime report {} for teardown finalization: {error}",
+                path.display()
+            )
+        })?;
+        let report_value = runtime
+            .get_mut("report")
+            .ok_or_else(|| format!("runtime report {} has no report object", path.display()))?;
+        let mut report: ReviewWorldDetailReportV1 = serde_json::from_value(report_value.take())
+            .map_err(|error| {
+                format!(
+                    "cannot decode world-detail report {} for teardown finalization: {error}",
+                    path.display()
+                )
+            })?;
+        report.cleanup = cleanup.clone();
+        report.validate().map_err(|error| {
+            format!(
+                "teardown-finalized world-detail report {} is invalid: {error}",
+                path.display()
+            )
+        })?;
+        *report_value = serde_json::to_value(report).map_err(|error| {
+            format!(
+                "cannot encode teardown-finalized world-detail report {}: {error}",
+                path.display()
+            )
+        })?;
+        let json = serde_json::to_string(&runtime).map_err(|error| {
+            format!(
+                "cannot serialize teardown-finalized runtime report {}: {error}",
+                path.display()
+            )
+        })?;
+        persist_runtime_report(path, &json)?;
+    }
+    Ok(())
 }
 
 fn requires_full_footprint_validation(capture: &ReviewCapture) -> bool {
@@ -2298,6 +6506,8 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
 mod tests {
     use std::fs;
 
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, PrimitiveTopology, TextureDimension};
     use bevy::state::app::StatesPlugin;
     use hex_assets::{ArtPalette, ScenarioCategory, Substance, SubstanceFile, SwatchId};
     use hex_core::{
@@ -2309,6 +6519,508 @@ mod tests {
     use crate::capture::{has_visual_coverage, temporary_capture_path};
 
     use super::*;
+
+    fn authority_snapshot_fixture() -> ReviewAuthoritySnapshotV1 {
+        ReviewAuthoritySnapshotV1 {
+            current_world: vec![1],
+            replication: vec![2],
+            lighting_condition: vec![3],
+            illumination: vec![4],
+            faction_knowledge: vec![5],
+            units_and_occupancy: vec![6],
+            logical_terrain: vec![7],
+            terrain_picking: vec![8],
+            persistence: vec![9],
+        }
+    }
+
+    #[derive(Resource, Default)]
+    struct AuthorityTeardownObservation(Option<Result<(), String>>);
+
+    fn observe_authority_teardown(
+        state: Res<ReviewCaptureState>,
+        evidence: ReviewAuthorityTeardownEvidence,
+        mut observation: ResMut<AuthorityTeardownObservation>,
+    ) {
+        observation.0 = Some(validate_review_authority_teardown(&state, &evidence));
+    }
+
+    #[test]
+    fn canonical_authority_encoding_uses_explicit_presence_and_pickability_tags() {
+        let mut encoder = CanonicalAuthorityEncoder::section(42);
+        encoder.presence(false);
+        encoder.presence(true);
+        encoder.pickable(None);
+        encoder.pickable(Some(Pickable::default()));
+
+        let mut expected = AUTHORITY_FINGERPRINT_DOMAIN.to_vec();
+        expected.extend_from_slice(&[42, 0, 1, 0, 1, 1, 1]);
+        assert_eq!(encoder.finish(), expected);
+    }
+
+    #[test]
+    fn authority_guard_names_every_canonical_section_that_changes() {
+        let baseline = authority_snapshot_fixture();
+        let mutations: [(&str, fn(&mut ReviewAuthoritySnapshotV1)); 9] = [
+            ("current_world", |snapshot| snapshot.current_world.push(0)),
+            ("replication", |snapshot| snapshot.replication.push(0)),
+            ("lighting_condition", |snapshot| {
+                snapshot.lighting_condition.push(0);
+            }),
+            ("resolved_illumination", |snapshot| {
+                snapshot.illumination.push(0);
+            }),
+            ("faction_knowledge", |snapshot| {
+                snapshot.faction_knowledge.push(0);
+            }),
+            ("units_and_occupancy", |snapshot| {
+                snapshot.units_and_occupancy.push(0);
+            }),
+            ("logical_terrain", |snapshot| {
+                snapshot.logical_terrain.push(0);
+            }),
+            ("terrain_picking", |snapshot| {
+                snapshot.terrain_picking.push(0);
+            }),
+            ("persistence", |snapshot| snapshot.persistence.push(0)),
+        ];
+
+        assert_eq!(baseline.verify_unchanged(&baseline), Ok(()));
+        for (expected_section, mutate) in mutations {
+            let mut current = baseline.clone();
+            mutate(&mut current);
+            let error = baseline
+                .verify_unchanged(&current)
+                .expect_err("a changed authority section must block capture");
+            assert!(error.contains(expected_section), "{error}");
+            assert_ne!(baseline.fingerprint(), current.fingerprint());
+        }
+    }
+
+    #[test]
+    fn report_authority_subsets_bind_exact_logical_picking_and_gameplay_streams() {
+        let baseline = authority_snapshot_fixture();
+        let logical = baseline.logical_terrain_picking_fingerprint();
+        let gameplay = baseline.gameplay_state_fingerprint();
+
+        let mut changed = baseline.clone();
+        changed.logical_terrain.push(10);
+        assert_ne!(changed.logical_terrain_picking_fingerprint(), logical);
+        assert_eq!(changed.gameplay_state_fingerprint(), gameplay);
+
+        changed = baseline.clone();
+        changed.terrain_picking.push(10);
+        assert_ne!(changed.logical_terrain_picking_fingerprint(), logical);
+        assert_eq!(changed.gameplay_state_fingerprint(), gameplay);
+
+        changed = baseline.clone();
+        changed.illumination.push(10);
+        assert_eq!(changed.logical_terrain_picking_fingerprint(), logical);
+        assert_ne!(changed.gameplay_state_fingerprint(), gameplay);
+
+        changed = baseline.clone();
+        changed.units_and_occupancy.push(10);
+        assert_eq!(changed.logical_terrain_picking_fingerprint(), logical);
+        assert_eq!(changed.gameplay_state_fingerprint(), gameplay);
+    }
+
+    #[test]
+    fn post_teardown_authority_certificate_fails_when_logical_terrain_survives() {
+        let mut state = ReviewCaptureState::new(review_capture_with_focus("fixture"));
+        let persistence_root = review_test_directory("authority-teardown-persistence");
+        let _cleanup = fs::remove_dir_all(&persistence_root);
+        let campaign_store = CampaignStore::default();
+        let campaign_save_status = CampaignSaveStatusProjection::default();
+        let storage_paths = StoragePaths::under(&persistence_root);
+        let persistence = encode_persistence_authority(
+            Some(&campaign_store),
+            Some(&campaign_save_status),
+            Some(&storage_paths),
+        )
+        .expect("the missing campaigns-file fixture should encode exactly");
+        state.authority_baseline = Some(authority_snapshot_fixture());
+        state
+            .authority_baseline
+            .as_mut()
+            .expect("the fixture baseline was inserted")
+            .persistence = persistence;
+        state.authority_validated_captures = 1;
+        state.authority_pre_teardown_verified = true;
+
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(WorldReplicationStateV1::default())
+            .insert_resource(UnitRegistry::default())
+            .insert_resource(campaign_store)
+            .insert_resource(campaign_save_status)
+            .insert_resource(storage_paths)
+            .init_resource::<AuthorityTeardownObservation>()
+            .add_systems(Update, observe_authority_teardown);
+        app.update();
+        assert!(app
+            .world()
+            .resource::<AuthorityTeardownObservation>()
+            .0
+            .as_ref()
+            .is_some_and(Result::is_ok));
+
+        app.world_mut().spawn(HexTile);
+        app.update();
+        let error = app
+            .world()
+            .resource::<AuthorityTeardownObservation>()
+            .0
+            .as_ref()
+            .expect("the teardown audit should run")
+            .as_ref()
+            .expect_err("surviving logical terrain must fail teardown")
+            .clone();
+        assert!(error.contains("logical terrain"), "{error}");
+        let _cleanup = fs::remove_dir_all(persistence_root);
+    }
+
+    #[test]
+    fn persistence_authority_distinguishes_missing_and_exact_campaign_file_bytes() {
+        let root = review_test_directory("persistence-presence");
+        let _cleanup = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("the persistence fixture directory should be creatable");
+        let store = CampaignStore::default();
+        let status = CampaignSaveStatusProjection::default();
+        let paths = StoragePaths::under(&root);
+        let missing = encode_persistence_authority(Some(&store), Some(&status), Some(&paths))
+            .expect("a missing campaigns file has an explicit canonical tag");
+        fs::write(&paths.campaigns, b"exact campaign bytes")
+            .expect("the campaigns fixture should be writable");
+        let present = encode_persistence_authority(Some(&store), Some(&status), Some(&paths))
+            .expect("present campaigns bytes should encode exactly");
+        assert_ne!(missing, present);
+        let _cleanup = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_sha256_matches_published_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn automated_capture_receipt_binds_runtime_and_exact_capture_plan_bytes() {
+        let request = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            Some(".context/review.png".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("capture request parses");
+        let exact_capture_plan = "exact UTF-8 capture-plan bytes".to_owned();
+        let configured = ReviewRequest::with_runtime_receipt(
+            request.clone(),
+            Some("a".repeat(64)),
+            Some("b".repeat(64)),
+            Some(exact_capture_plan.clone()),
+        )
+        .expect("strict receipt inputs bind")
+        .expect("capture request remains present");
+        let receipt = configured
+            .runtime_receipt
+            .expect("automated capture publishes a receipt");
+        assert_ne!(receipt.process_id, 0);
+        assert_eq!(
+            receipt.executable_sha256,
+            runtime_executable_sha256().expect("running test executable hashes")
+        );
+        assert_eq!(
+            receipt.capture_plan_sha256,
+            sha256_hex(exact_capture_plan.as_bytes())
+        );
+        assert_eq!(
+            receipt.profile_sha256,
+            ReviewWorldDetailProfileV1::default()
+                .profile_hash_sha256()
+                .expect("control profile hashes")
+        );
+        assert!(receipt.validate().is_ok());
+
+        assert!(ReviewRequest::with_runtime_receipt(
+            request.clone(),
+            None,
+            Some("b".repeat(64)),
+            Some(exact_capture_plan.clone()),
+        )
+        .is_err());
+        assert!(ReviewRequest::with_runtime_receipt(
+            request,
+            Some("A".repeat(64)),
+            Some("b".repeat(64)),
+            Some(exact_capture_plan),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn lifecycle_cycle_hash_matches_the_external_validator_contract() {
+        let cycle = ReviewLifecycleCycleV1::from_hash_body(ReviewLifecycleCycleHashBodyV1 {
+            cycle_index: 1,
+            launch_nonce: "c".repeat(64),
+            runtime_receipt_sha256: "d".repeat(64),
+            profile_hash_sha256: "a".repeat(64),
+            authority_before_sha256: "b".repeat(64),
+            authority_after_sha256: "b".repeat(64),
+            entities_remaining: 0,
+            materials_remaining: 0,
+            meshes_remaining: 0,
+            fog_density_images_remaining: 0,
+            target_images_remaining: 0,
+            terrain_material_overrides_remaining: 0,
+            liquid_visibility_overrides_remaining: 0,
+            vegetation_scale_overrides_remaining: 0,
+            camera_state_restored: true,
+            oit_state_restored: true,
+            transmission_state_restored: true,
+            depth_state_restored: true,
+            volumetric_state_restored: true,
+            previous_cycle_sha256: "0".repeat(64),
+        })
+        .expect("the canonical lifecycle hash body should serialize");
+        assert_eq!(
+            cycle.cycle_sha256,
+            "074bca522fd548a27ec64cc129030af12cddb28afb1080c33f49dfe2b0e9e16f"
+        );
+    }
+
+    #[test]
+    fn lifecycle_request_is_strict_canonical_and_exactly_one_hundred_cycles() {
+        let request = ReviewLifecycleRequestV1 {
+            version: 1,
+            certificate_path: env::temp_dir().join("hex-review-lifecycle-certificate.json"),
+            capture_plan_sha256: "a".repeat(64),
+            source_provenance_sha256: "b".repeat(64),
+            profile_matrix_sha256: "c".repeat(64),
+            tested_profile_sha256: "d".repeat(64),
+            cycles_requested: 100,
+        };
+        let canonical = serde_json::to_string(&request)
+            .expect("the lifecycle request fixture should serialize");
+        assert_eq!(
+            ReviewLifecycleRequestV1::from_canonical_json(&canonical),
+            Ok(request.clone())
+        );
+        assert!(ReviewLifecycleRequestV1::from_canonical_json(&format!("{canonical}\n")).is_err());
+
+        let wrong_count = canonical.replace("\"cycles_requested\":100", "\"cycles_requested\":99");
+        assert!(ReviewLifecycleRequestV1::from_canonical_json(&wrong_count).is_err());
+    }
+
+    #[test]
+    fn resident_mesh_measure_counts_exact_main_world_buffer_bytes() {
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD,
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![[0.0_f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0_f32, 0.0, 1.0]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32, 0.0]; 3]);
+        mesh.insert_indices(Indices::U16(vec![0, 1, 2]));
+
+        assert_eq!(mesh_buffer_bytes(&mesh), Ok(102));
+    }
+
+    #[test]
+    fn performance_window_uses_nearest_rank_p95_and_exact_texture_mips() {
+        let samples = (1_u8..=60).map(f32::from).collect::<Vec<_>>();
+        assert_eq!(nearest_rank_p95(&samples), Ok(57.0));
+
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD,
+        );
+        image.texture_descriptor.mip_level_count = 3;
+        assert_eq!(image_texture_bytes(&image), Ok(84));
+        assert!(REVIEW_RESIDENT_MEMORY_SCOPE.contains("Image texture mip"));
+    }
+
+    #[test]
+    fn performance_window_finishes_at_the_first_ninety_frame_settle_deadline() {
+        let start = performance_sampling_start_frame(SETTLE_FRAMES);
+        assert_eq!(start, 31);
+        assert_eq!(SETTLE_FRAMES - start + 1, 60);
+        assert_eq!(performance_sampling_start_frame(1), 1);
+        assert_eq!(performance_sampling_start_frame(2), 1);
+    }
+
+    #[test]
+    fn performance_sample_is_reused_within_a_sequence_and_reset_on_reentry() {
+        let first = ReviewCapture {
+            path: PathBuf::from("first.png"),
+            view: ReviewView::Default,
+            camera: ReviewCamera::Map,
+            focus_anchor: None,
+            anchor_look_at: None,
+            character_radius_scale: 1.0,
+            full_cutaway: false,
+            illumination_overlay: false,
+            liquid_phase_seconds: Some(0.0),
+            settle_frames: SETTLE_FRAMES,
+        };
+        let mut second = first.clone();
+        second.path = PathBuf::from("second.png");
+        second.settle_frames = 2;
+        let sample = ReviewPerformanceSampleV1 {
+            frame_time_ms: 10.0,
+            resident_presentation_bytes: 1_024,
+            warmup_complete: true,
+        };
+
+        let mut state = ReviewCaptureState::new_many(vec![first.clone(), second]);
+        state.performance_frame_window_ms.extend([10.0; 60]);
+        state.performance_resident_bytes = Some(sample.resident_presentation_bytes);
+        state.performance_sample = Some(sample);
+        state
+            .advance_capture(Instant::now())
+            .expect("the second capture remains in the sequence");
+
+        assert_eq!(state.performance_sample, Some(sample));
+        assert_eq!(state.performance_frame_window_ms.len(), 60);
+        assert_eq!(
+            state.performance_resident_bytes,
+            Some(sample.resident_presentation_bytes)
+        );
+        assert_eq!(state.capture.settle_frames, 2);
+
+        let reentered = ReviewCaptureState::new(first);
+        assert_eq!(reentered.performance_sample, None);
+        assert!(reentered.performance_frame_window_ms.is_empty());
+        assert_eq!(reentered.performance_resident_bytes, None);
+    }
+
+    #[test]
+    fn oit_restoration_equality_compares_every_setting_exactly() {
+        let baseline = OrderIndependentTransparencySettings {
+            sorted_fragment_max_count: 5,
+            fragments_per_pixel_average: 3.5,
+            alpha_threshold: 0.125,
+        };
+        assert!(oit_settings_equal(Some(baseline), Some(baseline)));
+        assert!(!oit_settings_equal(
+            Some(baseline),
+            Some(OrderIndependentTransparencySettings {
+                alpha_threshold: f32::from_bits(baseline.alpha_threshold.to_bits() + 1),
+                ..baseline
+            })
+        ));
+        assert!(!oit_settings_equal(Some(baseline), None));
+    }
+
+    fn capture_readback_binding_fixture() -> ReviewCaptureReadbackBindingV1 {
+        ReviewCaptureReadbackBindingV1 {
+            profile_hash_sha256: "0".repeat(64),
+            projection_hashes: hex_map::review_world_detail::ReviewWorldDetailProjectionHashesV1 {
+                terrain_plan: "0".repeat(16),
+                liquid_atmosphere_plan: "0".repeat(16),
+                mesh_projection: "0".repeat(16),
+            },
+            counts: hex_map::review_world_detail::ReviewWorldDetailCountsV1::default(),
+            camera_features: ReviewCameraFeaturesV1 {
+                oit: false,
+                medium_transmission: false,
+                depth_texture: false,
+                volumetrics: false,
+            },
+            camera_entity: Entity::PLACEHOLDER,
+            transform: Transform::default(),
+            global_transform_bits: Mat4::IDENTITY.to_cols_array().map(f32::to_bits),
+            orbit_focus_bits: Vec3::ZERO.to_array().map(f32::to_bits),
+            orbit_radius_bits: 5.0_f32.to_bits(),
+            render_target: RenderTarget::default(),
+            projection: Some(Projection::Perspective(
+                bevy::camera::PerspectiveProjection::default(),
+            )),
+            clip_from_view_bits: Mat4::IDENTITY.to_cols_array().map(f32::to_bits),
+            msaa: Msaa::Sample4,
+            depth_texture_usages: Camera3d::default().depth_texture_usages.0,
+            transmission_steps: 0,
+            transmission_quality: ScreenSpaceTransmissionQuality::Low,
+            oit: None,
+            volumetric_fog: None,
+        }
+    }
+
+    #[test]
+    fn screenshot_readback_binding_rejects_projection_count_and_camera_drift() {
+        let request = capture_readback_binding_fixture();
+
+        let mut projection_drift = request.clone();
+        projection_drift.projection_hashes.mesh_projection = "1".repeat(16);
+        assert!(request
+            .verify_same(&projection_drift)
+            .expect_err("projection drift must invalidate screenshot readback")
+            .contains("projection hashes"));
+
+        let mut count_drift = request.clone();
+        count_drift.counts.total.entities = 1;
+        assert!(request
+            .verify_same(&count_drift)
+            .expect_err("count drift must invalidate screenshot readback")
+            .contains("projection counts"));
+
+        let mut camera_drift = request.clone();
+        camera_drift.transform.translation.x = 1.0;
+        assert!(request
+            .verify_same(&camera_drift)
+            .expect_err("camera drift must invalidate screenshot readback")
+            .contains("camera pose"));
+
+        let mut lens_drift = request.clone();
+        let Some(first_clip_bit) = lens_drift.clip_from_view_bits.first_mut() else {
+            panic!("camera projection fixture must contain one clip-space bit");
+        };
+        *first_clip_bit ^= 1;
+        assert!(request
+            .verify_same(&lens_drift)
+            .expect_err("lens drift must invalidate screenshot readback")
+            .contains("camera projection"));
+
+        let mut renderer_drift = request.clone();
+        renderer_drift.camera_features.depth_texture = true;
+        assert!(request
+            .verify_same(&renderer_drift)
+            .expect_err("renderer drift must invalidate screenshot readback")
+            .contains("camera features"));
+    }
+
+    #[test]
+    fn collider_free_claim_is_tied_to_the_review_renderer_dependency_boundary() {
+        let game_manifest = include_str!("../Cargo.toml").to_ascii_lowercase();
+        let map_manifest = include_str!("../../hex_map/Cargo.toml").to_ascii_lowercase();
+        for collision_backend in ["rapier", "avian", "xpbd"] {
+            assert!(!game_manifest.contains(collision_backend));
+            assert!(!map_manifest.contains(collision_backend));
+        }
+        let renderer = include_str!("../../hex_map/src/review_world_detail_render.rs");
+        assert!(!renderer.contains("Collider"));
+        assert!(!REVIEW_COLLIDER_STATIC_INVARIANT.is_empty());
+    }
 
     #[derive(Resource, Default)]
     struct CharacterFollowObservation {
@@ -3104,7 +7816,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_anchor_relocates_the_selected_actor_to_the_exact_surface() {
+    fn focus_anchor_resolves_exact_surface_without_mutating_selected_actor() {
         let destination = TilePos::new(HexCoord::from_axial(3, -2), 7);
         let span = HexSpan::new(2.4, 3.2);
         let (table, stone) = review_substance_table();
@@ -3112,7 +7824,7 @@ mod tests {
         anchors.insert(MapAnchorId::from("deep_chamber"), destination);
 
         let mut app = App::new();
-        app.add_systems(PostUpdate, relocate_review_focus);
+        app.add_systems(PostUpdate, resolve_review_focus_anchor);
         app.insert_resource(ReviewCaptureState::new(review_capture_with_focus(
             "deep_chamber",
         )));
@@ -3142,23 +7854,30 @@ mod tests {
         let state = app.world().resource::<ReviewCaptureState>();
         assert!(state.focus_relocated);
         assert!(!state.failed);
+        assert_eq!(
+            state.focus_world_target,
+            Some(
+                Standing {
+                    pos: destination,
+                    span,
+                }
+                .world_position()
+            )
+        );
         let actor = app.world().entity(actor);
         assert_eq!(
             actor.get::<StandsOn>().map(|standing| standing.0),
-            Some(Standing {
-                pos: destination,
-                span,
-            })
+            Some(original)
         );
         assert_eq!(
             actor
                 .get::<Transform>()
                 .map(|transform| transform.translation),
-            Some(destination.coord.to_world(span.top))
+            Some(original.world_position())
         );
         assert_eq!(
             actor.get::<CameraFocusTarget>().map(|focus| focus.surface),
-            Some(destination)
+            Some(original.pos)
         );
     }
 
@@ -3195,7 +7914,7 @@ mod tests {
     fn unresolved_runtime_focus_exits_the_capture_cleanly() {
         let (table, _) = review_substance_table();
         let mut app = App::new();
-        app.add_systems(PostUpdate, relocate_review_focus);
+        app.add_systems(PostUpdate, resolve_review_focus_anchor);
         app.insert_resource(ReviewCaptureState::new(review_capture_with_focus(
             "not_published",
         )));
@@ -3244,6 +7963,8 @@ mod tests {
             character_radius_scale: 1.0,
             full_cutaway: false,
             illumination_overlay: false,
+            liquid_phase_seconds: None,
+            settle_frames: SETTLE_FRAMES,
         };
 
         let mut app = App::new();
@@ -3831,6 +8552,8 @@ mod tests {
                 character_radius_scale: 1.0,
                 full_cutaway: false,
                 illumination_overlay: false,
+                liquid_phase_seconds: None,
+                settle_frames: SETTLE_FRAMES,
             });
             state.view_applied = phase != CapturePhase::AwaitingCamera;
             state.requested = requested;
@@ -3846,7 +8569,7 @@ mod tests {
     }
 
     #[test]
-    fn production_capture_schedule_retains_target_and_requests_once() {
+    fn production_capture_schedule_retains_target_and_waits_for_runtime_evidence() {
         let directory = review_test_directory("schedule");
         let path = directory.join("capture.png");
         let _cleanup = fs::remove_dir_all(&directory);
@@ -3867,6 +8590,8 @@ mod tests {
                 character_radius_scale: 1.0,
                 full_cutaway: false,
                 illumination_overlay: false,
+                liquid_phase_seconds: None,
+                settle_frames: SETTLE_FRAMES,
             },
         );
         let camera = app
@@ -3927,18 +8652,18 @@ mod tests {
             app.update();
         }
         assert!(
-            app.world().resource::<ReviewCaptureState>().requested,
-            "the production schedule did not request a screenshot after settling"
+            !app.world().resource::<ReviewCaptureState>().requested,
+            "a capture without authority and renderer evidence must remain gated"
         );
         let mut screenshots = app.world_mut().query_filtered::<Entity, With<Screenshot>>();
-        assert_eq!(screenshots.iter(app.world()).count(), 1);
+        assert_eq!(screenshots.iter(app.world()).count(), 0);
 
         app.update();
         let mut screenshots = app.world_mut().query_filtered::<Entity, With<Screenshot>>();
         assert_eq!(
             screenshots.iter(app.world()).count(),
-            1,
-            "a pending asynchronous capture must not be requested twice"
+            0,
+            "missing runtime evidence must not enqueue an asynchronous capture"
         );
         assert!(!path.exists());
         let _cleanup = fs::remove_dir_all(directory);
@@ -3968,6 +8693,8 @@ mod tests {
                 character_radius_scale: 1.0,
                 full_cutaway: false,
                 illumination_overlay: false,
+                liquid_phase_seconds: None,
+                settle_frames: SETTLE_FRAMES,
             },
         );
         let camera = app
@@ -4062,6 +8789,8 @@ mod tests {
                 character_radius_scale: 1.0,
                 full_cutaway: false,
                 illumination_overlay: false,
+                liquid_phase_seconds: None,
+                settle_frames: SETTLE_FRAMES,
             },
         );
         let camera = app
@@ -4108,6 +8837,440 @@ mod tests {
             (projection.fov - test_camera_settings().first_person_fov_degrees.to_radians()).abs()
                 < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn capture_sequence_restores_map_lens_after_first_person() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(test_camera_settings());
+        app.insert_resource(CameraMode::Map);
+        app.insert_resource(Assets::<Image>::default());
+        let first_person = ReviewCapture {
+            path: PathBuf::from("first-person.png"),
+            view: ReviewView::Default,
+            camera: ReviewCamera::FirstPerson,
+            focus_anchor: None,
+            anchor_look_at: None,
+            character_radius_scale: 1.0,
+            full_cutaway: false,
+            illumination_overlay: false,
+            liquid_phase_seconds: None,
+            settle_frames: SETTLE_FRAMES,
+        };
+        let map = ReviewCapture {
+            path: PathBuf::from("map.png"),
+            view: ReviewView::Default,
+            camera: ReviewCamera::Map,
+            focus_anchor: None,
+            anchor_look_at: None,
+            character_radius_scale: 1.0,
+            full_cutaway: false,
+            illumination_overlay: false,
+            liquid_phase_seconds: None,
+            settle_frames: SETTLE_FRAMES,
+        };
+        // This fixture exercises only the multi-capture lens transition. The
+        // production authority guard is covered by the runtime-evidence tests
+        // and deliberately fails closed when their full gameplay resources are
+        // absent.
+        install_capture_sequence_inner(&mut app, vec![first_person, map], false);
+        let base_fov = 0.91;
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                RenderTarget::default(),
+                Projection::Perspective(bevy::camera::PerspectiveProjection {
+                    fov: base_fov,
+                    ..default()
+                }),
+            ))
+            .id();
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::new(2.0, 3.0, 4.0)),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        app.update();
+
+        let Projection::Perspective(first_projection) = app
+            .world()
+            .entity(camera)
+            .get::<Projection>()
+            .expect("review camera retains its projection")
+        else {
+            panic!("review camera remains perspective");
+        };
+        assert!(
+            (first_projection.fov - test_camera_settings().first_person_fov_degrees.to_radians())
+                .abs()
+                < f32::EPSILON
+        );
+
+        app.world_mut()
+            .resource_mut::<ReviewCaptureState>()
+            .advance_capture(Instant::now())
+            .expect("the map capture remains in the sequence");
+        app.update();
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        let Projection::Perspective(map_projection) = app
+            .world()
+            .entity(camera)
+            .get::<Projection>()
+            .expect("review camera retains its projection")
+        else {
+            panic!("review camera remains perspective");
+        };
+        assert!((map_projection.fov - base_fov).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn gameplay_exit_restores_complete_camera_snapshot_and_removes_target_image() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(test_camera_settings());
+        app.insert_resource(CameraMode::Map);
+        app.insert_resource(Assets::<Image>::default());
+        install_capture_systems(
+            &mut app,
+            ReviewCapture {
+                path: PathBuf::from("unused.png"),
+                view: ReviewView::Rear,
+                camera: ReviewCamera::FirstPerson,
+                focus_anchor: None,
+                anchor_look_at: None,
+                character_radius_scale: 1.0,
+                full_cutaway: false,
+                illumination_overlay: false,
+                liquid_phase_seconds: None,
+                settle_frames: SETTLE_FRAMES,
+            },
+        );
+        let original_transform =
+            Transform::from_xyz(9.0, 12.0, -7.0).looking_at(Vec3::new(1.0, 2.0, 3.0), Vec3::Y);
+        let original_focus = Vec3::new(1.0, 2.0, 3.0);
+        let original_radius = 17.0;
+        let original_target = RenderTarget::default();
+        let original_fov = 0.91;
+        let camera = app
+            .world_mut()
+            .spawn((
+                original_transform.clone(),
+                PanOrbitCamera {
+                    focus: original_focus,
+                    radius: original_radius,
+                },
+                original_target.clone(),
+                Projection::Perspective(bevy::camera::PerspectiveProjection {
+                    fov: original_fov,
+                    ..default()
+                }),
+            ))
+            .id();
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::new(2.0, 3.0, 4.0)),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        app.update();
+
+        let temporary_target = app
+            .world()
+            .resource::<ReviewCaptureState>()
+            .target
+            .clone()
+            .expect("first-person review should allocate its capture target");
+        assert!(app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(&temporary_target)
+            .is_some());
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Title);
+        app.update();
+
+        let camera_entity = app.world().entity(camera);
+        assert_eq!(
+            camera_entity
+                .get::<Transform>()
+                .expect("camera keeps transform"),
+            &original_transform
+        );
+        let orbit = camera_entity
+            .get::<PanOrbitCamera>()
+            .expect("camera keeps orbit state");
+        assert_eq!(orbit.focus, original_focus);
+        assert_eq!(orbit.radius, original_radius);
+        assert_eq!(
+            format!(
+                "{:?}",
+                camera_entity
+                    .get::<RenderTarget>()
+                    .expect("camera keeps render target")
+            ),
+            format!("{original_target:?}")
+        );
+        let Projection::Perspective(projection) = camera_entity
+            .get::<Projection>()
+            .expect("camera keeps projection")
+        else {
+            panic!("camera remains perspective");
+        };
+        assert_eq!(projection.fov, original_fov);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        assert!(app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(&temporary_target)
+            .is_none());
+        let state = app.world().resource::<ReviewCaptureState>();
+        assert!(state.camera_restored);
+        assert!(state.target_removed);
+        assert!(state.target.is_none());
+    }
+
+    #[test]
+    fn renderer_features_only_mutate_the_review_camera() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(ReviewWorldDetailProfileV1 {
+            water: hex_map::review_world_detail::WaterDetailV1::UniformAlpha { alpha: 0.85 },
+            ..default()
+        });
+        app.add_systems(Update, configure_review_camera_features);
+
+        let original_depth = Camera3d::default().depth_texture_usages;
+        let original_transmission = ScreenSpaceTransmission {
+            steps: 0,
+            quality: ScreenSpaceTransmissionQuality::Low,
+        };
+        let review_camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Msaa::Sample4,
+                original_transmission.clone(),
+                PanOrbitCamera::default(),
+            ))
+            .id();
+        let secondary_camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Msaa::Sample4,
+                original_transmission.clone(),
+            ))
+            .id();
+
+        app.update();
+
+        let review = app.world().entity(review_camera);
+        assert_eq!(review.get::<Msaa>(), Some(&Msaa::Off));
+        assert!(TextureUsages::from(
+            review
+                .get::<Camera3d>()
+                .expect("review camera keeps Camera3d")
+                .depth_texture_usages
+        )
+        .contains(TextureUsages::TEXTURE_BINDING));
+        assert!(review
+            .get::<OrderIndependentTransparencySettings>()
+            .is_some());
+        assert!(review.get::<ReviewCameraFeatureRestore>().is_some());
+
+        let secondary = app.world().entity(secondary_camera);
+        assert_eq!(secondary.get::<Msaa>(), Some(&Msaa::Sample4));
+        assert_eq!(
+            secondary
+                .get::<Camera3d>()
+                .expect("secondary camera keeps Camera3d")
+                .depth_texture_usages
+                .0,
+            original_depth.0
+        );
+        let secondary_transmission = secondary
+            .get::<ScreenSpaceTransmission>()
+            .expect("secondary camera keeps transmission settings");
+        assert_eq!(secondary_transmission.steps, original_transmission.steps);
+        assert_eq!(
+            secondary_transmission.quality,
+            original_transmission.quality
+        );
+        assert!(secondary
+            .get::<OrderIndependentTransparencySettings>()
+            .is_none());
+        assert!(secondary.get::<ReviewCameraFeatureRestore>().is_none());
+    }
+
+    #[test]
+    fn renderer_feature_restore_covers_every_marked_camera() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, restore_review_camera_features);
+
+        let original_depth = Camera3d::default().depth_texture_usages;
+        let original_transmission = ScreenSpaceTransmission {
+            steps: 0,
+            quality: ScreenSpaceTransmissionQuality::Low,
+        };
+        let mut cameras = Vec::new();
+        for include_review_marker in [true, false] {
+            let mut entity = app.world_mut().spawn((
+                Camera3d {
+                    depth_texture_usages: (TextureUsages::RENDER_ATTACHMENT
+                        | TextureUsages::TEXTURE_BINDING)
+                        .into(),
+                    ..default()
+                },
+                Msaa::Off,
+                ScreenSpaceTransmission {
+                    steps: 1,
+                    quality: ScreenSpaceTransmissionQuality::Medium,
+                },
+                OrderIndependentTransparencySettings::default(),
+                VolumetricFog::default(),
+                ReviewCameraFeatureRestore {
+                    msaa: Msaa::Sample4,
+                    depth_texture_usages: original_depth,
+                    transmission: original_transmission.clone(),
+                    oit: None,
+                    volumetric_fog: None,
+                },
+            ));
+            if include_review_marker {
+                entity.insert(PanOrbitCamera::default());
+            }
+            cameras.push(entity.id());
+        }
+
+        app.update();
+
+        for camera in cameras {
+            let entity = app.world().entity(camera);
+            assert_eq!(entity.get::<Msaa>(), Some(&Msaa::Sample4));
+            assert_eq!(
+                entity
+                    .get::<Camera3d>()
+                    .expect("restored camera keeps Camera3d")
+                    .depth_texture_usages
+                    .0,
+                original_depth.0
+            );
+            let transmission = entity
+                .get::<ScreenSpaceTransmission>()
+                .expect("restored camera keeps transmission settings");
+            assert_eq!(transmission.steps, original_transmission.steps);
+            assert_eq!(transmission.quality, original_transmission.quality);
+            assert!(entity
+                .get::<OrderIndependentTransparencySettings>()
+                .is_none());
+            assert!(entity.get::<VolumetricFog>().is_none());
+            assert!(entity.get::<ReviewCameraFeatureRestore>().is_none());
+        }
+    }
+
+    #[test]
+    fn renderer_camera_features_restore_over_one_hundred_exit_cycles() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.add_systems(OnExit(Screen::Gameplay), restore_review_camera_features);
+
+        let original_depth = Camera3d::default().depth_texture_usages;
+        let original_transmission = ScreenSpaceTransmission {
+            steps: 0,
+            quality: ScreenSpaceTransmissionQuality::Low,
+        };
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Msaa::Sample4,
+                original_transmission.clone(),
+            ))
+            .id();
+        let light = app.world_mut().spawn(DirectionalLight::default()).id();
+
+        for cycle in 0..100 {
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Gameplay);
+            app.update();
+
+            {
+                let mut camera_entity = app.world_mut().entity_mut(camera);
+                camera_entity
+                    .get_mut::<Camera3d>()
+                    .expect("camera fixture keeps Camera3d")
+                    .depth_texture_usages =
+                    (TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING).into();
+                *camera_entity
+                    .get_mut::<Msaa>()
+                    .expect("camera fixture keeps MSAA") = Msaa::Off;
+                let mut transmission = camera_entity
+                    .get_mut::<ScreenSpaceTransmission>()
+                    .expect("camera fixture keeps transmission settings");
+                transmission.steps = 1;
+                transmission.quality = ScreenSpaceTransmissionQuality::Medium;
+                camera_entity.insert((
+                    OrderIndependentTransparencySettings::default(),
+                    VolumetricFog::default(),
+                    ReviewCameraFeatureRestore {
+                        msaa: Msaa::Sample4,
+                        depth_texture_usages: original_depth,
+                        transmission: original_transmission.clone(),
+                        oit: None,
+                        volumetric_fog: None,
+                    },
+                ));
+            }
+            app.world_mut()
+                .entity_mut(light)
+                .insert((VolumetricLight, ReviewAddedVolumetricLight));
+
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Title);
+            app.update();
+
+            let camera_entity = app.world().entity(camera);
+            assert_eq!(camera_entity.get::<Msaa>(), Some(&Msaa::Sample4));
+            assert_eq!(
+                camera_entity
+                    .get::<Camera3d>()
+                    .expect("camera fixture keeps Camera3d")
+                    .depth_texture_usages
+                    .0,
+                original_depth.0,
+                "cycle {cycle} did not restore depth usage"
+            );
+            let transmission = camera_entity
+                .get::<ScreenSpaceTransmission>()
+                .expect("camera fixture keeps transmission settings");
+            assert_eq!(transmission.steps, original_transmission.steps);
+            assert_eq!(transmission.quality, original_transmission.quality);
+            assert!(camera_entity
+                .get::<OrderIndependentTransparencySettings>()
+                .is_none());
+            assert!(camera_entity.get::<VolumetricFog>().is_none());
+            assert!(camera_entity.get::<ReviewCameraFeatureRestore>().is_none());
+            assert!(app.world().get::<VolumetricLight>(light).is_none());
+            assert!(app
+                .world()
+                .get::<ReviewAddedVolumetricLight>(light)
+                .is_none());
+        }
     }
 
     #[test]
@@ -4511,6 +9674,8 @@ mod tests {
             character_radius_scale: 1.0,
             full_cutaway: false,
             illumination_overlay: false,
+            liquid_phase_seconds: None,
+            settle_frames: SETTLE_FRAMES,
         };
         assert!(!requires_full_footprint_validation(&anchored_capture));
         let mut overview_capture = anchored_capture.clone();
@@ -4566,9 +9731,10 @@ mod tests {
         assert!(!state.failed);
         assert!(!state.full_footprint_validated);
         assert!(
-            state.requested,
-            "the anchored close-up should proceed once ordinary coverage passes"
+            !state.requested,
+            "runtime evidence still gates the close-up"
         );
+        assert_eq!(state.visible_tiles, MIN_VISIBLE_TILES);
         let _cleanup = fs::remove_dir_all(directory);
     }
 
@@ -4582,7 +9748,15 @@ mod tests {
             character_radius_scale: 1.0,
             full_cutaway: false,
             illumination_overlay: false,
+            liquid_phase_seconds: None,
+            settle_frames: SETTLE_FRAMES,
         }
+    }
+
+    #[test]
+    fn oit_operational_evidence_fails_closed_without_device_capabilities() {
+        assert!(!operational_oit_available(false, None, None));
+        assert!(!operational_oit_available(true, None, None));
     }
 
     fn review_substance_table() -> (SubstanceTable, SubstanceId) {

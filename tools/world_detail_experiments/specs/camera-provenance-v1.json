@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "warning": "UNAPPROVABLE STRUCTURAL DRAFT — AESTHETIC REVIEW ONLY",
+  "sources": [
+    {
+      "vendored": "tools/world_detail_experiments/specs/final-17-cameras-v2.json",
+      "upstream_path": "/Users/alberto/Documents/Codex/2026-09-01/i-want-to-plan-the-work/work/cameras/final-17-cameras-v2.json",
+      "upstream_sha256": "a71f8d1073a5b6ad0bb737524a4b389a18027c431dff5e0349d2c541d5061851",
+      "vendored_sha256": "a71f8d1073a5b6ad0bb737524a4b389a18027c431dff5e0349d2c541d5061851",
+      "semantic_sha256": "6f4f126273666340f721b78e8ca9a18733a65b2e8e8217269a05813f2acf7319"
+    },
+    {
+      "vendored": "tools/world_detail_experiments/specs/focused-4-cameras-v1.json",
+      "upstream_path": "/Users/alberto/Documents/Codex/2026-09-01/i-want-to-plan-the-work/work/focused-followup/specs/focused-4-cameras-v1.json",
+      "upstream_sha256": "b43ef948d5ef177483575eba6497d55d4d31cc993ea29c9906d94e07faec3fcb",
+      "vendored_sha256": "b43ef948d5ef177483575eba6497d55d4d31cc993ea29c9906d94e07faec3fcb",
+      "semantic_sha256": "2fe7bb106d5b3df95f4e85bfa196aa5c45389ff8981e24531e60d32ef399639d"
+    }
+  ]
+}

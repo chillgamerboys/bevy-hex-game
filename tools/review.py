@@ -441,7 +441,9 @@ def _sanitized_environment(
     return environment
 
 
-def _structural_build_command(mode: str) -> tuple[str, ...]:
+def _structural_build_command(
+    mode: str, *, allow_structural_draft: bool
+) -> tuple[str, ...]:
     if mode not in {"author", "checkpoint"}:
         raise ReviewError(f"unknown structural review mode: {mode}")
     command = [
@@ -454,6 +456,8 @@ def _structural_build_command(mode: str) -> tuple[str, ...]:
     ]
     if mode == "checkpoint":
         command.append("--release")
+    if allow_structural_draft:
+        command.extend(("--features", "map-review"))
     command.append("--message-format=json-render-diagnostics")
     return tuple(command)
 
@@ -1204,7 +1208,10 @@ def run_structural(arguments: argparse.Namespace) -> int:
         seed=arguments.seed,
         provenance=provenance,
     )
-    build_command = _structural_build_command(arguments.mode)
+    build_command = _structural_build_command(
+        arguments.mode,
+        allow_structural_draft=arguments.allow_structural_draft,
+    )
     manifest = _base_manifest(
         arguments=arguments,
         output=output,

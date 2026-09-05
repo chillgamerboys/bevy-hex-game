@@ -32,6 +32,22 @@ use materialize::{MaterializationError, MaterializedV3World};
 use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
+/// Whether the explicitly review-only incomplete Grand-V3 draft path is enabled.
+///
+/// Ordinary builds compile this to a literal `false` and never inspect the
+/// environment, so a leaked shell variable cannot weaken production admission.
+#[must_use]
+pub(crate) fn grand_v3_structural_review_draft_enabled() -> bool {
+    #[cfg(feature = "map-review")]
+    {
+        std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some()
+    }
+    #[cfg(not(feature = "map-review"))]
+    {
+        false
+    }
+}
+
 mod arid_landform;
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
@@ -1415,6 +1431,12 @@ mod tests {
         V3DunesSettings, V3EnvironmentSettings, V3HillsSettings, V3OasisSettings,
         V3SandyIsletsSettings, V3WoodedIslandSettings,
     };
+
+    #[cfg(not(feature = "map-review"))]
+    #[test]
+    fn ordinary_build_cannot_enable_the_structural_review_draft() {
+        assert!(!grand_v3_structural_review_draft_enabled());
+    }
 
     fn world_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {

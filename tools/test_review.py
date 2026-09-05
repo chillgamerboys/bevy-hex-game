@@ -184,7 +184,9 @@ class ReviewToolTests(unittest.TestCase):
                 arguments=arguments,
                 output=arguments.output,
                 provenance=hidden,
-                build_command=review._structural_build_command("checkpoint"),
+                build_command=review._structural_build_command(
+                    "checkpoint", allow_structural_draft=False
+                ),
                 resource_preflight={"status": "PENDING"},
             )
             self.assertIn("dirty-worktree", manifest["unapprovable_reasons"])
@@ -295,14 +297,37 @@ class ReviewToolTests(unittest.TestCase):
         self.assertTrue(all(call[2] == (42,) for call in calls))
 
     def test_author_and_checkpoint_build_shapes_are_explicit(self) -> None:
-        author = review._structural_build_command("author")
-        checkpoint = review._structural_build_command("checkpoint")
+        author = review._structural_build_command(
+            "author", allow_structural_draft=False
+        )
+        checkpoint = review._structural_build_command(
+            "checkpoint", allow_structural_draft=False
+        )
         self.assertNotIn("--release", author)
         self.assertIn("--release", checkpoint)
         for command in (author, checkpoint):
             self.assertEqual(command[:2], ("cargo", "build"))
             self.assertIn(review.STRUCTURAL_EXAMPLE, command)
+            self.assertNotIn("--features", command)
             self.assertEqual(command[-1], "--message-format=json-render-diagnostics")
+
+    def test_structural_draft_pairs_feature_and_environment_opt_in(self) -> None:
+        inherited = {"PATH": "/usr/bin"}
+        for allow_structural_draft in (False, True):
+            command = review._structural_build_command(
+                "checkpoint", allow_structural_draft=allow_structural_draft
+            )
+            environment = review._sanitized_environment(
+                inherited,
+                mode="checkpoint",
+                allow_structural_draft=allow_structural_draft,
+            )
+            self.assertEqual("--features" in command, allow_structural_draft)
+            self.assertEqual("map-review" in command, allow_structural_draft)
+            self.assertEqual(
+                environment.get("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT") == "1",
+                allow_structural_draft,
+            )
 
     def test_logged_process_timeout_is_bounded_and_timed_without_a_real_child(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1072,7 +1097,9 @@ class ReviewToolTests(unittest.TestCase):
             arguments=arguments,
             output=arguments.output,
             provenance=start,
-            build_command=review._structural_build_command("author"),
+            build_command=review._structural_build_command(
+                "author", allow_structural_draft=False
+            ),
             resource_preflight={"status": "PASSED"},
         )
         with mock.patch.object(

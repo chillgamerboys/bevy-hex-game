@@ -14,6 +14,8 @@ use hex_core::{
     TilePos, UnitId, ZoomSensitivityOverride,
 };
 
+#[cfg(feature = "map-review")]
+use crate::sky_material::SkyRuntimeAssetEvidenceV1;
 use crate::{
     sky_material::{SkyMaterial, SkyParams},
     LightingSystems,
@@ -160,6 +162,8 @@ pub fn plugin(app: &mut App) {
                 .before(CameraUpdateSystems)
                 .run_if(in_state(Screen::Gameplay)),
         );
+    #[cfg(feature = "map-review")]
+    app.add_systems(PostStartup, publish_sky_runtime_asset_evidence);
 }
 
 /// Which perspective currently controls the gameplay camera.
@@ -443,6 +447,48 @@ fn spawn_camera(
         SkyDome,
         Name::new("Sky Dome"),
     ));
+}
+
+/// Publishes exact fixed-size allocation evidence without exposing the private
+/// procedural material or allowing the capture harness to mutate it.
+#[cfg(feature = "map-review")]
+fn publish_sky_runtime_asset_evidence(
+    mut commands: Commands,
+    domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
+    materials: Res<Assets<SkyMaterial>>,
+) {
+    let mut material_ids = BTreeSet::new();
+    let mut material_bytes = 0_u64;
+    for handle in &domes {
+        if !material_ids.insert(handle.0.id()) {
+            continue;
+        }
+        let Some(material) = materials.get(&handle.0) else {
+            error!("sky runtime evidence found a dome with a missing material asset");
+            commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+            return;
+        };
+        let Ok(allocation_bytes) = u64::try_from(std::mem::size_of_val(material)) else {
+            error!("sky material inline allocation exceeds u64");
+            commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+            return;
+        };
+        let Some(total_bytes) = material_bytes.checked_add(allocation_bytes) else {
+            error!("sky material byte count overflowed u64");
+            commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+            return;
+        };
+        material_bytes = total_bytes;
+    }
+    let Ok(material_count) = u64::try_from(material_ids.len()) else {
+        error!("sky material count exceeds u64");
+        commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+        return;
+    };
+    commands.insert_resource(SkyRuntimeAssetEvidenceV1 {
+        sky_material_count: material_count,
+        sky_material_bytes: material_bytes,
+    });
 }
 
 /// Sky parameters used for the one frame or two before `LightingSettings` loads.
