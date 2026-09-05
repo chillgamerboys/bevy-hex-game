@@ -20,7 +20,6 @@ use hex_world_runtime::WorldRuntime;
 use serde::de::DeserializeOwned;
 
 pub(super) struct ArtPlan {
-    pub fingerprint: u64,
     pub suppression: Vec<ColumnData>,
     pub fragments: Vec<PreparedObject>,
     pub unresolved: Vec<String>,
@@ -248,7 +247,6 @@ impl StockArt {
             }
         }
         Ok(ArtPlan {
-            fingerprint: self.signature(chunk),
             suppression: canonical_union(columns)?,
             fragments,
             unresolved,
