@@ -300,11 +300,15 @@ def strict_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def validate_receipt(receipt: dict[str, Any], package: dict[str, Any], walk: dict[str, Any] | None) -> None:
+def validate_receipt(receipt: dict[str, Any], package: dict[str, Any], walk: dict[str, Any] | None,
+                     settle_frames: int = 120) -> None:
     if receipt.get("package") != package["requested_directory"] or receipt.get("world_fingerprint") != package["fingerprint"]:
         raise ReviewError("game receipt does not match the requested package identity")
     for field in ("frames", "resident_chunks", "rendered_chunks", "mesh_publications", "rendered_vertices"):
         positive_int(receipt.get(field), field)
+    settled = positive_int(receipt.get("settled_frames"), "settled frames", receipt["frames"])
+    if settled < settle_frames:
+        raise ReviewError("capture did not reach the requested consecutive settled-frame budget")
     for field in ("discarded_mesh_jobs", "local_queue_peak"):
         nonnegative_int(receipt.get(field), field)
     if receipt["rendered_chunks"] > receipt["resident_chunks"]:
@@ -570,6 +574,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--parties", type=int, default=2)
     result.add_argument("--azimuth", type=float, default=35.0)
     result.add_argument("--frames", type=int, default=3600)
+    result.add_argument("--settle-frames", type=int, default=120,
+                        help="required consecutive fully settled updates, independent of the overall deadline")
     result.add_argument("--walk", type=Path)
     result.add_argument("--save", type=Path)
     result.add_argument("--profile", choices=("release", "map-test"), default="release")
@@ -589,6 +595,8 @@ def check_options(options: argparse.Namespace) -> None:
         raise ReviewError("radius must be 16..224; radius above 96 requires one party")
     if not 1 <= options.frames <= 100_000 or not math.isfinite(options.azimuth):
         raise ReviewError("invalid frame budget or azimuth")
+    if not 12 <= options.settle_frames <= 10_000 or options.frames <= options.settle_frames:
+        raise ReviewError("settle frames must be 12..10000 and smaller than the overall --frames deadline")
     if not math.isfinite(options.timeout_seconds) or not 1 <= options.timeout_seconds <= 7200:
         raise ReviewError("timeout must be 1..7200 seconds")
     if options.focus is not None:
@@ -605,7 +613,8 @@ def cargo_command(options: argparse.Namespace, output: Path, cargo: str = "cargo
     command += ["-p", "hex_game", "--features", "v4-world", "--bin", "hex_v4", "--",
                 "--world", str(options.package.resolve()), "--capture", str(output / "capture.png"),
                 "--view", options.view, "--radius", str(options.radius), "--parties", str(options.parties),
-                "--azimuth", str(options.azimuth), "--frames", str(options.frames)]
+                "--azimuth", str(options.azimuth), "--frames", str(options.frames),
+                "--settle-frames", str(options.settle_frames)]
     for flag, value in (("--focus", options.focus), ("--walk", options.walk), ("--save", options.save)):
         if value is not None:
             command += [flag, str(value.resolve()) if isinstance(value, Path) else value]
@@ -646,6 +655,7 @@ def capture(options: argparse.Namespace) -> int:
         "visual_review": "UNREVIEWED", "native_motion": "HUMAN-MOTION-PENDING",
         "git_head": before["head"], "source_sha256": before["sha256"], "dirty": before["dirty"],
         "profile": options.profile, "matrix_name": options.name, "output": str(output),
+        "settle_frames_requested": options.settle_frames, "overall_frame_deadline": options.frames,
         "cargo_argv": command, "timed_argv": argv, "cwd": str(ROOT),
         "environment": {key: value for key, value in environment.items() if key in RELEVANT_ENV or key.startswith(("CARGO_PROFILE_", "WGPU_"))},
         "platform": {"os": platform.system(), "release": platform.release(), "architecture": platform.machine(), "python": platform.python_version()},
@@ -677,7 +687,7 @@ def capture(options: argparse.Namespace) -> int:
         if re.search(r"Path not found|failed to load[^\n]*(?:asset|font|shader)|V4 (?:world|capture) failed", logs, re.IGNORECASE):
             raise ReviewError("capture logs contain an asset or world/capture failure")
         game = strict_json(output / "capture.json")
-        validate_receipt(game, package, walk)
+        validate_receipt(game, package, walk, options.settle_frames)
         coverage = png_coverage(output / "capture.png")
         after = source_snapshot()
         atomic_json(output / "source-after.json", after)
@@ -733,7 +743,8 @@ def self_test() -> int:
     import io
 
     def game_receipt(package: str = "/world") -> dict[str, Any]:
-        return {"package": package, "world_fingerprint": "0000000000000001", "frames": 3,
+        return {"package": package, "world_fingerprint": "0000000000000001", "frames": 130,
+                "settled_frames": 120,
                 "resident_chunks": 1, "rendered_chunks": 1, "mesh_publications": 1, "rendered_vertices": 12,
                 "discarded_mesh_jobs": 0, "local_queue_peak": 1, "rebase_samples_ms": [],
                 "elapsed_seconds": 0.1, "frame_samples_ms": [10.0, 20.0, 30.0],
@@ -749,11 +760,19 @@ def self_test() -> int:
             self.assertEqual(argv[argv.index("--bin") + 1], "hex_v4")
             self.assertEqual(argv[argv.index("--features") + 1], "v4-world")
             self.assertEqual(argv[argv.index("--capture") + 1], "/tmp/fresh/capture.png")
+            self.assertEqual(argv[argv.index("--settle-frames") + 1], "120")
+            options.settle_frames = 600
+            self.assertEqual(cargo_command(options, Path("/tmp/fresh"))[-1], "600")
             options.profile = "map-test"
             self.assertIn("map-test", cargo_command(options, Path("/tmp/fresh")))
             options.parties = 2
             with self.assertRaises(ReviewError):
                 check_options(options)
+            options.parties = 1
+            for settle in (11, 10_001, options.frames):
+                options.settle_frames = settle
+                with self.assertRaises(ReviewError):
+                    check_options(options)
 
         def test_walk_reader_binds_full_commands_and_rejects_duplicates(self) -> None:
             source = b'(schema_version:1,id:"walk",max_ticks:20,steps:[MoveTo(actor:"a",goal:(column:(q:1,r:0),level:2)),WaitAt(actor:"a",position:(column:(q:1,r:0),level:2),max_ticks:10)])'
@@ -776,6 +795,13 @@ def self_test() -> int:
                 validate_receipt({**receipt, "world_fingerprint": "0" * 16}, package, None)
             with self.assertRaises(ReviewError):
                 validate_receipt({**receipt, "frame_samples_ms": [float("nan")]}, package, None)
+            with self.assertRaises(ReviewError):
+                validate_receipt({**receipt, "settled_frames": 119}, package, None)
+            with self.assertRaises(ReviewError):
+                validate_receipt(receipt, package, None, 600)
+            validate_receipt({**receipt, "frames": 730, "settled_frames": 600}, package, None, 600)
+            with self.assertRaises(ReviewError):
+                validate_receipt({**receipt, "settled_frames": 131}, package, None)
 
         def test_walk_receipts_require_complete_settled_changed_support_evidence(self) -> None:
             package = {"requested_directory": "/world", "fingerprint": "0000000000000001"}
