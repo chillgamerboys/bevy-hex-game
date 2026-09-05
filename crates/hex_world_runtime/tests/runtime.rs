@@ -2601,3 +2601,57 @@ fn current_sequence_does_not_claim_new_interest_scope_is_synchronized() {
 
 #[path = "runtime/object_edits.rs"]
 mod object_edits;
+
+#[test]
+fn changed_global_material_policy_cannot_reuse_current_chunk_revision_proofs() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let mut runtime = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package.clone()).expect("base source")),
+        RuntimeConfig::default(),
+    )
+    .expect("runtime");
+    runtime
+        .set_interests(vec![interest("a", at, 0, 0)])
+        .expect("interest");
+    settle(&mut runtime);
+    let before_manifest = runtime.manifest().clone();
+    let before = runtime
+        .resident_chunk(at.chunk())
+        .expect("resident product");
+    let before_surfaces = runtime.surfaces(at);
+    for change_solidity in [true, false] {
+        let mut replacement = package.clone();
+        let material = replacement
+            .manifest
+            .materials
+            .iter_mut()
+            .find(|material| material.id == "stone")
+            .expect("stone");
+        if change_solidity {
+            material.solid = false;
+        } else {
+            material.color = [1, 2, 3, 255];
+        }
+        replacement.seal().expect("valid replacement policy");
+        assert_eq!(
+            replacement.chunks, package.chunks,
+            "policy changes can retain exact chunk bodies"
+        );
+        let error = runtime
+            .replace_source(Arc::new(
+                MemoryChunkSource::new(replacement).expect("valid policy-only source"),
+            ))
+            .expect_err("fresh consumer adapters required");
+        assert!(error.to_string().contains("requires a new runtime"));
+        assert_eq!(runtime.manifest(), &before_manifest);
+        assert_eq!(runtime.surfaces(at), before_surfaces);
+        let after = runtime
+            .resident_chunk(at.chunk())
+            .expect("original resident product");
+        assert_eq!(after.revision, before.revision);
+        assert!(Arc::ptr_eq(&after.package, &before.package));
+        let update = runtime.pump();
+        assert!(update.loaded.is_empty() && update.changed.is_empty() && update.removed.is_empty());
+    }
+}

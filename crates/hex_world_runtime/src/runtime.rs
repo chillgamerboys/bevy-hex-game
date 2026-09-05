@@ -471,6 +471,16 @@ impl WorldRuntime {
                 "source belongs to a different world",
             ));
         }
+        // Consumer revision proofs do not carry a separate material/boundary policy epoch.
+        // Retaining their identities across a policy change would permit stale cached facts.
+        if source.manifest().materials != self.manifest.materials
+            || source.manifest().boundaries != self.manifest.boundaries
+        {
+            return Err(RuntimeError::new(
+                ErrorKind::Conflict,
+                "changed material or boundary policy requires a new runtime and fresh consumer adapters",
+            ));
+        }
         if (!self.transactions.is_empty() || !self.attachments.is_empty())
             && source.manifest().fingerprint != self.manifest.fingerprint
         {
