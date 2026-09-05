@@ -760,6 +760,45 @@ fn crossing_fixture(
 }
 
 #[test]
+fn rebase_preflight_preserves_world_and_queued_generation_and_rejects_invalid_placements() {
+    let (mut presenter, mut world, object, left, _) =
+        crossing_fixture(ObjectPresentationLimits::default());
+    let before = snapshot(&presenter, &mut world);
+    let queued = presenter
+        .prepare_fragment(&object, 2, origin(0, 0, 0), left)
+        .expect("queued product");
+    presenter
+        .validate_rebase(
+            &world,
+            &BTreeMap::from([("tree".into(), origin(8, -4, -12))]),
+        )
+        .expect("valid preflight");
+    assert_eq!(snapshot(&presenter, &mut world), before);
+    for invalid in [
+        BTreeMap::new(),
+        BTreeMap::from([("tree".into(), origin(1024, 1024, 0))]),
+        BTreeMap::from([("tree".into(), origin(0, 0, 4097))]),
+        BTreeMap::from([
+            ("tree".into(), origin(0, 0, 0)),
+            ("extra".into(), origin(0, 0, 0)),
+        ]),
+    ] {
+        assert!(presenter.validate_rebase(&world, &invalid).is_err());
+        assert_eq!(snapshot(&presenter, &mut world), before);
+    }
+    // Both successful and rejected preflights leave queued generations usable.
+    presenter
+        .publish(&mut world, queued)
+        .expect("preflight did not invalidate queued product");
+    let root = presenter.receipts().next().expect("resident root").root;
+    world.entity_mut(root).remove::<Transform>();
+    assert!(presenter
+        .validate_rebase(&world, &BTreeMap::from([("tree".into(), origin(0, 0, 0))]),)
+        .is_err());
+    assert!(world.get::<Transform>(root).is_none());
+}
+
+#[test]
 fn atomic_fragment_replacement_rejects_late_invalid_products_without_any_mutation() {
     let (mut presenter, mut world, object, left, right) =
         crossing_fixture(ObjectPresentationLimits::default());

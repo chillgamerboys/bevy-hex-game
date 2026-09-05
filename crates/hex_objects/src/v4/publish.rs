@@ -82,6 +82,11 @@ struct PublishedObject {
 
 type ResidentKey = (String, Option<ChunkId>);
 
+struct RebasePlan {
+    generation: u64,
+    placements: Vec<(ResidentKey, TilePos, Transform)>,
+}
+
 struct SharedAsset {
     baked: Arc<BakedAsset>,
     parts: Vec<crate::CachedChunk>,
@@ -545,6 +550,20 @@ impl ResidentObjectPresenter {
         Some(object.receipt)
     }
 
+    /// Check every rebase placement and owned transform without changing the world.
+    ///
+    /// Uses the same admission checks as [`Self::rebase`], including origin bounds,
+    /// complete resident ID coverage, transform presence and generation exhaustion.
+    /// A subsequent rebase remains valid while this presenter and its owned roots
+    /// are unchanged. Mutations by other presenters must not touch these roots.
+    pub fn validate_rebase(
+        &self,
+        world: &World,
+        placements: &BTreeMap<String, TilePos>,
+    ) -> Result<(), ObjectPresentationError> {
+        self.rebase_plan(world, placements).map(|_| ())
+    }
+
     /// Atomically validate and move the complete current local resident set.
     ///
     /// The mapping must contain every distinct resident ID exactly once and no extra
@@ -557,6 +576,22 @@ impl ResidentObjectPresenter {
         world: &mut World,
         placements: &BTreeMap<String, TilePos>,
     ) -> Result<Vec<ObjectReceipt>, ObjectPresentationError> {
+        let plan = self.rebase_plan(world, placements)?;
+        for (id, origin, transform) in plan.placements {
+            if let Some(object) = self.resident.get_mut(&id) {
+                world.entity_mut(object.receipt.root).insert(transform);
+                object.receipt.local_origin = origin;
+            }
+        }
+        self.generation = plan.generation;
+        Ok(self.receipts().cloned().collect())
+    }
+
+    fn rebase_plan(
+        &self,
+        world: &World,
+        placements: &BTreeMap<String, TilePos>,
+    ) -> Result<RebasePlan, ObjectPresentationError> {
         let ids: BTreeSet<_> = self.resident.keys().map(|(id, _)| id).collect();
         if !ids.iter().copied().eq(placements.keys()) {
             return Err(ObjectPresentationError(
@@ -567,7 +602,7 @@ impl ResidentObjectPresenter {
             .generation
             .checked_add(1)
             .ok_or_else(|| ObjectPresentationError("object origin generation exhausted".into()))?;
-        let transforms = self
+        let placements = self
             .resident
             .iter()
             .map(|(key, object)| {
@@ -589,14 +624,10 @@ impl ResidentObjectPresenter {
                 Ok((key.clone(), origin, transform))
             })
             .collect::<Result<Vec<_>, ObjectPresentationError>>()?;
-        for (id, origin, transform) in transforms {
-            if let Some(object) = self.resident.get_mut(&id) {
-                world.entity_mut(object.receipt.root).insert(transform);
-                object.receipt.local_origin = origin;
-            }
-        }
-        self.generation = generation;
-        Ok(self.receipts().cloned().collect())
+        Ok(RebasePlan {
+            generation,
+            placements,
+        })
     }
 
     /// Release every owned root/mesh/material and invalidate all queued products.
