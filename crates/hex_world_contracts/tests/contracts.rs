@@ -960,3 +960,216 @@ fn manifest_index_rejects_untrusted_hash_and_unindexed_empty_chunk() {
     empty.seal().expect("local empty chunk shape");
     assert!(empty.validate_with_index(&index).is_err());
 }
+
+fn light(at: WorldHex, radius: u32) -> WorldLight {
+    WorldLight {
+        id: "local-lamp".into(),
+        position: VoxelPosition {
+            column: at,
+            level: 1,
+        },
+        domain: None,
+        bright_radius: radius / 2,
+        dim_radius: radius,
+    }
+}
+fn seal_hashes_only(package: &mut WorldPackage) {
+    for chunk in package.chunks.values_mut() {
+        chunk.seal().expect("local shape");
+    }
+    for descriptor in &mut package.manifest.chunks {
+        descriptor.fingerprint = package
+            .chunks
+            .get(&descriptor.coordinate)
+            .expect("chunk")
+            .fingerprint;
+    }
+    package.manifest.seal().expect("manifest hashes");
+}
+
+#[test]
+fn light_influence_projection_matches_independent_exact_horizontal_footprint() {
+    for origin in [
+        WorldHex::new(-1, -1),
+        WorldHex::new(1_000_000_000_015, -1_000_000_000_001),
+    ] {
+        let mut package = world(origin, 20);
+        let root = light(origin, 17);
+        package
+            .chunks
+            .get_mut(&origin.chunk())
+            .expect("owner")
+            .semantics
+            .lights
+            .push(root.clone());
+        package.seal().expect("complete light projection");
+        let mut remote_count = 0;
+        for (coordinate, chunk) in &package.chunks {
+            let expected = chunk.columns.iter().any(|column| {
+                let q = i128::from(column.position.q) - i128::from(origin.q);
+                let r = i128::from(column.position.r) - i128::from(origin.r);
+                q.abs().max(r.abs()).max((q + r).abs()) <= 17
+            });
+            assert_eq!(
+                chunk.semantics.light_influences,
+                if expected {
+                    vec![root.clone()]
+                } else {
+                    Vec::new()
+                }
+            );
+            if *coordinate != origin.chunk() && expected {
+                remote_count += 1;
+                assert!(
+                    chunk.semantics.lights.is_empty(),
+                    "projection does not create another root owner"
+                );
+            }
+        }
+        assert!(remote_count > 0);
+        assert_eq!(
+            package
+                .chunks
+                .values()
+                .map(|chunk| chunk.semantics.lights.len())
+                .sum::<usize>(),
+            1
+        );
+        let index =
+            ManifestIndex::new(std::sync::Arc::new(package.manifest.clone())).expect("index");
+        let remote = package
+            .chunks
+            .iter()
+            .find(|(coordinate, chunk)| {
+                **coordinate != origin.chunk() && !chunk.semantics.light_influences.is_empty()
+            })
+            .map(|(_, chunk)| chunk.clone())
+            .expect("remote product");
+        drop(package);
+        remote
+            .validate_with_index(&index)
+            .expect("local light admission with no owner chunk body");
+    }
+}
+
+#[test]
+fn missing_forged_or_duplicate_light_influences_are_rejected_at_their_trust_boundary() {
+    let origin = WorldHex::new(15, 0);
+    let remote = WorldHex::new(16, 0).chunk();
+    let mut package = world(origin, 3);
+    package
+        .chunks
+        .get_mut(&origin.chunk())
+        .expect("owner")
+        .semantics
+        .lights
+        .push(light(origin, 3));
+    package.seal().expect("source");
+    package
+        .chunks
+        .get_mut(&remote)
+        .expect("recipient")
+        .semantics
+        .light_influences
+        .clear();
+    seal_hashes_only(&mut package);
+    assert!(
+        package.validate().is_err(),
+        "whole-package validation proves complete influence coverage"
+    );
+    package.seal().expect("producer repairs missing projection");
+    package
+        .chunks
+        .get_mut(&remote)
+        .expect("recipient")
+        .semantics
+        .light_influences
+        .first_mut()
+        .expect("influence")
+        .bright_radius = 0;
+    seal_hashes_only(&mut package);
+    let index =
+        ManifestIndex::new(std::sync::Arc::new(package.manifest.clone())).expect("manifest index");
+    package
+        .chunks
+        .get(&remote)
+        .expect("recipient")
+        .validate_with_index(&index)
+        .expect("local shape cannot authenticate a foreign root by itself");
+    assert!(
+        package.validate().is_err(),
+        "root registry catches forged foreign light despite recomputed local hashes"
+    );
+    package.seal().expect("producer repairs forged record");
+    let owner = package.chunks.get_mut(&origin.chunk()).expect("owner");
+    owner
+        .semantics
+        .light_influences
+        .first_mut()
+        .expect("root influence")
+        .bright_radius = 0;
+    owner.seal().expect("well shaped");
+    assert!(
+        owner.validate_with_index(&index).is_err(),
+        "local root must match exactly"
+    );
+    package.seal().expect("producer repairs owner record");
+    let recipient = package.chunks.get_mut(&remote).expect("recipient");
+    let duplicate = recipient
+        .semantics
+        .light_influences
+        .first()
+        .expect("influence")
+        .clone();
+    recipient.semantics.light_influences.push(duplicate);
+    assert!(recipient.seal().is_err());
+}
+
+#[test]
+fn malformed_light_radius_fails_before_expansion_and_leaves_source_unchanged() {
+    let origin = WorldHex::new(-1_000_000_000_001, 1_000_000_000_015);
+    let mut package = world(origin, 0);
+    let huge = light(origin, u32::MAX);
+    let error = huge.validate().expect_err("bounded per-light expansion");
+    assert_eq!(error.context, "light.influence");
+    package
+        .chunks
+        .get_mut(&origin.chunk())
+        .expect("owner")
+        .semantics
+        .lights
+        .push(huge);
+    let before = package.clone();
+    assert!(package.seal().is_err());
+    assert_eq!(package, before, "producer failure is atomic");
+    let mut inverted = light(origin, 1);
+    inverted.bright_radius = 2;
+    assert!(inverted.validate().is_err());
+}
+
+#[test]
+fn zero_radius_light_is_clipped_to_its_exact_column_and_outside_sources_are_rejected() {
+    let origin = WorldHex::new(15, -1);
+    let mut package = world(origin, 1);
+    package
+        .chunks
+        .get_mut(&origin.chunk())
+        .expect("owner")
+        .semantics
+        .lights
+        .push(light(origin, 0));
+    package.seal().expect("point influence");
+    assert_eq!(
+        package
+            .chunks
+            .values()
+            .filter(|chunk| !chunk.semantics.light_influences.is_empty())
+            .count(),
+        1
+    );
+    let index = ManifestIndex::new(std::sync::Arc::new(package.manifest.clone())).expect("index");
+    let mut owner = package.chunks.get(&origin.chunk()).expect("owner").clone();
+    owner.semantics.light_influences = vec![light(WorldHex::new(999, 999), 0)];
+    owner.seal().expect("bounded shape");
+    assert!(owner.validate_with_index(&index).is_err());
+}

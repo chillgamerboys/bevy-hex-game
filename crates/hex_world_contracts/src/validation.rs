@@ -254,6 +254,20 @@ impl Validate for FeatureSummary {
     }
 }
 
+impl Validate for WorldLight {
+    fn validate(&self) -> Result<(), ContractError> {
+        name(&self.id, "light.id")?;
+        if let Some(domain) = &self.domain {
+            name(domain, "light.domain")?;
+        }
+        if self.bright_radius > self.dim_radius {
+            return Err(reject("light", "bright radius exceeds dim radius"));
+        }
+        let _bounded = crate::lighting::influence_bounds(self)?;
+        Ok(())
+    }
+}
+
 impl Validate for ChunkSemantics {
     fn validate(&self) -> Result<(), ContractError> {
         if self.occupancy.len() > 256 {
@@ -281,6 +295,7 @@ impl Validate for ChunkSemantics {
             .checked_add(self.anchors.len())
             .and_then(|value| value.checked_add(self.interiors.len()))
             .and_then(|value| value.checked_add(self.lights.len()))
+            .and_then(|value| value.checked_add(self.light_influences.len()))
             .and_then(|value| value.checked_add(self.objects.len()))
             .ok_or_else(|| reject("semantics", "record count overflow"))?;
         if count > MAX_SEMANTIC_RECORDS {
@@ -300,6 +315,10 @@ impl Validate for ChunkSemantics {
             "interiors",
         )?;
         ordered(self.lights.iter().map(|row| &row.id), "lights")?;
+        ordered(
+            self.light_influences.iter().map(|row| &row.id),
+            "light_influences",
+        )?;
         ordered(self.objects.iter().map(|row| &row.id), "objects")?;
         for liquid in &self.liquids {
             name(&liquid.body_id, "liquid.body_id")?;
@@ -344,14 +363,8 @@ impl Validate for ChunkSemantics {
                 ));
             }
         }
-        for light in &self.lights {
-            name(&light.id, "light.id")?;
-            if let Some(domain) = &light.domain {
-                name(domain, "light.domain")?;
-            }
-            if light.bright_radius > light.dim_radius {
-                return Err(reject("light", "bright radius exceeds dim radius"));
-            }
+        for light in self.lights.iter().chain(&self.light_influences) {
+            light.validate()?;
         }
         for object in &self.objects {
             name(&object.id, "object.id")?;
@@ -397,6 +410,7 @@ fn canonicalize_semantics(semantics: &mut ChunkSemantics) -> Result<(), Contract
         .interiors
         .sort_by(|a, b| (&a.id, a.column, a.floor_level).cmp(&(&b.id, b.column, b.floor_level)));
     semantics.lights.sort_by(|a, b| a.id.cmp(&b.id));
+    semantics.light_influences.sort_by(|a, b| a.id.cmp(&b.id));
     semantics.objects.sort_by(|a, b| a.id.cmp(&b.id));
     for object in &mut semantics.objects {
         for column in &mut object.occupancy {
@@ -910,6 +924,45 @@ impl ChunkPackage {
                 manifest,
             )?;
         }
+        for light in &self.semantics.light_influences {
+            if !manifest.contains(light.position.column)?
+                || !crate::lighting::affects_chunk(light, self)
+            {
+                return Err(reject(
+                    "chunk.light_influences",
+                    "source is outside world or does not affect this chunk",
+                ));
+            }
+            if light.position.column.chunk() == self.coordinate
+                && self
+                    .semantics
+                    .lights
+                    .binary_search_by(|root| root.id.cmp(&light.id))
+                    .ok()
+                    .and_then(|index| self.semantics.lights.get(index))
+                    != Some(light)
+            {
+                return Err(reject(
+                    "chunk.light_influences",
+                    "local influence differs from its root light",
+                ));
+            }
+        }
+        for root in &self.semantics.lights {
+            if self
+                .semantics
+                .light_influences
+                .binary_search_by(|light| light.id.cmp(&root.id))
+                .ok()
+                .and_then(|index| self.semantics.light_influences.get(index))
+                != Some(root)
+            {
+                return Err(reject(
+                    "chunk.light_influences",
+                    "root light lacks its complete local projection",
+                ));
+            }
+        }
         for object in &self.semantics.objects {
             manifest.validate_source_position(&object.region_id, object.origin.column)?;
             for column in &object.occupancy {
@@ -1070,6 +1123,19 @@ impl Validate for WorldPackage {
                 }
             }
         }
+        let expected_lights = crate::lighting::project_lights(self)?;
+        let actual_lights: BTreeMap<_, _> = self
+            .chunks
+            .iter()
+            .filter(|(_, chunk)| !chunk.semantics.light_influences.is_empty())
+            .map(|(coordinate, chunk)| (*coordinate, chunk.semantics.light_influences.clone()))
+            .collect();
+        if expected_lights != actual_lights {
+            return Err(reject(
+                "world.light_influences",
+                "resident light projection differs from complete root-light influence",
+            ));
+        }
         let expected_occupancy = object_occupancy(self)?;
         let actual_occupancy: BTreeMap<_, _> = self
             .chunks
@@ -1141,6 +1207,11 @@ impl Seal for WorldPackage {
     fn seal(&mut self) -> Result<(), ContractError> {
         let mut candidate = self.clone();
         let occupancy = object_occupancy(&candidate)?;
+        let influences = crate::lighting::project_lights(&candidate)?;
+        for (coordinate, chunk) in &mut candidate.chunks {
+            chunk.semantics.light_influences =
+                influences.get(coordinate).cloned().unwrap_or_default();
+        }
         for chunk in candidate.chunks.values_mut() {
             chunk.semantics.occupancy.clear();
         }
@@ -1313,6 +1384,7 @@ inherent_validation!(
     ColumnData,
     RegionDescriptor,
     FeatureSummary,
+    WorldLight,
     ChunkSemantics,
     ChunkPackage,
     WorldManifest,

@@ -309,6 +309,11 @@ pub struct ChunkSemantics {
     pub interiors: Vec<InteriorSpan>,
     /// Authored lights sorted by world-unique ID.
     pub lights: Vec<WorldLight>,
+    /// Complete root-light records influencing any world column in this chunk.
+    /// Sorted by light ID; retains illumination when the uniquely owning root chunk unloads.
+    /// [`WorldPackage::seal`] derives the horizontal dim-radius footprint exactly.
+    #[serde(default)]
+    pub light_influences: Vec<WorldLight>,
     /// Authored objects sorted by world-unique ID.
     pub objects: Vec<ObjectInstance>,
 }

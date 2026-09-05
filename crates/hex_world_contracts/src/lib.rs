@@ -7,12 +7,14 @@
 
 mod geometry;
 mod index;
+mod lighting;
 mod model;
 mod traversal;
 mod validation;
 
 pub use geometry::*;
 pub use index::ManifestIndex;
+pub use lighting::MAX_LIGHT_INFLUENCE_CHUNK_PROBES;
 pub use model::*;
 pub use traversal::*;
 pub use validation::*;
