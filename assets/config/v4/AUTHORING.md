@@ -139,7 +139,10 @@ are also separate acceptance gates.
 ## Windowless acceptance walks
 
 The scripts in `walks/` drive the ordinary actor-owned movement, step, edit and save
-requests. They never teleport actors. Every `MoveTo` stays within the local query's
+requests. They never teleport actors. `party-view-rebase.ron` additionally switches
+the detailed view between distant moving parties and requires three origin rebases.
+Wait budgets count uncapped render updates, so the fixtures deliberately allow
+substantial headroom; timeout errors include elapsed time and actual actor state. Every `MoveTo` stays within the local query's
 64-column radius. Party identities are **`party/0`, `party/1`, ...**, independent
 of region ownership. `--parties N` requests exactly N actors (1..7): declared region
 entries first, then deterministic farthest usable gameplay/transit anchors. If the
