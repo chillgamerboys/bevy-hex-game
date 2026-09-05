@@ -1007,37 +1007,121 @@ fn delayed_old_source_result_loses_admission_after_source_replacement() {
 
 #[test]
 fn distant_catalogue_growth_does_not_load_dormant_payloads_or_enlarge_active_work() {
-    let at = point(1, 1);
-    for distant_count in [0, 80] {
-        let mut regions = vec![(at, 0)];
+    let a = point(1, 1);
+    let b = point(-1_000_000, -1);
+    let mut expected_products = BTreeMap::new();
+    // 8,194 catalogue chunks exceed the seven real fixtures' 3,060 chunks.
+    // Thin dormant products isolate catalogue locality from terrain generation;
+    // the caller-owned MemoryChunkSource is not an RSS/residency measurement.
+    for distant_count in [0, 4096, 8192] {
+        let mut regions = vec![(a, 0), (b, 0)];
         regions
             .extend((0..distant_count).map(|index| (point(10_000 + i64::from(index) * 64, 1), 0)));
         let calls = Arc::new(AtomicUsize::new(0));
-        let released = Arc::new(AtomicBool::new(true));
         let source = ControlledSource {
             inner: MemoryChunkSource::new(world(&regions)).expect("source"),
             calls: Arc::clone(&calls),
-            released,
+            released: Arc::new(AtomicBool::new(true)),
         };
-        let mut runtime =
-            WorldRuntime::new(Arc::new(source), RuntimeConfig::default()).expect("runtime");
-        load(&mut runtime, vec![interest("a", at, 0, 0)]);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        for _ in 0..100 {
-            assert_eq!(runtime.voxel(voxel(at, 2)), QueryResult::Ready(None));
-            assert!(runtime.pump().loaded.is_empty());
+        let index = source
+            .inner
+            .manifest_index()
+            .expect("validated local index");
+        for active in [a, b] {
+            assert_eq!(index.candidate_region_count(active.chunk()), 1);
         }
+        let mut runtime = WorldRuntime::new(
+            Arc::new(source),
+            RuntimeConfig {
+                max_resident_chunks: 2,
+                max_in_flight_jobs: 1,
+                max_publications_per_pump: 1,
+                max_interest_probes: 1,
+                ..RuntimeConfig::default()
+            },
+        )
+        .expect("runtime");
+        assert_eq!(runtime.manifest().chunks.len(), regions.len());
         assert_eq!(
-            runtime.counts(),
-            RuntimeCounts {
-                resident_chunks: 1,
+            calls.load(Ordering::SeqCst),
+            0,
+            "catalogue open loads no bodies"
+        );
+        for centers in [vec![a], vec![a, b]] {
+            let requests = centers
+                .iter()
+                .enumerate()
+                .map(|(id, center)| interest(&format!("party-{id}"), *center, 0, 0))
+                .collect::<Vec<_>>();
+            runtime
+                .set_interests(requests.clone())
+                .expect("fixed islands");
+            let admitted = settle(&mut runtime);
+            assert_eq!(admitted.len(), 1, "only the newly requested island loads");
+            assert_eq!(calls.load(Ordering::SeqCst), centers.len());
+            let fingerprints = resident_fingerprints(&runtime);
+            assert_eq!(
+                fingerprints.keys().copied().collect::<BTreeSet<_>>(),
+                centers.iter().map(|center| center.chunk()).collect()
+            );
+            assert_eq!(
+                &fingerprints,
+                expected_products
+                    .entry(centers.len())
+                    .or_insert_with(|| fingerprints.clone()),
+                "dormant catalogue growth cannot change active source products"
+            );
+            let expected_counts = RuntimeCounts {
+                resident_chunks: centers.len(),
                 in_flight_jobs: 0,
                 queued_chunks: 0,
                 pinned_chunks: 0,
-                modified_chunks: 0
+                modified_chunks: 0,
+            };
+            for _ in 0..100 {
+                // Reordering a union cannot churn residency or its query products.
+                runtime
+                    .set_interests(requests.iter().rev().cloned().collect())
+                    .expect("unchanged union in different order");
+                for center in &centers {
+                    assert_eq!(runtime.voxel(voxel(*center, 2)), QueryResult::Ready(None));
+                    assert_eq!(
+                        runtime.voxel(voxel(*center, 0)),
+                        QueryResult::Ready(Some("stone".into()))
+                    );
+                    let QueryResult::Ready(surfaces) = runtime.surfaces(*center) else {
+                        unreachable!("active exact column must be ready");
+                    };
+                    assert_eq!(
+                        surfaces
+                            .iter()
+                            .map(|surface| (surface.position.level, surface.headroom))
+                            .collect::<Vec<_>>(),
+                        vec![(0, Some(4)), (6, None)]
+                    );
+                }
+                assert_eq!(
+                    runtime.voxel(voxel(point(2, 1), 2)),
+                    QueryResult::OutsideWorld,
+                    "a gap inside an active chunk is outside this thin fixture"
+                );
+                if distant_count > 0 {
+                    assert_eq!(
+                        runtime.voxel(voxel(point(10_000, 1), 2)),
+                        QueryResult::Unloaded(point(10_000, 1).chunk()),
+                        "declared dormant terrain is never interpreted as air"
+                    );
+                }
+                let quiet = runtime.pump();
+                assert!(quiet.loaded.is_empty());
+                assert!(quiet.changed.is_empty());
+                assert!(quiet.removed.is_empty());
+                assert!(quiet.failures.is_empty());
+                assert_eq!(runtime.counts(), expected_counts);
             }
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(resident_fingerprints(&runtime), fingerprints);
+            assert_eq!(calls.load(Ordering::SeqCst), centers.len());
+        }
     }
 }
 
