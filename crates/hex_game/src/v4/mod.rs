@@ -7,6 +7,7 @@
 
 mod art;
 mod atlas;
+mod gpu_completion;
 mod knowledge;
 mod object_edit;
 mod prefetch;
@@ -418,6 +419,7 @@ fn build_app(options: Options) -> Result<App, String> {
         app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
             std::time::Duration::ZERO,
         ));
+        gpu_completion::install(&mut app)?;
     } else {
         app.add_plugins(plugins);
     }
@@ -1374,7 +1376,7 @@ fn update_view(
     if let Ok(mut text) = hud.single_mut() {
         let counts = runtime.0.counts();
         let view = knowledge.selected(&session);
-        **text = format!(
+        let updated = format!(
             "V4 World Explorer | {} regions | {}\n{}\n{} resident | {} rendered | {} loading\n{} explored columns | {} known landmarks{}\nClick: walk | D+click: remove | Escape: cancel edit\nS: save | Tab: party | Right-drag: orbit | Scroll: zoom | M: atlas\nT: {} | Space: one step",
             runtime.0.manifest().regions.len(),
             view.map_or("loading party", |view| view.principal.as_str()),
@@ -1403,6 +1405,9 @@ fn update_view(
                 "continuous mode"
             }
         );
+        if **text != updated {
+            **text = updated;
+        }
     }
     let Some(actor) = session
         .actors
@@ -1429,7 +1434,7 @@ fn update_view(
             session.pitch
         };
         let distance = if options.view == "top" {
-            (f32::from(u16::try_from(options.radius).unwrap_or(224)) * 3.6).max(130.0)
+            (f32::from(u16::try_from(options.radius).unwrap_or(224)) * 4.0).max(130.0)
         } else {
             session.distance
         };
@@ -1449,6 +1454,7 @@ struct CaptureReceipt {
     frames: u64,
     settled_frames: u64,
     settled_frame_samples_ms: Vec<f64>,
+    gpu_completion: gpu_completion::CompletionReceipt,
     process_id: u32,
     captured_unix_seconds: f64,
     live_entities: usize,
@@ -1488,8 +1494,24 @@ fn capture(
     knowledge: Res<WorldKnowledge>,
     entities: Query<Entity>,
     walk: Option<Res<walk::WalkHarness>>,
+    gpu: Option<Res<gpu_completion::GpuCompletion>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let completed_batches = if options.capture.is_some() {
+        match gpu
+            .as_deref()
+            .ok_or_else(|| "windowless capture is missing GPU completion pacing".to_owned())
+            .and_then(gpu_completion::GpuCompletion::completed_batches)
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                session.error = Some(error);
+                0
+            }
+        }
+    } else {
+        0
+    };
     if let Some(error) = &session.error {
         error!("V4 world failed: {error}");
         if options.capture.is_some() {
@@ -1499,6 +1521,7 @@ fn capture(
     }
     if session.capture_requested
         || session.settled_frames < options.settle_frames
+        || (options.capture.is_some() && completed_batches < options.settle_frames)
         || !knowledge.idle()
         || has_pending_activity(&session)
         || walk.as_ref().is_some_and(|walk| !walk.completed())
@@ -1530,12 +1553,24 @@ fn capture(
     let tail = usize::try_from(session.settled_frames)
         .unwrap_or(session.frame_milliseconds.len())
         .min(session.frame_milliseconds.len());
+    let Some(completion) = gpu.as_deref().cloned() else {
+        session.error = Some("windowless capture lost GPU completion pacing".into());
+        return;
+    };
+    let gpu_receipt = match completion.receipt() {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            session.error = Some(error);
+            return;
+        }
+    };
     let selected = knowledge.selected(&session);
-    let receipt = CaptureReceipt {
+    let mut receipt = CaptureReceipt {
         package: options.package.display().to_string(),
         world_fingerprint: format!("{:016x}", runtime.0.manifest().fingerprint),
         frames: session.frames,
         settled_frames: session.settled_frames,
+        gpu_completion: gpu_receipt,
         settled_frame_samples_ms: session
             .frame_milliseconds
             .iter()
@@ -1579,16 +1614,15 @@ fn capture(
         native_motion: "HUMAN-MOTION-PENDING",
         scripted_walk,
     };
-    let receipt_bytes = match serde_json::to_vec_pretty(&receipt) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            session.error = Some(error.to_string());
-            return;
-        }
-    };
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
-            let result = crate::capture::write_png(&captured.image, &output).and_then(|stats| {
+            // Readback is later than the request. A timeout in that render batch
+            // must still prevent publication of an authoritative success receipt.
+            let result = (|| -> Result<(), String> {
+                receipt.gpu_completion = completion.receipt()?;
+                let receipt_bytes =
+                    serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
+                let stats = crate::capture::write_png(&captured.image, &output)?;
                 if stats.brightest <= 8 || !stats.has_coverage {
                     return Err("capture is black or lacks visual coverage".into());
                 }
@@ -1601,7 +1635,7 @@ fn capture(
                     file.sync_all()
                 })
                 .map_err(|error| error.to_string())
-            });
+            })();
             match result {
                 Ok(()) => {
                     info!("V4 capture saved: {}", output.display());

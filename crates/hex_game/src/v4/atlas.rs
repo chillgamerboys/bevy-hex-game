@@ -394,10 +394,13 @@ pub(super) fn update(
         state.knowledge_stamp = stamp;
     }
     if let Ok(mut text) = legend.single_mut() {
-        **text = selected.map_or_else(|| "World geography | Private exploration loading...".into(), |view| {
+        let updated = selected.map_or_else(|| "World geography | Private exploration loading...".into(), |view| {
             let landmarks = view.landmarks.values().filter(|landmark| is_summary_landmark(runtime.0.manifest(), &landmark.id)).count();
             format!("World geography | Drag: pan | Scroll: zoom | M: close\n{}: {} explored columns | {} known landmarks{}\nCyan: private exploration | Yellow: known landmarks", view.principal, view.discovered_column_count(), landmarks, if view.landmark_catalogue_complete { "" } else { " (nearby restore)" })
         });
+        if **text != updated {
+            **text = updated;
+        }
     }
     if keys.just_pressed(KeyCode::KeyM) {
         state.visible = !state.visible;
