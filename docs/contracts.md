@@ -20,6 +20,26 @@ Detail lives in the doc named in the last column. Where a contract is *asked* ra
 than agreed, the fallback the gameplay side ships without it is in
 [boundary.md](planning/boundary.md).
 
+## V4 world platform
+
+These fresh interfaces are implemented in the opt-in V4 explorer on the V4 foundation
+wave. They do not replace the shipped V3 rows below or promise V3 save compatibility.
+The implementation and ownership are specified in
+[world-platform-v4.md](systems/world-platform-v4.md).
+
+| Contract | Publisher | Consumer | Status |
+| --- | --- | --- | --- |
+| `WorldSpec` / `RegionSpec`, resolved boundary inputs | world authoring | deterministic regional compiler | partial — V4 authoring tool |
+| `WorldManifest`, `RegionDescriptor`, `ChunkPackage`, stable integer identities | world compiler | world runtime and summary atlas | partial — V4 pipeline |
+| `WorldQuery`, explicit availability, `ResidencyRequest` and pins | world runtime / operation owners | movement, sight, edits and presentation | partial — V4 consumers |
+| `WorldEditTransaction`, `WorldObjectEditTransaction`, partition revisions and deltas | gameplay/tool requester → world authority | local projections, persistence and reconnect | partial — V4 runtime and loopback acceptance |
+| Opaque owner attachments in the atomic world checkpoint | owning gameplay adapter → persistence | restored gameplay owner | partial — V4 explorer actor checkpoints |
+| Observer facts, remembered supports/landmarks and exact visible absence | world perception | principal-private knowledge and atlas | partial — V4 explorer; production gameplay fog consumer remains separate |
+
+`hex_world_contracts` is a shared vocabulary boundary, not a second world authority.
+Encounter scheduling and action-point rules remain gameplay-owned and are not encoded
+in the terrain compiler or residency clock.
+
 ## Terrain and geometry
 
 | Contract | Publisher | Consumer | Status | Specified in |
