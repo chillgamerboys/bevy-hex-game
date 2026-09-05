@@ -70,6 +70,9 @@ Exploration disables tactical terrain shroud while its pawn moves independently
 of gameplay perception, and restores the previous presentation mode on exit.
 Windowless scripts temporarily run exploration at real simulation speed and restore
 their previous clock speed when the session ends.
+Automated image captures omit the native world inspector, whose renderer requires
+a Winit surface. Ordinary development launches retain the inspector and its input
+ownership checks.
 
 ## Verification and future controls
 
