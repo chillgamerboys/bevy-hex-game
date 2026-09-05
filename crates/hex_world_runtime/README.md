@@ -142,7 +142,12 @@ The host creates `AuthorizedInterest` after deciding the authenticated principal
 and authorized chunks. It deliberately cannot be deserialized from a client's
 claim. `DisclosureStream` sends only already-declassified partitions belonging to
 that principal within those interests. Its retained replay is bounded by count
-and bytes. Changed interests discard old-scope replay. `reconnect` returns retained
+and bytes. New streams and changed interests require a scoped checkpoint; a matching
+sequence alone does not prove that the receiver has the newly authorized memories.
+`checkpoint_page` mutates the outbox to record the issued snapshot, and only its
+matching completed checkpoint ACK establishes that scope. Ordinary incremental or
+old-scope ACKs cannot do so. Changed interests discard old-scope replay.
+`reconnect` returns retained
 contiguous batches or requests `checkpoint_page` calls, each bounded by partition
 count and bytes. Checkpoint fingerprints cover only the authorized private scope,
 so unrelated party updates do not invalidate a reconnect. A changed scoped snapshot

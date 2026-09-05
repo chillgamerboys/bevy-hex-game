@@ -215,6 +215,15 @@ impl KnowledgeCheckpointPage {
     }
 }
 
+/// Exact private snapshot covered by a completed checkpoint acknowledgment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeCheckpointIdentity {
+    /// Principal and interest scope of the acknowledged snapshot.
+    pub scope_fingerprint: u64,
+    /// Exact private snapshot fingerprint, independent of unrelated party updates.
+    pub snapshot_fingerprint: u64,
+}
+
 /// Durable acknowledgment, emitted only after private partitions and cursor commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeAck {
@@ -224,6 +233,8 @@ pub struct KnowledgeAck {
     pub sequence: u64,
     /// False while a multi-page checkpoint remains incomplete.
     pub checkpoint_complete: bool,
+    /// Present only for checkpoint pages; ordinary incremental ACKs cannot establish a new scope.
+    pub checkpoint: Option<KnowledgeCheckpointIdentity>,
 }
 
 /// Connection-local bounded replay outbox. It reads only stored declassified knowledge.
@@ -233,6 +244,8 @@ pub struct DisclosureStream {
     config: DisclosureConfig,
     sequence: u64,
     acknowledged: u64,
+    checkpoint_required: bool,
+    pending_checkpoint: Option<(u64, u64, u64)>,
     retained: VecDeque<(SequencedKnowledgeBatch, usize)>,
     retained_bytes: usize,
 }
@@ -274,6 +287,8 @@ impl DisclosureStream {
             config,
             sequence,
             acknowledged: 0,
+            checkpoint_required: true,
+            pending_checkpoint: None,
             retained: VecDeque::new(),
             retained_bytes: 0,
         })
@@ -290,6 +305,8 @@ impl DisclosureStream {
         }
         if chunks != self.scope.chunks {
             self.scope.chunks = chunks;
+            self.checkpoint_required = true;
+            self.pending_checkpoint = None;
             self.retained.clear();
             self.retained_bytes = 0;
         }
@@ -379,6 +396,22 @@ impl DisclosureStream {
                 "ACK is outside this stream's committed sequence",
             ));
         }
+        if let Some(checkpoint) = &ack.checkpoint {
+            if self.pending_checkpoint
+                != Some((
+                    checkpoint.scope_fingerprint,
+                    checkpoint.snapshot_fingerprint,
+                    ack.sequence,
+                ))
+                || checkpoint.scope_fingerprint != self.scope.fingerprint()?
+            {
+                return Err(RuntimeError::new(
+                    ErrorKind::Conflict,
+                    "checkpoint ACK does not match the current issued scope and snapshot",
+                ));
+            }
+            self.checkpoint_required = false;
+        }
         self.acknowledged = self.acknowledged.max(ack.sequence);
         Ok(())
     }
@@ -386,6 +419,9 @@ impl DisclosureStream {
     /// Returns contiguous retained replay or requests bounded scoped checkpoint pages.
     #[must_use]
     pub fn reconnect(&self, after_sequence: u64) -> KnowledgeReplay {
+        if self.checkpoint_required {
+            return KnowledgeReplay::ResyncRequired;
+        }
         if after_sequence == self.sequence {
             return KnowledgeReplay::UpToDate;
         }
@@ -409,7 +445,7 @@ impl DisclosureStream {
     /// Produces one bounded reconnect page; unrelated principal updates do not invalidate it.
     /// A changed scoped snapshot requires restarting from a fresh first page.
     pub fn checkpoint_page(
-        &self,
+        &mut self,
         store: &KnowledgeStore,
         cursor: Option<&KnowledgeCheckpointCursor>,
     ) -> RuntimeResult<KnowledgeCheckpointPage> {
@@ -490,6 +526,11 @@ impl DisclosureStream {
         };
         page.seal()?;
         let _bounded = encode_bounded(&page, self.config.max_batch_bytes)?;
+        self.pending_checkpoint = Some((
+            page.scope_fingerprint,
+            page.snapshot_fingerprint,
+            page.watermark,
+        ));
         Ok(page)
     }
 
@@ -531,6 +572,7 @@ impl KnowledgeStore {
                 stream_id: batch.stream_id.clone(),
                 sequence: batch.sequence,
                 checkpoint_complete: true,
+                checkpoint: None,
             });
         }
         let mut cursor = cursor_for(&head, &batch.principal, &batch.stream_id)
@@ -556,6 +598,7 @@ impl KnowledgeStore {
             stream_id: batch.stream_id.clone(),
             sequence: batch.sequence,
             checkpoint_complete: true,
+            checkpoint: None,
         })
     }
 
@@ -597,6 +640,10 @@ impl KnowledgeStore {
                 stream_id: page.stream_id.clone(),
                 sequence: page.watermark,
                 checkpoint_complete: page.next.is_none(),
+                checkpoint: Some(KnowledgeCheckpointIdentity {
+                    scope_fingerprint: page.scope_fingerprint,
+                    snapshot_fingerprint: page.snapshot_fingerprint,
+                }),
             });
         }
         let mut cursor = cursor_for(&head, &page.principal, &page.stream_id)
@@ -643,6 +690,10 @@ impl KnowledgeStore {
             stream_id: page.stream_id.clone(),
             sequence: page.watermark,
             checkpoint_complete: page.next.is_none(),
+            checkpoint: Some(KnowledgeCheckpointIdentity {
+                scope_fingerprint: page.scope_fingerprint,
+                snapshot_fingerprint: page.snapshot_fingerprint,
+            }),
         })
     }
 

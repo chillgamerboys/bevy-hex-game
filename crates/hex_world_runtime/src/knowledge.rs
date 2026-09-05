@@ -636,6 +636,11 @@ impl KnowledgeStore {
     }
 
     pub(crate) fn validate_partition(&self, partition: &KnowledgePartition) -> RuntimeResult<()> {
+        if !self.manifest_index.contains_chunk(partition.coordinate) {
+            return Err(RuntimeError::invalid(
+                "knowledge partition belongs to an outside-world chunk",
+            ));
+        }
         if partition.discovered_columns.len() > 256
             || partition.surfaces.len() > self.config.max_surfaces_per_partition
             || partition.landmarks.len() > self.config.max_landmarks_per_partition

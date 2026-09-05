@@ -1819,6 +1819,14 @@ fn disclosure_filters_principal_and_interest_then_durably_orders_and_deduplicate
         },
     )
     .expect("stream");
+    let mut receiver = knowledge_store(&temp, "receiver", &package);
+    let initial = stream
+        .checkpoint_page(&host, None)
+        .expect("initial scoped checkpoint");
+    let ack = receiver
+        .apply_checkpoint_page_durable(&grant, &initial)
+        .expect("durable initial scope");
+    stream.acknowledge(&ack).expect("scope established");
     let changed = BTreeSet::from([a.chunk(), b.chunk()]);
     let first = stream
         .publish(&host, &changed)
@@ -1928,7 +1936,7 @@ fn reconnect_checkpoint_is_paged_private_and_restart_safe() {
             .collect(),
     );
     let grant = scope("party-a", &columns);
-    let stream = DisclosureStream::resume(
+    let mut stream = DisclosureStream::resume(
         "reconnected",
         grant.clone(),
         7,
@@ -2015,7 +2023,7 @@ fn checkpoint_snapshot_changes_only_for_scoped_principal_and_restarts_on_change(
             observation("party-a", b, 1, 0),
         ],
     );
-    let stream = DisclosureStream::resume(
+    let mut stream = DisclosureStream::resume(
         "stream",
         scope("party-a", &[a, b]),
         3,
@@ -2471,4 +2479,122 @@ fn attachment_budgets_and_corruption_fail_without_interpreting_owner_bytes() {
         .restore_save(&save, IoLimits::default())
         .expect("metadata-only restore");
     assert!(restored.attachment("gameplay", "a").is_err());
+}
+
+#[test]
+fn empty_outside_world_knowledge_cannot_poison_a_durable_head() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let mut store = knowledge_store(&temp, "knowledge", &package);
+    let at = point(-1, -1);
+    remember(
+        &mut store,
+        "party-a",
+        "valid",
+        vec![observation("party-a", at, 1, 0)],
+    );
+    let before = fs::read(temp.child("knowledge/knowledge.ron")).expect("existing head");
+    let outside = point(10_000, 10_000).chunk();
+    let mut empty = KnowledgePartition::new("party-a", outside);
+    empty.revision = 1;
+    empty.seal().expect("valid shape, outside finite source");
+    assert!(store
+        .compare_and_write(
+            "party-a",
+            "outside",
+            &BTreeMap::from([(outside, 0)]),
+            BTreeMap::from([(outside, empty)])
+        )
+        .is_err());
+    assert_eq!(
+        fs::read(temp.child("knowledge/knowledge.ron")).expect("unchanged head"),
+        before
+    );
+    let reopened = knowledge_store(&temp, "knowledge", &package);
+    assert_eq!(
+        reopened.discovered_chunks("party-a").expect("valid reopen"),
+        vec![at.chunk()]
+    );
+}
+
+#[test]
+fn current_sequence_does_not_claim_new_interest_scope_is_synchronized() {
+    let package = knowledge_world();
+    let temp = TempRoot::new();
+    let a = point(-1, -1);
+    let b = point(33, 1);
+    let mut host = knowledge_store(&temp, "host", &package);
+    remember(
+        &mut host,
+        "party-a",
+        "known",
+        vec![
+            observation("party-a", a, 1, 0),
+            observation("party-a", b, 1, 0),
+        ],
+    );
+    let mut stream = DisclosureStream::new(
+        "scope-stream",
+        scope("party-a", &[a]),
+        DisclosureConfig::default(),
+    )
+    .expect("stream");
+    assert!(
+        matches!(stream.reconnect(0), KnowledgeReplay::ResyncRequired),
+        "new stream may have undispatched stored memories"
+    );
+    let mut receiver = knowledge_store(&temp, "receiver", &package);
+    let initial = stream.checkpoint_page(&host, None).expect("initial scope");
+    let initial_ack = receiver
+        .apply_checkpoint_page_durable(&scope("party-a", &[a]), &initial)
+        .expect("initial scope ack");
+    stream
+        .acknowledge(&initial_ack)
+        .expect("ack scoped checkpoint");
+    assert!(matches!(stream.reconnect(0), KnowledgeReplay::UpToDate));
+    let batch = stream
+        .publish(&host, &BTreeSet::from([a.chunk()]))
+        .expect("publish")
+        .expect("batch");
+    let ordinary = receiver
+        .apply_sequence_durable(&scope("party-a", &[a]), &batch)
+        .expect("incremental ack");
+    stream.acknowledge(&ordinary).expect("ordinary ack");
+    stream
+        .set_interests(BTreeSet::from([b.chunk()]))
+        .expect("new interest");
+    assert!(matches!(
+        stream.reconnect(1),
+        KnowledgeReplay::ResyncRequired
+    ));
+    stream
+        .acknowledge(&ordinary)
+        .expect("old incremental ACK remains harmless");
+    assert!(matches!(
+        stream.reconnect(1),
+        KnowledgeReplay::ResyncRequired
+    ));
+    assert!(
+        stream.acknowledge(&initial_ack).is_err(),
+        "old scope checkpoint cannot establish new scope"
+    );
+    let next = stream
+        .checkpoint_page(&host, None)
+        .expect("new scoped snapshot");
+    let ack = receiver
+        .apply_checkpoint_page_durable(&scope("party-a", &[b]), &next)
+        .expect("new scope durable");
+    stream.acknowledge(&ack).expect("new scope ack");
+    assert!(matches!(stream.reconnect(1), KnowledgeReplay::UpToDate));
+    assert!(receiver
+        .read("party-a", b.chunk())
+        .expect("new knowledge")
+        .is_some());
+    stream
+        .set_interests(BTreeSet::from([a.chunk()]))
+        .expect("return to first scope");
+    assert!(
+        stream.acknowledge(&initial_ack).is_err(),
+        "returning to an old scope still needs a currently issued checkpoint"
+    );
 }

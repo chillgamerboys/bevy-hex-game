@@ -17,7 +17,8 @@ mod source;
 pub use attachments::{AttachmentUpdate, CheckpointAttachment};
 pub use disclosure::{
     AuthorizedInterest, DisclosureConfig, DisclosureStream, KnowledgeAck,
-    KnowledgeCheckpointCursor, KnowledgeCheckpointPage, KnowledgeReplay, SequencedKnowledgeBatch,
+    KnowledgeCheckpointCursor, KnowledgeCheckpointIdentity, KnowledgeCheckpointPage,
+    KnowledgeReplay, SequencedKnowledgeBatch,
 };
 pub use edits::{ChunkDelta, WorldDelta};
 pub use history::HistoryCounts;
