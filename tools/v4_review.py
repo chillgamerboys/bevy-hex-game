@@ -40,6 +40,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_SCRIPT = 262_144
 MAX_JSON = 32 * 1024 * 1024
 MAX_LOG = 128 * 1024 * 1024
+MAX_MEMORY_PROBE_FAILURE_DETAILS = 8
+MAX_MEMORY_PROBE_DETAIL = 512
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SKIP_SOURCE_DIRS = {".git", ".context", "target", "node_modules", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache"}
 RELEVANT_ENV = {"CARGO_TARGET_DIR", "CARGO_BUILD_JOBS", "CARGO_INCREMENTAL", "RUSTFLAGS", "RUSTDOCFLAGS", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_TARGET", "CARGO_ENCODED_RUSTFLAGS", "BEVY_ASSET_ROOT"}
@@ -512,7 +514,10 @@ def peak_rss(stderr: str) -> int | None:
 
 def group_is_gone(group: int) -> bool:
     """Darwin can return EPERM for an already-empty reaped process group."""
-    result = subprocess.run(["ps", "-axo", "pgid=,stat="], capture_output=True, check=False)
+    try:
+        result = subprocess.run(["ps", "-axo", "pgid=,stat="], capture_output=True, timeout=2, check=False)
+    except (subprocess.TimeoutExpired, OSError):
+        return False  # Failure to inspect a group cannot prove it is gone.
     if result.returncode:
         return False  # Unknown ownership/cleanup remains a failure, never a pass.
     for line in result.stdout.decode().splitlines():
@@ -573,39 +578,82 @@ def parse_game_memory(rows: str, group: int, timestamp: float) -> list[dict[str,
     return samples
 
 
+def sample_game_memory(group: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Optional telemetry cannot abort the owned build/game or invent RSS samples."""
+    timestamp = time.time()
+    try:
+        sampled = subprocess.run(["ps", "-axo", "pgid=,pid=,rss=,comm="], capture_output=True, timeout=2, check=False)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        return [], {"unix_seconds": timestamp, "type": type(error).__name__,
+                    "message": str(error)[:MAX_MEMORY_PROBE_DETAIL]}
+    if sampled.returncode:
+        return [], {"unix_seconds": timestamp, "type": "NonzeroExit", "exit_code": sampled.returncode,
+                    "message": sampled.stderr.decode(errors="replace")[:MAX_MEMORY_PROBE_DETAIL]}
+    return parse_game_memory(sampled.stdout.decode(errors="replace"), group, timestamp), None
+
+
 def run_process(argv: list[str], cwd: Path, environment: dict[str, str], output: Path, timeout: float) -> dict[str, Any]:
     started = time.monotonic()
-    memory = []
+    memory: list[dict[str, Any]] = []
+    probe_attempts = 0
+    probe_failures = 0
+    failure_details: list[dict[str, Any]] = []
     with (output / "cargo.stdout.log").open("xb") as stdout, (output / "cargo.stderr.log").open("xb") as stderr:
         process = subprocess.Popen(argv, cwd=cwd, env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
         timed_out = False
+
+        def result() -> dict[str, Any]:
+            return {"exit_code": process.returncode, "timed_out": timed_out,
+                    "elapsed_seconds": time.monotonic() - started,
+                    "owned_process_group": process.pid, "game_memory_samples": memory,
+                    "game_memory_probe_attempts": probe_attempts, "game_memory_probe_failure_count": probe_failures,
+                    "game_memory_probe_failures": failure_details,
+                    "game_memory_probe_failure_details_omitted": probe_failures - len(failure_details),
+                    "game_memory_scope": "owned hex_v4 process RSS sampled by ps at approximately 100 ms; excludes compiler, is not a separate GPU allocation measure; failed probes supply no samples"}
+
+        def aborted(error: BaseException, cleanup_error: BaseException | None) -> RunAborted:
+            details = result()
+            details["original_error"] = {"type": type(error).__name__, "message": str(error)[:2048]}
+            details["cleanup_error"] = None if cleanup_error is None else {
+                "type": type(cleanup_error).__name__, "message": str(cleanup_error)[:2048]}
+            details["cleanup_status"] = "completed" if cleanup_error is None else "failed-or-unconfirmed"
+            return RunAborted(error, details)
+
         try:
             while True:
                 remaining = timeout - (time.monotonic() - started)
                 if remaining <= 0:
                     timed_out = True
-                    terminate_group(process)
-                    code = process.returncode
+                    code = process.poll()
                     break
                 try:
                     code = process.wait(timeout=min(0.1, remaining))
                     break
                 except subprocess.TimeoutExpired:
-                    # ps reads process metadata only. Cargo/rustc and other tasks
-                    # never enter the game's memory series.
+                    # Only optional metadata is sampled here, never other tasks' RSS.
                     if platform.system() == "Darwin" and "hex_v4" in argv and len(memory) < 100_000:
-                        sampled = subprocess.run(["ps", "-axo", "pgid=,pid=,rss=,comm="], capture_output=True, timeout=2, check=False)
-                        if sampled.returncode == 0:
-                            memory.extend(parse_game_memory(sampled.stdout.decode(errors="replace"), process.pid, time.time()))
+                        probe_attempts += 1
+                        samples, failure = sample_game_memory(process.pid)
+                        memory.extend(samples[:100_000 - len(memory)])
+                        if failure is not None:
+                            probe_failures += 1
+                            if len(failure_details) < MAX_MEMORY_PROBE_FAILURE_DETAILS:
+                                failure_details.append(failure)
         except BaseException as error:
-            terminate_group(process)
-            raise RunAborted(error, {"exit_code": process.returncode, "timed_out": timed_out,
-                                    "elapsed_seconds": time.monotonic() - started}) from error
-        if code:
-            terminate_group(process)
-    return {"exit_code": code, "timed_out": timed_out, "elapsed_seconds": time.monotonic() - started,
-            "game_memory_samples": memory,
-            "game_memory_scope": "owned hex_v4 process RSS sampled by ps at approximately 100 ms; excludes compiler, is not a separate GPU allocation measure"}
+            cleanup_error = None
+            try:
+                terminate_group(process)
+            except BaseException as failed_cleanup:
+                cleanup_error = failed_cleanup
+            raise aborted(error, cleanup_error) from error
+        if timed_out or code:
+            original = (subprocess.TimeoutExpired(argv, timeout) if timed_out else
+                        ReviewError(f"owned Cargo/game process exited with code {code}"))
+            try:
+                terminate_group(process)
+            except BaseException as cleanup_error:
+                raise aborted(original, cleanup_error) from original
+        return result()
 
 
 def parser() -> argparse.ArgumentParser:
@@ -795,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
 def self_test() -> int:
     """Lightweight parser/provenance/PNG/timeout tests; no Cargo, GPU or window."""
     import unittest
-    from unittest.mock import patch
+    from unittest.mock import Mock, patch
     from contextlib import redirect_stderr, redirect_stdout
     import copy
     import io
@@ -1028,6 +1076,97 @@ def self_test() -> int:
                 self.assertTrue((Path(directory) / "cargo.stderr.log").exists())
             self.assertEqual(peak_rss("   123456 maximum resident set size\n"), 123456)
             self.assertIsNone(peak_rss("no measurement"))
+
+        def test_optional_memory_probe_failures_leave_owned_process_running(self) -> None:
+            # A real small child must finish its work despite all three probe failures.
+            failures = [subprocess.TimeoutExpired("ps", 2), PermissionError(1, "probe denied"),
+                        subprocess.CompletedProcess(["ps"], 1, b"", b"metadata unavailable")]
+
+            def probe(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+                self.assertEqual(args[0][0], "ps")
+                outcome = failures.pop(0) if failures else subprocess.CompletedProcess(["ps"], 1, b"", b"unavailable")
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return outcome
+
+            with tempfile.TemporaryDirectory() as directory, \
+                 patch.object(platform, "system", return_value="Darwin"), \
+                 patch.object(subprocess, "run", side_effect=probe), \
+                 patch.object(sys.modules[__name__], "terminate_group") as cleanup:
+                record = run_process([sys.executable, "-c", "import time; time.sleep(0.55); print('owned-work-completed')", "hex_v4"],
+                                     ROOT, dict(os.environ), Path(directory), 5)
+                self.assertEqual(record["exit_code"], 0)
+                self.assertFalse(record["timed_out"])
+                self.assertIn("owned-work-completed", (Path(directory) / "cargo.stdout.log").read_text())
+                self.assertEqual(record["game_memory_samples"], [])
+                self.assertGreaterEqual(record["game_memory_probe_failure_count"], 3)
+                self.assertEqual([failure["type"] for failure in record["game_memory_probe_failures"][:3]],
+                                 ["TimeoutExpired", "PermissionError", "NonzeroExit"])
+                cleanup.assert_not_called()
+
+        def test_memory_probe_failure_details_are_bounded(self) -> None:
+            owned = Mock(pid=4242, returncode=None)
+            remaining = MAX_MEMORY_PROBE_FAILURE_DETAILS + 4
+
+            def wait(**kwargs: Any) -> int:
+                nonlocal remaining
+                if remaining:
+                    remaining -= 1
+                    raise subprocess.TimeoutExpired("owned", 0.1)
+                owned.returncode = 0
+                return 0
+
+            owned.wait.side_effect = wait
+            with tempfile.TemporaryDirectory() as directory, \
+                 patch.object(subprocess, "Popen", return_value=owned), \
+                 patch.object(platform, "system", return_value="Darwin"), \
+                 patch.object(subprocess, "run", side_effect=OSError("x" * 2000)):
+                record = run_process(["hex_v4"], ROOT, {}, Path(directory), 5)
+            self.assertEqual(record["exit_code"], 0)
+            self.assertEqual(record["game_memory_probe_failure_count"], MAX_MEMORY_PROBE_FAILURE_DETAILS + 4)
+            self.assertEqual(len(record["game_memory_probe_failures"]), MAX_MEMORY_PROBE_FAILURE_DETAILS)
+            self.assertEqual(record["game_memory_probe_failure_details_omitted"], 4)
+            self.assertTrue(all(len(row["message"]) <= MAX_MEMORY_PROBE_DETAIL for row in record["game_memory_probe_failures"]))
+            self.assertEqual(record["game_memory_samples"], [])
+
+        def test_cleanup_failure_preserves_original_error_and_owned_identity(self) -> None:
+            original = RuntimeError("original wait failure")
+            owned = Mock(pid=4242, returncode=None)
+            owned.wait.side_effect = original
+            with tempfile.TemporaryDirectory() as directory, \
+                 patch.object(subprocess, "Popen", return_value=owned), \
+                 patch.object(sys.modules[__name__], "terminate_group", side_effect=PermissionError(1, "cleanup denied")) as cleanup:
+                with self.assertRaises(RunAborted) as caught:
+                    run_process(["owned"], ROOT, {}, Path(directory), 5)
+                cleanup.assert_called_once_with(owned)
+            self.assertIs(caught.exception.__cause__, original)
+            self.assertEqual(caught.exception.result["original_error"]["message"], "original wait failure")
+            self.assertEqual(caught.exception.result["cleanup_error"]["type"], "PermissionError")
+            self.assertEqual(caught.exception.result["cleanup_status"], "failed-or-unconfirmed")
+            self.assertEqual(caught.exception.result["owned_process_group"], 4242)
+            self.assertIsNone(caught.exception.result["exit_code"])
+
+        def test_nonzero_exit_and_timeout_survive_failed_cleanup(self) -> None:
+            for timeout, exit_code in [(5, 17), (0, None)]:
+                with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as directory:
+                    owned = Mock(pid=4242, returncode=exit_code)
+                    owned.wait.return_value = exit_code
+                    owned.poll.return_value = exit_code
+                    with patch.object(subprocess, "Popen", return_value=owned), \
+                         patch.object(sys.modules[__name__], "terminate_group", side_effect=PermissionError(1, "cleanup denied")) as cleanup:
+                        with self.assertRaises(RunAborted) as caught:
+                            run_process(["owned"], ROOT, {}, Path(directory), timeout)
+                        cleanup.assert_called_once_with(owned)
+                    record = caught.exception.result
+                    self.assertEqual(record["exit_code"], exit_code)
+                    self.assertEqual(record["timed_out"], timeout == 0)
+                    self.assertEqual(record["original_error"]["type"], "TimeoutExpired" if timeout == 0 else "ReviewError")
+                    self.assertEqual(record["cleanup_error"]["type"], "PermissionError")
+
+        def test_failed_group_probe_cannot_claim_cleanup_complete(self) -> None:
+            for failure in [PermissionError(1, "denied"), subprocess.TimeoutExpired("ps", 2)]:
+                with self.subTest(failure=type(failure).__name__), patch.object(subprocess, "run", side_effect=failure):
+                    self.assertFalse(group_is_gone(4242))
 
         def test_memory_samples_exclude_compilers_and_unrelated_games(self) -> None:
             rows = "42 81 100 /some workspace/map-test/hex_v4\n42 82 900 /bin/rustc\n43 83 500 /other/hex_v4\n42 84 200 /bin/hex_v4-helper\n42 bad 200 /bin/hex_v4\n"
