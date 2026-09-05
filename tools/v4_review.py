@@ -336,6 +336,7 @@ def validate_receipt(receipt: dict[str, Any], package: dict[str, Any], walk: dic
     fingerprint = None
     previous_tick = previous_moves = 0
     issued: dict[str, tuple[Any, Any]] = {}
+    removals: dict[str, int] = {}
     for index, (row, command) in enumerate(zip(rows, walk["steps"])):
         if not isinstance(row, dict) or row.get("step") != index or row.get("command") != command or row.get("script") != walk["id"]:
             raise ReviewError(f"script step {index} does not match the supplied source")
@@ -375,6 +376,20 @@ def validate_receipt(receipt: dict[str, Any], package: dict[str, Any], walk: dic
         if len(by_id) != len(actors):
             raise ReviewError("walk receipt has invalid actor identities")
         kind, arguments = next(iter(command.items()))
+        if kind in ("RemoveObject", "WaitObject"):
+            edits = nonnegative_int(row.get("successful_object_edits"), "successful object edits")
+            if kind == "RemoveObject":
+                if row.get("observed_object_present") is not True or row.get("pending_object_request") != arguments["object_id"]:
+                    raise ReviewError("object removal has no present exact source or queued intent")
+                removals[arguments["object_id"]] = edits
+            else:
+                if row.get("observed_object_present") is not arguments["present"] or row.get("observed_revision") is None:
+                    raise ReviewError("object assertion differs from available exact source")
+                if any(row.get(field) for field in ("pending_object_request", "object_removal_pending", "cancel_object_edit_pending")):
+                    raise ReviewError("object assertion completed with a pending command")
+                before_remove = removals.get(arguments["object_id"])
+                if not arguments["present"] and before_remove is not None and edits <= before_remove:
+                    raise ReviewError("object removal has no successful transaction acknowledgement")
         actor = by_id.get(arguments.get("actor"))
         if "actor" in arguments and actor is None:
             raise ReviewError("walk command actor is absent from receipt")
@@ -542,25 +557,55 @@ def terminate_group(process: subprocess.Popen[bytes]) -> None:
     process.wait(timeout=5)
 
 
+def parse_game_memory(rows: str, group: int, timestamp: float) -> list[dict[str, Any]]:
+    """Only the exact game executable in the driver's owned process group counts."""
+    samples = []
+    for line in rows.splitlines():
+        fields = line.strip().split(None, 3)
+        if len(fields) != 4 or fields[0] != str(group) or Path(fields[3]).name != "hex_v4":
+            continue
+        try:
+            pid, kibibytes = int(fields[1]), int(fields[2])
+        except ValueError:
+            continue
+        if pid > 0 and kibibytes > 0:
+            samples.append({"unix_seconds": timestamp, "pid": pid, "rss_bytes": kibibytes * 1024})
+    return samples
+
+
 def run_process(argv: list[str], cwd: Path, environment: dict[str, str], output: Path, timeout: float) -> dict[str, Any]:
     started = time.monotonic()
+    memory = []
     with (output / "cargo.stdout.log").open("xb") as stdout, (output / "cargo.stderr.log").open("xb") as stderr:
         process = subprocess.Popen(argv, cwd=cwd, env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
         timed_out = False
         try:
-            try:
-                code = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                terminate_group(process)
-                code = process.returncode
+            while True:
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    timed_out = True
+                    terminate_group(process)
+                    code = process.returncode
+                    break
+                try:
+                    code = process.wait(timeout=min(0.1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    # ps reads process metadata only. Cargo/rustc and other tasks
+                    # never enter the game's memory series.
+                    if platform.system() == "Darwin" and "hex_v4" in argv and len(memory) < 100_000:
+                        sampled = subprocess.run(["ps", "-axo", "pgid=,pid=,rss=,comm="], capture_output=True, timeout=2, check=False)
+                        if sampled.returncode == 0:
+                            memory.extend(parse_game_memory(sampled.stdout.decode(errors="replace"), process.pid, time.time()))
         except BaseException as error:
             terminate_group(process)
             raise RunAborted(error, {"exit_code": process.returncode, "timed_out": timed_out,
                                     "elapsed_seconds": time.monotonic() - started}) from error
         if code:
             terminate_group(process)
-    return {"exit_code": code, "timed_out": timed_out, "elapsed_seconds": time.monotonic() - started}
+    return {"exit_code": code, "timed_out": timed_out, "elapsed_seconds": time.monotonic() - started,
+            "game_memory_samples": memory,
+            "game_memory_scope": "owned hex_v4 process RSS sampled by ps at approximately 100 ms; excludes compiler, is not a separate GPU allocation measure"}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -688,6 +733,19 @@ def capture(options: argparse.Namespace) -> int:
             raise ReviewError("capture logs contain an asset or world/capture failure")
         game = strict_json(output / "capture.json")
         validate_receipt(game, package, walk, options.settle_frames)
+        samples = [sample for sample in result.get("game_memory_samples", []) if sample["pid"] == game.get("process_id")]
+        if samples:
+            end = game.get("captured_unix_seconds", 0)
+            duration = sum(game["frame_samples_ms"][-game["settled_frames"]:]) / 1000.0
+            settled = [sample["rss_bytes"] for sample in samples if end - duration <= sample["unix_seconds"] <= end]
+            receipt["game_memory_summary"] = {
+                "process_id": game["process_id"], "samples": len(samples),
+                "sampled_peak_rss_bytes": max(sample["rss_bytes"] for sample in samples),
+                "settled_samples": len(settled), "settled_window_seconds": duration,
+                "settled_min_rss_bytes": min(settled) if settled else None,
+                "settled_max_rss_bytes": max(settled) if settled else None,
+                "settled_last_rss_bytes": settled[-1] if settled else None,
+            }
         coverage = png_coverage(output / "capture.png")
         after = source_snapshot()
         atomic_json(output / "source-after.json", after)
@@ -835,6 +893,25 @@ def self_test() -> int:
                 with self.assertRaises(ReviewError):
                     validate_receipt(bad, package, walk)
 
+            remove = {"RemoveObject": {"position": goal, "object_id": "tree"}}
+            wait = {"WaitObject": {"column": goal["column"], "object_id": "tree", "present": False, "max_ticks": 5}}
+            walk["steps"] = [*steps, remove, wait]
+            removing = {**last, "step": 2, "tick": 4, "command": remove,
+                        "successful_object_edits": 0, "observed_object_present": True,
+                        "pending_object_request": "tree"}
+            removed = {**last, "step": 3, "tick": 5, "command": wait,
+                       "successful_object_edits": 1, "observed_object_present": False,
+                       "observed_revision": 1, "pending_object_request": None,
+                       "object_removal_pending": False, "cancel_object_edit_pending": False}
+            receipt["scripted_walk"] = [first, last, removing, removed]
+            validate_receipt(receipt, package, walk)
+            for invalid in ({"successful_object_edits": 0}, {"observed_object_present": None},
+                            {"observed_revision": None}, {"object_removal_pending": True}):
+                bad = copy.deepcopy(receipt)
+                bad["scripted_walk"][-1].update(invalid)
+                with self.assertRaises(ReviewError):
+                    validate_receipt(bad, package, walk)
+
         def test_strict_json_rejects_duplicate_and_nonfinite_receipts(self) -> None:
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "receipt.json"
@@ -951,6 +1028,12 @@ def self_test() -> int:
                 self.assertTrue((Path(directory) / "cargo.stderr.log").exists())
             self.assertEqual(peak_rss("   123456 maximum resident set size\n"), 123456)
             self.assertIsNone(peak_rss("no measurement"))
+
+        def test_memory_samples_exclude_compilers_and_unrelated_games(self) -> None:
+            rows = "42 81 100 /some workspace/map-test/hex_v4\n42 82 900 /bin/rustc\n43 83 500 /other/hex_v4\n42 84 200 /bin/hex_v4-helper\n42 bad 200 /bin/hex_v4\n"
+            self.assertEqual(parse_game_memory(rows, 42, 3.0), [
+                {"unix_seconds": 3.0, "pid": 81, "rss_bytes": 102400}
+            ])
 
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DriverTests))
     return 0 if result.wasSuccessful() else 1
