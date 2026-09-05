@@ -699,3 +699,227 @@ fn fragment_rebase_moves_each_root_once_and_rejects_stale_or_inconsistent_produc
     assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
     assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
 }
+
+#[derive(Debug, PartialEq)]
+struct ArtSnapshot {
+    receipts: Vec<ObjectReceipt>,
+    meshes: Vec<bevy::asset::AssetId<Mesh>>,
+    materials: Vec<bevy::asset::AssetId<StandardMaterial>>,
+    roots: Vec<(Entity, Transform)>,
+    parts: Vec<(Entity, ResidentObjectPart)>,
+}
+
+fn snapshot(presenter: &ResidentObjectPresenter, world: &mut World) -> ArtSnapshot {
+    ArtSnapshot {
+        receipts: presenter.receipts().cloned().collect(),
+        meshes: world.resource::<Assets<Mesh>>().ids().collect(),
+        materials: world.resource::<Assets<StandardMaterial>>().ids().collect(),
+        roots: presenter
+            .receipts()
+            .map(|receipt| {
+                (
+                    receipt.root,
+                    *world.get::<Transform>(receipt.root).expect("root"),
+                )
+            })
+            .collect(),
+        parts: world
+            .query::<(Entity, &ResidentObjectPart)>()
+            .iter(world)
+            .map(|(entity, part)| (entity, part.clone()))
+            .collect(),
+    }
+}
+
+fn crossing_fixture(
+    limits: ObjectPresentationLimits,
+) -> (
+    ResidentObjectPresenter,
+    World,
+    ObjectInstance,
+    hex_world_contracts::ChunkId,
+    hex_world_contracts::ChunkId,
+) {
+    let mut presenter = presenter(limits);
+    let mut world = World::new();
+    let object = translated(plant("tree", 0), "tree", WorldHex::new(15, 0));
+    let left = object.origin.column.chunk();
+    let right = object
+        .origin
+        .column
+        .checked_add(WorldHex::new(1, 0))
+        .expect("right")
+        .chunk();
+    for clip in [left, right] {
+        let ready = presenter
+            .prepare_fragment(&object, 1, origin(0, 0, 0), clip)
+            .expect("fragment");
+        presenter.publish(&mut world, ready).expect("publish");
+    }
+    (presenter, world, object, left, right)
+}
+
+#[test]
+fn atomic_fragment_replacement_rejects_late_invalid_products_without_any_mutation() {
+    let (mut presenter, mut world, object, left, right) =
+        crossing_fixture(ObjectPresentationLimits::default());
+    let before = snapshot(&presenter, &mut world);
+    let peer = translated(object.clone(), "peer", WorldHex::new(0, 0));
+    for case in 0..4 {
+        let first = presenter
+            .prepare_fragment(&peer, 1, origin(0, 0, 0), left)
+            .expect("first valid product");
+        let second = match case {
+            0 => presenter
+                .prepare_fragment(&object, 0, origin(0, 0, 0), left)
+                .expect("stale revision"),
+            1 => presenter
+                .prepare_fragment(&object, 2, origin(0, 0, 0), right)
+                .expect("wrong clip"),
+            2 => presenter
+                .prepare_fragment(&peer, 1, origin(0, 0, 0), left)
+                .expect("duplicate ID"),
+            _ => super::tests::presenter(ObjectPresentationLimits::default())
+                .prepare_fragment(&object, 2, origin(0, 0, 0), left)
+                .expect("foreign context"),
+        };
+        assert!(presenter
+            .replace_fragments(&mut world, left, vec![first, second])
+            .is_err());
+        assert_eq!(snapshot(&presenter, &mut world), before);
+    }
+}
+
+#[test]
+fn atomic_fragment_replacement_checks_cumulative_asset_and_vertex_budgets() {
+    let (prototype, _world, object, left, _) =
+        crossing_fixture(ObjectPresentationLimits::default());
+    let allowed_vertices = prototype.receipts().map(|receipt| receipt.vertices).sum();
+    for limits in [
+        ObjectPresentationLimits {
+            max_asset_types: 2,
+            ..default()
+        },
+        ObjectPresentationLimits {
+            max_cached_vertices: allowed_vertices,
+            ..default()
+        },
+        ObjectPresentationLimits {
+            max_resident_objects: 2,
+            ..default()
+        },
+    ] {
+        let (mut presenter, mut world, _, _, _) = crossing_fixture(limits);
+        let before = snapshot(&presenter, &mut world);
+        let peer = translated(object.clone(), "peer", WorldHex::new(0, 0));
+        // Rotation3 at phase0 selects its two root cells in the same clip; its
+        // other cells are in the previous chunk. This is a distinct 2-voxel cache.
+        let opposite = plant("opposite", 3);
+        let a = presenter
+            .prepare_fragment(&peer, 1, origin(0, 0, 0), left)
+            .expect("first two-voxel product");
+        let b = presenter
+            .prepare_fragment(&opposite, 1, origin(-15, 0, 0), left)
+            .expect("second two-voxel product");
+        assert_eq!((a.voxels(), b.voxels()), (2, 2));
+        assert!(presenter
+            .replace_fragments(&mut world, left, vec![a, b])
+            .is_err());
+        assert_eq!(snapshot(&presenter, &mut world), before);
+    }
+}
+
+#[test]
+fn atomic_fragment_replacement_preserves_other_clips_and_shared_users_then_can_retire() {
+    let (mut presenter, mut world, object, left, right) =
+        crossing_fixture(ObjectPresentationLimits::default());
+    let original: Vec<_> = presenter.receipts().cloned().collect();
+    let neighbor = original
+        .iter()
+        .find(|receipt| receipt.clip == Some(right))
+        .expect("neighbor")
+        .clone();
+    let existing = original
+        .iter()
+        .find(|receipt| receipt.clip == Some(left))
+        .expect("existing")
+        .clone();
+    let peer = translated(object.clone(), "peer", WorldHex::new(0, 0));
+    let first = presenter
+        .prepare_fragment(&object, 1, origin(0, 0, 0), left)
+        .expect("unchanged");
+    let second = presenter
+        .prepare_fragment(&peer, 1, origin(0, 0, 0), left)
+        .expect("additional shared user");
+    let replaced = presenter
+        .replace_fragments(&mut world, left, vec![second, first])
+        .expect("atomic set");
+    assert_eq!(replaced.len(), 2);
+    assert_eq!(
+        replaced
+            .iter()
+            .map(|receipt| receipt.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["peer", "tree"]
+    );
+    assert!(replaced.iter().any(|receipt| receipt.root == existing.root));
+    assert!(presenter.receipts().any(|receipt| receipt == &neighbor));
+    assert_eq!(presenter.cached_asset_count(), 2);
+    let updated = presenter
+        .prepare_fragment(&object, 2, origin(0, 0, 0), left)
+        .expect("new revision");
+    let replacement = presenter
+        .replace_fragments(&mut world, left, vec![updated])
+        .expect("retire peer and replace tree");
+    assert_eq!(replacement.len(), 1);
+    assert_ne!(replacement.first().expect("tree").root, existing.root);
+    assert!(presenter.receipts().any(|receipt| receipt == &neighbor));
+    assert!(presenter
+        .replace_fragments(&mut world, left, Vec::new())
+        .expect("retire clip")
+        .is_empty());
+    assert_eq!(
+        presenter.receipts().cloned().collect::<Vec<_>>(),
+        vec![neighbor.clone()]
+    );
+    assert!(world.get_entity(neighbor.root).is_ok());
+    assert_eq!(presenter.cached_asset_count(), 1);
+    assert_eq!(world.resource::<Assets<Mesh>>().len(), neighbor.meshes);
+}
+
+#[test]
+fn atomic_replacement_checks_cross_clip_source_agreement_and_stale_rebase_generation() {
+    let (mut presenter, mut world, object, left, _) =
+        crossing_fixture(ObjectPresentationLimits::default());
+    let before = snapshot(&presenter, &mut world);
+    let mut changed = object.clone();
+    changed
+        .occupancy
+        .first_mut()
+        .expect("column")
+        .runs
+        .first_mut()
+        .expect("run")
+        .material = "timber".into();
+    let changed = presenter
+        .prepare_fragment(&changed, 2, origin(0, 0, 0), left)
+        .expect("changed source");
+    assert!(presenter
+        .replace_fragments(&mut world, left, vec![changed])
+        .is_err());
+    assert_eq!(snapshot(&presenter, &mut world), before);
+    let stale = presenter
+        .prepare_fragment(&object, 2, origin(0, 0, 0), left)
+        .expect("queued");
+    presenter
+        .rebase(
+            &mut world,
+            &BTreeMap::from([("tree".into(), origin(1, -1, 0))]),
+        )
+        .expect("rebase");
+    let rebased = snapshot(&presenter, &mut world);
+    assert!(presenter
+        .replace_fragments(&mut world, left, vec![stale])
+        .is_err());
+    assert_eq!(snapshot(&presenter, &mut world), rebased);
+}

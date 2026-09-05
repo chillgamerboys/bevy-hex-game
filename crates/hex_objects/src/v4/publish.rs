@@ -270,6 +270,143 @@ impl ResidentObjectPresenter {
         world: &mut World,
         prepared: PreparedObject,
     ) -> Result<ObjectReceipt, ObjectPresentationError> {
+        self.validate_product(world, &prepared)?;
+        let key = (prepared.object.id.clone(), prepared.clip);
+        let current = self.resident.get(&key);
+        if let Some(current) = current.filter(|current| same_product(current, &prepared)) {
+            return Ok(current.receipt.clone());
+        }
+        if current.is_none() && self.resident.len() >= self.limits.max_resident_objects {
+            return Err(ObjectPresentationError(
+                "max_resident_objects exceeded".into(),
+            ));
+        }
+        let drops_old_asset = current
+            .filter(|current| current.cache_key != prepared.cache_key)
+            .and_then(|current| self.assets.get(&current.cache_key))
+            .filter(|asset| asset.users.len() == 1);
+        if !self.assets.contains_key(&prepared.cache_key) {
+            let remaining_assets = self.assets.len() - usize::from(drops_old_asset.is_some());
+            if remaining_assets >= self.limits.max_asset_types {
+                return Err(ObjectPresentationError("max_asset_types exceeded".into()));
+            }
+            let current_vertices: usize =
+                self.assets.values().map(|asset| asset.baked.vertices).sum();
+            let released_vertices = drops_old_asset.map_or(0, |asset| asset.baked.vertices);
+            if current_vertices
+                .saturating_sub(released_vertices)
+                .saturating_add(prepared.baked.vertices)
+                > self.limits.max_cached_vertices
+            {
+                return Err(ObjectPresentationError(
+                    "max_cached_vertices exceeded".into(),
+                ));
+            }
+        }
+        Ok(self.install_preflighted(world, prepared))
+    }
+
+    /// Atomically replace exactly one chunk's complete stock-art fragment set.
+    ///
+    /// Every product must name `clip`, and each object ID may occur only once. All
+    /// contexts, revisions, complete-source agreement and cumulative final cache
+    /// budgets are validated before touching the world. Empty input retires this
+    /// chunk. Other chunks and their shared mesh/material users remain intact.
+    /// The caller preflights matching terrain and publishes it in the same operation.
+    pub fn replace_fragments(
+        &mut self,
+        world: &mut World,
+        clip: ChunkId,
+        products: Vec<PreparedObject>,
+    ) -> Result<Vec<ObjectReceipt>, ObjectPresentationError> {
+        if products.len() > self.limits.max_resident_objects {
+            return Err(ObjectPresentationError(
+                "max_resident_objects exceeded".into(),
+            ));
+        }
+        let mut requested = BTreeMap::new();
+        for product in products {
+            if product.clip != Some(clip) {
+                return Err(ObjectPresentationError(
+                    "replacement set contains a whole object or another clip".into(),
+                ));
+            }
+            self.validate_product(world, &product)?;
+            if requested
+                .insert(product.object.id.clone(), product)
+                .is_some()
+            {
+                return Err(ObjectPresentationError(
+                    "replacement set contains a duplicate object ID".into(),
+                ));
+            }
+        }
+        let surviving = self
+            .resident
+            .iter()
+            .filter(|((_, owned_clip), _)| *owned_clip != Some(clip));
+        let mut final_assets = BTreeMap::new();
+        let mut final_roots = requested.len();
+        for (_, object) in surviving {
+            final_roots = final_roots.saturating_add(1);
+            let asset = self.assets.get(&object.cache_key).ok_or_else(|| {
+                ObjectPresentationError("surviving object lost its owned asset cache".into())
+            })?;
+            final_assets.insert(object.cache_key.clone(), asset.baked.vertices);
+        }
+        if final_roots > self.limits.max_resident_objects {
+            return Err(ObjectPresentationError(
+                "max_resident_objects exceeded".into(),
+            ));
+        }
+        for product in requested.values() {
+            final_assets.insert(product.cache_key.clone(), product.baked.vertices);
+        }
+        if final_assets.len() > self.limits.max_asset_types {
+            return Err(ObjectPresentationError("max_asset_types exceeded".into()));
+        }
+        let vertices = final_assets
+            .values()
+            .try_fold(0usize, |sum, vertices| sum.checked_add(*vertices))
+            .ok_or_else(|| ObjectPresentationError("cached vertex count overflow".into()))?;
+        if vertices > self.limits.max_cached_vertices {
+            return Err(ObjectPresentationError(
+                "max_cached_vertices exceeded".into(),
+            ));
+        }
+        let retired: Vec<_> = self
+            .resident
+            .iter()
+            .filter(|((id, owned_clip), object)| {
+                *owned_clip == Some(clip)
+                    && requested
+                        .get(id)
+                        .is_none_or(|product| !same_product(object, product))
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+
+        // All fallible work is complete. Retire obsolete products before allocating
+        // replacements so peak retained GPU assets stay within the final cache bound.
+        for key in retired {
+            drop(self.remove_key(world, &key));
+        }
+        let mut receipts = Vec::with_capacity(requested.len());
+        for product in requested.into_values() {
+            if let Some(existing) = self.resident.get(&(product.object.id.clone(), Some(clip))) {
+                receipts.push(existing.receipt.clone());
+            } else {
+                receipts.push(self.install_preflighted(world, product));
+            }
+        }
+        Ok(receipts)
+    }
+
+    fn validate_product(
+        &self,
+        world: &World,
+        prepared: &PreparedObject,
+    ) -> Result<(), ObjectPresentationError> {
         if !Arc::ptr_eq(&self.context, &prepared.context) || self.generation != prepared.generation
         {
             return Err(ObjectPresentationError(
@@ -314,36 +451,18 @@ impl ResidentObjectPresenter {
                         "resident root was removed outside its owner".into(),
                     ));
                 }
-                return Ok(current.receipt.clone());
-            }
-        } else if self.resident.len() >= self.limits.max_resident_objects {
-            return Err(ObjectPresentationError(
-                "max_resident_objects exceeded".into(),
-            ));
-        }
-        let drops_old_asset = current
-            .filter(|current| current.cache_key != prepared.cache_key)
-            .and_then(|current| self.assets.get(&current.cache_key))
-            .filter(|asset| asset.users.len() == 1);
-        if !self.assets.contains_key(&prepared.cache_key) {
-            let remaining_assets = self.assets.len() - usize::from(drops_old_asset.is_some());
-            if remaining_assets >= self.limits.max_asset_types {
-                return Err(ObjectPresentationError("max_asset_types exceeded".into()));
-            }
-            let current_vertices: usize =
-                self.assets.values().map(|asset| asset.baked.vertices).sum();
-            let released_vertices = drops_old_asset.map_or(0, |asset| asset.baked.vertices);
-            if current_vertices
-                .saturating_sub(released_vertices)
-                .saturating_add(prepared.baked.vertices)
-                > self.limits.max_cached_vertices
-            {
-                return Err(ObjectPresentationError(
-                    "max_cached_vertices exceeded".into(),
-                ));
+                return Ok(());
             }
         }
+        Ok(())
+    }
 
+    fn install_preflighted(
+        &mut self,
+        world: &mut World,
+        prepared: PreparedObject,
+    ) -> ObjectReceipt {
+        let key = (prepared.object.id.clone(), prepared.clip);
         world.init_resource::<Assets<Mesh>>();
         world.init_resource::<Assets<StandardMaterial>>();
         // Preserve a same-asset cache through replacement, even for its last user.
@@ -353,12 +472,11 @@ impl ResidentObjectPresenter {
                 self.release_asset(world, &current.cache_key, &key);
             }
         }
-        if !self.assets.contains_key(&prepared.cache_key) {
-            self.allocate_asset(world, prepared.cache_key.clone(), prepared.baked.clone());
-        }
-        let cached = self.assets.get_mut(&prepared.cache_key).ok_or_else(|| {
-            ObjectPresentationError("object asset allocation lost its cache entry".into())
-        })?;
+        let materials = &mut self.materials;
+        let cached = self
+            .assets
+            .entry(prepared.cache_key.clone())
+            .or_insert_with(|| allocate_asset(world, prepared.baked.clone(), materials));
         cached.users.insert(key.clone());
         let root = world
             .spawn((
@@ -402,7 +520,7 @@ impl ResidentObjectPresenter {
                 cache_key: prepared.cache_key,
             },
         );
-        Ok(receipt)
+        receipt
     }
 
     /// Remove a whole-object root; fragment roots use [`Self::remove_fragment`].
@@ -502,40 +620,6 @@ impl ResidentObjectPresenter {
         self.generation = 0;
     }
 
-    fn allocate_asset(&mut self, world: &mut World, id: AssetKey, baked: Arc<BakedAsset>) {
-        let parts = baked
-            .parts
-            .iter()
-            .map(|part| {
-                let material = self
-                    .materials
-                    .entry(part.key.style.clone())
-                    .or_insert_with(|| SharedMaterial {
-                        handle: world
-                            .resource_mut::<Assets<StandardMaterial>>()
-                            .add(part.material.clone()),
-                        parts: 0,
-                    });
-                material.parts += 1;
-                crate::CachedChunk {
-                    key: part.key.clone(),
-                    mesh: world.resource_mut::<Assets<Mesh>>().add(part.mesh.clone()),
-                    material: material.handle.clone(),
-                    surface_mode: part.surface_mode,
-                    casts_shadows: part.casts_shadows,
-                }
-            })
-            .collect();
-        self.assets.insert(
-            id,
-            SharedAsset {
-                baked,
-                parts,
-                users: BTreeSet::new(),
-            },
-        );
-    }
-
     fn release_asset(&mut self, world: &mut World, id: &AssetKey, user: &ResidentKey) {
         let unused = self.assets.get_mut(id).is_some_and(|asset| {
             asset.users.remove(user);
@@ -564,6 +648,47 @@ impl ResidentObjectPresenter {
                 }
             }
         }
+    }
+}
+
+fn same_product(existing: &PublishedObject, prepared: &PreparedObject) -> bool {
+    existing.receipt.revision == prepared.revision
+        && existing.receipt.fingerprint == prepared.fingerprint
+        && existing.receipt.local_origin == prepared.local_origin
+}
+
+fn allocate_asset(
+    world: &mut World,
+    baked: Arc<BakedAsset>,
+    materials: &mut BTreeMap<VoxelStyleId, SharedMaterial>,
+) -> SharedAsset {
+    let parts = baked
+        .parts
+        .iter()
+        .map(|part| {
+            let material =
+                materials
+                    .entry(part.key.style.clone())
+                    .or_insert_with(|| SharedMaterial {
+                        handle: world
+                            .resource_mut::<Assets<StandardMaterial>>()
+                            .add(part.material.clone()),
+                        parts: 0,
+                    });
+            material.parts += 1;
+            crate::CachedChunk {
+                key: part.key.clone(),
+                mesh: world.resource_mut::<Assets<Mesh>>().add(part.mesh.clone()),
+                material: material.handle.clone(),
+                surface_mode: part.surface_mode,
+                casts_shadows: part.casts_shadows,
+            }
+        })
+        .collect();
+    SharedAsset {
+        baked,
+        parts,
+        users: BTreeSet::new(),
     }
 }
 
