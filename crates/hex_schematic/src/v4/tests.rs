@@ -566,3 +566,86 @@ fn later_crossing_route_cannot_bury_an_earlier_protected_ribbon() {
             && error.contains("headroom")
     );
 }
+
+fn low_roof_steps() -> (WorldSpec, RegionRecipe, operators::RegionBuild) {
+    let source = fixture("rich-region");
+    let mut recipe = source.recipes["caldera"].clone();
+    recipe.routes.clear();
+    recipe.bridges.clear();
+    recipe.overrides.clear();
+    recipe.hub = GradePoint {
+        column: WorldHex::new(0, 0),
+        level: 10,
+    };
+    let mut build = operators::RegionBuild::default();
+    // Both floors have exactly two air voxels above them. Only one level of
+    // those air volumes overlaps laterally across the one-level step.
+    build.columns.insert(
+        WorldHex::new(0, 0),
+        vec![run(0, 11, "limestone"), run(13, 14, "limestone")],
+    );
+    build.columns.insert(
+        WorldHex::new(1, 0),
+        vec![run(0, 12, "limestone"), run(14, 15, "limestone")],
+    );
+    (source, recipe, build)
+}
+
+#[test]
+fn access_rejects_individually_standable_steps_under_a_low_lintel() {
+    let (source, mut recipe, mut build) = low_roof_steps();
+    for reverse in [false, true] {
+        let (start, goal) = if reverse {
+            ((WorldHex::new(1, 0), 11), (WorldHex::new(0, 0), 10))
+        } else {
+            ((WorldHex::new(0, 0), 10), (WorldHex::new(1, 0), 11))
+        };
+        recipe.hub = GradePoint {
+            column: start.0,
+            level: start.1,
+        };
+        build.semantics.anchors = vec![WorldAnchor {
+            id: "required-low-roof-exit".into(),
+            region_id: "steps".into(),
+            position: VoxelPosition {
+                column: goal.0,
+                level: goal.1,
+            },
+            role: AnchorRole::Transit,
+        }];
+        let error = operators::validate_access(&build, &recipe, &source.materials)
+            .expect_err("one-level aperture blocks a two-level walker in both directions");
+        assert!(error.contains("required-low-roof-exit"), "{error}");
+    }
+    // One additional clear voxel above the lower floor opens exactly the
+    // required two-level aperture. Nothing else in the topology changes.
+    build.columns.insert(
+        WorldHex::new(0, 0),
+        vec![run(0, 11, "limestone"), run(14, 15, "limestone")],
+    );
+    operators::validate_access(&build, &recipe, &source.materials)
+        .expect("raising the lower lintel restores the ordinary route");
+}
+
+#[test]
+fn later_low_lintel_reports_the_invalidating_operator_and_protected_route() {
+    let (_, recipe, mut build) = low_roof_steps();
+    build.routes.insert(
+        "required-stairway".into(),
+        BTreeMap::from([(WorldHex::new(0, 0), 10), (WorldHex::new(1, 0), 11)]),
+    );
+    let error = operators::check_constraints(&build, &recipe, "new-vault-lintel")
+        .expect_err("per-cell headroom alone does not preserve a graded route");
+    assert!(
+        error.contains("new-vault-lintel")
+            && error.contains("required-stairway")
+            && error.contains("lateral aperture"),
+        "{error}"
+    );
+    build.columns.insert(
+        WorldHex::new(0, 0),
+        vec![run(0, 11, "limestone"), run(14, 15, "limestone")],
+    );
+    operators::check_constraints(&build, &recipe, "raised-vault-lintel")
+        .expect("exactly two shared clear levels preserve the protected route");
+}

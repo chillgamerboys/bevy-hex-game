@@ -146,6 +146,7 @@ pub(super) fn check_constraints(
     invalidator: &str,
 ) -> OpResult<()> {
     for (route_id, levels) in &build.routes {
+        let mut surfaces = BTreeMap::new();
         for (p, level) in levels {
             let runs = build
                 .columns
@@ -160,6 +161,28 @@ pub(super) fn check_constraints(
                 || volume::clear_above(runs, *level).is_some_and(|clear| clear < 2)
             {
                 return Err(format!("operator {invalidator} violates protected route {route_id} at {p:?}, required surface level {level} and two-level headroom"));
+            }
+            surfaces.insert(
+                *p,
+                Surface {
+                    position: VoxelPosition {
+                        column: *p,
+                        level: *level,
+                    },
+                    material: volume::material_at(runs, *level)
+                        .ok_or_else(|| "checked route support disappeared".to_string())?
+                        .into(),
+                    headroom: volume::clear_above(runs, *level),
+                },
+            );
+        }
+        for (p, from) in &surfaces {
+            for neighbor in geometry::neighbors(*p) {
+                if let Some(to) = surfaces.get(&neighbor) {
+                    if !admits_surface_transition(from, to, 2, 1, 1) {
+                        return Err(format!("operator {invalidator} violates protected route {route_id} between {p:?} and {neighbor:?}, required two-level lateral aperture"));
+                    }
+                }
             }
         }
     }
@@ -864,7 +887,14 @@ pub(super) fn validate_access(
                 solids.contains(run.material.as_str())
                     && volume::clear_above(&runs, run.top - 1).is_none_or(|clear| clear >= 2)
             })
-            .map(|run| run.top - 1)
+            .map(|run| Surface {
+                position: VoxelPosition {
+                    column: *p,
+                    level: run.top - 1,
+                },
+                material: run.material.clone(),
+                headroom: volume::clear_above(&runs, run.top - 1),
+            })
             .collect();
         surfaces.insert(*p, available);
     }
@@ -872,7 +902,7 @@ pub(super) fn validate_access(
         for pin in &route.points {
             if !surfaces
                 .get(&pin.column)
-                .is_some_and(|levels| levels.contains(&pin.level))
+                .is_some_and(|levels| levels.iter().any(|s| s.position.level == pin.level))
             {
                 return Err(format!(
                     "route {} lost required endpoint support/headroom at {:?} level {}",
@@ -901,22 +931,22 @@ pub(super) fn validate_access(
     };
     if !surfaces
         .get(&start.column)
-        .is_some_and(|levels| levels.contains(&start.level))
+        .is_some_and(|levels| levels.iter().any(|s| s.position.level == start.level))
     {
         return Err("hub lacks exact support or two-level clearance".into());
     }
     let mut reached = BTreeSet::from([start]);
     let mut queue = VecDeque::from([start]);
     while let Some(p) = queue.pop_front() {
+        let from = surfaces
+            .get(&p.column)
+            .and_then(|levels| levels.iter().find(|s| s.position == p))
+            .ok_or_else(|| "reached support disappeared during access validation".to_string())?;
         for column in geometry::neighbors(p.column) {
             if let Some(levels) = surfaces.get(&column) {
-                for level in levels {
-                    let neighbor = VoxelPosition {
-                        column,
-                        level: *level,
-                    };
-                    if p.level.abs_diff(*level) <= 1 && reached.insert(neighbor) {
-                        queue.push_back(neighbor);
+                for to in levels {
+                    if admits_surface_transition(from, to, 2, 1, 1) && reached.insert(to.position) {
+                        queue.push_back(to.position);
                     }
                 }
             }

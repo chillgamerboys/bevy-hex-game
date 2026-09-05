@@ -8,11 +8,13 @@
 mod geometry;
 mod index;
 mod model;
+mod traversal;
 mod validation;
 
 pub use geometry::*;
 pub use index::ManifestIndex;
 pub use model::*;
+pub use traversal::*;
 pub use validation::*;
 
 use serde::{de::DeserializeOwned, Serialize};
