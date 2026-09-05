@@ -29017,14 +29017,36 @@ mod tests {
         let expanded =
             plan_tunnel_interior_carve(&lane, &crystal, &footprint, &BTreeSet::new(), 12)
                 .expect("the physical expansion resolves after surface planning");
-        assert!(expanded.columns.contains_key(&overland));
-        assert_eq!(
-            expanded
+        assert!(
+            !expanded.columns.contains_key(&overland),
+            "shell-blocked side growth must not be translated outward into the overland witness"
+        );
+        assert!(
+            original
                 .columns
-                .get(&overland)
-                .expect("fixture contains the requested terrain column")
-                .roof_top(),
-            18
+                .keys()
+                .all(|coord| expanded.columns.contains_key(coord)),
+            "the conservative final carve must retain every original floor column"
+        );
+        assert!(expanded.sections.iter().any(|section| section.len() == 4));
+        assert!(expanded.sections.iter().any(|section| section.len() == 8));
+        assert!(
+            original.columns.keys().any(|coord| expanded
+                .columns
+                .get(coord)
+                .is_some_and(|profile| profile.clearance_top == 15 && profile.roof_top() == 18)),
+            "deferring shell-blocked side growth must retain the two-level interior ceiling rise"
+        );
+        assert!(
+            lane.rows
+                .last()
+                .expect("the exact lane retains its foot connection")
+                .iter()
+                .all(|coord| expanded
+                    .columns
+                    .get(coord)
+                    .is_some_and(|profile| profile.clearance_top == 13)),
+            "the exterior connection must retain its original clearance"
         );
     }
 

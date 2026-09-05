@@ -11,7 +11,7 @@ use bevy::shader::ShaderRef;
 
 /// Read-only allocation evidence for the private procedural-sky material type.
 ///
-/// The review capture crate cannot name [`SkyMaterial`] directly, so the world
+/// The review capture crate cannot name `SkyMaterial` directly, so the world
 /// renderer publishes this fixed-size summary without exposing mutable material
 /// authority.
 #[cfg(feature = "map-review")]

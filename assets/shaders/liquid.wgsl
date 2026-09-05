@@ -65,12 +65,14 @@ fn fragment(
     let falling = step(2.5, in.uv_b.y);
     // These cycle rates all meet the material's 400-second phase wrap exactly.
     flow_velocity = vec2<f32>(0.0, 0.15 * moving + 0.50 * rapid + 0.20 * falling);
-    highlight_strength = 0.08 + 0.04 * moving + 0.10 * rapid + 0.04 * falling;
-    roughness_reduction = 0.04 + 0.01 * moving;
-    // The five other prism sides remain blue. Only the authored downstream
-    // face carries the descending white crests beside an animated top cap.
+    // Level Current and Still water share a restrained blue modulation. A
+    // Current row can continue into the sea without painting its outline white.
+    highlight_strength = 0.035 + 0.035 * rapid + 0.025 * falling;
+    roughness_reduction = 0.02;
+    // Only Rapid/Fall tops and their authored downstream faces receive foam;
+    // level currents and the other prism sides retain their water colour.
     foam_strength =
-        (0.04 * moving + 0.20 * rapid + 0.06 * falling) *
+        (0.14 * rapid + 0.06 * falling) *
         max(top_face, downstream_face);
 #endif
 
@@ -95,15 +97,31 @@ fn fragment(
         0.78 + analytic_width,
         primary_wave,
     );
-    let ripple = clamp(crest * 0.78 + secondary_wave * 0.22, 0.0, 1.0);
+    var ripple = clamp(crest * 0.78 + secondary_wave * 0.22, 0.0, 1.0);
+#ifdef VERTEX_UVS_B
+    // Broad blue ripples keep level flow visible without a repeated bright comb.
+    ripple = mix(primary_wave * 0.35 + secondary_wave * 0.65, ripple, rapid);
+#endif
 
     var liquid_color =
         pbr_input.material.base_color.rgb * (1.0 + ripple * highlight_strength);
-    let foam_mask = smoothstep(
+    var foam_mask = smoothstep(
         0.82 - analytic_width,
         0.96 + analytic_width,
         primary_wave,
     ) * foam_strength;
+#ifdef VERTEX_UVS_B
+    // Two oblique packet fields interrupt crests into separated patches. Both
+    // travel with the same downstream coordinates as the crests. Their 1/4 and
+    // 1/2 longitudinal frequencies complete whole cycles at the 400-second wrap.
+    let along_packet = 0.5 + 0.5 * sin(TAU * (
+        advected_uv.y * 0.25 + advected_uv.x * 0.37
+    ));
+    let across_packet = 0.5 + 0.5 * sin(TAU * (
+        advected_uv.x * 0.71 - advected_uv.y * 0.50
+    ));
+    foam_mask *= smoothstep(0.38, 0.78, along_packet * across_packet);
+#endif
     liquid_color = mix(
         liquid_color,
         liquid.foam_color.rgb,

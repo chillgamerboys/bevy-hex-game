@@ -16,15 +16,16 @@ The walking owner's frozen nine-commit handoff through `95b2274` is integrated h
 The combined hero passes strict generation, independent original-route preservation,
 intake/river/bridge/tunnel geometry and 84 Walking/launch checks. Full workspace
 Clippy passes. Inherited representative-seed terrain failures keep the map gate red;
-final renders, water animation and native motion/play evidence remain pending. This candidate
+the first exact-head 19-frame review found level-water stripes and one obstructed camera.
+Their repairs, final recapture, sampled animation and native motion/play evidence remain pending. This candidate
 has not been delivered to `dev`; the current gate is in the
 [Grand V3 map manifest](waves/grand-v3-map/manifest.md).
 
 **Grand V3 grounded exploration** adds continuous walking/running, jumping/falling,
 solid-body collision, bounded wading, recovery and collision-aware camera follow.
 See [exploration controls and boundaries](../systems/exploration.md). This is a
-development exploration pawn. Its combined Walking/launch fixtures pass; final GPU
-and native control-feel review, delivery to `dev`, and later V4 integration remain
+development exploration pawn. Its combined Walking/launch fixtures and hosted gameplay
+partitions pass. Native control-feel review, delivery to `dev`, and later V4 integration remain
 separate work.
 
 The following older reconciliation and checkpoint measurements remain historical evidence

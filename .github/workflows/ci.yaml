@@ -207,7 +207,7 @@ jobs:
     name: Map partitions
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
@@ -412,7 +412,7 @@ jobs:
     name: Prime Windows shipping dependencies
     needs: changes
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
     steps:

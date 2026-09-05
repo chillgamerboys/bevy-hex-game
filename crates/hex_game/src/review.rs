@@ -2082,6 +2082,13 @@ impl ReviewCaptureState {
         Some(self.capture.path.clone())
     }
 
+    fn begin_capture_teardown(&mut self, now: Instant) {
+        self.authority_pre_teardown_verified = true;
+        self.requested = false;
+        self.teardown_requested = true;
+        self.enter_phase(CapturePhase::AwaitingTeardown, now);
+    }
+
     fn enter_phase(&mut self, phase: CapturePhase, now: Instant) {
         if self.phase != phase {
             self.phase = phase;
@@ -5955,6 +5962,7 @@ fn capture_settled_frame(
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed
+        || state.teardown_requested
         || state.requested
         || !state.view_applied
         || !state.illumination_overlay_applied
@@ -6193,10 +6201,7 @@ fn capture_settled_frame(
                             next.display()
                         );
                     } else {
-                        state.authority_pre_teardown_verified = true;
-                        state.requested = false;
-                        state.teardown_requested = true;
-                        state.enter_phase(CapturePhase::AwaitingTeardown, Instant::now());
+                        state.begin_capture_teardown(Instant::now());
                         if lifecycle.is_some() {
                             commands.insert_resource(ReviewWorldDetailTeardownRequestV1);
                             commands.insert_resource(
@@ -8852,6 +8857,99 @@ mod tests {
             let diagnostic = capture_timeout_diagnostic(&mut state, screen, terrain_ready, now)
                 .expect("the expired phase should time out");
             assert!(diagnostic.contains(expected), "{diagnostic}");
+        }
+    }
+
+    #[test]
+    fn final_capture_teardown_stops_the_request_system_until_lifecycle_reentry() {
+        for in_place in [false, true] {
+            let capture = ReviewCapture {
+                path: review_test_directory("final-teardown-request").join("capture.png"),
+                view: ReviewView::TopDown,
+                camera: ReviewCamera::Map,
+                focus_anchor: None,
+                anchor_look_at: None,
+                character_radius_scale: 1.0,
+                full_cutaway: false,
+                illumination_overlay: false,
+                liquid_phase_seconds: None,
+                settle_frames: SETTLE_FRAMES,
+            };
+            let mut state = ReviewCaptureState::new(capture.clone());
+            state.view_applied = true;
+            state.full_footprint_validated = true;
+            state.settled_frames = SETTLE_FRAMES;
+            state.target = Some(Handle::default());
+            state.requested = true;
+            state.visible_tiles = MIN_VISIBLE_TILES;
+            state.total_tiles = MIN_VISIBLE_TILES;
+            state.authority_validated_captures = 1;
+            assert!(state.advance_capture(Instant::now()).is_none());
+            // Exercise the same transition as the final successful readback.
+            state.begin_capture_teardown(Instant::now());
+            assert_eq!(state.completed_captures, state.total_captures);
+            assert!(!state.requested);
+
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin));
+            app.init_state::<Screen>();
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Gameplay);
+            app.update();
+            app.insert_resource(TerrainReady)
+                .insert_resource(state)
+                .add_systems(
+                    PostUpdate,
+                    capture_settled_frame.run_if(in_state(Screen::Gameplay)),
+                );
+            if in_place {
+                app.insert_resource(ReviewWorldDetailTeardownRequestV1);
+                app.insert_resource(ReviewLifecycleCycleTeardownPendingV1);
+            } else {
+                app.world_mut()
+                    .resource_mut::<NextState<Screen>>()
+                    .set(Screen::Title);
+            }
+
+            // Readback can complete before another PostUpdate while Gameplay is
+            // still current. Keep the exit pending and leave partial teardown
+            // evidence deliberately absent: no capture work may inspect it.
+            for _ in 0..3 {
+                app.world_mut().run_schedule(PostUpdate);
+                let state = app.world().resource::<ReviewCaptureState>();
+                assert_eq!(state.phase, CapturePhase::AwaitingTeardown);
+                assert_eq!(state.settled_frames, SETTLE_FRAMES);
+                assert_eq!(state.visible_tiles, MIN_VISIBLE_TILES);
+                assert_eq!(state.total_tiles, MIN_VISIBLE_TILES);
+                assert_eq!(state.completed_captures, 1);
+                assert_eq!(state.authority_validated_captures, 1);
+                assert!(!state.requested && !state.failed);
+                assert!(state.target.is_some());
+                assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+                let world = app.world_mut();
+                assert_eq!(
+                    world
+                        .query_filtered::<Entity, With<Screenshot>>()
+                        .iter(world)
+                        .count(),
+                    0
+                );
+            }
+
+            // A fresh lifecycle cycle reopens the real request system. Its
+            // ordinary full-footprint guard must still reject absent terrain.
+            let mut reentered = ReviewCaptureState::new(capture);
+            reentered.view_applied = true;
+            reentered.settled_frames = SETTLE_FRAMES;
+            app.insert_resource(reentered);
+            app.world_mut()
+                .remove_resource::<ReviewWorldDetailTeardownRequestV1>();
+            app.world_mut()
+                .remove_resource::<ReviewLifecycleCycleTeardownPendingV1>();
+            app.world_mut().run_schedule(PostUpdate);
+            assert!(app.world().resource::<ReviewCaptureState>().failed);
+            assert!(!app.world().resource::<Messages<AppExit>>().is_empty());
         }
     }
 

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::asset::AssetId;
+use bevy::mesh::MeshVertexAttributeId;
 use bevy::picking::Pickable;
 
 use super::*;
@@ -37,11 +38,125 @@ fn active_grid(app: &mut App) -> Entity {
         .expect("Grand V3 should publish one stable grid")
 }
 
-fn liquid_presentation_snapshot(app: &mut App) -> BTreeSet<(Entity, Entity, AssetId<Mesh>)> {
+#[derive(Debug, PartialEq, Eq)]
+struct WaterBatchSnapshot {
+    runs: Vec<(TilePos, u32, u32)>,
+    attributes: Vec<(MeshVertexAttributeId, Vec<u8>)>,
+    indices: Vec<usize>,
+    #[cfg(feature = "map-review")]
+    material: AssetId<hex_map::ReviewLiquidMaterial>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LiquidPresentationSnapshot {
+    water: BTreeMap<(ChunkKey, Vec<TilePos>), WaterBatchSnapshot>,
+    overlays: BTreeSet<(Entity, Entity, AssetId<Mesh>)>,
+}
+
+fn liquid_presentation_snapshot(app: &mut App) -> LiquidPresentationSnapshot {
     let world = app.world_mut();
+    let water = world
+        .resource::<SubstanceTable>()
+        .id("water")
+        .expect("Grand V3 retains the water substance");
+    let logical = world
+        .query_filtered::<(Entity, &SubstanceId, &TilePos, &HexSpan), With<HexTile>>()
+        .iter(world)
+        .filter(|(_, substance, _, _)| **substance == water)
+        .map(|(entity, _, position, span)| (entity, (*position, *span)))
+        .collect::<BTreeMap<_, _>>();
+    assert!(!logical.is_empty(), "Grand V3 should publish logical water");
+    let mut represented = BTreeSet::new();
+    let mut water_batches = BTreeMap::new();
+    for (entity, batch, parent, mesh, pickable, visibility) in world
+        .query::<(
+            Entity,
+            &TerrainRenderBatch,
+            &ChildOf,
+            &Mesh3d,
+            &Pickable,
+            &Visibility,
+        )>()
+        .iter(world)
+    {
+        if batch.substance() != water {
+            continue;
+        }
+        assert_eq!(*pickable, Pickable::default());
+        assert_ne!(*visibility, Visibility::Hidden);
+        assert!(world.get::<HexTile>(entity).is_none());
+        assert!(world
+            .get::<MeshMaterial3d<StandardMaterial>>(entity)
+            .is_none());
+        assert!(world.get::<bevy::light::NotShadowCaster>(entity).is_some());
+        assert_eq!(
+            world.get::<TerrainChunkRoot>(parent.parent()),
+            Some(&batch.chunk())
+        );
+        let runs = batch
+            .runs()
+            .map(|run| {
+                assert_eq!(
+                    logical.get(&run.entity()),
+                    Some(&(run.position(), run.span()))
+                );
+                assert!(
+                    represented.insert(run.entity()),
+                    "water has two mesh owners"
+                );
+                assert_eq!(
+                    batch.resolve_hit(run.position().coord.to_world(run.span().top), Some(Vec3::Y)),
+                    Some(run.entity())
+                );
+                (
+                    run.position(),
+                    run.span().bottom.to_bits(),
+                    run.span().top.to_bits(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mesh = world
+            .resource::<Assets<Mesh>>()
+            .get(&mesh.0)
+            .expect("the original water pick mesh remains resident");
+        #[cfg(feature = "map-review")]
+        let material = {
+            let handle = &world
+                .get::<MeshMaterial3d<hex_map::ReviewLiquidMaterial>>(entity)
+                .expect("the original water batch retains its animated material")
+                .0;
+            assert!(world
+                .resource::<Assets<hex_map::ReviewLiquidMaterial>>()
+                .get(handle)
+                .is_some());
+            handle.id()
+        };
+        let chunk = batch.chunk();
+        let key = (
+            (chunk.q, chunk.r),
+            runs.iter().map(|(position, _, _)| *position).collect(),
+        );
+        let snapshot = WaterBatchSnapshot {
+            runs,
+            attributes: mesh
+                .attributes()
+                .map(|(attribute, values)| (attribute.id, values.get_bytes().to_vec()))
+                .collect(),
+            indices: mesh
+                .indices()
+                .map_or_else(Vec::new, |indices| indices.iter().collect()),
+            #[cfg(feature = "map-review")]
+            material,
+        };
+        assert!(water_batches.insert(key, snapshot).is_none());
+    }
+    assert_eq!(represented, logical.keys().copied().collect());
+
+    // Lava keeps its independent presentation entities. Original water uses its
+    // pickable terrain mesh, whose disposable entity may change in an edited chunk.
     let mut presentations =
         world.query::<(Entity, &Name, &ChildOf, &Mesh3d, &Pickable, Has<HexTile>)>();
-    presentations
+    let overlays = presentations
         .iter(world)
         .filter(|(_entity, name, _parent, _mesh, _pickable, _tile)| {
             matches!(
@@ -57,7 +172,11 @@ fn liquid_presentation_snapshot(app: &mut App) -> BTreeSet<(Entity, Entity, Asse
             assert_eq!(*pickable, Pickable::IGNORE);
             (entity, parent.parent(), mesh.0.id())
         })
-        .collect()
+        .collect();
+    LiquidPresentationSnapshot {
+        water: water_batches,
+        overlays,
+    }
 }
 
 fn local_knowledge_snapshot(app: &App) -> Vec<(TilePos, hex_core::KnownTraversal)> {
@@ -177,7 +296,7 @@ fn one_dry_grand_v3_edit_is_chunk_local_and_preserves_composed_runtime_contracts
     let grid_before = active_grid(&mut app);
     let liquids_before = liquid_presentation_snapshot(&mut app);
     assert!(
-        !liquids_before.is_empty(),
+        !liquids_before.water.is_empty(),
         "Grand V3 should publish liquids"
     );
     let occupancy_before = app.world().resource::<TerrainOccupancy>().clone();
