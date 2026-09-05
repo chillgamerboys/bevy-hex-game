@@ -853,7 +853,20 @@ mod tests {
             .expect("nonblocking accept loop");
         let mut client = TcpStream::connect(listener.local_addr().expect("listener address"))
             .expect("local client");
-        let (mut accepted, _) = listener.accept().expect("queued local connection");
+        // A completed client connect does not guarantee immediate nonblocking
+        // accept readiness on every host. Keep the listener nonblocking while
+        // allowing the kernel to publish its queued connection.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (mut accepted, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "local accept deadline");
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("local accept failed: {error}"),
+            }
+        };
         configure(&accepted).expect("portable accepted-stream mode");
         let writer = thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
