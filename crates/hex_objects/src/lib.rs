@@ -11,6 +11,9 @@
 //! tree is live. The renderer restores each camera's previous MSAA mode as soon as
 //! the final blended presentation disappears, restoring true alpha-to-coverage.
 
+/// Opt-in resident presentation of validated V4 object records.
+pub mod v4;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::f32::consts::TAU;
 
@@ -1248,7 +1251,7 @@ mod tests {
         }
     }
 
-    fn fixture_blueprint() -> ObjectBlueprint {
+    pub(super) fn fixture_blueprint() -> ObjectBlueprint {
         let origin = LocalVoxelCoord::new(-2, 1, 0);
         ObjectBlueprint {
             schema_version: hex_assets::OBJECT_BLUEPRINT_SCHEMA_VERSION,
@@ -1285,7 +1288,7 @@ mod tests {
         }
     }
 
-    fn material_fixture_blueprint() -> ObjectBlueprint {
+    pub(super) fn material_fixture_blueprint() -> ObjectBlueprint {
         let origin = LocalVoxelCoord::new(-1, 1, -2);
         ObjectBlueprint {
             schema_version: hex_assets::OBJECT_BLUEPRINT_SCHEMA_VERSION,
@@ -1331,7 +1334,7 @@ mod tests {
         }
     }
 
-    fn fixture_catalog(leaf_red: f32) -> RuntimeArtCatalog {
+    pub(super) fn fixture_catalog(leaf_red: f32) -> RuntimeArtCatalog {
         let palette = match ArtPalette::new(BTreeMap::from([
             (
                 swatch_id("test/bark"),
