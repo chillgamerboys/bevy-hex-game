@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_core::{
     GameplaySetup, HexCoord, HexTile, Level, RunBottom, Screen, TerrainSystems, TilePos,
@@ -49,6 +50,71 @@ impl std::error::Error for InvalidTerrainRun {}
 #[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TerrainOccupancy {
     columns: BTreeMap<HexCoord, Vec<(Level, Level)>>,
+}
+
+/// Entity-level source ledger for mutation-local occupancy publication.
+///
+/// Terrain chunk replacement deliberately retires and recreates every rendered run
+/// in one 16x16 chunk. Keeping the exact source tuple beside the semantic projection
+/// lets that ordinary edit repair only the affected columns instead of sorting every
+/// material run in a large resident world again. Entity ids remain private runtime
+/// metadata and never enter [`TerrainOccupancy`], saves, or deterministic identities.
+#[derive(Resource, Debug, Default)]
+struct TerrainOccupancyPublication {
+    run_by_entity: HashMap<Entity, (TilePos, RunBottom)>,
+    runs_by_coord: BTreeMap<HexCoord, Vec<(Entity, TilePos, RunBottom)>>,
+    #[cfg(test)]
+    incremental_rebuilds: u64,
+}
+
+impl TerrainOccupancyPublication {
+    fn clear(&mut self) {
+        self.run_by_entity.clear();
+        self.runs_by_coord.clear();
+        #[cfg(test)]
+        {
+            self.incremental_rebuilds = 0;
+        }
+    }
+
+    fn remove(&mut self, entity: Entity) -> Option<HexCoord> {
+        let (top, _bottom) = self.run_by_entity.remove(&entity)?;
+        let coord = top.coord;
+        let remove_bucket = self.runs_by_coord.get_mut(&coord).is_some_and(|runs| {
+            if let Some(index) = runs
+                .iter()
+                .position(|(candidate, _top, _bottom)| *candidate == entity)
+            {
+                runs.swap_remove(index);
+            }
+            runs.is_empty()
+        });
+        if remove_bucket {
+            self.runs_by_coord.remove(&coord);
+        }
+        Some(coord)
+    }
+
+    fn insert(&mut self, entity: Entity, top: TilePos, bottom: RunBottom) {
+        debug_assert!(!self.run_by_entity.contains_key(&entity));
+        self.run_by_entity.insert(entity, (top, bottom));
+        self.runs_by_coord
+            .entry(top.coord)
+            .or_default()
+            .push((entity, top, bottom));
+    }
+
+    fn contains_exact(&self, entity: Entity, top: TilePos, bottom: RunBottom) -> bool {
+        self.run_by_entity.get(&entity) == Some(&(top, bottom))
+    }
+
+    fn runs_in_column(&self, coord: HexCoord) -> impl Iterator<Item = (TilePos, RunBottom)> + '_ {
+        self.runs_by_coord
+            .get(&coord)
+            .into_iter()
+            .flat_map(|runs| runs.iter())
+            .map(|(_entity, top, bottom)| (*top, *bottom))
+    }
 }
 
 /// Faction-authorized material voxels for non-authoritative trajectory consumers.
@@ -156,36 +222,42 @@ impl TerrainOccupancy {
 
 /// Registers exact terrain-occupancy publication.
 pub fn plugin(app: &mut App) {
-    app.configure_sets(
-        OnEnter(Screen::Gameplay),
-        TerrainOccupancySystems::Publish
-            .after(GameplaySetup::Restore)
-            .before(GameplaySetup::Perception),
-    )
-    .add_systems(
-        OnEnter(Screen::Gameplay),
-        publish_initial_terrain_occupancy.in_set(TerrainOccupancySystems::Publish),
-    )
-    .add_systems(
-        Update,
-        rebuild_terrain_occupancy
-            .in_set(TerrainOccupancySystems::Publish)
-            .in_set(TerrainSystems::RefreshProjections)
-            .run_if(occupancy_session_active),
-    )
-    .add_systems(OnExit(Screen::Gameplay), clear_terrain_occupancy);
+    app.init_resource::<TerrainOccupancyPublication>()
+        .configure_sets(
+            OnEnter(Screen::Gameplay),
+            TerrainOccupancySystems::Publish
+                .after(GameplaySetup::Restore)
+                .before(GameplaySetup::Perception),
+        )
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            publish_initial_terrain_occupancy.in_set(TerrainOccupancySystems::Publish),
+        )
+        .add_systems(
+            Update,
+            rebuild_terrain_occupancy
+                .in_set(TerrainOccupancySystems::Publish)
+                .in_set(TerrainSystems::RefreshProjections)
+                .run_if(occupancy_session_active),
+        )
+        .add_systems(OnExit(Screen::Gameplay), clear_terrain_occupancy);
 }
 
 /// Publishes occupancy after terrain and restored actors exist but before perception.
 fn publish_initial_terrain_occupancy(
     mut commands: Commands,
-    runs: Query<(Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    runs: Query<(Entity, Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    mut publication: ResMut<TerrainOccupancyPublication>,
 ) {
-    publish_complete_terrain_occupancy(&mut commands, &runs);
+    publish_complete_terrain_occupancy(&mut commands, &runs, &mut publication);
 }
 
-fn clear_terrain_occupancy(mut commands: Commands) {
+fn clear_terrain_occupancy(
+    mut commands: Commands,
+    mut publication: ResMut<TerrainOccupancyPublication>,
+) {
     commands.remove_resource::<TerrainOccupancy>();
+    publication.clear();
 }
 
 fn occupancy_session_active(
@@ -195,58 +267,208 @@ fn occupancy_session_active(
     occupancy.is_some() || !tiles.is_empty()
 }
 
-/// Rebuilds the compact projection when any material-run entity appears or leaves.
+/// Repairs the compact projection when any material-run entity appears or leaves.
 ///
 /// Terrain edits replace the grid through deferred commands. The changed entities are
-/// visible on the following update, when this system rebuilds from the complete new
-/// entity set. A malformed run withdraws the projection instead of publishing a
-/// plausible-looking partial occupancy.
+/// visible on the following ordered phase. The private source ledger retains retired
+/// tuples long enough to identify their old columns, then rebuilds only the union of
+/// old and new affected columns. A malformed run withdraws the complete projection
+/// instead of publishing a plausible-looking partial occupancy.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "incremental publication must drain every required-component removal stream"
+)]
 fn rebuild_terrain_occupancy(
     mut commands: Commands,
-    runs: Query<(Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
-    added_tiles: Query<(), Added<HexTile>>,
-    changed_tops: Query<(), (With<HexTile>, Changed<TilePos>)>,
-    changed_bottoms: Query<(), (With<HexTile>, Changed<RunBottom>)>,
+    runs: Query<(Entity, Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    changed_runs: Query<
+        Entity,
+        (
+            With<HexTile>,
+            Or<(Added<HexTile>, Changed<TilePos>, Changed<RunBottom>)>,
+        ),
+    >,
     mut removed_tiles: RemovedComponents<HexTile>,
     mut removed_tops: RemovedComponents<TilePos>,
     mut removed_bottoms: RemovedComponents<RunBottom>,
+    occupancy: Option<ResMut<TerrainOccupancy>>,
+    mut publication: ResMut<TerrainOccupancyPublication>,
 ) {
-    let removed_count =
-        removed_tiles.read().count() + removed_tops.read().count() + removed_bottoms.read().count();
-    if added_tiles.is_empty()
-        && changed_tops.is_empty()
-        && changed_bottoms.is_empty()
-        && removed_count == 0
-    {
+    let removed_entities = removed_tiles
+        .read()
+        .chain(removed_tops.read())
+        .chain(removed_bottoms.read())
+        .collect::<BTreeSet<_>>();
+    if removed_entities.is_empty() && changed_runs.is_empty() {
         return;
     }
 
-    publish_complete_terrain_occupancy(&mut commands, &runs);
+    // A prior malformed publication intentionally withdrew authority. Revalidate the
+    // complete entity set before restoring it; an incremental repair cannot prove
+    // that an unrelated malformed source did not remain resident.
+    let Some(mut occupancy) = occupancy else {
+        publish_complete_terrain_occupancy(&mut commands, &runs, &mut publication);
+        return;
+    };
+
+    let mut affected_coords = BTreeSet::new();
+    let mut malformed = None;
+    for entity in removed_entities {
+        refresh_published_entity(
+            entity,
+            &runs,
+            &mut publication,
+            &mut affected_coords,
+            &mut malformed,
+        );
+    }
+
+    // A complete gameplay publication runs after terrain restoration, so every
+    // freshly spawned material entity is still reported as `Changed` on the first
+    // ordinary Update. Comparing the exact tuple before touching the per-column
+    // ledger turns that 400k+-entity bootstrap wave into a linear read instead of a
+    // BTreeSet build followed by remove/search/reinsert work for every run. Real
+    // edits still take the same fail-closed refresh path below.
+    let changed_entities = changed_runs
+        .iter()
+        .filter(|entity| {
+            let Ok((_entity, Some(top), Some(bottom))) = runs.get(*entity) else {
+                return true;
+            };
+            !publication.contains_exact(*entity, *top, *bottom)
+        })
+        .collect::<BTreeSet<_>>();
+    for entity in changed_entities {
+        refresh_published_entity(
+            entity,
+            &runs,
+            &mut publication,
+            &mut affected_coords,
+            &mut malformed,
+        );
+    }
+
+    if let Some(error) = malformed {
+        match error {
+            Some(error) => error!("withdrawing malformed terrain occupancy: {error}"),
+            None => error!(
+                "withdrawing terrain occupancy: a material-run entity omits TilePos or RunBottom"
+            ),
+        }
+        commands.remove_resource::<TerrainOccupancy>();
+        return;
+    }
+
+    for coord in affected_coords {
+        let rebuilt = match compact_column_runs(publication.runs_in_column(coord)) {
+            Ok(rebuilt) => rebuilt,
+            Err(error) => {
+                error!("withdrawing malformed terrain occupancy: {error}");
+                commands.remove_resource::<TerrainOccupancy>();
+                return;
+            }
+        };
+        if rebuilt.is_empty() {
+            occupancy.columns.remove(&coord);
+        } else {
+            occupancy.columns.insert(coord, rebuilt);
+        }
+    }
+}
+
+fn refresh_published_entity(
+    entity: Entity,
+    runs: &Query<(Entity, Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    publication: &mut TerrainOccupancyPublication,
+    affected_coords: &mut BTreeSet<HexCoord>,
+    malformed: &mut Option<Option<InvalidTerrainRun>>,
+) {
+    #[cfg(test)]
+    {
+        publication.incremental_rebuilds = publication.incremental_rebuilds.saturating_add(1);
+    }
+    if let Some(coord) = publication.remove(entity) {
+        affected_coords.insert(coord);
+    }
+
+    let Ok((_entity, top, bottom)) = runs.get(entity) else {
+        // Despawned entities and entities which no longer carry HexTile both retire
+        // their prior contribution without introducing a replacement.
+        return;
+    };
+    let (Some(top), Some(bottom)) = (top.copied(), bottom.copied()) else {
+        *malformed = Some(None);
+        return;
+    };
+    if bottom.0 > top.level {
+        *malformed = Some(Some(InvalidTerrainRun {
+            top,
+            bottom: bottom.0,
+        }));
+        return;
+    }
+    affected_coords.insert(top.coord);
+    publication.insert(entity, top, bottom);
 }
 
 fn publish_complete_terrain_occupancy(
     commands: &mut Commands,
-    runs: &Query<(Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    runs: &Query<(Entity, Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+    publication: &mut TerrainOccupancyPublication,
 ) {
     let Some(complete) = runs
         .iter()
-        .map(|(top, bottom)| top.copied().zip(bottom.copied()))
+        .map(|(entity, top, bottom)| {
+            top.copied()
+                .zip(bottom.copied())
+                .map(|(top, bottom)| (entity, top, bottom))
+        })
         .collect::<Option<Vec<_>>>()
     else {
         error!("withdrawing terrain occupancy: a material-run entity omits TilePos or RunBottom");
+        publication.clear();
         commands.remove_resource::<TerrainOccupancy>();
         return;
     };
 
-    match TerrainOccupancy::from_runs(complete) {
+    match TerrainOccupancy::from_runs(complete.iter().map(|(_, top, bottom)| (*top, *bottom))) {
         Ok(occupancy) => {
+            publication.clear();
+            for (entity, top, bottom) in complete {
+                publication.insert(entity, top, bottom);
+            }
             commands.insert_resource(occupancy);
         }
         Err(error) => {
             error!("withdrawing malformed terrain occupancy: {error}");
+            publication.clear();
             commands.remove_resource::<TerrainOccupancy>();
         }
     }
+}
+
+fn compact_column_runs(
+    runs: impl IntoIterator<Item = (TilePos, RunBottom)>,
+) -> Result<Vec<(Level, Level)>, InvalidTerrainRun> {
+    let mut ranges = Vec::new();
+    for (top, RunBottom(bottom)) in runs {
+        if bottom > top.level {
+            return Err(InvalidTerrainRun { top, bottom });
+        }
+        ranges.push((bottom, top.level));
+    }
+    ranges.sort_unstable();
+    let mut compacted: Vec<(Level, Level)> = Vec::with_capacity(ranges.len());
+    for (bottom, top) in ranges {
+        if let Some((_, previous_top)) = compacted.last_mut() {
+            if bottom <= previous_top.saturating_add(1) {
+                *previous_top = (*previous_top).max(top);
+                continue;
+            }
+        }
+        compacted.push((bottom, top));
+    }
+    Ok(compacted)
 }
 
 #[cfg(test)]
@@ -372,6 +594,25 @@ mod tests {
     }
 
     #[test]
+    fn gameplay_restore_does_not_incrementally_rebuild_unchanged_bootstrap_runs() {
+        let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
+        plugin(builder.app_mut());
+        let mut app = builder.build();
+        for q in 0..4_096 {
+            app.world_mut().spawn((HexTile, at(q, 0, 2), RunBottom(0)));
+        }
+
+        enter_gameplay(&mut app);
+
+        let publication = app.world().resource::<TerrainOccupancyPublication>();
+        assert_eq!(publication.run_by_entity.len(), 4_096);
+        assert_eq!(
+            publication.incremental_rebuilds, 0,
+            "the first Update must recognize the complete OnEnter publication instead of rebuilding every Added run"
+        );
+    }
+
+    #[test]
     fn malformed_gameplay_restore_withdraws_occupancy_before_perception() {
         let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
         plugin(builder.app_mut());
@@ -444,6 +685,50 @@ mod tests {
         assert!(occupancy.contains(at(0, 0, 4)));
         assert!(!occupancy.contains(at(0, 0, 6)));
         assert!(!occupancy.contains(at(0, 0, 7)));
+    }
+
+    #[test]
+    fn localized_replacement_matches_a_fresh_complete_projection() {
+        let mut app = occupancy_app().build();
+        let mut replaced = Vec::new();
+        for q in 0..64 {
+            app.world_mut().spawn((HexTile, at(q, 0, 2), RunBottom(0)));
+            let upper = app
+                .world_mut()
+                .spawn((HexTile, at(q, 0, 8), RunBottom(7)))
+                .id();
+            if (16..32).contains(&q) {
+                replaced.push((q, upper));
+            }
+        }
+        app.update();
+
+        for (q, entity) in replaced {
+            app.world_mut().despawn(entity);
+            app.world_mut().spawn((HexTile, at(q, 0, 6), RunBottom(4)));
+        }
+        app.update();
+
+        let rebuilt = {
+            let world = app.world_mut();
+            let mut runs = world.query_filtered::<(&TilePos, &RunBottom), With<HexTile>>();
+            TerrainOccupancy::from_runs(
+                runs.iter(world)
+                    .map(|(top, bottom)| (*top, *bottom))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("the complete comparison projection should be valid")
+        };
+        assert_eq!(
+            app.world().resource::<TerrainOccupancy>(),
+            &rebuilt,
+            "the mutation-local source ledger must exactly match a fresh full rebuild"
+        );
+        assert!(rebuilt.contains(at(15, 0, 8)));
+        assert!(!rebuilt.contains(at(16, 0, 8)));
+        assert!(rebuilt.contains(at(16, 0, 4)));
+        assert!(rebuilt.contains(at(16, 0, 6)));
+        assert!(rebuilt.contains(at(32, 0, 8)));
     }
 
     #[test]

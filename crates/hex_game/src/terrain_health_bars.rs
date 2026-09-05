@@ -8,7 +8,8 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 use hex_core::{
     AppSystems, DamagedVoxels, Headroom, HexSpan, HexTile, IlluminationLevel, KnowledgeState,
-    PerceptionSystems, PresentationSystems, Screen, TerrainSystems, TerrainVoxelHealth, TilePos,
+    PerceptionSystems, PresentationOcclusion, PresentationSystems, Screen, TerrainSystems,
+    TerrainVoxelHealth, TilePos,
 };
 use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
 use hex_ui::{DespawnOnExit, GameplayChromeView};
@@ -306,7 +307,7 @@ fn orient_health_bars(
 fn compose_health_bar_visibility(
     chrome: Res<GameplayChromeView>,
     cameras: Query<&Camera, With<PanOrbitCamera>>,
-    tiles: Query<&Visibility, (With<HexTile>, Without<TerrainHealthBar>)>,
+    tiles: Query<Option<&PresentationOcclusion>, (With<HexTile>, Without<TerrainHealthBar>)>,
     mut bars: Query<
         (&TerrainHealthBar, &mut Visibility),
         (With<TerrainHealthBar>, Without<HexTile>),
@@ -317,7 +318,7 @@ fn compose_health_bar_visibility(
     for (bar, mut visibility) in &mut bars {
         let tile_visible = tiles
             .get(bar.tile)
-            .is_ok_and(|visibility| *visibility != Visibility::Hidden);
+            .is_ok_and(|occlusion| occlusion.is_none_or(|occlusion| !occlusion.is_hidden()));
         let next = if chrome_visible && camera_ready && tile_visible {
             Visibility::Inherited
         } else {
@@ -332,7 +333,9 @@ fn compose_health_bar_visibility(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hex_core::{ExteriorIllumination, HexCoord, LightDomain, SubstanceId};
+    use hex_core::{
+        ExteriorIllumination, HexCoord, LightDomain, PresentationOcclusionReason, SubstanceId,
+    };
     use hex_perception::{
         apply_observations, FactionObservation, FactionObservations, SurfaceSnapshot,
         SurfaceSnapshots,
@@ -425,15 +428,7 @@ mod tests {
 
     fn spawn_tile(app: &mut App, position: TilePos, headroom: Headroom) -> Entity {
         app.world_mut()
-            .spawn((
-                HexTile,
-                position,
-                HexSpan::new(0.0, 1.0),
-                headroom,
-                Visibility::Inherited,
-                InheritedVisibility::VISIBLE,
-                ViewVisibility::VISIBLE,
-            ))
+            .spawn((HexTile, position, HexSpan::new(0.0, 1.0), headroom))
             .id()
     }
 
@@ -625,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn composed_tile_visibility_ignores_stale_aggregates_and_cleanup_removes_every_part() {
+    fn composed_tile_occlusion_hides_the_bar_and_cleanup_removes_every_part() {
         let mut app = test_app();
         let position = pos(0, 2);
         install_authority(&mut app, &[position], true, IlluminationLevel::Bright);
@@ -646,19 +641,19 @@ mod tests {
 
         app.world_mut()
             .entity_mut(tile)
-            .insert((InheritedVisibility::HIDDEN, ViewVisibility::HIDDEN));
+            .insert(PresentationOcclusion::default());
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),
             Some(&Visibility::Inherited),
-            "tile visibility aggregates are prior-frame state; the bar receives its own current-frame propagation and culling"
+            "an empty logical-run occlusion set must not hide the bar"
         );
 
-        app.world_mut().entity_mut(tile).insert((
-            Visibility::Hidden,
-            InheritedVisibility::VISIBLE,
-            ViewVisibility::VISIBLE,
-        ));
+        app.world_mut()
+            .entity_mut(tile)
+            .get_mut::<PresentationOcclusion>()
+            .expect("the fixture installed logical-run occlusion")
+            .insert(PresentationOcclusionReason::InteriorCutaway);
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),

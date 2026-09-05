@@ -7,6 +7,10 @@ description = "3D world presentation: sky and camera."
 
 [features]
 default = []
+# Read-only renderer allocation evidence consumed by deterministic map-review captures.
+map-review = []
+# Render-only clock override used by the development time-of-day preview.
+dev-time-preview = []
 # Headless production-plugin composition for the game crate's integration target.
 test-support = []
 

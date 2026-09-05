@@ -8,6 +8,15 @@ lighting, fog, selection feedback, interface colour, and debug overlays delibera
 live outside it. Those systems change how authored colours are perceived; they do not
 define the colour of an object.
 
+## Map features remain voxel-authored
+
+All current map features, including terrain, snow, trees, grass, and water bodies,
+are made of voxels. Reuse voxel materials and existing voxel-authored templates;
+their internal catalog names do not imply permission to add separate objects.
+Introducing separate decorative or gameplay objects is an explicit future user
+decision. Ordinary rendering batches and surface shading continue to represent the
+underlying voxel geometry.
+
 ## One named palette
 
 [`assets/art/palette.ron`](../../assets/art/palette.ron) is the canonical inventory of
@@ -110,9 +119,9 @@ The initial catalog records the currently rendered content vocabulary:
 
 | Group | Swatches | Current authority |
 |---|---|---|
-| Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
+| Terrain | grass, dirt, sand, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
 | Liquids and construction | water, lava, water foam, metal | `palette.ron`; bodies and metal are referenced by `substances.ron`, while the liquid shader resolves foam directly |
-| Authored vegetation | trunk, three foliage values, and two grass values | `palette.ron`, referenced by the small broadleaf, tall narrow, old-growth, and nonblocking grass-tuft objects rendered by Forest |
+| Authored vegetation | trunk, three foliage values, and two grass values | `palette.ron`, referenced by the small broadleaf, tall narrow, old-growth, blocking date-palm, and nonblocking grass-tuft objects rendered by generated biomes |
 | Emissive props | cyan crystal body and glow | `palette.ron`, referenced by the low, branched, and spire crystal objects |
 | Units | player red, hostile blue | `palette.ron`, resolved during actor setup |
 
@@ -123,6 +132,20 @@ also absent because they are presentation state rather than authored object colo
 The inventory will contract as well as grow. Art refinement may deliberately merge
 roles after reviewing every reference; the point is to make that choice explicit and
 auditable rather than to maximize the number of swatches.
+
+## Coastal island language
+
+Island maps introduce no new palette roles. Still water, sand, grass, dirt, stone,
+tree trunks, and broadleaf foliage retain their existing swatches and rendering
+contracts. Their identity comes from land-water silhouette and material succession:
+open water must clearly separate sandy components, while a wooded island reads from
+sea to sand fringe to grass-and-soil interior before tree density supplies the crown.
+
+At Macro scale, scenic satellites need strong negative-water gaps so they do not read
+as a broken land bridge. The playable sandy landing and wooded heart should remain
+visually close enough to advertise their single dry connection. Random shoreline
+detail, tree placement, and tree rotation may soften repeated shapes, but they must
+not obscure the exact component count or make an unreachable gap look traversable.
 
 ## Shape vocabulary
 

@@ -3939,10 +3939,13 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_multiplayer",
+ "hex_schematic",
  "hex_test_support",
  "rand 0.8.7",
  "ron",
  "serde",
+ "serde_json",
+ "sha2",
  "xxhash-rust",
 ]
 
@@ -4011,6 +4014,17 @@ dependencies = [
  "hex_multiplayer",
  "hex_test_app",
  "hex_units",
+]
+
+[[package]]
+name = "hex_schematic"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "ron",
+ "rustix 1.1.4",
+ "serde",
+ "xxhash-rust",
 ]
 
 [[package]]

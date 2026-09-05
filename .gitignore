@@ -4,6 +4,7 @@ __pycache__/
 *.DS_Store
 # Visual-walk output frames are per-run artifacts, not repo content.
 /.context/visual-walks/
+/.context/grand-v3-visual-experiments/
 /.context/asset-workshop/
 /assets/.asset-workshop-cache/
 /.claude/settings.local.json

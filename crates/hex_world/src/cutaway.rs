@@ -3,8 +3,8 @@
 //! `hex_map` projects exact authored roof voxels onto disposable rendered runs as
 //! [`CutawayOccluder`] components and publishes exact tree roots. `hex_objects`
 //! propagates each root as a [`TreeOccluder`] on every rendered tree chunk. Ordinary
-//! gameplay keeps cave roofs intact; explicit review tooling alone may expose a
-//! complete interior.
+//! gameplay keeps cave roofs and their overlying trees intact; explicit review tooling
+//! alone may expose a complete interior without leaving those trees floating.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -134,7 +134,12 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         OnExit(Screen::Gameplay),
         (
-            (clear_character_proximity, apply_presentation_occlusion).chain(),
+            (
+                clear_interior_cutaway,
+                clear_character_proximity,
+                apply_presentation_occlusion,
+            )
+                .chain(),
             clear_tree_fade_timelines,
         ),
     );
@@ -144,25 +149,74 @@ pub(super) fn install_full_review_override(app: &mut App) {
     app.init_resource::<FullCutawayReviewOverride>();
 }
 
-/// Owns only the explicit review-cutaway reason on exact projected roof runs.
+type InteriorCutawayCandidates = Or<(
+    With<CutawayOccluder>,
+    With<TreeOccluder>,
+    With<PresentationOcclusion>,
+)>;
+
+/// Owns only the explicit review-cutaway reason on exact projected roof runs and
+/// trees whose stack-safe roots are supported by those runs.
 fn reconcile_interior_cutaway(
+    mut commands: Commands,
     interiors: Option<Res<InteriorRegions>>,
     full_review_override: Option<Res<FullCutawayReviewOverride>>,
     targets: Query<&CameraFocusTarget>,
-    mut candidates: Query<(Option<&CutawayOccluder>, &mut PresentationOcclusion)>,
+    mut review_was_enabled: Local<bool>,
+    mut candidates: Query<
+        (
+            Entity,
+            Option<&CutawayOccluder>,
+            Option<&TreeOccluder>,
+            Option<&mut PresentationOcclusion>,
+        ),
+        InteriorCutawayCandidates,
+    >,
 ) {
+    let review_is_enabled = full_review_override.is_some();
+    if !review_is_enabled && !*review_was_enabled {
+        return;
+    }
+    *review_was_enabled = review_is_enabled;
     let active = full_review_override
         .is_some()
         .then(|| active_cutaway(interiors.as_deref(), &targets))
         .flatten();
 
-    for (occluder, occlusion) in &mut candidates {
-        let should_hide =
-            active.is_some_and(|region| occluder.is_some_and(|occluder| occluder.0 == region));
+    for (entity, occluder, tree, occlusion) in &mut candidates {
+        let should_hide = active.is_some_and(|region| {
+            occluder.is_some_and(|occluder| occluder.0 == region)
+                || tree.is_some_and(|tree| {
+                    interiors
+                        .as_deref()
+                        .and_then(|interiors| interiors.roof_region(tree.0))
+                        == Some(region)
+                })
+        });
+        match occlusion {
+            Some(occlusion) => set_reason(
+                occlusion,
+                PresentationOcclusionReason::InteriorCutaway,
+                should_hide,
+            ),
+            None if should_hide => {
+                commands
+                    .entity(entity)
+                    .insert(PresentationOcclusion::from_reason(
+                        PresentationOcclusionReason::InteriorCutaway,
+                    ));
+            }
+            None => {}
+        }
+    }
+}
+
+fn clear_interior_cutaway(mut candidates: Query<&mut PresentationOcclusion>) {
+    for occlusion in &mut candidates {
         set_reason(
             occlusion,
             PresentationOcclusionReason::InteriorCutaway,
-            should_hide,
+            false,
         );
     }
 }
@@ -208,6 +262,7 @@ fn reconcile_character_proximity(
             && match *mode {
                 CameraMode::Map => false,
                 CameraMode::Character => effective_radius.is_some_and(|radius| radius <= threshold),
+                CameraMode::Fly => false,
                 CameraMode::FirstPerson => true,
             };
 
@@ -504,11 +559,12 @@ fn clear_character_proximity(
         }
         commands
             .entity(entity)
-            .remove::<CharacterCameraOcclusionOwner>();
+            .try_remove::<CharacterCameraOcclusionOwner>();
     }
 }
 
 /// Applies the combined reason set and is the sole owner of concrete presentation state.
+/// Deferred updates tolerate roots removed by concurrent map/fog teardown.
 fn apply_presentation_occlusion(mut commands: Commands, mut candidates: OcclusionCandidateQuery) {
     for (entity, mut visibility, pickable, no_shadow, occlusion, applied) in &mut candidates {
         let should_hide = occlusion.is_some_and(|occlusion| occlusion.is_hidden());
@@ -522,7 +578,7 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
                 *visibility = Visibility::Hidden;
                 commands
                     .entity(entity)
-                    .insert((previous, Pickable::IGNORE, NotShadowCaster));
+                    .try_insert((previous, Pickable::IGNORE, NotShadowCaster));
             }
             (true, Some(_)) => {
                 if *visibility != Visibility::Hidden {
@@ -530,26 +586,26 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
                 }
                 let mut entity = commands.entity(entity);
                 if pickable.copied() != Some(Pickable::IGNORE) {
-                    entity.insert(Pickable::IGNORE);
+                    entity.try_insert(Pickable::IGNORE);
                 }
                 if !no_shadow {
-                    entity.insert(NotShadowCaster);
+                    entity.try_insert(NotShadowCaster);
                 }
             }
             (false, Some(previous)) => {
                 *visibility = previous.visibility;
                 let mut entity = commands.entity(entity);
                 if let Some(pickable) = previous.pickable {
-                    entity.insert(pickable);
+                    entity.try_insert(pickable);
                 } else {
-                    entity.remove::<Pickable>();
+                    entity.try_remove::<Pickable>();
                 }
                 if previous.had_not_shadow_caster {
-                    entity.insert(NotShadowCaster);
+                    entity.try_insert(NotShadowCaster);
                 } else {
-                    entity.remove::<NotShadowCaster>();
+                    entity.try_remove::<NotShadowCaster>();
                 }
-                entity.remove::<AppliedPresentationOcclusion>();
+                entity.try_remove::<AppliedPresentationOcclusion>();
             }
             (false, None) => {}
         }
@@ -563,6 +619,61 @@ mod tests {
     use super::*;
     use hex_core::{HexCoord, TilePos, UnitId};
     use hex_test_app::HeadlessAppBuilder;
+
+    #[test]
+    fn deferred_visibility_cleanup_tolerates_retirement_and_restores_survivors() {
+        #[derive(Component)]
+        struct Retiring;
+        let fixture = || {
+            (
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                NotShadowCaster,
+                CharacterCameraOcclusionOwner,
+                PresentationOcclusion::default(),
+                AppliedPresentationOcclusion {
+                    visibility: Visibility::Inherited,
+                    pickable: Some(Pickable::default()),
+                    had_not_shadow_caster: false,
+                },
+            )
+        };
+        let mut app = App::new();
+        let retiring = app.world_mut().spawn((fixture(), Retiring)).id();
+        let survivor = app.world_mut().spawn(fixture()).id();
+        app.add_systems(
+            Update,
+            (
+                |mut commands: Commands, roots: Query<Entity, With<Retiring>>| {
+                    for root in &roots {
+                        commands.entity(root).despawn();
+                    }
+                },
+                clear_character_proximity,
+                apply_presentation_occlusion,
+            )
+                .chain_ignore_deferred(),
+        );
+        app.update();
+        assert!(!app.world().entities().contains(retiring));
+        assert_eq!(
+            app.world().get::<Visibility>(survivor),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Pickable>(survivor),
+            Some(&Pickable::default())
+        );
+        assert!(app.world().get::<NotShadowCaster>(survivor).is_none());
+        assert!(app
+            .world()
+            .get::<AppliedPresentationOcclusion>(survivor)
+            .is_none());
+        assert!(app
+            .world()
+            .get::<CharacterCameraOcclusionOwner>(survivor)
+            .is_none());
+    }
 
     #[derive(Resource, Default)]
     struct PresentationChangeCounts {
@@ -672,6 +783,12 @@ mod tests {
                 PresentationOcclusion::default(),
                 Visibility::Inherited,
             ))
+            .id()
+    }
+
+    fn spawn_tree_part(app: &mut App, root: TilePos) -> Entity {
+        app.world_mut()
+            .spawn((TreeOccluder(root), Visibility::Inherited))
             .id()
     }
 
@@ -1064,6 +1181,33 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_gameplay_keeps_overlying_trees_in_all_camera_modes() {
+        let target = position(0, 0, 7);
+        let region = InteriorRegionId(2);
+        let tree_root = position(4, -2, 13);
+        let (mut app, _, _) = test_app(target, region);
+        app.world_mut()
+            .resource_mut::<InteriorRegions>()
+            .insert_roof_voxel(tree_root, region);
+        let tree = spawn_tree_part(&mut app, tree_root);
+
+        for mode in [
+            CameraMode::Map,
+            CameraMode::Character,
+            CameraMode::FirstPerson,
+        ] {
+            *app.world_mut().resource_mut::<CameraMode>() = mode;
+            app.update();
+            assert_ordinary(&app, tree);
+            assert!(app
+                .world()
+                .entity(tree)
+                .get::<PresentationOcclusion>()
+                .is_none());
+        }
+    }
+
+    #[test]
     fn full_review_override_hides_the_whole_exact_region_and_restores_it() {
         let target = position(0, 0, 7);
         let region = InteriorRegionId(2);
@@ -1085,6 +1229,169 @@ mod tests {
         assert_ordinary(&app, near);
         assert_ordinary(&app, distant);
         assert_ordinary(&app, unrelated);
+    }
+
+    #[test]
+    fn full_review_hides_exact_overlying_trees_and_restores_their_presentation() {
+        let target = position(0, 0, 7);
+        let region = InteriorRegionId(2);
+        let other_region = InteriorRegionId(9);
+        let tree_root = position(5, -3, 13);
+        let stacked_other_root = position(5, -3, 23);
+        let (mut app, _, _) = test_app(target, region);
+        {
+            let mut interiors = app.world_mut().resource_mut::<InteriorRegions>();
+            interiors.insert_roof_voxel(tree_root, region);
+            interiors.insert_roof_voxel(stacked_other_root, other_region);
+        }
+        let previous_pickable = Pickable {
+            should_block_lower: false,
+            is_hoverable: true,
+        };
+        let root = app
+            .world_mut()
+            .spawn((
+                TreeOccluder(tree_root),
+                Visibility::Visible,
+                previous_pickable,
+                NotShadowCaster,
+            ))
+            .id();
+        let render_chunk = spawn_tree_part(&mut app, tree_root);
+        let stacked_other = spawn_tree_part(&mut app, stacked_other_root);
+        install_full_review_override(&mut app);
+
+        for mode in [
+            CameraMode::Map,
+            CameraMode::Character,
+            CameraMode::FirstPerson,
+        ] {
+            *app.world_mut().resource_mut::<CameraMode>() = mode;
+            app.update();
+            assert_hidden(&app, root);
+            assert_hidden(&app, render_chunk);
+            assert_ordinary(&app, stacked_other);
+        }
+
+        app.world_mut()
+            .entity_mut(render_chunk)
+            .get_mut::<PresentationOcclusion>()
+            .expect("the cutaway should have installed a composable reason set")
+            .insert(PresentationOcclusionReason::Fog);
+        app.world_mut()
+            .remove_resource::<FullCutawayReviewOverride>();
+        app.update();
+
+        let restored_root = app.world().entity(root);
+        assert_eq!(
+            restored_root.get::<Visibility>(),
+            Some(&Visibility::Visible)
+        );
+        assert_eq!(restored_root.get::<Pickable>(), Some(&previous_pickable));
+        assert!(restored_root.contains::<NotShadowCaster>());
+        assert!(!restored_root.contains::<AppliedPresentationOcclusion>());
+        assert_hidden(&app, render_chunk);
+        let retained_reasons = app
+            .world()
+            .entity(render_chunk)
+            .get::<PresentationOcclusion>()
+            .expect("fog should retain the tree chunk reason set");
+        assert!(retained_reasons.contains(PresentationOcclusionReason::Fog));
+        assert!(!retained_reasons.contains(PresentationOcclusionReason::InteriorCutaway));
+        assert_ordinary(&app, stacked_other);
+
+        app.world_mut()
+            .entity_mut(render_chunk)
+            .get_mut::<PresentationOcclusion>()
+            .expect("fog should retain the tree chunk reason set")
+            .remove(PresentationOcclusionReason::Fog);
+        app.update();
+        assert_ordinary(&app, render_chunk);
+    }
+
+    #[test]
+    fn replacing_an_overlying_tree_during_review_clears_stale_cutaway_ownership() {
+        let target = position(0, 0, 7);
+        let region = InteriorRegionId(2);
+        let old_root = position(3, -1, 13);
+        let new_root = position(4, -1, 13);
+        let (mut app, _, _) = test_app(target, region);
+        {
+            let mut interiors = app.world_mut().resource_mut::<InteriorRegions>();
+            interiors.insert_roof_voxel(old_root, region);
+            interiors.insert_roof_voxel(new_root, region);
+        }
+        let old_tree = spawn_tree_part(&mut app, old_root);
+        install_full_review_override(&mut app);
+        app.update();
+        assert_hidden(&app, old_tree);
+
+        app.world_mut()
+            .entity_mut(old_tree)
+            .remove::<TreeOccluder>();
+        let replacement = spawn_tree_part(&mut app, new_root);
+        app.update();
+
+        assert_ordinary(&app, old_tree);
+        assert_hidden(&app, replacement);
+    }
+
+    #[test]
+    fn gameplay_exit_restores_review_hidden_trees_and_reentry_reacquires_them() {
+        let (mut app, _, _) = character_camera_lifecycle_app();
+        let region = InteriorRegionId(7);
+        let tree_root = position(2, -1, 13);
+        let mut interiors = InteriorRegions::new();
+        interiors.insert_surface(TilePos::ORIGIN, region);
+        interiors.insert_roof_voxel(tree_root, region);
+        app.insert_resource(interiors);
+        install_full_review_override(&mut app);
+        let previous_pickable = Pickable {
+            should_block_lower: false,
+            is_hoverable: true,
+        };
+        let tree = app
+            .world_mut()
+            .spawn((
+                TreeOccluder(tree_root),
+                Visibility::Visible,
+                previous_pickable,
+                NotShadowCaster,
+            ))
+            .id();
+
+        for cycle in 0..25 {
+            enter_screen(&mut app, Screen::Gameplay);
+            assert_hidden(&app, tree);
+
+            enter_screen(&mut app, Screen::Title);
+            let restored = app.world().entity(tree);
+            assert_eq!(
+                restored.get::<Visibility>(),
+                Some(&Visibility::Visible),
+                "cycle {cycle} did not restore the authored visibility"
+            );
+            assert_eq!(
+                restored.get::<Pickable>(),
+                Some(&previous_pickable),
+                "cycle {cycle} did not restore picking"
+            );
+            assert!(
+                restored.contains::<NotShadowCaster>(),
+                "cycle {cycle} did not preserve authored shadow suppression"
+            );
+            assert!(
+                !restored.contains::<AppliedPresentationOcclusion>(),
+                "cycle {cycle} leaked applied cutaway state"
+            );
+            assert!(
+                !restored
+                    .get::<PresentationOcclusion>()
+                    .expect("review reconciliation should retain its composable reason set")
+                    .contains(PresentationOcclusionReason::InteriorCutaway),
+                "cycle {cycle} leaked the review reason"
+            );
+        }
     }
 
     #[test]
@@ -1119,16 +1426,22 @@ mod tests {
     fn stable_review_cutaway_does_not_republish_state() {
         let target = position(0, 0, 7);
         let region = InteriorRegionId(2);
+        let tree_root = position(3, -1, 13);
         let (mut app, _, _) = test_app(target, region);
+        app.world_mut()
+            .resource_mut::<InteriorRegions>()
+            .insert_roof_voxel(tree_root, region);
         install_full_review_override(&mut app);
         app.init_resource::<PresentationChangeCounts>().add_systems(
             PostUpdate,
             count_presentation_changes.after(apply_presentation_occlusion),
         );
         let roof = spawn_roof(&mut app, position(0, 0, 13), region);
+        let tree = spawn_tree_part(&mut app, tree_root);
 
         app.update();
         assert_hidden(&app, roof);
+        assert_hidden(&app, tree);
         *app.world_mut().resource_mut::<PresentationChangeCounts>() =
             PresentationChangeCounts::default();
 

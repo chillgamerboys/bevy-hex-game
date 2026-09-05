@@ -34,7 +34,8 @@
         "python3",
         "-m",
         "unittest",
-        "tools/test_test_scope.py"
+        "tools/test_test_scope.py",
+        "tools/test_review.py"
       ]
     },
     "rules": {
@@ -178,6 +179,8 @@
         "run",
         "--package",
         "hex_map",
+        "--features",
+        "map-review",
         "--lib",
         "--cargo-profile",
         "map-test",
@@ -193,7 +196,11 @@
         "run",
         "--package",
         "hex_map",
+        "--features",
+        "map-review",
         "--lib",
+        "--test",
+        "schematic_compile",
         "--cargo-profile",
         "map-test",
         "--profile",
@@ -208,6 +215,8 @@
         "run",
         "--package",
         "hex_map",
+        "--features",
+        "map-review",
         "--test",
         "contracts",
         "--cargo-profile",
@@ -289,9 +298,12 @@
         "*procedural_v2::caves::tests::cave_radius_benchmark_tracks_the_radius_40_target",
         "*procedural_v2::sky::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
         "*procedural_v2::sky::tests::layered_sky_radius_benchmark_tracks_the_radius_40_target",
+        "*procedural_v3::macro_world::tests::crystal_mountain_constructs_as_one_valid_world_in_all_six_global_rotations",
+        "*procedural_v3::macro_world::tests::crystal_mountain_release_corpus_validates_32_seeds",
         "*procedural_v3::macro_world::tests::mountain_range_release_corpus_validates_128_seeds",
         "*procedural_v3::macro_world::tests::mountain_range_stress_corpus_keeps_fallbacks_below_one_percent",
         "*procedural_v3::macro_world::tests::mountain_range_generation_p95_stays_within_two_and_a_half_times_ring19",
+        "*procedural_v3::macro_world::tests::crystal_mountain_generation_benchmark_p95_stays_within_existing_macro_budget",
         "*procedural_v3::caves::tests::one_hundred_twenty_eight_seed_corpus_keeps_exact_sparse_vegetation",
         "*procedural_v3::caves::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
         "*procedural_v3::caves::tests::caves_full_build_benchmark_tracks_median_and_p95",
@@ -303,6 +315,8 @@
         "*procedural_v3::waterfall::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
         "*procedural_v3::waterfall::tests::waterfall_full_build_benchmark_tracks_median_and_p95",
         "*procedural_v3::crystal_ascent::tests::crystal_ascent_boundary_rise_benchmark_tracks_timing_and_plan_counts",
+        "*procedural_v3::schematic::tests::review_snow_masks_use_the_authored_garden_center_without_its_late_anchor",
+        "*grand_v3_full_world_release_corpus_compiles_32_seeds",
         "*terrain_edits::one_hundred_localized_terrain_edits_stay_within_the_interactive_budget"
       ],
       "full_command": [
@@ -311,6 +325,8 @@
         "list",
         "--package",
         "hex_map",
+        "--features",
+        "map-review",
         "--cargo-profile",
         "map-test",
         "--ignore-default-filter"
@@ -321,6 +337,8 @@
         "list",
         "--package",
         "hex_map",
+        "--features",
+        "map-review",
         "--cargo-profile",
         "map-test",
         "--ignore-default-filter",
@@ -333,10 +351,13 @@
     {
       "name": "scope-routing-contract",
       "patterns": [
-        "tools/test_test_scope.py"
+        "tools/test_test_scope.py",
+        "tools/test_review.py",
+        "tools/review.py",
+        "tools/run_grand_v3_structural_review.sh"
       ],
       "concerns": ["selector"],
-      "reason": "Selector regression changes run their own fail-closed unit target; command manifests, selector engines, and CI topology remain fully fail-closed."
+      "reason": "Selector and review-tool regressions run their own fail-closed Python contracts; command manifests, selector engines, and CI topology remain fully fail-closed."
     },
     {
       "name": "scope-infrastructure",
@@ -355,6 +376,12 @@
       ],
       "full": true,
       "reason": "Validation infrastructure changes require the complete gate."
+    },
+    {
+      "name": "schematic-map-compiler-contract",
+      "patterns": ["crates/hex_map/tests/schematic_compile.rs"],
+      "concerns": ["map_generation", "clippy"],
+      "reason": "The public schematic-to-map compiler corpus belongs to deterministic map generation rather than the generic publication-contract target."
     },
     {
       "name": "map-contract-tests",
@@ -455,6 +482,15 @@
       ],
       "full": true,
       "reason": "World-owned changes retain their existing complete owner and seam coverage."
+    },
+    {
+      "name": "schematic-planner",
+      "patterns": [
+        "crates/hex_schematic/**",
+        "assets/config/schematics/**"
+      ],
+      "concerns": ["residual", "clippy", "docs"],
+      "reason": "The standalone schematic planner is covered by its pure library, CLI, corpus, lint, and documentation tests without selecting voxel-map or gameplay suites."
     },
     {
       "name": "lattice-rules",

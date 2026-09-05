@@ -1,0 +1,16 @@
+[package]
+name = "hex_schematic"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Pure deterministic contracts and tooling for radius-eight world schematics."
+
+[dependencies]
+atomicwrites = { workspace = true }
+ron = { workspace = true }
+rustix = { workspace = true }
+serde = { workspace = true }
+xxhash-rust = { workspace = true, features = ["xxh3"] }
+
+[lints]
+workspace = true

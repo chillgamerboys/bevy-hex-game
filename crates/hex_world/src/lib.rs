@@ -22,7 +22,11 @@ mod sky_material;
 pub mod test_support;
 
 pub use camera::{CameraMode, CameraSystems, PanOrbitCamera};
-pub use sky::TimeOfDay;
+pub use sky::{clear_environment_map_cache, TimeOfDay};
+#[cfg(feature = "dev-time-preview")]
+pub use sky::{reset_presentation_time_override, PresentationTimeOverride};
+#[cfg(feature = "map-review")]
+pub use sky_material::SkyRuntimeAssetEvidenceV1;
 
 /// Enables a full-interior cutaway for one deterministic review capture.
 ///

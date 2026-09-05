@@ -61,7 +61,8 @@ pub use formation::{
 };
 pub use hex_core::{Faction, OccupancyBlock, UnitOccupancy};
 pub use movement::{
-    route, route_with_occupancy, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing,
+    route, route_with_occupancy, Body, Footing, FootingCache, MovementCrossings, MovementSystems,
+    Reach, Standing,
 };
 pub use pathing::HexPathingLine;
 pub use selection::{
@@ -78,8 +79,9 @@ pub use terrain_occupancy::{
 pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
 pub use trajectories::{
     authored_object_sight_segment_is_clear, known_trajectory_is_clear, sight_segment_is_clear,
-    supercover, terrain_and_authored_object_sight_is_clear, terrain_sight_is_clear,
-    trajectory_destination, trajectory_is_clear, trajectory_voxels,
+    supercover, terrain_and_authored_object_sight_is_clear,
+    terrain_and_authored_object_sight_is_clear_cached, terrain_sight_is_clear,
+    trajectory_destination, trajectory_is_clear, trajectory_voxels, SightOccupancyCache,
 };
 pub use units::{
     spawn_replica_unit, Archetype, Downed, Enemy, MovingTo, Party, Player, ReplicaUnitSpawn,

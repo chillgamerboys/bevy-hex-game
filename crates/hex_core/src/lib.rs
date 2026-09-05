@@ -30,6 +30,7 @@ pub mod spatial;
 pub mod surface_features;
 pub mod terrain;
 pub mod terrain_impact;
+pub mod terrain_render;
 pub mod traversal;
 pub mod unit_ids;
 pub mod view;
@@ -56,7 +57,7 @@ pub use formation::{
     FormationError, FormationPreset, FormationSlot, PartyFormation, PartyMovementMode, PartyPath,
     MAX_FORMATION_SLOTS, MIN_FORMATION_SLOTS,
 };
-pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
+pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant, TerrainChunkRoot};
 pub use input::{
     BindingConflict, BindingEditError, BindingRestoreOutcome, InputAction, InputActionInventory,
     InputActionMetadata, InputBindingOverrides, InputBindings, InputCategory, InputContext,
@@ -71,7 +72,8 @@ pub use perception::{
 };
 pub use presentation::{
     CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason, PresentationSystems,
-    TargetReticleRequest, TreeFadeAmount, TreeOccluder, WorldMarkerSuppression,
+    ReviewCrystalLightProfile, ReviewEdgeTreatment, ReviewMaterialTreatment, TargetReticleRequest,
+    TreeFadeAmount, TreeOccluder, WorldMarkerSuppression,
 };
 pub use setup::GameplaySetupFailure;
 pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};
@@ -82,14 +84,16 @@ pub use surface_features::{
     SurfaceFeatures,
 };
 pub use terrain::{
-    CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
-    ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
+    CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors,
+    MapObservationAnchors, MapViewHint, ResolvedMapSeed, SpecialMovementRegion,
+    SpecialMovementRegions, TerrainReady,
 };
 pub use terrain_impact::{
     is_terrain_toughness, DamagedVoxels, TerrainBatchId, TerrainImpact, TerrainImpactDisposition,
     TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainSystems,
     TerrainVoxelHealth, TerrainVoxelOutcome, MAX_TERRAIN_TOUGHNESS,
 };
+pub use terrain_render::{TerrainPickRun, TerrainRenderBatch, MAX_TERRAIN_PICK_RUNS_PER_BATCH};
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};
 pub use view::{

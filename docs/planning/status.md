@@ -9,6 +9,31 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Grand V3 completion is being assembled for PR #219.** The accepted visual source
+`125e2df` and its import provenance are preserved. The six recovered map fixes plus
+Crystal crown snow are tracked in [the recovered-fixes ledger](hex-six-map-fixes.md).
+The walking owner's frozen nine-commit handoff through `95b2274` is integrated here.
+The combined hero passes strict generation, independent original-route preservation,
+intake/river/bridge/tunnel geometry and 84 Walking/launch checks. Full workspace
+Clippy passes. Inherited representative-seed terrain failures keep the map gate red;
+the first exact-head review found level-water stripes and an obstructed camera.
+The shader and capture teardown are repaired; public hero publication/export and the refreshed
+camera-script contracts pass. Final exact-head capture/animation and CI receipts are tracked on
+PR #219, with native motion/play evidence still pending. This candidate
+has not been delivered to `dev`; the current gate is in the
+[Grand V3 map manifest](waves/grand-v3-map/manifest.md).
+
+**Grand V3 grounded exploration** adds continuous walking/running, jumping/falling,
+solid-body collision, bounded wading, recovery and collision-aware camera follow.
+See [exploration controls and boundaries](../systems/exploration.md). This is a
+development exploration pawn. Its combined Walking/launch fixtures and hosted gameplay
+partitions pass. Native control-feel review, delivery to `dev`, and later V4 integration remain
+separate work.
+
+The following older reconciliation and checkpoint measurements remain historical evidence
+at their stated source identities. Their earlier passing results do not certify PR #219's
+current combined candidate.
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,
@@ -30,8 +55,8 @@ four still require named-human exact-head presentation, motion/control-feel, and
 findings. They must land #210 → #211 → #212 → #213 under the
 [biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
 
-The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
-only after #213 lands; they are not merge-ready. Garden's published foundation plus nine
+The earlier sixteen-checkpoint Grand V3 packaging plan remains historical provenance
+in the biome-stack reconciliation; the current outcome is the combined PR #219 gate above. Garden's published foundation plus nine
 local commits are near-ready after its two integration-golden repairs, current-base
 reconciliation, complete gate, and exact-head walk. Generic review/provenance and
 capture-sequence tooling, Grand structural review, route revision 3, time-cycle work, and
@@ -39,6 +64,163 @@ subtle-geometry work remain unpublished and in progress; their inherited dirty s
 are not suitable for whole-tree commits.
 Rejected Outpost checkpoint `f4f0e4c` is preserved only as
 `archive/outpost-rejected-f4f0e4c`; the replacement design has not started.
+
+The **Grand V3 schematic planner** has completed its revision-2 correction and received
+cell-for-cell visual approval on `wave/grand-v3-schematic`, stacked temporarily on the
+exact corrective biome head while draft PRs #210–#213 await delivery to `dev`. The
+implementation adds a standalone world-owned
+library and CLI that turn one seed plus a strict radius-eight template into a complete
+217-cell semantic plan, validation metrics, semantic fingerprint, and review-only
+SVG/HTML projections. Alberto approved the corrected cell-for-cell source transcription:
+revision 2 uses the fixed flat-top orientation, places twelve peaks in two six-cell chains
+around the north-eastern mountain lake, and restores the exact lake island, frozen core and
+shore contact, waterfall opening, straight `q = 1` tunnel, and land-overlay river route.
+
+The previous revision-1 package and gallery are stale and must not be used as evidence.
+Revision 2 now passes the complete package suite, the 256-seed normal corpus, and the
+10,000-seed release corpus with zero invalid outputs, fallbacks, or duplicate semantic
+plans. Deterministic four-worker candidate evaluation preserves byte-identical serial
+results and brings sampled release p95 to 36.6–37.7 ms below the 50 ms budget. A fresh
+revision-2 reference plus twelve-seed gallery has been generated and machine-validated.
+The exact source transcription has Alberto's named visual approval; the seeded gallery's
+variation quality remains a separate pending human review. Local peak resident memory measured 8.7 MiB, while
+the scheduled Linux `VmHWM` run remains the authoritative 64 MiB platform gate.
+
+The **Grand V3 schematic-to-map compiler** has passed its required representative proxy
+decision and is now in final implementation on the same branch. Alberto approved the exact
+pitch-22/radius-187 scale, the recorded budgets, combined solid-terrain chunk meshes with
+exact picking, and retention of the 50 ms perception plus 100 ms local-edit targets. The
+approved proxy remains the before-state: 105,469 columns, 217 stable biome identities, 444
+resident chunks, a 10,861,429-byte snapshot, 1.794 s setup, and 1.137 s combined semantic
+compile plus voxel materialization. Its 56.707 ms perception and 192.377 ms local-edit p95
+measurements remain misses to close, not relaxed budgets.
+
+Final implementation now includes bounded terrain batches with exact picking, authoritative
+three-lane hydrology, exactly two bridges, ordinary hubs/routes, the tunnel and embedded
+Crystal Ascent, one shared interior/light domain, vegetation, and the complete anchor set.
+The 256-seed fine-topology corpus passes and exercises all three natural-pass width buckets;
+reference, zero, hero, and maximum-seed complete worlds also pass the final physical pass,
+route-cut, seam, vegetation, Crystal, anchor, and export validators.
+Exact release runtime gates also pass for one-chunk edit locality, complete Crystal
+occupancy/perception/fog/cutaway teardown and re-entry, and 10,000 unchanged updates with
+zero projection or presentation rebuild churn. The final-content comparison now meets all
+approved deterministic latency and snapshot budgets: 3.210 s setup, 2.099 s semantic
+compile plus materialization, 25.535 ms perception p95, and 77.638 ms one-column edit p95.
+Full-renderer measurements remain over the approved memory targets at 3.84 GB
+maximum RSS and 7.63 GB peak footprint. A same-process phase trace now isolates the current
+actionable miss to terrain publication/extraction: RSS peaks near 2.94 GB during upload,
+then settles around 0.50--0.72 GB and reaches about 0.78 GB during PNG capture. Renderer
+publication-memory optimization therefore remains open. The 32-world fully materialized
+release corpus passes in 64.65 s, including a permanent seed-14 review-anchor reachability
+regression. The real preview, camera-route capture, CI-equivalent gate, native
+motion review, and named visual/play approval remain outstanding. The fail-closed delivery
+state is tracked in
+[the Grand V3 map manifest](waves/grand-v3-map/manifest.md); the original quantitative
+baseline remains in [the proxy checkpoint](waves/grand-v3-map/proxy-checkpoint.md), and
+the final measurements are recorded in
+[the final runtime checkpoint](waves/grand-v3-map/final-runtime-checkpoint.md).
+
+The **Coastal islands** wave is review-ready on its delivery branch and is not yet a
+claim about `dev`. Exact implementation head
+`6f78a9cae681d9675e67daf6bd98b20e4a058475` contains focused **Sandy Islets** and
+**Wooded Island** maps plus the radius-77 **Ocean Archipelagoes** Macro world. The focused
+profiles reuse the Coastal environment at sea level 8: five separated sandy
+components in a radius-24 world, and one broad radius-40 island with a two-column
+beach and broadleaf interior. The Macro roster assigns 24 of 37 atomic cells to one
+continuous ocean, six cells to three scenic sandy clusters, one to a playable sandy
+landing, and six to the wooded heart. Its landing-heart seam is the only ordinary dry
+cross-instance route; six remote dry components remain scenery.
+
+Validation close-out head `45b0704c409474abf86c273b70fef3cac981751d`
+refreshes the exhaustive map-partition pins to the delivered 119/506/97 split. Typed
+settings, metrics, generation, Macro composition, three selectable maps, compact
+party placement, dependency invalidation, lifecycle checks, semantic review routes, and
+real Sandbox previews are complete. The exact-head selector-chosen CI-equivalent gate is
+green, including 119 map-unit, 506 map-generation, 97 map-contract, and 1,050 residual
+tests; doctests, strict clippy, formatting, dependency policy, generated documentation,
+tracked documentation links, and the optimized shipping build also pass. Three deterministic
+scripted walks produced 17 captures. The shipped large-map camera benchmark records Ocean
+Archipelagoes at 2.583 µs query p95 against its 2 ms budget. Named-human visual/play
+approval and publication to `dev` remain pending; neither the automated gate nor the
+captures substitute for that review.
+
+The 2026-08-21 corrective pass increased Wooded Island's central relief allowance by two
+voxels in both the focused recipe and Ocean Archipelagoes' wooded heart. Focused and Macro
+tests retain shoreline, protected-route, dry-connectivity, and height-bound contracts while
+replacement frames show the raised center; named-human approval remains pending.
+
+The **Crystal Mountain** wave is implemented on its delivery branch and is not yet a
+claim about `dev`. Its selectable radius-77 Macro candidate places the existing
+base-6/rise-144 Crystal Ascent at world origin, surrounds its level-150 summit with a
+five-cell temperate Forest basin and higher inner/outer ridges, and makes one
+four-wide level-6 tunnel the only ordinary route from the mountain foot to that basin.
+The landmark mask contains its complete radius-32 site while retaining the protruding
+central-cell fringe as summit terrain. The tunnel crosses the outer and inner mountain
+instances before joining the landmark, then shares one Dark interior and light domain
+with the complete Ascent; of the tunnel route floors, only its eight-cell boundary
+apron remains exterior.
+
+The branch now contains the defaulted surface-walker, spanning-feature, and anchor
+contracts; authored summit-port alignment; reserve/merge/carve/finalize composition;
+exact subsurface seam closures; unified interior, tunnel crystals, anchors and
+validators; selectable non-combat content; and review-cutaway feature reconciliation.
+Exact delivery head `74deb7f` is published as
+[draft PR #210](https://github.com/chillgamerboys/bevy-hex-game/pull/210). The complete
+selector-chosen CI-equivalent gate passes at that head, including release rotations
+and corpora, runtime lifecycle, materialization and re-entry, fog and heart occupancy,
+camera collision, and perception. Its deterministic review pack contains 28 captures
+under `.context/visual-walks/crystal-mountain/74deb7f`.
+
+Release profiling records Crystal Mountain generation at 7.10 s p95 versus 3.04 s
+for Ring19, or 2.33× inside the 2.5× budget. Materialization takes 7.187 s for 61,450
+entities, compared with Mountain Range's 3.854 s for 68,650. Camera collision is
+2.917 µs p95 and terrain-index rebuilding is 4.935 ms. Perception is 33.768 ms p95,
+the dense six-observer case is 101.655 ms p95, and 10,000 idle frames perform zero
+recomputation. Crystal Mountain's measured RSS/peak memory is
+940,670,976/1,481,492,232 bytes versus Mountain Range's
+764,608,512/1,249,576,544, an increase of 23.0%/18.6%.
+
+Human visual, camera-motion, control-feel, and named play approval remain pending.
+The PR deliberately remains draft and the candidate has not merged to `dev`; neither
+the generated frames nor the automated gate substitutes for that human review.
+
+The 2026-08-21 corrective pass found and closed two Crystal defects at their world and mesh
+sources. The complete Crystal Ascent stair annulus now has a stratified foundation through
+base level with a worked-stone cap, and final Crystal Mountain composition revalidates that exact plinth after merge
+and tunnel carving. Crystal mesh chunks now give opaque geometry sole ownership of a shared
+opaque-to-translucent/additive face, removing the coincident surfaces that caused movement
+flicker while retaining a closed backing. Typed geometry and mesh tests are green; native
+camera-motion review remains intentionally pending.
+
+The stacked **Arid biomes** wave is implemented on its delivery branch and is not yet
+a claim about `dev`. It adds the `Arid` environment, Desert Transition, Desert Plain,
+Dunes, and Oasis recipes, the blocking `plant/date-palm` object, and four selectable
+maps: **Desert Transition**, **Desert Plain**, **Dunes**, and **Desert Oasis Rings**.
+The first three are focused radius-12 `Single` worlds. The last is a radius-55
+`DesertOasis` Ring19 profile with one local-water oasis, six inner dune regions, and
+an alternating outer ring of six taller dune and six plain regions. It retains 42
+Dry reciprocal seams, redundant ordinary reachability, and the original defaulted
+`TwoRings` fingerprint.
+
+The complete selector-chosen CI-equivalent candidate is green: 60 selector checks,
+180 rules checks, 93 trajectory contracts, 420 cross-crate contracts plus five spell
+resolution checks, 29 simulation tests, 180 application and postflight tests, 701 map
+unit/generation/contract tests, and 1,047 residual workspace tests all pass. Workspace
+doctests, formatting, dependency policy, panic-free clippy, generated documentation,
+and the optimized shipping build also pass. Four pointer-driven camera walks produced
+22 deterministic frames and four Sandbox previews. Human visual/play approval and
+publication to `dev` remain pending; the automated pack does not substitute for either.
+
+The 2026-08-21 corrective pass lowered Oasis water exactly one voxel below its surrounding
+base-level grass, with the sand bed one further voxel down. Exact generation tests and
+replacement review frames verify the recessed-basin contract; named-human approval remains
+pending.
+
+Corrective visual evidence now fails closed across these review packs. Each run invalidates
+any stale review index before setup, records scenario/seed/script provenance and successful
+capture names, and may report completion only with the exact expected frame set. Every frame
+starts `UNREVIEWED` and must receive an explicit `PASS` or `FAIL`; static evidence is never
+used to claim native-motion flicker or control-feel approval.
 
 ## What is built
 
@@ -68,19 +250,24 @@ seed-independent, publishes stable lower/chamber/upper anchors, an upper
 corner-landing review anchor, and terminal pads, and
 validates exact handoff edges, ordinary traversal, one-level transitions, turning-pad
 headroom, per-crystal light pairs, and the absence of non-handoff cross-loop shortcuts.
-The standalone party starts on the exterior apron facing inward. Macro composition
-remains deferred.
+The standalone party starts on the exterior apron facing inward. Arbitrary Macro
+placement remains rejected; the in-delivery Crystal Mountain candidate is the one
+specialized composition that constructs the landmark at world origin, aligns its
+authored summit approach, and joins its lower aperture to the global tunnel.
 
-V3 now has fifteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
+V3 now has twenty-one recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
 Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,
-and Crystal Ascent. Ring7 places its fixed seven-recipe roster in one connected radius-33
-world. Ring19 powers the selectable **Two Rings** map: a radius-55, 9,241-column
-world with 19 fixed regions, 42 reciprocal seams, 30 outer boundary sides, and a
-physical ordinary-walker graph that keeps all regions reachable after any one seam is
-removed. Its three mountain-fed water branches meet in central Hills before flowing
-through downstream Hills and an outlet Waterfall; the western Volcano owns a separate
-lava outlet. Single and Ring7 retain their 4-bit patch namespace, while Ring19 uses 5
-patch bits so slots 16–18 remain collision-free.
+Crystal Ascent, Desert Transition, Desert Plain, Dunes, Oasis, Sandy Islets, and
+Wooded Island. Ring7 places its fixed seven-recipe roster in one connected radius-33
+world. Ring19 powers two
+selectable radius-55, 9,241-column profiles. **Two Rings** retains its 19 fixed mixed
+regions, 42 reciprocal seams, 30 outer boundary sides, and physical ordinary-walker
+graph that keeps all regions reachable after any one seam is removed. Its three
+mountain-fed water branches meet in central Hills before flowing through downstream
+Hills and an outlet Waterfall; the western Volcano owns a separate lava outlet.
+**Desert Oasis Rings** reuses the masks and redundant dry walker graph around one
+local Still pool. Single and Ring7 retain their 4-bit patch namespace, while Ring19
+uses 5 patch bits so slots 16–18 remain collision-free.
 
 The new authored Macro path powers the selectable **Mountain Range** map. It covers a
 radius-77, 18,019-column world with 37 atomic radius-12-scale cells collapsed into 30
@@ -563,6 +750,9 @@ tree through isolated per-tree material clones; authored canopy masks remain art
 metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
+Oasis publishes exact `plant/date-palm` instances with a single blocking root each;
+their seed-selected rotations and positions cannot overlap the pool, reserved routes,
+or one another.
 
 The camera action now cycles Map → Third Person → First Person → Map. Third Person
 gives the player exclusive ownership of yaw, full-range pitch, and desired zoom. A

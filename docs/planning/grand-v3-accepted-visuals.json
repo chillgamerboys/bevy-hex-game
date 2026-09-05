@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "status": "user-accepted visual direction; not shipping acceptance",
+  "acceptance": "Original tint water at alpha 0.85 and all combined voxel choices",
+  "scenario": "Grand V3 Baseline",
+  "reference_seed": 1592598566,
+  "water": {
+    "palette_swatch": "liquid/water",
+    "srgb": [
+      0.02,
+      0.24,
+      0.76
+    ],
+    "alpha": 0.85,
+    "review_profile": {
+      "version": 1,
+      "snow": {
+        "kind": "current"
+      },
+      "water": {
+        "kind": "uniform_alpha",
+        "alpha": 0.85
+      },
+      "physical_clouds": {
+        "kind": "current"
+      },
+      "shore_and_falls": {
+        "kind": "current"
+      },
+      "alpine_vegetation": {
+        "kind": "current"
+      },
+      "cliff_strata": {
+        "kind": "current"
+      },
+      "terrain_props": {
+        "kind": "current"
+      },
+      "ice_fringe": {
+        "kind": "current"
+      },
+      "local_fog": {
+        "kind": "current"
+      }
+    },
+    "source_status": "accepted preview uses review water replacement; general runtime promotion requires preserving this appearance"
+  },
+  "combined": {
+    "snow": {
+      "mean_level": 200,
+      "amplitude_levels": 32,
+      "correlation_hexes": 16,
+      "implementation": "voxel cap materials; regional and forced-summit exceptions retained"
+    },
+    "trees": "Existing Frozen Forest voxel tree templates on snowy ground, placed with clearance checks",
+    "grass": "Increased existing voxel grass target; no fallen wood",
+    "river_outlet": "Descend to sea datum at shore; preserve offshore sand beds and existing ocean columns",
+    "cliffs": "current",
+    "shore_and_ice": "current retained; prior differences were indistinguishable",
+    "clouds_and_local_fog": "deferred"
+  },
+  "review_fog_of_war": "none",
+  "map_features": "voxel-authored; separate objects require an explicit future user decision",
+  "remaining_validation": [
+    "Non-draft structural acceptance and full shipping gate",
+    "Motion and alternate lighting on final integrated candidate"
+  ],
+  "capture_evidence": "/Users/alberto/Documents/Codex/2026-09-04/i-a/outputs/v3-visual-review/selected/receipts",
+  "note": "The user accepted the combination despite the grass density view limitation; no further aesthetic re-selection is required."
+}

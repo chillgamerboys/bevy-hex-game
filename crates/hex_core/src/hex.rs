@@ -374,6 +374,20 @@ impl HexSpan {
 #[reflect(Component)]
 pub struct HexGrid;
 
+/// Marks one deterministic resident terrain chunk beneath a [`HexGrid`].
+///
+/// The axial chunk coordinate is runtime presentation metadata. It deliberately
+/// does not participate in saves, semantic map identities, anchors, or gameplay
+/// addressing; those continue to use exact [`HexCoord`] and voxel positions.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct TerrainChunkRoot {
+    /// Euclidean quotient of the world axial q coordinate by the chunk side.
+    pub q: i32,
+    /// Euclidean quotient of the world axial r coordinate by the chunk side.
+    pub r: i32,
+}
+
 /// Marks a single tile of the grid. Lives here rather than in `hex_world` so that
 /// gameplay can query tiles without depending on the presentation crate.
 #[derive(Component, Reflect, Default)]

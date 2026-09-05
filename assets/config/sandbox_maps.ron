@@ -226,6 +226,125 @@
             ),
         ),
         (
+            id: "desert-transition",
+            display_name: "Desert Transition",
+            description: "Rolling grassland gives way through a broad dry frontier to exposed sand.",
+            tags: ["Desert", "Transition", "Open"],
+            preview: "ui/sandbox/desert-transition.png",
+            scenario: "Desert Transition",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "desert-plain",
+            display_name: "Desert Plain",
+            description: "A wide sand plain uses subtle weathered relief to preserve long sightlines.",
+            tags: ["Desert", "Open", "Relief"],
+            preview: "ui/sandbox/desert-plain.png",
+            scenario: "Desert Plain",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "dunes",
+            display_name: "Dunes",
+            description: "Parallel sand ridges divide sheltered troughs from exposed desert high ground.",
+            tags: ["Desert", "Dunes", "Elevation"],
+            preview: "ui/sandbox/dunes.png",
+            scenario: "Dunes",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "desert-oasis-rings",
+            display_name: "Desert Oasis Rings",
+            description: "Two rings of dunes and open desert converge on one green, palm-lined oasis.",
+            tags: ["Ring19", "Desert", "Oasis"],
+            preview: "ui/sandbox/desert-oasis-rings.png",
+            scenario: "Desert Oasis Rings",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "sandy-islets",
+            display_name: "Sandy Islets",
+            description: "Five separated sandy islets share one shallow sea; the largest supports the ordinary landing route.",
+            tags: ["Coastal", "Islands", "Water"],
+            preview: "ui/sandbox/sandy-islets.png",
+            scenario: "Sandy Islets",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "wooded-island",
+            display_name: "Wooded Island",
+            description: "A wide sandy coast rises into a connected rolling island covered by broadleaf woodland.",
+            tags: ["Coastal", "Island", "Forest"],
+            preview: "ui/sandbox/wooded-island.png",
+            scenario: "Wooded Island",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "ocean-archipelagoes",
+            display_name: "Ocean Archipelagoes",
+            description: "Open ocean separates sandy island clusters from one large wooded island heart and its landing route.",
+            tags: ["Macro", "Archipelago", "Ocean"],
+            preview: "ui/sandbox/ocean-archipelagoes.png",
+            scenario: "Ocean Archipelagoes",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "fort",
             display_name: "Fort",
             description: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
@@ -258,6 +377,25 @@
             // packaged Crystal Ascent scenario itself intentionally has no enemies.
             hostile_region: (
                 center: Anchor("crystal_ascent.upper_exit"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "crystal-mountain",
+            display_name: "Crystal Mountain",
+            description: "A tunnel beneath enclosing alpine ridges is the only ordinary route into Crystal Ascent and its high woodland basin.",
+            tags: ["Macro", "Interior", "Vertical"],
+            preview: "ui/sandbox/crystal-mountain.png",
+            scenario: "Crystal Mountain",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("crystal_mountain.foot_apron"),
+                radius: 4,
+            ),
+            // Schema-v2 Sandbox retains both staging regions even though the
+            // packaged Crystal Mountain scenario intentionally has no enemies.
+            hostile_region: (
+                center: Anchor("crystal_mountain.basin_clearing"),
                 radius: 4,
             ),
         ),
@@ -309,6 +447,25 @@
             ),
             hostile_region: (
                 center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "grand-v3-baseline",
+            display_name: "Grand V3 Baseline",
+            description: "A complete eight-ring mountain-to-sea world with archipelagoes, a river valley, frozen peaks, two upper routes, and Crystal Ascent.",
+            tags: ["Grand V3", "Large", "Exploration"],
+            preview: "ui/sandbox/grand-v3-baseline.png",
+            scenario: "Grand V3 Baseline",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            // Schema-v2 Sandbox retains both staging regions even though the
+            // packaged Grand V3 Baseline scenario intentionally has no enemies.
+            hostile_region: (
+                center: Anchor("grand_v3.natural_pass"),
                 radius: 4,
             ),
         ),

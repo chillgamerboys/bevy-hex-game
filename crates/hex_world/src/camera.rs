@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::camera::CameraUpdateSystems;
+use bevy::core_pipeline::oit::OrderIndependentTransparencySettings;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureUsages;
 use bevy::transform::TransformSystems;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
@@ -14,6 +16,8 @@ use hex_core::{
     TilePos, UnitId, ZoomSensitivityOverride,
 };
 
+#[cfg(feature = "map-review")]
+use crate::sky_material::SkyRuntimeAssetEvidenceV1;
 use crate::{
     sky_material::{SkyMaterial, SkyParams},
     LightingSystems,
@@ -22,6 +26,14 @@ use crate::{
 /// Sky-dome radius, in world units. Comfortably inside the camera's default
 /// 1000-unit far plane and far outside the configured zoom range plus the terrain.
 const SKY_DOME_RADIUS: f32 = 500.0;
+/// Keeps a generated map and its complete framed footprint inside the camera-owned sky.
+///
+/// The Grand V3 overview sits farther than the legacy fixed dome radius from its
+/// focus. A radius proportional to the active orbit remains behind every point
+/// admitted by the 40-degree map-view cone while staying inside the generated
+/// far-plane override (`2.0 * orbit radius`). Character and First Person radii
+/// remain small enough to retain the legacy 500-unit dome exactly.
+const SKY_DOME_MAP_RADIUS_MULTIPLIER: f32 = 1.5;
 
 /// Distance from a unit-hex centre to any one of its six faces.
 const HEX_FACE_DISTANCE: f32 = HEX_CIRCUMRADIUS * 0.866_025_4;
@@ -33,6 +45,12 @@ const CHARACTER_UPWARD_COMPOSITION_ALLOWANCE: f32 = std::f32::consts::PI / 12.0;
 const FIRST_PERSON_LOOK_DISTANCE: f32 = 1.0;
 /// Extra room beyond a generated map's initial frame for deliberate zooming out.
 const MAP_VIEW_ZOOM_HEADROOM: f32 = 1.1;
+/// Keeps the complete generated world beyond the focus inside perspective depth.
+///
+/// `MapViewHint` describes an eye-to-focus distance, while terrain on the far side
+/// of that focus is deeper still. Doubling the hinted distance conservatively covers
+/// that far-side geometry as well as the ten-percent Map zoom headroom.
+const MAP_VIEW_FAR_HEADROOM: f32 = 2.0;
 /// Approximate pixels per logical scroll line on macOS trackpads.
 ///
 /// `MouseScrollUnit::Pixel` delivers raw pixel deltas that can be hundreds of
@@ -146,6 +164,8 @@ pub fn plugin(app: &mut App) {
                 .before(CameraUpdateSystems)
                 .run_if(in_state(Screen::Gameplay)),
         );
+    #[cfg(feature = "map-review")]
+    app.add_systems(PostStartup, publish_sky_runtime_asset_evidence);
 }
 
 /// Which perspective currently controls the gameplay camera.
@@ -157,6 +177,8 @@ pub enum CameraMode {
     Map,
     /// Close orbit whose focus follows the selected character.
     Character,
+    /// Development-only noclip view translated with its disposable test pawn.
+    Fly,
     /// Eye-level view whose pose follows the selected character.
     FirstPerson,
 }
@@ -221,6 +243,17 @@ impl CameraPose {
 #[derive(Resource, Debug, Default)]
 struct SavedMapCamera(Option<CameraPose>);
 
+/// One generated-map far-plane override and the projection value it replaced.
+///
+/// The global camera survives gameplay sessions. Retaining the prior value lets a
+/// later authored map without a [`MapViewHint`] recover its exact legacy projection
+/// instead of inheriting the preceding generated world's enlarged depth range.
+#[derive(Component, Debug, Clone, Copy)]
+struct MapViewFarPlaneOverride {
+    baseline: f32,
+    applied: f32,
+}
+
 /// One rendered terrain run in the camera's public obstruction projection.
 #[derive(Debug, Clone, Copy)]
 struct CameraObstruction {
@@ -230,7 +263,7 @@ struct CameraObstruction {
 }
 
 /// One exact public terrain run retained by the cached camera index.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct IndexedCameraSpan {
     position: TilePos,
     span: HexSpan,
@@ -242,8 +275,22 @@ struct IndexedCameraSpan {
 #[derive(Resource, Debug, Default)]
 struct CameraObstructionIndex {
     spans_by_coord: BTreeMap<hex_core::HexCoord, Vec<IndexedCameraSpan>>,
+    /// Reverse ownership for mutation-local removal and relocation.
+    ///
+    /// `HexTile` entities publish exactly one `TilePos`/`HexSpan` pair. Retaining
+    /// that pair here means a terrain edit can erase the old bucket entry without
+    /// searching any unrelated coordinate or rebuilding the complete projection.
+    span_by_entity: BTreeMap<Entity, IndexedCameraSpan>,
     initialized: bool,
+    /// Complete index constructions. After initialization, ordinary terrain edits
+    /// must leave this unchanged.
     rebuilds: u64,
+    /// Frames that applied at least one effective incremental index mutation.
+    incremental_batches: u64,
+    /// Effective entity insertions or geometry updates applied incrementally.
+    incremental_upserts: u64,
+    /// Indexed entities retired incrementally.
+    incremental_removals: u64,
 }
 
 /// Transient pose used only while Character mode avoids terrain.
@@ -371,7 +418,16 @@ fn spawn_camera(
     let radius = translation.length();
 
     commands.spawn((
-        Camera3d::default(),
+        Camera3d {
+            depth_texture_usages: (TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING)
+                .into(),
+            ..default()
+        },
+        // Translucent voxel water shares this camera with tree fades. Owning OIT
+        // here keeps water compositing active after temporary object fades end.
+        OrderIndependentTransparencySettings::default(),
+        Msaa::Off,
         Transform::from_translation(translation).looking_at(Vec3::ZERO, Vec3::Y),
         PanOrbitCamera {
             radius,
@@ -404,6 +460,48 @@ fn spawn_camera(
         SkyDome,
         Name::new("Sky Dome"),
     ));
+}
+
+/// Publishes exact fixed-size allocation evidence without exposing the private
+/// procedural material or allowing the capture harness to mutate it.
+#[cfg(feature = "map-review")]
+fn publish_sky_runtime_asset_evidence(
+    mut commands: Commands,
+    domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
+    materials: Res<Assets<SkyMaterial>>,
+) {
+    let mut material_ids = BTreeSet::new();
+    let mut material_bytes = 0_u64;
+    for handle in &domes {
+        if !material_ids.insert(handle.0.id()) {
+            continue;
+        }
+        let Some(material) = materials.get(&handle.0) else {
+            error!("sky runtime evidence found a dome with a missing material asset");
+            commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+            return;
+        };
+        let Ok(allocation_bytes) = u64::try_from(std::mem::size_of_val(material)) else {
+            error!("sky material inline allocation exceeds u64");
+            commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+            return;
+        };
+        let Some(total_bytes) = material_bytes.checked_add(allocation_bytes) else {
+            error!("sky material byte count overflowed u64");
+            commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+            return;
+        };
+        material_bytes = total_bytes;
+    }
+    let Ok(material_count) = u64::try_from(material_ids.len()) else {
+        error!("sky material count exceeds u64");
+        commands.remove_resource::<SkyRuntimeAssetEvidenceV1>();
+        return;
+    };
+    commands.insert_resource(SkyRuntimeAssetEvidenceV1 {
+        sky_material_count: material_count,
+        sky_material_bytes: material_bytes,
+    });
 }
 
 /// Sky parameters used for the one frame or two before `LightingSettings` loads.
@@ -444,18 +542,26 @@ fn default_sky_params() -> SkyParams {
 
 /// Applies generated map framing, or the designer-authored fallback, on every entry.
 fn frame_gameplay_camera(
+    mut commands: Commands,
     settings: Res<CameraSettings>,
     hint: Option<Res<MapViewHint>>,
-    cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    cameras: Query<(
+        Entity,
+        &mut Transform,
+        &mut PanOrbitCamera,
+        Option<&mut Projection>,
+        Option<&MapViewFarPlaneOverride>,
+    )>,
 ) {
     let to_vec3 = |(x, y, z)| Vec3::new(x, y, z);
     let fallback_eye = to_vec3(settings.gameplay_eye);
     let fallback_focus = to_vec3(settings.gameplay_focus);
-    let (eye, focus, what) = match hint.as_deref() {
+    let (eye, focus, what, hinted_depth) = match hint.as_deref() {
         Some(hint) if hint.is_valid() => (
             to_vec3(hint.eye),
             to_vec3(hint.focus),
             "generated map view hint",
+            Some(to_vec3(hint.eye).distance(to_vec3(hint.focus))),
         ),
         Some(_) => {
             warn!("generated map view hint must contain finite, distinct points; using camera.ron");
@@ -463,15 +569,17 @@ fn frame_gameplay_camera(
                 fallback_eye,
                 fallback_focus,
                 "gameplay_eye and gameplay_focus",
+                None,
             )
         }
         None => (
             fallback_eye,
             fallback_focus,
             "gameplay_eye and gameplay_focus",
+            None,
         ),
     };
-    frame_camera(cameras, eye, focus, what);
+    frame_camera(&mut commands, cameras, eye, focus, what, hinted_depth);
 }
 
 fn reset_camera_mode(
@@ -506,7 +614,7 @@ fn map_camera_active(mode: Res<CameraMode>) -> bool {
 fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
     match mode {
         CameraMode::Map => (settings.min_pitch, settings.max_pitch),
-        CameraMode::Character | CameraMode::FirstPerson => (-1.0, 1.0),
+        CameraMode::Character | CameraMode::Fly | CameraMode::FirstPerson => (-1.0, 1.0),
     }
 }
 
@@ -552,7 +660,8 @@ fn center_inspection_camera(
 ///
 /// Generated maps may need an initial frame farther away than the designer-authored
 /// ceiling. Map mode preserves that frame and allows a little additional zoom-out,
-/// while Character mode remains bounded by its authored gameplay controls.
+/// while Character and Fly modes remain bounded by their authored close-camera
+/// controls.
 fn effective_max_zoom(
     mode: CameraMode,
     settings: &CameraSettings,
@@ -709,6 +818,9 @@ fn toggle_camera_mode(
             clear_resolved_camera_subject(&mut subject);
             *mode = CameraMode::Map;
         }
+        // Fly belongs to a dedicated testing session and is never part of the
+        // ordinary Map / Character / First Person toggle cycle.
+        CameraMode::Fly => {}
     }
 }
 
@@ -731,7 +843,8 @@ fn follow_character_camera(
         With<PanOrbitCamera>,
     >,
 ) {
-    if *mode == CameraMode::Map {
+    if matches!(*mode, CameraMode::Map | CameraMode::Fly) {
+        clear_character_collision(&mut collision);
         clear_resolved_camera_subject(&mut subject);
         return;
     }
@@ -896,6 +1009,11 @@ fn character_boom_direction(rotation: Quat) -> Vec3 {
 }
 
 impl CameraObstructionIndex {
+    /// Rebuilds an untracked projection for read-only diagnostics.
+    ///
+    /// Production initialization uses [`Self::rebuild_tracked`] so later entity
+    /// mutations can update only their exact entries.
+    #[cfg(feature = "test-support")]
     fn rebuild(&mut self, tiles: impl IntoIterator<Item = (TilePos, HexSpan)>) {
         let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
         for (position, span) in tiles {
@@ -904,19 +1022,77 @@ impl CameraObstructionIndex {
                 .or_default()
                 .push(IndexedCameraSpan { position, span });
         }
-        for spans in spans_by_coord.values_mut() {
-            spans.sort_by(|first, second| {
-                first
-                    .span
-                    .bottom
-                    .total_cmp(&second.span.bottom)
-                    .then_with(|| first.span.top.total_cmp(&second.span.top))
-                    .then_with(|| first.position.cmp(&second.position))
-            });
-        }
+        spans_by_coord
+            .values_mut()
+            .for_each(|spans| Self::sort_spans(spans));
         self.spans_by_coord = spans_by_coord;
+        self.span_by_entity.clear();
         self.initialized = true;
         self.rebuilds = self.rebuilds.saturating_add(1);
+    }
+
+    fn rebuild_tracked(&mut self, tiles: impl IntoIterator<Item = (Entity, TilePos, HexSpan)>) {
+        let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
+        let mut span_by_entity = BTreeMap::new();
+        for (entity, position, span) in tiles {
+            let indexed = IndexedCameraSpan { position, span };
+            spans_by_coord
+                .entry(position.coord)
+                .or_default()
+                .push(indexed);
+            span_by_entity.insert(entity, indexed);
+        }
+        spans_by_coord
+            .values_mut()
+            .for_each(|spans| Self::sort_spans(spans));
+        self.spans_by_coord = spans_by_coord;
+        self.span_by_entity = span_by_entity;
+        self.initialized = true;
+        self.rebuilds = self.rebuilds.saturating_add(1);
+    }
+
+    fn sort_spans(spans: &mut [IndexedCameraSpan]) {
+        spans.sort_by(|first, second| {
+            first
+                .span
+                .bottom
+                .total_cmp(&second.span.bottom)
+                .then_with(|| first.span.top.total_cmp(&second.span.top))
+                .then_with(|| first.position.cmp(&second.position))
+        });
+    }
+
+    /// Removes one entity's exact previous projection, if it was indexed.
+    fn remove_entity(&mut self, entity: Entity) -> bool {
+        let Some(indexed) = self.span_by_entity.remove(&entity) else {
+            return false;
+        };
+        let coord = indexed.position.coord;
+        let mut remove_bucket = false;
+        if let Some(spans) = self.spans_by_coord.get_mut(&coord) {
+            if let Some(index) = spans.iter().position(|candidate| *candidate == indexed) {
+                spans.remove(index);
+            }
+            remove_bucket = spans.is_empty();
+        }
+        if remove_bucket {
+            self.spans_by_coord.remove(&coord);
+        }
+        true
+    }
+
+    /// Inserts or relocates one entity without touching unrelated coordinates.
+    fn upsert_entity(&mut self, entity: Entity, position: TilePos, span: HexSpan) -> bool {
+        let replacement = IndexedCameraSpan { position, span };
+        if self.span_by_entity.get(&entity) == Some(&replacement) {
+            return false;
+        }
+        self.remove_entity(entity);
+        let spans = self.spans_by_coord.entry(position.coord).or_default();
+        spans.push(replacement);
+        Self::sort_spans(spans);
+        self.span_by_entity.insert(entity, replacement);
+        true
     }
 
     fn safe_radius(
@@ -1095,33 +1271,72 @@ fn axis_interval(
 
 fn refresh_camera_obstruction_index(
     mut index: ResMut<CameraObstructionIndex>,
-    tiles: Query<(&TilePos, &HexSpan), With<HexTile>>,
+    tiles: Query<(Entity, &TilePos, &HexSpan), With<HexTile>>,
     changed_tiles: Query<
-        (),
+        (Entity, &TilePos, &HexSpan),
         (
             With<HexTile>,
             Or<(Added<HexTile>, Changed<TilePos>, Changed<HexSpan>)>,
         ),
     >,
     mut removed_tiles: RemovedComponents<HexTile>,
+    mut removed_positions: RemovedComponents<TilePos>,
+    mut removed_spans: RemovedComponents<HexSpan>,
 ) {
-    // Drain the complete batch. Reading only the first removal leaves the cursor
-    // behind, which would turn one large terrain replacement into one full index
-    // rebuild per frame until every stale message had been consumed.
-    let removed = removed_tiles.read().count() > 0;
-    if index.initialized && !removed && changed_tiles.is_empty() {
+    // Drain and deduplicate the complete retirement batch. A despawn removes all
+    // three public projection components, while a root replacement can retire
+    // hundreds of entities at once; both still become one deterministic update.
+    let removed = removed_tiles
+        .read()
+        .chain(removed_positions.read())
+        .chain(removed_spans.read())
+        .collect::<BTreeSet<_>>();
+
+    if !index.initialized {
+        index.rebuild_tracked(
+            tiles
+                .iter()
+                .map(|(entity, position, span)| (entity, *position, *span)),
+        );
         return;
     }
 
-    index.rebuild(tiles.iter().map(|(position, span)| (*position, *span)));
+    if removed.is_empty() && changed_tiles.is_empty() {
+        return;
+    }
+
+    let mut removals = 0_u64;
+    for entity in removed {
+        removals += u64::from(index.remove_entity(entity));
+    }
+
+    // Query iteration order is not a semantic contract. Canonicalize the small
+    // changed set before applying it so a 256-column chunk replacement produces
+    // byte-identical buckets independent of archetype traversal order.
+    let mut changed = changed_tiles
+        .iter()
+        .map(|(entity, position, span)| (entity, *position, *span))
+        .collect::<Vec<_>>();
+    changed.sort_by_key(|(entity, _, _)| *entity);
+    let mut upserts = 0_u64;
+    for (entity, position, span) in changed {
+        upserts += u64::from(index.upsert_entity(entity, position, span));
+    }
+
+    if removals > 0 || upserts > 0 {
+        index.incremental_batches = index.incremental_batches.saturating_add(1);
+        index.incremental_removals = index.incremental_removals.saturating_add(removals);
+        index.incremental_upserts = index.incremental_upserts.saturating_add(upserts);
+    }
 }
 
 fn clear_camera_obstruction_index(
     mut index: ResMut<CameraObstructionIndex>,
     mut collision: ResMut<CharacterCameraCollision>,
 ) {
-    if index.initialized || !index.spans_by_coord.is_empty() {
+    if index.initialized || !index.spans_by_coord.is_empty() || !index.span_by_entity.is_empty() {
         index.spans_by_coord.clear();
+        index.span_by_entity.clear();
         index.initialized = false;
     }
     if collision.effective_radius.is_some()
@@ -1162,10 +1377,18 @@ fn set_sky(mut domes: Query<&mut Visibility, With<SkyDome>>, wanted: Visibility)
 ///
 /// `what` names the settings being applied, so a bad edit says which pair to look at.
 fn frame_camera(
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    commands: &mut Commands,
+    mut cameras: Query<(
+        Entity,
+        &mut Transform,
+        &mut PanOrbitCamera,
+        Option<&mut Projection>,
+        Option<&MapViewFarPlaneOverride>,
+    )>,
     eye: Vec3,
     focus: Vec3,
     what: &str,
+    hinted_depth: Option<f32>,
 ) {
     let offset = eye - focus;
 
@@ -1183,12 +1406,61 @@ fn frame_camera(
         Vec3::Y
     };
 
-    for (mut transform, mut camera) in &mut cameras {
+    for (entity, mut transform, mut camera, mut projection, far_override) in &mut cameras {
         transform.translation = eye;
         transform.look_at(focus, up);
         camera.focus = focus;
         camera.radius = offset.length();
+        reconcile_map_view_far_plane(
+            commands,
+            entity,
+            projection.as_deref_mut(),
+            far_override.copied(),
+            hinted_depth,
+        );
     }
+}
+
+/// Applies generated framing depth without leaking it into later authored maps.
+fn reconcile_map_view_far_plane(
+    commands: &mut Commands,
+    entity: Entity,
+    projection: Option<&mut Projection>,
+    current: Option<MapViewFarPlaneOverride>,
+    hinted_depth: Option<f32>,
+) {
+    let Some(Projection::Perspective(perspective)) = projection else {
+        if current.is_some() {
+            commands.entity(entity).remove::<MapViewFarPlaneOverride>();
+        }
+        return;
+    };
+
+    let wanted_hint = hinted_depth
+        .map(|distance| distance * MAP_VIEW_FAR_HEADROOM)
+        .filter(|distance| distance.is_finite() && *distance > f32::EPSILON);
+    let Some(wanted_hint) = wanted_hint else {
+        if let Some(current) = current {
+            if perspective.far.to_bits() == current.applied.to_bits() {
+                perspective.far = current.baseline;
+            }
+            commands.entity(entity).remove::<MapViewFarPlaneOverride>();
+        }
+        return;
+    };
+
+    // An external projection edit wins. Rebase the generated override around that
+    // newly authored value instead of restoring a stale value on the next map.
+    let baseline = current
+        .filter(|current| perspective.far.to_bits() == current.applied.to_bits())
+        .map_or(perspective.far, |current| current.baseline);
+    let applied = baseline.max(wanted_hint);
+    if perspective.far.to_bits() != applied.to_bits() {
+        perspective.far = applied;
+    }
+    commands
+        .entity(entity)
+        .insert(MapViewFarPlaneOverride { baseline, applied });
 }
 
 /// Build sky parameters from settings. `to_color(..).to_linear()` converts the
@@ -1245,12 +1517,14 @@ pub(crate) fn apply_sky_material(
 
 /// Keep the dome centred on the camera so the camera never reaches its far wall.
 fn follow_camera(
-    camera: Query<&Transform, (With<PanOrbitCamera>, Without<SkyDome>)>,
+    camera: Query<(&Transform, &PanOrbitCamera), Without<SkyDome>>,
     mut domes: Query<&mut Transform, With<SkyDome>>,
 ) {
-    let Ok(cam) = camera.single() else {
+    let Ok((cam, orbit)) = camera.single() else {
         return;
     };
+    let radius = sky_dome_radius(orbit.radius);
+    let wanted_scale = Vec3::splat(radius);
     for mut dome in &mut domes {
         // Guarded because writing through `Mut` marks the transform changed even when
         // the value is identical, which would re-propagate and re-extract the dome
@@ -1258,6 +1532,18 @@ fn follow_camera(
         if dome.translation.distance_squared(cam.translation) > f32::EPSILON {
             dome.translation = cam.translation;
         }
+        if dome.scale.distance_squared(wanted_scale) > f32::EPSILON {
+            dome.scale = wanted_scale;
+        }
+    }
+}
+
+fn sky_dome_radius(camera_radius: f32) -> f32 {
+    let expanded = camera_radius * SKY_DOME_MAP_RADIUS_MULTIPLIER;
+    if expanded.is_finite() {
+        SKY_DOME_RADIUS.max(expanded)
+    } else {
+        SKY_DOME_RADIUS
     }
 }
 
@@ -1703,6 +1989,51 @@ mod tests {
         }
     }
 
+    fn obstruction_index_app() -> App {
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
+            .init_resource::<CameraObstructionIndex>()
+            .add_systems(PostUpdate, refresh_camera_obstruction_index);
+        builder.build()
+    }
+
+    /// Compares the incrementally maintained production resource with a fresh
+    /// construction from the exact same public ECS projection, including several
+    /// collision answers rather than only its internal container shape.
+    fn assert_incremental_index_matches_full(app: &mut App) {
+        let projection = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<(Entity, &TilePos, &HexSpan), With<HexTile>>();
+            query
+                .iter(world)
+                .map(|(entity, position, span)| (entity, *position, *span))
+                .collect::<Vec<_>>()
+        };
+        let mut rebuilt = CameraObstructionIndex::default();
+        rebuilt.rebuild_tracked(projection);
+
+        let incremental = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(incremental.spans_by_coord, rebuilt.spans_by_coord);
+        assert_eq!(incremental.span_by_entity, rebuilt.span_by_entity);
+        for (q, r) in [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)] {
+            let horizontal = hex_core::HexCoord::from_axial(q, r).to_world(0.0);
+            let direction = Vec3::new(horizontal.x, -0.1, horizontal.z).normalize();
+            let incremental_clearance =
+                incremental.safe_radius(Vec3::Y, TilePos::ORIGIN, direction, 64.0, 0.4, 0.35);
+            let rebuilt_clearance =
+                rebuilt.safe_radius(Vec3::Y, TilePos::ORIGIN, direction, 64.0, 0.4, 0.35);
+            assert_eq!(
+                incremental_clearance.radius.to_bits(),
+                rebuilt_clearance.radius.to_bits()
+            );
+            assert_eq!(
+                incremental_clearance.obstructed,
+                rebuilt_clearance.obstructed
+            );
+        }
+    }
+
     fn enter(app: &mut App, screen: Screen) {
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
@@ -1740,6 +2071,28 @@ mod tests {
 
     fn publish_generated_view(mut commands: Commands) {
         commands.insert_resource(MapViewHint::new((12.0, 36.0, -18.0), (2.0, 5.0, -1.0)));
+    }
+
+    /// Reproduces the public framing geometry of the radius-187 Grand V3 map.
+    ///
+    /// The camera crate cannot depend on `hex_map`, so the fixture owns only the
+    /// published world-space contract: radius, V3 height ceiling, level height,
+    /// 16:9 review aspect, and the resulting valid `MapViewHint`.
+    fn grand_v3_map_view_hint() -> MapViewHint {
+        const RADIUS: f32 = 187.0;
+        const MAXIMUM_WORLD_HEIGHT: f32 = 256.0 * 0.4;
+        const REVIEW_ASPECT: f32 = 16.0 / 9.0;
+
+        let half_width = f32::sqrt(3.0).mul_add(RADIUS, 2.0);
+        let half_depth = 1.5_f32.mul_add(RADIUS, 2.0);
+        let required_vertical_half_extent = half_depth.max(half_width / REVIEW_ASPECT);
+        let distance = ((required_vertical_half_extent + MAXIMUM_WORLD_HEIGHT * 0.3 + 12.0)
+            / 20.0_f32.to_radians().tan())
+            * 1.1;
+        let direction = Vec3::new(-0.45, 0.82, 0.35).normalize();
+        let focus = Vec3::Y * (MAXIMUM_WORLD_HEIGHT * 0.35);
+        let eye = focus + direction * distance;
+        MapViewHint::new((eye.x, eye.y, eye.z), (focus.x, focus.y, focus.z))
     }
 
     fn rotation_at_pitch(angle: f32) -> Quat {
@@ -1790,6 +2143,7 @@ mod tests {
                 spans_by_coord,
                 initialized: true,
                 rebuilds: 1,
+                ..default()
             },
             direction,
         )
@@ -2018,6 +2372,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         let clearance = index.safe_radius(
@@ -2100,6 +2455,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let direction = hex_core::HexCoord::from_axial(1, 0)
             .to_world(0.0)
@@ -2257,6 +2613,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let clearance = index.safe_radius(
             Vec3::Y * settings.character_focus_height,
@@ -2288,6 +2645,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         let clearance = index.safe_radius(
@@ -2361,6 +2719,7 @@ mod tests {
             ]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let direction = Vec3::new(0.0, 0.5, 1.0).normalize();
 
@@ -2379,6 +2738,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         let blocked = wall.safe_radius(focus, support, direction, 7.0, 0.4, 0.35);
         assert!(blocked.obstructed);
@@ -2396,6 +2756,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         let clearance = index.safe_radius(Vec3::Y, TilePos::ORIGIN, direction, 7.0, 0.4, 0.35);
@@ -2633,12 +2994,20 @@ mod tests {
             .entity_mut(tile)
             .insert(HexSpan::new(0.0, 0.8));
         app.update();
-        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 2);
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_upserts, 1);
+        assert_eq!(index.incremental_removals, 0);
         app.world_mut().entity_mut(tile).despawn();
         app.update();
         let index = app.world().resource::<CameraObstructionIndex>();
-        assert_eq!(index.rebuilds, 3);
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 2);
+        assert_eq!(index.incremental_upserts, 1);
+        assert_eq!(index.incremental_removals, 1);
         assert!(index.spans_by_coord.is_empty());
+        assert!(index.span_by_entity.is_empty());
     }
 
     #[test]
@@ -2699,7 +3068,149 @@ mod tests {
     }
 
     #[test]
-    fn a_large_removal_batch_rebuilds_the_obstruction_index_only_once() {
+    fn incremental_span_change_matches_a_full_obstruction_rebuild() {
+        let mut app = obstruction_index_app();
+        let coord = hex_core::HexCoord::from_axial(-7, -5);
+        let tile = app
+            .world_mut()
+            .spawn((HexTile, TilePos::new(coord, 0), HexSpan::new(-0.4, 0.4)))
+            .id();
+        app.update();
+
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(HexSpan::new(-0.4, 2.0));
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_upserts, 1);
+        assert_eq!(index.incremental_removals, 0);
+    }
+
+    #[test]
+    fn incremental_negative_coordinate_move_matches_a_full_obstruction_rebuild() {
+        let mut app = obstruction_index_app();
+        let old_coord = hex_core::HexCoord::from_axial(3, 2);
+        let new_coord = hex_core::HexCoord::from_axial(-11, -9);
+        let tile = app
+            .world_mut()
+            .spawn((HexTile, TilePos::new(old_coord, 0), HexSpan::new(0.0, 1.0)))
+            .id();
+        app.update();
+
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(TilePos::new(new_coord, 1));
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert!(!index.spans_by_coord.contains_key(&old_coord));
+        assert!(index.spans_by_coord.contains_key(&new_coord));
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_upserts, 1);
+    }
+
+    #[test]
+    fn incremental_individual_removal_matches_a_full_obstruction_rebuild() {
+        let mut app = obstruction_index_app();
+        let keep = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(-2, 1), 0),
+                HexSpan::new(0.0, 1.0),
+            ))
+            .id();
+        let retire = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(-3, 1), 0),
+                HexSpan::new(0.0, 2.0),
+            ))
+            .id();
+        app.update();
+
+        app.world_mut().entity_mut(retire).remove::<HexTile>();
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert!(index.span_by_entity.contains_key(&keep));
+        assert!(!index.span_by_entity.contains_key(&retire));
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_removals, 1);
+    }
+
+    #[test]
+    fn a_256_column_remove_add_batch_matches_one_full_rebuild_and_then_idles() {
+        let mut app = obstruction_index_app();
+        let retired = (0..256)
+            .map(|index| {
+                let q = index % 16 - 8;
+                let r = index / 16 - 8;
+                app.world_mut()
+                    .spawn((
+                        HexTile,
+                        TilePos::new(hex_core::HexCoord::from_axial(q, r), 0),
+                        HexSpan::new(0.0, 0.4),
+                    ))
+                    .id()
+            })
+            .collect::<Vec<_>>();
+        app.update();
+
+        for entity in retired {
+            app.world_mut().entity_mut(entity).despawn();
+        }
+        for index in (0..256).rev() {
+            let q = index % 16 - 8;
+            let r = index / 16 - 8;
+            app.world_mut().spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(q, r), 1),
+                HexSpan::new(0.4, 1.2),
+            ));
+        }
+        app.update();
+        assert_incremental_index_matches_full(&mut app);
+
+        let before_idle = {
+            let index = app.world().resource::<CameraObstructionIndex>();
+            assert_eq!(index.rebuilds, 1);
+            assert_eq!(index.incremental_batches, 1);
+            assert_eq!(index.incremental_removals, 256);
+            assert_eq!(index.incremental_upserts, 256);
+            (
+                index.rebuilds,
+                index.incremental_batches,
+                index.incremental_removals,
+                index.incremental_upserts,
+            )
+        };
+        for _ in 0..256 {
+            app.update();
+        }
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(
+            before_idle,
+            (
+                index.rebuilds,
+                index.incremental_batches,
+                index.incremental_removals,
+                index.incremental_upserts,
+            )
+        );
+    }
+
+    #[test]
+    fn a_large_removal_batch_updates_the_obstruction_index_only_once() {
         let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
         builder
             .app_mut()
@@ -2726,11 +3237,17 @@ mod tests {
 
         app.update();
         let index = app.world().resource::<CameraObstructionIndex>();
-        assert_eq!(index.rebuilds, 2);
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
+        assert_eq!(index.incremental_removals, 128);
+        assert_eq!(index.incremental_upserts, 0);
         assert!(index.spans_by_coord.is_empty());
+        assert!(index.span_by_entity.is_empty());
 
         app.update();
-        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 2);
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        assert_eq!(index.incremental_batches, 1);
     }
 
     #[test]
@@ -3179,6 +3696,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         app.update();
         let blocked = camera_pose(&app, camera);
@@ -3341,6 +3859,122 @@ mod tests {
             Vec3::new(12.0, 36.0, -18.0),
             Vec3::new(2.0, 5.0, -1.0),
         );
+    }
+
+    #[test]
+    fn grand_v3_hint_frames_the_complete_radius_187_boundary_inside_far_depth() {
+        const GRAND_V3_RADIUS: u32 = 187;
+        const GRAND_V3_COLUMNS: usize = 105_469;
+        const GRAND_V3_BOUNDARY_COLUMNS: usize = 6 * 187;
+        const MAXIMUM_WORLD_HEIGHT: f32 = 256.0 * 0.4;
+        const REVIEW_ASPECT: f32 = 16.0 / 9.0;
+        const HEX_CORNERS: [(f32, f32); 6] = [
+            (0.0, 1.0),
+            (0.866_025_4, 0.5),
+            (0.866_025_4, -0.5),
+            (0.0, -1.0),
+            (-0.866_025_4, -0.5),
+            (-0.866_025_4, 0.5),
+        ];
+
+        let hint = grand_v3_map_view_hint();
+        let baseline_far = 1_000.0;
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder
+            .app_mut()
+            .insert_resource(camera_settings())
+            .insert_resource(hint)
+            .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                Projection::Perspective(bevy::camera::PerspectiveProjection {
+                    aspect_ratio: REVIEW_ASPECT,
+                    far: baseline_far,
+                    ..default()
+                }),
+            ))
+            .id();
+        let mut app = builder.build();
+
+        enter(&mut app, Screen::Gameplay);
+
+        let camera_entity = app.world().entity(camera);
+        let transform = camera_entity
+            .get::<Transform>()
+            .expect("the generated frame should retain its transform");
+        let projection = camera_entity
+            .get::<Projection>()
+            .expect("the generated frame should retain its projection");
+        let Projection::Perspective(perspective) = projection else {
+            panic!("the generated frame should remain perspective");
+        };
+        let hinted_distance = Vec3::from(hint.eye).distance(Vec3::from(hint.focus));
+        let expected_far = baseline_far.max(hinted_distance * MAP_VIEW_FAR_HEADROOM);
+        let expected_sky_radius = sky_dome_radius(hinted_distance);
+        assert!((perspective.far - expected_far).abs() < 1e-4);
+
+        let view_from_world = transform.to_matrix().inverse();
+        let tan_half_fov = (perspective.fov * 0.5).tan();
+        let footprint = hex_core::HexCoord::ORIGIN.within_radius(GRAND_V3_RADIUS);
+        assert_eq!(footprint.len(), GRAND_V3_COLUMNS);
+        let mut boundary_columns = 0_usize;
+        let mut maximum_depth = 0.0_f32;
+        let mut maximum_scene_distance = 0.0_f32;
+        let mut maximum_projected_extent = 0.0_f32;
+        for coord in footprint
+            .into_iter()
+            .filter(|coord| coord.distance(hex_core::HexCoord::ORIGIN) == GRAND_V3_RADIUS)
+        {
+            boundary_columns = boundary_columns.saturating_add(1);
+            let center = coord.to_world(0.0);
+            for height in [0.0, MAXIMUM_WORLD_HEIGHT] {
+                for (offset_x, offset_z) in HEX_CORNERS {
+                    let point = Vec3::new(
+                        center.x + offset_x * HEX_CIRCUMRADIUS,
+                        height,
+                        center.z + offset_z * HEX_CIRCUMRADIUS,
+                    );
+                    let view = view_from_world.transform_point3(point);
+                    let depth = -view.z;
+                    assert!(
+                        depth >= perspective.near && depth <= perspective.far,
+                        "Grand V3 boundary point {point:?} has camera depth {depth}, outside {:?}",
+                        perspective.near..=perspective.far
+                    );
+                    let horizontal = view.x.abs() / (depth * tan_half_fov * REVIEW_ASPECT);
+                    let vertical = view.y.abs() / (depth * tan_half_fov);
+                    let extent = horizontal.max(vertical);
+                    assert!(
+                        extent <= 1.0,
+                        "Grand V3 boundary point {point:?} projects outside the frame at {extent}"
+                    );
+                    maximum_depth = maximum_depth.max(depth);
+                    maximum_scene_distance =
+                        maximum_scene_distance.max(transform.translation.distance(point));
+                    maximum_projected_extent = maximum_projected_extent.max(extent);
+                }
+            }
+        }
+        assert_eq!(boundary_columns, GRAND_V3_BOUNDARY_COLUMNS);
+        assert!(
+            maximum_depth > baseline_far,
+            "the fixture must reproduce the old 1,000-unit far-plane clipping"
+        );
+        assert!(maximum_depth < perspective.far);
+        assert!(
+            maximum_scene_distance < expected_sky_radius,
+            "the camera-centred sky dome would occlude Grand V3 terrain: \
+             scene distance {maximum_scene_distance}, dome radius {expected_sky_radius}"
+        );
+        assert!(expected_sky_radius < perspective.far);
+        assert!(maximum_projected_extent < 1.0);
     }
 
     #[test]
@@ -3784,6 +4418,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
     }
 
@@ -3866,6 +4501,79 @@ mod tests {
         assert_eq!(restored.1, original.1);
         assert!((restored.2 - original.2).abs() < f32::EPSILON);
         assert_eq!(perspective_projection(&app, camera), original_projection);
+    }
+
+    #[test]
+    fn generated_far_depth_survives_character_cycle_then_releases_for_hintless_map() {
+        let mut app = sky_app();
+        let hint = grand_v3_map_view_hint();
+        app.insert_resource(hint);
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::new(3.0, 2.0, -1.0)),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<PanOrbitCamera>>()
+            .single(app.world())
+            .expect("the production fixture should own one camera");
+        let authored_far = 777.0;
+        {
+            let mut camera_entity = app.world_mut().entity_mut(camera);
+            let mut projection = camera_entity
+                .get_mut::<Projection>()
+                .expect("the production camera should retain its projection");
+            let Projection::Perspective(perspective) = &mut *projection else {
+                panic!("the production camera should remain perspective");
+            };
+            perspective.far = authored_far;
+        }
+
+        enter(&mut app, Screen::Gameplay);
+        let generated_pose = camera_pose(&app, camera);
+        let generated_projection = perspective_projection(&app, camera);
+        assert!(generated_projection.2 > authored_far);
+        assert!(app
+            .world()
+            .entity(camera)
+            .contains::<MapViewFarPlaneOverride>());
+
+        press_camera_cycle_through_input_plugin(&mut app);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+        assert_eq!(
+            perspective_projection(&app, camera).2.to_bits(),
+            generated_projection.2.to_bits()
+        );
+        press_camera_cycle_through_input_plugin(&mut app);
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+        assert_eq!(
+            perspective_projection(&app, camera).2.to_bits(),
+            generated_projection.2.to_bits()
+        );
+        press_camera_cycle_through_input_plugin(&mut app);
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        assert_eq!(camera_pose(&app, camera), generated_pose);
+        assert_eq!(perspective_projection(&app, camera), generated_projection);
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
+
+        enter(&mut app, Screen::Title);
+        app.world_mut().remove_resource::<MapViewHint>();
+        enter(&mut app, Screen::Gameplay);
+
+        assert_eq!(
+            perspective_projection(&app, camera).2.to_bits(),
+            authored_far.to_bits()
+        );
+        assert!(
+            !app.world()
+                .entity(camera)
+                .contains::<MapViewFarPlaneOverride>(),
+            "a hint-less authored map must not inherit generated depth"
+        );
     }
 
     #[test]
@@ -4072,6 +4780,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
 
         toggle_camera(&mut app);
@@ -4356,6 +5065,7 @@ mod tests {
             )]),
             initialized: true,
             rebuilds: 1,
+            ..default()
         };
         app.update();
 
@@ -4738,6 +5448,37 @@ mod tests {
         assert_eq!(dome_visibility(&mut app), Some(Visibility::Visible));
         enter(&mut app, Screen::Title);
         assert_eq!(dome_visibility(&mut app), Some(Visibility::Hidden));
+    }
+
+    #[test]
+    fn game_camera_keeps_water_oit_through_gameplay_reentry() {
+        let mut app = sky_app();
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<PanOrbitCamera>>()
+            .single(app.world())
+            .expect("startup creates exactly one persistent game camera");
+
+        for screen in [
+            Screen::Title,
+            Screen::Gameplay,
+            Screen::Title,
+            Screen::Gameplay,
+        ] {
+            enter(&mut app, screen);
+            let camera_3d = app
+                .world()
+                .get::<Camera3d>(camera)
+                .expect("the same game camera survives screen transitions");
+            let depth_usage = TextureUsages::from(camera_3d.depth_texture_usages);
+            assert!(depth_usage.contains(TextureUsages::RENDER_ATTACHMENT));
+            assert!(depth_usage.contains(TextureUsages::TEXTURE_BINDING));
+            assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
+            assert!(app
+                .world()
+                .get::<OrderIndependentTransparencySettings>(camera)
+                .is_some());
+        }
     }
 
     /// An app running the real camera plugin, with everything that plugin declares.

@@ -108,8 +108,16 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/scenarios.ron"),
     ),
     (
+        "art/palette.ron",
+        include_str!("../../../assets/art/palette.ron"),
+    ),
+    (
         "art/object_catalog.ron",
         include_str!("../../../assets/art/object_catalog.ron"),
+    ),
+    (
+        "art/objects/plant/date-palm.ron",
+        include_str!("../../../assets/art/objects/plant/date-palm.ron"),
     ),
     (
         "art/objects/plant/old-growth.ron",
@@ -232,8 +240,28 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-crystal-ascent.ron"),
     ),
     (
+        "config/worlds/procedural-crystal-mountain.ron",
+        include_str!("../../../assets/config/worlds/procedural-crystal-mountain.ron"),
+    ),
+    (
+        "config/worlds/procedural-desert-oasis-rings.ron",
+        include_str!("../../../assets/config/worlds/procedural-desert-oasis-rings.ron"),
+    ),
+    (
+        "config/worlds/procedural-desert-plain.ron",
+        include_str!("../../../assets/config/worlds/procedural-desert-plain.ron"),
+    ),
+    (
+        "config/worlds/procedural-desert-transition.ron",
+        include_str!("../../../assets/config/worlds/procedural-desert-transition.ron"),
+    ),
+    (
         "config/worlds/procedural-deep-forest.ron",
         include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
+    ),
+    (
+        "config/worlds/procedural-dunes.ron",
+        include_str!("../../../assets/config/worlds/procedural-dunes.ron"),
     ),
     (
         "config/worlds/procedural-forest.ron",
@@ -248,6 +276,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
     ),
     (
+        "config/worlds/procedural-grand-v3-baseline.ron",
+        include_str!("../../../assets/config/worlds/procedural-grand-v3-baseline.ron"),
+    ),
+    (
         "config/worlds/procedural-hills.ron",
         include_str!("../../../assets/config/worlds/procedural-hills.ron"),
     ),
@@ -260,12 +292,20 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-mountain-range.ron"),
     ),
     (
+        "config/worlds/procedural-ocean-archipelagoes.ron",
+        include_str!("../../../assets/config/worlds/procedural-ocean-archipelagoes.ron"),
+    ),
+    (
         "config/worlds/procedural-prairie.ron",
         include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
     ),
     (
         "config/worlds/procedural-ring7.ron",
         include_str!("../../../assets/config/worlds/procedural-ring7.ron"),
+    ),
+    (
+        "config/worlds/procedural-sandy-islets.ron",
+        include_str!("../../../assets/config/worlds/procedural-sandy-islets.ron"),
     ),
     (
         "config/worlds/procedural-two-rings.ron",
@@ -282,6 +322,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/worlds/procedural-waterfall.ron",
         include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),
+    ),
+    (
+        "config/worlds/procedural-wooded-island.ron",
+        include_str!("../../../assets/config/worlds/procedural-wooded-island.ron"),
     ),
     (
         "config/worlds/rolling-hills.ron",
@@ -302,6 +346,18 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/encounters/crystal-ascent-showcase.ron",
         include_str!("../../../assets/config/encounters/crystal-ascent-showcase.ron"),
+    ),
+    (
+        "config/encounters/island-showcase.ron",
+        include_str!("../../../assets/config/encounters/island-showcase.ron"),
+    ),
+    (
+        "config/encounters/crystal-mountain-showcase.ron",
+        include_str!("../../../assets/config/encounters/crystal-mountain-showcase.ron"),
+    ),
+    (
+        "config/encounters/grand-v3-baseline-showcase.ron",
+        include_str!("../../../assets/config/encounters/grand-v3-baseline-showcase.ron"),
     ),
     (
         "config/encounters/open-ground.ron",
@@ -1356,6 +1412,14 @@ fn validate_campaign_catalog(
     }
 }
 
+fn development_campaign_revision_refusal(scenario_name: &str) -> String {
+    format!(
+        "The saved visual/world-scale revision for {scenario_name:?} changed, so this Campaign \
+         cannot be resumed. A new development Campaign is required; the existing save remains \
+         on disk."
+    )
+}
+
 fn campaign_v2_content_refusal(
     save: &CampaignSaveV2,
     library: &ScenarioLibrary,
@@ -1374,9 +1438,8 @@ fn campaign_v2_content_refusal(
         ));
     };
     if scenario_digest(scenario) != checkpoint.scenario_digest {
-        return Some(format!(
-            "The saved scenario {:?} changed and cannot be resumed.",
-            checkpoint.scenario_identity.as_str()
+        return Some(development_campaign_revision_refusal(
+            checkpoint.scenario_identity.as_str(),
         ));
     }
     if scenario.world != checkpoint.map_catalog_identity.as_str() {
@@ -1420,10 +1483,7 @@ fn campaign_content_refusal(
                 current_digest,
             ))
     {
-        return Some(format!(
-            "The saved scenario {:?} changed and cannot be resumed.",
-            save.scenario_name
-        ));
+        return Some(development_campaign_revision_refusal(&save.scenario_name));
     }
     if scenario.generation_seed.is_some() != save.resolved_seed.is_some() {
         return Some(format!(
@@ -2527,8 +2587,8 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
     use bevy::MinimalPlugins;
     use hex_assets::{
-        ArtPalette, ContentIndex, ElementFile, Encounter, LatticeFile, ScenarioCategory, SpellBook,
-        SpellFile, SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
+        ArtPalette, ContentIndex, ElementFile, LatticeFile, ScenarioCategory, SpellBook, SpellFile,
+        SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
     };
     use hex_multiplayer::{
         BoundedVec, CampaignEffectLedgerV2, PublicWorldFingerprint, WorldColumnSnapshotV1,
@@ -2671,82 +2731,6 @@ mod tests {
             "hex-game-campaign-{label}-{}-{unique}",
             std::process::id()
         ))
-    }
-
-    fn assert_elemental_fixture_matches_fresh_party_trial(
-        pending: Res<PendingCampaign>,
-        encounter: Res<Encounter>,
-        formation: Res<PartyFormation>,
-        party: Res<hex_units::Party>,
-        units: Query<(
-            &UnitId,
-            &Faction,
-            &UnitArchetype,
-            &StandsOn,
-            &LatticeState,
-            Has<Downed>,
-        )>,
-    ) {
-        let save = &pending.0;
-        assert_eq!(encounter.name, save.scenario_name);
-
-        let declarations = encounter
-            .entries()
-            .enumerate()
-            .map(|(index, entry)| {
-                (
-                    UnitId(u64::try_from(index).expect("the shipped roster is tiny")),
-                    (entry.faction, entry.archetype.to_owned()),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let runtime_count = units.iter().count();
-        let runtime = units
-            .iter()
-            .map(|(id, faction, archetype, standing, lattice, downed)| {
-                (
-                    *id,
-                    (
-                        *faction,
-                        archetype.0.clone(),
-                        standing.0.pos,
-                        lattice.clone(),
-                        downed,
-                    ),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        assert_eq!(
-            runtime.len(),
-            runtime_count,
-            "the production Party Trial spawn must deal unique unit ids"
-        );
-        assert_eq!(declarations.len(), save.units.len());
-        assert_eq!(runtime.len(), save.units.len());
-        assert_eq!(
-            save.selected,
-            party.members.first().copied(),
-            "the fixture selection must match the fresh Party Trial selection target"
-        );
-        for snapshot in &save.units {
-            let (declared_faction, declared_archetype) = declarations
-                .get(&snapshot.id)
-                .expect("every saved id comes from the shipped encounter declaration");
-            let (runtime_faction, runtime_archetype, position, lattice, downed) = runtime
-                .get(&snapshot.id)
-                .expect("every saved id was spawned by the production unit plugin");
-            assert_eq!(runtime_faction, declared_faction);
-            assert_eq!(runtime_archetype, declared_archetype);
-            assert_eq!(*runtime_faction, snapshot.faction);
-            assert_eq!(*position, snapshot.position);
-            assert_eq!(Some(lattice), snapshot.lattice.as_ref());
-            assert_eq!(*downed, snapshot.downed);
-        }
-        assert_eq!(
-            *formation, save.formation,
-            "the fixture formation must be the production Party Trial formation"
-        );
     }
 
     #[test]
@@ -3802,7 +3786,7 @@ mod tests {
             .expect("the current cutovers must refuse incompatible PR #175 content");
         assert_eq!(
             refusal,
-            "The saved scenario \"Party Trial\" changed and cannot be resumed."
+            development_campaign_revision_refusal("Party Trial")
         );
         assert_eq!(
             read(&paths.resume).expect("historical resume remains"),
@@ -3812,12 +3796,12 @@ mod tests {
     }
 
     #[test]
-    fn elemental_example_resume_migrates_and_restores_as_compatible() {
+    fn elemental_example_resume_is_preserved_but_refused_after_visual_world_scale_cutover() {
         let example_text = include_str!("../testdata/example_resume_elemental_grid.ron");
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0x5DF9_C632_EA7D_97D3);
+        assert_eq!(example.scenario_digest, 0xB3AB_659F_8DE1_5851);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 
@@ -3829,7 +3813,7 @@ mod tests {
             .iter()
             .find(|candidate| candidate.name == example.scenario_name)
             .expect("Party Trial remains the canonical Campaign");
-        assert_eq!(scenario_digest(current), example.scenario_digest);
+        assert_ne!(scenario_digest(current), example.scenario_digest);
 
         let root = scratch_root("elemental-grid-example");
         let paths = StoragePaths::under(&root);
@@ -3842,56 +3826,19 @@ mod tests {
         assert_eq!(migrated.scenario_digest, example.scenario_digest);
         assert_eq!(migrated.active_play_millis, 0);
         assert_eq!(migrated.content_revision, None);
+        let refusal = campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE)
+            .expect("the visual/world-scale cutover must refuse the old Campaign");
         assert_eq!(
-            campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE),
-            None
+            refusal,
+            development_campaign_revision_refusal("Party Trial")
         );
         assert_eq!(read(&paths.resume).expect("example remains"), example_text);
-
-        let expected_formation = migrated.formation.clone();
-        let mut app =
-            crate::scenarios::tests::procedural_gameplay_app_with_combat("Party Trial", true);
-        app.insert_resource(CampaignStore::default())
-            .insert_resource(PendingCampaign(migrated.clone()))
-            .insert_resource(ActiveCampaign::new(CampaignSlotId::One, 0xC0DE_CAFE, 0))
-            .add_systems(
-                OnEnter(Screen::Gameplay),
-                (
-                    assert_elemental_fixture_matches_fresh_party_trial,
-                    restore_pending_campaign,
-                )
-                    .chain()
-                    .in_set(GameplaySetup::Restore),
-            );
-
-        crate::scenarios::tests::enter_screen(&mut app, Screen::Gameplay);
-
-        assert!(!app.world().contains_resource::<PendingCampaign>());
-        assert!(app.world().contains_resource::<ActiveCampaign>());
-        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
-        assert_eq!(
-            *app.world().resource::<PartyFormation>(),
-            expected_formation
-        );
-        let restored = {
-            let world = app.world_mut();
-            let mut units = world.query::<(&UnitId, &StandsOn, &LatticeState, Option<&Selected>)>();
-            units
-                .iter(world)
-                .map(|(id, standing, lattice, selected)| {
-                    (*id, (standing.0.pos, lattice.clone(), selected.is_some()))
-                })
-                .collect::<BTreeMap<_, _>>()
-        };
-        assert_eq!(restored.len(), migrated.units.len());
-        for snapshot in &migrated.units {
-            let (position, lattice, selected) = restored
-                .get(&snapshot.id)
-                .expect("every saved Party Trial unit was restored");
-            assert_eq!(*position, snapshot.position);
-            assert_eq!(Some(lattice), snapshot.lattice.as_ref());
-            assert_eq!(*selected, migrated.selected == Some(snapshot.id));
-        }
+        let campaigns_text = read(&paths.campaigns).expect("migration should preserve Campaigns");
+        let persisted = decode_campaigns(&campaigns_text)
+            .available(CampaignSlotId::One)
+            .expect("the refused Campaign should remain persisted")
+            .clone();
+        assert_eq!(persisted.scenario_digest, example.scenario_digest);
         std::fs::remove_dir_all(root).expect("scratch directory should clean up");
     }
 
@@ -3931,7 +3878,7 @@ mod tests {
             .expect("pre-terrain content must not be resumed");
         assert_eq!(
             refusal,
-            "The saved scenario \"Party Trial\" changed and cannot be resumed."
+            development_campaign_revision_refusal("Party Trial")
         );
         store.mark_catalog_invalid(CampaignSlotId::One, refusal.clone());
         assert_eq!(store.slot(CampaignSlotId::One), Err(refusal.clone()));
@@ -4556,6 +4503,10 @@ mod tests {
         assert!(
             included.contains("config/terrain_damage.ron"),
             "terrain damage changes must invalidate resumable worlds"
+        );
+        assert!(
+            included.contains("art/palette.ron"),
+            "palette changes must invalidate visual/world-scale revisions"
         );
 
         for scenario in library.scenarios {

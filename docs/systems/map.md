@@ -48,7 +48,9 @@ the rendered run entity.
 
 A piece on a bridge **cannot step down** to the ground beneath it. Getting down means
 walking a ramp of adjacent surfaces that descends one level at a time, or using an
-ability that explicitly bypasses the rule — a teleport, a tunnel.
+ability that explicitly bypasses the rule — for example, teleportation or a future
+tunnelling ability. A physically authored tunnel such as Crystal Mountain's remains
+ordinary adjacent-surface movement.
 
 This is a design decision, and it means a position is a `TilePos`, never a `HexCoord`.
 There is one `Column` per coordinate, but separate material runs within it are
@@ -203,8 +205,13 @@ Both anchors are validated on the same exact walker graph as live movement.
 
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
-non-standable and may associate it with an interior. Anchors also name exact
-`TilePos`s, so stacked surfaces at one `HexCoord` never become interchangeable.
+non-standable and may associate it with an interior. `MapAnchors` name only exact
+standable gameplay/spawn surfaces. Scenic or blocked camera targets instead live in
+the separate `MapObservationAnchors` resource and are never consumed by scenario
+placement or movement. Both namespaces use full `TilePos`s, so stacked surfaces at one
+`HexCoord` never become interchangeable. Snapshot V1 serializes only gameplay anchors;
+review-only observation landmarks are regenerated metadata and restore as an empty
+resource rather than changing the gameplay wire contract.
 
 Each interior records its exact floor and entrance surfaces plus the air intervals
 that must remain clear. Roof masses identify their `InteriorRegionId`; voxelization
@@ -216,6 +223,17 @@ material. A cutaway tag does not remove or make terrain transparent, change voxe
 storage, or change traversal. Ordinary gameplay keeps tagged roof segments opaque and
 collision-active. Explicit map-review capture tooling may hide every tagged segment in
 the selected exact interior while leaving other regions and adjacent walls intact.
+
+A V3 spanning feature may cross several horizontal biome owners, but it does not
+create a second coordinate or ownership model. Crystal Mountain's globally carved
+tunnel publishes each level-6 floor with the `BiomeRegionId` of the patch that owns
+that horizontal column, while its exact roofed floors and roof voxels share the one
+authored `InteriorRegionId` that also contains Crystal Ascent. The tunnel therefore
+creates no synthetic "tunnel biome," and the mountain surface above it remains a
+separate stack-safe `TilePos` with its existing biome membership. The spanning planner
+reserves the passage before patch decoration and carves it once after fragment merge;
+consumers still receive only the ordinary `TilePos`, `BiomeRegions`,
+`InteriorRegions`, `TraversalBlockers`, and terrain-occupancy contracts.
 
 The plan also publishes a `MapViewHint` so camera setup can frame the generated
 geometry after terrain and actors exist. V1 keeps its frozen single-height plan and
@@ -248,9 +266,13 @@ under a megabyte and the correctness difference is what matters.
 This is the part worth understanding before changing anything.
 
 **One entity per voxel would be tens of thousands of entities on a deep map.** Instead
-the spawn pass merges vertical runs of the same substance into a single prism, so a
-fifteen-level stone column is one entity. The rendered entity count therefore follows
-the number of substance bands rather than the number of stored voxels.
+the spawn pass merges vertical runs of the same substance into one lightweight logical
+run entity. The logical entity carries the authoritative gameplay tuple but no scene
+transform, visibility aggregate, mesh, material, or picking surface. Presentation
+groups bounded sets of those runs by resident chunk, substance, and cutaway owner into
+combined render meshes. Logical entity count therefore follows the number of substance
+bands without enrolling those facts in transform propagation or culling, while
+draw-entity topology follows disposable batches rather than voxels or runs.
 
 Two consequences:
 
@@ -286,17 +308,24 @@ hex_units    reads tiles and authored-object run components, publishing exact te
              and object occupancy resources; cannot see hex_map
 ```
 
-The map exposes rendered footing through components on tile entities:
+The map exposes authoritative footing through lightweight logical run entities:
 
 ```rust
-(HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
+(HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, ...)
 ```
+
+Those entities deliberately carry no transform or visibility aggregate, mesh,
+material, or picking surface. Bounded `TerrainRenderBatch` children combine runs by
+resident chunk, substance, and cutaway owner; those disposable scene entities own
+render visibility, and a world-space mesh hit resolves back to the exact logical run.
+This keeps movement, occupancy, snapshots, and semantic identities independent of
+disposable draw topology while preserving stacked-surface selection.
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
 by `TilePos`; they are not duplicated on tile entities. Exact interior floors and
-cutaway roof voxels likewise live in `InteriorRegions`; only rendered segments projected
-from those roof voxels receive the `CutawayOccluder` component needed by live
-presentation queries. `hex_units` queries the footing components. It never reads
+cutaway roof voxels likewise live in `InteriorRegions`; both logical segments and their
+corresponding render batches receive the `CutawayOccluder` needed by live presentation
+queries. `hex_units` queries the footing components. It never reads
 `VoxelMap` or any generator, so terrain storage and generation can be replaced wholesale
 — chunked, streamed, generated differently — without anything else noticing.
 
@@ -409,7 +438,7 @@ pending cast; those deterministic policies belong to gameplay and are pinned in
 | Two standable endpoints do not guarantee a step | the shared lateral aperture can still be too short |
 | Cutaway metadata names exact opaque roof voxels | rendering projects them onto disposable run segments |
 | Air is never spawned | so an air-filled cave is a gap between two entities |
-| A tile's transform must agree with its span | otherwise pieces float or sink, and **nothing errors** |
+| Render batches must agree with logical coordinates and spans | otherwise pieces float or sink, and **nothing errors** |
 | Clearing a one-voxel run **removes** an entity | only clearing the middle of a taller run adds one |
 | Digging above the top does nothing | there is nothing there to remove |
 | Building above the top leaves a gap | that is how a floating platform is made |
@@ -426,6 +455,8 @@ pending cast; those deterministic policies belong to gameplay and are pinned in
   costs nobody anything. The live gameplay adapter keeps an elemental cast pending
   until the ordered map answer, but mana/action payment remains gameplay policy rather
   than a property of the map.
-- **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
-  but not implemented. When they are, they belong in `hex_units` as explicit
-  exceptions to the step rule, not as changes to it.
+- **Whether stacked surfaces ever connect.** Teleport and the tunnel movement ability
+  are named in the design but not implemented. When they are, they belong in
+  `hex_units` as explicit exceptions to the step rule, not as changes to it. An
+  authored physical passage such as Crystal Mountain's tunnel is ordinary adjacent
+  terrain and does not implement that ability.

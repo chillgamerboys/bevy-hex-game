@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crystal-ascent.invalid/review-evidence-schema-v1.json",
+  "title": "Crystal Ascent small-geometry blinded review V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "warning",
+    "reviewer_id",
+    "blinded",
+    "independence_attestation",
+    "unscored_camera_ids",
+    "scoring_contract_sha256",
+    "review_packet_sha256",
+    "ratings"
+  ],
+  "properties": {
+    "version": {"const": 1},
+    "warning": {"const": "UNAPPROVABLE STRUCTURAL DRAFT — AESTHETIC REVIEW ONLY"},
+    "reviewer_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "blinded": {"const": true},
+    "independence_attestation": {"const": true},
+    "unscored_camera_ids": {
+      "const": ["07-tunnel-first-person", "08-crystal-bottom-chamber"]
+    },
+    "scoring_contract_sha256": {
+      "const": "4d39679e9e3f423c9cd5ff6ef3c542efba0ff1089437e5c171653f4558f60e92"
+    },
+    "review_packet_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "ratings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/rating"}
+    }
+  },
+  "$defs": {
+    "score": {"type": "integer", "minimum": 1, "maximum": 5},
+    "rating": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "categories"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^RV-[0-9A-F]{12}$"},
+        "categories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "terrain_route_water_edge_readability",
+            "shadow_occlusion_preservation",
+            "biome_material_separation",
+            "atmosphere_depth_integration",
+            "edge_temporal_quietness",
+            "mood_cohesion"
+          ],
+          "properties": {
+            "terrain_route_water_edge_readability": {"$ref": "#/$defs/score"},
+            "shadow_occlusion_preservation": {"$ref": "#/$defs/score"},
+            "biome_material_separation": {"$ref": "#/$defs/score"},
+            "atmosphere_depth_integration": {"$ref": "#/$defs/score"},
+            "edge_temporal_quietness": {"$ref": "#/$defs/score"},
+            "mood_cohesion": {"$ref": "#/$defs/score"}
+          }
+        }
+      }
+    }
+  },
+  "x-authoritative-validator": "tools/world_detail_experiments.py::validate_reviewer_review",
+  "x-cross-document-rules": [
+    "exactly two distinct reviewer_id values",
+    "both files bind the same validated public packet hash",
+    "both files contain every and only the same opaque code set",
+    "no reviewer row contains a real profile, condition, family, parameter, ladder, combination, or clip id",
+    "the private hash-bound unblind map is validated only after both review files are complete",
+    "motion review uses the same two reviewer_id values as still review"
+  ]
+}

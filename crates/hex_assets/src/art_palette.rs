@@ -1254,7 +1254,7 @@ mod tests {
                 .color()
                 .to_array()
                 .map(f32::to_bits),
-            [0.896_243_8, 0.959_346_6, 0.991_156_4].map(f32::to_bits)
+            [0.93, 0.99, 1.0].map(f32::to_bits)
         );
     }
 

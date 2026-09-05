@@ -6,7 +6,8 @@ screen and does not run through the gameplay setup lifecycle.
 
 The contracts, tracked catalogs, and standalone `hex_editor` authoring application
 are live. Static runtime object rendering is also live through `hex_objects`, and
-Forest publishes exact authored tree and grass instances through that renderer.
+generated vegetation recipes publish exact authored tree, date-palm, and grass
+instances through that renderer.
 Procedural plant generation, reference-image import, and animated effect timelines
 remain separate later work.
 
@@ -144,9 +145,10 @@ prop parts are structure and detail.
 
 Part labels, blocker footprints, and canopy cells are author intent. None is inferred
 from colour, opacity, or occupancy, and none automatically creates gameplay damage,
-light, traversal, or interaction. Forest's live runtime adapter consumes object
-instances and blocker authority; whole-tree camera fading uses the separate exact root.
-The canopy mask remains preserved art metadata until a dedicated consumer is agreed.
+light, traversal, or interaction. Forest and Oasis consume object instances and their
+separately validated blocker authority; whole-tree camera fading uses the separate
+exact root. The canopy mask remains preserved art metadata until a dedicated consumer
+is agreed.
 
 ## Editing
 

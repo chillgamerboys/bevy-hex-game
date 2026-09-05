@@ -67,14 +67,25 @@ HEX_REVIEW_VIEW=default \
 cargo run --release -p hex_game --features map-review
 ```
 
+Automated captures are deliberately windowless: when `HEX_REVIEW_CAPTURE` (or a
+visual-walk automation request) is present, the app keeps its logical primary window
+for UI layout but replaces Winit with Bevy's schedule runner and renders only to the
+image target. Routine agent review must use this path so it never creates, activates,
+or focuses a native macOS window while someone is using the workstation. Launch a
+visible game only for an explicitly requested play session or approved live motion
+review.
+
 `HEX_REVIEW_VIEW` accepts `default`, `rotated`, `rear`, or `top-down` and requires
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
 `map`, `character`, or `first-person` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
 cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds and
 freezes liquid presentation there; captures default to `0.0`, while launches without a
-capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
-an exact generated anchor before framing and requires a capture.
+capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` holds the review camera at an exact generated gameplay
+anchor without moving the selected actor and requires a capture. Fixed anchor views
+do not establish live camera following, collision, or native-input behavior.
+`HEX_REVIEW_CHARACTER_RADIUS_SCALE` accepts a finite value in `[1, 20]` for Character
+captures and pulls the review camera back without changing shipped camera settings.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
 while ordinary gameplay keeps every cave roof opaque and collision-active; it also
 requires a capture.
@@ -103,7 +114,8 @@ cargo run -p hex_game --features visual-walk
 
 Exit code is the mechanical verdict: any stalled step, structural UI failure, or
 black frame fails the run. The scoped gameplay route contains at most ten
-deterministic Bevy image-target frames. It reviews hierarchy, layout, focus,
+deterministic Bevy image-target frames unless an approved authored-map acceptance
+matrix names more distinct landmark/camera frames. It reviews hierarchy, layout, focus,
 legibility, and responsive composition only; gameplay correctness is proved by
 canonical state snapshots in the rules/contracts/simulation/app partitions. Each
 capture has an explicit logical canvas and device scale, and uses Bevy's
@@ -112,6 +124,18 @@ Every capture replaces that shared 3D/UI image, gives both cameras four complete
 frames, and mirrors the 3D camera's MSAA onto the dedicated UI camera. The last rule
 keeps OIT tree-fade captures compatible while restoring ordinary sampling when OIT
 leaves.
+At walk startup, `review-index.md` is replaced with an **INCOMPLETE — NOT REVIEWABLE**
+marker so an aborted rerun cannot leave a prior approved index authoritative. Only an
+exactly complete capture set atomically publishes a completed index beside the PNGs; that
+index records run/script/scenario provenance and starts every frame as `UNREVIEWED` with
+explicit PASS/FAIL and notes fields. Inspect and classify every frame before selecting hero
+images or calling the pack reviewed. The exit code proves capture mechanics, not pixel quality.
+Close corrective visual work with two distinct passes: inspect every frame at full resolution,
+then scan a complete contact sheet and have a fresh-eyes reviewer challenge the PASS notes.
+Do not reuse one generic note across unrelated frames unless that exact criterion is visibly
+proved in every one; a technically complete but obstructed or poorly framed image is a FAIL.
+Emissive, translucent, or animated geometry additionally requires a named native-camera
+motion pass; static captures cannot clear flicker.
 `walks/camera_routes.ron` is the seed-exact route authority for every selectable Map
 scenario. Named anchor clicks carry an expected `TilePos` stale detector, and camera
 orbits pass through the ordinary held-right-button plus cursor-motion input path;
@@ -133,6 +157,7 @@ infer state transitions from pixels.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_schematic  (standalone pure semantic world-plan library and CLI)
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
@@ -177,6 +202,11 @@ Installing `MultiplayerPlugin` alone opens no socket and leaves offline single-p
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
+**`hex_schematic` is the pure world-plan boundary.** It depends only on deterministic
+serialization and utility crates, never `hex_core`, `hex_map`, gameplay, ECS apps, or a
+renderer. A later map compiler may depend on it and convert its checked cube coordinates;
+the planner must not depend back on the runtime map implementation.
+
 `hex_objects` is the renderer for static Workshop-authored objects. Producers publish
 the shared `hex_assets::ObjectInstance` contract; they do not depend on the renderer,
 and the renderer does not project gameplay blockers.
@@ -188,7 +218,7 @@ for player movement, while `hex_combat` consumes faction-generic projections and
 richer current-observation API to gate gameplay-owned lattice knowledge, cast anchors,
 and AI. Neither gameplay crate may import map-generator internals.
 
-**Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
+**Two owners, two roles.** The **world owner** has `hex_schematic`, `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
 content (world files, `substances.ron`, lighting profiles, `perception.ron`).
 The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat_core`, `hex_combat`, `hex_lattice`,
@@ -421,7 +451,8 @@ Gameplay and map tests are partitioned by concern in
 [`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
 evidence comes from rules/contracts/simulation/app data, while map logic uses
 unit/generation/publication data and retains its existing visual criteria. The scoped
-gameplay visual run contains exactly ten reviewed presentation frames.
+UI gameplay visual run contains exactly ten reviewed presentation frames; an approved
+authored-map matrix may exceed that UI budget only for its named landmark/camera views.
 Ordinary PRs run only the selector-chosen producer/consumer closure; trajectory-only
 changes use their dedicated pure/direct-consumer concern without application/UI tests.
 The combined terrain-impact source, unknown/unclassified paths, command-manifest or CI

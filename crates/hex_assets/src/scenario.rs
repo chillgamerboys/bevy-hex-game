@@ -81,8 +81,8 @@ pub struct Scenario {
     /// Asset path of the encounter file: the roster standing on this world.
     ///
     /// A path for the same reason `world` is one — a scenario is a world, a sky and an
-    /// encounter, each authored on its own and reusable by the next scenario. Six
-    /// generated maps share one anchored skirmish today.
+    /// encounter, each authored on its own and reusable by the next scenario. Generated
+    /// map reviews may share either an anchored skirmish or a non-combat showcase party.
     ///
     /// Not optional: a scenario with no encounter has nothing to play.
     pub encounter: String,
@@ -314,10 +314,11 @@ mod tests {
     /// Whether that encounter places its units through generated *anchors* is a
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
-    /// Procedural Hills, the additive vegetation biomes, Crystal Ascent, and the
-    /// composite wave map deliberately share one canonical review seed so their visual
-    /// differences are directly comparable. Mountain Range likewise shares the Mountains
-    /// review seed so the single-patch and macro-world massifs can be compared directly.
+    /// Procedural Hills, the additive vegetation, desert and island biomes, the crystal
+    /// landmarks, the composite wave maps, and the internal Grand V3 proxy deliberately
+    /// share one canonical review seed so their visual differences are directly comparable.
+    /// Mountain Range likewise shares the Mountains review seed so the single-patch and
+    /// macro-world massifs can be compared directly.
     #[test]
     fn procedural_scenarios_use_only_the_intended_shared_seed_and_name_an_encounter() {
         let library: ScenarioLibrary =
@@ -331,8 +332,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            15,
-            "the scenario library should include all fifteen generated maps"
+            24,
+            "the scenario library should include all twenty-four generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
@@ -356,15 +357,46 @@ mod tests {
                     1_592_598_566,
                     BTreeSet::from([
                         "Crystal Ascent",
+                        "Crystal Mountain",
                         "Deep Forest",
+                        "Desert Oasis Rings",
+                        "Desert Plain",
+                        "Desert Transition",
+                        "Dunes",
+                        "Grand V3 Baseline",
+                        "Ocean Archipelagoes",
                         "Prairie",
                         "Procedural Hills",
+                        "Sandy Islets",
                         "Two Rings",
+                        "Wooded Island",
                     ]),
                 ),
             ]),
             "only the approved directly comparable maps may share a configured seed"
         );
+
+        for (name, world) in [
+            ("Sandy Islets", "config/worlds/procedural-sandy-islets.ron"),
+            (
+                "Wooded Island",
+                "config/worlds/procedural-wooded-island.ron",
+            ),
+            (
+                "Ocean Archipelagoes",
+                "config/worlds/procedural-ocean-archipelagoes.ron",
+            ),
+        ] {
+            let scenario = generated
+                .iter()
+                .find(|scenario| scenario.name == name)
+                .unwrap_or_else(|| panic!("{name} should be a generated scenario"));
+            assert_eq!(scenario.world, world);
+            assert_eq!(
+                scenario.encounter, "config/encounters/island-showcase.ron",
+                "island reviews should share the standard non-combat party"
+            );
+        }
 
         for scenario in generated {
             assert!(

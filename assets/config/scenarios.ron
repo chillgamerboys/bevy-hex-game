@@ -27,9 +27,9 @@
 // named here, so a wrong path fails `cargo test` rather than at the loading screen.
 //
 // An `encounter` is a roster: many units a side, each naming an archetype and a
-// placement. Several scenarios share one — every generated map below uses the same
-// anchored skirmish. The placement vocabulary and how to add a party member are
-// documented in `config/encounters/anchored-skirmish.ron`.
+// placement. Several generated maps share the anchored skirmish, while non-combat
+// traversal and biome reviews may reuse one standard showcase party. The placement
+// vocabulary and how to add a party member are documented in the encounter files.
 //
 // Authored maps place units on exact CUBE coordinates; generated maps use the named
 // anchors the generator publishes after validating the map, so rerolling a seed does not
@@ -136,6 +136,62 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Desert Transition",
+            category: Map,
+            blurb: "A broad frontier where rolling grassland dries through sparse scrub into open sand.",
+            world: "config/worlds/procedural-desert-transition.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Desert Plain",
+            category: Map,
+            blurb: "An exposed sand plain with low weathered relief and long desert sightlines.",
+            world: "config/worlds/procedural-desert-plain.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Dunes",
+            category: Map,
+            blurb: "Parallel dune ridges and sheltered troughs form a shifting field of sandy high ground.",
+            world: "config/worlds/procedural-dunes.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Desert Oasis Rings",
+            category: Map,
+            blurb: "Nineteen arid regions gather dune belts and open desert around a green, palm-lined oasis.",
+            world: "config/worlds/procedural-desert-oasis-rings.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Sandy Islets",
+            category: Map,
+            blurb: "Five low sandy islets rise separately from one continuous shallow sea, with one playable landing route.",
+            world: "config/worlds/procedural-sandy-islets.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/island-showcase.ron",
+        ),
+        (
+            name: "Wooded Island",
+            category: Map,
+            blurb: "A broad connected island climbs from a sandy fringe into a rolling broadleaf interior.",
+            world: "config/worlds/procedural-wooded-island.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/island-showcase.ron",
+        ),
+        (
+            name: "Ocean Archipelagoes",
+            category: Map,
+            blurb: "A radius-77 ocean surrounds sandy satellite archipelagoes and a large wooded island heart.",
+            world: "config/worlds/procedural-ocean-archipelagoes.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/island-showcase.ron",
+        ),
+        (
             name: "Fort",
             category: Map,
             blurb: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
@@ -150,6 +206,14 @@
             world: "config/worlds/procedural-crystal-ascent.ron",
             generation_seed: Some(1592598566),
             encounter: "config/encounters/crystal-ascent-showcase.ron",
+        ),
+        (
+            name: "Crystal Mountain",
+            category: Map,
+            blurb: "A crystal-lit tunnel crosses beneath an enclosing mountain into the 144-level Crystal Ascent and a high wooded basin.",
+            world: "config/worlds/procedural-crystal-mountain.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/crystal-mountain-showcase.ron",
         ),
         (
             name: "Seven Regions",
@@ -174,6 +238,14 @@
             world: "config/worlds/procedural-mountain-range.ron",
             generation_seed: Some(129704046),
             encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Grand V3 Baseline",
+            category: Map,
+            blurb: "The complete eight-ring mountain-to-sea world joins archipelagoes, a river valley, frozen peaks, two upper routes, and Crystal Ascent.",
+            world: "config/worlds/procedural-grand-v3-baseline.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/grand-v3-baseline-showcase.ron",
         ),
         (
             name: "Party Trial",

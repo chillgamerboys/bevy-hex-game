@@ -7,6 +7,7 @@ contact with the next change.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_schematic  (standalone pure world-plan library and CLI)
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
@@ -43,6 +44,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects and isolated per-tree fade materials | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
+| `hex_schematic` | Strict semantic world templates, deterministic plan selection, validation, fingerprints, and renderer-free diagnostic projections | serialization and deterministic utility crates only; never `hex_core`, `hex_map`, Bevy, or gameplay | world |
 | `hex_world` | Sky, collision-aware camera presentation, tree obstruction, and review-only cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
 | `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
@@ -129,6 +131,20 @@ that id to the endpoint, SPKI pin, exact verified certificate expiry, seat/playe
 identity, and rotating credential. Only a matching typed closure, expiry, or successful
 replacement can remove it; an unrelated failed endpoint never consumes recoverable state.
 
+### `hex_schematic` plans geography without generating terrain
+
+`hex_schematic` is a pure world-authority library with a standalone CLI. It resolves a
+world seed and strict template into layered coarse-cell facts, networks, provenance,
+metrics, and a semantic fingerprint. It knows no voxel radius, terrain material, final
+colour, ECS entity, renderer, or gameplay state. Its SVG and HTML outputs are diagnostic
+projections of an already validated plan, never logical evidence.
+
+The separation is intentional: the same plan can later be expanded at different
+horizontal and vertical scales, and a runtime V3 or V4 consumer can call the same pure
+generator used by offline review. It owns a checked cube-coordinate type so neither Bevy
+nor gameplay enters the CLI. `hex_schematic` does not depend on `hex_map`; a future
+compiler edge points from map generation to this pure contract.
+
 ### `hex_map` is a leaf, on purpose
 
 Nothing depends on it except the binary. It is owned by one person, and bounding the
@@ -209,7 +225,7 @@ Two roles, named so the arrangement survives a change of people:
 
 | Role | Owns |
 |---|---|
-| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the `terrain_damage.ron` allow-list |
+| **World owner** | `hex_schematic`, `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: schematic/world files, `substances.ron`, lighting profiles, `perception.ron`, and the `terrain_damage.ron` allow-list |
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and

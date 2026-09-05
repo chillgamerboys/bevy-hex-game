@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "warning": "UNAPPROVABLE STRUCTURAL DRAFT — AESTHETIC REVIEW ONLY",
+  "launch_environment": {
+    "inherited_hex_state_scrubbed": true,
+    "required_name": "HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT",
+    "required_value": "1",
+    "scope": "map-review-only",
+    "applies_to": ["still", "control-verification", "reproduction", "motion", "lifecycle"]
+  },
+  "focused_control_funnel": {
+    "camera_ids": ["02-highlands-oblique", "03-coast-river-outlet", "14-cascade-basin-full-height", "16-deep-tree-shade"],
+    "omitted_profile_jobs": 4,
+    "explicit_current_jobs": 4,
+    "captures_per_job": 1,
+    "fresh_process_per_png": true,
+    "distinct_runtime_receipts_required": 8,
+    "oracle_equivalence": "aggregate only after all four omitted-profile one-camera jobs pass their clean-source stable-pixel gates"
+  },
+  "sidecar": {
+    "path_rule": "foo.png -> foo.world-detail-report.json",
+    "runtime_receipt": {
+      "exact_fields": ["version", "launch_nonce", "process_id", "executable_sha256", "source_provenance_sha256", "capture_plan_sha256", "profile_sha256", "receipt_sha256"],
+      "launch_nonce": "fresh runner-generated 64 lowercase hex passed through HEX_REVIEW_LAUNCH_NONCE",
+      "receipt_hash": "sha256 of UTF-8 compact JSON of the first seven exact fields in listed order"
+    },
+    "effect_validation": {
+      "exact_fields": ["cloud_coverage", "ice_coverage", "fog_coverage", "waterfall_anchors"],
+      "cloud_coverage": {
+        "presence": "null for current; required for every non-current physical_clouds treatment",
+        "exact_fields": ["field_radius", "target_fraction", "measured_fraction", "tolerance", "sample_count", "cloud_clusters", "peak_intersection_required", "peak_intersecting_puffs"],
+        "field_radius": "clamp(187 * 0.52, 64, 120) = 97.24 world units around grand_v3.massif_crest",
+        "target_fraction": "the profile projected_coverage of exact emitted low-poly puff XZ silhouettes over that deterministic circular massif field, not cluster envelopes or the full map",
+        "measured_gate": "finite [0,1], tolerance exactly 0.01, and abs(measured_fraction-target_fraction) <= tolerance",
+        "counts": "positive integer sample_count and cloud_clusters; non-negative peak_intersecting_puffs, positive whenever peak_intersection_required is true"
+      },
+      "ice_coverage": {
+        "presence": "null for current; required for every non-current ice_fringe treatment",
+        "exact_fields": ["target_fraction", "eligible_edges", "selected_edges"],
+        "selection_gate": "eligible_edges > 0 and selected_edges = min(eligible_edges, ceil(eligible_edges * target_fraction))"
+      },
+      "fog_coverage": {
+        "presence": "null for current; required for every non-current local_fog treatment",
+        "exact_fields": ["target_fraction", "measured_fraction", "sample_count", "active_samples", "fog_volumes"],
+        "semantics": "coverage is deterministic coherent XZ density occupancy inside every eligible named-anchor volume, not a ceiling-rounded subset of the small anchor list",
+        "selection_gate": "sample_count > 0, fog_volumes > 0, active_samples = min(sample_count, ceil(sample_count * target_fraction)), measured_fraction = active_samples / sample_count"
+      },
+      "waterfall_anchors": {
+        "presence": "empty except plunge_spray and restrained_combination, which require at least one resolved named anchor",
+        "exact_fields": ["anchor_name", "anchor_position", "landing_position", "distance_hexes"],
+        "semantics": "sorted unique authored anchor names; integer [q,r,level] positions differ; landing search distance <= 13 hexes"
+      }
+    },
+    "performance": {
+      "exact_fields": ["frame_time_ms", "resident_presentation_bytes", "warmup_complete"],
+      "frame_time_ms": "finite f32 in (0, 10000]; nearest-rank p95 of frames 31 through 90 of the first 90-frame settle interval, cached across later cameras or motion frames in the same process sequence and reset on lifecycle reentry",
+      "resident_presentation_bytes": "positive u64; total resident presentation asset bytes for the matched scene, counting unique live Mesh3d buffers, relevant live material allocations, non-capture Image mip payloads, and public review entity/component/name payloads; capture target excluded or included symmetrically",
+      "warmup_complete": "bool; true only after the stable 60-frame sample window"
+    },
+    "cleanup": {
+      "exact_fields": [
+        "completed_cycles",
+        "entities_remaining",
+        "materials_remaining",
+        "meshes_remaining",
+        "target_images_remaining",
+        "camera_state_restored",
+        "oit_state_restored",
+        "transmission_state_restored",
+        "depth_state_restored",
+        "volumetric_state_restored"
+      ],
+      "completed_cycles": "positive u16",
+      "remaining_counts_must_equal": 0,
+      "all_restoration_flags_must_equal": true,
+      "semantics": "capture sidecar rewritten atomically after the launch's verified projection and camera teardown; the separate lifecycle certificate proves 100 repeated cycles"
+    }
+  },
+  "lifecycle_certificate": {
+    "exact_fields": [
+      "version",
+      "warning",
+      "runtime_receipt",
+      "capture_plan_sha256",
+      "source_provenance_sha256",
+      "profile_matrix_sha256",
+      "tested_profile_sha256",
+      "cycles_requested",
+      "cycles_completed",
+      "cycles",
+      "final_chain_sha256"
+    ],
+    "cycles_requested": 100,
+    "cycles_completed": 100,
+    "cycle_exact_fields_before_hash": [
+      "cycle_index",
+      "launch_nonce",
+      "runtime_receipt_sha256",
+      "profile_hash_sha256",
+      "authority_before_sha256",
+      "authority_after_sha256",
+      "entities_remaining",
+      "materials_remaining",
+      "meshes_remaining",
+      "fog_density_images_remaining",
+      "target_images_remaining",
+      "terrain_material_overrides_remaining",
+      "liquid_visibility_overrides_remaining",
+      "vegetation_scale_overrides_remaining",
+      "camera_state_restored",
+      "oit_state_restored",
+      "transmission_state_restored",
+      "depth_state_restored",
+      "volumetric_state_restored",
+      "previous_cycle_sha256"
+    ],
+    "cycle_hash_field": "cycle_sha256",
+    "first_previous_cycle_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "cycle_hash": "sha256 of UTF-8 compact JSON in cycle_exact_fields_before_hash order",
+    "authority_before_must_equal_after": true,
+    "all_remaining_counts_must_equal": 0,
+    "all_restoration_flags_must_equal": true
+  },
+  "deterministic_reproduction": {
+    "new_render_count": 1,
+    "subject": "score-leader neutral camera 02; explicit-current camera 02 when score-leader is control",
+    "requires_fresh_runtime_receipts": true,
+    "exact_equal": ["every raster-stable decoded RGB pixel", "spatial exception limited to the one clean-source-proven camera-02 ambiguous shared-vertex coordinate, with treatment-specific endpoint RGB tuples recorded exactly and no numeric threshold", "capture state excluding path", "profile hash", "authority", "counts", "anchor heights/classes", "projection hashes", "effect validation", "camera features"],
+    "raw_hashes": "encoded PNG and full decoded-RGB equality are recorded when they occur, but are not required because camera 02 has one clean-source-proven ambiguous shared vertex; control-to-oracle and omitted-to-explicit-current comparisons separately restrict differing endpoint tuples to clean-source-observed values",
+    "excluded_variable_fields": ["runtime nonce/process/capture-plan path receipt fields", "performance", "post-teardown cleanup"]
+  }
+}

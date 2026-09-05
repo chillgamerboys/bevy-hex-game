@@ -9,17 +9,21 @@ use std::time::Instant;
 
 use hex_assets::RuntimeArtCatalog;
 use hex_core::{
-    BiomeRegions, InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
-    TraversalBlockers,
+    BiomeRegions, InteriorRegions, MapAnchors, MapObservationAnchors, MapViewHint,
+    SpecialMovementRegions, SubstanceId, TraversalBlockers,
 };
 
 use crate::procedural::{
     CavesMetrics as CavesReportMetrics, CrystalAscentMetrics as CrystalAscentReportMetrics,
-    DeepForestMetrics as DeepForestReportMetrics, ForestMetrics as ForestReportMetrics,
-    FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
-    MountainsMetrics as MountainsReportMetrics, PrairieMetrics as PrairieReportMetrics,
-    ProceduralRecipeMetrics, TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    DeepForestMetrics as DeepForestReportMetrics, DesertPlainMetrics as DesertPlainReportMetrics,
+    DesertTransitionMetrics as DesertTransitionReportMetrics, DunesMetrics as DunesReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    GrandV3Metrics as GrandV3ReportMetrics, HillsMetrics as HillsReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, OasisMetrics as OasisReportMetrics,
+    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics,
+    SandyIsletsMetrics as SandyIsletsReportMetrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    WoodedIslandMetrics as WoodedIslandReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -28,16 +32,38 @@ use materialize::{MaterializationError, MaterializedV3World};
 use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
+/// Whether the explicitly review-only incomplete Grand-V3 draft path is enabled.
+///
+/// Ordinary builds compile this to a literal `false` and never inspect the
+/// environment, so a leaked shell variable cannot weaken production admission.
+#[must_use]
+pub(crate) fn grand_v3_structural_review_draft_enabled() -> bool {
+    #[cfg(feature = "map-review")]
+    {
+        std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some()
+    }
+    #[cfg(not(feature = "map-review"))]
+    {
+        false
+    }
+}
+
+mod arid_landform;
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod coastal_island;
 mod crystal_ascent;
 mod crystal_ascent_assets;
 pub(crate) use crystal_ascent_assets::{CrystalAscentAssetError, CrystalAscentObjectSet};
 mod composite_patch;
 mod composition;
 mod deep_forest;
+mod desert_plain;
+mod desert_transition;
+mod desert_vegetation;
 #[cfg(test)]
 mod dry_patch_tests;
+mod dunes;
 mod fingerprint;
 mod forest;
 mod fort;
@@ -50,6 +76,7 @@ mod layout;
 mod local_frame;
 mod macro_alpine;
 mod macro_landform;
+mod macro_spanning;
 mod macro_world;
 pub(crate) use layout::HexSide;
 #[expect(
@@ -61,12 +88,19 @@ pub(crate) use liquid::LiquidFlowState;
 mod materialize;
 pub(crate) use materialize::{MapPresentationProjection, MaterializedLiquidVoxel};
 mod mountains;
+mod oasis;
 mod patch;
 mod prairie;
 mod ring19;
 mod ring7;
 mod river_terrain;
 mod routing;
+mod sandy_islets;
+mod schematic;
+pub(crate) use schematic::admit_schematic_topology;
+mod schematic_crystal;
+mod schematic_ecology;
+mod schematic_highlands;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -89,6 +123,7 @@ mod volcano;
 mod volume;
 pub(crate) use volume::FillMaterialRole;
 mod waterfall;
+mod wooded_island;
 mod world;
 pub(crate) use world::{
     CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, CrystalAscentCrystalKind,
@@ -206,6 +241,12 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Volcano(_)
                     | V3RecipeSettings::Prairie(_)
                     | V3RecipeSettings::CrystalAscent(_)
+                    | V3RecipeSettings::DesertTransition(_)
+                    | V3RecipeSettings::DesertPlain(_)
+                    | V3RecipeSettings::Dunes(_)
+                    | V3RecipeSettings::Oasis(_)
+                    | V3RecipeSettings::SandyIslets(_)
+                    | V3RecipeSettings::WoodedIsland(_)
             ) =>
         {
             Ok(())
@@ -216,6 +257,7 @@ pub(crate) fn ensure_recipe_available(
         V3LayoutSettings::Ring7(_) => Ok(()),
         V3LayoutSettings::Ring19(_) => Ok(()),
         V3LayoutSettings::Macro(_) => Ok(()),
+        V3LayoutSettings::Schematic(_) => Ok(()),
     }
 }
 
@@ -224,6 +266,7 @@ pub(crate) fn ensure_recipe_available(
 pub(crate) struct ProceduralBuild {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: MapAnchors,
+    pub(crate) observation_anchors: MapObservationAnchors,
     pub(crate) special_regions: SpecialMovementRegions,
     pub(crate) interiors: InteriorRegions,
     pub(crate) blockers: TraversalBlockers,
@@ -462,6 +505,118 @@ pub(crate) fn build(
                 },
             )
         }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::DesertTransition(_)) =>
+        {
+            finish_build(
+                desert_transition::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                desert_transition_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::DesertTransition(desert_transition_recipe_metrics(
+                        metrics,
+                    ))
+                },
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::DesertPlain(_)) =>
+        {
+            finish_build(
+                desert_plain::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                desert_plain_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::DesertPlain(desert_plain_recipe_metrics(metrics))
+                },
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Dunes(_)) => {
+            finish_build(
+                dunes::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                dunes_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Dunes(dunes_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Oasis(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Oasis requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                oasis::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                oasis_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Oasis(oasis_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::SandyIslets(_)) =>
+        {
+            finish_build(
+                sandy_islets::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                sandy_islets_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::SandyIslets(sandy_islets_recipe_metrics(metrics))
+                },
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::WoodedIsland(_)) =>
+        {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Wooded Island requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                wooded_island::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                wooded_island_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::WoodedIsland(wooded_island_recipe_metrics(metrics))
+                },
+            )
+        }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
             &patch.recipe,
         ))),
@@ -520,13 +675,94 @@ pub(crate) fn build(
                 started,
                 macro_report_metrics,
                 |metrics| {
-                    metrics.mountain_range.map_or_else(
-                        || ProceduralRecipeMetrics::Macro(metrics.report),
-                        ProceduralRecipeMetrics::MountainRange,
-                    )
+                    if let Some(metrics) = metrics.ocean_archipelago {
+                        ProceduralRecipeMetrics::OceanArchipelago(metrics)
+                    } else if let Some(metrics) = metrics.mountain_range {
+                        ProceduralRecipeMetrics::MountainRange(metrics)
+                    } else {
+                        ProceduralRecipeMetrics::Macro(metrics.report)
+                    }
                 },
             )
         }
+        V3LayoutSettings::Schematic(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Grand V3 requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                schematic::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                schematic_report_metrics,
+                |metrics| ProceduralRecipeMetrics::GrandV3(schematic_recipe_metrics(metrics)),
+            )
+        }
+    }
+}
+
+/// Compiles one already-generated Grand V3 schematic through the same semantic
+/// validation, materialization, and reporting boundary as runtime generation.
+///
+/// This path deliberately skips schematic candidate generation: review tools can
+/// compile an exact reference or saved plan without asking the planner to select
+/// another candidate.
+pub(crate) fn compile_schematic_plan(
+    plan: &hex_schematic::SchematicPlanV1,
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV3Settings,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+    art_catalog: &RuntimeArtCatalog,
+) -> Result<ProceduralBuild, V3GenerationError> {
+    let started = Instant::now();
+    finish_build(
+        schematic::compile_schematic(plan, settings, grid_radius, level_height, art_catalog)?,
+        grid_radius,
+        level_height,
+        settings,
+        plan.provenance.world_seed,
+        palette,
+        is_solid,
+        started,
+        schematic_report_metrics,
+        |metrics| ProceduralRecipeMetrics::GrandV3(schematic_recipe_metrics(metrics)),
+    )
+}
+
+fn schematic_report_metrics(metrics: &schematic::SchematicWorldMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics
+            .maximum_surface
+            .saturating_sub(metrics.minimum_surface),
+        barrier_cells: metrics.water_columns,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+const fn schematic_recipe_metrics(
+    metrics: &schematic::SchematicWorldMetrics,
+) -> GrandV3ReportMetrics {
+    GrandV3ReportMetrics {
+        schematic_cells: metrics.schematic_cells,
+        world_columns: metrics.world_columns,
+        resident_chunks: metrics.expected_chunks,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        water_columns: metrics.water_columns,
+        liquid_bodies: metrics.liquid_bodies,
+        minimum_surface: metrics.minimum_surface,
+        maximum_surface: metrics.maximum_surface,
+        schematic_fingerprint: metrics.schematic_fingerprint,
     }
 }
 
@@ -648,6 +884,128 @@ fn mountains_recipe_metrics(metrics: &mountains::MountainsMetrics) -> MountainsR
     }
 }
 
+fn desert_transition_report_metrics(metrics: &DesertTransitionReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.dry_coverage_percent,
+        ..Default::default()
+    }
+}
+
+const fn desert_transition_recipe_metrics(
+    metrics: &DesertTransitionReportMetrics,
+) -> DesertTransitionReportMetrics {
+    *metrics
+}
+
+fn desert_plain_report_metrics(metrics: &DesertPlainReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.sand_surface_percent,
+        ..Default::default()
+    }
+}
+
+const fn desert_plain_recipe_metrics(
+    metrics: &DesertPlainReportMetrics,
+) -> DesertPlainReportMetrics {
+    *metrics
+}
+
+fn dunes_report_metrics(metrics: &DunesReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .crest_surfaces
+            .saturating_mul(100)
+            .checked_div(metrics.ordinary_surfaces)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+const fn dunes_recipe_metrics(metrics: &DunesReportMetrics) -> DunesReportMetrics {
+    *metrics
+}
+
+fn oasis_report_metrics(metrics: &OasisReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        barrier_cells: metrics.water_cells,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .water_cells
+            .saturating_add(metrics.grass_ring_surfaces)
+            .saturating_mul(100)
+            .checked_div(
+                metrics
+                    .ordinary_surfaces
+                    .saturating_add(metrics.water_cells),
+            )
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+const fn oasis_recipe_metrics(metrics: &OasisReportMetrics) -> OasisReportMetrics {
+    *metrics
+}
+
+fn sandy_islets_report_metrics(metrics: &SandyIsletsReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        barrier_cells: metrics.water_cells,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.primary_reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .land_surfaces
+            .saturating_mul(100)
+            .checked_div(metrics.world_columns)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+const fn sandy_islets_recipe_metrics(
+    metrics: &SandyIsletsReportMetrics,
+) -> SandyIsletsReportMetrics {
+    *metrics
+}
+
+fn wooded_island_report_metrics(metrics: &WoodedIslandReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        barrier_cells: metrics.water_cells,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .tree_roots
+            .saturating_mul(100)
+            .checked_div(metrics.grass_interior_surfaces)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+const fn wooded_island_recipe_metrics(
+    metrics: &WoodedIslandReportMetrics,
+) -> WoodedIslandReportMetrics {
+    *metrics
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the V3 report boundary explicitly records every generation input"
@@ -674,11 +1032,20 @@ fn finish_build<M>(
         used_fallback,
         notes,
     } = selection;
+    let materialization_started = Instant::now();
     let materialized = materialize::materialize(validated, palette, is_solid)
         .map_err(V3GenerationError::Materialization)?;
+    if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
+        bevy::log::info!(
+            "v3 profile: materialization={:?} total_before_report={:?}",
+            materialization_started.elapsed(),
+            started.elapsed()
+        );
+    }
     let MaterializedV3World {
         map,
         anchors,
+        observation_anchors,
         special_regions,
         interiors,
         blockers,
@@ -722,6 +1089,7 @@ fn finish_build<M>(
     Ok(ProceduralBuild {
         map,
         anchors,
+        observation_anchors,
         special_regions,
         interiors,
         blockers,
@@ -1045,6 +1413,12 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
         V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
+        V3RecipeSettings::DesertTransition(_) => "DesertTransition",
+        V3RecipeSettings::DesertPlain(_) => "DesertPlain",
+        V3RecipeSettings::Dunes(_) => "Dunes",
+        V3RecipeSettings::Oasis(_) => "Oasis",
+        V3RecipeSettings::SandyIslets(_) => "SandyIslets",
+        V3RecipeSettings::WoodedIsland(_) => "WoodedIsland",
     }
 }
 
@@ -1053,8 +1427,16 @@ mod tests {
     use super::*;
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-        V3CrystalAscentSettings, V3EnvironmentSettings, V3HillsSettings,
+        V3CrystalAscentSettings, V3DesertPlainSettings, V3DesertTransitionSettings,
+        V3DunesSettings, V3EnvironmentSettings, V3HillsSettings, V3OasisSettings,
+        V3SandyIsletsSettings, V3WoodedIslandSettings,
     };
+
+    #[cfg(not(feature = "map-review"))]
+    #[test]
+    fn ordinary_build_cannot_enable_the_structural_review_draft() {
+        assert!(!grand_v3_structural_review_draft_enabled());
+    }
 
     fn world_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {
@@ -1102,6 +1484,78 @@ mod tests {
         };
 
         assert_eq!(ensure_recipe_available(&settings), Ok(()));
+    }
+
+    #[test]
+    fn all_native_desert_recipes_are_reported_available() {
+        let recipes = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 3,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 2,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 6,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 5,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+
+        for recipe in recipes {
+            let settings = ProceduralV3Settings {
+                layout: V3LayoutSettings::Single(PatchSpec {
+                    environment: V3EnvironmentSettings::Arid,
+                    recipe,
+                    overlays: Vec::new(),
+                    mask: PatchMaskSettings::WholeWorld,
+                    edges: world_edges(),
+                }),
+            };
+            assert_eq!(ensure_recipe_available(&settings), Ok(()));
+        }
+    }
+
+    #[test]
+    fn both_native_coastal_island_recipes_are_reported_available() {
+        let recipes = [
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+        ];
+
+        for recipe in recipes {
+            let settings = ProceduralV3Settings {
+                layout: V3LayoutSettings::Single(PatchSpec {
+                    environment: V3EnvironmentSettings::Coastal,
+                    recipe,
+                    overlays: Vec::new(),
+                    mask: PatchMaskSettings::WholeWorld,
+                    edges: world_edges(),
+                }),
+            };
+            assert_eq!(ensure_recipe_available(&settings), Ok(()));
+        }
     }
 
     #[test]

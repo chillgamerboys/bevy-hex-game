@@ -24,6 +24,15 @@ cycling between Third Person and First Person never overwrites it. If the follow
 subject becomes unavailable, either character view fails safely back to that saved
 Map pose.
 
+`MapViewHint` is also a bounded depth contract for generated worlds. A valid hint may
+increase the perspective far plane to the greater of its authored baseline and twice
+the hint's eye-to-focus distance, which keeps the far half of the radius-187 Grand V3
+world and its expanded sky dome inside the view volume. Camera-owned override state
+remembers both values. A later hintless or authored Map restores the exact baseline
+only when the projection still has the generated value; an external projection edit
+instead becomes the new baseline before the generated minimum is reapplied, so later
+restoration never replaces newer authority with a stale value.
+
 This is presentation only. Camera geometry never grants sight, changes gameplay
 targeting legality, brightens darkness, or becomes an occupancy fact. A unit hidden
 by the near-camera presentation envelope, or the complete model hidden in First
@@ -161,10 +170,18 @@ composites mesh fragments and whole-tree identity also fades chunks outside the 
 corridor.
 
 Material authority stays in `hex_objects`. It lazily clones each actively fading
-tree's shared source materials, participates in OIT while those clones are blended,
+tree's shared source materials, uses OIT while those clones are blended,
 and restores the exact handles before deleting the clones. A neighboring tree using
 the same catalog style is never mutated. Authored `CanopyOccluder` metadata remains a
 separate art boundary and does not create camera behavior by itself.
+
+The persistent game camera owns order-independent transparency (OIT), disables MSAA,
+and exposes its depth texture for compositing ordinary translucent voxel water. This
+configuration remains active when tree fading ends or gameplay exits. The object
+renderer preserves camera-owned OIT; on another camera without persistent OIT, it
+temporarily enables OIT for translucent objects and restores that camera's previous
+sampling settings after those objects disappear. Windowless visual-walk UI rendering
+uses the same sampling setting as the game camera.
 
 Ordinary gameplay never removes authored interior occluders. Cave roofs and Crystal
 Ascent's enclosing worked-stone shell remain visible collision geometry, allowing the
@@ -186,7 +203,8 @@ material changes settle before composed visibility, and fog/review reasons remai
 independent. Near-character and First Person hiding add and remove only their shared
 camera-owned composable reason.
 Gameplay exit clears collision indexes, effective-radius recovery state, proximity
-ownership, fade timelines, temporary material clones, and OIT ownership. Retargeting
+ownership, fade timelines, temporary material clones, and temporary object-owned OIT.
+Persistent game-camera OIT remains available for the next map. Retargeting
 inspection or gameplay selection also discards the previous unit's collision history
 and resolves the new unit's own clear or obstructed corridor in the same frame.
 
@@ -198,17 +216,18 @@ orbit/zoom input; 120 open-motion frames; blocked-clearance chatter; delayed mon
 recovery; proximity occlusion composition; a clear and obstructed focus retarget;
 one-shot Map inspection centering; character-view inspection follow and
 selected-target fallback; no gameplay-authority mutation; a
-synthetic flat radius-55 lower-level benchmark,
+synthetic flat radius-55 lower-level benchmark; complete radius-187 Grand V3 boundary,
+far-depth, and sky-dome coverage;
 a 2,048-render-chunk tree-fade
 performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
 roofs, and 100 gameplay lifecycles. An ignored release composition diagnostic
-generates the pinned shipped Two Rings and Mountain Range scenarios, builds and
+generates the pinned shipped Two Rings, Mountain Range, and Crystal Mountain scenarios, builds and
 repeatedly rebuilds the camera index from each public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
-1 ms p95 for Two Rings and defines a 2 ms p95 budget for Mountain Range across their
-exact published anchors and six yaws.
+1 ms p95 for Two Rings and defines a 2 ms p95 budget for both radius-77 Macro worlds
+across their exact published anchors and six yaws.
 
-The tracked route manifest pins 17 camera-walk Sandbox catalog maps—every entry except
+The tracked route manifest pins 18 camera-walk Sandbox catalog maps—every entry except
 the deployment-only Flat Arena—to their exact scenario seed and representative
 stack-safe destinations. Each has an executable multi-azimuth Character walk using
 ordinary pointer movement and bounded party-idle waiting, followed by an exact check
@@ -221,9 +240,28 @@ eight-level clearance and adjacent fixture are reviewed from both close cameras.
 The route switches through the real Formation panel into Solo movement before the
 ascent, leaving the other party members on the apron so the long camera proof does not
 turn into an unrelated atomic-formation routing test.
+Crystal Mountain extends that same proof from the opaque enclosing massif and exterior
+portal through the natural tunnel, Gothic transition, approved Crystal Ascent route,
+summit threshold, and wooded basin. Its ordinary walk never enables a cutaway or
+illumination diagnostic; those remain separate deterministic `map-review` captures. The
+showcase stages the selected explorer on the stable foot-apron anchor and resolves the
+other two exterior cells by running candidate footprints through the production Compact
+formation planner before Restore, which remains authoritative for saves. The review route
+enters the four-wide mouth once in default Group mode, then chooses Solo movement and leaves
+the two allies at the threshold so the vertical camera proof does not become a formation
+benchmark.
+
+Review focus and review look-at use different anchor contracts. A focus override
+resolves only `MapAnchors`, whose surfaces must satisfy live footing, and holds the
+requested Character or FirstPerson capture pose after the ordinary camera follower.
+It leaves actors unchanged. These fixed views show the shipped lens and eye height
+at that anchor; they do not establish following, collision, or native-input behavior. A free-camera look-at may additionally resolve
+`MapObservationAnchors`, which can name a blocked crest, scenic island, or other exact
+rendered surface. If one identity appears in both namespaces, capture setup fails
+closed. Observation anchors are review metadata and are not serialized in Snapshot V1.
 
 The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
-an eighteenth manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
+a camera-route manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
 steps around ordinary `C` input, performs click-to-move through the normal pointer
 adapter, applies a bounded right-drag look, and captures the restored Map frame. Run it
 with:

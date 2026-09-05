@@ -9,10 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use bevy::prelude::Resource;
+#[cfg(feature = "map-review")]
+use hex_core::HexCoord;
 use hex_core::{
-    BiomeRegionId, BiomeRegions, Headroom, HexCoord, IlluminationLevel, InteriorRegionId,
-    InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, SpecialMovementRegion,
-    SpecialMovementRegions, SubstanceId, TilePos, TraversalBlockers, TraversalProfile,
+    BiomeRegionId, BiomeRegions, Headroom, IlluminationLevel, InteriorRegions, MapAnchorId,
+    MapAnchors, MapObservationAnchors, MapViewHint, SpecialMovementRegions, SubstanceId, TilePos,
+    TraversalBlockers, TraversalProfile,
 };
 
 use super::fingerprint::{
@@ -21,7 +23,7 @@ use super::fingerprint::{
 use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::selection::ValidatedWorldPlan;
 use super::volume::{
-    FillMaterialRole, MaterializedVolume, SurfaceAccess, VolumeMaterializationError,
+    FillMaterialRole, MaterializedVolume, SurfaceAccess, VolumeElement, VolumeMaterializationError,
 };
 use super::world::{
     FeatureId, FeatureKind, GeneratedWorldPlan, LightId, PlannedFeature, PlannedGameplayLight,
@@ -35,6 +37,7 @@ use crate::voxel::VoxelMap;
 pub(crate) struct MaterializedV3World {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: MapAnchors,
+    pub(crate) observation_anchors: MapObservationAnchors,
     pub(crate) special_regions: SpecialMovementRegions,
     pub(crate) interiors: InteriorRegions,
     pub(crate) blockers: TraversalBlockers,
@@ -55,6 +58,14 @@ pub(crate) struct MapPresentationProjection {
     features: BTreeMap<FeatureId, PlannedFeature>,
     structures: BTreeMap<StructureId, PlannedStructure>,
     lights: BTreeMap<LightId, PlannedGameplayLight>,
+    #[cfg(feature = "map-review")]
+    review_protected_routes: BTreeMap<String, BTreeSet<TilePos>>,
+    #[cfg(feature = "map-review")]
+    review_frozen_woods_mask: BTreeSet<HexCoord>,
+    #[cfg(feature = "map-review")]
+    review_garden_mask: BTreeSet<HexCoord>,
+    #[cfg(feature = "map-review")]
+    review_forced_summits: BTreeSet<TilePos>,
 }
 
 impl MapPresentationProjection {
@@ -70,10 +81,46 @@ impl MapPresentationProjection {
         &self.features
     }
 
+    /// Returns exact structures in stable map-local identity order.
+    #[must_use]
+    pub(crate) const fn structures(&self) -> &BTreeMap<StructureId, PlannedStructure> {
+        &self.structures
+    }
+
     /// Returns generated gameplay-light descriptors in stable map-local order.
     #[must_use]
     pub(crate) const fn lights(&self) -> &BTreeMap<LightId, PlannedGameplayLight> {
         &self.lights
+    }
+
+    /// Returns the generator's exact protected route footprints for disposable
+    /// review projections. These surfaces are never published to gameplay and
+    /// exist only while the `map-review` feature is compiled.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_protected_routes(&self) -> &BTreeMap<String, BTreeSet<TilePos>> {
+        &self.review_protected_routes
+    }
+
+    /// Returns the exact union of authored Frozen-Woods ownership patches.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_frozen_woods_mask(&self) -> &BTreeSet<HexCoord> {
+        &self.review_frozen_woods_mask
+    }
+
+    /// Returns the exact authored Lake-Island garden ownership patch.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_garden_mask(&self) -> &BTreeSet<HexCoord> {
+        &self.review_garden_mask
+    }
+
+    /// Returns the exact final summit pins retained by Grand's highland authority.
+    #[cfg(feature = "map-review")]
+    #[must_use]
+    pub(crate) const fn review_forced_summits(&self) -> &BTreeSet<TilePos> {
+        &self.review_forced_summits
     }
 
     /// Rebuilds only the generator-neutral runtime consequences carried by a live
@@ -90,6 +137,14 @@ impl MapPresentationProjection {
             features,
             structures: BTreeMap::new(),
             lights,
+            #[cfg(feature = "map-review")]
+            review_protected_routes: BTreeMap::new(),
+            #[cfg(feature = "map-review")]
+            review_frozen_woods_mask: BTreeSet::new(),
+            #[cfg(feature = "map-review")]
+            review_garden_mask: BTreeSet::new(),
+            #[cfg(feature = "map-review")]
+            review_forced_summits: BTreeSet::new(),
         }
     }
 
@@ -236,45 +291,69 @@ pub(crate) fn materialize(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<MaterializedV3World, MaterializationError> {
-    let ValidatedWorldPlan {
-        plan,
-        semantic_fingerprint,
-    } = validated;
+    let profile_started = std::time::Instant::now();
+    let mut profile_previous = profile_started;
+    let semantic_fingerprint = validated.semantic_fingerprint();
     let actual_semantic =
-        semantic_plan_fingerprint(&plan).map_err(MaterializationError::Fingerprint)?;
+        semantic_plan_fingerprint(validated.plan()).map_err(MaterializationError::Fingerprint)?;
     if actual_semantic != semantic_fingerprint {
         return Err(MaterializationError::SemanticFingerprintMismatch {
             expected: semantic_fingerprint,
             actual: actual_semantic,
         });
     }
+    materialization_profile_checkpoint(
+        "semantic verification",
+        profile_started,
+        &mut profile_previous,
+    );
 
     let MaterializedVolume {
         map,
         interiors,
         special_regions,
-    } = plan
+    } = validated
+        .plan()
         .volume
-        .materialize(palette, is_solid)
+        .materialize_admitted(validated.volume_admission(), palette, is_solid)
         .map_err(MaterializationError::Volume)?;
+    materialization_profile_checkpoint("volume projection", profile_started, &mut profile_previous);
 
+    let plan = validated.plan();
     let materialized_liquids = project_liquids(&plan.liquids, &plan.volume)?;
     verify_materialized_consequences(
-        &plan,
+        plan,
         &map,
         &interiors,
         &special_regions,
         &materialized_liquids,
         is_solid,
     )?;
+    materialization_profile_checkpoint(
+        "consequence verification",
+        profile_started,
+        &mut profile_previous,
+    );
 
-    let anchors = project_anchors(&plan.anchors);
-    let blockers = project_blockers(&plan.blockers);
-    let biome_regions = project_biomes(&plan.biome_regions);
-    verify_public_resources(&plan, &anchors, &blockers, &biome_regions)?;
+    let (anchors, observation_anchors) = project_anchors(&plan.anchors, &plan.observation_anchors)?;
+    let blockers = project_blockers(&plan.blockers)?;
+    let biome_regions = project_biomes(&plan.biome_regions)?;
+    materialization_profile_checkpoint("public projection", profile_started, &mut profile_previous);
 
-    let materialized_fingerprint = fingerprint_materialized(&plan, &map, &materialized_liquids)
+    let materialized_fingerprint = fingerprint_materialized(plan, &map, &materialized_liquids)
         .map_err(MaterializationError::Fingerprint)?;
+    materialization_profile_checkpoint(
+        "materialized fingerprint",
+        profile_started,
+        &mut profile_previous,
+    );
+    #[cfg(feature = "map-review")]
+    let review_snow_exception_masks = validated
+        .review_snow_exception_masks()
+        .cloned()
+        .unwrap_or_default();
+    let (plan, admitted_semantic_fingerprint) = validated.into_parts();
+    debug_assert_eq!(semantic_fingerprint, admitted_semantic_fingerprint);
     let view_hint = plan.view_hint;
     let GeneratedWorldPlan {
         features,
@@ -282,16 +361,32 @@ pub(crate) fn materialize(
         lights,
         ..
     } = plan;
+    let features_by_id = features.by_id;
+    #[cfg(feature = "map-review")]
+    let review_protected_routes = features
+        .protected_routes
+        .into_iter()
+        .map(|(name, route)| (name, route.surfaces))
+        .collect();
     let presentation = MapPresentationProjection {
         liquids: materialized_liquids,
-        features: features.by_id,
+        features: features_by_id,
         structures: structures.by_id,
         lights,
+        #[cfg(feature = "map-review")]
+        review_protected_routes,
+        #[cfg(feature = "map-review")]
+        review_frozen_woods_mask: review_snow_exception_masks.frozen_woods,
+        #[cfg(feature = "map-review")]
+        review_garden_mask: review_snow_exception_masks.garden,
+        #[cfg(feature = "map-review")]
+        review_forced_summits: review_snow_exception_masks.forced_summits,
     };
 
     Ok(MaterializedV3World {
         map,
         anchors,
+        observation_anchors,
         special_regions,
         interiors,
         blockers,
@@ -303,27 +398,98 @@ pub(crate) fn materialize(
     })
 }
 
-fn project_anchors(source: &BTreeMap<String, TilePos>) -> MapAnchors {
-    source
-        .iter()
-        .map(|(name, position)| (MapAnchorId::from(name.as_str()), *position))
-        .collect()
+fn materialization_profile_checkpoint(
+    stage: &str,
+    started: std::time::Instant,
+    previous: &mut std::time::Instant,
+) {
+    if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
+        let now = std::time::Instant::now();
+        bevy::log::info!(
+            "v3 materialization profile: {stage}: delta={:?} total={:?}",
+            now.duration_since(*previous),
+            now.duration_since(started)
+        );
+        *previous = now;
+    }
 }
 
-fn project_blockers(source: &BTreeSet<TilePos>) -> TraversalBlockers {
+fn project_anchors(
+    walker: &BTreeMap<String, TilePos>,
+    observation: &BTreeMap<String, TilePos>,
+) -> Result<(MapAnchors, MapObservationAnchors), MaterializationError> {
+    if walker.keys().any(|name| observation.contains_key(name)) {
+        return Err(MaterializationError::Projection(
+            "walker and observation anchor projections contain a duplicate stable identity"
+                .to_owned(),
+        ));
+    }
+
+    let mut projected_walker = MapAnchors::new();
+    for (name, position) in walker {
+        if projected_walker
+            .insert(MapAnchorId::from(name.as_str()), *position)
+            .is_some()
+        {
+            return Err(MaterializationError::Projection(
+                "walker anchor projection contains a duplicate stable identity".to_owned(),
+            ));
+        }
+    }
+    let mut projected_observation = MapObservationAnchors::new();
+    for (name, position) in observation {
+        if projected_observation
+            .insert(MapAnchorId::from(name.as_str()), *position)
+            .is_some()
+        {
+            return Err(MaterializationError::Projection(
+                "observation anchor projection contains a duplicate stable identity".to_owned(),
+            ));
+        }
+    }
+    if projected_walker.len() != walker.len() || projected_observation.len() != observation.len() {
+        return Err(MaterializationError::Projection(
+            "anchor projection cardinality disagrees with its ordered semantic namespaces"
+                .to_owned(),
+        ));
+    }
+    Ok((projected_walker, projected_observation))
+}
+
+fn project_blockers(source: &BTreeSet<TilePos>) -> Result<TraversalBlockers, MaterializationError> {
     let mut projected = TraversalBlockers::new();
     for position in source {
-        let _inserted = projected.insert(*position);
+        if !projected.insert(*position) {
+            return Err(MaterializationError::Projection(format!(
+                "traversal blocker {position:?} was projected more than once"
+            )));
+        }
     }
-    projected
+    if projected.len() != source.len() {
+        return Err(MaterializationError::Projection(
+            "traversal blocker projection cardinality disagrees with semantic blockers".to_owned(),
+        ));
+    }
+    Ok(projected)
 }
 
-fn project_biomes(source: &BTreeMap<TilePos, BiomeRegionId>) -> BiomeRegions {
+fn project_biomes(
+    source: &BTreeMap<TilePos, BiomeRegionId>,
+) -> Result<BiomeRegions, MaterializationError> {
     let mut projected = BiomeRegions::new();
     for (position, region) in source {
-        let _previous = projected.insert(*position, *region);
+        if projected.insert(*position, *region).is_some() {
+            return Err(MaterializationError::Projection(format!(
+                "biome surface {position:?} was projected more than once"
+            )));
+        }
     }
-    projected
+    if projected.len() != source.len() {
+        return Err(MaterializationError::Projection(
+            "biome projection cardinality disagrees with exact semantic membership".to_owned(),
+        ));
+    }
+    Ok(projected)
 }
 
 fn project_liquids(
@@ -391,6 +557,7 @@ fn project_liquids(
 
     Ok(projected)
 }
+
 fn verify_materialized_consequences(
     plan: &GeneratedWorldPlan,
     map: &VoxelMap,
@@ -399,20 +566,36 @@ fn verify_materialized_consequences(
     liquids: &BTreeMap<TilePos, MaterializedLiquidVoxel>,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<(), MaterializationError> {
-    for position in plan.volume.surfaces.keys().copied() {
-        verify_surface(plan, map, position, is_solid)?;
+    // This single ordered pass proves that every admitted semantic surface
+    // survived voxelization with the same substance class and headroom. Later
+    // consequence checks can therefore validate membership against the sealed
+    // plan without repeating materialized column lookups.
+    for (position, metadata) in &plan.volume.surfaces {
+        let headroom = verify_materialized_surface(&plan.volume, map, *position, is_solid)?;
+        if matches!(metadata.access, SurfaceAccess::SpecialMovement(_))
+            && !TraversalProfile::WALKER.admits_surface(true, headroom)
+        {
+            return Err(MaterializationError::Projection(format!(
+                "special-movement surface {position:?} is not ordinary walker footing after materialization"
+            )));
+        }
     }
 
+    // Exact surface membership and materialized geometry were proven above;
+    // these projections still have to prove their independent walker contract.
     for (name, position) in &plan.anchors {
-        verify_walker_surface(plan, map, *position, is_solid, &format!("anchor {name:?}"))?;
+        verify_planned_walker_surface(plan, *position, &format!("anchor {name:?}"))?;
+    }
+    for (name, position) in &plan.observation_anchors {
+        if !plan.volume.surfaces.contains_key(position) {
+            return Err(MaterializationError::Projection(format!(
+                "observation anchor {name:?} at {position:?} is not an exact semantic surface"
+            )));
+        }
+        let _headroom = verify_materialized_surface(&plan.volume, map, *position, is_solid)?;
     }
     for position in &plan.blockers {
-        verify_walker_surface(plan, map, *position, is_solid, "traversal blocker")?;
-    }
-    for (position, metadata) in &plan.volume.surfaces {
-        if matches!(metadata.access, SurfaceAccess::SpecialMovement(_)) {
-            verify_walker_surface(plan, map, *position, is_solid, "special-movement surface")?;
-        }
+        verify_planned_walker_surface(plan, *position, "traversal blocker")?;
     }
 
     for (position, liquid) in liquids {
@@ -441,11 +624,12 @@ fn verify_materialized_consequences(
         }
     }
     for (id, light) in &plan.lights {
-        verify_surface(plan, map, light.origin, is_solid).map_err(|error| {
-            MaterializationError::Projection(format!(
-                "gameplay light {id:?} has an invalid materialized origin: {error}"
-            ))
-        })?;
+        if !plan.volume.surfaces.contains_key(&light.origin) {
+            return Err(MaterializationError::Projection(format!(
+                "gameplay light {id:?} has an invalid materialized origin: {:?} is not an exact semantic surface",
+                light.origin
+            )));
+        }
     }
 
     verify_special_regions(plan, special_regions)?;
@@ -453,36 +637,33 @@ fn verify_materialized_consequences(
     Ok(())
 }
 
-fn verify_surface(
-    plan: &GeneratedWorldPlan,
+fn verify_materialized_surface(
+    volume: &super::volume::VolumePlan,
     map: &VoxelMap,
     position: TilePos,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<Headroom, MaterializationError> {
-    if !plan.volume.surfaces.contains_key(&position) {
-        return Err(MaterializationError::Projection(format!(
-            "{position:?} is not an exact semantic surface"
-        )));
-    }
-    let substance = map.get(position);
+    let materialized_column = map.column(position.coord).ok_or_else(|| {
+        MaterializationError::Projection(format!(
+            "semantic surface {position:?} has no materialized column"
+        ))
+    })?;
+    let substance = materialized_column.get(position.level);
     if !is_solid(substance) {
         return Err(MaterializationError::Projection(format!(
             "semantic surface {position:?} is not solid after materialization"
         )));
     }
-    let materialized = map
-        .column(position.coord)
+    let materialized = materialized_column.headroom_above(position.level.saturating_add(1));
+    let semantic = volume
+        .columns
+        .get(&position.coord)
+        .map(|column| column.headroom_above(position.level.saturating_add(1)))
         .ok_or_else(|| {
             MaterializationError::Projection(format!(
-                "semantic surface {position:?} has no materialized column"
+                "semantic surface {position:?} has no planned headroom"
             ))
-        })?
-        .headroom_above(position.level.saturating_add(1));
-    let semantic = plan.volume.surface_headroom(position).ok_or_else(|| {
-        MaterializationError::Projection(format!(
-            "semantic surface {position:?} has no planned headroom"
-        ))
-    })?;
+        })?;
     if materialized != semantic {
         return Err(MaterializationError::Projection(format!(
             "surface {position:?} headroom changed from {} to {} during materialization",
@@ -492,15 +673,17 @@ fn verify_surface(
     Ok(materialized)
 }
 
-fn verify_walker_surface(
+fn verify_planned_walker_surface(
     plan: &GeneratedWorldPlan,
-    map: &VoxelMap,
     position: TilePos,
-    is_solid: &dyn Fn(SubstanceId) -> bool,
     kind: &str,
 ) -> Result<(), MaterializationError> {
-    let headroom = verify_surface(plan, map, position, is_solid)?;
-    if !TraversalProfile::WALKER.admits_surface(is_solid(map.get(position)), headroom) {
+    let headroom = plan.volume.surface_headroom(position).ok_or_else(|| {
+        MaterializationError::Projection(format!(
+            "{kind} {position:?} is not an exact semantic surface"
+        ))
+    })?;
+    if !TraversalProfile::WALKER.admits_surface(true, headroom) {
         return Err(MaterializationError::Projection(format!(
             "{kind} {position:?} is not ordinary walker footing after materialization"
         )));
@@ -512,17 +695,22 @@ fn verify_special_regions(
     plan: &GeneratedWorldPlan,
     actual: &SpecialMovementRegions,
 ) -> Result<(), MaterializationError> {
-    let expected: BTreeMap<_, _> = plan
+    let expected_count = plan
         .volume
         .surfaces
-        .iter()
-        .filter_map(|(position, metadata)| match metadata.access {
-            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
-            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
-        })
-        .collect();
-    let materialized: BTreeMap<_, _> = actual.iter().collect();
-    if materialized != expected {
+        .values()
+        .filter(|metadata| matches!(metadata.access, SurfaceAccess::SpecialMovement(_)))
+        .count();
+    if actual.len() != expected_count
+        || plan
+            .volume
+            .surfaces
+            .iter()
+            .any(|(position, metadata)| match metadata.access {
+                SurfaceAccess::SpecialMovement(region) => actual.get(*position) != Some(region),
+                SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => false,
+            })
+    {
         return Err(MaterializationError::Projection(
             "special-movement resource disagrees with exact surface metadata".to_owned(),
         ));
@@ -536,77 +724,43 @@ fn verify_interiors(
     map: &VoxelMap,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<(), MaterializationError> {
-    let expected_floors: BTreeMap<_, _> = plan
+    let expected_floor_count = plan
         .interiors
         .by_id
-        .iter()
-        .flat_map(|(region, interior)| {
+        .values()
+        .map(|interior| interior.floors.len())
+        .sum::<usize>();
+    let expected_roof_count = plan
+        .interiors
+        .by_id
+        .values()
+        .map(|interior| interior.roof_voxels.len())
+        .sum::<usize>();
+    if actual.surfaces().count() != expected_floor_count
+        || actual.roof_voxels().count() != expected_roof_count
+        || plan.interiors.by_id.iter().any(|(region, interior)| {
             interior
                 .floors
                 .iter()
-                .copied()
-                .map(|position| (position, *region))
+                .any(|position| actual.get(*position) != Some(*region))
+                || interior
+                    .roof_voxels
+                    .iter()
+                    .any(|position| actual.roof_region(*position) != Some(*region))
         })
-        .collect();
-    let expected_roofs: BTreeMap<_, _> = plan
-        .interiors
-        .by_id
-        .iter()
-        .flat_map(|(region, interior)| {
-            interior
-                .roof_voxels
-                .iter()
-                .copied()
-                .map(|position| (position, *region))
-        })
-        .collect();
-    let materialized_floors: BTreeMap<_, _> = actual.surfaces().collect();
-    let materialized_roofs: BTreeMap<_, _> = actual.roof_voxels().collect();
-    if materialized_floors != expected_floors || materialized_roofs != expected_roofs {
+    {
         return Err(MaterializationError::Projection(
             "interior resource disagrees with exact floor or roof metadata".to_owned(),
         ));
     }
-    for position in expected_floors.keys().copied() {
-        verify_surface(plan, map, position, is_solid)?;
-    }
-    for position in expected_roofs.keys() {
-        if !is_solid(map.get(*position)) {
-            return Err(MaterializationError::Projection(format!(
-                "interior roof voxel {position:?} is not solid after materialization"
-            )));
+    for interior in plan.interiors.by_id.values() {
+        for position in &interior.roof_voxels {
+            if !is_solid(map.get(*position)) {
+                return Err(MaterializationError::Projection(format!(
+                    "interior roof voxel {position:?} is not solid after materialization"
+                )));
+            }
         }
-    }
-    Ok(())
-}
-
-fn verify_public_resources(
-    plan: &GeneratedWorldPlan,
-    anchors: &MapAnchors,
-    blockers: &TraversalBlockers,
-    biome_regions: &BiomeRegions,
-) -> Result<(), MaterializationError> {
-    if anchors.len() != plan.anchors.len()
-        || plan.anchors.iter().any(|(name, position)| {
-            anchors.get(&MapAnchorId::from(name.as_str())) != Some(*position)
-        })
-    {
-        return Err(MaterializationError::Projection(
-            "anchor resource disagrees with the ordered semantic anchors".to_owned(),
-        ));
-    }
-
-    let materialized_blockers: BTreeSet<_> = blockers.iter().collect();
-    if materialized_blockers != plan.blockers {
-        return Err(MaterializationError::Projection(
-            "traversal blocker resource disagrees with semantic blockers".to_owned(),
-        ));
-    }
-    let materialized_biomes: BTreeMap<_, _> = biome_regions.iter().collect();
-    if materialized_biomes != plan.biome_regions {
-        return Err(MaterializationError::Projection(
-            "biome resource disagrees with exact semantic membership".to_owned(),
-        ));
     }
     Ok(())
 }
@@ -616,11 +770,19 @@ fn fingerprint_materialized(
     map: &VoxelMap,
     liquids: &BTreeMap<TilePos, MaterializedLiquidVoxel>,
 ) -> Result<u64, String> {
-    let mut encoder = FingerprintEncoder::new();
+    let capacity = materialized_fingerprint_capacity_hint(plan, map)?;
+    let mut encoder = FingerprintEncoder::with_capacity(capacity);
     encoder.u32(3);
 
+    // Conditional for legacy stability: only schematic-compiled worlds carry the
+    // complete coarse-plan identity into their materialized map fingerprint.
+    if let Some(source) = plan.source_schematic_fingerprint {
+        encoder.tag(255);
+        encoder.u64(source);
+    }
+
     encoder.tag(0);
-    encode_voxel_map(&mut encoder, map)?;
+    encode_voxel_map(&mut encoder, map, &plan.volume)?;
 
     encoder.tag(1);
     encoder.collection_count(plan.anchors.len())?;
@@ -628,18 +790,17 @@ fn fingerprint_materialized(
         encoder.str(name)?;
         encoder.tile_pos(*position);
     }
+    if !plan.observation_anchors.is_empty() {
+        encoder.tag(254);
+        encoder.collection_count(plan.observation_anchors.len())?;
+        for (name, position) in &plan.observation_anchors {
+            encoder.str(name)?;
+            encoder.tile_pos(*position);
+        }
+    }
 
     encoder.tag(2);
-    let special: BTreeMap<_, _> = plan
-        .volume
-        .surfaces
-        .iter()
-        .filter_map(|(position, metadata)| match metadata.access {
-            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
-            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
-        })
-        .collect();
-    encode_special_regions(&mut encoder, &special)?;
+    encode_projected_special_regions(&mut encoder, plan)?;
 
     encoder.tag(3);
     encode_projected_interiors(&mut encoder, plan)?;
@@ -669,10 +830,69 @@ fn fingerprint_materialized(
     Ok(encoder.finish_materialized_world())
 }
 
-fn encode_voxel_map(encoder: &mut FingerprintEncoder, map: &VoxelMap) -> Result<(), String> {
-    let columns: BTreeMap<HexCoord, _> = map.columns().collect();
-    encoder.collection_count(columns.len())?;
-    for (coord, column) in columns {
+fn materialized_fingerprint_capacity_hint(
+    plan: &GeneratedWorldPlan,
+    map: &VoxelMap,
+) -> Result<usize, String> {
+    const ENCODED_COLUMN_BYTES: usize = 12 + 8;
+    const ENCODED_VOXEL_BYTES: usize = 16 + 2;
+    const ENCODED_BIOME_BYTES: usize = 16 + 4;
+
+    // These are the dominant collections in a large schematic world. Reserving
+    // them plus bounded headroom avoids repeatedly copying a tens-of-megabytes
+    // payload as `Vec` grows. The remaining projections may use some or all of
+    // the headroom; an underestimate affects capacity only, never encoded bytes.
+    let dominant = map
+        .columns()
+        .try_fold(0_usize, |encoded, (_coord, column)| {
+            let voxels = column
+                .iter()
+                .len()
+                .checked_mul(ENCODED_VOXEL_BYTES)
+                .ok_or_else(|| {
+                    "materialized voxel fingerprint capacity exceeds usize".to_owned()
+                })?;
+            encoded
+                .checked_add(ENCODED_COLUMN_BYTES)
+                .and_then(|encoded| encoded.checked_add(voxels))
+                .ok_or_else(|| "materialized voxel fingerprint capacity exceeds usize".to_owned())
+        })?;
+    let biome_bytes = plan
+        .biome_regions
+        .len()
+        .checked_mul(ENCODED_BIOME_BYTES)
+        .ok_or_else(|| "materialized biome fingerprint capacity exceeds usize".to_owned())?;
+    let lower_bound = dominant
+        .checked_add(biome_bytes)
+        .and_then(|encoded| encoded.checked_add(256))
+        .ok_or_else(|| "materialized fingerprint capacity exceeds usize".to_owned())?;
+    lower_bound
+        .checked_add(lower_bound / 4)
+        .ok_or_else(|| "materialized fingerprint capacity headroom exceeds usize".to_owned())
+}
+
+fn encode_voxel_map(
+    encoder: &mut FingerprintEncoder,
+    map: &VoxelMap,
+    volume: &super::volume::VolumePlan,
+) -> Result<(), String> {
+    if map.len() != volume.columns.len() {
+        return Err(format!(
+            "materialized voxel map has {} columns but the admitted volume has {}",
+            map.len(),
+            volume.columns.len()
+        ));
+    }
+
+    encoder.collection_count(volume.columns.len())?;
+    // The admitted volume supplies canonical coordinate order without rebuilding
+    // the chunk-native map as a temporary `BTreeMap`. Equal cardinality plus an
+    // exact lookup for every admitted key also proves that the live map has no
+    // missing or extra column.
+    for coord in volume.columns.keys().copied() {
+        let column = map.column(coord).ok_or_else(|| {
+            format!("materialized voxel map is missing admitted column {coord:?}")
+        })?;
         encoder.hex_coord(coord);
         encoder.collection_count(column.iter().len())?;
         for (index, substance) in column.iter().enumerate() {
@@ -685,14 +905,22 @@ fn encode_voxel_map(encoder: &mut FingerprintEncoder, map: &VoxelMap) -> Result<
     Ok(())
 }
 
-fn encode_special_regions(
+fn encode_projected_special_regions(
     encoder: &mut FingerprintEncoder,
-    regions: &BTreeMap<TilePos, SpecialMovementRegion>,
+    plan: &GeneratedWorldPlan,
 ) -> Result<(), String> {
-    encoder.collection_count(regions.len())?;
-    for (position, region) in regions {
-        encoder.tile_pos(*position);
-        encoder.u32(region.0);
+    let count = plan
+        .volume
+        .surfaces
+        .values()
+        .filter(|metadata| matches!(metadata.access, SurfaceAccess::SpecialMovement(_)))
+        .count();
+    encoder.collection_count(count)?;
+    for (position, metadata) in &plan.volume.surfaces {
+        if let SurfaceAccess::SpecialMovement(region) = metadata.access {
+            encoder.tile_pos(*position);
+            encoder.u32(region.0);
+        }
     }
     Ok(())
 }
@@ -701,42 +929,56 @@ fn encode_projected_interiors(
     encoder: &mut FingerprintEncoder,
     plan: &GeneratedWorldPlan,
 ) -> Result<(), String> {
-    let floors: BTreeMap<_, _> = plan
-        .interiors
-        .by_id
-        .iter()
-        .flat_map(|(region, interior)| {
-            interior
-                .floors
-                .iter()
-                .copied()
-                .map(|position| (position, *region))
-        })
-        .collect();
-    let roofs: BTreeMap<_, _> = plan
-        .interiors
-        .by_id
-        .iter()
-        .flat_map(|(region, interior)| {
-            interior
-                .roof_voxels
-                .iter()
-                .copied()
-                .map(|position| (position, *region))
-        })
-        .collect();
-    encode_interior_membership(encoder, &floors)?;
-    encode_interior_membership(encoder, &roofs)
-}
+    let floor_count = plan
+        .volume
+        .surfaces
+        .values()
+        .filter(|metadata| metadata.interior.is_some())
+        .count();
+    encoder.collection_count(floor_count)?;
+    for (position, metadata) in &plan.volume.surfaces {
+        if let Some(region) = metadata.interior {
+            encoder.tile_pos(*position);
+            encoder.u32(region.0);
+        }
+    }
 
-fn encode_interior_membership(
-    encoder: &mut FingerprintEncoder,
-    membership: &BTreeMap<TilePos, InteriorRegionId>,
-) -> Result<(), String> {
-    encoder.collection_count(membership.len())?;
-    for (position, region) in membership {
-        encoder.tile_pos(*position);
-        encoder.u32(region.0);
+    let roof_count = plan
+        .volume
+        .columns
+        .values()
+        .flat_map(|column| &column.elements)
+        .filter_map(|element| match *element {
+            VolumeElement::Solid(mass) if mass.cutaway_for.is_some() => Some(mass.levels),
+            VolumeElement::Solid(_) | VolumeElement::Fill(_) => None,
+        })
+        .try_fold(0_usize, |count, levels| {
+            let run_length = levels.top.checked_sub(levels.bottom).ok_or_else(|| {
+                format!(
+                    "interior roof run {:?}..{:?} overflows its exact level difference",
+                    levels.bottom, levels.top
+                )
+            })?;
+            let run_count = usize::try_from(run_length)
+                .map_err(|error| format!("interior roof run exceeds usize: {error}"))?;
+            count
+                .checked_add(run_count)
+                .ok_or_else(|| "interior roof voxel count exceeds usize".to_owned())
+        })?;
+    encoder.collection_count(roof_count)?;
+    for (coord, column) in &plan.volume.columns {
+        for element in &column.elements {
+            let VolumeElement::Solid(mass) = *element else {
+                continue;
+            };
+            let Some(region) = mass.cutaway_for else {
+                continue;
+            };
+            for level in mass.levels.bottom..mass.levels.top {
+                encoder.tile_pos(TilePos::new(*coord, level));
+                encoder.u32(region.0);
+            }
+        }
     }
     Ok(())
 }
@@ -865,6 +1107,7 @@ mod tests {
         SurfaceMetadata, VolumeElement, VolumePlan,
     };
     use crate::procedural_v3::world::{FeaturePlan, InteriorPlan, PlannedInterior, StructurePlan};
+    use hex_core::{HexCoord, InteriorRegionId, SpecialMovementRegion};
 
     fn palette() -> TerrainPalette {
         TerrainPalette {
@@ -1244,6 +1487,7 @@ mod tests {
         let roof = TilePos::new(anchor_coord, 3);
 
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan {
@@ -1319,21 +1563,31 @@ mod tests {
                 )]),
             },
             anchors: BTreeMap::from([("party_start".to_owned(), anchor)]),
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((0.0, 20.0, 20.0), (0.0, 1.0, 0.0)),
         }
     }
 
     fn validated(plan: GeneratedWorldPlan) -> ValidatedWorldPlan {
-        assert!(
-            plan.validate().is_empty(),
-            "the materialization fixture must satisfy common validation"
-        );
-        let semantic_fingerprint =
-            semantic_plan_fingerprint(&plan).expect("the fixture fingerprint is finite");
-        ValidatedWorldPlan {
-            plan,
-            semantic_fingerprint,
-        }
+        ValidatedWorldPlan::validate_complete(plan)
+            .and_then(super::super::selection::CompleteWorldAdmission::fingerprint)
+            .expect("the materialization fixture must satisfy complete-world admission")
+    }
+
+    #[test]
+    fn invalid_volume_cannot_obtain_materialization_admission() {
+        let mut plan = valid_plan(5);
+        let _removed = plan
+            .volume
+            .columns
+            .pop_first()
+            .expect("the fixture has a generated column");
+
+        let error = ValidatedWorldPlan::validate_complete(plan)
+            .expect_err("incomplete volume coverage must fail before materialization");
+        assert!(error
+            .to_string()
+            .contains("volume columns do not exactly cover the mask"));
     }
 
     #[test]
@@ -1359,6 +1613,59 @@ mod tests {
         assert_eq!(output.presentation.features.len(), 2);
         assert_eq!(output.presentation.structures.len(), 1);
         assert_eq!(output.presentation.lights.len(), 1);
+    }
+
+    #[test]
+    fn observation_anchor_materializes_on_an_exact_nonstandable_surface() {
+        let mut plan = valid_plan(5);
+        let observation = plan
+            .volume
+            .surfaces
+            .iter()
+            .find_map(|(position, metadata)| {
+                (metadata.access == SurfaceAccess::NonStandable).then_some(*position)
+            })
+            .expect("the fixture contains one exact nonstandable waterbed");
+        plan.observation_anchors
+            .insert("review.waterbed".to_owned(), observation);
+
+        let output = materialize(validated(plan), &palette(), &is_solid)
+            .expect("an exact observation surface materializes without walker admission");
+        assert!(output
+            .anchors
+            .get(&MapAnchorId::from("review.waterbed"))
+            .is_none());
+        assert_eq!(
+            output
+                .observation_anchors
+                .get(&MapAnchorId::from("review.waterbed")),
+            Some(observation)
+        );
+        assert!(output
+            .anchors
+            .get(&MapAnchorId::from("party_start"))
+            .is_some());
+    }
+
+    #[test]
+    fn anchor_projection_keeps_both_namespaces_separate_and_rejects_collisions() {
+        let walker = BTreeMap::from([("party_start".to_owned(), TilePos::ORIGIN)]);
+        let observation = BTreeMap::from([(
+            "review.target".to_owned(),
+            TilePos::new(HexCoord::ORIGIN, 6),
+        )]);
+        let (projected_walker, projected_observation) = project_anchors(&walker, &observation)
+            .expect("disjoint walker and observation names project separately");
+        assert_eq!(projected_walker.len(), 1);
+        assert_eq!(projected_observation.len(), 1);
+
+        let collision =
+            BTreeMap::from([("party_start".to_owned(), TilePos::new(HexCoord::ORIGIN, 6))]);
+        assert!(matches!(
+            project_anchors(&walker, &collision),
+            Err(MaterializationError::Projection(message))
+                if message.contains("duplicate stable identity")
+        ));
     }
 
     #[test]
@@ -1457,6 +1764,31 @@ mod tests {
     }
 
     #[test]
+    fn materialized_fingerprint_conditionally_covers_observation_anchors() {
+        let baseline = materialize(validated(valid_plan(5)), &palette(), &is_solid)
+            .expect("the baseline world materializes");
+        let mut plan = valid_plan(5);
+        let observation = plan
+            .volume
+            .surfaces
+            .iter()
+            .find_map(|(position, metadata)| {
+                (metadata.access == SurfaceAccess::NonStandable).then_some(*position)
+            })
+            .expect("the fixture contains one exact nonstandable waterbed");
+        plan.observation_anchors
+            .insert("review.waterbed".to_owned(), observation);
+        let observed = materialize(validated(plan), &palette(), &is_solid)
+            .expect("the observation world materializes");
+
+        assert_ne!(baseline.semantic_fingerprint, observed.semantic_fingerprint);
+        assert_ne!(
+            baseline.materialized_fingerprint,
+            observed.materialized_fingerprint
+        );
+    }
+
+    #[test]
     fn body_identity_changes_semantics_without_changing_materialized_voxels() {
         let first = materialize(validated(valid_plan(5)), &palette(), &is_solid)
             .expect("the first world materializes");
@@ -1492,7 +1824,7 @@ mod tests {
 
     #[test]
     fn forged_unstandable_anchor_is_rejected_by_materialized_cross_check() {
-        let mut plan = valid_plan(5);
+        let plan = valid_plan(5);
         let waterbed = plan
             .volume
             .surfaces
@@ -1501,13 +1833,13 @@ mod tests {
                 (metadata.access == SurfaceAccess::NonStandable).then_some(*position)
             })
             .expect("the fixture contains a waterbed");
-        plan.anchors.insert("party_start".to_owned(), waterbed);
-        let semantic_fingerprint =
-            semantic_plan_fingerprint(&plan).expect("the forged plan remains encodable");
-        let selected = ValidatedWorldPlan {
-            plan,
-            semantic_fingerprint,
-        };
+        let mut selected = validated(plan);
+        selected
+            .plan
+            .anchors
+            .insert("party_start".to_owned(), waterbed);
+        selected.semantic_fingerprint = semantic_plan_fingerprint(&selected.plan)
+            .expect("the deliberately forged test plan remains encodable");
 
         let error = materialize(selected, &palette(), &is_solid)
             .expect_err("an anchor without walker headroom must fail");

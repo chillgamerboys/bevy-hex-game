@@ -35,7 +35,7 @@ use crate::{
 
 /// Project-owned schema material not visible to Replicon's type/order hashing.
 pub const PROTOCOL_SCHEMA_TAG: &str =
-    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;ordered-player-knowledge-v1;run-level-liquid-flow;shipped-projection-524288;visible-archetype-v1;explicit-host-map-ready;system-boundary-sequence;explicit-session-launch-kind-v1;campaign-save-status-v2";
+    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;ordered-player-knowledge-v1;run-level-liquid-flow;shipped-projection-524288;visible-archetype-v1;explicit-host-map-ready;system-boundary-sequence;explicit-session-launch-kind-v1;campaign-save-status-v2;world-columns-131072";
 
 /// Monotonic ordering assigned by the simulation authority.
 #[derive(

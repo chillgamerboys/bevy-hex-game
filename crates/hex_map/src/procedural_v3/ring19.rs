@@ -33,7 +33,7 @@ use super::V3GenerationError;
 use crate::procedural::Ring19Metrics as Ring19ReportMetrics;
 use crate::settings::{
     ProceduralV3Settings, Ring19RegionSettings, V3EnvironmentSettings, V3LayoutSettings,
-    V3RecipeSettings, V3Ring19Settings, V3_RING19_REGION_COUNT,
+    V3RecipeSettings, V3Ring19ProfileSettings, V3Ring19Settings, V3_RING19_REGION_COUNT,
 };
 
 const RING_RADIUS: u32 = 55;
@@ -54,11 +54,21 @@ const MOUNTAIN_WATERFALL_OVERLOOK: &str = "mountain_waterfall_overlook";
 const CONFLUENCE_OVERLOOK: &str = "confluence_overlook";
 const VEGETATION_GRADIENT_OVERLOOK: &str = "vegetation_gradient_overlook";
 const FORT_OUTLET_OVERLOOK: &str = "fort_outlet_overlook";
+const OASIS_OVERLOOK: &str = "oasis_overlook";
+const INNER_DUNE_CREST: &str = "inner_dune_crest";
+const OUTER_DUNE_CREST: &str = "outer_dune_crest";
+const DESERT_PLAIN_OVERLOOK: &str = "desert_plain_overlook";
 const REVIEW_ANCHORS: [&str; 4] = [
     MOUNTAIN_WATERFALL_OVERLOOK,
     CONFLUENCE_OVERLOOK,
     VEGETATION_GRADIENT_OVERLOOK,
     FORT_OUTLET_OVERLOOK,
+];
+const DESERT_REVIEW_ANCHORS: [&str; 4] = [
+    OASIS_OVERLOOK,
+    INNER_DUNE_CREST,
+    OUTER_DUNE_CREST,
+    DESERT_PLAIN_OVERLOOK,
 ];
 const LEGACY_RING19_VIEW_FRAME: f32 = 196.0;
 const RING19_VIEW_EYE_UP: f32 = 0.72;
@@ -219,6 +229,9 @@ const FIXED_REGIONS: [FixedRegion; V3_RING19_REGION_COUNT] = [
     FixedRegion::new("Mountains C", V3EnvironmentSettings::Frozen, "Mountains", 0),
 ];
 
+const DESERT_FIXED_ROTATIONS: [u8; V3_RING19_REGION_COUNT] =
+    [0, 0, 1, 2, 3, 4, 5, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0];
+
 const INTERNAL_HYDROLOGY: [(u32, u32, Level); 8] = [
     (16, 5, 29),
     (5, 0, 16),
@@ -316,7 +329,7 @@ fn generate_with_options(
     let ring = validate_recipe_settings(settings)?;
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
-    validate_resolved_layout(&layout)?;
+    validate_resolved_layout(&layout, ring.profile)?;
     let patch_by_coord = resolved_patch_index(&layout)?;
     let cave_vegetation = CaveVegetationSet::resolve(art_catalog, "Ring19 Caves")
         .map_err(V3GenerationError::RecipeContract)?;
@@ -375,7 +388,7 @@ impl V3Recipe for Ring19Recipe<'_> {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_ring19(plan, &self.patch_by_coord)
+        validate_ring19(plan, &self.patch_by_coord, self.settings.profile)
     }
 
     fn repair(
@@ -430,57 +443,7 @@ impl Ring19Recipe<'_> {
             self.layout.clone(),
             fragments,
             WorldCompositionSettings {
-                canonical_anchors: BTreeMap::from([
-                    (
-                        PARTY_START.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(0),
-                            local_name: PARTY_START.to_owned(),
-                        },
-                    ),
-                    (
-                        HOSTILE_START.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(0),
-                            local_name: HOSTILE_START.to_owned(),
-                        },
-                    ),
-                    (
-                        CONFLICT_CENTER.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(0),
-                            local_name: CONFLICT_CENTER.to_owned(),
-                        },
-                    ),
-                    (
-                        MOUNTAIN_WATERFALL_OVERLOOK.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(16),
-                            local_name: "stream_fall_overlook".to_owned(),
-                        },
-                    ),
-                    (
-                        CONFLUENCE_OVERLOOK.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(0),
-                            local_name: CONFLICT_CENTER.to_owned(),
-                        },
-                    ),
-                    (
-                        VEGETATION_GRADIENT_OVERLOOK.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(2),
-                            local_name: "prairie_overlook".to_owned(),
-                        },
-                    ),
-                    (
-                        FORT_OUTLET_OVERLOOK.to_owned(),
-                        PatchAnchorRef {
-                            patch: PatchId(12),
-                            local_name: "fall_overlook".to_owned(),
-                        },
-                    ),
-                ]),
+                canonical_anchors: canonical_anchors(self.settings.profile),
                 view_hint,
             },
         )
@@ -529,6 +492,51 @@ impl Ring19Recipe<'_> {
     }
 }
 
+fn canonical_anchors(profile: V3Ring19ProfileSettings) -> BTreeMap<String, PatchAnchorRef> {
+    match profile {
+        V3Ring19ProfileSettings::TwoRings => BTreeMap::from([
+            (PARTY_START.to_owned(), anchor_ref(0, PARTY_START)),
+            (HOSTILE_START.to_owned(), anchor_ref(0, HOSTILE_START)),
+            (CONFLICT_CENTER.to_owned(), anchor_ref(0, CONFLICT_CENTER)),
+            (
+                MOUNTAIN_WATERFALL_OVERLOOK.to_owned(),
+                anchor_ref(16, "stream_fall_overlook"),
+            ),
+            (
+                CONFLUENCE_OVERLOOK.to_owned(),
+                anchor_ref(0, CONFLICT_CENTER),
+            ),
+            (
+                VEGETATION_GRADIENT_OVERLOOK.to_owned(),
+                anchor_ref(2, "prairie_overlook"),
+            ),
+            (
+                FORT_OUTLET_OVERLOOK.to_owned(),
+                anchor_ref(12, "fall_overlook"),
+            ),
+        ]),
+        V3Ring19ProfileSettings::DesertOasis => BTreeMap::from([
+            (PARTY_START.to_owned(), anchor_ref(0, PARTY_START)),
+            (HOSTILE_START.to_owned(), anchor_ref(18, HOSTILE_START)),
+            (CONFLICT_CENTER.to_owned(), anchor_ref(0, OASIS_OVERLOOK)),
+            (OASIS_OVERLOOK.to_owned(), anchor_ref(0, OASIS_OVERLOOK)),
+            (INNER_DUNE_CREST.to_owned(), anchor_ref(1, "dune_crest")),
+            (OUTER_DUNE_CREST.to_owned(), anchor_ref(7, "dune_crest")),
+            (
+                DESERT_PLAIN_OVERLOOK.to_owned(),
+                anchor_ref(8, DESERT_PLAIN_OVERLOOK),
+            ),
+        ]),
+    }
+}
+
+fn anchor_ref(patch: u32, local_name: &str) -> PatchAnchorRef {
+    PatchAnchorRef {
+        patch: PatchId(patch),
+        local_name: local_name.to_owned(),
+    }
+}
+
 fn contextualize_fragment_issues(
     id: PatchId,
     region: &Ring19RegionSettings,
@@ -555,12 +563,18 @@ fn validate_recipe_settings(
     let V3LayoutSettings::Ring19(ring) = &settings.layout else {
         return Err(V3GenerationError::RecipeUnavailable("Ring19"));
     };
-    ring.validate_two_rings_contract()
-        .map_err(V3GenerationError::RecipeContract)?;
+    match ring.profile {
+        V3Ring19ProfileSettings::TwoRings => ring.validate_two_rings_contract(),
+        V3Ring19ProfileSettings::DesertOasis => ring.validate_desert_oasis_contract(),
+    }
+    .map_err(V3GenerationError::RecipeContract)?;
     Ok(ring)
 }
 
-fn validate_resolved_layout(layout: &ResolvedLayoutPlan) -> Result<(), V3GenerationError> {
+fn validate_resolved_layout(
+    layout: &ResolvedLayoutPlan,
+    profile: V3Ring19ProfileSettings,
+) -> Result<(), V3GenerationError> {
     if layout.kind != LayoutKind::Ring19
         || layout.grid_radius != RING_RADIUS
         || count_u32(layout.footprint.len()) != WORLD_COLUMNS
@@ -583,22 +597,36 @@ fn validate_resolved_layout(layout: &ResolvedLayoutPlan) -> Result<(), V3Generat
             "Ring19 resolved {boundary_sides} outer boundary sides instead of {BOUNDARY_SIDES}"
         )));
     }
-    for (index, expected) in FIXED_REGIONS.into_iter().enumerate() {
+    for index in 0..V3_RING19_REGION_COUNT {
         let id = PatchId(u32::try_from(index).unwrap_or(u32::MAX));
         let Some(patch) = layout.patches.get(&id) else {
             return Err(V3GenerationError::RecipeContract(format!(
                 "Ring19 resolved layout is missing patch {index}"
             )));
         };
-        if patch.biome_region != BiomeRegionId(id.0)
-            || patch.rotation_turns != expected.rotation_turns
-        {
-            return Err(V3GenerationError::RecipeContract(format!(
-                "Ring19 patch {index} identity/rotation disagrees with its fixed slot"
-            )));
+        let expected_rotation = fixed_rotation(profile, index).unwrap_or_default();
+        if patch.biome_region != BiomeRegionId(id.0) || patch.rotation_turns != expected_rotation {
+            let detail = match profile {
+                V3Ring19ProfileSettings::TwoRings => {
+                    format!("Ring19 patch {index} identity/rotation disagrees with its fixed slot")
+                }
+                V3Ring19ProfileSettings::DesertOasis => format!(
+                    "Ring19 DesertOasis patch {index} identity/rotation disagrees with its fixed slot"
+                ),
+            };
+            return Err(V3GenerationError::RecipeContract(detail));
         }
     }
-    validate_resolved_hydrology(layout)
+    validate_resolved_hydrology(layout, profile)
+}
+
+fn fixed_rotation(profile: V3Ring19ProfileSettings, index: usize) -> Option<u8> {
+    match profile {
+        V3Ring19ProfileSettings::TwoRings => {
+            FIXED_REGIONS.get(index).map(|region| region.rotation_turns)
+        }
+        V3Ring19ProfileSettings::DesertOasis => DESERT_FIXED_ROTATIONS.get(index).copied(),
+    }
 }
 
 fn resolved_patch_index(
@@ -623,12 +651,19 @@ fn resolved_patch_index(
     Ok(index)
 }
 
-fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3GenerationError> {
+fn validate_resolved_hydrology(
+    layout: &ResolvedLayoutPlan,
+    profile: V3Ring19ProfileSettings,
+) -> Result<(), V3GenerationError> {
+    let (preferred, minimum, maximum) = match profile {
+        V3Ring19ProfileSettings::TwoRings => (17, 16, 18),
+        V3Ring19ProfileSettings::DesertOasis => (17, 15, 19),
+    };
     let mut actual_internal = BTreeSet::new();
     for edge in layout.shared_edges.values() {
-        if edge.elevation.preferred != 17
-            || edge.elevation.min != 16
-            || edge.elevation.max != 18
+        if edge.elevation.preferred != preferred
+            || edge.elevation.min != minimum
+            || edge.elevation.max != maximum
             || edge.walker.count != WALKER_PORT_COUNT
             || edge.walker.width != WALKER_PORT_WIDTH
             || edge.walker.ports.len() != usize::from(WALKER_PORT_COUNT)
@@ -636,6 +671,13 @@ fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
         {
             return Err(V3GenerationError::RecipeContract(
                 "Ring19 resolved a seam outside its fixed walker authority".to_owned(),
+            ));
+        }
+        if profile == V3Ring19ProfileSettings::DesertOasis
+            && !matches!(edge.liquid, ResolvedLiquidPort::Dry)
+        {
+            return Err(V3GenerationError::RecipeContract(
+                "Ring19 DesertOasis requires every reciprocal seam to remain dry".to_owned(),
             ));
         }
         let ResolvedLiquidPort::Directed {
@@ -654,10 +696,13 @@ fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
         };
         actual_internal.insert((source.0, sink.0, count_u32(port.lanes.len()), *level));
     }
-    let expected_internal = INTERNAL_HYDROLOGY
-        .into_iter()
-        .map(|(source, sink, level)| (source, sink, SEAM_PORT_WIDTH, level))
-        .collect::<BTreeSet<_>>();
+    let expected_internal = match profile {
+        V3Ring19ProfileSettings::TwoRings => INTERNAL_HYDROLOGY
+            .into_iter()
+            .map(|(source, sink, level)| (source, sink, SEAM_PORT_WIDTH, level))
+            .collect::<BTreeSet<_>>(),
+        V3Ring19ProfileSettings::DesertOasis => BTreeSet::new(),
+    };
     if actual_internal != expected_internal {
         return Err(V3GenerationError::RecipeContract(format!(
             "Ring19 resolved internal hydrology differs from its fixed graph: \
@@ -679,19 +724,22 @@ fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
             )
         })
         .collect::<BTreeSet<_>>();
-    let expected_boundary = BOUNDARY_HYDROLOGY
-        .into_iter()
-        .map(|(source, side, level, _)| {
-            (
-                source,
-                side,
-                SEAM_PORT_WIDTH,
-                level,
-                SEAM_APPROACH_DEPTH,
-                true,
-            )
-        })
-        .collect::<BTreeSet<_>>();
+    let expected_boundary = match profile {
+        V3Ring19ProfileSettings::TwoRings => BOUNDARY_HYDROLOGY
+            .into_iter()
+            .map(|(source, side, level, _)| {
+                (
+                    source,
+                    side,
+                    SEAM_PORT_WIDTH,
+                    level,
+                    SEAM_APPROACH_DEPTH,
+                    true,
+                )
+            })
+            .collect::<BTreeSet<_>>(),
+        V3Ring19ProfileSettings::DesertOasis => BTreeSet::new(),
+    };
     if actual_boundary != expected_boundary {
         return Err(V3GenerationError::RecipeContract(format!(
             "Ring19 resolved boundary hydrology differs from its fixed outlets: \
@@ -704,11 +752,12 @@ fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
 fn validate_ring19(
     plan: &GeneratedWorldPlan,
     patch_by_coord: &BTreeMap<HexCoord, PatchId>,
+    profile: V3Ring19ProfileSettings,
 ) -> WorldValidation<Ring19Metrics> {
     // The common runner admits this callback only after `GeneratedWorldPlan::validate`.
     // Keeping layout-specific checks here avoids a third full scan of 9,241 columns.
     let mut issues = Vec::new();
-    if let Err(error) = validate_resolved_layout(&plan.layout) {
+    if let Err(error) = validate_resolved_layout(&plan.layout, profile) {
         issues.push(recipe_issue(error.to_string()));
     }
 
@@ -751,7 +800,7 @@ fn validate_ring19(
         ));
     }
     let distances = ordinary.distances_from(party);
-    for name in REVIEW_ANCHORS {
+    for &name in review_anchors(profile) {
         match plan.anchors.get(name).copied() {
             Some(position) if ordinary.contains(position) && distances.contains_key(&position) => {}
             Some(position) => issues.push(recipe_issue(format!(
@@ -872,18 +921,34 @@ fn validate_ring19(
     }
 
     let liquid_metrics = validate_routed_liquids(plan, patch_by_coord, &mut issues);
-    if liquid_metrics.internal_seams != INTERNAL_LIQUID_SEAMS {
-        issues.push(recipe_issue(format!(
-            "Ring19 realizes {} directed liquid seams instead of {INTERNAL_LIQUID_SEAMS}",
-            liquid_metrics.internal_seams
-        )));
+    let (expected_internal_liquid_seams, expected_boundary_liquid_outlets) =
+        expected_hydrology_counts(profile);
+    if liquid_metrics.internal_seams != expected_internal_liquid_seams {
+        let detail = match profile {
+            V3Ring19ProfileSettings::TwoRings => format!(
+                "Ring19 realizes {} directed liquid seams instead of {INTERNAL_LIQUID_SEAMS}",
+                liquid_metrics.internal_seams
+            ),
+            V3Ring19ProfileSettings::DesertOasis => format!(
+                "Ring19 DesertOasis realizes {} directed liquid seams instead of 0",
+                liquid_metrics.internal_seams
+            ),
+        };
+        issues.push(recipe_issue(detail));
     }
-    if liquid_metrics.boundary_outlets != BOUNDARY_LIQUID_OUTLETS {
-        issues.push(recipe_issue(format!(
-            "Ring19 realizes {} boundary liquid outlets instead of \
-             {BOUNDARY_LIQUID_OUTLETS}",
-            liquid_metrics.boundary_outlets
-        )));
+    if liquid_metrics.boundary_outlets != expected_boundary_liquid_outlets {
+        let detail = match profile {
+            V3Ring19ProfileSettings::TwoRings => format!(
+                "Ring19 realizes {} boundary liquid outlets instead of \
+                 {BOUNDARY_LIQUID_OUTLETS}",
+                liquid_metrics.boundary_outlets
+            ),
+            V3Ring19ProfileSettings::DesertOasis => format!(
+                "Ring19 DesertOasis realizes {} boundary liquid outlets instead of 0",
+                liquid_metrics.boundary_outlets
+            ),
+        };
+        issues.push(recipe_issue(detail));
     }
 
     let reachable_levels = distances
@@ -941,6 +1006,20 @@ fn validate_ring19(
         })
     } else {
         WorldValidation::Invalid(issues)
+    }
+}
+
+fn review_anchors(profile: V3Ring19ProfileSettings) -> &'static [&'static str] {
+    match profile {
+        V3Ring19ProfileSettings::TwoRings => &REVIEW_ANCHORS,
+        V3Ring19ProfileSettings::DesertOasis => &DESERT_REVIEW_ANCHORS,
+    }
+}
+
+const fn expected_hydrology_counts(profile: V3Ring19ProfileSettings) -> (u32, u32) {
+    match profile {
+        V3Ring19ProfileSettings::TwoRings => (INTERNAL_LIQUID_SEAMS, BOUNDARY_LIQUID_OUTLETS),
+        V3Ring19ProfileSettings::DesertOasis => (0, 0),
     }
 }
 
@@ -1470,6 +1549,12 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
         V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
+        V3RecipeSettings::DesertTransition(_) => "DesertTransition",
+        V3RecipeSettings::DesertPlain(_) => "DesertPlain",
+        V3RecipeSettings::Dunes(_) => "Dunes",
+        V3RecipeSettings::Oasis(_) => "Oasis",
+        V3RecipeSettings::SandyIslets(_) => "SandyIslets",
+        V3RecipeSettings::WoodedIsland(_) => "WoodedIsland",
     }
 }
 
@@ -1482,7 +1567,7 @@ mod tests {
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
-    use super::super::{deep_forest, prairie, vegetation_landform};
+    use super::super::{deep_forest, desert_vegetation, prairie, vegetation_landform};
     use super::*;
     use crate::procedural_v3::liquid::LiquidPlan;
     use crate::procedural_v3::volume::{
@@ -1490,7 +1575,11 @@ mod tests {
         VolumeElement, VolumePlan,
     };
     use crate::procedural_v3::world::{FeaturePlan, InteriorPlan, StructurePlan};
-    use crate::settings::{ring19_region_coord, MapSettings, ProceduralSettings, TerrainSettings};
+    use crate::settings::{
+        ring19_region_coord, EdgeElevationSettings, EdgeLiquidSettings, MapSettings,
+        ProceduralSettings, SharedEdgeSettings, TerrainSettings, V3DesertPlainSettings,
+        V3DunesSettings, V3OasisSettings, WalkerPortSettings,
+    };
 
     fn assert_view_hint_close(actual: MapViewHint, expected: MapViewHint) {
         for (actual, expected) in [
@@ -1545,6 +1634,66 @@ mod tests {
                 .max(source.2.abs_diff(sink.2));
             assert_eq!(distance, 1, "fixed liquid handoff must use one seam");
         }
+    }
+
+    #[test]
+    fn desert_profile_resolves_fixed_rotations_dry_seams_and_aliases() {
+        let settings = desert_settings();
+        let ring = validate_recipe_settings(&settings).expect("desert profile should validate");
+        assert_eq!(ring.profile, V3Ring19ProfileSettings::DesertOasis);
+        let layout = resolve_layout(RING_RADIUS, &settings).expect("desert layout should resolve");
+        validate_resolved_layout(&layout, ring.profile)
+            .expect("desert resolved layout should retain its profile contract");
+        assert!(validate_resolved_layout(&layout, V3Ring19ProfileSettings::TwoRings).is_err());
+        assert_eq!(count_u32(layout.shared_edges.len()), RECIPROCAL_SEAMS);
+        assert_eq!(count_u32(layout.patches.len()), PATCH_COUNT);
+        assert!(layout.boundary_liquid_outlets.is_empty());
+        assert!(layout.shared_edges.values().all(|edge| {
+            edge.elevation.preferred == 17
+                && edge.elevation.min == 15
+                && edge.elevation.max == 19
+                && edge.walker.count == WALKER_PORT_COUNT
+                && edge.walker.width == WALKER_PORT_WIDTH
+                && matches!(edge.liquid, ResolvedLiquidPort::Dry)
+        }));
+        for (index, expected_rotation) in DESERT_FIXED_ROTATIONS.into_iter().enumerate() {
+            let id = PatchId(u32::try_from(index).expect("desert slot should fit a patch id"));
+            assert_eq!(
+                layout.patches.get(&id).map(|patch| patch.rotation_turns),
+                Some(expected_rotation)
+            );
+        }
+        assert_eq!(
+            expected_hydrology_counts(V3Ring19ProfileSettings::DesertOasis),
+            (0, 0)
+        );
+
+        let aliases = canonical_anchors(V3Ring19ProfileSettings::DesertOasis);
+        assert_anchor_ref(&aliases, PARTY_START, 0, PARTY_START);
+        assert_anchor_ref(&aliases, HOSTILE_START, 18, HOSTILE_START);
+        assert_anchor_ref(&aliases, CONFLICT_CENTER, 0, OASIS_OVERLOOK);
+        assert_anchor_ref(&aliases, OASIS_OVERLOOK, 0, OASIS_OVERLOOK);
+        assert_anchor_ref(&aliases, INNER_DUNE_CREST, 1, "dune_crest");
+        assert_anchor_ref(&aliases, OUTER_DUNE_CREST, 7, "dune_crest");
+        assert_anchor_ref(&aliases, DESERT_PLAIN_OVERLOOK, 8, DESERT_PLAIN_OVERLOOK);
+        assert_eq!(aliases.len(), 7);
+        assert_eq!(
+            review_anchors(V3Ring19ProfileSettings::DesertOasis),
+            &DESERT_REVIEW_ANCHORS
+        );
+    }
+
+    fn assert_anchor_ref(
+        aliases: &BTreeMap<String, PatchAnchorRef>,
+        alias: &str,
+        patch: u32,
+        local_name: &str,
+    ) {
+        let actual = aliases
+            .get(alias)
+            .unwrap_or_else(|| panic!("desert profile should publish alias {alias:?}"));
+        assert_eq!(actual.patch, PatchId(patch));
+        assert_eq!(actual.local_name, local_name);
     }
 
     #[test]
@@ -2058,6 +2207,124 @@ mod tests {
     }
 
     #[test]
+    fn tracked_desert_oasis_rings_hero_seed_is_complete_connected_and_deterministic() {
+        let map = desert_oasis_rings_map_settings();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = &map.terrain else {
+            panic!("tracked Desert Oasis Rings world should select procedural V3");
+        };
+        let first = generate(
+            map.grid_radius,
+            map.level_height,
+            settings,
+            1_592_598_566,
+            runtime_art_catalog(),
+        )
+        .expect("tracked Desert Oasis Rings hero seed should generate a valid world");
+        let repeated = generate(
+            map.grid_radius,
+            map.level_height,
+            settings,
+            1_592_598_566,
+            runtime_art_catalog(),
+        )
+        .expect("repeated Desert Oasis Rings hero seed should generate the same valid world");
+
+        assert!(
+            !first.used_fallback,
+            "tracked Desert Oasis Rings hero seed should not fall back: {:#?}",
+            first.notes
+        );
+        assert_eq!(first.metrics.report.world_columns, WORLD_COLUMNS);
+        assert_eq!(first.metrics.report.biome_regions, PATCH_COUNT);
+        assert_eq!(first.metrics.report.reciprocal_seams, RECIPROCAL_SEAMS);
+        assert_eq!(
+            first.validated.plan.layout.patches.len(),
+            PATCH_COUNT as usize
+        );
+        assert_eq!(
+            first.validated.plan.layout.shared_edges.len(),
+            RECIPROCAL_SEAMS as usize
+        );
+        assert!(first
+            .validated
+            .plan
+            .layout
+            .shared_edges
+            .values()
+            .all(|edge| matches!(edge.liquid, ResolvedLiquidPort::Dry)));
+        assert!(first
+            .validated
+            .plan
+            .layout
+            .boundary_liquid_outlets
+            .is_empty());
+        assert_eq!(first.metrics.report.directed_liquid_seams, 0);
+        assert_eq!(first.metrics.report.boundary_liquid_outlets, 0);
+
+        let palms = first
+            .validated
+            .plan
+            .features
+            .by_id
+            .values()
+            .filter(|feature| feature.object_id.as_str() == desert_vegetation::DATE_PALM_ID)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            palms.len(),
+            12,
+            "the center oasis should own twelve date palms"
+        );
+        assert!(palms.iter().all(|feature| {
+            first.validated.plan.biome_regions.get(&feature.root) == Some(&BiomeRegionId(0))
+        }));
+
+        for (alias, source) in [
+            (PARTY_START, "center_party_start"),
+            (HOSTILE_START, "mountains_c_hostile_start"),
+            (CONFLICT_CENTER, "center_oasis_overlook"),
+            (OASIS_OVERLOOK, "center_oasis_overlook"),
+            (INNER_DUNE_CREST, "frozen_hills_dune_crest"),
+            (OUTER_DUNE_CREST, "sky_islands_dune_crest"),
+            (DESERT_PLAIN_OVERLOOK, "deep_forest_a_desert_plain_overlook"),
+        ] {
+            assert_eq!(
+                first.validated.plan.anchors.get(alias),
+                first.validated.plan.anchors.get(source),
+                "whole-world desert alias {alias:?} must retain source anchor {source:?}"
+            );
+        }
+
+        let ordinary = OrdinaryGraph::from_volume(
+            &first.validated.plan.volume,
+            Some(&first.validated.plan.blockers),
+        );
+        let party = first
+            .validated
+            .plan
+            .anchors
+            .get(PARTY_START)
+            .copied()
+            .expect("the validated desert world publishes party_start");
+        let reachable = ordinary.distances_from(party);
+        assert_eq!(
+            reachable.len(),
+            ordinary.len(),
+            "every unblocked ordinary Desert Oasis Rings surface should share one global network"
+        );
+        assert_eq!(
+            first.metrics.report.reachable_surfaces,
+            first.metrics.report.ordinary_surfaces
+        );
+
+        assert_eq!(first.selected_candidate, repeated.selected_candidate);
+        assert_eq!(
+            first.validated.semantic_fingerprint,
+            repeated.validated.semantic_fingerprint
+        );
+        assert_eq!(first.metrics, repeated.metrics);
+    }
+
+    #[test]
     #[ignore = "manual release-mode Ring7/Ring19 generation benchmark"]
     fn ring19_generation_p95_stays_within_three_and_a_half_times_ring7() {
         require_release_benchmark();
@@ -2384,6 +2651,17 @@ mod tests {
         })
     }
 
+    fn desert_oasis_rings_map_settings() -> &'static MapSettings {
+        static SETTINGS: OnceLock<MapSettings> = OnceLock::new();
+        SETTINGS.get_or_init(|| {
+            ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/config/worlds/procedural-desert-oasis-rings.ron"
+            )))
+            .expect("tracked Desert Oasis Rings world should parse")
+        })
+    }
+
     fn settings() -> &'static ProceduralV3Settings {
         let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) =
             &two_rings_map_settings().terrain
@@ -2391,6 +2669,74 @@ mod tests {
             panic!("tracked Two Rings world should select procedural V3");
         };
         settings
+    }
+
+    fn desert_settings() -> ProceduralV3Settings {
+        let regions = (0..V3_RING19_REGION_COUNT)
+            .map(|index| {
+                let (recipe, rotation_turns) = match index {
+                    0 => (
+                        V3RecipeSettings::Oasis(V3OasisSettings {
+                            base_level: 15,
+                            pool_radius: 5,
+                            palm_count: 12,
+                            grass_ring_width: 3,
+                        }),
+                        0,
+                    ),
+                    1..=6 => (
+                        V3RecipeSettings::Dunes(V3DunesSettings {
+                            base_level: 15,
+                            ridge_height: 4,
+                            ridge_spacing: 10,
+                            ridge_count: 3,
+                        }),
+                        u8::try_from(index - 1).expect("inner-ring rotation should fit u8"),
+                    ),
+                    7 | 9 | 11 | 13 | 15 | 17 => (
+                        V3RecipeSettings::Dunes(V3DunesSettings {
+                            base_level: 15,
+                            ridge_height: 6,
+                            ridge_spacing: 12,
+                            ridge_count: 4,
+                        }),
+                        u8::try_from((index - 7) / 2).expect("outer-ring rotation should fit u8"),
+                    ),
+                    8 | 10 | 12 | 14 | 16 | 18 => (
+                        V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                            base_level: 15,
+                            max_relief: 2,
+                        }),
+                        0,
+                    ),
+                    _ => unreachable!("Ring19 fixture index is bounded"),
+                };
+                Ring19RegionSettings {
+                    environment: V3EnvironmentSettings::Arid,
+                    recipe,
+                    overlays: Vec::new(),
+                    rotation_turns,
+                }
+            })
+            .collect();
+        ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(V3Ring19Settings {
+                profile: V3Ring19ProfileSettings::DesertOasis,
+                regions,
+                seam_defaults: SharedEdgeSettings {
+                    elevation: EdgeElevationSettings {
+                        preferred: 17,
+                        min: 15,
+                        max: 19,
+                    },
+                    walker: WalkerPortSettings { count: 2, width: 2 },
+                    liquid: EdgeLiquidSettings::Dry,
+                    approach_depth: 3,
+                },
+                liquid_connections: Vec::new(),
+                boundary_outlets: Vec::new(),
+            }),
+        }
     }
 
     fn runtime_art_catalog() -> &'static RuntimeArtCatalog {

@@ -1480,6 +1480,7 @@ mod tests {
             ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
                 .expect("shipped object manifest should parse");
         let objects = [
+            include_str!("../../../assets/art/objects/plant/date-palm.ron"),
             include_str!("../../../assets/art/objects/plant/old-growth.ron"),
             include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
             include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
@@ -1503,6 +1504,7 @@ mod tests {
         })
         .collect::<BTreeMap<_, _>>();
         let expected_ids = [
+            "plant/date-palm",
             "plant/old-growth",
             "plant/small-broadleaf",
             "plant/snowy-old-growth",
@@ -1523,8 +1525,15 @@ mod tests {
 
         let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
             .expect("shipped authored object graph should resolve");
-        assert_eq!(resolved.objects().len(), 14);
+        assert_eq!(resolved.objects().len(), 15);
         assert_eq!(resolved.styles().styles().len(), 8);
+
+        let palm = resolved
+            .object(&id("plant/date-palm"))
+            .expect("date palm should resolve");
+        assert_eq!(palm.bounds.radius, 2);
+        assert_eq!(palm.bounds.height, 11);
+        assert_eq!(palm.blocker_footprint, [LocalAxialCoord::new(0, 0)]);
 
         let small = resolved
             .object(&id("plant/small-broadleaf"))
@@ -1791,12 +1800,13 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                5_183_140_313_222_150_403,
-                10_433_221_081_678_676_936,
-                4_689_356_606_817_881_777,
+                12_455_183_987_975_877_660,
+                8_439_221_568_114_641_522,
+                7_479_919_725_092_961_930,
             )
         );
         let expected_object_fingerprints = BTreeMap::from([
+            (id("plant/date-palm"), 17_225_330_407_669_589_318),
             (id("plant/old-growth"), 18_215_252_645_504_955_369),
             (id("plant/small-broadleaf"), 692_655_780_260_542_668),
             (id("plant/snowy-old-growth"), 16_803_730_044_443_536_229),

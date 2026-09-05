@@ -108,6 +108,62 @@ impl FromIterator<(MapAnchorId, TilePos)> for MapAnchors {
     }
 }
 
+/// Exact generated surfaces used only as scenic camera/review landmarks.
+///
+/// Observation anchors deliberately live outside [`MapAnchors`]: they may name
+/// blocked, nonstandable, or otherwise scenic surfaces that must never be offered
+/// to scenario placement, movement, or actor relocation. The generator replaces
+/// this resource for each map. Review tooling may resolve names from both resources
+/// when it only needs an exact look-at target.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct MapObservationAnchors {
+    by_id: HashMap<MapAnchorId, TilePos>,
+}
+
+impl MapObservationAnchors {
+    /// Creates an empty observation-anchor collection.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces one landmark, returning the previous position if it existed.
+    pub fn insert(&mut self, id: MapAnchorId, pos: TilePos) -> Option<TilePos> {
+        self.by_id.insert(id, pos)
+    }
+
+    /// Resolves a landmark to its exact surface.
+    #[must_use]
+    pub fn get(&self, id: &MapAnchorId) -> Option<TilePos> {
+        self.by_id.get(id).copied()
+    }
+
+    /// Every landmark and its exact surface, in unspecified order.
+    pub fn iter(&self) -> impl Iterator<Item = (&MapAnchorId, TilePos)> {
+        self.by_id.iter().map(|(id, pos)| (id, *pos))
+    }
+
+    /// Number of published landmarks.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// Whether the map published no landmarks.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+impl FromIterator<(MapAnchorId, TilePos)> for MapObservationAnchors {
+    fn from_iter<T: IntoIterator<Item = (MapAnchorId, TilePos)>>(anchors: T) -> Self {
+        Self {
+            by_id: anchors.into_iter().collect(),
+        }
+    }
+}
+
 /// Stable identity of one generated interior network.
 ///
 /// The number is deterministic only within one map. Exact floor and roof-voxel
@@ -369,6 +425,18 @@ mod tests {
         assert_eq!(anchors.insert(id.clone(), ground), None);
         assert_eq!(anchors.insert(id.clone(), bridge), Some(ground));
         assert_eq!(anchors.get(&id), Some(bridge));
+    }
+
+    #[test]
+    fn observation_anchors_preserve_the_exact_scenic_surface_separately() {
+        let id = MapAnchorId::from("review.massif_crest");
+        let crest = TilePos::new(HexCoord::ORIGIN, 225);
+        let mut anchors = MapObservationAnchors::new();
+
+        assert_eq!(anchors.insert(id.clone(), crest), None);
+        assert_eq!(anchors.get(&id), Some(crest));
+        assert_eq!(anchors.len(), 1);
+        assert!(!anchors.is_empty());
     }
 
     #[test]

@@ -25,8 +25,8 @@ use hex_assets::{
     ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
 };
 use hex_core::{
-    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, Screen, TilePos,
-    TreeFadeAmount, TreeOccluder,
+    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, ReviewEdgeTreatment,
+    ReviewMaterialTreatment, Screen, TilePos, TreeFadeAmount, TreeOccluder,
 };
 
 /// Marks a generated render child belonging to one authored object instance.
@@ -75,6 +75,12 @@ struct RenderedObject {
 struct ChunkKey {
     style: VoxelStyleId,
     canopy: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OccupiedCell {
+    style: VoxelStyleId,
+    surface_mode: VoxelSurfaceMode,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +228,8 @@ impl TreeFadeMaterialAssets {
 struct ObjectRenderCache {
     catalog_fingerprint: Option<u64>,
     source_generation: u64,
+    material_treatment: ReviewMaterialTreatment,
+    edge_treatment: ReviewEdgeTreatment,
     objects: BTreeMap<ObjectAssetId, CachedObject>,
     materials: BTreeMap<VoxelStyleId, CachedMaterial>,
 }
@@ -282,6 +290,8 @@ fn reconcile_objects(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cache: ResMut<ObjectRenderCache>,
+    material_treatment: Option<Res<ReviewMaterialTreatment>>,
+    edge_treatment: Option<Res<ReviewEdgeTreatment>>,
 ) {
     for entity in removed_instances.read() {
         if instances.get(entity).is_ok() {
@@ -311,16 +321,23 @@ fn reconcile_objects(
 
     let catalog_fingerprint = catalog.combined_fingerprint();
     let catalog_changed = cache.catalog_fingerprint != Some(catalog_fingerprint);
+    let material_treatment = material_treatment.as_deref().copied().unwrap_or_default();
+    let edge_treatment = edge_treatment.as_deref().copied().unwrap_or_default();
+    let material_treatment_changed = cache.material_treatment != material_treatment;
+    let edge_treatment_changed = cache.edge_treatment != edge_treatment;
     if source_changed {
         cache.source_generation = cache.source_generation.wrapping_add(1);
     }
-    if catalog_changed {
+    if catalog_changed || material_treatment_changed {
         cache.invalidate_all(&mut meshes, &mut materials);
         cache.catalog_fingerprint = Some(catalog_fingerprint);
-    } else if source_changed {
+        cache.material_treatment = material_treatment;
+    } else if source_changed || edge_treatment_changed {
         cache.invalidate_objects(&mut meshes);
     }
-    let force_rebuild = catalog_changed || source_changed;
+    cache.edge_treatment = edge_treatment;
+    let force_rebuild =
+        catalog_changed || source_changed || material_treatment_changed || edge_treatment_changed;
     let mut source_mesh = None;
 
     for (entity, instance, rendered, visibility, tree) in &instances {
@@ -387,6 +404,7 @@ fn reconcile_objects(
             &catalog,
             instance.object_id(),
             source_mesh,
+            edge_treatment,
             &mut meshes,
             &mut materials,
         ) {
@@ -489,6 +507,7 @@ fn cached_object(
     catalog: &RuntimeArtCatalog,
     object_id: &ObjectAssetId,
     source_mesh: &Mesh,
+    edge_treatment: ReviewEdgeTreatment,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> Result<CachedObject, String> {
@@ -499,7 +518,7 @@ fn cached_object(
     let blueprint = catalog
         .object(object_id)
         .ok_or_else(|| format!("runtime art catalog has no object '{object_id}'"))?;
-    let baked = bake_blueprint(source_mesh, blueprint)?;
+    let baked = bake_blueprint_with_edge(source_mesh, blueprint, catalog, edge_treatment)?;
     let mut chunks = Vec::with_capacity(baked.len());
     for (key, mesh) in baked {
         let style = catalog.style(&key.style).ok_or_else(|| {
@@ -727,7 +746,7 @@ fn cached_material(
     if let Some(cached) = cache.materials.get(id) {
         return cached.handle.clone();
     }
-    let handle = materials.add(material_for(style));
+    let handle = materials.add(material_for(style, cache.material_treatment));
     cache.materials.insert(
         id.clone(),
         CachedMaterial {
@@ -737,7 +756,10 @@ fn cached_material(
     handle
 }
 
-fn material_for(style: &ResolvedVoxelStyle) -> StandardMaterial {
+fn material_for(
+    style: &ResolvedVoxelStyle,
+    treatment: ReviewMaterialTreatment,
+) -> StandardMaterial {
     let authored = style.authored();
     let alpha_mode = match authored.surface_mode() {
         VoxelSurfaceMode::Opaque => AlphaMode::Opaque,
@@ -763,56 +785,168 @@ fn material_for(style: &ResolvedVoxelStyle) -> StandardMaterial {
         )
     });
     let color = style.base_color();
-    StandardMaterial {
+    let mut material = StandardMaterial {
         base_color: Color::srgba(color.red(), color.green(), color.blue(), alpha),
         emissive,
         alpha_mode,
         perceptual_roughness: 0.82,
         metallic: 0.0,
         ..default()
+    };
+    if treatment.applies_to_objects() {
+        material.perceptual_roughness = 1.0;
     }
+    material
 }
 
+#[cfg(test)]
 fn bake_blueprint(
     source_mesh: &Mesh,
     blueprint: &ObjectBlueprint,
+    catalog: &RuntimeArtCatalog,
 ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+    bake_blueprint_with_edge(
+        source_mesh,
+        blueprint,
+        catalog,
+        ReviewEdgeTreatment::Current,
+    )
+}
+
+fn bake_blueprint_with_edge(
+    source_mesh: &Mesh,
+    blueprint: &ObjectBlueprint,
+    catalog: &RuntimeArtCatalog,
+    edge_treatment: ReviewEdgeTreatment,
+) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+    let treated_source = mesh_with_micro_bevel_normals(source_mesh, edge_treatment)?;
     let canopy: BTreeSet<_> = blueprint.canopy_occluders.iter().copied().collect();
     let mut groups: BTreeMap<ChunkKey, Vec<LocalVoxelCoord>> = BTreeMap::new();
+    let mut occupied_by_visibility =
+        BTreeMap::<bool, BTreeMap<LocalVoxelCoord, OccupiedCell>>::new();
     for placement in &blueprint.placements {
+        let is_canopy = canopy.contains(&placement.position);
+        let style = catalog.style(&placement.style).ok_or_else(|| {
+            format!(
+                "validated object '{}' references unresolved style '{}' while baking",
+                blueprint.id, placement.style
+            )
+        })?;
         groups
             .entry(ChunkKey {
                 style: placement.style.clone(),
-                canopy: canopy.contains(&placement.position),
+                canopy: is_canopy,
             })
             .or_default()
             .push(placement.position);
+        occupied_by_visibility.entry(is_canopy).or_default().insert(
+            placement.position,
+            OccupiedCell {
+                style: placement.style.clone(),
+                surface_mode: style.authored().surface_mode(),
+            },
+        );
     }
 
     groups
         .into_iter()
         .map(|(key, mut cells)| {
             cells.sort_unstable();
-            let occupied: BTreeSet<_> = cells.iter().copied().collect();
-            let mesh = merge_cells(source_mesh, blueprint.origin, &cells, &occupied)?;
+            let occupied = occupied_by_visibility
+                .get(&key.canopy)
+                .ok_or_else(|| "object chunk lost its visibility partition".to_owned())?;
+            let mesh = merge_cells(&treated_source, blueprint.origin, &cells, occupied)?;
             Ok((key, mesh))
         })
         .collect()
+}
+
+fn mesh_with_micro_bevel_normals(
+    source_mesh: &Mesh,
+    treatment: ReviewEdgeTreatment,
+) -> Result<Mesh, String> {
+    let blend = treatment.normal_blend();
+    if blend == 0.0 {
+        return Ok(source_mesh.clone());
+    }
+    let positions = match source_mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(positions)) => positions,
+        Some(_) => return Err("hex mesh positions must use Float32x3 format".to_owned()),
+        None => return Err("hex mesh has no position attribute".to_owned()),
+    };
+    let normals = match source_mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+        Some(VertexAttributeValues::Float32x3(normals)) => normals,
+        Some(_) => return Err("hex mesh normals must use Float32x3 format".to_owned()),
+        None => return Err("hex mesh has no normal attribute".to_owned()),
+    };
+    if positions.len() != normals.len() {
+        return Err("hex mesh position and normal counts differ".to_owned());
+    }
+    let planes = SourcePrismPlanes::measure(positions)?;
+    let (mut min_x, mut max_x, mut min_z, mut max_z) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for position in positions {
+        min_x = min_x.min(position[0]);
+        max_x = max_x.max(position[0]);
+        min_z = min_z.min(position[2]);
+        max_z = max_z.max(position[2]);
+    }
+    let horizontal_centre = Vec2::new((min_x + max_x) * 0.5, (min_z + max_z) * 0.5);
+    let near = |left: f32, right: f32| (left - right).abs() <= planes.epsilon;
+    let mut treated_normals = Vec::with_capacity(normals.len());
+    for (position, normal) in positions.iter().zip(normals) {
+        let face_normal = Vec3::from(*normal);
+        if !face_normal.is_finite() || face_normal.length_squared() <= f32::EPSILON {
+            return Err("hex mesh contains a non-finite or zero normal".to_owned());
+        }
+        let horizontal = Vec2::new(position[0], position[2]) - horizontal_centre;
+        let horizontal = horizontal.normalize_or_zero();
+        let vertical = if near(position[1], planes.max_y) {
+            1.0
+        } else if near(position[1], planes.min_y) {
+            -1.0
+        } else {
+            0.0
+        };
+        let edge_direction = Vec3::new(horizontal.x, vertical, horizontal.y).normalize_or_zero();
+        let treated = if edge_direction == Vec3::ZERO {
+            face_normal.normalize()
+        } else {
+            face_normal
+                .normalize()
+                .lerp(edge_direction, blend)
+                .normalize()
+        };
+        treated_normals.push(treated.to_array());
+    }
+    let mut treated = source_mesh.clone();
+    treated.insert_attribute(Mesh::ATTRIBUTE_NORMAL, treated_normals);
+    Ok(treated)
 }
 
 fn merge_cells(
     source_mesh: &Mesh,
     origin: LocalVoxelCoord,
     cells: &[LocalVoxelCoord],
-    occupied_with_style: &BTreeSet<LocalVoxelCoord>,
+    occupied_in_visibility_partition: &BTreeMap<LocalVoxelCoord, OccupiedCell>,
 ) -> Result<Mesh, String> {
     let mut cells = cells.iter();
     let first = cells
         .next()
         .ok_or_else(|| "cannot bake an empty object chunk".to_owned())?;
-    let mut merged = transformed_cell(source_mesh, origin, *first, occupied_with_style)?;
+    let mut merged = transformed_cell(
+        source_mesh,
+        origin,
+        *first,
+        occupied_in_visibility_partition,
+    )?;
     for cell in cells {
-        let transformed = transformed_cell(source_mesh, origin, *cell, occupied_with_style)?;
+        let transformed =
+            transformed_cell(source_mesh, origin, *cell, occupied_in_visibility_partition)?;
         merged
             .merge(&transformed)
             .map_err(|error| format!("hex mesh chunks cannot be merged: {error}"))?;
@@ -824,7 +958,7 @@ fn transformed_cell(
     source_mesh: &Mesh,
     origin: LocalVoxelCoord,
     cell: LocalVoxelCoord,
-    occupied_with_style: &BTreeSet<LocalVoxelCoord>,
+    occupied_in_visibility_partition: &BTreeMap<LocalVoxelCoord, OccupiedCell>,
 ) -> Result<Mesh, String> {
     let relative_q = cell
         .q
@@ -843,17 +977,23 @@ fn transformed_cell(
         reason = "authored object levels are bounded to 64 and exactly represented by f32"
     )]
     let translation = HexCoord::from_axial(relative_q, relative_r).to_world(relative_level as f32);
-    cull_internal_faces(source_mesh, face_cull_mask(cell, occupied_with_style))?
-        .try_transformed_by(Transform::from_translation(translation))
-        .map_err(|error| format!("hex mesh cannot be transformed: {error}"))
+    cull_internal_faces(
+        source_mesh,
+        face_cull_mask(cell, occupied_in_visibility_partition),
+    )?
+    .try_transformed_by(Transform::from_translation(translation))
+    .map_err(|error| format!("hex mesh cannot be transformed: {error}"))
 }
 
 const AXIAL_NEIGHBOURS: [(i32, i32); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
 
 fn face_cull_mask(
     cell: LocalVoxelCoord,
-    occupied_with_style: &BTreeSet<LocalVoxelCoord>,
+    occupied_in_visibility_partition: &BTreeMap<LocalVoxelCoord, OccupiedCell>,
 ) -> FaceCullMask {
+    let Some(current) = occupied_in_visibility_partition.get(&cell) else {
+        return FaceCullMask::default();
+    };
     let mut sides = [false; 6];
     for (culled, (delta_q, delta_r)) in sides.iter_mut().zip(AXIAL_NEIGHBOURS) {
         let neighbour = cell
@@ -861,19 +1001,31 @@ fn face_cull_mask(
             .checked_add(delta_q)
             .zip(cell.r.checked_add(delta_r))
             .map(|(q, r)| LocalVoxelCoord::new(q, r, cell.level));
-        *culled = neighbour.is_some_and(|position| occupied_with_style.contains(&position));
+        *culled = neighbour
+            .and_then(|position| occupied_in_visibility_partition.get(&position))
+            .is_some_and(|neighbour| shared_face_is_owned_by_neighbour(current, neighbour));
     }
     let top = cell
         .level
         .checked_add(1)
         .map(|level| LocalVoxelCoord::new(cell.q, cell.r, level))
-        .is_some_and(|position| occupied_with_style.contains(&position));
+        .and_then(|position| occupied_in_visibility_partition.get(&position))
+        .is_some_and(|neighbour| shared_face_is_owned_by_neighbour(current, neighbour));
     let bottom = cell
         .level
         .checked_sub(1)
         .map(|level| LocalVoxelCoord::new(cell.q, cell.r, level))
-        .is_some_and(|position| occupied_with_style.contains(&position));
+        .and_then(|position| occupied_in_visibility_partition.get(&position))
+        .is_some_and(|neighbour| shared_face_is_owned_by_neighbour(current, neighbour));
     FaceCullMask { sides, top, bottom }
+}
+
+fn shared_face_is_owned_by_neighbour(current: &OccupiedCell, neighbour: &OccupiedCell) -> bool {
+    current.style == neighbour.style
+        || (matches!(
+            current.surface_mode,
+            VoxelSurfaceMode::Translucent | VoxelSurfaceMode::Additive
+        ) && neighbour.surface_mode == VoxelSurfaceMode::Opaque)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1266,6 +1418,30 @@ mod tests {
         }
     }
 
+    fn bake_fixture(
+        source: &Mesh,
+        blueprint: &ObjectBlueprint,
+    ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+        bake_blueprint(source, blueprint, &fixture_catalog(0.24))
+    }
+
+    fn occupied_fixture(
+        cells: impl IntoIterator<Item = LocalVoxelCoord>,
+    ) -> BTreeMap<LocalVoxelCoord, OccupiedCell> {
+        cells
+            .into_iter()
+            .map(|cell| {
+                (
+                    cell,
+                    OccupiedCell {
+                        style: style_id("test/opaque"),
+                        surface_mode: VoxelSurfaceMode::Opaque,
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn rotation(steps: u8) -> HexObjectRotation {
         match HexObjectRotation::new(steps) {
             Ok(rotation) => rotation,
@@ -1369,6 +1545,15 @@ mod tests {
         positions
     }
 
+    fn mesh_normals(mesh: &Mesh) -> &[[f32; 3]] {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            unreachable!("cuboid fixture must expose Float32x3 normals")
+        };
+        normals
+    }
+
     fn position_centroid(mesh: &Mesh) -> Vec3 {
         let positions = mesh_positions(mesh);
         let sum = positions
@@ -1425,7 +1610,7 @@ mod tests {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let blueprint = fixture_blueprint();
         assert_eq!(blueprint.validate_intrinsic(), Ok(()));
-        let baked = match bake_blueprint(&source, &blueprint) {
+        let baked = match bake_fixture(&source, &blueprint) {
             Ok(baked) => baked,
             Err(error) => unreachable!("valid blueprint should bake: {error}"),
         };
@@ -1456,7 +1641,7 @@ mod tests {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let source_indices = mesh_index_count(&source);
         let blueprint = fixture_blueprint();
-        let baked = match bake_blueprint(&source, &blueprint) {
+        let baked = match bake_fixture(&source, &blueprint) {
             Ok(baked) => baked,
             Err(error) => unreachable!("valid canopy fixture should bake: {error}"),
         };
@@ -1478,7 +1663,7 @@ mod tests {
     fn adjacent_translucent_cells_share_no_closed_internal_prism_faces() {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let blueprint = material_fixture_blueprint();
-        let baked = match bake_blueprint(&source, &blueprint) {
+        let baked = match bake_fixture(&source, &blueprint) {
             Ok(baked) => baked,
             Err(error) => unreachable!("valid material fixture should bake: {error}"),
         };
@@ -1495,6 +1680,134 @@ mod tests {
     }
 
     #[test]
+    fn only_blended_and_additive_cells_yield_a_shared_face_to_opaque_backing() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let source_indices = mesh_index_count(&source);
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        for (neighbour_style, neighbour_indices) in [
+            ("test/cutout", source_indices),
+            ("test/translucent", source_indices - 6),
+            ("test/additive", source_indices - 6),
+        ] {
+            let mut blueprint = material_fixture_blueprint();
+            blueprint.origin = origin;
+            blueprint.placements = vec![
+                ObjectPlacement {
+                    position: origin,
+                    style: style_id("test/opaque"),
+                    part: ObjectPart::Effect(EffectPart::Core),
+                },
+                ObjectPlacement {
+                    position: LocalVoxelCoord::new(1, 0, 0),
+                    style: style_id(neighbour_style),
+                    part: ObjectPart::Effect(EffectPart::Accent),
+                },
+            ];
+
+            let baked = match bake_fixture(&source, &blueprint) {
+                Ok(baked) => baked,
+                Err(error) => unreachable!("valid cross-style fixture should bake: {error}"),
+            };
+            let opaque = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id("test/opaque"))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its opaque chunk"));
+            let neighbour = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id(neighbour_style))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its neighbouring chunk"));
+
+            assert_eq!(
+                mesh_index_count(opaque),
+                source_indices,
+                "opaque backing must remain closed behind {neighbour_style}"
+            );
+            assert_eq!(
+                mesh_index_count(neighbour),
+                neighbour_indices,
+                "{neighbour_style} must follow its exact shared-face ownership policy"
+            );
+        }
+    }
+
+    #[test]
+    fn additive_yields_to_opaque_backing_across_side_top_and_bottom_directions() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let source_indices = mesh_index_count(&source);
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        let side = LocalVoxelCoord::new(1, 0, 0);
+        let above = LocalVoxelCoord::new(0, 0, 1);
+
+        for (opaque_position, additive_position) in [
+            (origin, side),
+            (side, origin),
+            (origin, above),
+            (above, origin),
+        ] {
+            let mut blueprint = material_fixture_blueprint();
+            blueprint.origin = origin;
+            blueprint.placements = vec![
+                ObjectPlacement {
+                    position: opaque_position,
+                    style: style_id("test/opaque"),
+                    part: ObjectPart::Effect(EffectPart::Core),
+                },
+                ObjectPlacement {
+                    position: additive_position,
+                    style: style_id("test/additive"),
+                    part: ObjectPart::Effect(EffectPart::Accent),
+                },
+            ];
+
+            let baked = match bake_fixture(&source, &blueprint) {
+                Ok(baked) => baked,
+                Err(error) => unreachable!("valid directional fixture should bake: {error}"),
+            };
+            let opaque = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id("test/opaque"))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its opaque chunk"));
+            let additive = baked
+                .iter()
+                .find(|(key, _)| key.style == style_id("test/additive"))
+                .map(|(_, mesh)| mesh)
+                .unwrap_or_else(|| unreachable!("fixture must bake its additive chunk"));
+
+            assert_eq!(mesh_index_count(opaque), source_indices);
+            assert_eq!(mesh_index_count(additive), source_indices - 6);
+        }
+    }
+
+    #[test]
+    fn unresolved_style_aborts_baking_without_partial_mesh_output() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let mut blueprint = material_fixture_blueprint();
+        blueprint.placements = vec![
+            ObjectPlacement {
+                position: blueprint.origin,
+                style: style_id("test/opaque"),
+                part: ObjectPart::Effect(EffectPart::Core),
+            },
+            ObjectPlacement {
+                position: LocalVoxelCoord::new(1, 0, 0),
+                style: style_id("test/missing"),
+                part: ObjectPart::Effect(EffectPart::Accent),
+            },
+        ];
+
+        let catalog = fixture_catalog(0.24);
+        let Err(error) = bake_blueprint(&source, &blueprint, &catalog) else {
+            unreachable!("an unresolved style must abort the complete bake")
+        };
+        assert!(error.contains("effect/material-test"));
+        assert!(error.contains("test/missing"));
+        assert!(error.contains("while baking"));
+    }
+
+    #[test]
     fn merged_chunk_vertex_count_scales_with_cells_not_entities() {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let source_vertices = source.count_vertices();
@@ -1504,7 +1817,7 @@ mod tests {
             LocalVoxelCoord::new(1, 0, 0),
             LocalVoxelCoord::new(1, -1, 2),
         ];
-        let occupied = BTreeSet::from(cells);
+        let occupied = occupied_fixture(cells);
         let merged = match merge_cells(&source, origin, &cells, &occupied) {
             Ok(mesh) => mesh,
             Err(error) => unreachable!("compatible meshes should merge: {error}"),
@@ -1518,7 +1831,7 @@ mod tests {
         let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
         let origin = LocalVoxelCoord::new(-2, 1, -3);
         let cell = LocalVoxelCoord::new(-1, 0, -1);
-        let occupied = BTreeSet::from([cell]);
+        let occupied = occupied_fixture([cell]);
         let merged = match merge_cells(&source, origin, &[cell], &occupied) {
             Ok(mesh) => mesh,
             Err(error) => unreachable!("compatible mesh should transform: {error}"),
@@ -1535,7 +1848,7 @@ mod tests {
             &source,
             LocalVoxelCoord::new(0, 0, 0),
             &[],
-            &BTreeSet::new(),
+            &BTreeMap::new(),
         );
 
         assert_eq!(
@@ -2228,6 +2541,163 @@ mod tests {
             );
             assert_eq!(app.world().get::<Pickable>(entity), Some(&Pickable::IGNORE));
         }
+    }
+
+    #[test]
+    fn review_material_treatment_preserves_authored_response_until_unified_matte() {
+        let catalog = fixture_catalog(0.18);
+        let style = catalog
+            .style(&style_id("test/additive"))
+            .expect("additive fixture style resolves");
+        let current = material_for(style, ReviewMaterialTreatment::Current);
+        let terrain_only = material_for(style, ReviewMaterialTreatment::MatteTerrain);
+        let unified = material_for(style, ReviewMaterialTreatment::UnifiedMatte);
+
+        assert_eq!(current.perceptual_roughness.to_bits(), 0.82_f32.to_bits());
+        assert_eq!(
+            terrain_only.perceptual_roughness.to_bits(),
+            0.82_f32.to_bits()
+        );
+        assert_eq!(unified.perceptual_roughness.to_bits(), 1.0_f32.to_bits());
+        assert_eq!(terrain_only.base_color, current.base_color);
+        assert_eq!(unified.base_color, current.base_color);
+        assert_eq!(terrain_only.emissive, current.emissive);
+        assert_eq!(unified.emissive, current.emissive);
+        assert_eq!(terrain_only.alpha_mode, current.alpha_mode);
+        assert_eq!(unified.alpha_mode, current.alpha_mode);
+    }
+
+    #[test]
+    fn micro_bevel_treatment_changes_only_object_normals_and_scales_exactly() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        let current = mesh_with_micro_bevel_normals(&source, ReviewEdgeTreatment::Current)
+            .expect("hard-normal fixture should remain valid");
+        let subtle = mesh_with_micro_bevel_normals(&source, ReviewEdgeTreatment::MicroBevel04)
+            .expect("0.04 bevel fixture should remain valid");
+        let strong = mesh_with_micro_bevel_normals(&source, ReviewEdgeTreatment::MicroBevel08)
+            .expect("0.08 bevel fixture should remain valid");
+
+        assert_eq!(mesh_positions(&current), mesh_positions(&source));
+        assert_eq!(mesh_positions(&subtle), mesh_positions(&source));
+        assert_eq!(mesh_positions(&strong), mesh_positions(&source));
+        assert_eq!(mesh_index_count(&current), mesh_index_count(&source));
+        assert_eq!(mesh_index_count(&subtle), mesh_index_count(&source));
+        assert_eq!(mesh_index_count(&strong), mesh_index_count(&source));
+        assert_eq!(mesh_normals(&current), mesh_normals(&source));
+
+        let normal_delta = |mesh: &Mesh| {
+            mesh_normals(mesh)
+                .iter()
+                .zip(mesh_normals(&source))
+                .map(|(actual, shipped)| Vec3::from(*actual).distance(Vec3::from(*shipped)))
+                .sum::<f32>()
+        };
+        let subtle_delta = normal_delta(&subtle);
+        let strong_delta = normal_delta(&strong);
+        assert!(subtle_delta > 0.0);
+        assert!(strong_delta > subtle_delta);
+        for normal in mesh_normals(&subtle).iter().chain(mesh_normals(&strong)) {
+            assert!((Vec3::from(*normal).length() - 1.0).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn terrain_geometric_bevel_modes_leave_authored_object_meshes_unchanged() {
+        let source = Mesh::from(Cuboid::new(1.0, 1.0, 1.0));
+        for treatment in [
+            ReviewEdgeTreatment::GeometricBevel04,
+            ReviewEdgeTreatment::GeometricBevel08,
+        ] {
+            let treated = mesh_with_micro_bevel_normals(&source, treatment)
+                .expect("terrain-only geometric treatment preserves object meshes");
+            assert_eq!(mesh_positions(&treated), mesh_positions(&source));
+            assert_eq!(mesh_normals(&treated), mesh_normals(&source));
+            assert_eq!(mesh_index_count(&treated), mesh_index_count(&source));
+        }
+    }
+
+    #[test]
+    fn changing_review_edge_treatment_rebuilds_only_cached_object_meshes() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn(instance(
+                "effect/material-test",
+                HexCoord::ORIGIN,
+                0,
+                0.4,
+                0,
+            ))
+            .id();
+        settle(&mut app);
+        let current = chunk_handles(&app, root);
+
+        app.insert_resource(ReviewEdgeTreatment::MicroBevel04);
+        app.update();
+
+        let beveled = chunk_handles(&app, root);
+        assert_eq!(current.len(), beveled.len());
+        for (key, (old_mesh, old_material, old_entity)) in current {
+            let Some((new_mesh, new_material, new_entity)) = beveled.get(&key) else {
+                unreachable!("edge rebuild must preserve chunk key {key:?}")
+            };
+            assert_ne!(&old_mesh, new_mesh);
+            assert_eq!(&old_material, new_material);
+            assert_ne!(&old_entity, new_entity);
+            assert!(app
+                .world()
+                .resource::<Assets<Mesh>>()
+                .get(old_mesh)
+                .is_none());
+            assert!(app.world().get_entity(old_entity).is_err());
+        }
+    }
+
+    #[test]
+    fn changing_review_material_treatment_rebuilds_cached_object_materials() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn(instance(
+                "effect/material-test",
+                HexCoord::ORIGIN,
+                0,
+                0.4,
+                0,
+            ))
+            .id();
+        settle(&mut app);
+
+        let current = chunk_handles(&app, root);
+        let current_materials = current
+            .values()
+            .map(|(_, material, _)| *material)
+            .collect::<BTreeSet<_>>();
+        assert!(current_materials.iter().all(|id| {
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(*id)
+                .is_some_and(|material| {
+                    material.perceptual_roughness.to_bits() == 0.82_f32.to_bits()
+                })
+        }));
+
+        app.insert_resource(ReviewMaterialTreatment::UnifiedMatte);
+        app.update();
+
+        let unified = chunk_handles(&app, root);
+        let unified_materials = unified
+            .values()
+            .map(|(_, material, _)| *material)
+            .collect::<BTreeSet<_>>();
+        assert!(current_materials.is_disjoint(&unified_materials));
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert!(current_materials
+            .iter()
+            .all(|material| materials.get(*material).is_none()));
+        assert!(unified_materials.iter().all(|id| materials
+            .get(*id)
+            .is_some_and(|material| material.perceptual_roughness.to_bits() == 1.0_f32.to_bits())));
     }
 
     #[test]

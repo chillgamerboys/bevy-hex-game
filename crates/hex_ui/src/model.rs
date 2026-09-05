@@ -1090,10 +1090,12 @@ pub enum InitiativeIntent {
 #[cfg(feature = "dev-tools")]
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub enum DevTimeView {
-    /// Cyclic time can be adjusted for the current map.
+    /// Cyclic lighting is active and may receive a local presentation override.
     Available {
-        /// Current hour in the scenario's `[0, 24)` cycle.
-        hours: f32,
+        /// Authoritative gameplay hour, unaffected by local preview controls.
+        game_hours: f32,
+        /// Local visual-preview hour, or `None` when presentation follows gameplay.
+        preview_hours: Option<f32>,
     },
     /// The current lighting profile does not expose a cyclic clock.
     Unavailable {
@@ -1113,20 +1115,12 @@ impl Default for DevTimeView {
 
 /// Development-only time controls emitted by presentation.
 #[cfg(feature = "dev-tools")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DevTimeIntent {
-    /// Move the cyclic clock back by thirty minutes.
-    PreviousHalfHour,
-    /// Move the cyclic clock forward by thirty minutes.
-    NextHalfHour,
-    /// Set the cyclic clock to midnight.
-    Midnight,
-    /// Set the cyclic clock to dawn.
-    Dawn,
-    /// Set the cyclic clock to noon.
-    Noon,
-    /// Set the cyclic clock to dusk.
-    Dusk,
+    /// Preview one finite hour from the local clear-sky cycle.
+    SetPreviewHours(f32),
+    /// Stop previewing and return presentation to authoritative gameplay time.
+    ResetPreview,
 }
 
 /// One configurable setting rendered by the Settings screen.

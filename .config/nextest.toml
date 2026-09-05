@@ -75,7 +75,7 @@ store-failure-output = true
 [profile.map-generation]
 fail-fast = false
 slow-timeout = "60s"
-default-filter = "package(hex_map) & binary(hex_map) & test(/^procedural/)"
+default-filter = "package(hex_map) & ((binary(hex_map) & test(/^procedural/)) | binary(schematic_compile))"
 
 [profile.map-generation.junit]
 path = "junit.xml"

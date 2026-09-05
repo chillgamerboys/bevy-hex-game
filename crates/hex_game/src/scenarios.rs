@@ -14,19 +14,24 @@
 //! the *previous* scenario's terrain still installed — a wrong-map bug that renders
 //! perfectly and logs nothing.
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, Encounter, EncounterPlacement, LightingSettings, Scenario, SelectSettings,
-    SettingsRegistry, SubstanceTable, CONFIG_EXTENSIONS,
+    choose_settings, Encounter, EncounterPlacement, FormationCatalog, LightingSettings, Scenario,
+    SelectSettings, SettingsRegistry, SubstanceTable, CONFIG_EXTENSIONS,
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, InteriorRegions,
-    MapAnchorId, MapAnchors, MapViewHint, PartyFormation, ResolvedMapSeed, Screen, Sextant,
-    SimSeeds, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
-    UnitId,
+    MapAnchorId, MapAnchors, MapObservationAnchors, MapViewHint, PartyFormation, ResolvedMapSeed,
+    Screen, Sextant, SimSeeds, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
+    TraversalBlockers, UnitId,
 };
 use hex_map::{MapSettings, TerrainSettings};
-use hex_units::{Body, Faction, Footing, Player, StandsOn};
+use hex_units::{
+    plan_formation_move_with_occupancy, route_with_occupancy, Body, Faction, Footing,
+    FormationMember, Player, StandsOn, UnitOccupancy,
+};
 use hex_world::TimeOfDay;
 
 use crate::screens::CreatorSandboxReturn;
@@ -55,6 +60,9 @@ pub(super) fn plugin(app: &mut App) {
                 stage_crystal_ascent_showcase_party
                     .after(GameplaySetup::Actors)
                     .before(GameplaySetup::Restore),
+                stage_crystal_mountain_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
                 finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
             ),
         )
@@ -66,9 +74,14 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 const CRYSTAL_ASCENT_SHOWCASE: &str = "Crystal Ascent Showcase";
+const CRYSTAL_ASCENT_SCENARIO: &str = "Crystal Ascent";
 const CRYSTAL_ASCENT_SITE_RADIUS: u32 = 32;
 const CRYSTAL_ASCENT_LOWER_ENTRY: &str = "crystal_ascent.lower_entry";
 const CRYSTAL_ASCENT_BOTTOM_CHAMBER: &str = "crystal_ascent.bottom_chamber";
+const CRYSTAL_MOUNTAIN_SHOWCASE: &str = "Crystal Mountain Showcase";
+const CRYSTAL_MOUNTAIN_RADIUS: u32 = 77;
+const CRYSTAL_MOUNTAIN_FOOT_APRON: &str = "crystal_mountain.foot_apron";
+const CRYSTAL_MOUNTAIN_TUNNEL_MOUTH: &str = "crystal_mountain.tunnel_mouth";
 
 /// Stages the shipped Crystal Ascent party on its exact exterior terminal.
 ///
@@ -79,8 +92,13 @@ const CRYSTAL_ASCENT_BOTTOM_CHAMBER: &str = "crystal_ascent.bottom_chamber";
 /// that one launch after generic actors exist and before save restoration/perception.
 /// A pending save therefore remains authoritative, while a fresh launch never exposes
 /// the generic formation's temporary positions to gameplay systems.
+///
+/// Other non-combat maps reuse the same encounter roster, so the active scenario is
+/// part of this adapter's authority gate. Only Crystal Ascent owns landmark-specific
+/// apron staging and its fail-closed anchor checks.
 fn stage_crystal_ascent_showcase_party(
     mut commands: Commands,
+    active: Option<Res<ActiveScenario>>,
     encounter: Option<Res<Encounter>>,
     anchors: Option<Res<MapAnchors>>,
     interiors: Option<Res<InteriorRegions>>,
@@ -91,8 +109,12 @@ fn stage_crystal_ascent_showcase_party(
     players: Query<(Entity, &UnitId, &Body), With<Player>>,
     tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
 ) {
+    let Some(active) = active else { return };
     let Some(encounter) = encounter else { return };
-    if encounter.name != CRYSTAL_ASCENT_SHOWCASE || failure.is_some() {
+    if active.0.scenario.name != CRYSTAL_ASCENT_SCENARIO
+        || encounter.name != CRYSTAL_ASCENT_SHOWCASE
+        || failure.is_some()
+    {
         return;
     }
 
@@ -181,6 +203,186 @@ fn stage_crystal_ascent_showcase_party(
     }
 }
 
+/// Stages the Crystal Mountain party in a group-safe exterior footprint.
+///
+/// Nearest-first generic staging can give three individually valid cells whose routes
+/// conflict when the default Compact group enters the boundary mouth. Keep the anchor
+/// exact, enumerate only nearby exterior footing, and retain the first deterministic
+/// placement/facing whose production formation planner proves atomic. The camera walk
+/// switches to Solo only after that ordinary Group move completes.
+fn stage_crystal_mountain_showcase_party(
+    mut commands: Commands,
+    encounter: Option<Res<Encounter>>,
+    anchors: Option<Res<MapAnchors>>,
+    interiors: Option<Res<InteriorRegions>>,
+    table: Option<Res<SubstanceTable>>,
+    formations: Option<Res<FormationCatalog>>,
+    blockers: Option<Res<TraversalBlockers>>,
+    failure: Option<Res<GameplaySetupFailure>>,
+    mut formation: Option<ResMut<PartyFormation>>,
+    players: Query<(Entity, &UnitId, &Body), With<Player>>,
+    tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
+) {
+    let Some(encounter) = encounter else { return };
+    if encounter.name != CRYSTAL_MOUNTAIN_SHOWCASE || failure.is_some() {
+        return;
+    }
+
+    let result = (|| {
+        let anchors = anchors
+            .as_deref()
+            .ok_or("the generated map published no anchors")?;
+        let interiors = interiors
+            .as_deref()
+            .ok_or("the generated map published no interior regions")?;
+        let table = table
+            .as_deref()
+            .ok_or("the substance table is unavailable")?;
+        let formations = formations
+            .as_deref()
+            .ok_or("the formation catalog is unavailable")?;
+        let formation = formation
+            .as_deref_mut()
+            .ok_or("party formation state is unavailable")?;
+        let foot_apron = anchors
+            .get(&MapAnchorId::from(CRYSTAL_MOUNTAIN_FOOT_APRON))
+            .ok_or("the Crystal Mountain foot-apron anchor is missing")?;
+        let tunnel_mouth = anchors
+            .get(&MapAnchorId::from(CRYSTAL_MOUNTAIN_TUNNEL_MOUTH))
+            .ok_or("the Crystal Mountain tunnel-mouth anchor is missing")?;
+
+        let mut members = players
+            .iter()
+            .map(|(entity, unit, body)| (entity, *unit, *body))
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(_, unit, _)| *unit);
+        if members.len() != 3 {
+            return Err("the standard showcase party did not spawn exactly three members");
+        }
+        let body = members
+            .first()
+            .map(|(_, _, body)| *body)
+            .ok_or("the standard showcase party is empty")?;
+        if members
+            .iter()
+            .any(|(_, _, member_body)| *member_body != body)
+        {
+            return Err("the standard showcase party no longer shares one staging footprint");
+        }
+
+        let footing = Arc::new(Footing::from_tiles(
+            tiles.iter(),
+            table,
+            body,
+            blockers.as_deref(),
+        ));
+        let selected = footing
+            .at(foot_apron)
+            .ok_or("the foot-apron anchor is not standable")?;
+        let selected_unit = members
+            .first()
+            .map(|(_, unit, _)| *unit)
+            .ok_or("the standard showcase party is empty")?;
+        let preset = formations
+            .get(&formation.preset)
+            .ok_or("the selected formation preset is unavailable")?;
+        let anchor_slot = preset
+            .anchor()
+            .ok_or("the selected formation preset has no anchor")?;
+        let anchor = formation
+            .assignments
+            .iter()
+            .find_map(|(&unit, &slot)| (slot == anchor_slot).then_some(unit))
+            .ok_or("the selected formation has no assigned anchor")?;
+        if anchor != selected_unit {
+            return Err("the stable foot-apron explorer is not the formation anchor");
+        }
+        let destination = footing
+            .at(tunnel_mouth)
+            .ok_or("the tunnel-mouth anchor is not standable")?;
+        let external_occupancy = UnitOccupancy::default();
+        let anchor_path =
+            route_with_occupancy(selected, destination, &footing, &external_occupancy, anchor)
+                .ok_or("the formation anchor cannot route into the tunnel mouth")?;
+
+        let mut candidates = foot_apron
+            .coord
+            .within_radius(4)
+            .into_iter()
+            .filter(|coord| coord.distance(HexCoord::ORIGIN) == CRYSTAL_MOUNTAIN_RADIUS)
+            .map(|coord| TilePos::new(coord, foot_apron.level))
+            .filter(|position| *position != foot_apron)
+            .filter(|position| interiors.get(*position).is_none())
+            .filter_map(|position| footing.at(position))
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|standing| standing.pos);
+        candidates.dedup_by_key(|standing| standing.pos);
+
+        let mut directions = Sextant::ALL;
+        directions.sort_by_key(|direction| {
+            (
+                foot_apron
+                    .coord
+                    .neighbor(*direction)
+                    .distance(tunnel_mouth.coord),
+                *direction,
+            )
+        });
+        let mut accepted = None;
+        'placements: for direction in directions {
+            for (second_index, second) in candidates.iter().enumerate() {
+                for (third_index, third) in candidates.iter().enumerate() {
+                    if second_index == third_index {
+                        continue;
+                    }
+                    let staged = [selected, *second, *third];
+                    let mut candidate_formation = formation.clone();
+                    candidate_formation.facing = direction;
+                    let planned_members = members
+                        .iter()
+                        .zip(staged)
+                        .map(|((_, unit, _), standing)| FormationMember {
+                            unit: *unit,
+                            standing,
+                            footing: Arc::clone(&footing),
+                        })
+                        .collect::<Vec<_>>();
+                    if plan_formation_move_with_occupancy(
+                        preset,
+                        &candidate_formation,
+                        &anchor_path,
+                        planned_members,
+                        &external_occupancy,
+                    )
+                    .is_ok()
+                    {
+                        accepted = Some((direction, staged));
+                        break 'placements;
+                    }
+                }
+            }
+        }
+        let Some((facing, staged)) = accepted else {
+            return Err("no nearby exterior staging footprint can enter the mouth atomically");
+        };
+
+        for ((entity, _, _), standing) in members.into_iter().zip(staged) {
+            commands.entity(entity).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+            ));
+        }
+        formation.facing = facing;
+        Ok::<(), &'static str>(())
+    })();
+
+    if let Err(detail) = result {
+        let reason = format!("Crystal Mountain showcase staging failed: {detail}.");
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
+    }
+}
+
 /// The exact scenario and resolved seed frozen by its typed launch owner.
 ///
 /// The library can hot-reload between a Campaign, Sandbox, save, retry, review, or
@@ -232,6 +434,7 @@ fn apply_selected_scenario(
     // new settings request prevents a failed generation from reusing old anchors or a
     // stale readiness marker.
     commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<MapObservationAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
     commands.remove_resource::<MapViewHint>();
@@ -543,7 +746,6 @@ fn clear_session_resources(mut commands: Commands) {
     commands.remove_resource::<ResolvedMapSeed>();
     commands.remove_resource::<SimSeeds>();
     commands.remove_resource::<ScenarioTimeOverride>();
-    commands.remove_resource::<TimeOfDay>();
     commands.remove_resource::<ActiveScenario>();
 }
 
@@ -579,11 +781,14 @@ fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Instant;
+
+    #[cfg(feature = "test-support")]
+    use std::time::Duration;
 
     use bevy::app::PluginsState;
     use bevy::asset::AssetPlugin;
@@ -603,36 +808,62 @@ pub(crate) mod tests {
         MAX_COMBAT_SUMMARY_DETAILS,
     };
     use hex_core::{
-        AppSystems, AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns, Busy, CommandQueue,
-        ControlOwner, ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup,
-        GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, IlluminationLevel,
-        InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord, LightDomain,
-        LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
-        PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
-        Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady,
-        TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
+        AppSystems, AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns, BiomeRegions, Busy,
+        CommandQueue, ControlOwner, ExteriorIllumination, GameCommand, GameplayLight,
+        GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+        IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
+        LightDomain, LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
+        PartyMovementMode, PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat,
+        ResolvedMapSeed, Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions,
+        SubstanceId, TerrainChunkRoot, TerrainReady, TerrainRenderBatch, TilePos,
+        TraversalBlockers, TraversalProfile, Turn, UnitId, MAX_TERRAIN_PICK_RUNS_PER_BATCH,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
-        GenerationReport, MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
+        export_world_snapshot_v1, terrain_chunk_key, CurrentWorldSnapshotV1, GenerationReport,
+        MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
     };
     use hex_perception::{
-        can_observe, can_observe_with_authored_objects, FactionMapKnowledge, ResolvedIllumination,
+        can_observe, can_observe_with_authored_objects, FactionMapKnowledge, FactionObservations,
+        ResolvedIllumination, SurfaceSnapshots,
     };
     use hex_units::{
-        either_in_reach, plan_formation_move, Archetype, AuthoredObjectOccupancy, Body, Downed,
-        Enemy, Faction, Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
-        UnitOccupancy,
+        either_in_reach, plan_formation_move, plan_formation_move_with_occupancy,
+        route_with_occupancy, Archetype, AuthoredObjectOccupancy, Body, Downed, Enemy, Faction,
+        Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy, UnitOccupancy,
     };
     use hex_world::TimeOfDay;
+
+    #[cfg(feature = "test-support")]
+    use hex_assets::{CameraSettings, HexObjectRotation, ObjectAssetId};
+    #[cfg(feature = "test-support")]
+    use hex_core::{
+        CameraFocusTarget, CutawayOccluder, PresentationOcclusion, PresentationOcclusionReason,
+        RunBottom, TerrainEdit, TreeOccluder,
+    };
+    #[cfg(feature = "test-support")]
+    use hex_perception::{
+        resolve_observations_with_authored_objects, LightSourceSnapshot, ObservedUnit,
+    };
+    #[cfg(feature = "test-support")]
+    use hex_units::{FootingCache, Standing, TerrainRevision};
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
         scenario_contract_error, scenario_contract_error_for_launch, setup_failure_destination,
-        stage_crystal_ascent_showcase_party, validate_gameplay_lighting_contract,
-        validate_loaded_scenario, ActiveScenario, ScenarioContractStatus, ScenarioTimeOverride,
-        ScenarioToLoad,
+        stage_crystal_ascent_showcase_party, stage_crystal_mountain_showcase_party,
+        validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
+        ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
     };
+
+    #[cfg(feature = "test-support")]
+    mod grand_v3_crystal_contract;
+
+    #[cfg(feature = "test-support")]
+    mod grand_v3_edit_contract;
+
+    #[cfg(feature = "test-support")]
+    mod grand_v3_idle_contract;
 
     fn library() -> ScenarioLibrary {
         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -834,6 +1065,217 @@ pub(crate) mod tests {
         panic!("the shipped heart should block at least one otherwise-clear chamber sight bundle");
     }
 
+    #[cfg(feature = "test-support")]
+    fn crystal_mountain_presentation_app() -> App {
+        let mut app = unfinished_procedural_gameplay_app("Crystal Mountain", false);
+        let settings: CameraSettings =
+            ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                .expect("the shipped camera settings should deserialize");
+        settings
+            .validate()
+            .expect("the shipped camera settings should remain valid");
+        app.insert_resource(settings);
+        app.add_plugins(bevy::window::WindowPlugin {
+            primary_window: None,
+            ..default()
+        });
+        app.add_plugins(bevy::transform::TransformPlugin);
+        app.add_plugins((
+            hex_world::test_support::headless_camera_plugin,
+            crate::fog::plugin,
+        ));
+        hex_world::install_full_cutaway_review_override(&mut app);
+        finish_test_app(app)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn focus_crystal_mountain_interior(app: &mut App) -> TilePos {
+        let target = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("crystal_mountain.midpoint"))
+            .expect("Crystal Mountain should publish its tunnel midpoint");
+        let span = {
+            let world = app.world_mut();
+            let mut surfaces =
+                world.query_filtered::<(&TilePos, &HexSpan, &Headroom), With<HexTile>>();
+            surfaces
+                .iter(world)
+                .find(|(position, _, headroom)| **position == target && headroom.0 > 0)
+                .map(|(_, span, _)| *span)
+                .expect("the tunnel midpoint should be an exposed published surface")
+        };
+        let standing = Standing { pos: target, span };
+        {
+            let world = app.world_mut();
+            let player = {
+                let mut players = world.query_filtered::<(Entity, &UnitId), With<Player>>();
+                players
+                    .iter(world)
+                    .min_by_key(|(_, unit)| **unit)
+                    .map(|(entity, _)| entity)
+                    .expect("Crystal Mountain should retain its player party")
+            };
+            world.entity_mut(player).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+                CameraFocusTarget::new(target),
+            ));
+        }
+        app.update();
+
+        let world = app.world_mut();
+        let mut focused = world.query_filtered::<&CameraFocusTarget, With<Player>>();
+        assert_eq!(
+            focused
+                .single(world)
+                .expect("the review fixture should publish one exact camera focus")
+                .surface,
+            target,
+            "review cutaway must consume the relocated actor's exact interior surface"
+        );
+        target
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CrystalMountainRuntimeSnapshot {
+        map_fingerprint: u64,
+        terrain: TerrainOccupancy,
+        authored: AuthoredObjectOccupancy,
+        blocked_sight_pair: (TilePos, TilePos),
+        fog_surfaces: BTreeSet<TilePos>,
+        cutaway_roofs: BTreeSet<TilePos>,
+        cutaway_tree_roots: BTreeSet<TilePos>,
+    }
+
+    #[cfg(feature = "test-support")]
+    fn crystal_mountain_runtime_snapshot(app: &mut App) -> CrystalMountainRuntimeSnapshot {
+        let target = focus_crystal_mountain_interior(app);
+        let expected_terrain = {
+            let world = app.world_mut();
+            let mut runs = world.query_filtered::<(&TilePos, &RunBottom), With<HexTile>>();
+            TerrainOccupancy::from_runs(
+                runs.iter(world)
+                    .map(|(position, bottom)| (*position, *bottom)),
+            )
+            .expect("Crystal Mountain should publish only valid terrain runs")
+        };
+        let terrain = app.world().resource::<TerrainOccupancy>().clone();
+        assert_eq!(
+            terrain, expected_terrain,
+            "runtime terrain authority must derive from every composed material run"
+        );
+        assert!(terrain.contains(target));
+
+        let (heart, _, authored) = crystal_heart_occupancy_snapshot(app);
+        let blocked_sight_pair = crystal_heart_blocked_sight_pair(app, heart.origin());
+        let active_region = app
+            .world()
+            .resource::<InteriorRegions>()
+            .get(target)
+            .expect("the tunnel midpoint should belong to the combined interior");
+        let projected_regions = {
+            let world = app.world_mut();
+            let mut cutaways = world.query::<&CutawayOccluder>();
+            cutaways
+                .iter(world)
+                .map(|cutaway| cutaway.0)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            projected_regions.contains(&active_region),
+            "the combined interior omitted its exact rendered roof projection: active={active_region:?}, projected={projected_regions:?}"
+        );
+        let cutaway_roofs = {
+            let world = app.world_mut();
+            let mut roofs = world.query_filtered::<(
+                &TilePos,
+                &CutawayOccluder,
+                &PresentationOcclusion,
+                Option<&Visibility>,
+            ), With<HexTile>>();
+            roofs
+                .iter(world)
+                .filter(|(_, cutaway, _, _)| cutaway.0 == active_region)
+                .map(|(position, _, occlusion, visibility)| {
+                    assert!(occlusion.contains(PresentationOcclusionReason::InteriorCutaway));
+                    assert_eq!(
+                        visibility, None,
+                        "logical roof runs must remain outside visibility propagation"
+                    );
+                    *position
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        assert!(
+            !cutaway_roofs.is_empty(),
+            "the combined tunnel/ascent interior should hide authored roof runs"
+        );
+        {
+            let world = app.world_mut();
+            let mut rendered_roofs =
+                world.query::<(&TerrainRenderBatch, &CutawayOccluder, Option<&Visibility>)>();
+            let hidden = rendered_roofs
+                .iter(world)
+                .filter(|(_batch, cutaway, visibility)| {
+                    cutaway.0 == active_region && *visibility == Some(&Visibility::Hidden)
+                })
+                .count();
+            assert!(
+                hidden > 0,
+                "the active cutaway did not hide its render batches"
+            );
+        }
+        let interior_regions = app.world().resource::<InteriorRegions>().clone();
+        let cutaway_tree_roots = {
+            let world = app.world_mut();
+            let mut trees = world.query::<(
+                &TreeOccluder,
+                Option<&PresentationOcclusion>,
+                Option<&Visibility>,
+            )>();
+            let mut all_roots = BTreeSet::new();
+            let mut hidden_roots = BTreeSet::new();
+            for (tree, occlusion, visibility) in trees.iter(world) {
+                all_roots.insert(tree.0);
+                if interior_regions.roof_region(tree.0) == Some(active_region) {
+                    assert!(occlusion.is_some_and(|occlusion| {
+                        occlusion.contains(PresentationOcclusionReason::InteriorCutaway)
+                    }));
+                    assert_eq!(visibility, Some(&Visibility::Hidden));
+                    hidden_roots.insert(tree.0);
+                }
+            }
+            assert!(
+                !all_roots.is_empty(),
+                "Crystal Mountain should retain its generated tree roots"
+            );
+            hidden_roots
+        };
+        assert_eq!(
+            app.world().resource::<LocalMapKnowledge>().state(target),
+            KnowledgeState::Observed,
+            "relocating the real observer should rebuild local visibility at the tunnel midpoint"
+        );
+        let fog_surfaces = crate::fog::fog_overlay_positions(app.world_mut());
+        assert!(!fog_surfaces.is_empty());
+        assert!(
+            !fog_surfaces.contains(&target),
+            "an observed tunnel midpoint must not retain a fog cap"
+        );
+
+        CrystalMountainRuntimeSnapshot {
+            map_fingerprint: app.world().resource::<GenerationReport>().map_fingerprint,
+            terrain,
+            authored,
+            blocked_sight_pair,
+            fog_surfaces,
+            cutaway_roofs,
+            cutaway_tree_roots,
+        }
+    }
+
     /// The encounter a scenario names, read off disk.
     ///
     /// The whole point of the path is that this crate is the first layer allowed to open
@@ -916,9 +1358,10 @@ pub(crate) mod tests {
     /// a typo would otherwise be a loading screen that hangs for the one scenario nobody
     /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
     /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
-    /// coordinate that is not a hex, no two units sharing one exact surface. Crystal
-    /// Ascent is the one approved non-combat showcase; every other scenario must still
-    /// provide somebody to fight.
+    /// coordinate that is not a hex, no two units sharing one exact surface. The two
+    /// Crystal traversal showcases, the three island review maps, and Grand V3 are
+    /// approved non-combat maps; every other scenario must still provide somebody
+    /// to fight.
     #[test]
     fn every_scenario_names_an_encounter_that_exists_and_parses() {
         for scenario in &library().scenarios {
@@ -929,10 +1372,18 @@ pub(crate) mod tests {
                 scenario.name
             );
             let hostile_count = encounter.unit_count(EncounterFaction::Hostile);
-            if scenario.name == "Crystal Ascent" {
+            if matches!(
+                scenario.name.as_str(),
+                "Crystal Ascent"
+                    | "Crystal Mountain"
+                    | "Grand V3 Baseline"
+                    | "Sandy Islets"
+                    | "Wooded Island"
+                    | "Ocean Archipelagoes"
+            ) {
                 assert_eq!(
                     hostile_count, 0,
-                    "the Crystal Ascent showcase should remain non-combat"
+                    "the non-combat map showcases should remain non-combat"
                 );
             } else {
                 assert!(
@@ -1296,6 +1747,9 @@ pub(crate) mod tests {
             )
                 .chain(),
         );
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<GlobalAmbientLight>()
+            .add_plugins(hex_world::sky::plugin);
         app.insert_resource(lighting);
         app.insert_resource(ScenarioTimeOverride(Some(18.5)));
         app.add_systems(
@@ -1769,6 +2223,330 @@ pub(crate) mod tests {
         );
     }
 
+    /// The selectable Crystal Mountain content freezes the intended Macro roster and
+    /// launches the standard party from the stable world-owned foot anchor. Exact
+    /// tunnel and route behavior remains generator-owned and is proved in map tests.
+    #[test]
+    fn crystal_mountain_showcase_names_its_macro_world_and_non_combat_party() {
+        let library = library();
+        let scenario = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Crystal Mountain")
+            .expect("the shipped library should contain Crystal Mountain");
+
+        assert_eq!(
+            scenario.world,
+            "config/worlds/procedural-crystal-mountain.ron"
+        );
+        assert_eq!(
+            scenario.encounter,
+            "config/encounters/crystal-mountain-showcase.ron"
+        );
+        assert_eq!(scenario.generation_seed, Some(1_592_598_566));
+
+        let world_text = fs::read_to_string(assets_dir().join(&scenario.world))
+            .expect("the Crystal Mountain world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the Crystal Mountain world should parse");
+        assert_eq!(world.grid_radius, 77);
+        let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) = &world.terrain
+        else {
+            panic!("Crystal Mountain must remain a V3 procedural world");
+        };
+        let hex_map::V3LayoutSettings::Macro(layout) = &v3.layout else {
+            panic!("Crystal Mountain must remain a Macro world");
+        };
+        assert_eq!(layout.macro_radius, 3);
+        assert_eq!(
+            layout
+                .instances
+                .iter()
+                .map(|instance| (instance.name.as_str(), instance.cells.len()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("crystal-ascent", 7),
+                ("summit-forest", 5),
+                ("inner-mountain", 7),
+                ("outer-mountain", 18),
+            ]
+        );
+        let landmark = layout
+            .instances
+            .first()
+            .expect("Crystal Mountain should retain its central landmark instance");
+        assert_eq!(landmark.rotation_turns, 0);
+        let hex_map::V3RecipeSettings::CrystalAscent(settings) = &landmark.recipe else {
+            panic!("Crystal Mountain's central instance must use CrystalAscent");
+        };
+        assert_eq!(settings.base_level, 6);
+        assert_eq!(settings.rise_levels, 144);
+        assert!(layout.critical_route.is_empty());
+
+        let encounter = encounter_of(scenario);
+        assert_eq!(encounter.name, "Crystal Mountain Showcase");
+        assert_eq!(encounter.rosters.len(), 1);
+        let roster = encounter
+            .rosters
+            .first()
+            .expect("Crystal Mountain should retain its player roster");
+        assert_eq!(roster.faction, EncounterFaction::Player);
+        assert_eq!(
+            roster
+                .units
+                .iter()
+                .map(|unit| unit.archetype.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hedge-mage", "raider", "wolf"]
+        );
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        assert_eq!(
+            roster.placement,
+            EncounterPlacement::Formation {
+                center: FormationCenter::Anchor("crystal_mountain.foot_apron".to_owned()),
+                spread: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn crystal_mountain_showcase_stages_a_clear_default_group_route_from_the_outer_apron() {
+        let mut app = procedural_gameplay_app("Crystal Mountain");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "exact outer-apron staging failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let (foot_apron, tunnel_mouth) = {
+            let anchors = app.world().resource::<MapAnchors>();
+            (
+                anchors
+                    .get(&MapAnchorId::from("crystal_mountain.foot_apron"))
+                    .expect("Crystal Mountain should publish its exterior apron"),
+                anchors
+                    .get(&MapAnchorId::from("crystal_mountain.tunnel_mouth"))
+                    .expect("Crystal Mountain should publish its roofed threshold"),
+            )
+        };
+        let mut party = {
+            let world = app.world_mut();
+            let mut players =
+                world.query_filtered::<(&UnitId, &StandsOn, &Transform), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing, transform)| {
+                    assert_eq!(transform.translation, standing.0.world_position());
+                    (*unit, standing.0.pos)
+                })
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, _)| *unit);
+        assert_eq!(party.len(), 3);
+        assert_eq!(
+            party.first().map(|(_, position)| *position),
+            Some(foot_apron)
+        );
+        let occupied = party
+            .iter()
+            .map(|(_, position)| *position)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(occupied.len(), party.len());
+        assert_eq!(
+            party
+                .iter()
+                .map(|(_, position)| *position)
+                .collect::<Vec<_>>(),
+            vec![
+                foot_apron,
+                TilePos::new(HexCoord::from_axial(-77, 0), 6),
+                TilePos::new(HexCoord::from_axial(-77, 4), 6),
+            ],
+            "the fresh party should retain its stable group-safe exterior footprint"
+        );
+        let interiors = app.world().resource::<InteriorRegions>();
+        assert!(party.iter().all(|(_, position)| {
+            position.level == foot_apron.level
+                && position.coord.distance(HexCoord::ORIGIN) <= 77
+                && interiors.get(*position).is_none()
+        }));
+
+        let formation = app.world().resource::<PartyFormation>();
+        let inward = TilePos::new(
+            foot_apron.coord.neighbor(formation.facing),
+            foot_apron.level,
+        );
+        assert!(
+            inward.coord.distance(tunnel_mouth.coord)
+                < foot_apron.coord.distance(tunnel_mouth.coord),
+            "the staged party must face inward toward the tunnel"
+        );
+        let inward_is_standable = {
+            let world = app.world_mut();
+            let mut surfaces = world.query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+            surfaces
+                .iter(world)
+                .any(|(position, headroom)| *position == inward && headroom.0 > 0)
+        };
+        assert!(inward_is_standable);
+
+        let (selected, body) = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &Body, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .min_by_key(|(unit, _, _)| **unit)
+                .map(|(unit, body, _)| (*unit, *body))
+                .expect("the standard party should retain its selected explorer")
+        };
+        let table = app.world().resource::<SubstanceTable>().clone();
+        let blockers = app.world().resource::<TraversalBlockers>().clone();
+        let authored = app.world().resource::<AuthoredObjectOccupancy>().clone();
+        let footing = Arc::new({
+            let world = app.world_mut();
+            let mut tiles = world
+                .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+            Footing::from_tiles_with_object_occupancy(
+                tiles.iter(world),
+                &table,
+                body,
+                Some(&blockers),
+                &authored,
+            )
+        });
+        let destination = footing
+            .at(tunnel_mouth)
+            .expect("the roofed tunnel threshold should remain standable");
+
+        let formation = app.world().resource::<PartyFormation>().clone();
+        let formations = app.world().resource::<FormationCatalog>();
+        let preset = formations
+            .get(&formation.preset)
+            .expect("fresh gameplay should resolve the shipped formation preset")
+            .clone();
+        let anchor_slot = preset
+            .anchor()
+            .expect("the shipped formation preset should have one anchor");
+        let anchor = formation
+            .assignments
+            .iter()
+            .find_map(|(&unit, &slot)| (slot == anchor_slot).then_some(unit))
+            .expect("the staged standard party should retain its formation anchor");
+        assert_eq!(anchor, selected);
+        let members = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing)| FormationMember {
+                    unit: *unit,
+                    standing: standing.0,
+                    footing: Arc::clone(&footing),
+                })
+                .collect::<Vec<_>>()
+        };
+        let anchor_standing = members
+            .iter()
+            .find_map(|member| (member.unit == anchor).then_some(member.standing))
+            .expect("the formation anchor should be one of the staged players");
+        let external_occupancy = UnitOccupancy::default();
+        let anchor_route = route_with_occupancy(
+            anchor_standing,
+            destination,
+            &footing,
+            &external_occupancy,
+            anchor,
+        )
+        .expect("the default Group anchor should route to the tunnel mouth");
+        let group_plan = plan_formation_move_with_occupancy(
+            &preset,
+            &formation,
+            &anchor_route,
+            members,
+            &external_occupancy,
+        )
+        .expect("the default Group party should compress through the four-wide mouth");
+        assert_eq!(group_plan.paths.len(), party.len());
+        assert!(group_plan.paths.iter().all(|path| path.path.len() > 1));
+        let anchor_path = group_plan
+            .paths
+            .iter()
+            .find(|path| path.member == anchor)
+            .expect("the group plan should retain its anchor path");
+        assert_eq!(anchor_path.path.first().copied(), Some(foot_apron));
+        assert_eq!(anchor_path.path.last().copied(), Some(tunnel_mouth));
+    }
+
+    fn restore_staging_override_fixture(
+        mut commands: Commands,
+        mut formation: ResMut<PartyFormation>,
+        players: Query<(Entity, &UnitId, &StandsOn), With<Player>>,
+    ) {
+        let mut staged = players
+            .iter()
+            .map(|(entity, unit, standing)| (entity, *unit, standing.0))
+            .collect::<Vec<_>>();
+        staged.sort_by_key(|(_, unit, _)| *unit);
+        let restored = staged
+            .iter()
+            .map(|(_, _, standing)| *standing)
+            .cycle()
+            .skip(1)
+            .take(staged.len())
+            .collect::<Vec<_>>();
+        for ((entity, _, _), standing) in staged.into_iter().zip(restored) {
+            commands.entity(entity).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+            ));
+        }
+        formation.facing = Sextant::D;
+        formation.mode = PartyMovementMode::Solo;
+    }
+
+    #[test]
+    fn crystal_mountain_restore_remains_authoritative_over_fresh_showcase_staging() {
+        let mut app = procedural_gameplay_app("Crystal Mountain");
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            restore_staging_override_fixture.in_set(GameplaySetup::Restore),
+        );
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "the restore fixture should retain a valid composed setup"
+        );
+        let mut party = {
+            let world = app.world_mut();
+            let mut players =
+                world.query_filtered::<(&UnitId, &StandsOn, &Transform), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing, transform)| {
+                    assert_eq!(transform.translation, standing.0.world_position());
+                    (*unit, standing.0.pos)
+                })
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, _)| *unit);
+        assert_eq!(
+            party,
+            vec![
+                (UnitId(0), TilePos::new(HexCoord::from_axial(-77, 0), 6)),
+                (UnitId(1), TilePos::new(HexCoord::from_axial(-77, 4), 6)),
+                (UnitId(2), TilePos::new(HexCoord::from_axial(-77, 3), 6)),
+            ],
+            "Restore must overwrite every fresh staging position"
+        );
+        let formation = app.world().resource::<PartyFormation>();
+        assert_eq!(formation.facing, Sextant::D);
+        assert_eq!(formation.mode, PartyMovementMode::Solo);
+    }
+
     /// The generic encounter formation owns a spawn *region*. This landmark's terminal
     /// is narrower: freeze the exact fresh-launch staging that the scenario adapter
     /// publishes before perception sees any party member.
@@ -2116,6 +2894,71 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn crystal_mountain_rebuilds_visibility_fog_and_cutaway_from_composed_authority() {
+        let mut app = crystal_mountain_presentation_app();
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "Crystal Mountain setup failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let first = crystal_mountain_runtime_snapshot(&mut app);
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+        assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+        assert!(!app.world().contains_resource::<ResolvedIllumination>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+        assert!(crate::fog::fog_overlay_positions(app.world_mut()).is_empty());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Crystal Mountain left a rendered grid after teardown"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&CutawayOccluder>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Crystal Mountain left cutaway-tagged roof entities after teardown"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&TreeOccluder>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Crystal Mountain left generated tree roots after teardown"
+        );
+        {
+            let world = app.world_mut();
+            let mut occlusions = world.query::<&PresentationOcclusion>();
+            assert!(occlusions.iter(world).all(|occlusion| {
+                !occlusion.contains(PresentationOcclusionReason::Fog)
+                    && !occlusion.contains(PresentationOcclusionReason::InteriorCutaway)
+            }));
+        }
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+        let second = crystal_mountain_runtime_snapshot(&mut app);
+        assert_eq!(
+            second, first,
+            "Crystal Mountain re-entry rebuilt stale or divergent visibility presentation state"
+        );
+    }
+
     #[test]
     #[ignore = "manual release/debug Crystal Ascent end-to-end boundary-rise benchmark"]
     fn crystal_ascent_boundary_rises_track_materialization_perception_and_entity_counts() {
@@ -2207,6 +3050,2213 @@ pub(crate) mod tests {
             assert!(!app.world().contains_resource::<ResolvedIllumination>());
             assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
         }
+    }
+
+    #[derive(Debug)]
+    struct RuntimeWorldObservation {
+        generator_version: u32,
+        seed: u64,
+        generation_and_materialization_micros: u64,
+        settings_fingerprint: u64,
+        semantic_plan_fingerprint: Option<u64>,
+        map_fingerprint: u64,
+        recipe_metrics: Option<ProceduralRecipeMetrics>,
+        reported_reachable_surfaces: u32,
+        reported_reachable_elevation_levels: u32,
+        columns: usize,
+        material_runs: usize,
+        resident_chunks: usize,
+        grid_entities: usize,
+        tile_entities: usize,
+        terrain_render_batches: usize,
+        terrain_batched_runs: usize,
+        maximum_terrain_batch_runs: usize,
+        maximum_resident_chunk_columns: usize,
+        total_entities: usize,
+        object_instances: usize,
+        gameplay_lights: usize,
+        point_lights: usize,
+        #[cfg_attr(
+            not(feature = "test-support"),
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
+        )]
+        snapshot_export_elapsed: std::time::Duration,
+        #[cfg_attr(
+            not(feature = "test-support"),
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
+        )]
+        snapshot_encode_elapsed: std::time::Duration,
+        snapshot_encoded_bytes: usize,
+        snapshot_fingerprint: u64,
+        snapshot_columns: usize,
+        snapshot_runs: usize,
+        snapshot_damage: usize,
+        snapshot_anchors: usize,
+        snapshot_interior_surfaces: usize,
+        snapshot_interior_roofs: usize,
+        snapshot_special_regions: usize,
+        snapshot_biome_regions: usize,
+        snapshot_blockers: usize,
+        snapshot_lights: usize,
+        snapshot_liquids: usize,
+        snapshot_objects: usize,
+        surface_snapshots: usize,
+        illumination_surfaces: usize,
+        player_observed_surfaces: usize,
+        player_known_surfaces: usize,
+        perception: hex_perception::PerceptionRuntimeStats,
+    }
+
+    #[derive(Debug)]
+    struct MacroRuntimeProfile {
+        scenario_name: &'static str,
+        setup_elapsed: std::time::Duration,
+        #[cfg_attr(
+            not(feature = "test-support"),
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
+        )]
+        reentry_setup_elapsed: std::time::Duration,
+        #[cfg_attr(
+            not(feature = "test-support"),
+            expect(dead_code, reason = "the extended runtime gate is feature-gated")
+        )]
+        reentry_generation_and_materialization_micros: u64,
+        runtime: RuntimeWorldObservation,
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug)]
+    struct TraversalRuntimeProbe {
+        party_unit: UnitId,
+        party_start: TilePos,
+        footing_build_elapsed: std::time::Duration,
+        footing_cache_hit_elapsed: std::time::Duration,
+        footing_cache_builds: u64,
+        reach_warmup_samples: usize,
+        reach_samples: usize,
+        reach_p95: std::time::Duration,
+        reach_worst: std::time::Duration,
+        reachable_surfaces: usize,
+        reachable_special_surfaces: usize,
+        reachable_ordinary_surfaces: usize,
+        reachable_ordinary_elevation_levels: usize,
+        path_target: TilePos,
+        path_cost: u32,
+        path_warmup_samples: usize,
+        path_samples: usize,
+        path_p95: std::time::Duration,
+        path_worst: std::time::Duration,
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug)]
+    struct EditRuntimeProbe {
+        edit_target: TilePos,
+        edit_chunk: (i32, i32),
+        edit_chunk_columns: usize,
+        edit_chunk_runs: usize,
+        original_run_levels: i32,
+        edit_warmup_updates: usize,
+        edit_samples: usize,
+        edit_total_updates: usize,
+        edit_p95: std::time::Duration,
+        edit_worst: std::time::Duration,
+        edit_chunk_roots_replaced_per_update: usize,
+        edit_frames_checked: u64,
+        edit_surface_rebuilds: u64,
+        edit_illumination_resolutions: u64,
+        edit_observation_resolutions: u64,
+        edit_knowledge_publications: u64,
+    }
+
+    #[derive(Debug)]
+    struct TerrainRuntimeTopology {
+        resident_chunks: usize,
+        grid_entities: usize,
+        tile_entities: usize,
+        terrain_render_batches: usize,
+        terrain_batched_runs: usize,
+        maximum_terrain_batch_runs: usize,
+        maximum_resident_chunk_columns: usize,
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug, Clone, Copy)]
+    struct CheckpointEditTarget {
+        position: TilePos,
+        original: SubstanceId,
+        chunk: (i32, i32),
+        chunk_columns: usize,
+        chunk_runs: usize,
+        original_run_levels: i32,
+        baseline_column_runs: usize,
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug)]
+    struct PerceptionRuntimeProbe {
+        warmup_samples: usize,
+        samples: usize,
+        p95: std::time::Duration,
+        worst: std::time::Duration,
+        player_surfaces: usize,
+        hostile_surfaces: usize,
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug)]
+    struct RuntimeGateProbes {
+        traversal: TraversalRuntimeProbe,
+        perception: PerceptionRuntimeProbe,
+        camera: hex_world::camera::test_support::CharacterCollisionProfile,
+        edit: EditRuntimeProbe,
+    }
+
+    /// Validates the complete headless terrain-presentation projection while it is live.
+    ///
+    /// Raw material runs and logical presentation runs are deliberately different
+    /// quantities: cutaway ownership may split one raw run into multiple logical
+    /// [`HexTile`] entities. The combined render batches must nevertheless cover every
+    /// logical entity exactly once, under the same chunk and substance authority.
+    fn observe_terrain_runtime_topology(
+        app: &mut App,
+        scenario_name: &'static str,
+    ) -> TerrainRuntimeTopology {
+        const MAX_CHUNK_COLUMNS: usize = 16 * 16;
+
+        let expected_chunk_columns = {
+            let map = app.world().resource::<VoxelMap>();
+            let mut by_chunk = BTreeMap::<(i32, i32), usize>::new();
+            for (coord, _column) in map.columns() {
+                *by_chunk.entry(terrain_chunk_key(coord)).or_default() += 1;
+            }
+            by_chunk
+        };
+        let maximum_resident_chunk_columns = expected_chunk_columns
+            .values()
+            .copied()
+            .max()
+            .unwrap_or_default();
+        assert!(
+            maximum_resident_chunk_columns <= MAX_CHUNK_COLUMNS,
+            "{scenario_name} resident chunk exceeded the fixed {MAX_CHUNK_COLUMNS}-column slot bound: \
+             {maximum_resident_chunk_columns}"
+        );
+
+        let world = app.world_mut();
+        let grid_entities = world
+            .query_filtered::<Entity, With<HexGrid>>()
+            .iter(world)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            grid_entities.len(),
+            1,
+            "{scenario_name} must publish exactly one HexGrid before TerrainReady"
+        );
+        let grid = grid_entities
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("{scenario_name} did not publish its sole HexGrid"));
+
+        let mut roots = BTreeMap::<(i32, i32), Entity>::new();
+        let mut root_query = world.query::<(Entity, &TerrainChunkRoot, Option<&ChildOf>)>();
+        for (entity, root, parent) in root_query.iter(world) {
+            let key = (root.q, root.r);
+            let parent = parent
+                .unwrap_or_else(|| panic!("{scenario_name} terrain chunk {key:?} is orphaned"));
+            assert_eq!(
+                parent.parent(),
+                grid,
+                "{scenario_name} terrain chunk {key:?} is not parented to the sole HexGrid"
+            );
+            assert!(
+                expected_chunk_columns.contains_key(&key),
+                "{scenario_name} published unexpected terrain chunk {key:?}"
+            );
+            assert!(
+                roots.insert(key, entity).is_none(),
+                "{scenario_name} published duplicate terrain chunk {key:?}"
+            );
+        }
+        let expected_keys = expected_chunk_columns.keys().copied().collect::<Vec<_>>();
+        let actual_keys = roots.keys().copied().collect::<Vec<_>>();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "{scenario_name} terrain chunk roots do not exactly cover VoxelMap storage"
+        );
+
+        let mut logical_tiles = BTreeMap::<Entity, (TilePos, HexSpan, SubstanceId, Entity)>::new();
+        let mut tile_query = world.query_filtered::<(
+            Entity,
+            &TilePos,
+            &HexSpan,
+            &SubstanceId,
+            Option<&ChildOf>,
+            Option<&Transform>,
+            Option<&GlobalTransform>,
+            Option<&Visibility>,
+            Option<&InheritedVisibility>,
+            Option<&ViewVisibility>,
+        ), With<HexTile>>();
+        let logical_rows = tile_query
+            .iter(world)
+            .map(
+                |(
+                    entity,
+                    position,
+                    span,
+                    substance,
+                    parent,
+                    transform,
+                    global,
+                    visibility,
+                    inherited,
+                    view,
+                )| {
+                    (
+                        entity,
+                        *position,
+                        *span,
+                        *substance,
+                        parent.map(ChildOf::parent),
+                        transform.is_some(),
+                        global.is_some(),
+                        visibility.is_some(),
+                        inherited.is_some(),
+                        view.is_some(),
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+        for (
+            entity,
+            position,
+            span,
+            substance,
+            logical_parent,
+            has_transform,
+            has_global,
+            has_visibility,
+            has_inherited,
+            has_view,
+        ) in logical_rows
+        {
+            let key = terrain_chunk_key(position.coord);
+            let expected_parent = *roots.get(&key).unwrap_or_else(|| {
+                panic!(
+                    "{scenario_name} logical terrain run {entity:?} belongs to absent chunk {key:?}"
+                )
+            });
+            let logical_parent = logical_parent.unwrap_or_else(|| {
+                panic!("{scenario_name} logical terrain run {entity:?} is orphaned")
+            });
+            let owner = world.entity(logical_parent);
+            assert!(
+                owner.get::<Transform>().is_none()
+                    && owner.get::<GlobalTransform>().is_none()
+                    && owner.get::<Visibility>().is_none()
+                    && owner.get::<InheritedVisibility>().is_none()
+                    && owner.get::<ViewVisibility>().is_none(),
+                "{scenario_name} logical terrain owner entered Bevy scene propagation"
+            );
+            let parent = owner.get::<ChildOf>().unwrap_or_else(|| {
+                panic!("{scenario_name} logical terrain owner {logical_parent:?} is orphaned")
+            });
+            assert_eq!(
+                parent.parent(),
+                expected_parent,
+                "{scenario_name} logical terrain run {entity:?} has the wrong chunk owner"
+            );
+            assert!(
+                !(has_transform || has_global || has_visibility || has_inherited || has_view),
+                "{scenario_name} logical terrain run {entity:?} entered Bevy scene propagation"
+            );
+            assert!(
+                logical_tiles
+                    .insert(entity, (position, span, substance, parent.parent()))
+                    .is_none(),
+                "{scenario_name} observed duplicate logical terrain entity {entity:?}"
+            );
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut terrain_render_batches = 0_usize;
+        let mut terrain_batched_runs = 0_usize;
+        let mut maximum_terrain_batch_runs = 0_usize;
+        let mut batch_query = world.query::<(Entity, &TerrainRenderBatch, Option<&ChildOf>)>();
+        for (batch_entity, batch, parent) in batch_query.iter(world) {
+            terrain_render_batches = terrain_render_batches.saturating_add(1);
+            let batch_key = (batch.chunk().q, batch.chunk().r);
+            let expected_parent = *roots.get(&batch_key).unwrap_or_else(|| {
+                panic!(
+                    "{scenario_name} terrain batch {batch_entity:?} belongs to absent chunk \
+                     {batch_key:?}"
+                )
+            });
+            let parent = parent.unwrap_or_else(|| {
+                panic!("{scenario_name} terrain batch {batch_entity:?} is orphaned")
+            });
+            assert_eq!(
+                parent.parent(),
+                expected_parent,
+                "{scenario_name} terrain batch {batch_entity:?} has the wrong chunk parent"
+            );
+
+            let batch_runs = batch.runs().len();
+            assert!(
+                (1..=MAX_TERRAIN_PICK_RUNS_PER_BATCH).contains(&batch_runs),
+                "{scenario_name} terrain batch {batch_entity:?} has invalid run count {batch_runs}"
+            );
+            terrain_batched_runs = terrain_batched_runs.saturating_add(batch_runs);
+            maximum_terrain_batch_runs = maximum_terrain_batch_runs.max(batch_runs);
+            for run in batch.runs() {
+                let Some((position, span, substance, logical_parent)) =
+                    logical_tiles.get(&run.entity())
+                else {
+                    panic!(
+                        "{scenario_name} terrain batch {batch_entity:?} references unknown logical \
+                         run {:?}",
+                        run.entity()
+                    );
+                };
+                assert_eq!(
+                    run.position(),
+                    *position,
+                    "{scenario_name} batch position drifted from logical run {:?}",
+                    run.entity()
+                );
+                assert_eq!(
+                    run.span(),
+                    *span,
+                    "{scenario_name} batch span drifted from logical run {:?}",
+                    run.entity()
+                );
+                assert_eq!(
+                    batch.substance(),
+                    *substance,
+                    "{scenario_name} batch substance drifted from logical run {:?}",
+                    run.entity()
+                );
+                assert_eq!(
+                    *logical_parent,
+                    expected_parent,
+                    "{scenario_name} batch crossed chunk ownership for logical run {:?}",
+                    run.entity()
+                );
+                assert!(
+                    seen.insert(run.entity()),
+                    "{scenario_name} logical terrain run {:?} appears in multiple render batches",
+                    run.entity()
+                );
+            }
+        }
+        if let Some(missing) = logical_tiles.keys().find(|entity| !seen.contains(entity)) {
+            panic!("{scenario_name} logical terrain run {missing:?} is absent from render batches");
+        }
+        assert_eq!(
+            terrain_batched_runs,
+            logical_tiles.len(),
+            "{scenario_name} render-batch coverage must equal logical terrain cardinality"
+        );
+
+        TerrainRuntimeTopology {
+            resident_chunks: roots.len(),
+            grid_entities: grid_entities.len(),
+            tile_entities: logical_tiles.len(),
+            terrain_render_batches,
+            terrain_batched_runs,
+            maximum_terrain_batch_runs,
+            maximum_resident_chunk_columns,
+        }
+    }
+
+    fn observe_runtime_world(
+        app: &mut App,
+        scenario_name: &'static str,
+    ) -> RuntimeWorldObservation {
+        let report = app.world().resource::<GenerationReport>().clone();
+        let (columns, material_runs) = {
+            let map = app.world().resource::<VoxelMap>();
+            (
+                map.columns().count(),
+                map.columns()
+                    .map(|(_, column)| hex_map::runs(column).len())
+                    .sum::<usize>(),
+            )
+        };
+        let terrain = observe_terrain_runtime_topology(app, scenario_name);
+        assert!(
+            material_runs <= terrain.tile_entities,
+            "{scenario_name} raw material runs cannot exceed cutaway-aware logical runs"
+        );
+        let (total_entities, object_instances, gameplay_lights, point_lights) = {
+            let world = app.world_mut();
+            let object_instances = world.query::<&ObjectInstance>().iter(world).count();
+            let gameplay_lights = world.query::<&GameplayLight>().iter(world).count();
+            let point_lights = world.query::<&PointLight>().iter(world).count();
+            (
+                world.iter_entities().count(),
+                object_instances,
+                gameplay_lights,
+                point_lights,
+            )
+        };
+
+        let snapshot_started = Instant::now();
+        let snapshot = export_world_snapshot_v1(app.world())
+            .unwrap_or_else(|error| panic!("{scenario_name} should export: {error}"));
+        let snapshot_export_elapsed = snapshot_started.elapsed();
+        assert_eq!(
+            app.world().resource::<CurrentWorldSnapshotV1>().snapshot(),
+            &snapshot,
+            "{scenario_name} current snapshot cache drifted from map-owned truth"
+        );
+        let snapshot_runs = snapshot
+            .columns
+            .as_slice()
+            .iter()
+            .map(|column| column.runs.len())
+            .sum();
+        let snapshot_encode_started = Instant::now();
+        let mut snapshot_bytes = Vec::new();
+        bevy_replicon::postcard_utils::to_extend_mut(&snapshot, &mut snapshot_bytes)
+            .unwrap_or_else(|error| panic!("{scenario_name} snapshot should encode: {error}"));
+        let snapshot_encode_elapsed = snapshot_encode_started.elapsed();
+
+        let surface_snapshots = {
+            let surfaces = app.world().resource::<SurfaceSnapshots>();
+            let biomes = app.world().resource::<BiomeRegions>();
+            if let Some((position, _snapshot)) = surfaces
+                .iter()
+                .find(|(position, snapshot)| snapshot.is_solid && biomes.get(*position).is_none())
+            {
+                panic!(
+                    "{scenario_name} exposed solid gameplay surface {position:?} has no exact biome projection"
+                );
+            }
+            let map = app.world().resource::<VoxelMap>();
+            let table = app.world().resource::<SubstanceTable>();
+            if let Some((position, substance, headroom)) =
+                biomes.iter().find_map(|(position, _region)| {
+                    let substance = map.get(position);
+                    let headroom = map
+                        .column(position.coord)
+                        .map(|column| column.headroom_above(position.level))
+                        .unwrap_or_default();
+                    (!table.is_solid(substance)
+                        || (surfaces.get(position).is_none() && headroom.0 > 0))
+                        .then_some((position, substance, headroom))
+                })
+            {
+                panic!(
+                    "{scenario_name} biome surface {position:?} has substance {substance:?}, \
+                     headroom {headroom:?}, and no valid solid-surface projection"
+                );
+            }
+            surfaces.len()
+        };
+        let illumination_surfaces = app.world().resource::<ResolvedIllumination>().len();
+        let player_observed_surfaces = app
+            .world()
+            .resource::<FactionObservations>()
+            .faction(Faction::Player)
+            .surface_count();
+        let player_known_surfaces = app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .surface_count();
+        let perception = *app
+            .world()
+            .resource::<hex_perception::PerceptionRuntimeStats>();
+
+        RuntimeWorldObservation {
+            generator_version: report.generator_version,
+            seed: report.seed,
+            generation_and_materialization_micros: report.elapsed_micros,
+            settings_fingerprint: report.settings_fingerprint,
+            semantic_plan_fingerprint: report.semantic_plan_fingerprint,
+            map_fingerprint: report.map_fingerprint,
+            recipe_metrics: report.recipe_metrics,
+            reported_reachable_surfaces: report.metrics.reachable_surfaces,
+            reported_reachable_elevation_levels: report.metrics.reachable_elevation_levels,
+            columns,
+            material_runs,
+            resident_chunks: terrain.resident_chunks,
+            grid_entities: terrain.grid_entities,
+            tile_entities: terrain.tile_entities,
+            terrain_render_batches: terrain.terrain_render_batches,
+            terrain_batched_runs: terrain.terrain_batched_runs,
+            maximum_terrain_batch_runs: terrain.maximum_terrain_batch_runs,
+            maximum_resident_chunk_columns: terrain.maximum_resident_chunk_columns,
+            total_entities,
+            object_instances,
+            gameplay_lights,
+            point_lights,
+            snapshot_export_elapsed,
+            snapshot_encode_elapsed,
+            snapshot_encoded_bytes: snapshot_bytes.len(),
+            snapshot_fingerprint: snapshot.public_fingerprint.0,
+            snapshot_columns: snapshot.columns.len(),
+            snapshot_runs,
+            snapshot_damage: snapshot.damage.len(),
+            snapshot_anchors: snapshot.anchors.len(),
+            snapshot_interior_surfaces: snapshot.interior_surfaces.len(),
+            snapshot_interior_roofs: snapshot.interior_roofs.len(),
+            snapshot_special_regions: snapshot.special_regions.len(),
+            snapshot_biome_regions: snapshot.biome_regions.len(),
+            snapshot_blockers: snapshot.blockers.len(),
+            snapshot_lights: snapshot.lights.len(),
+            snapshot_liquids: snapshot.liquids.len(),
+            snapshot_objects: snapshot.objects.len(),
+            surface_snapshots,
+            illumination_surfaces,
+            player_observed_surfaces,
+            player_known_surfaces,
+            perception,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_p95_and_worst(
+        samples: &mut [std::time::Duration],
+    ) -> (std::time::Duration, std::time::Duration) {
+        assert!(
+            !samples.is_empty(),
+            "checkpoint timing samples cannot be empty"
+        );
+        samples.sort_unstable();
+        let p95_index = samples
+            .len()
+            .saturating_mul(95)
+            .div_ceil(100)
+            .saturating_sub(1);
+        let p95 = samples
+            .get(p95_index)
+            .copied()
+            .expect("a non-empty checkpoint sample has a p95");
+        let worst = samples
+            .last()
+            .copied()
+            .expect("a non-empty checkpoint sample has a worst case");
+        (p95, worst)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_traversal_probe(
+        app: &mut App,
+        scenario_name: &'static str,
+    ) -> TraversalRuntimeProbe {
+        const REACH_SAMPLES: usize = 20;
+        const PATH_SAMPLES: usize = 20;
+
+        let (party_unit, body, party_start) = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &Body, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .min_by_key(|(unit, _, _)| **unit)
+                .map(|(unit, body, standing)| (*unit, *body, standing.0))
+                .unwrap_or_else(|| panic!("{scenario_name} should stage a player party"))
+        };
+        let table = app.world().resource::<SubstanceTable>().clone();
+        let blockers = app.world().resource::<TraversalBlockers>().clone();
+        let authored = app.world().resource::<AuthoredObjectOccupancy>().clone();
+        let terrain_revision = app
+            .world()
+            .get_resource::<TerrainRevision>()
+            .map_or(0, |revision| revision.0);
+        let mut footing_cache = FootingCache::default();
+        let footing_started = Instant::now();
+        let footing = {
+            let world = app.world_mut();
+            let mut tiles = world
+                .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+            footing_cache.get_or_build(
+                terrain_revision,
+                tiles.iter(world),
+                &table,
+                body,
+                Some(&blockers),
+                &authored,
+            )
+        };
+        let footing_build_elapsed = footing_started.elapsed();
+        let cache_hit_started = Instant::now();
+        let reused_footing = {
+            let world = app.world_mut();
+            let mut tiles = world
+                .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+            footing_cache.get_or_build(
+                terrain_revision,
+                tiles.iter(world),
+                &table,
+                body,
+                Some(&blockers),
+                &authored,
+            )
+        };
+        let footing_cache_hit_elapsed = cache_hit_started.elapsed();
+        assert!(
+            Arc::ptr_eq(&footing, &reused_footing),
+            "{scenario_name} should reuse the immutable Footing projection"
+        );
+        assert!(
+            footing.at(party_start.pos).is_some(),
+            "{scenario_name} production Footing omitted the selected party surface"
+        );
+
+        std::hint::black_box(Reach::from(party_start, &footing, None));
+        let mut reach_timings = Vec::with_capacity(REACH_SAMPLES);
+        let mut measured_reach = None;
+        for _ in 0..REACH_SAMPLES {
+            let started = Instant::now();
+            let reach = std::hint::black_box(Reach::from(party_start, &footing, None));
+            reach_timings.push(started.elapsed());
+            measured_reach = Some(reach);
+        }
+        let (reach_p95, reach_worst) = checkpoint_p95_and_worst(&mut reach_timings);
+        let measured_reach = measured_reach.expect("the checkpoint records Reach samples");
+        assert_eq!(measured_reach.cost(party_start.pos), Some(0));
+        let reachable_surfaces = measured_reach.surfaces().count();
+        let special = app.world().resource::<SpecialMovementRegions>();
+        let mut reachable_special_surfaces = 0_usize;
+        let mut reachable_ordinary_surfaces = 0_usize;
+        let mut reachable_ordinary_elevations = BTreeSet::new();
+        for standing in measured_reach.surfaces() {
+            if special.get(standing.pos).is_some() {
+                reachable_special_surfaces = reachable_special_surfaces.saturating_add(1);
+            } else {
+                reachable_ordinary_surfaces = reachable_ordinary_surfaces.saturating_add(1);
+                reachable_ordinary_elevations.insert(standing.pos.level);
+            }
+        }
+        assert_eq!(
+            reachable_surfaces,
+            reachable_ordinary_surfaces.saturating_add(reachable_special_surfaces),
+            "{scenario_name} Reach surface partition is incomplete"
+        );
+        let reachable_ordinary_elevation_levels = reachable_ordinary_elevations.len();
+        let path_target = measured_reach
+            .surfaces()
+            .max_by_key(|standing| {
+                (
+                    measured_reach.cost(standing.pos).unwrap_or_default(),
+                    standing.pos,
+                )
+            })
+            .expect("the selected party surface is always reachable");
+        let path_cost = measured_reach
+            .cost(path_target.pos)
+            .expect("the selected path target came from Reach");
+        let occupancy = UnitOccupancy::default();
+        let warm_path = route_with_occupancy(
+            party_start,
+            path_target,
+            footing.as_ref(),
+            &occupancy,
+            party_unit,
+        )
+        .unwrap_or_else(|| panic!("{scenario_name} A* omitted a Reach-confirmed destination"));
+        assert_eq!(
+            u32::try_from(warm_path.len().saturating_sub(1)).unwrap_or(u32::MAX),
+            path_cost,
+            "{scenario_name} A* and Reach disagree about shortest path cost"
+        );
+        let mut path_timings = Vec::with_capacity(PATH_SAMPLES);
+        for _ in 0..PATH_SAMPLES {
+            let started = Instant::now();
+            let path = std::hint::black_box(route_with_occupancy(
+                party_start,
+                path_target,
+                footing.as_ref(),
+                &occupancy,
+                party_unit,
+            ))
+            .unwrap_or_else(|| panic!("{scenario_name} repeated A* route should remain valid"));
+            path_timings.push(started.elapsed());
+            assert_eq!(
+                u32::try_from(path.len().saturating_sub(1)).unwrap_or(u32::MAX),
+                path_cost
+            );
+        }
+        let (path_p95, path_worst) = checkpoint_p95_and_worst(&mut path_timings);
+
+        TraversalRuntimeProbe {
+            party_unit,
+            party_start: party_start.pos,
+            footing_build_elapsed,
+            footing_cache_hit_elapsed,
+            footing_cache_builds: footing_cache.builds(),
+            reach_warmup_samples: 1,
+            reach_samples: reach_timings.len(),
+            reach_p95,
+            reach_worst,
+            reachable_surfaces,
+            reachable_special_surfaces,
+            reachable_ordinary_surfaces,
+            reachable_ordinary_elevation_levels,
+            path_target: path_target.pos,
+            path_cost,
+            path_warmup_samples: 1,
+            path_samples: path_timings.len(),
+            path_p95,
+            path_worst,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_perception_probe(
+        app: &mut App,
+        scenario_name: &'static str,
+    ) -> PerceptionRuntimeProbe {
+        const SAMPLES: usize = 20;
+
+        let illumination = app.world().resource::<ResolvedIllumination>().clone();
+        let prior = app.world().resource::<FactionMapKnowledge>().clone();
+        let exterior = *app.world().resource::<ExteriorIllumination>();
+        let profile = app
+            .world()
+            .resource::<PerceptionSettings>()
+            .active_profile();
+        let terrain = app.world().resource::<TerrainOccupancy>().clone();
+        let authored = app.world().resource::<AuthoredObjectOccupancy>().clone();
+        let interiors = app.world().resource::<InteriorRegions>().clone();
+        let mut lights = {
+            let world = app.world_mut();
+            let mut query = world.query::<(&TilePos, &GameplayLight)>();
+            query
+                .iter(world)
+                .map(|(position, light)| LightSourceSnapshot {
+                    pos: *position,
+                    domain: interiors
+                        .get(*position)
+                        .map_or(LightDomain::Exterior, LightDomain::Interior),
+                    light: *light,
+                })
+                .collect::<Vec<_>>()
+        };
+        lights.sort_by_key(|source| {
+            (
+                source.pos,
+                source.domain,
+                source.light.level,
+                source.light.radius,
+            )
+        });
+        let mut units = {
+            let world = app.world_mut();
+            let mut query =
+                world.query_filtered::<(&UnitId, &Faction, &StandsOn, Has<Downed>), With<Body>>();
+            query
+                .iter(world)
+                .map(|(id, faction, standing, downed)| ObservedUnit {
+                    id: *id,
+                    faction: *faction,
+                    pos: standing.0.pos,
+                    provides_sight: !downed,
+                })
+                .collect::<Vec<_>>()
+        };
+        units.sort_by_key(|unit| unit.id);
+
+        let resolve = || {
+            resolve_observations_with_authored_objects(
+                units.iter().copied(),
+                &illumination,
+                &prior,
+                exterior,
+                &lights,
+                profile,
+                &terrain,
+                &authored,
+            )
+            .unwrap_or_else(|error| {
+                panic!("{scenario_name} isolated perception probe failed: {error}")
+            })
+        };
+        let warm = resolve();
+        let live = app.world().resource::<FactionObservations>();
+        assert_eq!(
+            &warm, live,
+            "{scenario_name} direct solver probe drifted from runtime observation"
+        );
+
+        let mut timings = Vec::with_capacity(SAMPLES);
+        let mut measured = None;
+        for _ in 0..SAMPLES {
+            let started = Instant::now();
+            let observation = std::hint::black_box(resolve());
+            timings.push(started.elapsed());
+            measured = Some(observation);
+        }
+        let (p95, worst) = checkpoint_p95_and_worst(&mut timings);
+        let measured = measured.expect("the checkpoint records perception samples");
+        PerceptionRuntimeProbe {
+            warmup_samples: 1,
+            samples: timings.len(),
+            p95,
+            worst,
+            player_surfaces: measured.faction(Faction::Player).surface_count(),
+            hostile_surfaces: measured.faction(Faction::Hostile).surface_count(),
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_camera_probe(
+        app: &mut App,
+        scenario_name: &'static str,
+    ) -> hex_world::camera::test_support::CharacterCollisionProfile {
+        let settings: CameraSettings =
+            ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                .expect("the shipped camera settings should deserialize");
+        let mut supports = app
+            .world()
+            .resource::<MapAnchors>()
+            .iter()
+            .map(|(_id, position)| position)
+            .collect::<Vec<_>>();
+        supports.sort_unstable();
+        supports.dedup();
+        let projection = {
+            let world = app.world_mut();
+            let mut tiles = world.query_filtered::<(&TilePos, &HexSpan), With<HexTile>>();
+            tiles
+                .iter(world)
+                .map(|(position, span)| (*position, *span))
+                .collect::<Vec<_>>()
+        };
+        hex_world::camera::test_support::profile_character_collision(
+            &projection,
+            &supports,
+            &settings,
+            10_000,
+        )
+        .unwrap_or_else(|error| panic!("{scenario_name} camera checkpoint failed: {error}"))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_edit_target(app: &mut App, scenario_name: &'static str) -> CheckpointEditTarget {
+        let table = app.world().resource::<SubstanceTable>().clone();
+        let blockers = app.world().resource::<TraversalBlockers>().clone();
+        let special = app.world().resource::<SpecialMovementRegions>().clone();
+        let (top_voxels, chunk_columns, chunk_runs) = {
+            let map = app.world().resource::<VoxelMap>();
+            let mut top_voxels = BTreeMap::<TilePos, (i32, usize)>::new();
+            let mut chunk_columns = BTreeMap::<(i32, i32), usize>::new();
+            let mut chunk_runs = BTreeMap::<(i32, i32), usize>::new();
+            for (coord, column) in map.columns() {
+                let chunk = terrain_chunk_key(coord);
+                *chunk_columns.entry(chunk).or_default() += 1;
+                let runs = hex_map::runs(column);
+                *chunk_runs.entry(chunk).or_default() += runs.len();
+                let Some(surface) = column.surface() else {
+                    continue;
+                };
+                let Some(top_run) = runs.last().copied() else {
+                    continue;
+                };
+                if top_run.top - 1 == surface && top_run.levels() >= 1 {
+                    top_voxels.insert(TilePos::new(coord, surface), (top_run.levels(), runs.len()));
+                }
+            }
+            (top_voxels, chunk_columns, chunk_runs)
+        };
+        let mut excluded_coords = BTreeSet::new();
+        {
+            let snapshot = app.world().resource::<CurrentWorldSnapshotV1>().snapshot();
+            let catalog = app.world().resource::<RuntimeArtCatalog>();
+            excluded_coords.extend(
+                snapshot
+                    .anchors
+                    .as_slice()
+                    .iter()
+                    .map(|anchor| anchor.position.coord),
+            );
+            excluded_coords.extend(
+                snapshot
+                    .interior_surfaces
+                    .as_slice()
+                    .iter()
+                    .map(|surface| surface.position.coord),
+            );
+            excluded_coords.extend(
+                snapshot
+                    .interior_roofs
+                    .as_slice()
+                    .iter()
+                    .map(|roof| roof.position.coord),
+            );
+            excluded_coords.extend(
+                snapshot
+                    .lights
+                    .as_slice()
+                    .iter()
+                    .map(|light| light.origin.coord),
+            );
+            excluded_coords.extend(
+                snapshot
+                    .liquids
+                    .as_slice()
+                    .iter()
+                    .map(|liquid| liquid.position.coord),
+            );
+            for object in snapshot.objects.as_slice() {
+                excluded_coords.insert(object.root.coord);
+                excluded_coords.extend(
+                    object
+                        .blockers
+                        .as_slice()
+                        .iter()
+                        .map(|position| position.coord),
+                );
+                let object_id =
+                    ObjectAssetId::new(object.asset_identity.as_str()).unwrap_or_else(|error| {
+                        panic!(
+                            "{scenario_name} snapshot object '{}' has an invalid asset id: {error}",
+                            object.asset_identity.as_str()
+                        )
+                    });
+                let blueprint = catalog.object(&object_id).unwrap_or_else(|| {
+                    panic!(
+                        "{scenario_name} snapshot object '{}' is absent from the runtime catalog",
+                        object.asset_identity.as_str()
+                    )
+                });
+                let rotation = HexObjectRotation::new(object.rotation_sixths)
+                    .unwrap_or_else(|error| panic!("{scenario_name} object rotation: {error}"));
+                for placement in &blueprint.placements {
+                    let rotated = rotation
+                        .rotate_voxel(placement.position, blueprint.origin)
+                        .unwrap_or_else(|| {
+                            panic!("{scenario_name} object placement rotation overflowed")
+                        });
+                    let delta_q = rotated
+                        .q
+                        .checked_sub(blueprint.origin.q)
+                        .unwrap_or_else(|| panic!("{scenario_name} object q delta overflowed"));
+                    let delta_r = rotated
+                        .r
+                        .checked_sub(blueprint.origin.r)
+                        .unwrap_or_else(|| panic!("{scenario_name} object r delta overflowed"));
+                    let q = object
+                        .root
+                        .coord
+                        .x()
+                        .checked_add(delta_q)
+                        .unwrap_or_else(|| panic!("{scenario_name} object world q overflowed"));
+                    let r = object
+                        .root
+                        .coord
+                        .y()
+                        .checked_add(delta_r)
+                        .unwrap_or_else(|| panic!("{scenario_name} object world r overflowed"));
+                    excluded_coords.insert(HexCoord::from_axial(q, r));
+                }
+            }
+        }
+        let actor_positions = {
+            let world = app.world_mut();
+            let mut standing = world.query::<&StandsOn>();
+            standing
+                .iter(world)
+                .map(|standing| standing.0.pos)
+                .collect::<BTreeSet<_>>()
+        };
+        // The localized rebuild probe deliberately avoids stacked semantic columns.
+        // Replacing a dry diggable cap keeps the exposed surface fixed. The exact raw-run
+        // projection depends on the material directly below it, while restoring the cap
+        // must always recover the exact baseline snapshot.
+        let single_biome_coords = {
+            let mut counts = BTreeMap::<HexCoord, usize>::new();
+            for (position, _region) in app.world().resource::<BiomeRegions>().iter() {
+                *counts.entry(position.coord).or_default() += 1;
+            }
+            counts
+                .into_iter()
+                .filter_map(|(coord, count)| (count == 1).then_some(coord))
+                .collect::<BTreeSet<_>>()
+        };
+        let mut candidates = {
+            let world = app.world_mut();
+            let mut tiles =
+                world.query_filtered::<(&TilePos, &SubstanceId, &Headroom), With<HexTile>>();
+            tiles
+                .iter(world)
+                .filter_map(|(position, substance, headroom)| {
+                    let (original_run_levels, baseline_column_runs) =
+                        top_voxels.get(position).copied()?;
+                    let chunk = terrain_chunk_key(position.coord);
+                    (headroom.0 > 0
+                        && table.is_solid(*substance)
+                        && table.is_diggable(*substance)
+                        && !actor_positions.contains(position)
+                        && !excluded_coords.contains(&position.coord)
+                        && single_biome_coords.contains(&position.coord)
+                        && !blockers.contains(*position)
+                        && special.get(*position).is_none())
+                    .then(|| CheckpointEditTarget {
+                        position: *position,
+                        original: *substance,
+                        chunk,
+                        chunk_columns: chunk_columns.get(&chunk).copied().unwrap_or_default(),
+                        chunk_runs: chunk_runs.get(&chunk).copied().unwrap_or_default(),
+                        original_run_levels,
+                        baseline_column_runs,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        candidates.sort_unstable_by(|left, right| {
+            right
+                .chunk_runs
+                .cmp(&left.chunk_runs)
+                .then_with(|| right.chunk_columns.cmp(&left.chunk_columns))
+                .then_with(|| left.position.cmp(&right.position))
+        });
+        candidates.into_iter().next().unwrap_or_else(|| {
+            panic!("{scenario_name} should expose a dry diggable cap in a dense chunk")
+        })
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_chunk_roots(app: &mut App) -> BTreeMap<(i32, i32), Entity> {
+        let world = app.world_mut();
+        let mut roots = world.query::<(Entity, &TerrainChunkRoot)>();
+        roots
+            .iter(world)
+            .map(|(entity, root)| ((root.q, root.r), entity))
+            .collect()
+    }
+
+    #[cfg(feature = "test-support")]
+    fn checkpoint_edit_probe(app: &mut App, scenario_name: &'static str) -> EditRuntimeProbe {
+        const WARMUP_EDITS: usize = 4;
+        const MEASURED_EDITS: usize = 20;
+        const TOTAL_EDITS: usize = WARMUP_EDITS + MEASURED_EDITS;
+
+        let target = checkpoint_edit_target(app, scenario_name);
+        let edit_target = target.position;
+        let original = target.original;
+        let replacement = ["dirt", "stone", "gravel", "grass"]
+            .into_iter()
+            .filter_map(|name| app.world().resource::<SubstanceTable>().id(name))
+            .find(|substance| {
+                *substance != original
+                    && app
+                        .world()
+                        .resource::<SubstanceTable>()
+                        .is_solid(*substance)
+                    && app
+                        .world()
+                        .resource::<SubstanceTable>()
+                        .is_diggable(*substance)
+            })
+            .unwrap_or_else(|| {
+                panic!("{scenario_name} needs a second solid diggable checkpoint substance")
+            });
+        let mutated_column_runs = {
+            let mut column = app
+                .world()
+                .resource::<VoxelMap>()
+                .column(edit_target.coord)
+                .expect("the edit target column remains resident")
+                .clone();
+            column.set(edit_target.level, replacement);
+            hex_map::runs(&column).len()
+        };
+        let baseline_snapshot = app
+            .world()
+            .resource::<CurrentWorldSnapshotV1>()
+            .snapshot()
+            .clone();
+        let baseline_fingerprint = baseline_snapshot.public_fingerprint.0;
+        let perception_before = *app
+            .world()
+            .resource::<hex_perception::PerceptionRuntimeStats>();
+        let mut edit_timings = Vec::with_capacity(MEASURED_EDITS);
+        let mut maximum_replaced_chunks = 0_usize;
+
+        for edit_index in 0..TOTAL_EDITS {
+            let roots_before = checkpoint_chunk_roots(app);
+            let mutate = edit_index.is_multiple_of(2);
+            let expected = if mutate { replacement } else { original };
+            app.world_mut().write_message(TerrainEdit::Set {
+                pos: edit_target,
+                substance: expected,
+            });
+
+            let started = Instant::now();
+            app.update();
+            let elapsed = started.elapsed();
+            if edit_index >= WARMUP_EDITS {
+                edit_timings.push(elapsed);
+            }
+
+            assert!(
+                !app.world().contains_resource::<GameplaySetupFailure>(),
+                "{scenario_name} edit {edit_index} failed"
+            );
+            assert_eq!(
+                app.world().resource::<VoxelMap>().get(edit_target),
+                expected,
+                "{scenario_name} edit {edit_index} did not settle in one update"
+            );
+            let current_column_runs = hex_map::runs(
+                app.world()
+                    .resource::<VoxelMap>()
+                    .column(edit_target.coord)
+                    .expect("the edit target column remains resident"),
+            )
+            .len();
+            let expected_column_runs = if mutate {
+                mutated_column_runs
+            } else {
+                target.baseline_column_runs
+            };
+            assert_eq!(
+                current_column_runs, expected_column_runs,
+                "{scenario_name} edit {edit_index} must match the exact predicted raw-run projection"
+            );
+            let roots_after = checkpoint_chunk_roots(app);
+            assert!(
+                roots_before.keys().eq(roots_after.keys()),
+                "{scenario_name} edit {edit_index} changed the resident chunk footprint"
+            );
+            let replaced_chunks = roots_before
+                .iter()
+                .filter(|(chunk, entity)| roots_after.get(chunk) != Some(*entity))
+                .count();
+            assert_eq!(
+                replaced_chunks, 1,
+                "{scenario_name} edit {edit_index} should replace exactly one chunk root"
+            );
+            maximum_replaced_chunks = maximum_replaced_chunks.max(replaced_chunks);
+
+            let current_fingerprint = app
+                .world()
+                .resource::<CurrentWorldSnapshotV1>()
+                .fingerprint()
+                .0;
+            if mutate {
+                assert_ne!(
+                    current_fingerprint, baseline_fingerprint,
+                    "{scenario_name} replacement retained the baseline snapshot fingerprint"
+                );
+            } else {
+                if current_fingerprint != baseline_fingerprint {
+                    let current = app.world().resource::<CurrentWorldSnapshotV1>().snapshot();
+                    let first_column_difference = baseline_snapshot
+                        .columns
+                        .as_slice()
+                        .iter()
+                        .zip(current.columns.as_slice())
+                        .find(|(before, after)| before != after)
+                        .map(|(before, after)| (before.coord, after.coord));
+                    let first_biome_difference = baseline_snapshot
+                        .biome_regions
+                        .as_slice()
+                        .iter()
+                        .zip(current.biome_regions.as_slice())
+                        .find(|(before, after)| before != after)
+                        .map(|(before, after)| (before.position, after.position));
+                    panic!(
+                        "{scenario_name} restore drift at {edit_target:?}: \
+                         columns_equal={} first_column_difference={first_column_difference:?} \
+                         damage_equal={} anchors_equal={} interiors_equal={} roofs_equal={} \
+                         special_equal={} biome_equal={} first_biome_difference={first_biome_difference:?} \
+                         blockers_equal={} view_equal={} lights_equal={} liquids_equal={} objects_equal={}",
+                        baseline_snapshot.columns == current.columns,
+                        baseline_snapshot.damage == current.damage,
+                        baseline_snapshot.anchors == current.anchors,
+                        baseline_snapshot.interior_surfaces == current.interior_surfaces,
+                        baseline_snapshot.interior_roofs == current.interior_roofs,
+                        baseline_snapshot.special_regions == current.special_regions,
+                        baseline_snapshot.biome_regions == current.biome_regions,
+                        baseline_snapshot.blockers == current.blockers,
+                        baseline_snapshot.view_hint == current.view_hint,
+                        baseline_snapshot.lights == current.lights,
+                        baseline_snapshot.liquids == current.liquids,
+                        baseline_snapshot.objects == current.objects,
+                    );
+                }
+                assert_eq!(
+                    current_fingerprint, baseline_fingerprint,
+                    "{scenario_name} restore edit did not recover the baseline snapshot"
+                );
+            }
+        }
+
+        assert_eq!(edit_timings.len(), MEASURED_EDITS);
+        assert_eq!(
+            app.world()
+                .resource::<CurrentWorldSnapshotV1>()
+                .fingerprint()
+                .0,
+            baseline_fingerprint,
+            "{scenario_name} checkpoint edits must finish at the original world"
+        );
+        let (edit_p95, edit_worst) = checkpoint_p95_and_worst(&mut edit_timings);
+        let perception_after = *app
+            .world()
+            .resource::<hex_perception::PerceptionRuntimeStats>();
+        let total_edits = u64::try_from(TOTAL_EDITS).expect("checkpoint edit count fits u64");
+        let edit_frames_checked = perception_after
+            .frames_checked
+            .saturating_sub(perception_before.frames_checked);
+        let edit_surface_rebuilds = perception_after
+            .surface_rebuilds
+            .saturating_sub(perception_before.surface_rebuilds);
+        let edit_illumination_resolutions = perception_after
+            .illumination_resolutions
+            .saturating_sub(perception_before.illumination_resolutions);
+        let edit_observation_resolutions = perception_after
+            .observation_resolutions
+            .saturating_sub(perception_before.observation_resolutions);
+        let edit_knowledge_publications = perception_after
+            .knowledge_publications
+            .saturating_sub(perception_before.knowledge_publications);
+        assert_eq!(edit_frames_checked, total_edits);
+        assert_eq!(edit_surface_rebuilds, total_edits);
+        assert_eq!(edit_illumination_resolutions, total_edits);
+        assert_eq!(edit_observation_resolutions, total_edits);
+        assert_eq!(edit_knowledge_publications, total_edits);
+
+        EditRuntimeProbe {
+            edit_target,
+            edit_chunk: target.chunk,
+            edit_chunk_columns: target.chunk_columns,
+            edit_chunk_runs: target.chunk_runs,
+            original_run_levels: target.original_run_levels,
+            edit_warmup_updates: WARMUP_EDITS,
+            edit_samples: edit_timings.len(),
+            edit_total_updates: TOTAL_EDITS,
+            edit_p95,
+            edit_worst,
+            edit_chunk_roots_replaced_per_update: maximum_replaced_chunks,
+            edit_frames_checked,
+            edit_surface_rebuilds,
+            edit_illumination_resolutions,
+            edit_observation_resolutions,
+            edit_knowledge_publications,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn observe_runtime_gate_probes(
+        app: &mut App,
+        scenario_name: &'static str,
+        runtime: &RuntimeWorldObservation,
+    ) -> RuntimeGateProbes {
+        let traversal = checkpoint_traversal_probe(app, scenario_name);
+        let perception = checkpoint_perception_probe(app, scenario_name);
+        let camera = checkpoint_camera_probe(app, scenario_name);
+        assert_eq!(camera.columns, runtime.columns, "{scenario_name}");
+        assert_eq!(camera.spans, runtime.tile_entities, "{scenario_name}");
+        assert_eq!(camera.queries, 10_000, "{scenario_name}");
+        assert_ne!(camera.result_checksum, 0, "{scenario_name}");
+        let edit = checkpoint_edit_probe(app, scenario_name);
+        RuntimeGateProbes {
+            traversal,
+            perception,
+            camera,
+            edit,
+        }
+    }
+
+    fn assert_runtime_world_rebuilt(
+        scenario_name: &'static str,
+        initial: &RuntimeWorldObservation,
+        rebuilt: &RuntimeWorldObservation,
+    ) {
+        assert_eq!(rebuilt.generator_version, initial.generator_version);
+        assert_eq!(rebuilt.seed, initial.seed);
+        assert_eq!(rebuilt.settings_fingerprint, initial.settings_fingerprint);
+        assert_eq!(
+            rebuilt.semantic_plan_fingerprint,
+            initial.semantic_plan_fingerprint
+        );
+        assert_eq!(rebuilt.map_fingerprint, initial.map_fingerprint);
+        assert_eq!(rebuilt.recipe_metrics, initial.recipe_metrics);
+        assert_eq!(
+            rebuilt.reported_reachable_surfaces,
+            initial.reported_reachable_surfaces
+        );
+        assert_eq!(
+            rebuilt.reported_reachable_elevation_levels,
+            initial.reported_reachable_elevation_levels
+        );
+        assert_eq!(rebuilt.columns, initial.columns);
+        assert_eq!(rebuilt.material_runs, initial.material_runs);
+        assert_eq!(rebuilt.resident_chunks, initial.resident_chunks);
+        assert_eq!(rebuilt.grid_entities, initial.grid_entities);
+        assert_eq!(rebuilt.tile_entities, initial.tile_entities);
+        assert_eq!(
+            rebuilt.terrain_render_batches,
+            initial.terrain_render_batches
+        );
+        assert_eq!(rebuilt.terrain_batched_runs, initial.terrain_batched_runs);
+        assert_eq!(
+            rebuilt.maximum_terrain_batch_runs,
+            initial.maximum_terrain_batch_runs
+        );
+        assert_eq!(
+            rebuilt.maximum_resident_chunk_columns,
+            initial.maximum_resident_chunk_columns
+        );
+        // The complete app world also contains session/service entities whose lifetime
+        // intentionally spans screen transitions. Map-owned entity categories above must
+        // rebuild exactly; record the whole-world count for capacity analysis without
+        // treating unrelated service churn as a map determinism failure.
+        assert_eq!(rebuilt.object_instances, initial.object_instances);
+        assert_eq!(rebuilt.gameplay_lights, initial.gameplay_lights);
+        assert_eq!(rebuilt.point_lights, initial.point_lights);
+        assert_eq!(
+            rebuilt.snapshot_encoded_bytes,
+            initial.snapshot_encoded_bytes
+        );
+        assert_eq!(rebuilt.snapshot_fingerprint, initial.snapshot_fingerprint);
+        assert_eq!(rebuilt.snapshot_columns, initial.snapshot_columns);
+        assert_eq!(rebuilt.snapshot_runs, initial.snapshot_runs);
+        assert_eq!(rebuilt.snapshot_damage, initial.snapshot_damage);
+        assert_eq!(rebuilt.snapshot_anchors, initial.snapshot_anchors);
+        assert_eq!(
+            rebuilt.snapshot_interior_surfaces,
+            initial.snapshot_interior_surfaces
+        );
+        assert_eq!(
+            rebuilt.snapshot_interior_roofs,
+            initial.snapshot_interior_roofs
+        );
+        assert_eq!(
+            rebuilt.snapshot_special_regions,
+            initial.snapshot_special_regions
+        );
+        assert_eq!(
+            rebuilt.snapshot_biome_regions,
+            initial.snapshot_biome_regions
+        );
+        assert_eq!(rebuilt.snapshot_blockers, initial.snapshot_blockers);
+        assert_eq!(rebuilt.snapshot_lights, initial.snapshot_lights);
+        assert_eq!(rebuilt.snapshot_liquids, initial.snapshot_liquids);
+        assert_eq!(rebuilt.snapshot_objects, initial.snapshot_objects);
+        assert_eq!(rebuilt.surface_snapshots, initial.surface_snapshots);
+        assert_eq!(rebuilt.illumination_surfaces, initial.illumination_surfaces);
+        assert_eq!(
+            rebuilt.player_observed_surfaces,
+            initial.player_observed_surfaces
+        );
+        assert_eq!(rebuilt.player_known_surfaces, initial.player_known_surfaces);
+        assert_eq!(
+            rebuilt.perception.surface_rebuilds, initial.perception.surface_rebuilds,
+            "{scenario_name} re-entry changed perception surface rebuilds"
+        );
+        assert_eq!(
+            rebuilt.perception.illumination_resolutions,
+            initial.perception.illumination_resolutions,
+            "{scenario_name} re-entry changed illumination resolutions"
+        );
+        assert_eq!(
+            rebuilt.perception.observation_resolutions, initial.perception.observation_resolutions,
+            "{scenario_name} re-entry changed observation resolutions"
+        );
+        assert_eq!(
+            rebuilt.perception.knowledge_publications, initial.perception.knowledge_publications,
+            "{scenario_name} re-entry changed knowledge publications"
+        );
+    }
+
+    fn assert_macro_runtime_torn_down(app: &mut App, scenario_name: &'static str) {
+        assert!(
+            !app.world().contains_resource::<TerrainReady>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<VoxelMap>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<CurrentWorldSnapshotV1>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<MapAnchors>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<SpecialMovementRegions>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<InteriorRegions>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<TraversalBlockers>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<BiomeRegions>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<MapViewHint>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<GenerationReport>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<ResolvedIllumination>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<SurfaceSnapshots>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<FactionMapKnowledge>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<FactionObservations>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<TerrainOccupancy>(),
+            "{scenario_name}"
+        );
+        assert!(
+            !app.world().contains_resource::<AuthoredObjectOccupancy>(),
+            "{scenario_name}"
+        );
+        let (grids, chunks, tiles, render_batches, objects, gameplay_lights, point_lights) = {
+            let world = app.world_mut();
+            let grids = world
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(world)
+                .count();
+            let chunks = world
+                .query_filtered::<Entity, With<TerrainChunkRoot>>()
+                .iter(world)
+                .count();
+            let tiles = world
+                .query_filtered::<Entity, With<HexTile>>()
+                .iter(world)
+                .count();
+            let render_batches = world
+                .query_filtered::<Entity, With<TerrainRenderBatch>>()
+                .iter(world)
+                .count();
+            let objects = world.query::<&ObjectInstance>().iter(world).count();
+            let gameplay_lights = world.query::<&GameplayLight>().iter(world).count();
+            let point_lights = world.query::<&PointLight>().iter(world).count();
+            (
+                grids,
+                chunks,
+                tiles,
+                render_batches,
+                objects,
+                gameplay_lights,
+                point_lights,
+            )
+        };
+        assert_eq!(
+            (
+                grids,
+                chunks,
+                tiles,
+                render_batches,
+                objects,
+                gameplay_lights,
+                point_lights,
+            ),
+            (0, 0, 0, 0, 0, 0, 0),
+            "{scenario_name} left map presentation entities after teardown"
+        );
+    }
+
+    fn macro_runtime_profile(scenario_name: &'static str) -> MacroRuntimeProfile {
+        macro_runtime_profile_with_probe(scenario_name, |_app, _runtime| ()).0
+    }
+
+    fn macro_runtime_profile_with_probe<P>(
+        scenario_name: &'static str,
+        probe: impl FnOnce(&mut App, &RuntimeWorldObservation) -> P,
+    ) -> (MacroRuntimeProfile, P) {
+        let mut app = procedural_gameplay_app(scenario_name);
+        let started = Instant::now();
+        enter_screen(&mut app, Screen::Gameplay);
+        let setup_elapsed = started.elapsed();
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "{scenario_name} setup failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let runtime = observe_runtime_world(&mut app, scenario_name);
+        let probe_result = probe(&mut app, &runtime);
+
+        enter_screen(&mut app, Screen::Title);
+        assert_macro_runtime_torn_down(&mut app, scenario_name);
+
+        let reentry_started = Instant::now();
+        enter_screen(&mut app, Screen::Gameplay);
+        let reentry_setup_elapsed = reentry_started.elapsed();
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "{scenario_name} re-entry failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let rebuilt = observe_runtime_world(&mut app, scenario_name);
+        assert_runtime_world_rebuilt(scenario_name, &runtime, &rebuilt);
+        let reentry_generation_and_materialization_micros =
+            rebuilt.generation_and_materialization_micros;
+
+        enter_screen(&mut app, Screen::Title);
+        assert_macro_runtime_torn_down(&mut app, scenario_name);
+
+        (
+            MacroRuntimeProfile {
+                scenario_name,
+                setup_elapsed,
+                reentry_setup_elapsed,
+                reentry_generation_and_materialization_micros,
+                runtime,
+            },
+            probe_result,
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    fn print_large_world_headless_checkpoint(
+        profile: &MacroRuntimeProfile,
+        probes: &RuntimeGateProbes,
+    ) {
+        let runtime = &profile.runtime;
+        let traversal = &probes.traversal;
+        let perception = &probes.perception;
+        let camera = probes.camera;
+        let edit = &probes.edit;
+        let ordinary_route_validation = if matches!(
+            runtime.recipe_metrics.as_ref(),
+            Some(ProceduralRecipeMetrics::GrandV3(_))
+        ) {
+            "compiler_validated_runtime_projection_matched"
+        } else {
+            "not_part_of_grand_v3_assertion"
+        };
+        eprintln!(
+            "LARGE_WORLD_HEADLESS_CHECKPOINT harness=headless_minimal_plugins \
+             full_app_capture_rss_evidence=separate scenario={:?} generator_version={} seed={} \
+             setup_ns={} reentry_setup_ns={} v3_build_us={} reentry_v3_build_us={} \
+             settings_fingerprint={} semantic_plan_fingerprint={:?} map_fingerprint={} \
+             columns={} material_runs={} resident_chunks={} grid_entities={} \
+             tile_entities={} terrain_render_batches={} terrain_batched_runs={} \
+             maximum_terrain_batch_runs={} maximum_resident_chunk_columns={} total_entities={} \
+             object_instances={} gameplay_lights={} point_lights={} \
+             snapshot_export_ns={} snapshot_encode_ns={} \
+             snapshot_encoded_bytes={} snapshot_fingerprint={} snapshot_columns={} \
+             snapshot_runs={} snapshot_damage={} snapshot_anchors={} \
+             snapshot_interior_surfaces={} snapshot_interior_roofs={} \
+             snapshot_special_regions={} snapshot_biome_regions={} snapshot_blockers={} \
+             snapshot_lights={} snapshot_liquids={} snapshot_objects={} \
+             surface_snapshots={} illumination_surfaces={} player_observed_surfaces={} \
+             player_known_surfaces={} perception_frames_checked={} \
+             perception_surface_rebuilds={} perception_illumination_resolutions={} \
+             perception_observation_resolutions={} perception_knowledge_publications={} \
+             traversal_scope=party_reach_and_farthest_path ordinary_route_validation={} \
+             reported_reachable_surfaces={} reported_reachable_elevation_levels={} \
+             party_unit={} party_start_q={} party_start_r={} party_start_level={} \
+             footing_build_ns={} footing_cache_hit_ns={} footing_cache_builds={} \
+             reach_warmup_samples={} reach_samples={} \
+             reach_p95_ns={} reach_worst_ns={} \
+             reachable_surfaces={} reachable_special_surfaces={} \
+             reachable_ordinary_surfaces={} reachable_ordinary_elevation_levels={} \
+             path_target_q={} path_target_r={} path_target_level={} path_cost={} \
+             path_warmup_samples={} path_samples={} path_p95_ns={} path_worst_ns={} \
+             perception_solver_warmup_samples={} perception_solver_samples={} \
+             perception_solver_p95_ns={} perception_solver_worst_ns={} \
+             perception_solver_player_surfaces={} perception_solver_hostile_surfaces={} \
+             camera_projection=isolated_full_public_helper camera_columns={} camera_spans={} \
+             camera_supports={} camera_queries={} camera_index_build_ns={} \
+             camera_index_rebuild_p95_ns={} camera_index_rebuild_worst_ns={} \
+             camera_query_p95_ns={} camera_query_worst_ns={} camera_checksum={} \
+             edit_timing_scope=headless_map_perception_update edit_mutation=top_run_split_restore \
+             edit_chunk_q={} edit_chunk_r={} edit_chunk_columns={} edit_chunk_runs={} \
+             edit_original_run_levels={} edit_target_q={} edit_target_r={} edit_target_level={} \
+             edit_warmup_updates={} edit_samples={} \
+             edit_total_updates={} edit_p95_ns={} edit_worst_ns={} \
+             edit_chunk_roots_replaced_per_update={} \
+             edit_frames_checked={} edit_surface_rebuilds={} \
+             edit_illumination_resolutions={} edit_observation_resolutions={} \
+             edit_knowledge_publications={}",
+            profile.scenario_name,
+            runtime.generator_version,
+            runtime.seed,
+            profile.setup_elapsed.as_nanos(),
+            profile.reentry_setup_elapsed.as_nanos(),
+            runtime.generation_and_materialization_micros,
+            profile.reentry_generation_and_materialization_micros,
+            runtime.settings_fingerprint,
+            runtime.semantic_plan_fingerprint,
+            runtime.map_fingerprint,
+            runtime.columns,
+            runtime.material_runs,
+            runtime.resident_chunks,
+            runtime.grid_entities,
+            runtime.tile_entities,
+            runtime.terrain_render_batches,
+            runtime.terrain_batched_runs,
+            runtime.maximum_terrain_batch_runs,
+            runtime.maximum_resident_chunk_columns,
+            runtime.total_entities,
+            runtime.object_instances,
+            runtime.gameplay_lights,
+            runtime.point_lights,
+            runtime.snapshot_export_elapsed.as_nanos(),
+            runtime.snapshot_encode_elapsed.as_nanos(),
+            runtime.snapshot_encoded_bytes,
+            runtime.snapshot_fingerprint,
+            runtime.snapshot_columns,
+            runtime.snapshot_runs,
+            runtime.snapshot_damage,
+            runtime.snapshot_anchors,
+            runtime.snapshot_interior_surfaces,
+            runtime.snapshot_interior_roofs,
+            runtime.snapshot_special_regions,
+            runtime.snapshot_biome_regions,
+            runtime.snapshot_blockers,
+            runtime.snapshot_lights,
+            runtime.snapshot_liquids,
+            runtime.snapshot_objects,
+            runtime.surface_snapshots,
+            runtime.illumination_surfaces,
+            runtime.player_observed_surfaces,
+            runtime.player_known_surfaces,
+            runtime.perception.frames_checked,
+            runtime.perception.surface_rebuilds,
+            runtime.perception.illumination_resolutions,
+            runtime.perception.observation_resolutions,
+            runtime.perception.knowledge_publications,
+            ordinary_route_validation,
+            runtime.reported_reachable_surfaces,
+            runtime.reported_reachable_elevation_levels,
+            traversal.party_unit.0,
+            traversal.party_start.coord.x(),
+            traversal.party_start.coord.y(),
+            traversal.party_start.level,
+            traversal.footing_build_elapsed.as_nanos(),
+            traversal.footing_cache_hit_elapsed.as_nanos(),
+            traversal.footing_cache_builds,
+            traversal.reach_warmup_samples,
+            traversal.reach_samples,
+            traversal.reach_p95.as_nanos(),
+            traversal.reach_worst.as_nanos(),
+            traversal.reachable_surfaces,
+            traversal.reachable_special_surfaces,
+            traversal.reachable_ordinary_surfaces,
+            traversal.reachable_ordinary_elevation_levels,
+            traversal.path_target.coord.x(),
+            traversal.path_target.coord.y(),
+            traversal.path_target.level,
+            traversal.path_cost,
+            traversal.path_warmup_samples,
+            traversal.path_samples,
+            traversal.path_p95.as_nanos(),
+            traversal.path_worst.as_nanos(),
+            perception.warmup_samples,
+            perception.samples,
+            perception.p95.as_nanos(),
+            perception.worst.as_nanos(),
+            perception.player_surfaces,
+            perception.hostile_surfaces,
+            camera.columns,
+            camera.spans,
+            camera.supports,
+            camera.queries,
+            camera.index_build.as_nanos(),
+            camera.index_rebuild_p95.as_nanos(),
+            camera.index_rebuild_worst.as_nanos(),
+            camera.query_p95.as_nanos(),
+            camera.query_worst.as_nanos(),
+            camera.result_checksum,
+            edit.edit_chunk.0,
+            edit.edit_chunk.1,
+            edit.edit_chunk_columns,
+            edit.edit_chunk_runs,
+            edit.original_run_levels,
+            edit.edit_target.coord.x(),
+            edit.edit_target.coord.y(),
+            edit.edit_target.level,
+            edit.edit_warmup_updates,
+            edit.edit_samples,
+            edit.edit_total_updates,
+            edit.edit_p95.as_nanos(),
+            edit.edit_worst.as_nanos(),
+            edit.edit_chunk_roots_replaced_per_update,
+            edit.edit_frames_checked,
+            edit.edit_surface_rebuilds,
+            edit.edit_illumination_resolutions,
+            edit.edit_observation_resolutions,
+            edit.edit_knowledge_publications,
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn ratio_thousand_u128(numerator: u128, denominator: u128) -> u128 {
+        assert_ne!(
+            denominator, 0,
+            "checkpoint ratios require a non-zero reference"
+        );
+        numerator.saturating_mul(1_000) / denominator
+    }
+
+    #[cfg(feature = "test-support")]
+    fn ratio_thousand_u64(numerator: u64, denominator: u64) -> u64 {
+        assert_ne!(
+            denominator, 0,
+            "checkpoint ratios require a non-zero reference"
+        );
+        numerator.saturating_mul(1_000) / denominator
+    }
+
+    #[cfg(feature = "test-support")]
+    fn ratio_thousand_usize(numerator: usize, denominator: usize) -> usize {
+        assert_ne!(
+            denominator, 0,
+            "checkpoint ratios require a non-zero reference"
+        );
+        numerator.saturating_mul(1_000) / denominator
+    }
+
+    #[test]
+    #[ignore = "manual release-mode Mountain Range/Crystal Mountain runtime comparison"]
+    fn crystal_mountain_runtime_profile_compares_materialization_and_entities_to_mountain_range() {
+        let mountain_range = macro_runtime_profile("Mountain Range");
+        let crystal_mountain = macro_runtime_profile("Crystal Mountain");
+
+        for profile in [&mountain_range, &crystal_mountain] {
+            let runtime = &profile.runtime;
+            assert_eq!(runtime.columns, 18_019);
+            assert!(profile.setup_elapsed > std::time::Duration::ZERO);
+            assert!(runtime.generation_and_materialization_micros > 0);
+            assert!(runtime.material_runs >= runtime.columns);
+            assert!(runtime.tile_entities >= runtime.material_runs);
+            assert!(runtime.terrain_render_batches > 0);
+            assert_eq!(runtime.terrain_batched_runs, runtime.tile_entities);
+            assert!(runtime.maximum_terrain_batch_runs <= MAX_TERRAIN_PICK_RUNS_PER_BATCH);
+            assert!(runtime.maximum_resident_chunk_columns <= 16 * 16);
+            assert!(runtime.total_entities >= runtime.tile_entities);
+            assert!(runtime.illumination_surfaces > 0);
+            assert!((1..=2).contains(&runtime.perception.illumination_resolutions));
+            assert!((1..=2).contains(&runtime.perception.observation_resolutions));
+            eprintln!(
+                "MACRO_RUNTIME scenario={:?} setup={:?} generation_and_materialization_us={} \
+                 columns={} material_runs={} tile_entities={} terrain_render_batches={} \
+                 total_entities={} \
+                 object_instances={} point_lights={} illumination_surfaces={} \
+                 illumination_resolutions={} observation_resolutions={}",
+                profile.scenario_name,
+                profile.setup_elapsed,
+                runtime.generation_and_materialization_micros,
+                runtime.columns,
+                runtime.material_runs,
+                runtime.tile_entities,
+                runtime.terrain_render_batches,
+                runtime.total_entities,
+                runtime.object_instances,
+                runtime.point_lights,
+                runtime.illumination_surfaces,
+                runtime.perception.illumination_resolutions,
+                runtime.perception.observation_resolutions,
+            );
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[ignore = "manual release-mode headless Grand V3 performance gate and Crystal Mountain comparison"]
+    fn grand_v3_headless_runtime_gate_compares_to_crystal_mountain() {
+        // This intentionally deterministic MinimalPlugins harness covers map authority,
+        // logical presentation, movement, perception, and isolated camera-query helpers.
+        // Full AppPlugin rendering, fog, capture review, RSS, and peak-footprint evidence
+        // remain separate release artifacts and are not claimed by this checkpoint.
+        assert!(
+            !std::hint::black_box(cfg!(debug_assertions)),
+            "run the headless Grand V3 performance gate with `cargo test --release -p hex_game \
+             --features test-support --lib scenarios::tests::grand_v3_headless_runtime_gate_compares_to_crystal_mountain \
+             -- --ignored --exact --nocapture --test-threads=1`"
+        );
+
+        let (grand, grand_probes) =
+            macro_runtime_profile_with_probe("Grand V3 Baseline", |app, runtime| {
+                observe_runtime_gate_probes(app, "Grand V3 Baseline", runtime)
+            });
+        let (crystal, crystal_probes) =
+            macro_runtime_profile_with_probe("Crystal Mountain", |app, runtime| {
+                observe_runtime_gate_probes(app, "Crystal Mountain", runtime)
+            });
+
+        assert_eq!(
+            u32::try_from(grand_probes.traversal.reachable_ordinary_surfaces)
+                .expect("Grand V3 runtime ordinary reachability should fit the report contract"),
+            grand.runtime.reported_reachable_surfaces,
+            "Grand V3 compiler reachability changed during runtime materialization or publication"
+        );
+        assert_eq!(
+            u32::try_from(grand_probes.traversal.reachable_ordinary_elevation_levels)
+                .expect("Grand V3 runtime elevation reachability should fit the report contract"),
+            grand.runtime.reported_reachable_elevation_levels,
+            "Grand V3 reachable elevation levels changed during runtime materialization or publication"
+        );
+
+        for (profile, probes) in [(&grand, &grand_probes), (&crystal, &crystal_probes)] {
+            let runtime = &profile.runtime;
+            let traversal = &probes.traversal;
+            let perception = &probes.perception;
+            let camera = probes.camera;
+            let edit = &probes.edit;
+            assert_eq!(runtime.generator_version, 3, "{}", profile.scenario_name);
+            assert_eq!(runtime.grid_entities, 1, "{}", profile.scenario_name);
+            assert!(profile.setup_elapsed > std::time::Duration::ZERO);
+            assert!(profile.reentry_setup_elapsed > std::time::Duration::ZERO);
+            assert!(runtime.generation_and_materialization_micros > 0);
+            assert!(profile.reentry_generation_and_materialization_micros > 0);
+            assert!(runtime.columns > 0);
+            assert!(runtime.material_runs >= runtime.columns);
+            assert!(runtime.resident_chunks > 0);
+            assert!(runtime.tile_entities >= runtime.material_runs);
+            assert!(
+                runtime.terrain_render_batches > 0,
+                "{} should render solid terrain through combined batches",
+                profile.scenario_name
+            );
+            assert_eq!(
+                runtime.terrain_batched_runs, runtime.tile_entities,
+                "{} render batches must cover every logical terrain run exactly once",
+                profile.scenario_name
+            );
+            assert!(
+                runtime.maximum_terrain_batch_runs <= MAX_TERRAIN_PICK_RUNS_PER_BATCH,
+                "{} exceeded the shared render-batch lookup cap",
+                profile.scenario_name
+            );
+            assert!(runtime.maximum_resident_chunk_columns <= 16 * 16);
+            assert!(runtime.total_entities >= runtime.tile_entities);
+            assert!(runtime.snapshot_encoded_bytes > 0);
+            assert_ne!(runtime.snapshot_fingerprint, 0);
+            assert_eq!(runtime.snapshot_columns, runtime.columns);
+            assert_eq!(runtime.snapshot_runs, runtime.material_runs);
+            assert!(runtime.surface_snapshots > 0);
+            assert_eq!(runtime.illumination_surfaces, runtime.surface_snapshots);
+            assert!(runtime.perception.surface_rebuilds > 0);
+            assert!((1..=2).contains(&runtime.perception.illumination_resolutions));
+            assert!((1..=2).contains(&runtime.perception.observation_resolutions));
+            assert!(runtime.perception.knowledge_publications > 0);
+            assert_eq!(traversal.reach_warmup_samples, 1);
+            assert_eq!(traversal.reach_samples, 20);
+            assert_eq!(traversal.footing_cache_builds, 1);
+            assert!(traversal.reach_worst >= traversal.reach_p95);
+            assert!(traversal.reachable_surfaces > 0);
+            assert!(traversal.reachable_special_surfaces <= traversal.reachable_surfaces);
+            assert_eq!(traversal.path_warmup_samples, 1);
+            assert_eq!(traversal.path_samples, 20);
+            assert!(traversal.path_worst >= traversal.path_p95);
+            assert!(traversal.path_cost > 0);
+            assert_eq!(perception.warmup_samples, 1);
+            assert_eq!(perception.samples, 20);
+            assert!(perception.worst >= perception.p95);
+            assert_eq!(perception.player_surfaces, runtime.player_observed_surfaces);
+            assert_eq!(camera.columns, runtime.columns);
+            assert_eq!(camera.spans, runtime.tile_entities);
+            assert!(camera.supports > 0);
+            assert_eq!(camera.queries, 10_000);
+            assert!(camera.index_rebuild_worst >= camera.index_rebuild_p95);
+            assert!(camera.query_worst >= camera.query_p95);
+            assert_ne!(camera.result_checksum, 0);
+            assert_eq!(edit.edit_warmup_updates, 4);
+            assert_eq!(edit.edit_samples, 20);
+            assert_eq!(edit.edit_total_updates, 24);
+            assert!(edit.edit_worst >= edit.edit_p95);
+            assert_eq!(edit.edit_chunk, terrain_chunk_key(edit.edit_target.coord));
+            assert!((1..=16 * 16).contains(&edit.edit_chunk_columns));
+            assert!(edit.edit_chunk_runs > 0);
+            assert!(edit.original_run_levels > 0);
+            assert_eq!(edit.edit_chunk_roots_replaced_per_update, 1);
+            assert_eq!(edit.edit_frames_checked, 24);
+            assert_eq!(edit.edit_surface_rebuilds, 24);
+            assert_eq!(edit.edit_illumination_resolutions, 24);
+            assert_eq!(edit.edit_observation_resolutions, 24);
+            assert_eq!(edit.edit_knowledge_publications, 24);
+            print_large_world_headless_checkpoint(profile, probes);
+        }
+
+        let grand_runtime = &grand.runtime;
+        let Some(ProceduralRecipeMetrics::GrandV3(metrics)) = grand_runtime.recipe_metrics.as_ref()
+        else {
+            panic!("Grand V3 Baseline should publish Grand V3 recipe metrics");
+        };
+        assert_eq!(grand_runtime.seed, 1_592_598_566);
+        assert_eq!(metrics.schematic_cells, 217);
+        assert_eq!(metrics.world_columns, 105_469);
+        assert_eq!(metrics.resident_chunks, 444);
+        assert!(metrics.ordinary_surfaces > 0);
+        assert!(metrics.water_columns > 0);
+        assert!(metrics.liquid_bodies > 0);
+        assert!(metrics.maximum_surface > metrics.minimum_surface);
+        assert_eq!(grand_runtime.columns, 105_469);
+        assert_eq!(grand_runtime.resident_chunks, 444);
+        assert!(grand_runtime.material_runs <= grand_runtime.tile_entities);
+        assert_eq!(
+            grand_runtime.terrain_batched_runs,
+            grand_runtime.tile_entities
+        );
+        assert_eq!(grand_runtime.maximum_resident_chunk_columns, 16 * 16);
+        assert!(
+            grand_runtime.snapshot_biome_regions >= grand_runtime.columns,
+            "stacked bridges, Crystal stairs, and tunnel surfaces may add exact biome projections"
+        );
+        assert!(
+            grand_runtime.snapshot_biome_regions >= grand_runtime.surface_snapshots,
+            "biome metadata may additionally retain authored surfaces without positive headroom"
+        );
+        assert!(grand_runtime.object_instances > 0);
+        assert!(grand_runtime.gameplay_lights > 0);
+        assert!(grand_runtime.point_lights > 0);
+        assert!(grand_runtime.snapshot_interior_surfaces > 0);
+        assert!(grand_runtime.snapshot_interior_roofs > 0);
+        assert!(grand_runtime.snapshot_blockers > 0);
+        assert!(grand_runtime.snapshot_lights > 0);
+        assert!(grand_runtime.snapshot_objects > 0);
+        assert!(grand_runtime.snapshot_anchors > 0);
+        assert!(grand_runtime.snapshot_special_regions > 0);
+        assert!(grand_runtime.snapshot_liquids > 0);
+
+        const SETUP_BUDGET: Duration = Duration::from_secs(5);
+        const BUILD_BUDGET: Duration = Duration::from_millis(2_500);
+        const SNAPSHOT_BUDGET_BYTES: usize = 16 * 1024 * 1024;
+        const SNAPSHOT_EXPORT_BUDGET: Duration = Duration::from_millis(100);
+        const SNAPSHOT_ENCODE_BUDGET: Duration = Duration::from_millis(50);
+        const FOOTING_BUILD_BUDGET: Duration = Duration::from_millis(20);
+        const FOOTING_CACHE_HIT_BUDGET: Duration = Duration::from_micros(100);
+        const REACH_AND_PATH_BUDGET: Duration = Duration::from_millis(50);
+        const PERCEPTION_BUDGET: Duration = Duration::from_millis(50);
+        const CAMERA_BUILD_BUDGET: Duration = Duration::from_millis(50);
+        const CAMERA_QUERY_BUDGET: Duration = Duration::from_micros(5);
+        const LOCAL_EDIT_BUDGET: Duration = Duration::from_millis(100);
+
+        assert!(
+            grand.setup_elapsed <= SETUP_BUDGET,
+            "Grand V3 initial setup exceeded {SETUP_BUDGET:?}: {:?}",
+            grand.setup_elapsed
+        );
+        assert!(
+            grand.reentry_setup_elapsed <= SETUP_BUDGET,
+            "Grand V3 re-entry setup exceeded {SETUP_BUDGET:?}: {:?}",
+            grand.reentry_setup_elapsed
+        );
+        let grand_build =
+            Duration::from_micros(grand_runtime.generation_and_materialization_micros);
+        let grand_reentry_build =
+            Duration::from_micros(grand.reentry_generation_and_materialization_micros);
+        assert!(
+            grand_build <= BUILD_BUDGET,
+            "Grand V3 initial build exceeded {BUILD_BUDGET:?}: {grand_build:?}"
+        );
+        assert!(
+            grand_reentry_build <= BUILD_BUDGET,
+            "Grand V3 re-entry build exceeded {BUILD_BUDGET:?}: {grand_reentry_build:?}"
+        );
+        assert!(
+            grand_runtime.snapshot_encoded_bytes <= SNAPSHOT_BUDGET_BYTES,
+            "Grand V3 snapshot exceeded 16 MiB: {} bytes",
+            grand_runtime.snapshot_encoded_bytes
+        );
+        assert!(
+            grand_runtime.snapshot_export_elapsed <= SNAPSHOT_EXPORT_BUDGET,
+            "Grand V3 snapshot export exceeded {SNAPSHOT_EXPORT_BUDGET:?}: {:?}",
+            grand_runtime.snapshot_export_elapsed
+        );
+        assert!(
+            grand_runtime.snapshot_encode_elapsed <= SNAPSHOT_ENCODE_BUDGET,
+            "Grand V3 snapshot encoding exceeded {SNAPSHOT_ENCODE_BUDGET:?}: {:?}",
+            grand_runtime.snapshot_encode_elapsed
+        );
+        assert!(
+            grand_probes.traversal.footing_build_elapsed <= FOOTING_BUILD_BUDGET,
+            "Grand V3 cold Footing build exceeded {FOOTING_BUILD_BUDGET:?}: {:?}",
+            grand_probes.traversal.footing_build_elapsed
+        );
+        assert!(
+            grand_probes.traversal.footing_cache_hit_elapsed <= FOOTING_CACHE_HIT_BUDGET,
+            "Grand V3 Footing cache hit exceeded {FOOTING_CACHE_HIT_BUDGET:?}: {:?}",
+            grand_probes.traversal.footing_cache_hit_elapsed
+        );
+        assert!(
+            grand_probes.traversal.reach_p95 <= REACH_AND_PATH_BUDGET,
+            "Grand V3 Reach p95 exceeded {REACH_AND_PATH_BUDGET:?}: {:?}",
+            grand_probes.traversal.reach_p95
+        );
+        assert!(
+            grand_probes.traversal.path_p95 <= REACH_AND_PATH_BUDGET,
+            "Grand V3 A* p95 exceeded {REACH_AND_PATH_BUDGET:?}: {:?}",
+            grand_probes.traversal.path_p95
+        );
+        assert!(
+            grand_probes.perception.p95 <= PERCEPTION_BUDGET,
+            "Grand V3 perception p95 exceeded {PERCEPTION_BUDGET:?}: {:?}",
+            grand_probes.perception.p95
+        );
+        assert!(
+            grand_probes.camera.index_build <= CAMERA_BUILD_BUDGET,
+            "Grand V3 camera index build exceeded {CAMERA_BUILD_BUDGET:?}: {:?}",
+            grand_probes.camera.index_build
+        );
+        assert!(
+            grand_probes.camera.index_rebuild_p95 <= CAMERA_BUILD_BUDGET,
+            "Grand V3 camera index rebuild p95 exceeded {CAMERA_BUILD_BUDGET:?}: {:?}",
+            grand_probes.camera.index_rebuild_p95
+        );
+        assert!(
+            grand_probes.camera.query_p95 <= CAMERA_QUERY_BUDGET,
+            "Grand V3 camera query p95 exceeded {CAMERA_QUERY_BUDGET:?}: {:?}",
+            grand_probes.camera.query_p95
+        );
+        assert!(
+            grand_probes.edit.edit_p95 <= LOCAL_EDIT_BUDGET,
+            "Grand V3 local edit p95 exceeded {LOCAL_EDIT_BUDGET:?}: {:?}",
+            grand_probes.edit.edit_p95
+        );
+
+        let crystal_runtime = &crystal.runtime;
+        assert_eq!(crystal_runtime.seed, 1_592_598_566);
+        assert_eq!(crystal_runtime.columns, 18_019);
+
+        eprintln!(
+            "LARGE_WORLD_HEADLESS_CHECKPOINT_RATIO harness=headless_minimal_plugins \
+             numerator={:?} denominator={:?} scale=1000 \
+             setup_x1000={} reentry_setup_x1000={} v3_build_x1000={} \
+             columns_x1000={} material_runs_x1000={} resident_chunks_x1000={} \
+             tile_entities_x1000={} terrain_render_batches_x1000={} total_entities_x1000={} \
+             snapshot_export_x1000={} snapshot_encode_x1000={} \
+             snapshot_encoded_bytes_x1000={} surface_snapshots_x1000={} \
+             illumination_surfaces_x1000={} footing_build_x1000={} \
+             footing_cache_hit_x1000={} reach_p95_x1000={} reach_worst_x1000={} \
+             reachable_surfaces_x1000={} path_p95_x1000={} path_worst_x1000={} \
+             perception_solver_p95_x1000={} perception_solver_worst_x1000={} \
+             camera_index_build_x1000={} camera_index_rebuild_p95_x1000={} \
+             camera_query_p95_x1000={} edit_p95_x1000={} edit_worst_x1000={}",
+            grand.scenario_name,
+            crystal.scenario_name,
+            ratio_thousand_u128(
+                grand.setup_elapsed.as_nanos(),
+                crystal.setup_elapsed.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand.reentry_setup_elapsed.as_nanos(),
+                crystal.reentry_setup_elapsed.as_nanos()
+            ),
+            ratio_thousand_u64(
+                grand_runtime.generation_and_materialization_micros,
+                crystal_runtime.generation_and_materialization_micros
+            ),
+            ratio_thousand_usize(grand_runtime.columns, crystal_runtime.columns),
+            ratio_thousand_usize(grand_runtime.material_runs, crystal_runtime.material_runs),
+            ratio_thousand_usize(
+                grand_runtime.resident_chunks,
+                crystal_runtime.resident_chunks
+            ),
+            ratio_thousand_usize(grand_runtime.tile_entities, crystal_runtime.tile_entities),
+            ratio_thousand_usize(
+                grand_runtime.terrain_render_batches,
+                crystal_runtime.terrain_render_batches
+            ),
+            ratio_thousand_usize(grand_runtime.total_entities, crystal_runtime.total_entities),
+            ratio_thousand_u128(
+                grand_runtime.snapshot_export_elapsed.as_nanos(),
+                crystal_runtime.snapshot_export_elapsed.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_runtime.snapshot_encode_elapsed.as_nanos(),
+                crystal_runtime.snapshot_encode_elapsed.as_nanos()
+            ),
+            ratio_thousand_usize(
+                grand_runtime.snapshot_encoded_bytes,
+                crystal_runtime.snapshot_encoded_bytes
+            ),
+            ratio_thousand_usize(
+                grand_runtime.surface_snapshots,
+                crystal_runtime.surface_snapshots
+            ),
+            ratio_thousand_usize(
+                grand_runtime.illumination_surfaces,
+                crystal_runtime.illumination_surfaces
+            ),
+            ratio_thousand_u128(
+                grand_probes.traversal.footing_build_elapsed.as_nanos(),
+                crystal_probes.traversal.footing_build_elapsed.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.traversal.footing_cache_hit_elapsed.as_nanos(),
+                crystal_probes
+                    .traversal
+                    .footing_cache_hit_elapsed
+                    .as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.traversal.reach_p95.as_nanos(),
+                crystal_probes.traversal.reach_p95.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.traversal.reach_worst.as_nanos(),
+                crystal_probes.traversal.reach_worst.as_nanos()
+            ),
+            ratio_thousand_usize(
+                grand_probes.traversal.reachable_surfaces,
+                crystal_probes.traversal.reachable_surfaces
+            ),
+            ratio_thousand_u128(
+                grand_probes.traversal.path_p95.as_nanos(),
+                crystal_probes.traversal.path_p95.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.traversal.path_worst.as_nanos(),
+                crystal_probes.traversal.path_worst.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.perception.p95.as_nanos(),
+                crystal_probes.perception.p95.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.perception.worst.as_nanos(),
+                crystal_probes.perception.worst.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.camera.index_build.as_nanos(),
+                crystal_probes.camera.index_build.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.camera.index_rebuild_p95.as_nanos(),
+                crystal_probes.camera.index_rebuild_p95.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.camera.query_p95.as_nanos(),
+                crystal_probes.camera.query_p95.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.edit.edit_p95.as_nanos(),
+                crystal_probes.edit.edit_p95.as_nanos()
+            ),
+            ratio_thousand_u128(
+                grand_probes.edit.edit_worst.as_nanos(),
+                crystal_probes.edit.edit_worst.as_nanos()
+            ),
+        );
     }
 
     /// Automated combat UI walks use minimal flat fixtures instead of making ability
@@ -2536,6 +5586,14 @@ pub(crate) mod tests {
         procedural_gameplay_app_with_combat(scenario_name, false)
     }
 
+    fn finish_test_app(mut app: App) -> App {
+        while app.plugins_state() != PluginsState::Cleaned {
+            app.finish();
+            app.cleanup();
+        }
+        app
+    }
+
     fn shipped_combat_content(
         substances: &SubstanceTable,
     ) -> (
@@ -2575,6 +5633,13 @@ pub(crate) mod tests {
         scenario_name: &str,
         with_combat: bool,
     ) -> App {
+        finish_test_app(unfinished_procedural_gameplay_app(
+            scenario_name,
+            with_combat,
+        ))
+    }
+
+    fn unfinished_procedural_gameplay_app(scenario_name: &str, with_combat: bool) -> App {
         let entry = library()
             .scenarios
             .into_iter()
@@ -2667,7 +5732,16 @@ pub(crate) mod tests {
         app.insert_resource(art_catalog);
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
+        app.insert_resource(ActiveScenario(ScenarioToLoad {
+            scenario: entry.clone(),
+            resolved_seed: seed,
+            encounter_override: None,
+        }));
         app.insert_resource(world);
+        let formations: FormationCatalog =
+            ron::from_str(include_str!("../../../assets/config/formations.ron"))
+                .expect("the shipped formation catalog should deserialize");
+        app.insert_resource(formations);
         if let Some(seed) = seed {
             app.insert_resource(seed);
         }
@@ -2703,14 +5777,13 @@ pub(crate) mod tests {
                 stage_crystal_ascent_showcase_party
                     .after(GameplaySetup::Actors)
                     .before(GameplaySetup::Restore),
+                stage_crystal_mountain_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
                 finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
             ),
         );
 
-        while app.plugins_state() != PluginsState::Cleaned {
-            app.finish();
-            app.cleanup();
-        }
         app
     }
 
@@ -3416,6 +6489,303 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn island_showcases_freeze_their_shipped_profiles_and_standard_party() {
+        for (name, world_path, radius) in [
+            (
+                "Sandy Islets",
+                "config/worlds/procedural-sandy-islets.ron",
+                24,
+            ),
+            (
+                "Wooded Island",
+                "config/worlds/procedural-wooded-island.ron",
+                40,
+            ),
+            (
+                "Ocean Archipelagoes",
+                "config/worlds/procedural-ocean-archipelagoes.ron",
+                77,
+            ),
+        ] {
+            let scenario = library()
+                .scenarios
+                .into_iter()
+                .find(|scenario| scenario.name == name)
+                .unwrap_or_else(|| panic!("the shipped library should contain {name}"));
+            assert_eq!(scenario.world, world_path);
+            assert_eq!(scenario.generation_seed, Some(1_592_598_566));
+            assert_eq!(scenario.encounter, "config/encounters/island-showcase.ron");
+
+            let world_text = fs::read_to_string(assets_dir().join(world_path))
+                .unwrap_or_else(|error| panic!("cannot read {name} world: {error}"));
+            let world: MapSettings = ron::from_str(&world_text)
+                .unwrap_or_else(|error| panic!("cannot parse {name} world: {error}"));
+            assert_eq!(world.grid_radius, radius);
+            let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) = &world.terrain
+            else {
+                panic!("{name} should remain a V3 procedural world");
+            };
+            match (name, &v3.layout) {
+                ("Sandy Islets", hex_map::V3LayoutSettings::Single(patch)) => {
+                    assert_eq!(patch.environment, hex_map::V3EnvironmentSettings::Coastal);
+                    assert!(patch.overlays.is_empty());
+                    assert!(matches!(
+                        &patch.mask,
+                        hex_map::PatchMaskSettings::WholeWorld
+                    ));
+                    let hex_map::V3RecipeSettings::SandyIslets(settings) = &patch.recipe else {
+                        panic!("Sandy Islets changed recipe");
+                    };
+                    assert_eq!(settings.sea_level, 8);
+                    assert_eq!(settings.land_coverage_percent, 32);
+                    assert_eq!(settings.islet_count, 5);
+                    assert_eq!(settings.max_relief, 3);
+                }
+                ("Wooded Island", hex_map::V3LayoutSettings::Single(patch)) => {
+                    assert_eq!(patch.environment, hex_map::V3EnvironmentSettings::Coastal);
+                    assert!(patch.overlays.is_empty());
+                    assert!(matches!(
+                        &patch.mask,
+                        hex_map::PatchMaskSettings::WholeWorld
+                    ));
+                    let hex_map::V3RecipeSettings::WoodedIsland(settings) = &patch.recipe else {
+                        panic!("Wooded Island changed recipe");
+                    };
+                    assert_eq!(settings.sea_level, 8);
+                    assert_eq!(settings.land_coverage_percent, 65);
+                    assert_eq!(settings.max_relief, 8);
+                    assert_eq!(settings.tree_coverage_percent, 25);
+                }
+                ("Ocean Archipelagoes", hex_map::V3LayoutSettings::Macro(layout)) => {
+                    assert_eq!(layout.macro_radius, 3);
+                    assert_eq!(layout.instances.len(), 6);
+                    assert_eq!(layout.liquid_connections.len(), 10);
+                    assert_eq!(layout.walker_connections.len(), 1);
+                    let wooded_heart = layout
+                        .instances
+                        .iter()
+                        .find(|instance| instance.name == "wooded-heart")
+                        .expect("Ocean Archipelagoes should retain its wooded heart");
+                    let hex_map::V3RecipeSettings::WoodedIsland(settings) = &wooded_heart.recipe
+                    else {
+                        panic!("Ocean Archipelagoes wooded heart changed recipe");
+                    };
+                    assert_eq!(settings.sea_level, 8);
+                    assert_eq!(settings.land_coverage_percent, 68);
+                    assert_eq!(settings.max_relief, 8);
+                    assert_eq!(settings.tree_coverage_percent, 26);
+                    assert_eq!(wooded_heart.elevation.low, 9);
+                    assert_eq!(wooded_heart.elevation.high, 16);
+                }
+                _ => panic!("{name} changed its shipped layout kind"),
+            }
+
+            let encounter = encounter_of(&scenario);
+            assert_eq!(encounter.name, "Island Showcase");
+            assert_eq!(encounter.unit_count(EncounterFaction::Player), 3);
+            assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+            let [roster] = encounter.rosters.as_slice() else {
+                panic!("Island Showcase must retain exactly one roster");
+            };
+            assert_eq!(roster.faction, EncounterFaction::Player);
+            assert_eq!(
+                roster.placement,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Anchor("party_start".to_owned()),
+                    spread: 1,
+                }
+            );
+            assert_eq!(
+                roster
+                    .units
+                    .iter()
+                    .map(|unit| unit.archetype.as_str())
+                    .collect::<Vec<_>>(),
+                ["hedge-mage", "raider", "wolf"]
+            );
+            assert!(roster.units.iter().all(|unit| unit.placement.is_none()));
+        }
+    }
+
+    fn assert_island_scenario_reenters_with_same_world(
+        scenario_name: &str,
+        required_anchors: &[&str],
+    ) {
+        let mut app = procedural_gameplay_app(scenario_name);
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let first_fingerprint = app.world().resource::<GenerationReport>().map_fingerprint;
+        let first_terrain_occupancy = app.world().resource::<TerrainOccupancy>().clone();
+        let first_blockers = app
+            .world()
+            .resource::<TraversalBlockers>()
+            .iter()
+            .collect::<Vec<_>>();
+        let first_objects = island_object_snapshot(&mut app);
+        let first_anchors = {
+            let anchors = app.world().resource::<MapAnchors>();
+            required_anchors
+                .iter()
+                .map(|name| {
+                    (
+                        *name,
+                        anchors
+                            .get(&MapAnchorId::from(*name))
+                            .unwrap_or_else(|| panic!("{scenario_name} omitted {name}")),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let first_party = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("party_start"))
+            .expect("an island world should publish party_start");
+        assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
+        assert_eq!(
+            player_count(&mut app),
+            3,
+            "{scenario_name} changed its party"
+        );
+        assert!(
+            standing_pos::<Enemy>(&mut app).is_none(),
+            "{scenario_name} should remain a non-combat review world"
+        );
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert!(!app.world().contains_resource::<MapAnchors>());
+        assert!(!app.world().contains_resource::<GenerationReport>());
+        assert!(!app.world().contains_resource::<TerrainReady>());
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+        assert!(!app.world().contains_resource::<TraversalBlockers>());
+        assert!(standing_pos::<Player>(&mut app).is_none());
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
+        assert_eq!(player_count(&mut app), 0);
+        assert!(island_object_snapshot(&mut app).is_empty());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "{scenario_name} teardown left a rendered grid alive"
+        );
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        assert_eq!(
+            app.world().resource::<GenerationReport>().map_fingerprint,
+            first_fingerprint,
+            "{scenario_name} changed fingerprint after re-entry"
+        );
+        let second_anchors = app.world().resource::<MapAnchors>();
+        for (name, expected) in first_anchors {
+            assert_eq!(
+                second_anchors.get(&MapAnchorId::from(name)),
+                Some(expected),
+                "{scenario_name} changed anchor {name} after re-entry"
+            );
+        }
+        assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
+        assert_eq!(
+            player_count(&mut app),
+            3,
+            "{scenario_name} changed its party"
+        );
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
+        assert_eq!(
+            app.world().resource::<TerrainOccupancy>(),
+            &first_terrain_occupancy,
+            "{scenario_name} rebuilt different terrain occupancy"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<TraversalBlockers>()
+                .iter()
+                .collect::<Vec<_>>(),
+            first_blockers,
+            "{scenario_name} rebuilt different generated blockers"
+        );
+        assert_eq!(
+            island_object_snapshot(&mut app),
+            first_objects,
+            "{scenario_name} rebuilt different generated objects"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(app.world())
+                .count(),
+            1,
+            "{scenario_name} re-entry duplicated the rendered grid"
+        );
+    }
+
+    fn player_count(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut players = world.query_filtered::<Entity, With<Player>>();
+        players.iter(world).count()
+    }
+
+    fn island_object_snapshot(app: &mut App) -> Vec<(String, TilePos, u8)> {
+        let world = app.world_mut();
+        let mut objects = world.query::<&ObjectInstance>();
+        let mut snapshot = objects
+            .iter(world)
+            .map(|instance| {
+                (
+                    instance.object_id().as_str().to_owned(),
+                    instance.origin(),
+                    instance.rotation().steps(),
+                )
+            })
+            .collect::<Vec<_>>();
+        snapshot.sort_unstable();
+        snapshot
+    }
+
+    #[test]
+    fn island_worlds_reenter_with_same_fingerprint_anchors_and_actors() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "Sandy Islets",
+                &[
+                    "party_start",
+                    "hostile_start",
+                    "sandy_islets_primary_overlook",
+                    "sandy_islets_channel_overlook",
+                ],
+            ),
+            (
+                "Wooded Island",
+                &[
+                    "party_start",
+                    "hostile_start",
+                    "wooded_island_beach",
+                    "wooded_island_clearing",
+                    "wooded_island_ridge",
+                ],
+            ),
+            (
+                "Ocean Archipelagoes",
+                &[
+                    "party_start",
+                    "hostile_start",
+                    "macro_route_end",
+                    "archipelago.home_beach",
+                    "archipelago.channel_overlook",
+                    "archipelago.home_ridge",
+                ],
+            ),
+        ];
+        for (scenario_name, required_anchors) in cases {
+            assert_island_scenario_reenters_with_same_world(scenario_name, required_anchors);
+        }
+    }
+
+    #[test]
     fn missing_generated_enemy_anchor_fails_setup_and_cleans_partial_world() {
         let mut app = procedural_gameplay_app("Procedural Hills");
         // Point the hostile roster at an anchor the generator does not publish. The
@@ -3463,6 +6833,13 @@ pub(crate) mod tests {
             "Prairie",
             "Two Rings",
             "Mountain Range",
+            "Desert Transition",
+            "Desert Plain",
+            "Dunes",
+            "Desert Oasis Rings",
+            "Sandy Islets",
+            "Wooded Island",
+            "Ocean Archipelagoes",
         ] {
             let scenario = library()
                 .scenarios
@@ -3515,11 +6892,70 @@ pub(crate) mod tests {
                         metrics.grass_coverage_percent
                     );
                 }
+                ("Desert Transition", Some(ProceduralRecipeMetrics::DesertTransition(metrics))) => {
+                    assert!(metrics.grass_surfaces > 0);
+                    assert!(metrics.transition_surfaces > 0);
+                    assert!(metrics.sand_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Desert Plain", Some(ProceduralRecipeMetrics::DesertPlain(metrics))) => {
+                    assert_eq!(metrics.sand_surface_percent, 100);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Dunes", Some(ProceduralRecipeMetrics::Dunes(metrics))) => {
+                    assert_eq!(metrics.ridge_count, 5);
+                    assert_eq!(metrics.ridge_height, 6);
+                    assert!(metrics.crest_surfaces > 0);
+                    assert!(metrics.trough_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Sandy Islets", Some(ProceduralRecipeMetrics::SandyIslets(metrics))) => {
+                    assert_eq!(metrics.world_columns, 1_801);
+                    assert_eq!(metrics.land_components, 5);
+                    assert!(metrics.land_surfaces > 0);
+                    assert!(metrics.water_cells > 0);
+                    assert!(metrics.primary_reachable_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                ("Wooded Island", Some(ProceduralRecipeMetrics::WoodedIsland(metrics))) => {
+                    assert_eq!(metrics.world_columns, 4_921);
+                    assert!(metrics.land_surfaces > 0);
+                    assert!(metrics.water_cells > 0);
+                    assert!(metrics.grass_interior_surfaces > 0);
+                    assert!(metrics.tree_roots > 0);
+                    assert!(metrics.reachable_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                }
+                (
+                    "Ocean Archipelagoes",
+                    Some(ProceduralRecipeMetrics::OceanArchipelago(metrics)),
+                ) => {
+                    assert_eq!(metrics.world_columns, 18_019);
+                    assert_eq!(metrics.macro_cells, 37);
+                    assert_eq!(metrics.biome_regions, 6);
+                    assert_eq!(metrics.standing_water_seams, 10);
+                    assert_eq!(metrics.dry_components, 7);
+                    assert_eq!(metrics.scenic_dry_components, 6);
+                    assert!(metrics.liquid_cells > 0);
+                    assert!(metrics.reachable_surfaces > 0);
+                    assert!(metrics.critical_route_steps > 0);
+                    assert!(metrics.tree_roots > 0);
+                }
                 ("Two Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
                     assert_eq!(metrics.world_columns, 9_241);
                     assert_eq!(metrics.biome_regions, 19);
                     assert_eq!(metrics.reciprocal_seams, 42);
                     assert_eq!(metrics.redundant_regions, 19);
+                }
+                ("Desert Oasis Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
+                    assert_eq!(metrics.world_columns, 9_241);
+                    assert_eq!(metrics.biome_regions, 19);
+                    assert_eq!(metrics.reciprocal_seams, 42);
+                    assert_eq!(metrics.redundant_regions, 19);
+                    assert_eq!(metrics.directed_liquid_seams, 0);
+                    assert_eq!(metrics.boundary_liquid_outlets, 0);
+                    assert!(metrics.liquid_cells > 0);
+                    assert!(metrics.feature_instances >= 12);
                 }
                 ("Mountain Range", Some(ProceduralRecipeMetrics::MountainRange(metrics))) => {
                     assert_eq!(metrics.world_columns, 18_019);
@@ -3532,7 +6968,20 @@ pub(crate) mod tests {
                     assert!((92..=104).contains(&metrics.summit_level));
                     assert!(metrics.high_massif_surfaces >= 100);
                 }
-                ("Deep Forest" | "Prairie" | "Two Rings" | "Mountain Range", metrics) => {
+                (
+                    "Deep Forest"
+                    | "Prairie"
+                    | "Desert Transition"
+                    | "Desert Plain"
+                    | "Dunes"
+                    | "Sandy Islets"
+                    | "Wooded Island"
+                    | "Ocean Archipelagoes"
+                    | "Two Rings"
+                    | "Desert Oasis Rings"
+                    | "Mountain Range",
+                    metrics,
+                ) => {
                     panic!("{scenario_name} published unexpected metrics: {metrics:?}");
                 }
                 _ => {}
@@ -3556,6 +7005,30 @@ pub(crate) mod tests {
                 "Forest" => &["forest_clearing", "prairie_overlook"],
                 "Deep Forest" => &["deep_forest_clearing"],
                 "Prairie" => &["prairie_overlook"],
+                "Desert Transition" => &["transition_center", "grass_overlook", "sand_overlook"],
+                "Desert Plain" => &["desert_plain_overlook"],
+                "Dunes" => &["dune_crest", "dune_trough"],
+                "Desert Oasis Rings" => &[
+                    "oasis_overlook",
+                    "inner_dune_crest",
+                    "outer_dune_crest",
+                    "desert_plain_overlook",
+                ],
+                "Sandy Islets" => &[
+                    "sandy_islets_primary_overlook",
+                    "sandy_islets_channel_overlook",
+                ],
+                "Wooded Island" => &[
+                    "wooded_island_beach",
+                    "wooded_island_clearing",
+                    "wooded_island_ridge",
+                ],
+                "Ocean Archipelagoes" => &[
+                    "macro_route_end",
+                    "archipelago.home_beach",
+                    "archipelago.channel_overlook",
+                    "archipelago.home_ridge",
+                ],
                 "Two Rings" => &[
                     "center_conflict_center",
                     "mountains_a_stream_source_overlook",
@@ -3588,10 +7061,18 @@ pub(crate) mod tests {
                     !special_regions.is_empty(),
                     "{scenario_name} dropped its flight-gated upper layer"
                 ),
+                "Desert Oasis Rings" => assert!(
+                    !special_regions.is_empty(),
+                    "Desert Oasis Rings dropped its closed non-route seams"
+                ),
                 "Mountain Range" => assert!(
                     !special_regions.is_empty(),
                     "Mountain Range dropped its closed non-route macro seams"
                 ),
+                // Remote dry components are deliberately scenic. Whether Macro represents
+                // their closed seams as ordinary disconnection or special movement metadata
+                // is validated by the composition contract, not this lifecycle smoke test.
+                "Ocean Archipelagoes" => {}
                 "Mountains" => {}
                 "Waterfall" => {
                     assert_eq!(
@@ -3628,7 +7109,17 @@ pub(crate) mod tests {
                 );
             }
             assert!(standing_pos::<Player>(&mut app).is_some());
-            assert!(standing_pos::<Enemy>(&mut app).is_some());
+            if matches!(
+                scenario_name,
+                "Sandy Islets" | "Wooded Island" | "Ocean Archipelagoes"
+            ) {
+                assert!(
+                    standing_pos::<Enemy>(&mut app).is_none(),
+                    "{scenario_name} should remain a non-combat review world"
+                );
+            } else {
+                assert!(standing_pos::<Enemy>(&mut app).is_some());
+            }
             assert_eq!(
                 app.world_mut()
                     .query_filtered::<Entity, With<HexGrid>>()
@@ -3648,6 +7139,16 @@ pub(crate) mod tests {
             ("Two Rings", 9_241, std::time::Duration::from_millis(1)),
             (
                 "Mountain Range",
+                18_019,
+                std::time::Duration::from_millis(2),
+            ),
+            (
+                "Crystal Mountain",
+                18_019,
+                std::time::Duration::from_millis(2),
+            ),
+            (
+                "Ocean Archipelagoes",
                 18_019,
                 std::time::Duration::from_millis(2),
             ),

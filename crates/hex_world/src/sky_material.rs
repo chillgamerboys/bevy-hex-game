@@ -9,6 +9,20 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 
+/// Read-only allocation evidence for the private procedural-sky material type.
+///
+/// The review capture crate cannot name `SkyMaterial` directly, so the world
+/// renderer publishes this fixed-size summary without exposing mutable material
+/// authority.
+#[cfg(feature = "map-review")]
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SkyRuntimeAssetEvidenceV1 {
+    /// Number of distinct live sky material assets referenced by sky domes.
+    pub sky_material_count: u64,
+    /// Exact inline allocation bytes of those distinct material assets.
+    pub sky_material_bytes: u64,
+}
+
 /// GPU-side sky parameters.
 ///
 /// Field order and types must match `struct SkyParams` in `assets/shaders/sky.wgsl`

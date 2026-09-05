@@ -100,7 +100,7 @@ and hot-file overlap rather than opening one PR per ticket.
 
 ## Ownership and shared concerns
 
-- The world owner controls `hex_map`, `hex_world`, `hex_perception`, and their
+- The world owner controls `hex_schematic`, `hex_map`, `hex_world`, `hex_perception`, and their
   domain content and schema. The gameplay owner controls `hex_core`, `hex_units`,
   `hex_combat`, `hex_lattice`, `hex_anim`, and generic asset-loader infrastructure.
 - `hex_game` is shared integration; `hex_objects` and `hex_editor` are shared
@@ -134,10 +134,17 @@ and hot-file overlap rather than opening one PR per ticket.
   CI-equivalent gate on the combined wave candidate. Run the automated visual walk
   and human runtime route only when the candidate affects presentation or experience;
   a logic-only candidate records the exact-head hook-backed classification instead.
+- Use `$inspect-game-renders` after every materially different map render and before
+  showing or approving changed map presentation. Require a fresh full-footprint frame,
+  changed-region views from multiple camera modes and azimuths, and a motion pass for
+  flicker, popping, translucent/emissive content, or camera collision. A cropped,
+  stale, or mechanically completed but uninspected pack is not visual evidence.
 - Automated presentation review must not open, activate, or focus a visible native game
-  window or begin screen recording without explicit user approval. If noninteractive
-  capture is unavailable or regresses, record the review as blocked instead of substituting
-  a visible launch.
+  window or begin screen recording without explicit user approval. Routine screenshot
+  and visual-walk automation must use the repository's windowless render targets. Launch
+  a visible game only when the user explicitly asks to play or agrees to a named live
+  motion review. If noninteractive capture is unavailable or regresses, record the review
+  as blocked instead of substituting a visible launch.
 
 ## Code review rules
 

@@ -1,14 +1,5 @@
 //! Runtime contracts for map-owned voxel toughness and terrain impacts.
 
-#![expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixtures should fail these integration tests immediately"
-)]
-#![expect(
-    clippy::panic,
-    reason = "contract fixtures fail immediately when their required shape is absent"
-)]
-
 use bevy::ecs::message::MessageCursor;
 
 use super::*;
@@ -168,6 +159,18 @@ fn current_grid(app: &mut App) -> Entity {
         .expect("one terrain grid should exist")
 }
 
+fn assert_current_snapshot_matches_live_export(app: &App, context: &str) {
+    let live = hex_map::export_world_snapshot_v1(app.world())
+        .unwrap_or_else(|error| panic!("{context} live world should export: {error}"));
+    assert_eq!(
+        app.world()
+            .resource::<hex_map::CurrentWorldSnapshotV1>()
+            .snapshot(),
+        &live,
+        "{context} incremental cache drifted from a complete export"
+    );
+}
+
 fn assert_resisted_without_rebuild(app: &mut App, target: TilePos, element: ElementId, batch: u64) {
     let original = app.world().resource::<VoxelMap>().get(target);
     assert!(
@@ -204,6 +207,11 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
     let target = *exactly_one(&positions_with_substance(&app, "stone", 1));
     let stone = app.world().resource::<VoxelMap>().get(target);
     let grid_before = current_grid(&mut app);
+    let affected_chunk = terrain_chunk_key(target.coord);
+    let chunks_before = terrain_chunk_roots(&mut app);
+    let affected_root_before = *chunks_before
+        .get(&affected_chunk)
+        .expect("affected chunk exists before damage");
     let mut cursor = app
         .world()
         .resource::<Messages<TerrainImpactOutcome>>()
@@ -246,6 +254,7 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
         grid_before,
         "partial damage must not rebuild terrain"
     );
+    assert_current_snapshot_matches_live_export(&app, "partial terrain damage");
 
     let second = impact(2, vec![target], earth, 3);
     app.world_mut().write_message(second.clone());
@@ -255,11 +264,29 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
     assert!(exactly_one(&outcomes).is_consistent_with(&second));
     assert!(app.world().resource::<VoxelMap>().get(target).is_air());
     assert_eq!(app.world().resource::<DamagedVoxels>().get(target), None);
-    assert_ne!(
+    assert_eq!(
         current_grid(&mut app),
         grid_before,
-        "destruction must use the ordinary terrain rebuild"
+        "chunk-native destruction must retain the stable whole-grid owner"
     );
+    let chunks_after = terrain_chunk_roots(&mut app);
+    assert_ne!(
+        *chunks_after
+            .get(&affected_chunk)
+            .expect("affected chunk remains after damage"),
+        affected_root_before,
+        "destruction must atomically replace its affected chunk root"
+    );
+    for (chunk, root) in chunks_before {
+        if chunk != affected_chunk {
+            assert_eq!(
+                *chunks_after.get(&chunk).expect("unaffected chunk remains"),
+                root,
+                "unaffected chunk {chunk:?}"
+            );
+        }
+    }
+    assert_current_snapshot_matches_live_export(&app, "destructive terrain damage");
 }
 
 #[test]
@@ -659,7 +686,7 @@ fn direct_edits_precede_impacts_and_material_changes_share_one_rebuild() {
     assert_eq!(voxel.before, Some(dirt));
     assert_eq!(voxel.disposition, TerrainImpactDisposition::Destroyed);
     assert!(app.world().resource::<VoxelMap>().get(target).is_air());
-    assert_ne!(current_grid(&mut app), grid_before);
+    assert_eq!(current_grid(&mut app), grid_before);
     assert_eq!(
         app.world_mut()
             .query_filtered::<Entity, With<HexGrid>>()
@@ -731,7 +758,7 @@ fn edits_and_impacts_wait_while_paused_without_aging_out() {
     let voxel = exactly_one(voxels);
     assert_eq!(voxel.before, Some(dirt));
     assert_eq!(voxel.disposition, TerrainImpactDisposition::Damaged);
-    assert_ne!(current_grid(&mut app), grid_before);
+    assert_eq!(current_grid(&mut app), grid_before);
 }
 
 #[test]

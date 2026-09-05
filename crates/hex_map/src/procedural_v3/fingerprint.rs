@@ -7,15 +7,16 @@
 //! an identity.
 
 use hex_core::{HexCoord, IlluminationLevel, MapViewHint, TilePos};
-use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::settings::{
-    EdgeLiquidSettings, MacroAccessSettings, MacroAxisSettings, MacroHeadwaterSettings,
-    MacroLayoutSettings, MacroLiquidConnectionSettings, NamedOverlaySettings,
-    PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    ProceduralV3Settings, Ring19BoundarySide, Ring19RegionSettings, SharedEdgeSettings,
-    V3EnvironmentSettings, V3LayoutSettings, V3OverlaySettings, V3RecipeSettings, V3Ring19Settings,
-    V3Ring7Settings,
+    EdgeLiquidSettings, MacroAccessSettings, MacroAxisSettings, MacroBoundarySideSettings,
+    MacroHeadwaterSettings, MacroLayoutSettings, MacroLiquidConnectionSettings,
+    MacroSpanningFeatureSettings, NamedOverlaySettings, PatchEdgeContractSettings,
+    PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide,
+    Ring19RegionSettings, SharedEdgeSettings, V3EnvironmentSettings, V3LayoutSettings,
+    V3OverlaySettings, V3RecipeSettings, V3Ring19ProfileSettings, V3Ring19Settings,
+    V3Ring7Settings, V3SchematicLayoutSettings, V3SchematicTemplate, V3SchematicTerrainProfile,
 };
 
 use super::layout::{
@@ -37,6 +38,10 @@ use super::world::{
 const SETTINGS_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/settings";
 const SEMANTIC_PLAN_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/semantic-plan";
 const MATERIALIZED_WORLD_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/materialized-world";
+const MACRO_EXTENSION_TAG: u8 = 128;
+const MACRO_EXTENSION_VERSION: u8 = 1;
+const RING19_EXTENSION_TAG: u8 = 129;
+const RING19_EXTENSION_VERSION: u8 = 1;
 
 /// Canonical V3 fingerprint payload.
 ///
@@ -54,6 +59,15 @@ impl FingerprintEncoder {
     #[must_use]
     pub(crate) const fn new() -> Self {
         Self { bytes: Vec::new() }
+    }
+
+    /// Starts an empty canonical payload with storage reserved for a known-large
+    /// encoding. Capacity is not part of the byte or fingerprint contract.
+    #[must_use]
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(capacity),
+        }
     }
 
     /// Writes an enum or union variant tag.
@@ -204,8 +218,54 @@ pub(crate) fn settings_fingerprint(
             encoder.tag(3);
             encode_macro_settings(&mut encoder, macro_layout)?;
         }
+        V3LayoutSettings::Schematic(schematic) => {
+            encoder.tag(4);
+            encode_schematic_settings(&mut encoder, schematic);
+        }
     }
     Ok(encoder.finish_settings())
+}
+
+fn encode_schematic_settings(
+    encoder: &mut FingerprintEncoder,
+    settings: &V3SchematicLayoutSettings,
+) {
+    encoder.tag(match settings.template {
+        V3SchematicTemplate::GrandV3 => 0,
+    });
+    encoder.u32(settings.template_revision);
+    encoder.u32(settings.cell_pitch);
+    match settings.terrain_profile {
+        V3SchematicTerrainProfile::GrandV3BasicV1(profile) => {
+            encoder.tag(0);
+            for level in [
+                profile.sea_level,
+                profile.island_level,
+                profile.beach_level,
+                profile.shore_level,
+                profile.valley_level,
+                profile.plateau_level,
+                profile.hill_level,
+                profile.mountain_floor,
+                profile.massif_floor,
+                profile.high_core_level,
+                profile.high_gradient_per_cell,
+                profile.mountain_lake_level,
+                profile.frozen_woods_level,
+                profile.lake_island_min_level,
+                profile.lake_island_max_level,
+                profile.sharp_peak_bench_min,
+                profile.sharp_peak_bench_max,
+                profile.sharp_peak_min,
+                profile.sharp_peak_max,
+                profile.valley_lake_level,
+                profile.crystal_base_level,
+                profile.crystal_rise_levels,
+            ] {
+                encoder.i32(level);
+            }
+        }
+    }
 }
 
 fn encode_macro_settings(
@@ -303,7 +363,74 @@ fn encode_macro_settings(
     for instance in &settings.critical_route {
         encoder.str(instance)?;
     }
+    if !settings.walker_connections.is_empty()
+        || !settings.spanning_features.is_empty()
+        || !settings.anchor_aliases.is_empty()
+    {
+        encoder.tag(MACRO_EXTENSION_TAG);
+        encoder.u8(MACRO_EXTENSION_VERSION);
+
+        let mut walkers = settings.walker_connections.clone();
+        for walker in &mut walkers {
+            if walker.second_instance < walker.first_instance {
+                std::mem::swap(&mut walker.first_instance, &mut walker.second_instance);
+            }
+        }
+        walkers.sort_unstable();
+        encoder.collection_count(walkers.len())?;
+        for walker in walkers {
+            encoder.str(&walker.first_instance)?;
+            encoder.str(&walker.second_instance)?;
+            encoder.u32(walker.width);
+            encoder.i32(walker.level);
+        }
+
+        let mut features = settings.spanning_features.clone();
+        features.sort_unstable();
+        encoder.collection_count(features.len())?;
+        for feature in features {
+            match feature {
+                MacroSpanningFeatureSettings::Tunnel(tunnel) => {
+                    encoder.tag(0);
+                    encoder.str(&tunnel.name)?;
+                    encoder.u8(u8::from(tunnel.canonical_route));
+                    encoder.collection_count(tunnel.instance_route.len())?;
+                    for instance in tunnel.instance_route {
+                        encoder.str(&instance)?;
+                    }
+                    encoder.str(&tunnel.boundary_terminal.instance)?;
+                    encoder.tag(macro_boundary_side_tag(tunnel.boundary_terminal.side));
+                    encoder.str(&tunnel.destination_anchor.instance)?;
+                    encoder.str(&tunnel.destination_anchor.anchor)?;
+                    encoder.i32(tunnel.floor_level);
+                    encoder.u32(tunnel.width);
+                    encoder.u32(tunnel.clearance);
+                    encoder.u32(tunnel.roof_thickness);
+                }
+            }
+        }
+
+        let mut aliases = settings.anchor_aliases.clone();
+        aliases.sort_unstable();
+        encoder.collection_count(aliases.len())?;
+        for alias in aliases {
+            encoder.str(&alias.alias)?;
+            encoder.str(&alias.instance)?;
+            encoder.str(&alias.anchor)?;
+        }
+    }
     Ok(())
+}
+
+const fn macro_boundary_side_tag(side: MacroBoundarySideSettings) -> u8 {
+    match side {
+        MacroBoundarySideSettings::East => 0,
+        MacroBoundarySideSettings::SouthEast => 1,
+        MacroBoundarySideSettings::SouthWest => 2,
+        MacroBoundarySideSettings::West => 3,
+        MacroBoundarySideSettings::NorthWest => 4,
+        MacroBoundarySideSettings::NorthEast => 5,
+    }
 }
 
 const fn macro_axis_tag(axis: MacroAxisSettings) -> u8 {
@@ -325,6 +452,13 @@ const fn macro_axis_tag(axis: MacroAxisSettings) -> u8 {
 pub(crate) fn semantic_plan_fingerprint(plan: &GeneratedWorldPlan) -> Result<u64, String> {
     let mut encoder = FingerprintEncoder::new();
     encoder.u32(3);
+    // This conditional extension deliberately writes no bytes for established V3
+    // recipes. Grand V3 can therefore bind its complete schematic input without
+    // changing any legacy semantic fingerprint.
+    if let Some(source) = plan.source_schematic_fingerprint {
+        encoder.u8(255);
+        encoder.u64(source);
+    }
     encode_layout_plan(&mut encoder, &plan.layout)?;
     encode_volume_plan(&mut encoder, &plan.volume)?;
     encode_liquids(&mut encoder, &plan.liquids)?;
@@ -344,6 +478,17 @@ pub(crate) fn semantic_plan_fingerprint(plan: &GeneratedWorldPlan) -> Result<u64
         encoder.tile_pos(*position);
     }
     encode_view_hint(&mut encoder, plan.view_hint)?;
+    // Append-only conditional extension preserves every established V3 byte
+    // stream as an exact prefix while giving review-only surfaces their own
+    // deterministic identity.
+    if !plan.observation_anchors.is_empty() {
+        encoder.tag(254);
+        encoder.collection_count(plan.observation_anchors.len())?;
+        for (name, position) in &plan.observation_anchors {
+            encoder.str(name)?;
+            encoder.tile_pos(*position);
+        }
+    }
     Ok(encoder.finish_semantic_plan())
 }
 
@@ -393,6 +538,11 @@ fn encode_ring19_settings(
         encoder.tag(ring19_boundary_side_tag(outlet.side));
         encoder.u32(outlet.width);
         encoder.i32(outlet.level);
+    }
+    if ring.profile != V3Ring19ProfileSettings::TwoRings {
+        encoder.tag(RING19_EXTENSION_TAG);
+        encoder.u8(RING19_EXTENSION_VERSION);
+        encoder.tag(ring19_profile_tag(ring.profile));
     }
     Ok(())
 }
@@ -538,6 +688,47 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.i32(settings.base_level);
             encoder.i32(settings.rise_levels);
         }
+        V3RecipeSettings::DesertTransition(settings) => {
+            encoder.tag(17);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.max_relief);
+            encoder.u8(settings.transition_width);
+            encoder.u8(settings.dry_coverage_percent);
+        }
+        V3RecipeSettings::DesertPlain(settings) => {
+            encoder.tag(18);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.max_relief);
+        }
+        V3RecipeSettings::Dunes(settings) => {
+            encoder.tag(19);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.ridge_height);
+            encoder.u8(settings.ridge_spacing);
+            encoder.u8(settings.ridge_count);
+        }
+        V3RecipeSettings::Oasis(settings) => {
+            encoder.tag(20);
+            encoder.i32(settings.base_level);
+            encoder.u8(settings.pool_radius);
+            encoder.u8(settings.palm_count);
+            encoder.u8(settings.grass_ring_width);
+        }
+        V3RecipeSettings::SandyIslets(settings) => {
+            // Coastal-island tags append after the accepted Arid recipe range.
+            encoder.tag(21);
+            encoder.i32(settings.sea_level);
+            encoder.u8(settings.land_coverage_percent);
+            encoder.u8(settings.islet_count);
+            encoder.i32(settings.max_relief);
+        }
+        V3RecipeSettings::WoodedIsland(settings) => {
+            encoder.tag(22);
+            encoder.i32(settings.sea_level);
+            encoder.u8(settings.land_coverage_percent);
+            encoder.i32(settings.max_relief);
+            encoder.u8(settings.tree_coverage_percent);
+        }
     }
 }
 
@@ -569,6 +760,14 @@ const fn environment_tag(environment: V3EnvironmentSettings) -> u8 {
         V3EnvironmentSettings::Rocky => 3,
         V3EnvironmentSettings::Coastal => 4,
         V3EnvironmentSettings::Alpine => 5,
+        V3EnvironmentSettings::Arid => 6,
+    }
+}
+
+const fn ring19_profile_tag(profile: V3Ring19ProfileSettings) -> u8 {
+    match profile {
+        V3Ring19ProfileSettings::TwoRings => 0,
+        V3Ring19ProfileSettings::DesertOasis => 1,
     }
 }
 
@@ -644,6 +843,7 @@ fn encode_layout_plan(
         LayoutKind::Ring7 => 1,
         LayoutKind::Ring19 => 2,
         LayoutKind::Macro => 3,
+        LayoutKind::Schematic => 4,
     });
     encoder.u32(layout.grid_radius);
     encode_coord_set(encoder, &layout.footprint)?;
@@ -1071,16 +1271,12 @@ fn encode_view_hint(
 fn fingerprint(domain: &[u8], payload: &[u8]) -> u64 {
     let domain_len = u64::try_from(domain.len()).unwrap_or(u64::MAX);
     let payload_len = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-    let capacity = 8_usize
-        .saturating_add(domain.len())
-        .saturating_add(8)
-        .saturating_add(payload.len());
-    let mut framed = Vec::with_capacity(capacity);
-    framed.extend_from_slice(&domain_len.to_le_bytes());
-    framed.extend_from_slice(domain);
-    framed.extend_from_slice(&payload_len.to_le_bytes());
-    framed.extend_from_slice(payload);
-    xxh3_64(&framed)
+    let mut hasher = Xxh3::new();
+    hasher.update(&domain_len.to_le_bytes());
+    hasher.update(domain);
+    hasher.update(&payload_len.to_le_bytes());
+    hasher.update(payload);
+    hasher.digest()
 }
 
 #[cfg(test)]
@@ -1101,10 +1297,28 @@ mod tests {
         StructureId, StructurePlan,
     };
     use crate::settings::{
-        CubeCoord, EdgeElevationSettings, Ring19BoundaryOutletSettings,
-        Ring19LiquidConnectionSettings, SharedEdgeSettings, V3CrystalAscentSettings,
-        V3HillsSettings, V3PrairieSettings, WalkerPortSettings,
+        CubeCoord, EdgeElevationSettings, MacroAnchorAliasSettings, MacroAnchorReferenceSettings,
+        MacroBoundaryTerminalSettings, MacroSpanningFeatureSettings, MacroTunnelSettings,
+        MacroWalkerConnectionSettings, MapSettings, ProceduralSettings,
+        Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings, SharedEdgeSettings,
+        TerrainSettings, V3CrystalAscentSettings, V3DesertPlainSettings,
+        V3DesertTransitionSettings, V3DunesSettings, V3GrandV3BasicTerrainProfile, V3HillsSettings,
+        V3OasisSettings, V3PrairieSettings, V3SandyIsletsSettings, V3SchematicLayoutSettings,
+        V3SchematicTemplate, V3SchematicTerrainProfile, V3WoodedIslandSettings, WalkerPortSettings,
     };
+
+    const MOUNTAIN_RANGE_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
+    const TWO_RINGS_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-two-rings.ron");
+
+    fn shipped_v3_settings(source: &str) -> (u32, f32, ProceduralV3Settings) {
+        let settings: MapSettings = ron::from_str(source).expect("shipped V3 settings parse");
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = settings.terrain else {
+            panic!("shipped fixture must use procedural V3");
+        };
+        (settings.grid_radius, settings.level_height, v3)
+    }
 
     fn world_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {
@@ -1176,6 +1390,7 @@ mod tests {
             )]),
         };
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan::default(),
@@ -1186,6 +1401,7 @@ mod tests {
             biome_regions: BTreeMap::from([(surface, BiomeRegionId(0))]),
             interiors: InteriorPlan::default(),
             anchors: BTreeMap::from([("party_start".to_owned(), surface)]),
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((0.0, 8.0, 8.0), (0.0, 0.0, 0.0)),
         }
     }
@@ -1202,6 +1418,92 @@ mod tests {
         assert_ne!(settings, semantic);
         assert_ne!(settings, materialized);
         assert_ne!(semantic, materialized);
+    }
+
+    #[test]
+    fn streamed_domain_frame_matches_the_legacy_contiguous_encoding() {
+        let domain = b"test-domain";
+        let payload = b"canonical payload spanning the streamed frame";
+        let mut legacy_frame = Vec::new();
+        legacy_frame.extend_from_slice(
+            &u64::try_from(domain.len())
+                .expect("the test domain length fits")
+                .to_le_bytes(),
+        );
+        legacy_frame.extend_from_slice(domain);
+        legacy_frame.extend_from_slice(
+            &u64::try_from(payload.len())
+                .expect("the test payload length fits")
+                .to_le_bytes(),
+        );
+        legacy_frame.extend_from_slice(payload);
+
+        assert_eq!(
+            fingerprint(domain, payload),
+            xxhash_rust::xxh3::xxh3_64(&legacy_frame)
+        );
+    }
+
+    #[test]
+    fn conditional_schematic_source_identity_changes_semantics_without_shifting_legacy() {
+        let legacy = compact_world();
+        let legacy_fingerprint =
+            semantic_plan_fingerprint(&legacy).expect("the compact legacy world fingerprints");
+
+        let mut first = legacy.clone();
+        first.source_schematic_fingerprint = Some(7);
+        let mut second = legacy.clone();
+        second.source_schematic_fingerprint = Some(8);
+
+        assert_eq!(
+            semantic_plan_fingerprint(&legacy).expect("legacy identity remains encodable"),
+            legacy_fingerprint
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&first).expect("first source identity fingerprints"),
+            semantic_plan_fingerprint(&second).expect("second source identity fingerprints")
+        );
+    }
+
+    #[test]
+    fn conditional_observation_anchor_identity_is_ordered_and_leaves_empty_legacy_unchanged() {
+        let legacy = compact_world();
+        let legacy_fingerprint =
+            semantic_plan_fingerprint(&legacy).expect("the compact legacy world fingerprints");
+        let surface = *legacy
+            .volume
+            .surfaces
+            .first_key_value()
+            .expect("the compact world has one exact surface")
+            .0;
+
+        let mut first = legacy.clone();
+        first
+            .observation_anchors
+            .insert("review.z".to_owned(), surface);
+        first
+            .observation_anchors
+            .insert("review.a".to_owned(), surface);
+        let mut repeated = legacy.clone();
+        repeated
+            .observation_anchors
+            .insert("review.a".to_owned(), surface);
+        repeated
+            .observation_anchors
+            .insert("review.z".to_owned(), surface);
+
+        assert_eq!(
+            semantic_plan_fingerprint(&legacy).expect("legacy identity remains encodable"),
+            legacy_fingerprint
+        );
+        assert_eq!(
+            semantic_plan_fingerprint(&first).expect("observation identities fingerprint"),
+            semantic_plan_fingerprint(&repeated).expect("ordered identities fingerprint")
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&first).expect("observation identities fingerprint"),
+            legacy_fingerprint
+        );
     }
 
     #[test]
@@ -1304,6 +1606,515 @@ mod tests {
         );
         assert_ne!(baseline, changed_base.finish_settings());
         assert_ne!(baseline, changed_rise.finish_settings());
+    }
+
+    #[test]
+    fn arid_environment_and_desert_recipe_tags_are_append_only_and_complete() {
+        assert_eq!(environment_tag(V3EnvironmentSettings::Arid), 6);
+
+        let recipes = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 3,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 2,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 6,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 5,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+        let expected = [
+            {
+                let mut bytes = vec![17];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&3_i32.to_le_bytes());
+                bytes.extend_from_slice(&[8, 55]);
+                bytes
+            },
+            {
+                let mut bytes = vec![18];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&2_i32.to_le_bytes());
+                bytes
+            },
+            {
+                let mut bytes = vec![19];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&6_i32.to_le_bytes());
+                bytes.extend_from_slice(&[12, 5]);
+                bytes
+            },
+            {
+                let mut bytes = vec![20];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&[5, 12, 3]);
+                bytes
+            },
+        ];
+
+        for (recipe, expected) in recipes.iter().zip(expected) {
+            let mut encoder = FingerprintEncoder::new();
+            encode_recipe_settings(&mut encoder, recipe);
+            assert_eq!(encoder.bytes, expected);
+        }
+    }
+
+    #[test]
+    fn coastal_island_recipe_tags_are_append_only_and_every_field_is_sensitive() {
+        assert_eq!(environment_tag(V3EnvironmentSettings::Coastal), 4);
+
+        fn recipe_fingerprint(recipe: &V3RecipeSettings) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_recipe_settings(&mut encoder, recipe);
+            encoder.finish_settings()
+        }
+
+        let sandy = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+            sea_level: 8,
+            land_coverage_percent: 28,
+            islet_count: 5,
+            max_relief: 3,
+        });
+        let wooded = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+
+        let mut sandy_encoder = FingerprintEncoder::new();
+        encode_recipe_settings(&mut sandy_encoder, &sandy);
+        let mut sandy_expected = vec![21];
+        sandy_expected.extend_from_slice(&8_i32.to_le_bytes());
+        sandy_expected.extend_from_slice(&[28, 5]);
+        sandy_expected.extend_from_slice(&3_i32.to_le_bytes());
+        assert_eq!(sandy_encoder.bytes, sandy_expected);
+
+        let mut wooded_encoder = FingerprintEncoder::new();
+        encode_recipe_settings(&mut wooded_encoder, &wooded);
+        let mut wooded_expected = vec![22];
+        wooded_expected.extend_from_slice(&8_i32.to_le_bytes());
+        wooded_expected.push(68);
+        wooded_expected.extend_from_slice(&6_i32.to_le_bytes());
+        wooded_expected.push(26);
+        assert_eq!(wooded_encoder.bytes, wooded_expected);
+
+        let sandy_baseline = recipe_fingerprint(&sandy);
+        for changed in [
+            V3SandyIsletsSettings {
+                sea_level: 9,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 3,
+            },
+            V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 29,
+                islet_count: 5,
+                max_relief: 3,
+            },
+            V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 6,
+                max_relief: 3,
+            },
+            V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 4,
+            },
+        ] {
+            assert_ne!(
+                sandy_baseline,
+                recipe_fingerprint(&V3RecipeSettings::SandyIslets(changed))
+            );
+        }
+
+        let wooded_baseline = recipe_fingerprint(&wooded);
+        for changed in [
+            V3WoodedIslandSettings {
+                sea_level: 9,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            },
+            V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 69,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            },
+            V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 7,
+                tree_coverage_percent: 26,
+            },
+            V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 27,
+            },
+        ] {
+            assert_ne!(
+                wooded_baseline,
+                recipe_fingerprint(&V3RecipeSettings::WoodedIsland(changed))
+            );
+        }
+    }
+
+    #[test]
+    fn empty_macro_extensions_preserve_shipped_settings_fingerprints() {
+        let (radius, level_height, mountain_range) = shipped_v3_settings(MOUNTAIN_RANGE_RON);
+        let V3LayoutSettings::Macro(layout) = &mountain_range.layout else {
+            unreachable!("Mountain Range is Macro");
+        };
+        assert!(layout.walker_connections.is_empty());
+        assert!(layout.spanning_features.is_empty());
+        assert!(layout.anchor_aliases.is_empty());
+        assert_eq!(
+            settings_fingerprint(radius, level_height, &mountain_range)
+                .expect("Mountain Range settings encode"),
+            2_843_243_527_997_079_402,
+            "defaulted empty Macro extensions append no bytes"
+        );
+
+        let (radius, level_height, two_rings) = shipped_v3_settings(TWO_RINGS_RON);
+        assert_eq!(
+            settings_fingerprint(radius, level_height, &two_rings)
+                .expect("Two Rings settings encode"),
+            2_347_243_186_379_186_390,
+            "the unrelated Ring19 settings identity remains byte-identical"
+        );
+    }
+
+    #[test]
+    fn schematic_layout_uses_additive_tag_four_and_encodes_every_numeric_field() {
+        let schematic = V3SchematicLayoutSettings {
+            template: V3SchematicTemplate::GrandV3,
+            template_revision: 2,
+            cell_pitch: 22,
+            terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                V3GrandV3BasicTerrainProfile::canonical(),
+            ),
+        };
+        let mut encoder = FingerprintEncoder::new();
+        encoder.tag(4);
+        encode_schematic_settings(&mut encoder, &schematic);
+
+        let mut expected = vec![4, 0];
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        expected.extend_from_slice(&22_u32.to_le_bytes());
+        expected.push(0);
+        for level in [
+            8_i32, 12, 10, 12, 16, 20, 20, 28, 48, 150, 18, 150, 152, 151, 158, 150, 166, 178, 192,
+            15, 6, 144,
+        ] {
+            expected.extend_from_slice(&level.to_le_bytes());
+        }
+        assert_eq!(
+            encoder.bytes, expected,
+            "the additive layout tag and BasicV1 field order are wire contracts"
+        );
+    }
+
+    #[test]
+    fn schematic_settings_fingerprint_changes_with_every_numeric_field() {
+        fn canonical() -> ProceduralV3Settings {
+            ProceduralV3Settings {
+                layout: V3LayoutSettings::Schematic(V3SchematicLayoutSettings {
+                    template: V3SchematicTemplate::GrandV3,
+                    template_revision: crate::settings::V3_GRAND_V3_TEMPLATE_REVISION,
+                    cell_pitch: 22,
+                    terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                        V3GrandV3BasicTerrainProfile::canonical(),
+                    ),
+                }),
+            }
+        }
+
+        let baseline = settings_fingerprint(187, 0.4, &canonical())
+            .expect("canonical Schematic settings encode");
+
+        let mut changed_revision = canonical();
+        let V3LayoutSettings::Schematic(schematic) = &mut changed_revision.layout else {
+            unreachable!("the fixture is Schematic");
+        };
+        schematic.template_revision += 1;
+        assert_ne!(
+            settings_fingerprint(187, 0.4, &changed_revision)
+                .expect("changed revision settings encode"),
+            baseline
+        );
+
+        let mut changed_pitch = canonical();
+        let V3LayoutSettings::Schematic(schematic) = &mut changed_pitch.layout else {
+            unreachable!("the fixture is Schematic");
+        };
+        schematic.cell_pitch += 1;
+        assert_ne!(
+            settings_fingerprint(187, 0.4, &changed_pitch).expect("changed pitch settings encode"),
+            baseline
+        );
+
+        macro_rules! assert_profile_field_changes_fingerprint {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    let mut changed = canonical();
+                    let V3LayoutSettings::Schematic(schematic) = &mut changed.layout else {
+                        unreachable!("the fixture is Schematic");
+                    };
+                    let V3SchematicTerrainProfile::GrandV3BasicV1(profile) =
+                        &mut schematic.terrain_profile;
+                    profile.$field += 1;
+                    assert_ne!(
+                        settings_fingerprint(187, 0.4, &changed)
+                            .expect("changed profile settings encode"),
+                        baseline,
+                        concat!(stringify!($field), " must affect the settings fingerprint")
+                    );
+                )+
+            };
+        }
+        assert_profile_field_changes_fingerprint!(
+            sea_level,
+            island_level,
+            beach_level,
+            shore_level,
+            valley_level,
+            plateau_level,
+            hill_level,
+            mountain_floor,
+            massif_floor,
+            high_core_level,
+            high_gradient_per_cell,
+            mountain_lake_level,
+            frozen_woods_level,
+            lake_island_min_level,
+            lake_island_max_level,
+            sharp_peak_bench_min,
+            sharp_peak_bench_max,
+            sharp_peak_min,
+            sharp_peak_max,
+            valley_lake_level,
+            crystal_base_level,
+            crystal_rise_levels,
+        );
+    }
+
+    #[test]
+    fn ring19_profile_extension_is_conditional_and_preserves_two_rings() {
+        let (radius, level_height, two_rings) = shipped_v3_settings(TWO_RINGS_RON);
+        let baseline = settings_fingerprint(radius, level_height, &two_rings)
+            .expect("defaulted Two Rings settings encode");
+        assert_eq!(baseline, 2_347_243_186_379_186_390);
+
+        let explicit_source = TWO_RINGS_RON.replacen(
+            "layout: Ring19((",
+            "layout: Ring19((\n            profile: TwoRings,",
+            1,
+        );
+        let (_, _, explicit) = shipped_v3_settings(&explicit_source);
+        assert_eq!(
+            settings_fingerprint(radius, level_height, &explicit)
+                .expect("explicit TwoRings settings encode"),
+            baseline,
+            "the default profile appends no bytes"
+        );
+
+        let V3LayoutSettings::Ring19(default_ring) = &two_rings.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        let mut base_encoder = FingerprintEncoder::new();
+        encode_ring19_settings(&mut base_encoder, default_ring).expect("Ring19 encodes");
+        let mut desert_ring = default_ring.clone();
+        desert_ring.profile = V3Ring19ProfileSettings::DesertOasis;
+        let mut desert_encoder = FingerprintEncoder::new();
+        encode_ring19_settings(&mut desert_encoder, &desert_ring).expect("Ring19 encodes");
+        assert_eq!(
+            desert_encoder
+                .bytes
+                .strip_suffix(&[RING19_EXTENSION_TAG, RING19_EXTENSION_VERSION, 1,]),
+            Some(base_encoder.bytes.as_slice()),
+            "DesertOasis appends exactly the versioned profile suffix"
+        );
+        assert_eq!(RING19_EXTENSION_TAG, 129);
+        assert_eq!(RING19_EXTENSION_VERSION, 1);
+        assert_eq!(
+            [
+                V3Ring19ProfileSettings::TwoRings,
+                V3Ring19ProfileSettings::DesertOasis,
+            ]
+            .map(ring19_profile_tag),
+            [0, 1]
+        );
+    }
+
+    #[test]
+    fn macro_extension_identity_is_conditional_canonical_and_complete() {
+        let (radius, level_height, mut settings) = shipped_v3_settings(MOUNTAIN_RANGE_RON);
+        let V3LayoutSettings::Macro(layout) = &mut settings.layout else {
+            unreachable!("Mountain Range is Macro");
+        };
+        layout.walker_connections = vec![
+            MacroWalkerConnectionSettings {
+                first_instance: "hills-center".to_owned(),
+                second_instance: "hills-lower".to_owned(),
+                width: 4,
+                level: 150,
+            },
+            MacroWalkerConnectionSettings {
+                first_instance: "hills-upper".to_owned(),
+                second_instance: "hills-upper-outer".to_owned(),
+                width: 2,
+                level: 24,
+            },
+        ];
+        layout.spanning_features = vec![
+            MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "crystal_mountain.tunnel".to_owned(),
+                canonical_route: false,
+                instance_route: ["hills-lower-outer", "hills-lower", "hills-center"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-lower-outer".to_owned(),
+                    side: MacroBoundarySideSettings::NorthWest,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-center".to_owned(),
+                    anchor: "crystal_ascent.lower_entry".to_owned(),
+                },
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+            }),
+            MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "review.secondary".to_owned(),
+                canonical_route: false,
+                instance_route: ["hills-upper-outer", "hills-upper"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-upper-outer".to_owned(),
+                    side: MacroBoundarySideSettings::SouthEast,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-upper".to_owned(),
+                    anchor: "review.destination".to_owned(),
+                },
+                floor_level: 7,
+                width: 2,
+                clearance: 3,
+                roof_thickness: 2,
+            }),
+        ];
+        layout.anchor_aliases = vec![
+            MacroAnchorAliasSettings {
+                alias: "crystal_mountain.ascent_threshold".to_owned(),
+                instance: "hills-center".to_owned(),
+                anchor: "crystal_ascent.lower_entry".to_owned(),
+            },
+            MacroAnchorAliasSettings {
+                alias: "crystal_mountain.ridge".to_owned(),
+                instance: "hills-upper".to_owned(),
+                anchor: "ridge".to_owned(),
+            },
+        ];
+        let baseline = settings_fingerprint(radius, level_height, &settings)
+            .expect("extended Macro settings encode");
+
+        let mut reordered = settings.clone();
+        let V3LayoutSettings::Macro(reordered_layout) = &mut reordered.layout else {
+            unreachable!("reordered fixture remains Macro");
+        };
+        reordered_layout.walker_connections.reverse();
+        for walker in &mut reordered_layout.walker_connections {
+            std::mem::swap(&mut walker.first_instance, &mut walker.second_instance);
+        }
+        reordered_layout.spanning_features.reverse();
+        reordered_layout.anchor_aliases.reverse();
+        assert_eq!(
+            baseline,
+            settings_fingerprint(radius, level_height, &reordered)
+                .expect("reordered Macro settings encode"),
+            "unordered extension collections and unordered walker endpoints canonicalize"
+        );
+
+        let mut changed_walker = settings.clone();
+        let V3LayoutSettings::Macro(layout) = &mut changed_walker.layout else {
+            unreachable!();
+        };
+        layout
+            .walker_connections
+            .first_mut()
+            .expect("fixture has explicit walkers")
+            .level += 1;
+        assert_ne!(
+            baseline,
+            settings_fingerprint(radius, level_height, &changed_walker).expect("settings encode")
+        );
+
+        let mut changed_tunnel = settings.clone();
+        let V3LayoutSettings::Macro(layout) = &mut changed_tunnel.layout else {
+            unreachable!();
+        };
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = layout
+            .spanning_features
+            .first_mut()
+            .expect("fixture has spanning features");
+        tunnel.roof_thickness += 1;
+        assert_ne!(
+            baseline,
+            settings_fingerprint(radius, level_height, &changed_tunnel).expect("settings encode")
+        );
+
+        let mut changed_alias = settings.clone();
+        let V3LayoutSettings::Macro(layout) = &mut changed_alias.layout else {
+            unreachable!();
+        };
+        layout
+            .anchor_aliases
+            .first_mut()
+            .expect("fixture has anchor aliases")
+            .anchor
+            .push_str(".changed");
+        assert_ne!(
+            baseline,
+            settings_fingerprint(radius, level_height, &changed_alias).expect("settings encode")
+        );
+
+        assert_eq!(MACRO_EXTENSION_TAG, 128);
+        assert_eq!(MACRO_EXTENSION_VERSION, 1);
+        assert_eq!(
+            [
+                MacroBoundarySideSettings::East,
+                MacroBoundarySideSettings::SouthEast,
+                MacroBoundarySideSettings::SouthWest,
+                MacroBoundarySideSettings::West,
+                MacroBoundarySideSettings::NorthWest,
+                MacroBoundarySideSettings::NorthEast,
+            ]
+            .map(macro_boundary_side_tag),
+            [0, 1, 2, 3, 4, 5]
+        );
     }
 
     #[test]
@@ -1506,6 +2317,7 @@ mod tests {
         };
         let original = ProceduralV3Settings {
             layout: V3LayoutSettings::Ring19(V3Ring19Settings {
+                profile: V3Ring19ProfileSettings::TwoRings,
                 regions: vec![region; 19],
                 seam_defaults: SharedEdgeSettings {
                     elevation: EdgeElevationSettings {
@@ -1994,6 +2806,10 @@ mod tests {
             plan.anchors
                 .insert("enemy_start".to_owned(), TilePos::ORIGIN);
         }
+        fn mutate_observation_anchors(plan: &mut GeneratedWorldPlan) {
+            plan.observation_anchors
+                .insert("review_target".to_owned(), TilePos::ORIGIN);
+        }
         fn mutate_view(plan: &mut GeneratedWorldPlan) {
             plan.view_hint.eye.0 = 1.0;
         }
@@ -2005,7 +2821,7 @@ mod tests {
         );
         let baseline_fingerprint =
             semantic_plan_fingerprint(&baseline).expect("the baseline encodes");
-        let mutations: [(&str, fn(&mut GeneratedWorldPlan)); 11] = [
+        let mutations: [(&str, fn(&mut GeneratedWorldPlan)); 12] = [
             ("layout", mutate_layout),
             ("volume", mutate_volume),
             ("liquids", mutate_liquids),
@@ -2016,6 +2832,7 @@ mod tests {
             ("biome memberships", mutate_biomes),
             ("interiors", mutate_interiors),
             ("anchors", mutate_anchors),
+            ("observation anchors", mutate_observation_anchors),
             ("view hint", mutate_view),
         ];
 

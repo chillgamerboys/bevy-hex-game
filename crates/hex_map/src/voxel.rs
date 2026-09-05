@@ -24,9 +24,9 @@
 //! vertical runs of the same substance into one prism, so storage stays simple
 //! without paying for an entity per voxel.
 
-use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
+use std::collections::BTreeMap;
 
+use bevy::prelude::*;
 use hex_core::{Headroom, HexCoord, Level, SubstanceId, TilePos, MAX_HEADROOM};
 
 /// One vertical stack of voxels, from the bedrock floor upward.
@@ -144,6 +144,133 @@ impl Column {
     }
 }
 
+/// Axial width and depth of one terrain-storage chunk.
+///
+/// Euclidean division is important here: coordinates immediately west or north of
+/// the origin belong to chunk `-1` with a positive local coordinate, rather than to
+/// chunk `0` with a negative local coordinate.
+pub(crate) const TERRAIN_CHUNK_SIDE: i32 = 16;
+const TERRAIN_CHUNK_SIDE_USIZE: usize = 16;
+const TERRAIN_CHUNK_SLOT_COUNT: usize = TERRAIN_CHUNK_SIDE_USIZE * TERRAIN_CHUNK_SIDE_USIZE;
+
+/// Coordinate of a fixed 16 x 16 axial storage chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TerrainChunkCoord {
+    pub(crate) q: i32,
+    pub(crate) r: i32,
+}
+
+/// Coordinate of one column within a terrain chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalColumnCoord {
+    q: i32,
+    r: i32,
+}
+
+impl LocalColumnCoord {
+    /// Row-major fixed-slot index: local `r` is the row and local `q` is the column.
+    fn slot(self) -> Option<usize> {
+        let q = usize::try_from(self.q).ok()?;
+        let r = usize::try_from(self.r).ok()?;
+        if q >= TERRAIN_CHUNK_SIDE_USIZE || r >= TERRAIN_CHUNK_SIDE_USIZE {
+            return None;
+        }
+        r.checked_mul(TERRAIN_CHUNK_SIDE_USIZE)?
+            .checked_add(q)
+            .filter(|slot| *slot < TERRAIN_CHUNK_SLOT_COUNT)
+    }
+
+    fn from_slot(slot: usize) -> Option<Self> {
+        if slot >= TERRAIN_CHUNK_SLOT_COUNT {
+            return None;
+        }
+
+        Some(Self {
+            q: i32::try_from(slot % TERRAIN_CHUNK_SIDE_USIZE).ok()?,
+            r: i32::try_from(slot / TERRAIN_CHUNK_SIDE_USIZE).ok()?,
+        })
+    }
+}
+
+/// Splits an axial coordinate into its Euclidean chunk and positive local position.
+pub(crate) fn terrain_chunk_coord(coord: HexCoord) -> TerrainChunkCoord {
+    split_column_coord(coord).0
+}
+
+/// Returns the fixed resident terrain-chunk key for one world axial coordinate.
+///
+/// The tuple is runtime presentation metadata only. Exact world positions remain
+/// the authoritative gameplay and persistence identity. Euclidean division keeps
+/// negative coordinates in the same chunks used by [`VoxelMap`].
+#[must_use]
+pub fn terrain_chunk_key(coord: HexCoord) -> (i32, i32) {
+    let chunk = terrain_chunk_coord(coord);
+    (chunk.q, chunk.r)
+}
+
+fn split_column_coord(coord: HexCoord) -> (TerrainChunkCoord, LocalColumnCoord) {
+    (
+        TerrainChunkCoord {
+            q: coord.x().div_euclid(TERRAIN_CHUNK_SIDE),
+            r: coord.y().div_euclid(TERRAIN_CHUNK_SIDE),
+        },
+        LocalColumnCoord {
+            q: coord.x().rem_euclid(TERRAIN_CHUNK_SIDE),
+            r: coord.y().rem_euclid(TERRAIN_CHUNK_SIDE),
+        },
+    )
+}
+
+/// Reconstructs an axial coordinate without overflowing at the `i32` boundaries.
+fn join_column_coord(chunk: TerrainChunkCoord, local: LocalColumnCoord) -> Option<HexCoord> {
+    let q = i64::from(chunk.q)
+        .checked_mul(i64::from(TERRAIN_CHUNK_SIDE))?
+        .checked_add(i64::from(local.q))?;
+    let r = i64::from(chunk.r)
+        .checked_mul(i64::from(TERRAIN_CHUNK_SIDE))?
+        .checked_add(i64::from(local.r))?;
+    Some(HexCoord::from_axial(
+        i32::try_from(q).ok()?,
+        i32::try_from(r).ok()?,
+    ))
+}
+
+/// A fixed set of axial column slots. Empty slots cost only their discriminant and
+/// let lookup avoid hashing every individual coordinate in a large world.
+#[derive(Debug)]
+struct TerrainChunk {
+    columns: Vec<Option<Column>>,
+}
+
+impl Default for TerrainChunk {
+    fn default() -> Self {
+        Self {
+            columns: vec![None; TERRAIN_CHUNK_SLOT_COUNT],
+        }
+    }
+}
+
+impl TerrainChunk {
+    fn column(&self, local: LocalColumnCoord) -> Option<&Column> {
+        self.columns.get(local.slot()?)?.as_ref()
+    }
+
+    /// Returns the column and whether this call populated a previously empty slot.
+    fn column_mut_or_insert(&mut self, local: LocalColumnCoord) -> Option<(&mut Column, bool)> {
+        let slot = self.columns.get_mut(local.slot()?)?;
+        let inserted = slot.is_none();
+        Some((slot.get_or_insert_with(Column::new), inserted))
+    }
+
+    /// Replaces a slot and reports whether it was previously empty.
+    fn insert_column(&mut self, local: LocalColumnCoord, column: Column) -> Option<bool> {
+        let slot = self.columns.get_mut(local.slot()?)?;
+        let inserted = slot.is_none();
+        *slot = Some(column);
+        Some(inserted)
+    }
+}
+
 /// The world, as voxels.
 ///
 /// Private to `hex_map` in every meaningful sense: nothing outside this crate reads
@@ -154,7 +281,10 @@ impl Column {
 /// outside this crate.
 #[derive(Resource, Debug, Default)]
 pub struct VoxelMap {
-    columns: HashMap<HexCoord, Column>,
+    /// Ordered chunk keys plus row-major fixed slots make iteration deterministic.
+    chunks: BTreeMap<TerrainChunkCoord, TerrainChunk>,
+    /// Counts generated columns, including deliberately inserted empty columns.
+    column_count: usize,
 }
 
 impl VoxelMap {
@@ -167,51 +297,106 @@ impl VoxelMap {
     /// The substance at a position. Anywhere unwritten is air.
     #[must_use]
     pub fn get(&self, pos: TilePos) -> SubstanceId {
-        self.columns
-            .get(&pos.coord)
+        self.column(pos.coord)
             .map_or(SubstanceId::AIR, |column| column.get(pos.level))
     }
 
     /// Sets the substance at a position, creating the column if needed.
     pub fn set(&mut self, pos: TilePos, substance: SubstanceId) {
-        self.columns
-            .entry(pos.coord)
-            .or_default()
-            .set(pos.level, substance);
+        let (chunk_coord, local_coord) = split_column_coord(pos.coord);
+        let chunk = self.chunks.entry(chunk_coord).or_default();
+        let Some((column, inserted)) = chunk.column_mut_or_insert(local_coord) else {
+            return;
+        };
+        column.set(pos.level, substance);
+        if inserted {
+            self.column_count = self.column_count.saturating_add(1);
+        }
     }
 
     /// Replaces a whole column.
     pub fn insert_column(&mut self, coord: HexCoord, column: Column) {
-        self.columns.insert(coord, column);
+        let (chunk_coord, local_coord) = split_column_coord(coord);
+        let inserted = self
+            .chunks
+            .entry(chunk_coord)
+            .or_default()
+            .insert_column(local_coord, column);
+        if inserted == Some(true) {
+            self.column_count = self.column_count.saturating_add(1);
+        }
     }
 
     /// The column at a coordinate, if one has been generated.
     #[must_use]
     pub fn column(&self, coord: HexCoord) -> Option<&Column> {
-        self.columns.get(&coord)
+        let (chunk_coord, local_coord) = split_column_coord(coord);
+        self.chunks.get(&chunk_coord)?.column(local_coord)
     }
 
-    /// Every generated column.
+    /// Every generated column in deterministic chunk-major, row-major order.
     pub fn columns(&self) -> impl Iterator<Item = (HexCoord, &Column)> {
-        self.columns.iter().map(|(coord, column)| (*coord, column))
+        self.chunks.iter().flat_map(|(chunk_coord, chunk)| {
+            chunk
+                .columns
+                .iter()
+                .enumerate()
+                .filter_map(move |(slot, column)| {
+                    let local_coord = LocalColumnCoord::from_slot(slot)?;
+                    let coord = join_column_coord(*chunk_coord, local_coord)?;
+                    Some((coord, column.as_ref()?))
+                })
+        })
+    }
+
+    /// Every occupied chunk coordinate in deterministic axial order.
+    pub(crate) fn chunk_coords(&self) -> impl ExactSizeIterator<Item = TerrainChunkCoord> + '_ {
+        self.chunks.keys().copied()
+    }
+
+    /// Generated columns in one resident chunk, in deterministic row-major order.
+    pub(crate) fn columns_in_chunk(
+        &self,
+        chunk_coord: TerrainChunkCoord,
+    ) -> impl Iterator<Item = (HexCoord, &Column)> {
+        self.chunks
+            .get(&chunk_coord)
+            .into_iter()
+            .flat_map(move |chunk| {
+                chunk
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(slot, column)| {
+                        let local_coord = LocalColumnCoord::from_slot(slot)?;
+                        let coord = join_column_coord(chunk_coord, local_coord)?;
+                        Some((coord, column.as_ref()?))
+                    })
+            })
+    }
+
+    /// Number of resident chunks carrying at least one generated column.
+    #[must_use]
+    pub(crate) fn chunk_count(&self) -> usize {
+        self.chunks.len()
     }
 
     /// How many columns the world holds.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.columns.len()
+        self.column_count
     }
 
     /// Whether the world is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.columns.is_empty()
+        self.column_count == 0
     }
 
     /// The highest non-air level at a coordinate, if any.
     #[must_use]
     pub fn surface(&self, coord: HexCoord) -> Option<Level> {
-        self.columns.get(&coord).and_then(Column::surface)
+        self.column(coord).and_then(Column::surface)
     }
 }
 
@@ -442,5 +627,182 @@ mod tests {
         assert_eq!(map.get(TilePos::new(coord, 0)), STONE);
         assert_eq!(map.get(TilePos::new(coord, 6)), DIRT);
         assert_eq!(map.get(TilePos::new(coord, 3)), SubstanceId::AIR);
+    }
+
+    #[test]
+    fn chunk_coordinates_use_euclidean_sixteen_by_sixteen_slots() {
+        let cases = [
+            (
+                HexCoord::from_axial(-17, -17),
+                TerrainChunkCoord { q: -2, r: -2 },
+                LocalColumnCoord { q: 15, r: 15 },
+            ),
+            (
+                HexCoord::from_axial(-16, -16),
+                TerrainChunkCoord { q: -1, r: -1 },
+                LocalColumnCoord { q: 0, r: 0 },
+            ),
+            (
+                HexCoord::from_axial(-1, -1),
+                TerrainChunkCoord { q: -1, r: -1 },
+                LocalColumnCoord { q: 15, r: 15 },
+            ),
+            (
+                HexCoord::from_axial(0, 0),
+                TerrainChunkCoord { q: 0, r: 0 },
+                LocalColumnCoord { q: 0, r: 0 },
+            ),
+            (
+                HexCoord::from_axial(15, 15),
+                TerrainChunkCoord { q: 0, r: 0 },
+                LocalColumnCoord { q: 15, r: 15 },
+            ),
+            (
+                HexCoord::from_axial(16, 16),
+                TerrainChunkCoord { q: 1, r: 1 },
+                LocalColumnCoord { q: 0, r: 0 },
+            ),
+        ];
+
+        for (coord, expected_chunk, expected_local) in cases {
+            let (chunk, local) = split_column_coord(coord);
+            assert_eq!(chunk, expected_chunk);
+            assert_eq!(
+                terrain_chunk_key(coord),
+                (expected_chunk.q, expected_chunk.r)
+            );
+            assert_eq!(local, expected_local);
+            assert_eq!(join_column_coord(chunk, local), Some(coord));
+        }
+    }
+
+    #[test]
+    fn chunk_split_and_join_round_trip_extreme_coordinates() {
+        let values = [
+            i32::MIN,
+            i32::MIN + 1,
+            -33,
+            -32,
+            -31,
+            -17,
+            -16,
+            -15,
+            -1,
+            0,
+            1,
+            15,
+            16,
+            17,
+            31,
+            32,
+            33,
+            i32::MAX - 1,
+            i32::MAX,
+        ];
+
+        for q in values {
+            for r in values {
+                let coord = HexCoord::from_axial(q, r);
+                let (chunk, local) = split_column_coord(coord);
+                assert_eq!(join_column_coord(chunk, local), Some(coord));
+                assert!(local.slot().is_some_and(|slot| slot < 256));
+            }
+        }
+    }
+
+    #[test]
+    fn map_columns_cross_chunk_boundaries_without_colliding() {
+        let mut map = VoxelMap::new();
+        let coords = [
+            HexCoord::from_axial(-17, 0),
+            HexCoord::from_axial(-16, 0),
+            HexCoord::from_axial(-1, 0),
+            HexCoord::from_axial(0, 0),
+            HexCoord::from_axial(15, 0),
+            HexCoord::from_axial(16, 0),
+        ];
+
+        for (level, coord) in coords.into_iter().enumerate() {
+            map.set(
+                TilePos::new(coord, Level::try_from(level).unwrap_or(Level::MAX)),
+                STONE,
+            );
+        }
+
+        assert_eq!(map.len(), coords.len());
+        for (level, coord) in coords.into_iter().enumerate() {
+            let level = Level::try_from(level).unwrap_or(Level::MAX);
+            assert_eq!(map.get(TilePos::new(coord, level)), STONE);
+            assert_eq!(map.surface(coord), Some(level));
+        }
+    }
+
+    #[test]
+    fn replacing_and_clearing_preserve_generated_column_semantics() {
+        let coord = HexCoord::from_axial(-1, 16);
+        let mut map = VoxelMap::new();
+
+        // The old flat map retained a generated empty column, including when the
+        // first operation merely cleared already-empty air.
+        map.set(TilePos::new(coord, 9), SubstanceId::AIR);
+        assert_eq!(map.len(), 1);
+        assert!(map.column(coord).is_some_and(Column::is_empty));
+
+        map.insert_column(coord, Column::filled(STONE, 4));
+        assert_eq!(map.len(), 1, "replacing a slot must not change the count");
+        assert_eq!(map.surface(coord), Some(3));
+
+        map.insert_column(coord, Column::new());
+        assert_eq!(map.len(), 1);
+        assert!(map.column(coord).is_some_and(Column::is_empty));
+    }
+
+    #[test]
+    fn column_iteration_is_deterministic_across_insertion_orders() {
+        let coords = [
+            HexCoord::from_axial(31, -17),
+            HexCoord::from_axial(-1, 16),
+            HexCoord::from_axial(0, 0),
+            HexCoord::from_axial(-32, 33),
+            HexCoord::from_axial(16, 15),
+        ];
+        let mut forwards = VoxelMap::new();
+        let mut backwards = VoxelMap::new();
+
+        for coord in coords {
+            forwards.insert_column(coord, Column::new());
+        }
+        for coord in coords.into_iter().rev() {
+            backwards.insert_column(coord, Column::new());
+        }
+
+        let forward_coords: Vec<_> = forwards.columns().map(|(coord, _)| coord).collect();
+        let backward_coords: Vec<_> = backwards.columns().map(|(coord, _)| coord).collect();
+        assert_eq!(forward_coords, backward_coords);
+        assert_eq!(forward_coords.len(), coords.len());
+    }
+
+    #[test]
+    fn radius_187_uses_the_expected_fixed_chunk_footprint() {
+        let mut map = VoxelMap::new();
+        for coord in HexCoord::ORIGIN.within_radius(187) {
+            map.insert_column(coord, Column::new());
+        }
+
+        let occupied_per_chunk = map.chunks.values().map(|chunk| {
+            chunk
+                .columns
+                .iter()
+                .filter(|column| column.is_some())
+                .count()
+        });
+        let occupied_total: usize = occupied_per_chunk.clone().sum();
+        let fullest_chunk = occupied_per_chunk.max();
+
+        assert_eq!(map.len(), 105_469);
+        assert_eq!(map.columns().count(), 105_469);
+        assert_eq!(occupied_total, 105_469);
+        assert_eq!(map.chunks.len(), 444);
+        assert_eq!(fullest_chunk, Some(256));
     }
 }

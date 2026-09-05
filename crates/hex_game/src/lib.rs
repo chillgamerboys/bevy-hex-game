@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
 use bevy::window::WindowMode;
+use bevy::winit::WinitPlugin;
 use hex_core::{
     AppSystems, GameplayPhase, GameplaySetup, InputBindings, PausableSystems, Pause,
     PerceptionSystems, Screen,
@@ -29,8 +30,10 @@ mod casting;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod creation_store;
-#[cfg(feature = "dev")]
+#[cfg(feature = "dev-time-preview")]
 mod dev_time_controls;
+#[cfg(feature = "dev")]
+mod fly;
 mod fog;
 mod menus;
 mod multiplayer_gameplay;
@@ -94,8 +97,8 @@ fn file_log_layer(_app: &mut App) -> Option<BoxedLayer> {
 /// Native play starts fullscreen before the first rendered frame.
 ///
 /// Preferences still project immediately after startup, so an explicit persisted
-/// windowed choice wins. Automated review builds retain a stable ordinary window;
-/// their image targets, rather than the OS window, own the evidence viewport.
+/// windowed choice wins. Review-shaped builds start windowed when used manually;
+/// automated captures later replace Winit with a windowless schedule runner.
 fn initial_window_mode() -> WindowMode {
     #[cfg(any(feature = "map-review", feature = "visual-walk"))]
     {
@@ -104,6 +107,53 @@ fn initial_window_mode() -> WindowMode {
     #[cfg(not(any(feature = "map-review", feature = "visual-walk")))]
     {
         WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
+    }
+}
+
+/// Whether this launch will write automated visual evidence rather than be played.
+///
+/// Both automation paths render into an explicit image target. They retain a logical
+/// `PrimaryWindow` entity for UI layout but replace Winit's native event loop, so no
+/// operating-system window should appear or take focus. A review-feature build
+/// without either automation request remains an ordinary, visible game launch.
+fn automated_capture_requested() -> bool {
+    #[cfg(any(feature = "map-review", feature = "visual-walk"))]
+    {
+        automated_capture_requested_for(
+            cfg!(feature = "map-review"),
+            std::env::var_os("HEX_REVIEW_CAPTURE").is_some(),
+            std::env::var_os("HEX_REVIEW_CAPTURE_PLAN").is_some(),
+            cfg!(feature = "visual-walk"),
+            std::env::var_os("HEX_WALK_SCRIPT").is_some(),
+            std::env::var_os("HEX_WALK_OUT").is_some(),
+        )
+    }
+    #[cfg(not(any(feature = "map-review", feature = "visual-walk")))]
+    {
+        false
+    }
+}
+
+#[cfg(any(feature = "map-review", feature = "visual-walk", test))]
+const fn automated_capture_requested_for(
+    map_review_enabled: bool,
+    review_capture_present: bool,
+    review_capture_plan_present: bool,
+    visual_walk_enabled: bool,
+    walk_script_present: bool,
+    walk_output_present: bool,
+) -> bool {
+    (map_review_enabled && (review_capture_present || review_capture_plan_present))
+        || (visual_walk_enabled && (walk_script_present || walk_output_present))
+}
+
+fn initial_window(automated_capture: bool) -> Window {
+    Window {
+        title: storage::APP_NAME.to_owned(),
+        mode: initial_window_mode(),
+        visible: !automated_capture,
+        focused: !automated_capture,
+        ..default()
     }
 }
 
@@ -122,30 +172,37 @@ impl Plugin for AppPlugin {
         // of falling back to llvmpipe software rendering. Without the flag, wgpu
         // filters Dozen out and renders on CPU: single-digit FPS even on a discrete
         // NVIDIA card. Don't remove it; it costs nothing on other platforms.
-        app.add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: storage::APP_NAME.to_owned(),
-                        mode: initial_window_mode(),
-                        ..default()
-                    }),
+        let automated_capture = automated_capture_requested();
+        let default_plugins = DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(initial_window(automated_capture)),
+                ..default()
+            })
+            .set(RenderPlugin {
+                render_creation: WgpuSettings {
+                    instance_flags: InstanceFlags::default()
+                        | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
                     ..default()
-                })
-                .set(RenderPlugin {
-                    render_creation: WgpuSettings {
-                        instance_flags: InstanceFlags::default()
-                            | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
-                        ..default()
-                    }
-                    .into(),
-                    ..default()
-                })
-                .set(LogPlugin {
-                    custom_layer: file_log_layer,
-                    ..default()
-                }),
-        );
+                }
+                .into(),
+                ..default()
+            })
+            .set(LogPlugin {
+                custom_layer: file_log_layer,
+                ..default()
+            });
+        if automated_capture {
+            // Winit activates the macOS application during startup even if its
+            // window is hidden. Automated captures already render into an Image,
+            // so use Bevy's windowless runner and avoid creating or activating a
+            // native application window at all.
+            app.add_plugins(default_plugins.disable::<WinitPlugin>());
+            app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+                std::time::Duration::from_secs_f64(1.0 / 60.0),
+            ));
+        } else {
+            app.add_plugins(default_plugins);
+        }
 
         app.add_plugins(MeshPickingPlugin);
         app.add_plugins(bevy_hanabi::HanabiPlugin);
@@ -269,11 +326,18 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((
-            hex_dev::plugin,
-            content_debug::plugin,
-            dev_time_controls::plugin,
-        ));
+        {
+            // The inspector resolves its surface format through a native Winit
+            // window. Image-target automation has no such surface; keep its
+            // renderer out of captures while retaining exploration and its UI.
+            if !automated_capture {
+                app.add_plugins(hex_dev::plugin);
+            }
+            app.add_plugins((content_debug::plugin, fly::plugin));
+        }
+
+        #[cfg(feature = "dev-time-preview")]
+        app.add_plugins(dev_time_controls::plugin);
     }
 }
 
@@ -294,5 +358,38 @@ mod tests {
             initial_window_mode(),
             WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
         );
+    }
+
+    #[test]
+    fn automated_capture_host_window_is_hidden_and_unfocused() {
+        let automated = initial_window(true);
+        assert!(!automated.visible);
+        assert!(!automated.focused);
+
+        let interactive = initial_window(false);
+        assert!(interactive.visible);
+        assert!(interactive.focused);
+    }
+
+    #[test]
+    fn only_required_automation_environment_starts_the_windowless_runner() {
+        assert!(automated_capture_requested_for(
+            true, true, false, false, false, false
+        ));
+        assert!(automated_capture_requested_for(
+            true, false, true, false, false, false
+        ));
+        assert!(automated_capture_requested_for(
+            false, false, false, true, true, false
+        ));
+        assert!(automated_capture_requested_for(
+            false, false, false, true, false, true
+        ));
+        assert!(!automated_capture_requested_for(
+            true, false, false, true, false, false
+        ));
+        assert!(!automated_capture_requested_for(
+            false, true, true, false, true, true
+        ));
     }
 }

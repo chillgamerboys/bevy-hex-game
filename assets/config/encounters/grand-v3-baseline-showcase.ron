@@ -1,0 +1,18 @@
+// Standard non-combat exploration party for Grand V3 Baseline.
+//
+// The compiler publishes `party_start` on the dry coastal-lowland overlook near
+// the authoritative river outlet. No Hostile roster is authored.
+(
+    name: "Grand V3 Baseline Showcase",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Anchor("party_start"), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+    ],
+)

@@ -60,11 +60,32 @@ impl GeneratedPatchPlan {
         &self,
         layout: &ResolvedLayoutPlan,
     ) -> Vec<PatchValidationIssue> {
+        self.validate_against_internal(layout, true)
+    }
+
+    fn validate_against_valid_layout(
+        &self,
+        layout: &ResolvedLayoutPlan,
+    ) -> Vec<PatchValidationIssue> {
+        self.validate_against_internal(layout, false)
+    }
+
+    fn validate_against_internal(
+        &self,
+        layout: &ResolvedLayoutPlan,
+        validate_layout: bool,
+    ) -> Vec<PatchValidationIssue> {
         let mut issues = Vec::new();
-        if let Err(error) = layout.validate() {
-            issues.extend(error.issues().iter().map(|issue| {
-                PatchValidationIssue::new(self.patch_id, PatchIssueCode::Layout, issue.to_string())
-            }));
+        if validate_layout {
+            if let Err(error) = layout.validate() {
+                issues.extend(error.issues().iter().map(|issue| {
+                    PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Layout,
+                        issue.to_string(),
+                    )
+                }));
+            }
         }
 
         let Some(resolved_patch) = layout.patches.get(&self.patch_id) else {
@@ -226,6 +247,7 @@ impl GeneratedPatchPlan {
             boundary_liquid_outlets: BTreeMap::new(),
         };
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout: isolated_layout,
             volume: self.volume.clone(),
             liquids: self.liquids.clone(),
@@ -236,11 +258,12 @@ impl GeneratedPatchPlan {
             biome_regions: self.biome_regions.clone(),
             interiors: self.interiors.clone(),
             anchors: self.anchors.clone(),
+            observation_anchors: BTreeMap::new(),
             view_hint: self.view_hint,
         }
     }
 
-    fn namespace(
+    pub(crate) fn namespace(
         mut self,
         layout_kind: LayoutKind,
         namespace_names: bool,
@@ -387,6 +410,7 @@ fn patch_slug(layout_kind: LayoutKind, patch: PatchId) -> String {
             id => format!("patch_{id}"),
         },
         LayoutKind::Macro => format!("macro_{:02}", patch.0),
+        LayoutKind::Schematic => format!("schematic_{:03}", patch.0),
     }
 }
 
@@ -408,6 +432,7 @@ fn namespace_numeric(
             RING19_MAX_LOCAL_ID,
         ),
         LayoutKind::Macro => (MACRO_LOCAL_ID_BITS, MACRO_MAX_PATCH_ID, MACRO_MAX_LOCAL_ID),
+        LayoutKind::Schematic => (24, 254, 0x00ff_ffff),
     };
     if patch.0 > maximum_patch || local > maximum_local {
         return Err(WorldCompositionError::NamespaceOverflow { patch, kind, local });
@@ -552,8 +577,14 @@ pub(crate) enum LiquidSeamIssue {
     MissingMergedNode(TilePos),
 }
 
-/// Merges complete patch fragments into one strict whole-world semantic plan.
-pub(crate) fn compose_world(
+/// Merges complete patch fragments into one whole-world semantic plan.
+///
+/// The returned plan has passed layout, fragment, namespacing, collision, and
+/// liquid-seam checks, but it has deliberately not passed final whole-world
+/// validation yet. World-spanning authored features use this narrow stage to
+/// mutate the combined semantic volume exactly once, after patch-local work is
+/// complete and before the normal strict validator admits the result.
+pub(crate) fn merge_world(
     layout: ResolvedLayoutPlan,
     fragments: Vec<GeneratedPatchPlan>,
     settings: WorldCompositionSettings,
@@ -580,7 +611,7 @@ pub(crate) fn compose_world(
         }
     }
     for (patch, fragment) in &by_patch {
-        let issues = fragment.validate_against(&layout);
+        let issues = fragment.validate_against_valid_layout(&layout);
         if !issues.is_empty() {
             return Err(WorldCompositionError::InvalidPatch {
                 patch: *patch,
@@ -666,7 +697,8 @@ pub(crate) fn compose_world(
         insert_unique(&mut anchors, alias, position, CollisionKind::Anchor)?;
     }
 
-    let world = GeneratedWorldPlan {
+    Ok(GeneratedWorldPlan {
+        source_schematic_fingerprint: None,
         layout,
         volume,
         liquids,
@@ -677,14 +709,31 @@ pub(crate) fn compose_world(
         biome_regions,
         interiors,
         anchors,
+        observation_anchors: BTreeMap::new(),
         view_hint: settings.view_hint,
-    };
+    })
+}
+
+/// Runs the unchanged strict whole-world validator after any world-owned
+/// spanning-feature finalization has completed.
+pub(crate) fn finalize_world(
+    world: GeneratedWorldPlan,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
     let issues = world.validate();
     if issues.is_empty() {
         Ok(world)
     } else {
         Err(WorldCompositionError::FinalValidation(issues))
     }
+}
+
+/// Merges and immediately validates a world with no spanning-feature pass.
+pub(crate) fn compose_world(
+    layout: ResolvedLayoutPlan,
+    fragments: Vec<GeneratedPatchPlan>,
+    settings: WorldCompositionSettings,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
+    finalize_world(merge_world(layout, fragments, settings)?)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1181,6 +1230,31 @@ mod tests {
     }
 
     #[test]
+    fn merge_world_still_rejects_semantically_invalid_fragments_after_layout_preflight() {
+        let layout = ring7_layout();
+        let mut fragments = complete_fragments(&layout);
+        let fragment = fragments
+            .first_mut()
+            .expect("the complete Ring7 fixture should have a center fragment");
+        let position = *fragment
+            .biome_regions
+            .keys()
+            .next()
+            .expect("the center fragment should publish a surface biome");
+        fragment.biome_regions.insert(position, BiomeRegionId(99));
+
+        let error = merge_world(layout, fragments, composition_settings())
+            .expect_err("merge must retain every fragment semantic check");
+        assert!(matches!(
+            error,
+            WorldCompositionError::InvalidPatch { patch: PatchId(0), issues }
+                if issues.iter().any(|issue| {
+                    issue.code == PatchIssueCode::Semantic(WorldIssueCode::Biome)
+                })
+        ));
+    }
+
+    #[test]
     fn only_macro_patch_fragments_may_omit_actor_anchors() {
         for (name, layout) in [("Ring7", ring7_layout()), ("Ring19", ring19_layout())] {
             let mut fragment = complete_patch(&layout, PatchId(0));
@@ -1607,6 +1681,58 @@ mod tests {
                 kind: NamespaceKind::Structure,
                 local: RING19_MAX_LOCAL_ID + 1,
             })
+        );
+    }
+
+    #[test]
+    fn schematic_namespace_reserves_world_prefix_and_admits_every_cell() {
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(254),
+                0x00ff_ffff,
+                NamespaceKind::Interior
+            ),
+            Ok(0xfeff_ffff)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(255),
+                0,
+                NamespaceKind::Feature
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(255),
+                kind: NamespaceKind::Feature,
+                local: 0,
+            })
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(0),
+                0x0100_0000,
+                NamespaceKind::Structure
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(0),
+                kind: NamespaceKind::Structure,
+                local: 0x0100_0000,
+            })
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Schematic,
+                PatchId(216),
+                42,
+                NamespaceKind::Liquid
+            ),
+            Ok(0xd800_002a)
+        );
+        assert_eq!(
+            namespace_name(LayoutKind::Schematic, PatchId(216), "party_start"),
+            "schematic_216_party_start"
         );
     }
 

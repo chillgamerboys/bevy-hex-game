@@ -1,0 +1,157 @@
+// Ocean Archipelagoes: one radius-77 Macro world with a continuous level-8 sea,
+// six scenic sandy islands, and one four-lane landing/wooded-heart causeway.
+(
+    grid_radius: 77,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Macro((
+            macro_radius: 3,
+            approach_depth: 3,
+            instances: [
+                // The complete radius-three perimeter plus six inward spokes forms
+                // one connected sea region around and between every landmass.
+                (
+                    name: "open-sea",
+                    cells: [
+                        (x: 3, y: 0, z: -3), (x: 2, y: 1, z: -3),
+                        (x: 1, y: 2, z: -3), (x: 0, y: 3, z: -3),
+                        (x: -1, y: 3, z: -2), (x: -2, y: 3, z: -1),
+                        (x: -3, y: 3, z: 0), (x: -3, y: 2, z: 1),
+                        (x: -3, y: 1, z: 2), (x: -3, y: 0, z: 3),
+                        (x: -2, y: -1, z: 3), (x: -1, y: -2, z: 3),
+                        (x: 0, y: -3, z: 3), (x: 1, y: -3, z: 2),
+                        (x: 2, y: -3, z: 1), (x: 3, y: -3, z: 0),
+                        (x: 3, y: -2, z: -1), (x: 3, y: -1, z: -2),
+                        (x: 2, y: -2, z: 0), (x: 1, y: -2, z: 1),
+                        (x: -2, y: 0, z: 2), (x: -2, y: 1, z: 1),
+                        (x: 0, y: 2, z: -2), (x: 1, y: 1, z: -2),
+                    ],
+                    environment: Coastal,
+                    recipe: ShallowSea((sea_level: 8)),
+                    rotation_turns: 0,
+                    access: Aquatic,
+                    elevation: (low: 8, high: 8, grade_axis: East),
+                ),
+                (
+                    name: "east-islets",
+                    cells: [(x: 2, y: 0, z: -2), (x: 2, y: -1, z: -1)],
+                    environment: Coastal,
+                    recipe: SandyIslets((
+                        sea_level: 8,
+                        land_coverage_percent: 28,
+                        islet_count: 2,
+                        max_relief: 3,
+                    )),
+                    rotation_turns: 0,
+                    access: Scenic,
+                    elevation: (low: 8, high: 11, grade_axis: West),
+                ),
+                (
+                    name: "south-islets",
+                    cells: [(x: 0, y: -2, z: 2), (x: -1, y: -1, z: 2)],
+                    environment: Coastal,
+                    recipe: SandyIslets((
+                        sea_level: 8,
+                        land_coverage_percent: 28,
+                        islet_count: 2,
+                        max_relief: 3,
+                    )),
+                    rotation_turns: 2,
+                    access: Scenic,
+                    elevation: (low: 8, high: 11, grade_axis: NorthEast),
+                ),
+                (
+                    name: "northwest-islets",
+                    cells: [(x: -2, y: 2, z: 0), (x: -1, y: 2, z: -1)],
+                    environment: Coastal,
+                    recipe: SandyIslets((
+                        sea_level: 8,
+                        land_coverage_percent: 28,
+                        islet_count: 2,
+                        max_relief: 3,
+                    )),
+                    rotation_turns: 4,
+                    access: Scenic,
+                    elevation: (low: 8, high: 11, grade_axis: SouthEast),
+                ),
+                // The one-cell sandy landing and six-cell wooded heart share the
+                // only protected ordinary causeway through the continuous ocean.
+                (
+                    name: "home-landing",
+                    cells: [(x: -1, y: 0, z: 1)],
+                    environment: Coastal,
+                    recipe: SandyIslets((
+                        sea_level: 8,
+                        land_coverage_percent: 40,
+                        islet_count: 1,
+                        max_relief: 3,
+                    )),
+                    rotation_turns: 0,
+                    access: Land,
+                    elevation: (low: 8, high: 11, grade_axis: East),
+                ),
+                (
+                    name: "wooded-heart",
+                    cells: [
+                        (x: 0, y: 0, z: 0), (x: 1, y: -1, z: 0),
+                        (x: 1, y: 0, z: -1), (x: 0, y: 1, z: -1),
+                        (x: -1, y: 1, z: 0), (x: 0, y: -1, z: 1),
+                    ],
+                    environment: Coastal,
+                    recipe: WoodedIsland((
+                        sea_level: 8,
+                        land_coverage_percent: 68,
+                        max_relief: 8,
+                        tree_coverage_percent: 26,
+                    )),
+                    rotation_turns: 0,
+                    access: Land,
+                    elevation: (low: 9, high: 16, grade_axis: East),
+                ),
+            ],
+            liquid_connections: [
+                Standing(first_instance: "open-sea", second_instance: "east-islets", width: 0, level: 8),
+                Standing(first_instance: "open-sea", second_instance: "south-islets", width: 0, level: 8),
+                Standing(first_instance: "open-sea", second_instance: "northwest-islets", width: 0, level: 8),
+                Standing(first_instance: "open-sea", second_instance: "home-landing", width: 0, level: 8),
+                Standing(first_instance: "open-sea", second_instance: "wooded-heart", width: 0, level: 8),
+                Standing(first_instance: "east-islets", second_instance: "wooded-heart", width: 0, level: 8),
+                Standing(first_instance: "south-islets", second_instance: "home-landing", width: 0, level: 8),
+                Standing(first_instance: "south-islets", second_instance: "wooded-heart", width: 0, level: 8),
+                Standing(first_instance: "northwest-islets", second_instance: "wooded-heart", width: 0, level: 8),
+                // Full standing ocean continues along this shared coast while the
+                // explicit walker connection below removes its exact four land lanes.
+                Standing(first_instance: "home-landing", second_instance: "wooded-heart", width: 0, level: 8),
+            ],
+            headwaters: [],
+            walker_connections: [
+                (
+                    first_instance: "home-landing",
+                    second_instance: "wooded-heart",
+                    width: 4,
+                    level: 9,
+                ),
+            ],
+            spanning_features: [],
+            anchor_aliases: [
+                (
+                    alias: "archipelago.home_beach",
+                    instance: "home-landing",
+                    anchor: "sandy_islets_primary_overlook",
+                ),
+                (
+                    alias: "archipelago.channel_overlook",
+                    instance: "home-landing",
+                    anchor: "sandy_islets_channel_overlook",
+                ),
+                (
+                    alias: "archipelago.home_ridge",
+                    instance: "wooded-heart",
+                    anchor: "wooded_island_ridge",
+                ),
+            ],
+            critical_route: ["home-landing", "wooded-heart"],
+        )),
+    )),
+)

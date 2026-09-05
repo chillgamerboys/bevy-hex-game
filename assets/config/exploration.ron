@@ -1,0 +1,14 @@
+// Development exploration only. Heights scale with the loaded map's voxel height.
+(
+    walk_speed: 3.0,
+    run_speed: 6.0,
+    fly_speed: 25.0,
+    body_levels: 2.0,
+    body_radius: 0.25,
+    step_levels: 1.0,
+    jump_levels: 3.0,
+    wade_levels: 1.0,
+    gravity: 16.0,
+    jump_buffer_seconds: 0.1,
+    coyote_seconds: 0.1,
+)
