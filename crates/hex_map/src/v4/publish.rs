@@ -4,7 +4,7 @@ use bevy::{picking::Pickable, prelude::*};
 use hex_core::{
     Headroom, HexTile, RunBottom, SubstanceId, TerrainPickRun, TerrainRenderBatch, MAX_HEADROOM,
 };
-use hex_world_contracts::{ChunkId, ChunkPackage, WorldManifest};
+use hex_world_contracts::{ChunkId, ChunkPackage, ManifestIndex, WorldManifest};
 
 use super::{
     PreparedChunk, PresentationError, PresentationLimits, RenderOrigin, RunSource, TerrainPreparer,
@@ -87,7 +87,8 @@ impl TerrainPresenter {
         level_height: f32,
         limits: PresentationLimits,
     ) -> Result<Self, PresentationError> {
-        manifest.validate()?;
+        let manifest = Arc::new(manifest.clone());
+        let index = Arc::new(ManifestIndex::new(manifest.clone())?);
         limits.validate()?;
         if !level_height.is_finite() || !(0.01..=16.0).contains(&level_height) {
             return Err(PresentationError(
@@ -109,7 +110,8 @@ impl TerrainPresenter {
             .collect::<Result<BTreeMap<_, _>, PresentationError>>()?;
         Ok(Self {
             context: TerrainPreparer {
-                manifest: Arc::new(manifest.clone()),
+                manifest,
+                index,
                 palette: Arc::new(palette),
                 origin,
                 level_height,

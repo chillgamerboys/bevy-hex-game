@@ -8,7 +8,7 @@ use hex_core::{
     HexCoord, HexSpan, SubstanceId, TerrainChunkRoot, TilePos, MAX_TERRAIN_PICK_RUNS_PER_BATCH,
 };
 use hex_world_contracts::{
-    ChunkPackage, MaterialSpec, VoxelPosition, VoxelRun, WorldHex, WorldManifest,
+    ChunkPackage, ManifestIndex, MaterialSpec, VoxelPosition, VoxelRun, WorldHex, WorldManifest,
 };
 
 use super::{PresentationError, ResidentRun, RunSource};
@@ -129,6 +129,7 @@ impl PresentationLimits {
 #[derive(Clone)]
 pub struct TerrainPreparer {
     pub(super) manifest: Arc<WorldManifest>,
+    pub(super) index: Arc<ManifestIndex>,
     pub(super) palette: Arc<BTreeMap<String, (SubstanceId, MaterialSpec)>>,
     pub(super) origin: RenderOrigin,
     pub(super) level_height: f32,
@@ -196,17 +197,7 @@ impl TerrainPreparer {
         package: &ChunkPackage,
         revision: u64,
     ) -> Result<PreparedChunk, PresentationError> {
-        package.validate_against_manifest(&self.manifest)?;
-        if self
-            .manifest
-            .chunks
-            .binary_search_by_key(&package.coordinate, |entry| entry.coordinate)
-            .is_err()
-        {
-            return Err(PresentationError(
-                "chunk is absent from the world index".into(),
-            ));
-        }
+        package.validate_with_index(&self.index)?;
         let mut projected = BTreeMap::new();
         let mut grouped: BTreeMap<SubstanceId, Vec<PreparedRun>> = BTreeMap::new();
         let mut run_count = 0_usize;
