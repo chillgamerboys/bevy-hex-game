@@ -7,9 +7,11 @@
 //! Authored object assets, liquid effects and interior cutaways are not rendered.
 //! The original semantic descriptors remain available through [`TerrainPresenter::package`].
 
+mod halo;
 mod prepare;
 mod publish;
 
+pub use halo::{RenderHalo, RenderHaloDependency, RenderNeighbor, MAX_RENDER_HALO_COLUMNS};
 pub use prepare::{PreparedChunk, PresentationLimits, RenderOrigin, TerrainPreparer};
 pub use publish::{ChunkReceipt, ResidentChunk, TerrainPresenter};
 

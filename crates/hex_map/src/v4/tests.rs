@@ -1026,3 +1026,384 @@ fn masked_opaque_occupancy_retains_background_faces_for_transparent_stock_art() 
         vec![run(1, 6, "glass_object")]
     );
 }
+
+fn halo_fixture(neighbor_bottom: i32, neighbor_top: i32) -> (WorldPackage, WorldHex, WorldHex) {
+    let owner = WorldHex::new(15, 8);
+    let neighbor = WorldHex::new(16, 8);
+    let mut package = fixture(owner);
+    package.manifest.materials.push(MaterialSpec {
+        id: "water".into(),
+        solid: false,
+        diggable: false,
+        color: [50, 132, 175, 180],
+    });
+    for column in package
+        .chunks
+        .values_mut()
+        .flat_map(|chunk| &mut chunk.columns)
+    {
+        column.runs = if column.position == owner {
+            vec![run(-4, 4, "water")]
+        } else if column.position == neighbor {
+            vec![run(neighbor_bottom, neighbor_top, "water")]
+        } else {
+            Vec::new()
+        };
+    }
+    package.seal().expect("cross-chunk water fixture");
+    (package, owner, neighbor)
+}
+
+fn halo_neighbor(package: &WorldPackage, column: WorldHex) -> RenderNeighbor {
+    RenderNeighbor {
+        package: std::sync::Arc::new(
+            package
+                .chunks
+                .get(&column.chunk())
+                .expect("neighbor chunk")
+                .clone(),
+        ),
+        revision: 0,
+        suppression: std::sync::Arc::new(Vec::new()),
+    }
+}
+
+// Owner at render-local(0,0); its q+1 face is x=sqrt(3)/2, normal+X.
+fn owner_east_face_heights(prepared: &PreparedChunk) -> Vec<f32> {
+    let mut result = Vec::new();
+    for batch in &prepared.batches {
+        let Some(mesh) = &batch.mesh else {
+            continue;
+        };
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            unreachable!("positions");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            unreachable!("normals");
+        };
+        for ([x, y, z], [nx, ny, _]) in positions.iter().zip(normals) {
+            if (*x - 0.866_025_4).abs() < 0.001 && z.abs() <= 0.501 && *nx > 0.9 && ny.abs() < 0.01
+            {
+                result.push(*y);
+            }
+        }
+    }
+    result
+}
+
+#[test]
+fn render_halo_removes_same_water_internal_walls_without_emitting_neighbor_runs() {
+    let (package, owner, neighbor) = halo_fixture(-4, 4);
+    let presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let source = package.chunks.get(&owner.chunk()).expect("owner");
+    let closed = presenter
+        .prepare(source, 0)
+        .expect("unknown neighbor stays closed");
+    assert_eq!(owner_east_face_heights(&closed).len(), 4);
+    let halo = presenter
+        .preparer()
+        .render_halo(owner.chunk(), &[halo_neighbor(&package, neighbor)])
+        .expect("halo");
+    assert!(halo.column_count() <= MAX_RENDER_HALO_COLUMNS);
+    assert_eq!(halo.dependencies().len(), 1);
+    let open = presenter
+        .prepare_with_render_halo(source, 0, &[], &halo)
+        .expect("continuous water");
+    assert!(owner_east_face_heights(&open).is_empty());
+    assert_eq!(open.logical_runs(), closed.logical_runs());
+    assert_eq!(open.logical_runs(), 1);
+    assert!(open
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.runs)
+        .all(|run| run.exact.position.column == owner));
+    assert_ne!(open.halo_fingerprint(), closed.halo_fingerprint());
+}
+
+#[test]
+fn render_halo_preserves_real_water_height_differences_and_clips_extreme_neighbor_heights() {
+    let (package, owner, neighbor) = halo_fixture(-4, 2);
+    let presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let halo = presenter
+        .preparer()
+        .render_halo(owner.chunk(), &[halo_neighbor(&package, neighbor)])
+        .expect("halo");
+    let prepared = presenter
+        .prepare_with_render_halo(
+            package.chunks.get(&owner.chunk()).expect("owner"),
+            0,
+            &[],
+            &halo,
+        )
+        .expect("water step");
+    let heights = owner_east_face_heights(&prepared);
+    assert_eq!(heights.len(), 4);
+    assert!(heights.iter().all(|height| (2.0..=4.0).contains(height)));
+    assert!(heights.iter().any(|height| (*height - 2.0).abs() < 0.001));
+    assert!(heights.iter().any(|height| (*height - 4.0).abs() < 0.001));
+    let (package, owner, neighbor) = halo_fixture(i32::MIN, i32::MAX);
+    let presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("extreme neighbor presenter");
+    let halo = presenter
+        .preparer()
+        .render_halo(owner.chunk(), &[halo_neighbor(&package, neighbor)])
+        .expect("global halo");
+    let prepared = presenter
+        .prepare_with_render_halo(
+            package.chunks.get(&owner.chunk()).expect("owner"),
+            0,
+            &[],
+            &halo,
+        )
+        .expect("clip before render-local conversion");
+    assert!(owner_east_face_heights(&prepared).is_empty());
+}
+
+#[test]
+fn render_halo_subtracts_published_object_masks_before_culling_opaque_background() {
+    let (mut package, owner, neighbor) = halo_fixture(-4, 4);
+    for column in package
+        .chunks
+        .values_mut()
+        .flat_map(|chunk| &mut chunk.columns)
+    {
+        column.runs = if column.position == owner {
+            vec![run(-4, 4, "custom_rock")]
+        } else {
+            Vec::new()
+        };
+    }
+    package
+        .chunks
+        .get_mut(&neighbor.chunk())
+        .expect("neighbor")
+        .semantics
+        .objects
+        .push(ObjectInstance {
+            id: "cutout-stock".into(),
+            region_id: "region".into(),
+            asset: "cutout-stock".into(),
+            origin: VoxelPosition {
+                column: neighbor,
+                level: 0,
+            },
+            rotation: 0,
+            occupancy: vec![ColumnData {
+                position: neighbor,
+                runs: vec![run(-4, 4, "custom_rock")],
+            }],
+        });
+    package.seal().expect("object fixture");
+    let presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let source = package.chunks.get(&owner.chunk()).expect("owner");
+    let mut input = halo_neighbor(&package, neighbor);
+    let full = presenter
+        .preparer()
+        .render_halo(owner.chunk(), std::slice::from_ref(&input))
+        .expect("full proxy neighbor");
+    assert!(owner_east_face_heights(
+        &presenter
+            .prepare_with_render_halo(source, 0, &[], &full)
+            .expect("proxy")
+    )
+    .is_empty());
+    input.suppression = std::sync::Arc::new(vec![ColumnData {
+        position: neighbor,
+        runs: vec![run(-4, 4, "custom_rock")],
+    }]);
+    let cutout = presenter
+        .preparer()
+        .render_halo(owner.chunk(), &[input])
+        .expect("stock mask");
+    let prepared = presenter
+        .prepare_with_render_halo(source, 0, &[], &cutout)
+        .expect("visible background");
+    assert_eq!(owner_east_face_heights(&prepared).len(), 4);
+    assert_ne!(full.fingerprint(), cutout.fingerprint());
+    assert_eq!(prepared.logical_runs(), 1);
+}
+
+#[test]
+fn halo_identity_drives_replacement_and_survives_rebase_with_exact_published_sources() {
+    let (package, owner, neighbor) = halo_fixture(-4, 4);
+    let mut presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let mut world = World::new();
+    world.init_resource::<Assets<Mesh>>();
+    world.init_resource::<Assets<StandardMaterial>>();
+    let source = package.chunks.get(&owner.chunk()).expect("owner");
+    let closed = presenter.prepare(source, 0).expect("closed");
+    let first = presenter.publish(&mut world, closed).expect("publish");
+    let halo = presenter
+        .preparer()
+        .render_halo(owner.chunk(), &[halo_neighbor(&package, neighbor)])
+        .expect("halo");
+    let prepared = presenter
+        .prepare_with_render_halo(source, 0, &[], &halo)
+        .expect("open");
+    let second = presenter
+        .publish(&mut world, prepared)
+        .expect("same-revision halo change");
+    assert_ne!(first.root, second.root);
+    assert!(!world.entities().contains(first.root));
+    let prepared = presenter
+        .prepare_with_render_halo(source, 0, &[], &halo)
+        .expect("duplicate");
+    assert_eq!(
+        presenter
+            .publish(&mut world, prepared)
+            .expect("idempotent")
+            .root,
+        second.root
+    );
+    let snapshot = presenter
+        .render_neighbor(owner.chunk())
+        .expect("exact source");
+    assert_eq!(snapshot.package.fingerprint, source.fingerprint);
+    assert_eq!(snapshot.revision, 0);
+    assert!(snapshot.suppression.is_empty());
+    let next = RenderOrigin {
+        column: WorldHex::new(16, 8),
+        level: 1,
+    };
+    let receipts = presenter
+        .rebase(&mut world, next)
+        .expect("rebase retains halo");
+    assert_eq!(
+        receipts.first().expect("owner receipt").halo_fingerprint,
+        halo.fingerprint()
+    );
+    assert!(world
+        .query::<&ResidentRun>()
+        .iter(&world)
+        .all(|run| run.position.column == owner));
+    assert_eq!(
+        receipts.first().expect("rebased receipt").vertices,
+        second.vertices
+    );
+    let closed = presenter
+        .prepare(source, 0)
+        .expect("neighbor unknown again");
+    let restored = presenter
+        .publish(&mut world, closed)
+        .expect("restore boundary wall");
+    assert_ne!(restored.halo_fingerprint, second.halo_fingerprint);
+    assert!(restored.vertices > second.vertices);
+}
+
+#[test]
+fn render_halo_rejects_nonadjacent_duplicate_wrong_owner_and_invalid_mask_inputs() {
+    let (package, owner, neighbor) = halo_fixture(-4, 4);
+    let presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let context = presenter.preparer();
+    let input = halo_neighbor(&package, neighbor);
+    assert!(context
+        .render_halo(owner.chunk(), &[input.clone(), input.clone()])
+        .is_err());
+    assert!(context
+        .render_halo(owner.chunk(), &[halo_neighbor(&package, owner)])
+        .is_err());
+    let mut invalid = input.clone();
+    invalid.suppression = std::sync::Arc::new(vec![ColumnData {
+        position: neighbor,
+        runs: vec![run(-4, 4, "water")],
+    }]);
+    assert!(context.render_halo(owner.chunk(), &[invalid]).is_err());
+    let halo = context.render_halo(owner.chunk(), &[input]).expect("halo");
+    assert!(presenter
+        .prepare_with_render_halo(
+            package.chunks.get(&neighbor.chunk()).expect("other owner"),
+            0,
+            &[],
+            &halo
+        )
+        .is_err());
+    let tiny = TerrainPresenter::with_limits(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+        PresentationLimits {
+            max_runs_per_halo: 1,
+            ..PresentationLimits::default()
+        },
+    )
+    .expect("tiny presenter");
+    // The bounded neighboring footprint currently has one nonempty interval.
+    assert!(tiny
+        .preparer()
+        .render_halo(owner.chunk(), &[halo_neighbor(&package, neighbor)])
+        .is_ok());
+    let mut changed = package
+        .chunks
+        .get(&neighbor.chunk())
+        .expect("neighbor")
+        .clone();
+    changed
+        .columns
+        .iter_mut()
+        .find(|column| column.position == neighbor)
+        .expect("neighbor column")
+        .runs
+        .push(run(6, 8, "water"));
+    changed.seal().expect("revised neighbor");
+    let too_many = RenderNeighbor {
+        package: std::sync::Arc::new(changed),
+        revision: 1,
+        suppression: std::sync::Arc::new(Vec::new()),
+    };
+    let result = tiny.preparer().render_halo(owner.chunk(), &[too_many]);
+    assert!(matches!(result, Err(error) if error.to_string().contains("max_runs_per_halo")));
+}

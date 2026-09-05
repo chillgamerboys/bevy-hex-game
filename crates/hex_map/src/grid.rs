@@ -2005,8 +2005,8 @@ pub(crate) struct TerrainMeshRun {
 }
 
 /// Uses the same cap, side-culling, normals, winding and batched mesh engine as V3.
-/// Columns contain exactly one source chunk, so boundaries remain closed even when
-/// the render origin is not aligned with the storage lattice. Negative bottom
+/// Columns contain the owner and optional validated one-hex render halo. Unknown
+/// neighbors remain closed. Only owner runs emit geometry. Negative bottom
 /// levels are valid; the legacy bedrock-floor convention does not apply here.
 pub(crate) fn resident_terrain_mesh(
     runs: &[TerrainMeshRun],
@@ -2055,9 +2055,8 @@ fn terrain_mesh_from_runs(
             .into_iter()
             .zip(terrain_hex_sides())
         {
-            // Resident chunk meshes own their seam walls permanently. Depending on
-            // another chunk's columns here would force an otherwise local edit to
-            // replace neighbouring roots just to repair one culled face.
+            // Resident callers may supply a bounded immutable render halo. They
+            // own adjacent-root invalidation and atomic boundary publication.
             let neighbour_runs = if resident
                 || terrain_chunk_coord(neighbour) == terrain_chunk_coord(run.position.coord)
             {

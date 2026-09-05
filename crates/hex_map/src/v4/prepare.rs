@@ -12,7 +12,7 @@ use hex_world_contracts::{
     WorldManifest,
 };
 
-use super::{PresentationError, ResidentRun, RunSource};
+use super::{PresentationError, RenderHalo, ResidentRun, RunSource};
 use crate::{
     grid::{resident_terrain_mesh, ProjectedRun, TerrainMeshRun},
     voxel::SubstanceRun,
@@ -85,6 +85,8 @@ pub struct PresentationLimits {
     pub max_resident_chunks: usize,
     /// Maximum derived terrain/object intervals in one CPU preparation product.
     pub max_runs_per_chunk: usize,
+    /// Maximum effective render intervals retained in one chunk's one-hex halo.
+    pub max_runs_per_halo: usize,
     /// Maximum axial/cube distance from the current render origin (at most 4096).
     pub max_local_hex: i32,
     /// Maximum absolute relative voxel level (at most 1,048,576).
@@ -98,6 +100,7 @@ impl Default for PresentationLimits {
         Self {
             max_resident_chunks: 256,
             max_runs_per_chunk: 32_768,
+            max_runs_per_halo: 32_768,
             max_local_hex: 1024,
             max_local_level: 4096,
             max_render_height: 4096.0,
@@ -109,6 +112,7 @@ impl PresentationLimits {
     pub(super) fn validate(self) -> Result<(), PresentationError> {
         if self.max_resident_chunks == 0
             || self.max_runs_per_chunk == 0
+            || self.max_runs_per_halo == 0
             || !(1..=4096).contains(&self.max_local_hex)
             || !(1..=1_048_576).contains(&self.max_local_level)
             || !self.max_render_height.is_finite()
@@ -149,6 +153,7 @@ pub struct PreparedChunk {
     pub(super) batches: Vec<PreparedBatch>,
     pub(super) suppression: Arc<Vec<ColumnData>>,
     pub(super) suppression_fingerprint: u64,
+    pub(super) halo: RenderHalo,
 }
 
 pub(super) struct PreparedBatch {
@@ -194,6 +199,11 @@ impl PreparedChunk {
     pub const fn suppression_fingerprint(&self) -> u64 {
         self.suppression_fingerprint
     }
+    /// Canonical signature of the exact neighboring render context.
+    #[must_use]
+    pub const fn halo_fingerprint(&self) -> u64 {
+        self.halo.fingerprint()
+    }
 }
 
 impl TerrainPreparer {
@@ -226,6 +236,26 @@ impl TerrainPreparer {
         revision: u64,
         suppression: &[ColumnData],
     ) -> Result<PreparedChunk, PresentationError> {
+        let halo = self.render_halo(package.coordinate, &[])?;
+        self.prepare_with_render_halo(package, revision, suppression, &halo)
+    }
+
+    /// Prepare owner geometry against immutable neighboring render intervals.
+    /// Halo cells affect side occlusion only; they never emit geometry or picking
+    /// metadata. The application owns dependency freshness and atomic neighbor
+    /// arrival, replacement and retirement publication.
+    pub fn prepare_with_render_halo(
+        &self,
+        package: &ChunkPackage,
+        revision: u64,
+        suppression: &[ColumnData],
+        halo: &RenderHalo,
+    ) -> Result<PreparedChunk, PresentationError> {
+        halo.validate_context(
+            package.coordinate,
+            self.manifest.fingerprint,
+            self.limits.max_runs_per_halo,
+        )?;
         package.validate_with_index(&self.index)?;
         validate_suppression(package, suppression, self.limits.max_runs_per_chunk)?;
         let suppression_fingerprint = hex_world_contracts::hash_serializable(suppression)?;
@@ -301,6 +331,36 @@ impl TerrainPreparer {
                 }
                 grouped.entry(*substance).or_default().push(prepared_run);
             }
+            projected.insert(local, geometry);
+        }
+        let owner_bottom = grouped.values().flatten().map(|run| run.exact.bottom).min();
+        let owner_top = grouped.values().flatten().map(|run| run.exact.top).max();
+        for column in halo.columns() {
+            let local = self.origin.local_hex(column.position)?;
+            let geometry = column
+                .runs
+                .iter()
+                .filter_map(|run| {
+                    // An arbitrarily tall neighboring interval only occludes heights
+                    // emitted by this owner. Clip before local integer conversion.
+                    let bottom = run.bottom.max(owner_bottom?);
+                    let top = run.top.min(owner_top?);
+                    (bottom < top).then_some((run, bottom, top))
+                })
+                .map(|(run, bottom, top)| {
+                    let (substance, _) = self.palette.get(&run.material).ok_or_else(|| {
+                        PresentationError("halo material is absent from palette".into())
+                    })?;
+                    Ok(ProjectedRun {
+                        run: SubstanceRun {
+                            bottom: self.checked_level(bottom)?,
+                            top: self.checked_level(top)?,
+                            substance: *substance,
+                        },
+                        cutaway: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, PresentationError>>()?;
             projected.insert(local, geometry);
         }
         let rendered_runs = grouped.values().flatten().try_fold(0usize, |count, run| {
@@ -390,6 +450,7 @@ impl TerrainPreparer {
             batches,
             suppression: Arc::new(suppression.to_vec()),
             suppression_fingerprint,
+            halo: halo.clone(),
         })
     }
 
@@ -418,7 +479,7 @@ impl TerrainPreparer {
     }
 }
 
-fn validate_suppression(
+pub(super) fn validate_suppression(
     package: &ChunkPackage,
     suppression: &[ColumnData],
     run_limit: usize,
@@ -473,34 +534,48 @@ fn validate_suppression(
 }
 
 fn remaining_intervals(run: &PreparedRun, suppression: &[ColumnData]) -> Vec<(i32, i32)> {
-    if run.exact.source != RunSource::StaticObject {
-        return vec![(run.exact.bottom, run.exact.top)];
+    render_intervals(
+        run.exact.position.column,
+        run.exact.bottom,
+        run.exact.top,
+        run.exact.source,
+        suppression,
+    )
+}
+
+pub(super) fn render_intervals(
+    column: WorldHex,
+    bottom: i32,
+    top: i32,
+    source: RunSource,
+    suppression: &[ColumnData],
+) -> Vec<(i32, i32)> {
+    if source != RunSource::StaticObject {
+        return vec![(bottom, top)];
     }
     let Some(mask) = suppression
-        .binary_search_by_key(&run.exact.position.column, |column| column.position)
+        .binary_search_by_key(&column, |column| column.position)
         .ok()
         .and_then(|index| suppression.get(index))
     else {
-        return vec![(run.exact.bottom, run.exact.top)];
+        return vec![(bottom, top)];
     };
-    let mut cursor = run.exact.bottom;
+    let mut cursor = bottom;
     let mut intervals = Vec::new();
-    let start = mask
-        .runs
-        .partition_point(|hidden| hidden.top <= run.exact.bottom);
+    let start = mask.runs.partition_point(|hidden| hidden.top <= bottom);
     for hidden in mask
         .runs
         .iter()
         .skip(start)
-        .take_while(|hidden| hidden.bottom < run.exact.top)
+        .take_while(|hidden| hidden.bottom < top)
     {
         if hidden.bottom > cursor {
             intervals.push((cursor, hidden.bottom));
         }
-        cursor = cursor.max(hidden.top).min(run.exact.top);
+        cursor = cursor.max(hidden.top).min(top);
     }
-    if cursor < run.exact.top {
-        intervals.push((cursor, run.exact.top));
+    if cursor < top {
+        intervals.push((cursor, top));
     }
     intervals
 }

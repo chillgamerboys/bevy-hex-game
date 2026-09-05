@@ -7,7 +7,8 @@ use hex_core::{
 use hex_world_contracts::{ChunkId, ChunkPackage, ColumnData, ManifestIndex, WorldManifest};
 
 use super::{
-    PreparedChunk, PresentationError, PresentationLimits, RenderOrigin, RunSource, TerrainPreparer,
+    PreparedChunk, PresentationError, PresentationLimits, RenderHalo, RenderNeighbor, RenderOrigin,
+    RunSource, TerrainPreparer,
 };
 
 /// Global identity of a disposable resident root; never a gameplay authority.
@@ -21,6 +22,8 @@ pub struct ResidentChunk {
     pub fingerprint: u64,
     /// Exact render-only static object suppression signature.
     pub suppression_fingerprint: u64,
+    /// Exact neighboring render context signature.
+    pub halo_fingerprint: u64,
 }
 
 /// Measured publication outcome for a single root and its owned assets.
@@ -34,6 +37,8 @@ pub struct ChunkReceipt {
     pub fingerprint: u64,
     /// Canonical signature of the exact render-only static object suppression mask.
     pub suppression_fingerprint: u64,
+    /// Exact neighboring render context signature.
+    pub halo_fingerprint: u64,
     /// Current disposable root; replacement/rebase returns a new entity.
     pub root: Entity,
     /// Number of exact logical interval entities.
@@ -55,6 +60,7 @@ struct PublishedChunk {
     package: Arc<ChunkPackage>,
     meshes: Vec<Handle<Mesh>>,
     suppression: Arc<Vec<ColumnData>>,
+    halo: RenderHalo,
 }
 
 /// Owns the disposable roots/assets for one bounded local presentation window.
@@ -153,6 +159,29 @@ impl TerrainPresenter {
             .prepare_with_suppressed_occupancy(package, revision, suppression)
     }
 
+    /// Prepare an exact owner against a validated immutable neighboring render halo.
+    pub fn prepare_with_render_halo(
+        &self,
+        package: &ChunkPackage,
+        revision: u64,
+        suppression: &[ColumnData],
+        halo: &RenderHalo,
+    ) -> Result<PreparedChunk, PresentationError> {
+        self.context
+            .prepare_with_render_halo(package, revision, suppression, halo)
+    }
+
+    /// Clone the exact published source/mask for one direct neighbor lookup.
+    /// The returned source does not include its own halo, avoiding recursive dependencies.
+    #[must_use]
+    pub fn render_neighbor(&self, chunk: ChunkId) -> Option<RenderNeighbor> {
+        self.resident.get(&chunk).map(|entry| RenderNeighbor {
+            package: Arc::clone(&entry.package),
+            revision: entry.receipt.revision,
+            suppression: Arc::clone(&entry.suppression),
+        })
+    }
+
     /// Current integer anchor of this presentation window.
     #[must_use]
     pub fn origin(&self) -> RenderOrigin {
@@ -186,6 +215,7 @@ impl TerrainPresenter {
         if let Some(old) = self.resident.get(&prepared.coordinate()) {
             if prepared.revision == old.receipt.revision
                 && prepared.suppression_fingerprint == old.receipt.suppression_fingerprint
+                && prepared.halo.fingerprint() == old.receipt.halo_fingerprint
             {
                 return Ok(old.receipt.clone());
             }
@@ -253,10 +283,11 @@ impl TerrainPresenter {
             .resident
             .values()
             .map(|old| {
-                next.prepare_with_suppressed_occupancy(
+                next.prepare_with_render_halo(
                     &old.package,
                     old.receipt.revision,
                     &old.suppression,
+                    &old.halo,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -292,6 +323,7 @@ impl TerrainPresenter {
                     revision: prepared.revision,
                     fingerprint: prepared.package.fingerprint,
                     suppression_fingerprint: prepared.suppression_fingerprint,
+                    halo_fingerprint: prepared.halo.fingerprint(),
                 },
                 prepared.marker,
                 Transform::default(),
@@ -306,6 +338,7 @@ impl TerrainPresenter {
             revision: prepared.revision,
             fingerprint: prepared.package.fingerprint,
             suppression_fingerprint: prepared.suppression_fingerprint,
+            halo_fingerprint: prepared.halo.fingerprint(),
             root,
             logical_runs: 0,
             object_runs: 0,
@@ -386,6 +419,7 @@ impl TerrainPresenter {
             package: prepared.package,
             meshes,
             suppression: prepared.suppression,
+            halo: prepared.halo,
         };
         if let Some(old) = self.resident.insert(coordinate, entry) {
             cleanup(world, &old);
