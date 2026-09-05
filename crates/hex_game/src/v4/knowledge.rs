@@ -1316,6 +1316,19 @@ mod tests {
             .landmarks
             .iter()
             .any(|fact| fact.feature == feature));
+        let mut durable = KnowledgeStore::open(
+            directory.join("knowledge"),
+            runtime.manifest(),
+            IoLimits::default(),
+            KnowledgeConfig::default(),
+        )
+        .expect("independent durable knowledge reader");
+        let remembered = durable
+            .read("a", at.column.chunk())
+            .expect("read observed landmark partition")
+            .expect("observation was persisted");
+        assert!(remembered.landmarks.iter().any(|fact| fact.id == "tree"));
+        let persisted_batches = knowledge.counts().persisted_batches;
         session.actors[0].standing = None;
         runtime
             .apply_object_transaction(&WorldObjectEditTransaction {
@@ -1338,11 +1351,22 @@ mod tests {
             .expect("remembered view")
             .landmarks
             .contains_key("tree"));
-        assert!(knowledge.principals["a"].cache[&at.column.chunk()]
-            .draft
-            .landmarks
-            .iter()
-            .any(|fact| fact.id == "tree"));
+        // An unavailable observer releases its neighborhood and pages clean fine
+        // memory out. The remembered landmark must survive in the compact view
+        // and unchanged durable partition, without requiring cache residency.
+        let unavailable = knowledge.principals.get("a").expect("unavailable observer");
+        assert!(unavailable.required.is_empty());
+        assert!(unavailable.cache.is_empty());
+        assert!(unavailable.view.current.is_none());
+        assert_eq!(knowledge.counts().persisted_batches, persisted_batches);
+        durable.refresh().expect("refresh after unseen deletion");
+        assert_eq!(
+            durable
+                .read("a", at.column.chunk())
+                .expect("read dormant memory"),
+            Some(remembered),
+            "an unseen world edit cannot rewrite the principal's remembered partition"
+        );
         session.actors[0].standing = Some(position(14, 2));
         settle(&mut knowledge, &session, &mut runtime);
         assert!(!knowledge
@@ -1352,6 +1376,14 @@ mod tests {
             .contains_key("tree"));
         assert!(!knowledge.principals["a"].cache[&at.column.chunk()]
             .draft
+            .landmarks
+            .iter()
+            .any(|fact| fact.id == "tree"));
+        durable.refresh().expect("refresh after visible absence");
+        assert!(!durable
+            .read("a", at.column.chunk())
+            .expect("read updated private memory")
+            .expect("discovery partition remains durable")
             .landmarks
             .iter()
             .any(|fact| fact.id == "tree"));
