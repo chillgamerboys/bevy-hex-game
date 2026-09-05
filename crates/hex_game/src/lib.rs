@@ -32,6 +32,8 @@ mod content_debug;
 mod creation_store;
 #[cfg(feature = "dev-time-preview")]
 mod dev_time_controls;
+#[cfg(feature = "dev")]
+mod fly;
 mod fog;
 mod menus;
 mod multiplayer_gameplay;
@@ -324,7 +326,15 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((hex_dev::plugin, content_debug::plugin));
+        {
+            // The inspector resolves its surface format through a native Winit
+            // window. Image-target automation has no such surface; keep its
+            // renderer out of captures while retaining exploration and its UI.
+            if !automated_capture {
+                app.add_plugins(hex_dev::plugin);
+            }
+            app.add_plugins((content_debug::plugin, fly::plugin));
+        }
 
         #[cfg(feature = "dev-time-preview")]
         app.add_plugins(dev_time_controls::plugin);

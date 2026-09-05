@@ -65,3 +65,19 @@ extension is being integrated: it raises only lower adjacent terrain toward the 
 existing nine-level falloff, preserves higher cliffs, pins the exact route and prior terrain
 authorities, and refuses to create or worsen steep boundary edges. No passing full-world
 result is claimed until that candidate is compiled and admitted.
+
+## Committed walking handoff integrated
+
+The walking owner completed and froze `95b2274de9c9be23a2aaf75634c5a1cb03b1281b`,
+based on `bc06a896`, and explicitly yielded its caches. All nine intended commits are
+integrated through a merge that preserves their history. The one status-document conflict
+was resolved around the combined candidate. Automatic source merges retain the candidate's
+OIT/depth/MSAA camera setup and capture-plan detection alongside exploration and windowless
+inspector suppression. Deferred visibility retirement uses the walking owner's
+`try_insert`/`try_remove` fix. The `dev,map-review` combination still needs validation.
+
+Exploration starts in Fly; F selects Walk/Fly. Its focused tests and static author/reviewer
+captures are source-scoped evidence from the walking task. Native feel/flicker remains
+pending the user's morning test. Same-map local launchers are prepared but remain disabled
+until the combined candidate is validated. Warm development and ci/map-test caches were
+APFS-cloned after the owner yielded them; the original caches are preserved.

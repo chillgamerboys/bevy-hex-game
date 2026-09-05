@@ -38,16 +38,17 @@ const SOFTENED_NEAR_FOG_CAP_COLOR: Color = Color::srgba(0.07, 0.09, 0.18, 0.30);
 #[cfg(any(feature = "map-review", test))]
 const SOFTENED_FAR_FOG_CAP_COLOR: Color = Color::srgba(0.07, 0.09, 0.18, 0.56);
 
-/// Review-only terrain-shroud treatment.
+/// Development/review terrain-shroud treatment.
 ///
 /// Ordinary game builds always retain [`Self::Current`]. The map-review adapter may
-/// replace this resource before gameplay starts, but every mode deliberately leaves
-/// hostile [`PresentationOcclusionReason::Fog`] ownership unchanged.
+/// replace this resource before gameplay starts. Development exploration temporarily
+/// disables terrain shading while its pawn is outside tactical perception. Every mode
+/// leaves hostile [`PresentationOcclusionReason::Fog`] ownership unchanged.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FogPresentationMode {
     #[default]
     Current,
-    #[cfg(any(feature = "map-review", test))]
+    #[cfg(any(feature = "dev", feature = "map-review", test))]
     NoTerrainShading,
     #[cfg(any(feature = "map-review", test))]
     Dimmed,
@@ -393,11 +394,12 @@ fn desired_fog_bands(
     desired: &BTreeSet<TilePos>,
     _surfaces: impl IntoIterator<Item = TilePos>,
 ) -> BTreeMap<TilePos, FogOverlayBand> {
+    #[cfg(any(feature = "dev", feature = "map-review", test))]
+    if _mode == FogPresentationMode::NoTerrainShading {
+        return BTreeMap::new();
+    }
     #[cfg(any(feature = "map-review", test))]
     {
-        if _mode == FogPresentationMode::NoTerrainShading {
-            return BTreeMap::new();
-        }
         if _mode == FogPresentationMode::SoftenedTwoBand {
             // This is intentionally a presentation-space approximation over exposed
             // surfaces. Stacked surfaces at one horizontal coordinate share a boundary
@@ -579,7 +581,7 @@ fn fog_material(mode: FogPresentationMode, band: FogOverlayBand) -> StandardMate
         (FogPresentationMode::Current, _) => FOG_CAP_COLOR,
         #[cfg(any(feature = "map-review", test))]
         (FogPresentationMode::SoftenedTwoBand, FogOverlayBand::Core) => FOG_CAP_COLOR,
-        #[cfg(any(feature = "map-review", test))]
+        #[cfg(any(feature = "dev", feature = "map-review", test))]
         (FogPresentationMode::NoTerrainShading, _) => Color::NONE,
         #[cfg(any(feature = "map-review", test))]
         (FogPresentationMode::Dimmed, _) => DIMMED_FOG_CAP_COLOR,

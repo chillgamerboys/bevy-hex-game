@@ -262,6 +262,7 @@ fn reconcile_character_proximity(
             && match *mode {
                 CameraMode::Map => false,
                 CameraMode::Character => effective_radius.is_some_and(|radius| radius <= threshold),
+                CameraMode::Fly => false,
                 CameraMode::FirstPerson => true,
             };
 
@@ -558,11 +559,12 @@ fn clear_character_proximity(
         }
         commands
             .entity(entity)
-            .remove::<CharacterCameraOcclusionOwner>();
+            .try_remove::<CharacterCameraOcclusionOwner>();
     }
 }
 
 /// Applies the combined reason set and is the sole owner of concrete presentation state.
+/// Deferred updates tolerate roots removed by concurrent map/fog teardown.
 fn apply_presentation_occlusion(mut commands: Commands, mut candidates: OcclusionCandidateQuery) {
     for (entity, mut visibility, pickable, no_shadow, occlusion, applied) in &mut candidates {
         let should_hide = occlusion.is_some_and(|occlusion| occlusion.is_hidden());
@@ -576,7 +578,7 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
                 *visibility = Visibility::Hidden;
                 commands
                     .entity(entity)
-                    .insert((previous, Pickable::IGNORE, NotShadowCaster));
+                    .try_insert((previous, Pickable::IGNORE, NotShadowCaster));
             }
             (true, Some(_)) => {
                 if *visibility != Visibility::Hidden {
@@ -584,26 +586,26 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
                 }
                 let mut entity = commands.entity(entity);
                 if pickable.copied() != Some(Pickable::IGNORE) {
-                    entity.insert(Pickable::IGNORE);
+                    entity.try_insert(Pickable::IGNORE);
                 }
                 if !no_shadow {
-                    entity.insert(NotShadowCaster);
+                    entity.try_insert(NotShadowCaster);
                 }
             }
             (false, Some(previous)) => {
                 *visibility = previous.visibility;
                 let mut entity = commands.entity(entity);
                 if let Some(pickable) = previous.pickable {
-                    entity.insert(pickable);
+                    entity.try_insert(pickable);
                 } else {
-                    entity.remove::<Pickable>();
+                    entity.try_remove::<Pickable>();
                 }
                 if previous.had_not_shadow_caster {
-                    entity.insert(NotShadowCaster);
+                    entity.try_insert(NotShadowCaster);
                 } else {
-                    entity.remove::<NotShadowCaster>();
+                    entity.try_remove::<NotShadowCaster>();
                 }
-                entity.remove::<AppliedPresentationOcclusion>();
+                entity.try_remove::<AppliedPresentationOcclusion>();
             }
             (false, None) => {}
         }
@@ -617,6 +619,61 @@ mod tests {
     use super::*;
     use hex_core::{HexCoord, TilePos, UnitId};
     use hex_test_app::HeadlessAppBuilder;
+
+    #[test]
+    fn deferred_visibility_cleanup_tolerates_retirement_and_restores_survivors() {
+        #[derive(Component)]
+        struct Retiring;
+        let fixture = || {
+            (
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                NotShadowCaster,
+                CharacterCameraOcclusionOwner,
+                PresentationOcclusion::default(),
+                AppliedPresentationOcclusion {
+                    visibility: Visibility::Inherited,
+                    pickable: Some(Pickable::default()),
+                    had_not_shadow_caster: false,
+                },
+            )
+        };
+        let mut app = App::new();
+        let retiring = app.world_mut().spawn((fixture(), Retiring)).id();
+        let survivor = app.world_mut().spawn(fixture()).id();
+        app.add_systems(
+            Update,
+            (
+                |mut commands: Commands, roots: Query<Entity, With<Retiring>>| {
+                    for root in &roots {
+                        commands.entity(root).despawn();
+                    }
+                },
+                clear_character_proximity,
+                apply_presentation_occlusion,
+            )
+                .chain_ignore_deferred(),
+        );
+        app.update();
+        assert!(!app.world().entities().contains(retiring));
+        assert_eq!(
+            app.world().get::<Visibility>(survivor),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Pickable>(survivor),
+            Some(&Pickable::default())
+        );
+        assert!(app.world().get::<NotShadowCaster>(survivor).is_none());
+        assert!(app
+            .world()
+            .get::<AppliedPresentationOcclusion>(survivor)
+            .is_none());
+        assert!(app
+            .world()
+            .get::<CharacterCameraOcclusionOwner>(survivor)
+            .is_none());
+    }
 
     #[derive(Resource, Default)]
     struct PresentationChangeCounts {

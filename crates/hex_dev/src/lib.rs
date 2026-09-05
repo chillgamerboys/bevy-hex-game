@@ -16,6 +16,9 @@ use bevy::ui_render::prelude::GlobalUiDebugOptions;
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
+/// Keyboard ownership from the developer inspector, separate from Bevy UI focus.
+pub use bevy_inspector_egui::bevy_egui::input::EguiWantsInput as DevUiInputCapture;
+
 #[derive(Component)]
 struct DevDiagnostics;
 

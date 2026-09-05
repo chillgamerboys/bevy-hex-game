@@ -177,6 +177,8 @@ pub enum CameraMode {
     Map,
     /// Close orbit whose focus follows the selected character.
     Character,
+    /// Development-only noclip view translated with its disposable test pawn.
+    Fly,
     /// Eye-level view whose pose follows the selected character.
     FirstPerson,
 }
@@ -612,7 +614,7 @@ fn map_camera_active(mode: Res<CameraMode>) -> bool {
 fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
     match mode {
         CameraMode::Map => (settings.min_pitch, settings.max_pitch),
-        CameraMode::Character | CameraMode::FirstPerson => (-1.0, 1.0),
+        CameraMode::Character | CameraMode::Fly | CameraMode::FirstPerson => (-1.0, 1.0),
     }
 }
 
@@ -658,7 +660,8 @@ fn center_inspection_camera(
 ///
 /// Generated maps may need an initial frame farther away than the designer-authored
 /// ceiling. Map mode preserves that frame and allows a little additional zoom-out,
-/// while Character mode remains bounded by its authored gameplay controls.
+/// while Character and Fly modes remain bounded by their authored close-camera
+/// controls.
 fn effective_max_zoom(
     mode: CameraMode,
     settings: &CameraSettings,
@@ -815,6 +818,9 @@ fn toggle_camera_mode(
             clear_resolved_camera_subject(&mut subject);
             *mode = CameraMode::Map;
         }
+        // Fly belongs to a dedicated testing session and is never part of the
+        // ordinary Map / Character / First Person toggle cycle.
+        CameraMode::Fly => {}
     }
 }
 
@@ -837,7 +843,8 @@ fn follow_character_camera(
         With<PanOrbitCamera>,
     >,
 ) {
-    if *mode == CameraMode::Map {
+    if matches!(*mode, CameraMode::Map | CameraMode::Fly) {
+        clear_character_collision(&mut collision);
         clear_resolved_camera_subject(&mut subject);
         return;
     }
