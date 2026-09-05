@@ -1,8 +1,4 @@
 //! Real headless queue transitions: CPU mesh facts and owned roots, no renderer.
-#![expect(
-    clippy::expect_used,
-    reason = "Small deterministic fixtures and exact lifecycle assertions"
-)]
 
 use std::{
     thread,

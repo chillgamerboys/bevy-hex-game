@@ -1003,7 +1003,10 @@ pub(in crate::v4) mod tests {
         ] {
             assert!(WalkHarness::parse(&invalid).is_err(), "{invalid}");
         }
-        assert!(WalkHarness::parse(&" ".repeat(MAX_SCRIPT_BYTES as usize + 1)).is_err());
+        assert!(WalkHarness::parse(
+            &" ".repeat(usize::try_from(MAX_SCRIPT_BYTES).expect("bounded script limit") + 1)
+        )
+        .is_err());
     }
     #[test]
     fn passing_through_a_pending_goal_does_not_verify_completed_movement() {

@@ -456,10 +456,6 @@ fn column(columns: &[ColumnData], position: WorldHex) -> Option<&ColumnData> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(
-        clippy::expect_used,
-        reason = "Fixtures and assertions require explicit failure context."
-    )]
 
     use super::*;
     use hex_world_contracts::{

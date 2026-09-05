@@ -681,7 +681,7 @@ impl WorldKnowledge {
             let event = match self
                 .events
                 .lock()
-                .map_err(|_| "knowledge event queue poisoned")?
+                .map_err(|error| format!("knowledge event queue poisoned: {error}"))?
                 .try_recv()
             {
                 Ok(event) => event,
@@ -938,10 +938,6 @@ fn temporary_directory() -> Result<PathBuf, String> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "fixture construction and explicit success assertions"
-)]
 mod tests {
     use super::*;
     use hex_perception::v4::VisibleSurface;
@@ -1208,16 +1204,40 @@ mod tests {
         };
         merge_facts(&mut state, &facts).expect("stale absence ignored");
         assert_eq!(state.view.landmarks.len(), 2);
-        assert!(!state.cache[&coordinate].dirty);
-        facts.invalidated_landmarks[0].world_revision = 4;
-        facts.invalidated_landmarks[0].position = other;
+        assert!(
+            !state
+                .cache
+                .get(&coordinate)
+                .expect("cached partition")
+                .dirty
+        );
+        facts
+            .invalidated_landmarks
+            .first_mut()
+            .expect("one invalidated landmark")
+            .world_revision = 4;
+        facts
+            .invalidated_landmarks
+            .first_mut()
+            .expect("one invalidated landmark")
+            .position = other;
         merge_facts(&mut state, &facts).expect("wrong anchor ignored");
         assert_eq!(state.view.landmarks.len(), 2);
-        facts.invalidated_landmarks[0].position = at;
+        facts
+            .invalidated_landmarks
+            .first_mut()
+            .expect("one invalidated landmark")
+            .position = at;
         let before = state.view.revision;
         merge_facts(&mut state, &facts).expect("exact visible absence");
         assert!(state.view.revision > before);
-        assert!(state.cache[&coordinate].dirty);
+        assert!(
+            state
+                .cache
+                .get(&coordinate)
+                .expect("cached partition")
+                .dirty
+        );
         assert_eq!(
             state
                 .view
@@ -1227,12 +1247,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["hidden"]
         );
-        assert_eq!(state.cache[&coordinate].draft.landmarks.len(), 1);
+        assert_eq!(
+            state
+                .cache
+                .get(&coordinate)
+                .expect("cached partition")
+                .draft
+                .landmarks
+                .len(),
+            1
+        );
         assert!(state.view.discovered(at.column));
         state.cache.get_mut(&coordinate).expect("cache").dirty = false;
         let before = state.view.revision;
         merge_facts(&mut state, &facts).expect("duplicate absence");
-        assert!(!state.cache[&coordinate].dirty);
+        assert!(
+            !state
+                .cache
+                .get(&coordinate)
+                .expect("cached partition")
+                .dirty
+        );
         assert_eq!(state.view.revision, before);
     }
 
@@ -1308,7 +1343,10 @@ mod tests {
             .expect("view")
             .landmarks
             .contains_key("tree"));
-        assert!(knowledge.principals["a"]
+        assert!(knowledge
+            .principals
+            .get("a")
+            .expect("known principal")
             .view
             .current
             .as_ref()
@@ -1329,7 +1367,7 @@ mod tests {
             .expect("observation was persisted");
         assert!(remembered.landmarks.iter().any(|fact| fact.id == "tree"));
         let persisted_batches = knowledge.counts().persisted_batches;
-        session.actors[0].standing = None;
+        session.actors.first_mut().expect("first actor").standing = None;
         runtime
             .apply_object_transaction(&WorldObjectEditTransaction {
                 id: "remove-landmark".into(),
@@ -1367,14 +1405,20 @@ mod tests {
             Some(remembered),
             "an unseen world edit cannot rewrite the principal's remembered partition"
         );
-        session.actors[0].standing = Some(position(14, 2));
+        session.actors.first_mut().expect("first actor").standing = Some(position(14, 2));
         settle(&mut knowledge, &session, &mut runtime);
         assert!(!knowledge
             .selected(&session)
             .expect("revisited view")
             .landmarks
             .contains_key("tree"));
-        assert!(!knowledge.principals["a"].cache[&at.column.chunk()]
+        assert!(!knowledge
+            .principals
+            .get("a")
+            .expect("known principal")
+            .cache
+            .get(&at.column.chunk())
+            .expect("cached landmark partition")
             .draft
             .landmarks
             .iter()

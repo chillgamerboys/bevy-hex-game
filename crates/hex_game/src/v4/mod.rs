@@ -858,13 +858,12 @@ fn advance(
             if let QueryResult::Ready(surfaces) = runtime.surfaces(actor.column) {
                 let surface = surfaces
                     .into_iter()
-                    .filter(|surface| surface.headroom.is_none_or(|clearance| clearance >= 2))
-                    .filter(|surface| {
-                        actor
-                            .requested_level
-                            .is_none_or(|level| surface.position.level == level)
+                    .rfind(|surface| {
+                        surface.headroom.is_none_or(|clearance| clearance >= 2)
+                            && actor
+                                .requested_level
+                                .is_none_or(|level| surface.position.level == level)
                     })
-                    .last()
                     .ok_or_else(|| {
                         format!(
                             "{} has no valid initial support at {:?}",
