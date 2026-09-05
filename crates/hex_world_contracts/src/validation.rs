@@ -44,7 +44,7 @@ fn reject(context: &str, message: &str) -> ContractError {
     ContractError::new(context, message)
 }
 
-fn name(value: &str, context: &str) -> Result<(), ContractError> {
+pub(crate) fn name(value: &str, context: &str) -> Result<(), ContractError> {
     if value.is_empty()
         || value.len() > 512
         || value.trim() != value
@@ -66,7 +66,7 @@ fn material_name(value: &str) -> Result<(), ContractError> {
     Ok(())
 }
 
-fn ordered<T: Ord>(
+pub(crate) fn ordered<T: Ord>(
     values: impl IntoIterator<Item = T>,
     context: &str,
 ) -> Result<(), ContractError> {
@@ -296,6 +296,7 @@ impl Validate for ChunkSemantics {
             .and_then(|value| value.checked_add(self.interiors.len()))
             .and_then(|value| value.checked_add(self.lights.len()))
             .and_then(|value| value.checked_add(self.light_influences.len()))
+            .and_then(|value| value.checked_add(self.object_influences.len()))
             .and_then(|value| value.checked_add(self.objects.len()))
             .ok_or_else(|| reject("semantics", "record count overflow"))?;
         if count > MAX_SEMANTIC_RECORDS {
@@ -320,6 +321,19 @@ impl Validate for ChunkSemantics {
             "light_influences",
         )?;
         ordered(self.objects.iter().map(|row| &row.id), "objects")?;
+        ordered(
+            self.object_influences.iter().map(|row| &row.id),
+            "object_influences",
+        )?;
+        for influence in &self.object_influences {
+            influence.validate()?;
+        }
+        if union_object_occupancy(&self.object_influences)? != self.occupancy {
+            return Err(reject(
+                "object_influences",
+                "union differs from resident occupancy",
+            ));
+        }
         for liquid in &self.liquids {
             name(&liquid.body_id, "liquid.body_id")?;
             if liquid.bottom >= liquid.top {
@@ -367,28 +381,7 @@ impl Validate for ChunkSemantics {
             light.validate()?;
         }
         for object in &self.objects {
-            name(&object.id, "object.id")?;
-            name(&object.region_id, "object.region_id")?;
-            name(&object.asset, "object.asset")?;
-            if object.rotation >= 6 {
-                return Err(reject(
-                    "object.rotation",
-                    "expected six-way rotation in 0..6",
-                ));
-            }
-            if object.occupancy.len() > MAX_SEMANTIC_RECORDS {
-                return Err(reject(
-                    "object.occupancy",
-                    "per-object column limit exceeded",
-                ));
-            }
-            ordered(
-                object.occupancy.iter().map(|column| column.position),
-                "object.occupancy",
-            )?;
-            for column in &object.occupancy {
-                column.validate()?;
-            }
+            object.validate()?;
         }
         Ok(())
     }
@@ -412,6 +405,13 @@ fn canonicalize_semantics(semantics: &mut ChunkSemantics) -> Result<(), Contract
     semantics.lights.sort_by(|a, b| a.id.cmp(&b.id));
     semantics.light_influences.sort_by(|a, b| a.id.cmp(&b.id));
     semantics.objects.sort_by(|a, b| a.id.cmp(&b.id));
+    semantics.object_influences.sort_by(|a, b| a.id.cmp(&b.id));
+    for influence in &mut semantics.object_influences {
+        for column in &mut influence.occupancy {
+            column.seal()?;
+        }
+        influence.occupancy.sort_by_key(|column| column.position);
+    }
     for object in &mut semantics.objects {
         for column in &mut object.occupancy {
             column.seal()?;
@@ -976,6 +976,59 @@ impl ChunkPackage {
                     manifest.material(&run.material)?;
                 }
             }
+            if self
+                .semantics
+                .object_influences
+                .binary_search_by(|row| row.id.cmp(&object.id))
+                .ok()
+                .and_then(|index| self.semantics.object_influences.get(index))
+                != object.influence(self.coordinate)?.as_ref()
+            {
+                return Err(reject(
+                    "object_influences",
+                    "root lacks exact local identity projection",
+                ));
+            }
+        }
+        for influence in &self.semantics.object_influences {
+            manifest.validate_source_position(&influence.region_id, influence.origin.column)?;
+            if influence.occupancy.is_empty() && influence.origin.column.chunk() != self.coordinate
+            {
+                return Err(reject("object_influences", "empty foreign influence"));
+            }
+            for column in &influence.occupancy {
+                if column.position.chunk() != self.coordinate
+                    || !manifest.contains(column.position)?
+                {
+                    return Err(reject(
+                        "object_influences",
+                        "contribution outside resident footprint",
+                    ));
+                }
+                for run in &column.runs {
+                    manifest.material(&run.material)?;
+                }
+            }
+            if influence.origin.column.chunk() == self.coordinate {
+                let root = self
+                    .semantics
+                    .objects
+                    .binary_search_by(|row| row.id.cmp(&influence.id))
+                    .ok()
+                    .and_then(|index| self.semantics.objects.get(index));
+                if root
+                    .map(|root| root.influence(self.coordinate))
+                    .transpose()?
+                    .flatten()
+                    .as_ref()
+                    != Some(influence)
+                {
+                    return Err(reject(
+                        "object_influences",
+                        "local contribution differs from complete root",
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -1022,6 +1075,12 @@ impl Validate for WorldPackage {
                 }
             }
             for object in &chunk.semantics.objects {
+                if object.id.starts_with(RUNTIME_OBJECT_PREFIX) {
+                    return Err(reject(
+                        "world.objects",
+                        "runtime object namespace is reserved for runtime transactions",
+                    ));
+                }
                 if !object_ids.insert(&object.id) {
                     return Err(reject("world.objects", "duplicate world object ID"));
                 }
@@ -1136,17 +1195,17 @@ impl Validate for WorldPackage {
                 "resident light projection differs from complete root-light influence",
             ));
         }
-        let expected_occupancy = object_occupancy(self)?;
-        let actual_occupancy: BTreeMap<_, _> = self
+        let expected_objects = crate::objects::project_objects(self)?;
+        let actual_objects = self
             .chunks
-            .values()
-            .flat_map(|chunk| &chunk.semantics.occupancy)
-            .map(|column| (column.position, column.clone()))
-            .collect();
-        if expected_occupancy != actual_occupancy {
+            .iter()
+            .filter(|(_, chunk)| !chunk.semantics.object_influences.is_empty())
+            .map(|(coordinate, chunk)| (*coordinate, chunk.semantics.object_influences.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if expected_objects != actual_objects {
             return Err(reject(
-                "world.occupancy",
-                "resident object projection differs from complete root-object occupancy",
+                "world.object_influences",
+                "projection differs from complete root records",
             ));
         }
         validate_liquid_graph(&liquids)?;
@@ -1206,21 +1265,24 @@ impl CanonicalFingerprint for WorldPackage {
 impl Seal for WorldPackage {
     fn seal(&mut self) -> Result<(), ContractError> {
         let mut candidate = self.clone();
-        let occupancy = object_occupancy(&candidate)?;
+        // Canonicalize complete roots before hashing their clipped identity records.
+        for chunk in candidate.chunks.values_mut() {
+            chunk.semantics.objects.sort_by(|a, b| a.id.cmp(&b.id));
+            for object in &mut chunk.semantics.objects {
+                for column in &mut object.occupancy {
+                    column.seal()?;
+                }
+                object.occupancy.sort_by_key(|column| column.position);
+            }
+        }
+        let objects = crate::objects::project_objects(&candidate)?;
         let influences = crate::lighting::project_lights(&candidate)?;
         for (coordinate, chunk) in &mut candidate.chunks {
+            chunk.semantics.object_influences =
+                objects.get(coordinate).cloned().unwrap_or_default();
+            chunk.semantics.occupancy = union_object_occupancy(&chunk.semantics.object_influences)?;
             chunk.semantics.light_influences =
                 influences.get(coordinate).cloned().unwrap_or_default();
-        }
-        for chunk in candidate.chunks.values_mut() {
-            chunk.semantics.occupancy.clear();
-        }
-        for column in occupancy.into_values() {
-            let chunk = candidate
-                .chunks
-                .get_mut(&column.position.chunk())
-                .ok_or_else(|| reject("world.occupancy", "missing dependent object chunk"))?;
-            chunk.semantics.occupancy.push(column);
         }
         for chunk in candidate.chunks.values_mut() {
             chunk.seal()?;
@@ -1237,56 +1299,6 @@ impl Seal for WorldPackage {
         *self = candidate;
         Ok(())
     }
-}
-
-fn object_occupancy(
-    package: &WorldPackage,
-) -> Result<BTreeMap<WorldHex, ColumnData>, ContractError> {
-    let mut grouped: BTreeMap<WorldHex, Vec<VoxelRun>> = BTreeMap::new();
-    for object in package
-        .chunks
-        .values()
-        .flat_map(|chunk| &chunk.semantics.objects)
-    {
-        for column in &object.occupancy {
-            let mut checked = column.clone();
-            checked.seal()?;
-            grouped
-                .entry(column.position)
-                .or_default()
-                .extend(checked.runs);
-        }
-    }
-    let mut output = BTreeMap::new();
-    for (position, mut runs) in grouped {
-        runs.sort_by(|a, b| (a.bottom, a.top, &a.material).cmp(&(b.bottom, b.top, &b.material)));
-        let mut union: Vec<VoxelRun> = Vec::new();
-        for run in runs {
-            if let Some(prior) = union.last_mut() {
-                if prior.top > run.bottom && prior.material != run.material {
-                    return Err(reject(
-                        "world.occupancy",
-                        "overlapping objects disagree on exact voxel material",
-                    ));
-                }
-                if prior.top >= run.bottom && prior.material == run.material {
-                    prior.top = prior.top.max(run.top);
-                    continue;
-                }
-            }
-            union.push(run);
-        }
-        if !union.is_empty() {
-            output.insert(
-                position,
-                ColumnData {
-                    position,
-                    runs: union,
-                },
-            );
-        }
-    }
-    Ok(output)
 }
 
 impl Validate for ResidencyRequest {

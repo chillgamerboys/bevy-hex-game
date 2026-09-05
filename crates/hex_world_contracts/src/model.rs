@@ -296,6 +296,10 @@ pub struct ObjectInstance {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChunkSemantics {
+    /// Exact identity-bearing clipped contributions, sorted by object ID.
+    /// Full object records remain in their root chunks; this projection survives root unload.
+    #[serde(default)]
+    pub object_influences: Vec<crate::ObjectInfluence>,
     /// Exact static object occupancy clipped to this global chunk, sorted by column.
     /// Queries use this projection even when an object's root chunk is unloaded.
     /// [`WorldPackage::seal`] derives it from the complete root-object registry.

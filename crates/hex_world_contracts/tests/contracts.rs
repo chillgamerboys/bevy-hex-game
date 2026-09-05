@@ -544,9 +544,7 @@ fn forged_or_conflicting_object_projections_are_rejected() {
         .get_mut(&WorldHex::new(16, 0).chunk())
         .expect("remote");
     remote.semantics.occupancy.clear();
-    remote
-        .seal()
-        .expect("locally valid without complete registry");
+    assert!(remote.seal().is_err());
     for descriptor in &mut package.manifest.chunks {
         descriptor.fingerprint = package
             .chunks
@@ -1172,4 +1170,189 @@ fn zero_radius_light_is_clipped_to_its_exact_column_and_outside_sources_are_reje
     owner.semantics.light_influences = vec![light(WorldHex::new(999, 999), 0)];
     owner.seal().expect("bounded shape");
     assert!(owner.validate_with_index(&index).is_err());
+}
+
+fn spanning_object(id: &str) -> ObjectInstance {
+    ObjectInstance {
+        id: id.into(),
+        region_id: "region".into(),
+        asset: "tree".into(),
+        origin: VoxelPosition {
+            column: WorldHex::new(15, 0),
+            level: 1,
+        },
+        rotation: 0,
+        occupancy: vec![
+            ColumnData {
+                position: WorldHex::new(15, 0),
+                runs: vec![run(1, 4, "stone")],
+            },
+            ColumnData {
+                position: WorldHex::new(16, 0),
+                runs: vec![run(2, 5, "stone")],
+            },
+        ],
+    }
+}
+
+#[test]
+fn identity_projection_is_clipped_and_preserves_overlapping_contributors() {
+    let a = spanning_object("a");
+    let b = spanning_object("b");
+    let coordinate = WorldHex::new(16, 0).chunk();
+    let a = a
+        .influence(coordinate)
+        .expect("projection")
+        .expect("foreign contribution");
+    let b = b
+        .influence(coordinate)
+        .expect("projection")
+        .expect("foreign contribution");
+    assert_eq!(a.occupancy.len(), 1);
+    assert_eq!(a.occupancy, b.occupancy);
+    assert_ne!(a.source_fingerprint, b.source_fingerprint);
+    assert_eq!(
+        union_object_occupancy(&[a.clone(), b.clone()]).expect("union"),
+        a.occupancy
+    );
+    assert_eq!(
+        union_object_occupancy(std::slice::from_ref(&b)).expect("survivor"),
+        a.occupancy
+    );
+    let mut conflicting = b;
+    conflicting
+        .occupancy
+        .first_mut()
+        .expect("column")
+        .runs
+        .first_mut()
+        .expect("run")
+        .material = "water".into();
+    assert!(union_object_occupancy(&[a, conflicting]).is_err());
+}
+
+#[test]
+fn source_seal_rejects_reserved_identity_but_runtime_chunk_admission_accepts_it() {
+    let mut package = world(WorldHex::new(15, 0), 1);
+    let object = spanning_object(&runtime_object_id("add-tree", 0).expect("allocated"));
+    package
+        .chunks
+        .get_mut(&object.origin.column.chunk())
+        .expect("owner")
+        .semantics
+        .objects
+        .push(object.clone());
+    assert!(package.seal().is_err());
+    for coordinate in object.dependency_chunks().expect("dependencies") {
+        let chunk = package.chunks.get_mut(&coordinate).expect("chunk");
+        chunk.semantics.object_influences = vec![object
+            .influence(coordinate)
+            .expect("projection")
+            .expect("member")];
+        chunk.semantics.occupancy =
+            union_object_occupancy(&chunk.semantics.object_influences).expect("union");
+        chunk.seal().expect("runtime package");
+        chunk
+            .validate_against_manifest(&package.manifest)
+            .expect("runtime admission permits allocated identity");
+    }
+}
+
+#[test]
+fn clipped_object_forgery_fails_local_or_complete_projection_validation() {
+    let mut package = world(WorldHex::new(15, 0), 1);
+    let object = spanning_object("tree");
+    package
+        .chunks
+        .get_mut(&object.origin.column.chunk())
+        .expect("owner")
+        .semantics
+        .objects
+        .push(object.clone());
+    package.seal().expect("source");
+    let foreign = WorldHex::new(16, 0).chunk();
+    let chunk = package.chunks.get_mut(&foreign).expect("foreign");
+    chunk
+        .semantics
+        .object_influences
+        .first_mut()
+        .expect("identity")
+        .source_fingerprint ^= 1;
+    chunk
+        .seal()
+        .expect("foreign full hash is checked at world boundary");
+    package
+        .manifest
+        .chunks
+        .iter_mut()
+        .find(|row| row.coordinate == foreign)
+        .expect("descriptor")
+        .fingerprint = chunk.fingerprint;
+    package.manifest.seal().expect("manifest");
+    assert!(package.validate().is_err());
+    let root = package
+        .chunks
+        .get_mut(&object.origin.column.chunk())
+        .expect("root");
+    root.semantics
+        .object_influences
+        .first_mut()
+        .expect("identity")
+        .source_fingerprint ^= 1;
+    root.seal().expect("structural seal");
+    assert!(root.validate_against_manifest(&package.manifest).is_err());
+}
+
+#[test]
+fn object_transactions_require_canonical_exact_dependencies_and_allocated_new_ids() {
+    let object = spanning_object("tree");
+    let mut transaction = WorldObjectEditTransaction {
+        id: "remove".into(),
+        expected_revisions: object
+            .dependency_chunks()
+            .expect("dependencies")
+            .into_iter()
+            .map(|chunk| (chunk, 3))
+            .collect(),
+        edits: vec![ObjectEdit {
+            before: Some(object.clone()),
+            after: None,
+        }],
+    };
+    transaction.validate().expect("removal");
+    let saved = transaction.expected_revisions.clone();
+    transaction.expected_revisions.pop_last();
+    assert!(transaction.validate().is_err());
+    transaction.expected_revisions = saved;
+    transaction
+        .edits
+        .push(transaction.edits.first().expect("edit").clone());
+    assert!(transaction.validate().is_err());
+    transaction.edits = vec![ObjectEdit {
+        before: None,
+        after: Some(object),
+    }];
+    assert!(transaction.validate().is_err());
+    transaction
+        .edits
+        .first_mut()
+        .expect("edit")
+        .after
+        .as_mut()
+        .expect("after")
+        .id = runtime_object_id("remove", 0).expect("id");
+    transaction.validate().expect("allocated addition");
+    let wire = ron::ser::to_string(&transaction).expect("wire");
+    let decoded: WorldObjectEditTransaction = ron::from_str(&wire).expect("shape");
+    decoded.validate().expect("command");
+    assert_eq!(decoded, transaction);
+    transaction
+        .edits
+        .first_mut()
+        .expect("edit")
+        .after
+        .as_mut()
+        .expect("after")
+        .id = runtime_object_id("other-command", 0).expect("id");
+    assert!(transaction.validate().is_err());
 }

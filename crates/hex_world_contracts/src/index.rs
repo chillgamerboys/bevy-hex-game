@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{
-    ChunkId, ContractError, FeatureSummary, MaterialSpec, RegionDescriptor, WorldHex, WorldManifest,
+    BoundarySample, ChunkId, ContractError, FeatureSummary, MaterialSpec, RegionDescriptor,
+    WorldHex, WorldManifest,
 };
 
 /// Validated immutable catalogue indexes shared by chunk producers and consumers.
@@ -15,6 +16,7 @@ use crate::{
 pub struct ManifestIndex {
     manifest: Arc<WorldManifest>,
     regions_by_chunk: BTreeMap<ChunkId, Vec<usize>>,
+    boundaries_by_column: BTreeMap<WorldHex, Vec<(usize, usize)>>,
 }
 
 impl ManifestIndex {
@@ -22,9 +24,21 @@ impl ManifestIndex {
     pub fn new(manifest: Arc<WorldManifest>) -> Result<Self, ContractError> {
         manifest.validate()?;
         let regions_by_chunk = crate::validation::validate_chunk_catalogue(&manifest)?;
+        let mut boundaries_by_column: BTreeMap<WorldHex, Vec<(usize, usize)>> = BTreeMap::new();
+        for (boundary_index, boundary) in manifest.boundaries.iter().enumerate() {
+            for (sample_index, sample) in boundary.samples.iter().enumerate() {
+                for column in [sample.a, sample.b] {
+                    boundaries_by_column
+                        .entry(column)
+                        .or_default()
+                        .push((boundary_index, sample_index));
+                }
+            }
+        }
         Ok(Self {
             manifest,
             regions_by_chunk,
+            boundaries_by_column,
         })
     }
 
@@ -81,6 +95,20 @@ impl ManifestIndex {
             .binary_search_by(|entry| entry.id.as_str().cmp(id))
             .ok()
             .and_then(|index| self.manifest.features.get(index))
+    }
+
+    /// Exact authored boundary contracts touching one changed column, without a world scan.
+    pub fn boundary_samples_at(&self, column: WorldHex) -> impl Iterator<Item = &BoundarySample> {
+        self.boundaries_by_column
+            .get(&column)
+            .into_iter()
+            .flatten()
+            .filter_map(|(boundary, sample)| {
+                self.manifest
+                    .boundaries
+                    .get(*boundary)
+                    .and_then(|boundary| boundary.samples.get(*sample))
+            })
     }
 
     pub(crate) fn validate_source_position(
