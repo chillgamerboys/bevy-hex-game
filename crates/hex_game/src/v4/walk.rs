@@ -3,7 +3,7 @@
 //! This module never moves an actor or changes terrain directly. The composition
 //! root calls it before its ordinary movement/edit systems, once per update.
 
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use std::{collections::BTreeMap, fs::File, io::Read, path::Path, time::Instant};
 
 use bevy::prelude::Resource;
 use hex_world_contracts::{ChunkId, QueryResult, VoxelPosition, WorldHex, WorldQuery};
@@ -169,6 +169,8 @@ pub(super) struct WalkHarness {
     cursor: usize,
     ticks: u64,
     step_started: u64,
+    started_at: Option<Instant>,
+    step_started_at: Option<Instant>,
     checked: bool,
     pending: Option<PendingOperation>,
     issued_moves: BTreeMap<String, (VoxelPosition, VoxelPosition)>,
@@ -259,6 +261,8 @@ impl WalkHarness {
             cursor: 0,
             ticks: 0,
             step_started: 0,
+            started_at: None,
+            step_started_at: None,
             checked: false,
             pending: None,
             issued_moves: BTreeMap::new(),
@@ -326,11 +330,15 @@ impl WalkHarness {
         if let Some(error) = &session.error {
             return Err(format!("walk {}: explorer failed: {error}", self.script.id));
         }
+        let now = Instant::now();
+        self.started_at.get_or_insert(now);
         self.ticks += 1;
         if self.ticks > self.script.max_ticks {
             return Err(format!(
-                "walk {} exceeded its total tick budget at step {}",
-                self.script.id, self.cursor
+                "walk {} exceeded its total tick budget at step {}; state={}",
+                self.script.id,
+                self.cursor,
+                self.timeout_state(session, runtime)
             ));
         }
         self.seen_resident
@@ -343,12 +351,15 @@ impl WalkHarness {
             .clone();
         if self.step_started == 0 {
             self.step_started = self.ticks;
+            self.step_started_at = Some(now);
         }
         let elapsed = self.ticks - self.step_started;
         if step.budget().is_some_and(|budget| elapsed >= budget) {
             return Err(format!(
-                "walk {} step {} timed out: {step:?}",
-                self.script.id, self.cursor
+                "walk {} step {} timed out: {step:?}; state={}",
+                self.script.id,
+                self.cursor,
+                self.timeout_state(session, runtime)
             ));
         }
         let finished = self
@@ -358,12 +369,67 @@ impl WalkHarness {
             self.record(step, session, runtime);
             self.cursor += 1;
             self.step_started = 0;
+            self.step_started_at = None;
             self.pending = None;
             if self.cursor == self.script.steps.len() && self.verified_moves == 0 {
                 return Err("walk completed no successful exact movement observation".into());
             }
         }
         Ok(())
+    }
+
+    /// Failure diagnostics remain bounded and describe ordinary controller state.
+    /// Wall clocks are evidence only; the script's tick-budget semantics are unchanged.
+    fn timeout_state(&self, session: &Session, runtime: &WorldRuntime) -> String {
+        let actors = session
+            .actors
+            .iter()
+            .take(8)
+            .map(|actor| {
+                serde_json::json!({
+                    "id": actor.id,
+                    "standing": actor.standing,
+                    "motion_from": actor.motion.map(|motion| motion.from),
+                    "motion_to": actor.motion.map(|motion| motion.to),
+                    "motion_fraction": actor.motion.map(|motion| motion.fraction),
+                    "queued_steps": actor.route.len(),
+                    "next_step": actor.route.front(),
+                    "last_step": actor.route.back(),
+                    "turn_steps": actor.turn_steps,
+                    "pending_goal": actor.requested.as_ref().map(|request| request.goal),
+                    "waiting_chunks": actor.requested.as_ref().map_or(0, |request| request.waiting.len()),
+                    "waiting_chunk_preview": actor.requested.as_ref().map(|request| request.waiting.iter().take(8).copied().collect::<Vec<_>>()),
+                    "motion_pinned": actor.pinned,
+                    "planning_pinned": actor.planning_pinned,
+                })
+            })
+            .collect::<Vec<_>>();
+        let counts = runtime.counts();
+        serde_json::json!({
+            "tick": self.ticks,
+            "step": self.cursor,
+            "total_tick_budget": self.script.max_ticks,
+            "step_tick_budget": self.script.steps.get(self.cursor).and_then(WalkStep::budget),
+            "step_elapsed_ticks": (self.step_started != 0).then(|| self.ticks.saturating_sub(self.step_started)),
+            "walk_elapsed_seconds": self.started_at.map(|start| start.elapsed().as_secs_f64()),
+            "step_elapsed_seconds": self.step_started_at.map(|start| start.elapsed().as_secs_f64()),
+            "session_elapsed_seconds": session.started.elapsed().as_secs_f64(),
+            "session_status": session.status.chars().take(512).collect::<String>(),
+            "actors": actors,
+            "actor_count": session.actors.len(),
+            "resident_chunks": counts.resident_chunks,
+            "queued_chunks": counts.queued_chunks,
+            "loading_chunks": counts.in_flight_jobs,
+            "pinned_chunks": counts.pinned_chunks,
+            "successful_saves": session.successful_saves,
+            "gameplay_revision": session.gameplay_revision,
+            "successful_object_edits": session.successful_object_edits,
+            "object_request_pending": session.object_edit_requested.is_some(),
+            "object_removal_pending": session.object_removal.is_some(),
+            "completed_steps": self.receipts.len(),
+            "verified_moves": self.verified_moves,
+        })
+        .to_string()
     }
 
     fn execute(
@@ -962,10 +1028,33 @@ pub(in crate::v4) mod tests {
         );
         walk.tick(&mut session, &mut runtime).expect("first wait");
         walk.tick(&mut session, &mut runtime).expect("bounded wait");
-        assert!(walk
+        let failure = walk
             .tick(&mut session, &mut runtime)
-            .expect_err("controller was not run")
-            .contains("timed out"));
+            .expect_err("controller was not run");
+        assert!(failure.contains("timed out"));
+        let (_, state) = failure
+            .split_once("; state=")
+            .expect("actual timeout facts");
+        let facts: serde_json::Value = serde_json::from_str(state).expect("structured state");
+        let actual = facts
+            .get("actors")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|actors| actors.first())
+            .expect("actor diagnostic");
+        assert_eq!(
+            actual.get("standing"),
+            Some(&serde_json::json!(position(14)))
+        );
+        assert_eq!(
+            actual.get("pending_goal"),
+            Some(&serde_json::json!(position(17)))
+        );
+        assert_eq!(actual.get("queued_steps"), Some(&serde_json::json!(0)));
+        assert_eq!(facts.get("step_elapsed_ticks"), Some(&serde_json::json!(2)));
+        assert!(facts
+            .get("step_elapsed_seconds")
+            .and_then(serde_json::Value::as_f64)
+            .is_some_and(|seconds| seconds >= 0.0));
         assert!(!walk.completed());
     }
 
