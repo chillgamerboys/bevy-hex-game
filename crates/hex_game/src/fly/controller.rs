@@ -263,7 +263,15 @@ impl Body {
             ));
         }
         if self.grounded {
-            self.last_safe = self.position;
+            // A wide body may still touch a ledge after its center passes it.
+            // Recovery must return to support beneath the feet, rather than
+            // saving that marginal overhang as the next safe landing.
+            if world
+                .ground(self.position, height, 0.0, SKIN * 8.0)
+                .is_some()
+            {
+                self.last_safe = self.position;
+            }
             // Buffered landing jumps fire on the very next fixed tick.
             if !was_grounded {
                 self.coyote = settings.coyote_seconds;
@@ -285,12 +293,9 @@ impl Body {
                 settings.body_levels * level,
                 settings.body_radius,
             ) {
-                if let Some(ground) = world.ground(
-                    candidate,
-                    settings.body_levels * level,
-                    settings.body_radius,
-                    SKIN * 8.0,
-                ) {
+                if let Some(ground) =
+                    world.ground(candidate, settings.body_levels * level, 0.0, SKIN * 8.0)
+                {
                     if world.water_depth(ground, settings.body_radius)
                         <= settings.wade_levels * level + SKIN * 4.0
                     {
@@ -754,6 +759,30 @@ mod tests {
             recovered && body.grounded && body.position.y > 2.99,
             "{body:?}"
         );
+    }
+
+    #[test]
+    fn recovery_does_not_save_a_bodys_marginal_ledge_contact() {
+        let world = floor(0);
+        let mut body = Body::new(Vec3::ZERO);
+        advance(
+            &mut body,
+            &world,
+            Intent {
+                direction: Vec3::X,
+                ..default()
+            },
+            40,
+        );
+        assert!(body.grounded);
+        assert!(world.ground(body.position, 0.8, 0.0, 0.001).is_none());
+        assert!(world.ground(body.last_safe, 0.8, 0.0, 0.001).is_some());
+        let safe = body.last_safe;
+        body.position.y = world.floor - 1.0;
+        assert!(body
+            .tick(Intent::default(), &settings(), 0.4, &world)
+            .is_some());
+        assert!(body.position.distance(safe) < 0.001);
     }
 
     #[test]
