@@ -16,8 +16,10 @@ The walking owner's frozen nine-commit handoff through `95b2274` is integrated h
 The combined hero passes strict generation, independent original-route preservation,
 intake/river/bridge/tunnel geometry and 84 Walking/launch checks. Full workspace
 Clippy passes. Inherited representative-seed terrain failures keep the map gate red;
-the first exact-head 19-frame review found level-water stripes and one obstructed camera.
-Their repairs, final recapture, sampled animation and native motion/play evidence remain pending. This candidate
+the first exact-head review found level-water stripes and an obstructed camera.
+The shader and capture teardown are repaired; public hero publication/export and the refreshed
+camera-script contracts pass. Final exact-head capture/animation and CI receipts are tracked on
+PR #219, with native motion/play evidence still pending. This candidate
 has not been delivered to `dev`; the current gate is in the
 [Grand V3 map manifest](waves/grand-v3-map/manifest.md).
 

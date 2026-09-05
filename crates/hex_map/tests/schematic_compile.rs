@@ -160,9 +160,9 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
         ("exported Snapshot V1", exported_snapshot_fingerprint),
     );
     let expected_fingerprints = (
-        ("compiled semantic plan", Some(0x617e_db14_f9e5_72b1)),
-        ("materialized map", 0x1e41_dc04_f9da_c0df),
-        ("exported Snapshot V1", 0xc994_a636_2a71_1576),
+        ("compiled semantic plan", Some(0x2929_4c79_400f_865e)),
+        ("materialized map", 0x8fcf_4662_ac5b_93e8),
+        ("exported Snapshot V1", 0xc929_2402_a372_f3b2),
     );
     assert_eq!(
         actual_fingerprints, expected_fingerprints,
@@ -179,10 +179,10 @@ fn assert_hero_camera_anchor_positions(compiled: &CompiledSchematicMap) {
         ("grand_v3.coastal_bridge", (-5, 91, 10)),
         ("grand_v3.valley_bridge", (80, 10, 15)),
         ("grand_v3.valley_lake", (66, -10, 20)),
-        ("grand_v3.natural_pass", (143, -144, 111)),
-        ("grand_v3.massif", (0, -44, 107)),
-        ("grand_v3.peak_saddle", (97, -147, 151)),
-        ("grand_v3.mountain_lake", (77, -77, 151)),
+        ("grand_v3.natural_pass", (-16, -123, 161)),
+        ("grand_v3.massif", (-1, -44, 139)),
+        ("grand_v3.peak_saddle", (119, -147, 160)),
+        ("grand_v3.mountain_lake", (65, -68, 227)),
         ("grand_v3.frozen_woods", (44, -132, 150)),
         ("grand_v3.tunnel_mouth", (22, 31, 7)),
         ("grand_v3.tunnel_midpoint", (22, -47, 6)),

@@ -34,8 +34,10 @@ checks, and the preceding candidate's final hero route, hydrology and tunnel con
 The current tunnel narrows its protected-shell segment to the repaired four-wide core
 while retaining the ceiling increase and legal symmetric expansion. Inherited seed-zero
 Massif and alternate-seed terrain constraints still block the representative gate;
-thresholds and protected routes remain unchanged. The final head receives hosted
-combined checks and local windowless GPU review.
+thresholds and protected routes remain unchanged. The public hero publication/export and refreshed camera-manifest/itinerary checks pass after
+independent geometry and fingerprint verification. The corrected matrix has 28 static views
+and a separate 48-phase water sequence. Exact final receipts are tracked on PR #219;
+hosted combined gates and native review remain mandatory.
 
 ## Approved foundation
 
