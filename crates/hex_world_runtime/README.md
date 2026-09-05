@@ -100,6 +100,27 @@ checkpointing releases them. Only a bounded recent durable transaction-body cach
 stays in memory. `history_counts` separates light history metadata, recent bodies,
 and unsaved bodies. Restoring a long history loads no transaction bodies.
 
+## Atomic owner checkpoint attachments
+
+`save_with_attachments(root, limits, updates)` and
+`apply_transaction_durable_with_attachments(transaction, root, limits, updates)`
+commit opaque owner bytes in the same atomic head as terrain. The delta variant
+has the same boundary. An `AttachmentUpdate` supplies an owner namespace, key,
+expected prior fingerprint, and replacement bytes. `None` bytes explicitly delete;
+unmentioned keys survive ordinary saves and durable edits. Immutable body files
+are bounded by `max_chunk_bytes`, update batches by `max_transaction_bytes`, and
+update counts by `RuntimeConfig::max_attachment_updates`.
+
+`attachment(owner, key)` reads one verified body from the last committed/restored
+head. Payloads remain on disk otherwise. The owner must decode and validate its
+format before applying gameplay state; the runtime never interprets actors or
+encounters. Compare-and-write detects actor-only stale writers. Terrain transaction
+IDs bind the exact attachment request, so altered retries fail and exact old retries
+cannot roll back later actor movement. Previously committed terrain-only IDs cannot
+retroactively acquire attachments. A failure before the head switch preserves both
+the prior terrain and prior owner references, including when new immutable bodies
+have already been flushed.
+
 ## Principal-private knowledge and reconnect
 
 `KnowledgeStore::open(root, &manifest, limits, config)` reads metadata only.

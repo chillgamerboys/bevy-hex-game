@@ -2120,3 +2120,355 @@ fn knowledge_and_workspace_reject_symlink_parent_escapes_before_writing() {
         0
     );
 }
+
+fn attachment_update(
+    key: &str,
+    expected_fingerprint: Option<u64>,
+    bytes: Option<&[u8]>,
+) -> AttachmentUpdate {
+    AttachmentUpdate {
+        owner: "gameplay".into(),
+        key: key.into(),
+        expected_fingerprint,
+        bytes: bytes.map(<[u8]>::to_vec),
+    }
+}
+
+#[test]
+fn terrain_and_actor_attachments_publish_under_one_head_and_failure_preserves_both() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let save = temp.child("save");
+    let mut runtime = make_runtime(package.clone());
+    load(&mut runtime, vec![interest("a", at, 0, 0)]);
+    runtime
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[attachment_update(
+                "actors",
+                None,
+                Some(b"standing at old support"),
+            )],
+        )
+        .expect("initial actor checkpoint");
+    let old = runtime
+        .attachment("gameplay", "actors")
+        .expect("read")
+        .expect("actors");
+    let old_head = fs::read(save.join("current.ron")).expect("initial head");
+    let updates = vec![attachment_update(
+        "actors",
+        Some(old.fingerprint),
+        Some(b"standing at revised support"),
+    )];
+    let command = edit("terrain-and-actor", voxel(at, 2), 0, Some("stone"));
+    let limits = IoLimits {
+        max_manifest_bytes: old_head.len(),
+        ..IoLimits::default()
+    };
+    assert!(runtime
+        .apply_transaction_durable_with_attachments(&command, &save, limits, &updates)
+        .is_err());
+    assert_eq!(
+        fs::read(save.join("current.ron")).expect("unchanged head"),
+        old_head
+    );
+    assert_eq!(runtime.revision(at.chunk()), Some(0));
+    assert_eq!(runtime.voxel(voxel(at, 2)), QueryResult::Ready(None));
+    assert_eq!(
+        runtime
+            .attachment("gameplay", "actors")
+            .expect("unchanged actors"),
+        Some(old.clone())
+    );
+    assert_eq!(
+        fs::read_dir(save.join("attachments"))
+            .expect("prepared immutable bodies")
+            .count(),
+        2,
+        "failure occurs after immutable preparation, before the head switch"
+    );
+    let mut restored = make_runtime(package.clone());
+    restored
+        .restore_save(&save, IoLimits::default())
+        .expect("restore previous complete head");
+    assert_eq!(
+        restored
+            .attachment("gameplay", "actors")
+            .expect("previous actor body"),
+        Some(old)
+    );
+    load(&mut restored, vec![interest("a", at, 0, 0)]);
+    assert_eq!(restored.voxel(voxel(at, 2)), QueryResult::Ready(None));
+    runtime
+        .apply_transaction_durable_with_attachments(&command, &save, IoLimits::default(), &updates)
+        .expect("atomic retry");
+    let mut restored = make_runtime(package);
+    restored
+        .restore_save(&save, IoLimits::default())
+        .expect("new complete head");
+    assert_eq!(
+        restored
+            .attachment("gameplay", "actors")
+            .expect("new actors")
+            .expect("body")
+            .bytes,
+        b"standing at revised support"
+    );
+    load(&mut restored, vec![interest("a", at, 0, 0)]);
+    assert_eq!(
+        restored.voxel(voxel(at, 2)),
+        QueryResult::Ready(Some("stone".into()))
+    );
+}
+
+#[test]
+fn attachment_cas_is_owner_local_and_ordinary_checkpoints_retain_durable_keys() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let save = temp.child("save");
+    let mut first = make_runtime(package.clone());
+    first
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[
+                attachment_update("party-a", None, Some(b"a1")),
+                attachment_update("party-b", None, Some(b"b1")),
+            ],
+        )
+        .expect("initial owners");
+    let mut stale = make_runtime(package.clone());
+    stale
+        .restore_save(&save, IoLimits::default())
+        .expect("second owner snapshot");
+    let a1 = first
+        .attachment("gameplay", "party-a")
+        .expect("read")
+        .expect("a1");
+    first
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[attachment_update(
+                "party-a",
+                Some(a1.fingerprint),
+                Some(b"a2"),
+            )],
+        )
+        .expect("next actor checkpoint");
+    assert!(stale
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[attachment_update(
+                "party-a",
+                Some(a1.fingerprint),
+                Some(b"stale actor")
+            )]
+        )
+        .is_err());
+    stale
+        .save(&save, IoLimits::default())
+        .expect("ordinary save retains latest locked owner head");
+    assert_eq!(
+        stale
+            .attachment("gameplay", "party-a")
+            .expect("retained")
+            .expect("a2")
+            .bytes,
+        b"a2"
+    );
+    assert_eq!(
+        stale
+            .attachment("gameplay", "party-b")
+            .expect("unrelated")
+            .expect("b1")
+            .bytes,
+        b"b1"
+    );
+    let a2 = stale
+        .attachment("gameplay", "party-a")
+        .expect("read")
+        .expect("a2");
+    stale
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[attachment_update("party-a", Some(a2.fingerprint), None)],
+        )
+        .expect("explicit removal");
+    assert_eq!(
+        stale.attachment("gameplay", "party-a").expect("removed"),
+        None
+    );
+    stale
+        .save(temp.child("copy"), IoLimits::default())
+        .expect("copy preserves remaining opaque body");
+    let mut copied = make_runtime(package);
+    copied
+        .restore_save(temp.child("copy"), IoLimits::default())
+        .expect("copy restore");
+    assert_eq!(
+        copied
+            .attachment("gameplay", "party-b")
+            .expect("copied")
+            .expect("b1")
+            .bytes,
+        b"b1"
+    );
+}
+
+#[test]
+fn durable_transaction_retries_bind_actor_payloads_and_never_roll_back_later_movement() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let save = temp.child("save");
+    let mut runtime = make_runtime(package.clone());
+    load(&mut runtime, vec![interest("a", at, 0, 0)]);
+    let command = edit("combined", voxel(at, 2), 0, Some("stone"));
+    let updates = vec![attachment_update("actors", None, Some(b"after edit"))];
+    let result = runtime
+        .apply_transaction_durable_with_attachments(&command, &save, IoLimits::default(), &updates)
+        .expect("combined commit");
+    let actor = runtime
+        .attachment("gameplay", "actors")
+        .expect("read")
+        .expect("actor");
+    runtime
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[attachment_update(
+                "actors",
+                Some(actor.fingerprint),
+                Some(b"later movement"),
+            )],
+        )
+        .expect("actor only progress");
+    let mut restored = make_runtime(package);
+    restored
+        .restore_save(&save, IoLimits::default())
+        .expect("restore idempotency binding");
+    assert_eq!(
+        restored
+            .apply_transaction_durable_with_attachments(
+                &command,
+                &save,
+                IoLimits::default(),
+                &updates
+            )
+            .expect("exact duplicate"),
+        result
+    );
+    assert_eq!(
+        restored
+            .attachment("gameplay", "actors")
+            .expect("later movement retained")
+            .expect("actor")
+            .bytes,
+        b"later movement"
+    );
+    assert!(restored
+        .apply_transaction_durable_with_attachments(
+            &command,
+            &save,
+            IoLimits::default(),
+            &[attachment_update("actors", None, Some(b"altered retry"))]
+        )
+        .is_err());
+    restored
+        .apply_transaction_durable(&command, &save, IoLimits::default())
+        .expect("ordinary duplicate retains actors");
+    load(&mut restored, vec![interest("a", at, 0, 0)]);
+    let plain = edit("plain", voxel(at, 2), 1, None);
+    restored
+        .apply_transaction_durable(&plain, &save, IoLimits::default())
+        .expect("plain terrain commit");
+    assert!(restored
+        .apply_transaction_durable_with_attachments(
+            &plain,
+            &save,
+            IoLimits::default(),
+            &[attachment_update(
+                "new-owner",
+                None,
+                Some(b"retroactive payload")
+            )]
+        )
+        .is_err());
+}
+
+#[test]
+fn attachment_budgets_and_corruption_fail_without_interpreting_owner_bytes() {
+    let at = point(1, 1);
+    let package = world(&[(at, 0)]);
+    let temp = TempRoot::new();
+    let save = temp.child("save");
+    let mut runtime = WorldRuntime::new(
+        Arc::new(MemoryChunkSource::new(package.clone()).expect("source")),
+        RuntimeConfig {
+            max_attachment_updates: 1,
+            ..RuntimeConfig::default()
+        },
+    )
+    .expect("runtime");
+    assert!(runtime
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[
+                attachment_update("a", None, Some(b"a")),
+                attachment_update("b", None, Some(b"b"))
+            ]
+        )
+        .is_err());
+    assert!(runtime
+        .save_with_attachments(
+            &save,
+            IoLimits {
+                max_chunk_bytes: 1,
+                ..IoLimits::default()
+            },
+            &[attachment_update("a", None, Some(b"too large"))]
+        )
+        .is_err());
+    assert!(runtime
+        .save_with_attachments(
+            &save,
+            IoLimits {
+                max_transaction_bytes: 1,
+                ..IoLimits::default()
+            },
+            &[attachment_update("a", None, Some(b"too large"))]
+        )
+        .is_err());
+    assert!(!save.join("current.ron").exists());
+    runtime
+        .save_with_attachments(
+            &save,
+            IoLimits::default(),
+            &[attachment_update(
+                "a",
+                None,
+                Some(b"opaque-ron-or-json-or-binary"),
+            )],
+        )
+        .expect("opaque bytes");
+    let file = fs::read_dir(save.join("attachments"))
+        .expect("files")
+        .next()
+        .expect("file")
+        .expect("entry")
+        .path();
+    fs::write(file, b"corrupt").expect("corrupt body");
+    let mut restored = make_runtime(package);
+    restored
+        .restore_save(&save, IoLimits::default())
+        .expect("metadata-only restore");
+    assert!(restored.attachment("gameplay", "a").is_err());
+}

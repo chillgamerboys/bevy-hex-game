@@ -5,6 +5,7 @@
 //! caller pumps completed jobs and publishes the returned immutable products into
 //! its own engine; this crate never owns a renderer, combat clock, or ECS schedule.
 
+mod attachments;
 mod disclosure;
 mod edits;
 mod history;
@@ -13,6 +14,7 @@ mod persistence;
 mod runtime;
 mod source;
 
+pub use attachments::{AttachmentUpdate, CheckpointAttachment};
 pub use disclosure::{
     AuthorizedInterest, DisclosureConfig, DisclosureStream, KnowledgeAck,
     KnowledgeCheckpointCursor, KnowledgeCheckpointPage, KnowledgeReplay, SequencedKnowledgeBatch,

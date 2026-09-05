@@ -36,6 +36,8 @@ pub struct RuntimeConfig {
     pub max_pin_owners: usize,
     /// Maximum modified partitions awaiting a durable checkpoint, resident or not.
     pub max_unsaved_chunks: usize,
+    /// Maximum opaque owner keys explicitly changed by one checkpoint operation.
+    pub max_attachment_updates: usize,
     /// Maximum serialized body bytes for one terrain transaction.
     pub max_transaction_bytes: usize,
     /// Maximum uncheckpointed transaction identities with resident bodies.
@@ -59,6 +61,7 @@ impl Default for RuntimeConfig {
             max_edits_per_transaction: 4096,
             max_pin_owners: 256,
             max_unsaved_chunks: 256,
+            max_attachment_updates: 64,
             max_transaction_bytes: 8 * 1024 * 1024,
             max_unsaved_transactions: 256,
             max_unsaved_transaction_bytes: 32 * 1024 * 1024,
@@ -151,6 +154,8 @@ pub struct WorldRuntime {
     pub(crate) history_order: VecDeque<String>,
     pub(crate) unsaved_transactions: BTreeSet<String>,
     pub(crate) unsaved_transaction_bytes: usize,
+    pub(crate) attachments: crate::attachments::AttachmentLocations,
+    pub(crate) attachment_bindings: BTreeMap<String, u64>,
     pub(crate) manifest_index: Arc<ManifestIndex>,
     interests: Vec<ResidencyRequest>,
     desired: BTreeMap<ChunkId, u8>,
@@ -179,6 +184,7 @@ impl WorldRuntime {
             || config.max_edits_per_transaction == 0
             || config.max_pin_owners == 0
             || config.max_unsaved_chunks == 0
+            || config.max_attachment_updates == 0
             || config.max_transaction_bytes == 0
             || config.max_unsaved_transactions == 0
             || config.max_unsaved_transaction_bytes == 0
@@ -208,6 +214,8 @@ impl WorldRuntime {
             history_order: VecDeque::new(),
             unsaved_transactions: BTreeSet::new(),
             unsaved_transaction_bytes: 0,
+            attachments: BTreeMap::new(),
+            attachment_bindings: BTreeMap::new(),
             manifest_index,
             interests: Vec::new(),
             desired: BTreeMap::new(),
@@ -463,7 +471,7 @@ impl WorldRuntime {
                 "source belongs to a different world",
             ));
         }
-        if !self.transactions.is_empty()
+        if (!self.transactions.is_empty() || !self.attachments.is_empty())
             && source.manifest().fingerprint != self.manifest.fingerprint
         {
             return Err(RuntimeError::new(

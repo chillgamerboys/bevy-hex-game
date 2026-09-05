@@ -15,13 +15,18 @@ use hex_world_contracts::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    attachments::{
+        AttachmentBinding, AttachmentDescriptor, AttachmentLocation, AttachmentLocations,
+        AttachmentPlan,
+    },
     edits::{exact_column_mut, StagedEdit},
     history::{HistoryEntry, JournalDescriptor},
     source::{
         checked_existing_path, checked_relative_path, encode_bounded, read_bounded,
         read_bytes_bounded, sync_directory, write_new,
     },
-    CancellationToken, ErrorKind, IoLimits, RuntimeError, RuntimeResult, WorldRuntime,
+    AttachmentUpdate, CancellationToken, ErrorKind, IoLimits, RuntimeError, RuntimeResult,
+    WorldRuntime,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +178,7 @@ impl OverlayLocation {
 }
 
 struct CheckpointLocations {
+    attachments: AttachmentPlan,
     overlays: BTreeMap<ChunkId, OverlayLocation>,
     journals: BTreeMap<String, (JournalDescriptor, PathBuf, IoLimits)>,
 }
@@ -186,6 +192,8 @@ struct SaveHead {
     // Vectors keep duplicate wire keys observable rather than silently overwriting.
     partitions: Vec<OverlayDescriptor>,
     transactions: Vec<JournalDescriptor>,
+    attachments: Vec<AttachmentDescriptor>,
+    attachment_bindings: Vec<AttachmentBinding>,
     fingerprint: u64,
 }
 
@@ -217,6 +225,32 @@ impl SaveHead {
                 "save head contains duplicate or unordered identities",
             ));
         }
+        crate::knowledge::ensure_ordered(
+            self.attachments
+                .iter()
+                .map(|entry| (&entry.owner, &entry.key)),
+            "checkpoint attachment identities",
+        )?;
+        crate::knowledge::ensure_ordered(
+            self.attachment_bindings
+                .iter()
+                .map(|entry| &entry.transaction_id),
+            "checkpoint attachment bindings",
+        )?;
+        for descriptor in &self.attachments {
+            descriptor.validate(usize::MAX)?;
+        }
+        for binding in &self.attachment_bindings {
+            if self
+                .transactions
+                .binary_search_by(|transaction| transaction.id.cmp(&binding.transaction_id))
+                .is_err()
+            {
+                return Err(RuntimeError::invalid(
+                    "attachment binding has no terrain transaction",
+                ));
+            }
+        }
         for descriptor in &self.partitions {
             let _path = checked_relative_path(Path::new("."), &descriptor.path)?;
             if descriptor.revision == 0 {
@@ -238,7 +272,18 @@ impl WorldRuntime {
     /// Unchanged partition content keeps its exact path and is never rewritten.
     /// Historical orphan content is retained; garbage collection is a separate job.
     pub fn save(&mut self, root: impl AsRef<Path>, limits: IoLimits) -> RuntimeResult<()> {
-        let locations = self.checkpoint(root.as_ref(), limits, None)?;
+        self.save_with_attachments(root, limits, &[])
+    }
+
+    /// Atomically checkpoints terrain and opaque owner updates under one durable head.
+    /// Unmentioned keys are retained; compare-and-write expectations prevent stale updates.
+    pub fn save_with_attachments(
+        &mut self,
+        root: impl AsRef<Path>,
+        limits: IoLimits,
+        updates: &[AttachmentUpdate],
+    ) -> RuntimeResult<()> {
+        let locations = self.checkpoint(root.as_ref(), limits, None, updates)?;
         self.demote_persisted_unloaded(locations);
         Ok(())
     }
@@ -251,8 +296,19 @@ impl WorldRuntime {
         root: impl AsRef<Path>,
         limits: IoLimits,
     ) -> RuntimeResult<WorldChange> {
+        self.apply_transaction_durable_with_attachments(transaction, root, limits, &[])
+    }
+
+    /// Commits terrain and owner bytes together; transaction retries bind the exact owner request.
+    pub fn apply_transaction_durable_with_attachments(
+        &mut self,
+        transaction: &WorldEditTransaction,
+        root: impl AsRef<Path>,
+        limits: IoLimits,
+        updates: &[AttachmentUpdate],
+    ) -> RuntimeResult<WorldChange> {
         let staged = self.stage_transaction(transaction)?;
-        let locations = self.checkpoint(root.as_ref(), limits, Some(&staged))?;
+        let locations = self.checkpoint(root.as_ref(), limits, Some(&staged), updates)?;
         let change = self.commit_edit(staged);
         self.demote_persisted_unloaded(locations);
         Ok(change)
@@ -266,8 +322,19 @@ impl WorldRuntime {
         root: impl AsRef<Path>,
         limits: IoLimits,
     ) -> RuntimeResult<WorldChange> {
+        self.apply_delta_durable_with_attachments(delta, root, limits, &[])
+    }
+
+    /// Applies a delta and opaque owner updates in the same durable checkpoint before ACK.
+    pub fn apply_delta_durable_with_attachments(
+        &mut self,
+        delta: &crate::WorldDelta,
+        root: impl AsRef<Path>,
+        limits: IoLimits,
+        updates: &[AttachmentUpdate],
+    ) -> RuntimeResult<WorldChange> {
         let staged = self.stage_delta(delta)?;
-        let locations = self.checkpoint(root.as_ref(), limits, Some(&staged))?;
+        let locations = self.checkpoint(root.as_ref(), limits, Some(&staged), updates)?;
         let change = self.commit_edit(staged);
         self.demote_persisted_unloaded(locations);
         Ok(change)
@@ -308,6 +375,24 @@ impl WorldRuntime {
                 "save belongs to a different compiled world",
             ));
         }
+        let mut attachments = AttachmentLocations::new();
+        for descriptor in head.attachments {
+            descriptor.validate(limits.max_chunk_bytes)?;
+            let _safe = checked_existing_path(&root, &descriptor.path)?;
+            attachments.insert(
+                (descriptor.owner.clone(), descriptor.key.clone()),
+                AttachmentLocation {
+                    root: root.clone(),
+                    descriptor,
+                    limits,
+                },
+            );
+        }
+        let attachment_bindings = head
+            .attachment_bindings
+            .into_iter()
+            .map(|binding| (binding.transaction_id, binding.request_fingerprint))
+            .collect();
         let mut overlays = BTreeMap::new();
         for descriptor in head.partitions {
             if self
@@ -367,6 +452,8 @@ impl WorldRuntime {
                 "saved partition has no matching latest journal revision",
             ));
         }
+        self.attachments = attachments;
+        self.attachment_bindings = attachment_bindings;
         self.persisted = overlays.clone();
         self.overlays = overlays;
         self.transactions = transactions;
@@ -379,6 +466,8 @@ impl WorldRuntime {
     }
 
     fn demote_persisted_unloaded(&mut self, locations: CheckpointLocations) {
+        self.attachments = locations.attachments.locations;
+        self.attachment_bindings = locations.attachments.bindings;
         self.persisted = locations.overlays.clone();
         self.dirty.clear();
         for (coordinate, location) in locations.overlays {
@@ -403,6 +492,7 @@ impl WorldRuntime {
         root: &Path,
         limits: IoLimits,
         staged: Option<&StagedEdit>,
+        updates: &[AttachmentUpdate],
     ) -> RuntimeResult<CheckpointLocations> {
         fs::create_dir_all(root).map_err(RuntimeError::io)?;
         let root = root.canonicalize().map_err(RuntimeError::io)?;
@@ -426,6 +516,10 @@ impl WorldRuntime {
                 format!("save already has a writer or cannot be locked: {error}"),
             )
         })?;
+        let mut attachment_plan = AttachmentPlan {
+            locations: self.attachments.clone(),
+            bindings: self.attachment_bindings.clone(),
+        };
         if root.join("current.ron").exists() {
             let path = checked_existing_path(&root, "current.ron")?;
             let existing: SaveHead = read_bounded(
@@ -442,6 +536,26 @@ impl WorldRuntime {
                     "save destination already belongs to another compiled world",
                 ));
             }
+            // The locked destination is authoritative for owner-only updates by other writers.
+            attachment_plan.locations = existing
+                .attachments
+                .iter()
+                .map(|descriptor| {
+                    (
+                        (descriptor.owner.clone(), descriptor.key.clone()),
+                        AttachmentLocation {
+                            root: root.clone(),
+                            descriptor: descriptor.clone(),
+                            limits,
+                        },
+                    )
+                })
+                .collect();
+            attachment_plan.bindings = existing
+                .attachment_bindings
+                .iter()
+                .map(|binding| (binding.transaction_id.clone(), binding.request_fingerprint))
+                .collect();
             for descriptor in &existing.transactions {
                 let fingerprint = self
                     .transactions
@@ -471,6 +585,13 @@ impl WorldRuntime {
                 }
             }
         }
+        let attachment_plan = self.prepare_attachments(
+            &root,
+            limits,
+            updates,
+            staged.map(|edit| edit.journal.id.as_str()),
+            attachment_plan,
+        )?;
         let partition_directory = root.join("partitions");
         let journal_directory = root.join("transactions");
         fs::create_dir_all(&partition_directory).map_err(RuntimeError::io)?;
@@ -596,6 +717,19 @@ impl WorldRuntime {
             manifest_fingerprint: self.manifest.fingerprint,
             partitions: descriptors,
             transactions,
+            attachments: attachment_plan
+                .locations
+                .values()
+                .map(|location| location.descriptor.clone())
+                .collect(),
+            attachment_bindings: attachment_plan
+                .bindings
+                .iter()
+                .map(|(transaction_id, request_fingerprint)| AttachmentBinding {
+                    transaction_id: transaction_id.clone(),
+                    request_fingerprint: *request_fingerprint,
+                })
+                .collect(),
             fingerprint: 0,
         };
         head.fingerprint = head.expected_fingerprint()?;
@@ -609,6 +743,7 @@ impl WorldRuntime {
             .map_err(RuntimeError::io)?;
         sync_directory(&root)?;
         Ok(CheckpointLocations {
+            attachments: attachment_plan,
             overlays: locations,
             journals,
         })
