@@ -48,6 +48,8 @@ pub mod terrain_reconciliation;
 pub mod trajectories;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
+/// Bounded, availability-aware motion over the shared V4 world queries.
+pub mod v4;
 /// Turning a spell's shape into the exact voxels it reaches.
 pub mod volumes;
 
