@@ -6,7 +6,7 @@
     AwaitTerrain,
     Key("H"),
     AssertCameraMode(Map),
-    Settle(120),
+    Settle(30),
     Capture("00-grand-v3-map-overview"),
     Key("Backspace"),
     AwaitScreen("Title"),
