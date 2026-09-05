@@ -2019,6 +2019,7 @@ fn combined_terrain_mesh(
     )
 }
 
+#[cfg(test)]
 fn combined_terrain_mesh_with_edge(
     runs: &[PendingTerrainRun],
     projected_columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
@@ -3027,8 +3028,11 @@ mod tests {
         let current =
             terrain_material(Color::srgb(0.2, 0.4, 0.7), ReviewMaterialTreatment::Current);
         assert_eq!(current.base_color, expected.base_color);
-        assert_eq!(current.perceptual_roughness, expected.perceptual_roughness);
-        assert_eq!(current.metallic, expected.metallic);
+        assert_eq!(
+            current.perceptual_roughness.to_bits(),
+            expected.perceptual_roughness.to_bits()
+        );
+        assert_eq!(current.metallic.to_bits(), expected.metallic.to_bits());
 
         for treatment in [
             ReviewMaterialTreatment::MatteTerrain,
@@ -3036,8 +3040,8 @@ mod tests {
         ] {
             let matte = terrain_material(Color::srgb(0.2, 0.4, 0.7), treatment);
             assert_eq!(matte.base_color, expected.base_color);
-            assert_eq!(matte.perceptual_roughness, 1.0);
-            assert_eq!(matte.metallic, 0.0);
+            assert_eq!(matte.perceptual_roughness.to_bits(), 1.0_f32.to_bits());
+            assert_eq!(matte.metallic.to_bits(), 0.0_f32.to_bits());
         }
     }
 
@@ -3066,8 +3070,9 @@ mod tests {
             materials
                 .get(&matte)
                 .expect("matte replacement remains resident")
-                .perceptual_roughness,
-            1.0,
+                .perceptual_roughness
+                .to_bits(),
+            1.0_f32.to_bits(),
         );
     }
 

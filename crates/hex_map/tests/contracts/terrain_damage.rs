@@ -1,14 +1,5 @@
 //! Runtime contracts for map-owned voxel toughness and terrain impacts.
 
-#![expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixtures should fail these integration tests immediately"
-)]
-#![expect(
-    clippy::panic,
-    reason = "contract fixtures fail immediately when their required shape is absent"
-)]
-
 use bevy::ecs::message::MessageCursor;
 
 use super::*;
@@ -218,7 +209,9 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
     let grid_before = current_grid(&mut app);
     let affected_chunk = terrain_chunk_key(target.coord);
     let chunks_before = terrain_chunk_roots(&mut app);
-    let affected_root_before = chunks_before[&affected_chunk];
+    let affected_root_before = *chunks_before
+        .get(&affected_chunk)
+        .expect("affected chunk exists before damage");
     let mut cursor = app
         .world()
         .resource::<Messages<TerrainImpactOutcome>>()
@@ -278,12 +271,19 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
     );
     let chunks_after = terrain_chunk_roots(&mut app);
     assert_ne!(
-        chunks_after[&affected_chunk], affected_root_before,
+        *chunks_after
+            .get(&affected_chunk)
+            .expect("affected chunk remains after damage"),
+        affected_root_before,
         "destruction must atomically replace its affected chunk root"
     );
     for (chunk, root) in chunks_before {
         if chunk != affected_chunk {
-            assert_eq!(chunks_after[&chunk], root, "unaffected chunk {chunk:?}");
+            assert_eq!(
+                *chunks_after.get(&chunk).expect("unaffected chunk remains"),
+                root,
+                "unaffected chunk {chunk:?}"
+            );
         }
     }
     assert_current_snapshot_matches_live_export(&app, "destructive terrain damage");

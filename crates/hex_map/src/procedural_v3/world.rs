@@ -2219,7 +2219,11 @@ mod tests {
         let mut plan = complete_stacked_plan();
         let observation = TilePos::new(hex_core::HexCoord::ORIGIN, 6);
         assert_ne!(
-            plan.volume.surfaces[&observation].access,
+            plan.volume
+                .surfaces
+                .get(&observation)
+                .expect("fixture observation surface")
+                .access,
             SurfaceAccess::Ordinary
         );
         plan.observation_anchors
@@ -2353,24 +2357,28 @@ mod tests {
         type Mutator = fn(&mut GeneratedWorldPlan);
         let cases: &[(WorldIssueCode, Mutator)] = &[
             (WorldIssueCode::Volume, |plan| {
-                let VolumeElement::Solid(mass) = &mut plan
+                let VolumeElement::Solid(mass) = plan
                     .volume
                     .columns
                     .get_mut(&hex_core::HexCoord::ORIGIN)
                     .expect("fixture has its column")
-                    .elements[1]
+                    .elements
+                    .get_mut(1)
+                    .expect("fixture cutaway element")
                 else {
                     panic!("fixture has its cutaway solid");
                 };
                 mass.levels.bottom = 2;
             }),
             (WorldIssueCode::Volume, |plan| {
-                let VolumeElement::Solid(mass) = &mut plan
+                let VolumeElement::Solid(mass) = plan
                     .volume
                     .columns
                     .get_mut(&hex_core::HexCoord::ORIGIN)
                     .expect("fixture has its column")
-                    .elements[2]
+                    .elements
+                    .get_mut(2)
+                    .expect("fixture grass element")
                 else {
                     panic!("fixture has its grass cap");
                 };

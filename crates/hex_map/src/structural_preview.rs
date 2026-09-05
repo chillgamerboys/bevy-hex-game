@@ -341,7 +341,7 @@ pub fn build_grand_v3_structural_preview(
     let (waterfall_centerline, waterfall_gorge_rows) = match waterfall_evidence {
         Ok(evidence) => evidence,
         Err(error) if grand_v3_structural_review_draft_enabled() => {
-            eprintln!(
+            bevy::log::warn!(
                 "Grand V3 structural-review draft: omitting incomplete waterfall evidence: {error}"
             );
             (Vec::new(), Vec::new())
@@ -548,10 +548,31 @@ fn peak_chain_sections(
                 .copied()
                 .unwrap_or(summit);
             let tangent = if previous.coord == next.coord {
-                delta(
-                    centers[summit_index.saturating_sub(1)],
-                    centers[(summit_index + 1).min(centers.len().saturating_sub(1))],
-                )
+                let previous_center = centers
+                    .get(summit_index.saturating_sub(1))
+                    .copied()
+                    .ok_or_else(|| {
+                        StructuralPreviewError(format!(
+                            "peak chain {} lost the previous center for summit {}",
+                            index + 1,
+                            summit_index + 1
+                        ))
+                    })?;
+                let next_center = centers
+                    .get(
+                        summit_index
+                            .saturating_add(1)
+                            .min(centers.len().saturating_sub(1)),
+                    )
+                    .copied()
+                    .ok_or_else(|| {
+                        StructuralPreviewError(format!(
+                            "peak chain {} lost the next center for summit {}",
+                            index + 1,
+                            summit_index + 1
+                        ))
+                    })?;
+                delta(previous_center, next_center)
             } else {
                 delta(previous.coord, next.coord)
             };
@@ -585,14 +606,34 @@ fn peak_chain_sections(
             ));
         }
 
-        for saddle_index in 0..region_ids.len().saturating_sub(1) {
-            let first_region = region_ids[saddle_index];
-            let second_region = region_ids[saddle_index + 1];
+        for (saddle_index, (first_region, second_region)) in region_ids
+            .iter()
+            .copied()
+            .zip(region_ids.iter().copied().skip(1))
+            .enumerate()
+        {
+            let first_summit = summit_pins.get(saddle_index).copied().ok_or_else(|| {
+                StructuralPreviewError(format!(
+                    "peak chain {} lost the first summit for saddle {}",
+                    index + 1,
+                    saddle_index + 1
+                ))
+            })?;
+            let second_summit = summit_pins
+                .get(saddle_index.saturating_add(1))
+                .copied()
+                .ok_or_else(|| {
+                    StructuralPreviewError(format!(
+                        "peak chain {} lost the second summit for saddle {}",
+                        index + 1,
+                        saddle_index + 1
+                    ))
+                })?;
             let (first, second) = exact_interpeak_saddle(
                 first_region,
                 second_region,
-                summit_pins[saddle_index],
-                summit_pins[saddle_index + 1],
+                first_summit,
+                second_summit,
                 fields,
             )?;
             let transverse_axis = delta(first.coord, second.coord);
@@ -1134,7 +1175,7 @@ fn semantic_three_lane_centerline(
         },
     );
     let mut result = Vec::with_capacity(raw_path.len());
-    for (index, (position, _)) in raw_path.iter().copied().enumerate() {
+    for (index, (position, raw_liquid)) in raw_path.iter().copied().enumerate() {
         let previous = raw_path
             .get(index.saturating_sub(2))
             .or_else(|| raw_path.get(index.saturating_sub(1)))
@@ -1144,8 +1185,7 @@ fn semantic_three_lane_centerline(
             .or_else(|| raw_path.get(index.saturating_add(1)))
             .map_or(position.coord, |entry| entry.0.coord);
         let tangent = if previous == next {
-            raw_path[index]
-                .1
+            raw_liquid
                 .downstream
                 .map_or((0, 1), |downstream| delta(position.coord, downstream.coord))
         } else {
@@ -1171,19 +1211,16 @@ fn semantic_three_lane_centerline(
                 row.center
             }
             Err(_error)
-                if index > 0
-                    && index.saturating_add(1) < raw_path.len()
-                    && raw_path[index.saturating_sub(1)]
-                        .0
-                        .coord
-                        .distance(position.coord)
-                        == 1
-                    && position
-                        .coord
-                        .distance(raw_path[index.saturating_add(1)].0.coord)
-                        == 1
-                    && raw_path[index.saturating_sub(1)].0.level >= position.level
-                    && position.level >= raw_path[index.saturating_add(1)].0.level =>
+                if index
+                    .checked_sub(1)
+                    .and_then(|previous_index| raw_path.get(previous_index))
+                    .zip(raw_path.get(index.saturating_add(1)))
+                    .is_some_and(|((previous, _), (next, _))| {
+                        previous.coord.distance(position.coord) == 1
+                            && position.coord.distance(next.coord) == 1
+                            && previous.level >= position.level
+                            && position.level >= next.level
+                    }) =>
             {
                 // A normalized high-drop bend can collapse the three semantic
                 // lanes into two adjacent rows joined by one exact directed
@@ -1206,9 +1243,13 @@ fn semantic_three_lane_centerline(
         })?;
         result.push((semantic_center, liquid));
     }
-    if result.windows(2).any(|pair| {
-        pair[0].0.coord.distance(pair[1].0.coord) > 1 || pair[1].0.level > pair[0].0.level
-    }) {
+    if result
+        .iter()
+        .zip(result.iter().skip(1))
+        .any(|(first, second)| {
+            first.0.coord.distance(second.0.coord) > 1 || second.0.level > first.0.level
+        })
+    {
         return Err(StructuralPreviewError(
             "waterfall semantic center rows skip a fine-grid row or climb upstream".to_owned(),
         ));
@@ -2181,7 +2222,13 @@ mod tests {
         let raw = centers
             .iter()
             .copied()
-            .map(|position| (position, liquids[&position]))
+            .map(|position| {
+                let liquid = liquids
+                    .get(&position)
+                    .copied()
+                    .expect("every authored center was inserted into the liquid fixture");
+                (position, liquid)
+            })
             .collect::<Vec<_>>();
 
         let semantic = semantic_three_lane_centerline(&raw, &liquids)

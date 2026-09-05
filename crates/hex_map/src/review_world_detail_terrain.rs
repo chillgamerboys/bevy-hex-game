@@ -1104,8 +1104,7 @@ fn plan_props(
                 b"review-props-grass-litter",
             ) {
                 let kind = if surface_hash(input.seed, b"review-props-litter-kind", surface.pos, 0)
-                    % 5
-                    == 0
+                    .is_multiple_of(5)
                 {
                     ReviewPropKindV1::Deadwood
                 } else {
@@ -1305,11 +1304,11 @@ fn plan_clustered_props(
     }
 }
 
-fn mesh_batch<'a>(
-    batches: &'a mut BTreeMap<MeshBatchKey, MeshBatchBuilder>,
+fn mesh_batch(
+    batches: &mut BTreeMap<MeshBatchKey, MeshBatchBuilder>,
     key: MeshBatchKey,
     color: [f32; 4],
-) -> &'a mut MeshBatchBuilder {
+) -> &mut MeshBatchBuilder {
     batches
         .entry(key)
         .or_insert_with(|| MeshBatchBuilder::new(key, color))
@@ -2370,31 +2369,33 @@ mod tests {
 
     #[test]
     fn concrete_batches_are_finite_aligned_and_wound_to_their_normals() {
-        let mut profile = ReviewWorldDetailProfileV1::default();
-        profile.snow = SnowDetailV1::TerrainAware {
-            vertical_shell_height: 0.08,
-        };
-        profile.alpine_vegetation = AlpineVegetationDetailV1::ScaleJitterWithDust {
-            horizontal_min: 0.90,
-            horizontal_max: 1.10,
-            vertical_min: 0.95,
-            vertical_max: 1.05,
-            upper_fraction: 0.25,
-            shell_height: 0.02,
-        };
-        profile.cliff_strata = CliffStrataDetailV1::StrataWithValue {
-            period_levels: 32,
-            width_levels: 3,
-            contrast: 0.08,
-            phase_variation_levels: 4,
-            correlation_hexes: 22,
-            value_delta: -0.08,
-        };
-        profile.terrain_props = TerrainPropsDetailV1::Mixed {
-            boulder_density: 0.0012,
-            tuft_density: 0.0030,
-            deadwood_density: 0.0005,
-            cap: 500,
+        let profile = ReviewWorldDetailProfileV1 {
+            snow: SnowDetailV1::TerrainAware {
+                vertical_shell_height: 0.08,
+            },
+            alpine_vegetation: AlpineVegetationDetailV1::ScaleJitterWithDust {
+                horizontal_min: 0.90,
+                horizontal_max: 1.10,
+                vertical_min: 0.95,
+                vertical_max: 1.05,
+                upper_fraction: 0.25,
+                shell_height: 0.02,
+            },
+            cliff_strata: CliffStrataDetailV1::StrataWithValue {
+                period_levels: 32,
+                width_levels: 3,
+                contrast: 0.08,
+                phase_variation_levels: 4,
+                correlation_hexes: 22,
+                value_delta: -0.08,
+            },
+            terrain_props: TerrainPropsDetailV1::Mixed {
+                boulder_density: 0.0012,
+                tuft_density: 0.0030,
+                deadwood_density: 0.0005,
+                cap: 500,
+            },
+            ..ReviewWorldDetailProfileV1::default()
         };
         let input = fixture(35);
         let plan = plan_review_terrain_details(&profile, &input)

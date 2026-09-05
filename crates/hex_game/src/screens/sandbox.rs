@@ -1344,6 +1344,15 @@ type DeploymentTileQuery<'w, 's> = Query<
     With<HexTile>,
 >;
 
+/// Registers the real Finalize adapter for the renderer-free launch ownership test.
+#[cfg(all(test, feature = "dev", feature = "map-review"))]
+pub(crate) fn install_headless_launch_finalize_for_test(app: &mut App) {
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        enter_deployment.in_set(GameplaySetup::Finalize),
+    );
+}
+
 fn enter_deployment(
     mut commands: Commands,
     session: Option<Res<DeploymentSession>>,

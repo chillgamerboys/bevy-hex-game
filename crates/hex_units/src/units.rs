@@ -1717,10 +1717,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "a rejected SystemState fixture is an exact unit-test setup failure"
-    )]
     fn combined_mesh_pointer_target_resolves_to_the_exact_logical_run() {
         let mut world = World::new();
         let coord = HexCoord::from_axial(2, -1);

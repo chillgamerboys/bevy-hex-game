@@ -405,7 +405,7 @@ fn materialization_profile_checkpoint(
 ) {
     if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
         let now = std::time::Instant::now();
-        eprintln!(
+        bevy::log::info!(
             "v3 materialization profile: {stage}: delta={:?} total={:?}",
             now.duration_since(*previous),
             now.duration_since(started)

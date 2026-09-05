@@ -63,7 +63,9 @@ pub mod review_world_detail_effects;
 #[cfg(feature = "map-review")]
 mod review_world_detail_render;
 #[cfg(feature = "map-review")]
-pub use review_world_detail_render::{ReviewWorldDetailEntity, ReviewWorldDetailLifecycleSystems};
+pub use review_world_detail_render::{
+    ReviewSuppressedWaterMaterial, ReviewWorldDetailEntity, ReviewWorldDetailLifecycleSystems,
+};
 /// Pure terrain-attached projections for world-detail review.
 #[cfg(feature = "map-review")]
 pub(crate) mod review_world_detail_terrain;
@@ -81,6 +83,9 @@ mod world_snapshot;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use hex_schematic::SchematicPlanV1;
+/// Original liquid material type exposed for strict review binding checks.
+#[cfg(feature = "map-review")]
+pub use liquid_render::LiquidMaterial as ReviewLiquidMaterial;
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
     CavesMetrics as CavesReportMetrics, CrystalAscentMetrics as CrystalAscentReportMetrics,

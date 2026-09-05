@@ -2370,9 +2370,14 @@ fn plan_fog(
             coverage: *coverage,
         });
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "The density mask has at most 1024 samples, exactly representable as f32; this fraction is renderer evidence"
+    )]
+    let measured_fraction = active_samples as f32 / sample_count as f32;
     builder.effect_validation.fog_coverage = Some(ReviewFogCoverageEvidenceV1 {
         target_fraction: *coverage,
-        measured_fraction: active_samples as f32 / sample_count as f32,
+        measured_fraction,
         sample_count,
         active_samples,
         fog_volumes: bounded_u32(builder.fog_volumes.len()),
@@ -3593,7 +3598,13 @@ mod tests {
         assert_eq!(curtain_bottom(&source, ReviewHexSideV1::East, &input), None);
         let edges = shoreline_edges(&input);
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].land, cliff.position);
+        assert_eq!(
+            edges
+                .first()
+                .expect("the containing cliff owns one shoreline edge")
+                .land,
+            cliff.position,
+        );
 
         let wet = atomic_profiles("shore-")
             .into_iter()
@@ -3639,7 +3650,11 @@ mod tests {
 
         let edges = shoreline_edges(&input);
         assert_eq!(edges.len(), 1);
-        assert!(immediate_water_bank(&edges[0]));
+        assert!(immediate_water_bank(
+            edges
+                .first()
+                .expect("the raised bank owns one shoreline edge")
+        ));
 
         let wet = atomic_profiles("shore-")
             .into_iter()
@@ -4427,7 +4442,13 @@ mod tests {
             ("fog-03-valley-light", "fog-04-valley-heavy"),
             ("fog-05-mixed", "fog-06-mixed-cinematic"),
         ] {
-            assert!(active_samples_by_id[light] < active_samples_by_id[heavy]);
+            let light_samples = active_samples_by_id
+                .get(light)
+                .expect("the light fog profile retains its active sample count");
+            let heavy_samples = active_samples_by_id
+                .get(heavy)
+                .expect("the heavy fog profile retains its active sample count");
+            assert!(light_samples < heavy_samples);
         }
     }
 

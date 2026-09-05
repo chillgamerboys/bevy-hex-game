@@ -153,7 +153,11 @@ impl LocalPatchFrame {
             center,
             scale: max_distance.min(12),
             rotation: rotation % 6,
-            compose_presentation_rotation: kind.is_composite(),
+            // Ring7 retains its shipped recipe-owned presentation orientation.
+            compose_presentation_rotation: matches!(
+                kind,
+                LayoutKind::Ring19 | LayoutKind::Macro | LayoutKind::Schematic
+            ),
         })
     }
 

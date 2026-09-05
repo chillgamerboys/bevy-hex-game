@@ -100,9 +100,12 @@ struct SelectedInnerPeakTransitAdmission {
 impl SelectedInnerPeakTransitAdmission {
     fn is_retained_by(&self, route: &[TilePos]) -> bool {
         let retains_portal = |portal: BoundaryPortal| {
-            route
-                .windows(2)
-                .any(|pair| pair[0].coord == portal.from && pair[1].coord == portal.to)
+            route.windows(2).any(|pair| {
+                let [first, second] = pair else {
+                    return false;
+                };
+                first.coord == portal.from && second.coord == portal.to
+            })
         };
         retains_portal(self.ingress)
             && retains_portal(self.egress)
@@ -604,7 +607,7 @@ pub(super) fn compile_inner_peak_ledge(
     let suffix_ids = main_ids
         .get(5..)
         .ok_or_else(|| schematic_contract("inner peak route lost its authored suffix"))?;
-    let transit_authorities = vec![ordered_inner_peak_transit_authority(
+    let transit_authorities = [ordered_inner_peak_transit_authority(
         &patch_masks,
         ordered_transit_spine,
         &route_search_allowed,
@@ -685,15 +688,17 @@ pub(super) fn compile_inner_peak_ledge(
                 transit_authority,
                 &mut transit_search_budget,
             );
-            let Ok(centerline) = search else {
-                if diagnostics.len() < 8 {
-                    diagnostics.push(format!(
-                        "{junction:?} transit-{transit_index}/{}: {}",
-                        transit_authority.runway_domain.len(),
-                        search.unwrap_err()
-                    ));
+            let centerline = match search {
+                Ok(centerline) => centerline,
+                Err(error) => {
+                    if diagnostics.len() < 8 {
+                        diagnostics.push(format!(
+                            "{junction:?} transit-{transit_index}/{}: {error}",
+                            transit_authority.runway_domain.len(),
+                        ));
+                    }
+                    continue;
                 }
-                continue;
             };
             let transit_admission =
                 match transit_authority.validate_route(&centerline, &patch_masks) {
@@ -754,7 +759,7 @@ pub(super) fn compile_inner_peak_ledge(
                     // centerline selected by the bounded solver, but omit only its
                     // unfinished nine-level shoulder. Normal generation never
                     // takes this path and remains fail-closed.
-                    eprintln!(
+                    bevy::log::warn!(
                         "Grand V3 structural-review draft: omitting inner-peak ledge shoulder: {diagnostic}"
                     );
                     let route_levels = centerline
@@ -836,12 +841,9 @@ pub(super) fn compile_inner_peak_ledge(
             ))
         })?;
         let position = TilePos::new(*coord, level);
-        let current = volume
-            .top_surface_at_coord(*coord)
-            .map(|(surface, metadata)| (surface, metadata))
-            .ok_or_else(|| {
-                schematic_contract(format!("inner peak ledge lost source surface at {coord:?}"))
-            })?;
+        let current = volume.top_surface_at_coord(*coord).ok_or_else(|| {
+            schematic_contract(format!("inner peak ledge lost source surface at {coord:?}"))
+        })?;
         if current.0 != position {
             let biome = fine_index.biome(*coord).ok_or_else(|| {
                 schematic_contract(format!("inner peak ledge {coord:?} has no biome owner"))
@@ -1320,7 +1322,13 @@ fn compile_upper_ledge_side_branch(
         let mut attachments = trunk
             .centerline
             .windows(2)
-            .flat_map(|pair| [(pair[0], pair[1]), (pair[1], pair[0])])
+            .filter_map(|pair| {
+                let [first, second] = pair else {
+                    return None;
+                };
+                Some([(*first, *second), (*second, *first)])
+            })
+            .flatten()
             .filter(|(shared_start, junction)| {
                 source_mask.contains(&shared_start.coord)
                     && source_mask.contains(&junction.coord)
@@ -1418,14 +1426,14 @@ fn compile_upper_ledge_side_branch(
                 Some(junction.level),
                 Some(&bounds),
             );
-            let Ok(centerline) = search else {
-                if attempts.len().saturating_sub(source_attempt_start) < 6 {
-                    attempts.push(format!(
-                        "source={source_id} junction={junction:?}: {}",
-                        search.unwrap_err()
-                    ));
+            let centerline = match search {
+                Ok(value) => value,
+                Err(error) => {
+                    if attempts.len().saturating_sub(source_attempt_start) < 6 {
+                        attempts.push(format!("source={source_id} junction={junction:?}: {error}"));
+                    }
+                    continue;
                 }
-                continue;
             };
             if centerline.len() < 2
                 || centerline
@@ -1451,14 +1459,14 @@ fn compile_upper_ledge_side_branch(
                 planned_saddles_remain_scenic(component, &graded.all_levels(), volume)?;
                 Ok(graded)
             });
-            let Ok(graded) = grading else {
-                if attempts.len().saturating_sub(source_attempt_start) < 6 {
-                    attempts.push(format!(
-                        "source={source_id} junction={junction:?}: {}",
-                        grading.unwrap_err()
-                    ));
+            let graded = match grading {
+                Ok(value) => value,
+                Err(error) => {
+                    if attempts.len().saturating_sub(source_attempt_start) < 6 {
+                        attempts.push(format!("source={source_id} junction={junction:?}: {error}"));
+                    }
+                    continue;
                 }
-                continue;
             };
             let prospective_centerline = std::iter::once(shared_start)
                 .chain(centerline.iter().copied())
@@ -1502,7 +1510,6 @@ fn compile_upper_ledge_side_branch(
             "{label} has no dry Upper-only one-junction branch into cell {expected_id} outside exact feature/highland authority: {}",
             std::iter::once(format!("target-exclusions=(water,occupied,feature,high-band,summit,upper-ordinary)={target_exclusion_summary:?}"))
                 .chain(source_summaries)
-                .into_iter()
                 .chain(attempts)
                 .collect::<Vec<_>>()
                 .join("; ")
@@ -1857,8 +1864,10 @@ fn inner_peak_suffix_reachability(
             let width = i64::from(maximum)
                 .saturating_sub(i64::from(minimum))
                 .saturating_add(1);
-            let width = usize::try_from(width).map_err(|_| {
-                format!("inner peak suffix bounds at {coord:?} exceed addressable state space")
+            let width = usize::try_from(width).map_err(|error| {
+                format!(
+                    "inner peak suffix bounds at {coord:?} exceed addressable state space: {error}"
+                )
             })?;
             possible_states = possible_states.saturating_add(width);
         }
@@ -1987,8 +1996,11 @@ fn inner_peak_suffix_reachability(
         .iter()
         .filter_map(|(state, distance)| (state.stage == 0).then_some((state.position, *distance)))
         .collect::<BTreeMap<_, _>>();
-    let reachable_by_stage = (0..sequence.len())
-        .map(|stage| {
+    let reachable_by_stage = sequence
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(stage, patch)| {
             let states = distances
                 .keys()
                 .filter(|state| state.stage == stage)
@@ -1996,7 +2008,7 @@ fn inner_peak_suffix_reachability(
             let levels = states.iter().map(|state| state.position.level);
             let minimum = levels.clone().min();
             let maximum = levels.max();
-            (sequence[stage], states.len(), minimum, maximum)
+            (patch, states.len(), minimum, maximum)
         })
         .collect::<Vec<_>>();
     let egress_diagnostic = egress
@@ -2030,7 +2042,13 @@ fn inner_peak_suffix_reachability(
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Regression fixtures retain the alternate transit search; production uses ordered_inner_peak_transit_authority."
+    )
+)]
 fn inner_peak_transit_authorities(
     masks: &BTreeMap<PatchId, BTreeSet<HexCoord>>,
     saddle_swaths: &BTreeMap<(PatchId, PatchId), BTreeSet<HexCoord>>,
@@ -2223,20 +2241,32 @@ fn ordered_inner_peak_transit_authority(
         });
     if authored.centerline.len() < 2
         || runway_domain.len() != authored.centerline.len()
-        || authored
-            .centerline
-            .windows(2)
-            .any(|pair| pair[0].distance(pair[1]) != 1)
+        || authored.centerline.windows(2).any(|pair| {
+            let [first, second] = pair else {
+                return true;
+            };
+            first.distance(*second) != 1
+        })
         || has_chord
         || authored_grade_coords != runway_domain
         || authored.centerline.windows(2).any(|pair| {
-            authored.authored_grades[&pair[0]].abs_diff(authored.authored_grades[&pair[1]]) > 1
+            let [first, second] = pair else {
+                return true;
+            };
+            authored
+                .authored_grades
+                .get(first)
+                .zip(authored.authored_grades.get(second))
+                .is_none_or(|(first_level, second_level)| first_level.abs_diff(*second_level) > 1)
         })
         || runway_domain.iter().any(|coord| {
             !owner_mask.contains(coord)
                 || !route_search_allowed.contains(coord)
                 || route_bounds.get(coord).is_none_or(|(minimum, maximum)| {
-                    !(*minimum..=*maximum).contains(&authored.authored_grades[coord])
+                    authored
+                        .authored_grades
+                        .get(coord)
+                        .is_none_or(|level| !(*minimum..=*maximum).contains(level))
                 })
         })
     {
@@ -2268,7 +2298,11 @@ fn ordered_inner_peak_transit_authority(
                         && to_minimum <= from_maximum.saturating_add(1)
                 })
     };
-    let first = authored.centerline[0];
+    let first = authored
+        .centerline
+        .first()
+        .copied()
+        .ok_or_else(|| schematic_contract("ordered inner-peak transit lost its ingress"))?;
     let last = *authored
         .centerline
         .last()
@@ -2415,8 +2449,19 @@ fn ordered_inner_peak_transit_authority(
             authored
                 .centerline
                 .iter()
-                .map(|coord| TilePos::new(*coord, authored.authored_grades[coord]))
-                .collect(),
+                .map(|coord| {
+                    authored
+                        .authored_grades
+                        .get(coord)
+                        .copied()
+                        .map(|level| TilePos::new(*coord, level))
+                        .ok_or_else(|| {
+                            schematic_contract(format!(
+                                "ordered inner-peak transit lost its authored grade at {coord:?}"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         ),
     })
 }
@@ -2785,8 +2830,12 @@ fn segmented_inner_peak_route_ranked(
             "inner peak route sequence does not retain the exact 58->59->36 transit contract: {sequence:?}"
         ));
     }
-    let prefix_sequence = &sequence[..=transit_stage];
-    let suffix_sequence = &sequence[transit_stage..];
+    let prefix_sequence = sequence
+        .get(..=transit_stage)
+        .ok_or_else(|| "inner peak transit prefix is outside the authored sequence".to_owned())?;
+    let suffix_sequence = sequence
+        .get(transit_stage..)
+        .ok_or_else(|| "inner peak transit suffix is outside the authored sequence".to_owned())?;
     if prefix_sequence.len() < 2 || suffix_sequence.len() < 2 {
         return Err("inner peak transit split produced an empty prefix or suffix".to_owned());
     }
@@ -2972,9 +3021,12 @@ fn segmented_inner_peak_route_ranked(
             continue;
         };
         if prefix_handoff != handoff
-            || !prefix
-                .windows(2)
-                .any(|pair| pair[0].coord == ingress.from && pair[1].coord == ingress.to)
+            || !prefix.windows(2).any(|pair| {
+                let [first, second] = pair else {
+                    return false;
+                };
+                first.coord == ingress.from && second.coord == ingress.to
+            })
         {
             if diagnostics.len() < 8 {
                 diagnostics.push(format!(
@@ -2993,8 +3045,10 @@ fn segmented_inner_peak_route_ranked(
             .collect::<BTreeSet<_>>();
         if coordinates.len() != route.len()
             || route.windows(2).any(|pair| {
-                pair[0].coord.distance(pair[1].coord) != 1
-                    || pair[0].level.abs_diff(pair[1].level) > 1
+                let [first, second] = pair else {
+                    return true;
+                };
+                first.coord.distance(second.coord) != 1 || first.level.abs_diff(second.level) > 1
             })
         {
             if diagnostics.len() < 8 {
@@ -3971,9 +4025,12 @@ fn exact_recovered_route_is_valid(
     let exact_owner_trace = owner_stages.is_some_and(|owners| {
         owners.first() == Some(&0)
             && owners.last() == Some(&final_stage)
-            && owners
-                .windows(2)
-                .all(|pair| pair[0] <= pair[1] && pair[1].saturating_sub(pair[0]) <= 1)
+            && owners.windows(2).all(|pair| {
+                let [first, second] = pair else {
+                    return false;
+                };
+                first <= second && second.saturating_sub(*first) <= 1
+            })
     });
     route
         .iter()
@@ -3981,12 +4038,18 @@ fn exact_recovered_route_is_valid(
         .collect::<BTreeSet<_>>()
         .len()
         == route.len()
-        && route
-            .windows(2)
-            .all(|pair| pair[0].coord.distance(pair[1].coord) == 1)
-        && route
-            .windows(2)
-            .all(|pair| pair[0].level.abs_diff(pair[1].level) <= 1)
+        && route.windows(2).all(|pair| {
+            let [first, second] = pair else {
+                return false;
+            };
+            first.coord.distance(second.coord) == 1
+        })
+        && route.windows(2).all(|pair| {
+            let [first, second] = pair else {
+                return false;
+            };
+            first.level.abs_diff(second.level) <= 1
+        })
         && route.iter().all(|position| {
             bounds
                 .get(&position.coord)
@@ -4112,8 +4175,10 @@ fn exact_simple_stage_runways(
         route.push(TilePos::new(portal.to, to_level));
         (route.first().copied() == Some(start)
             && route.windows(2).all(|pair| {
-                pair[0].coord.distance(pair[1].coord) == 1
-                    && pair[0].level.abs_diff(pair[1].level) <= 1
+                let [first, second] = pair else {
+                    return false;
+                };
+                first.coord.distance(second.coord) == 1 && first.level.abs_diff(second.level) <= 1
             }))
         .then_some(route)
     }
@@ -5103,7 +5168,9 @@ mod tests {
         ));
 
         let mut scoped_allowed = allowed.clone();
-        let patch_59 = &masks[&INNER_PEAK_TRANSIT_PATCH];
+        let patch_59 = masks
+            .get(&INNER_PEAK_TRANSIT_PATCH)
+            .expect("transit fixture retains Patch59");
         scoped_allowed
             .retain(|coord| !patch_59.contains(coord) || transit.runway_domain.contains(coord));
         let mut search_budget = InnerPeakTransitSearchBudget::new();
@@ -5177,7 +5244,12 @@ mod tests {
         let admission = transit
             .validate_route(&route, &masks)
             .expect("the exact retained spine satisfies typed transit");
-        assert_eq!(admission.runway, route[1..=2]);
+        assert_eq!(
+            admission.runway.as_slice(),
+            route
+                .get(1..=2)
+                .expect("four-point route retains the exact two-point runway")
+        );
 
         let shortened = [ingress_from, first, egress_to]
             .into_iter()
@@ -5185,7 +5257,18 @@ mod tests {
             .collect::<Vec<_>>();
         let error = transit
             .validate_route(&shortened, &masks)
-            .expect_err("an alternate Patch-59 projection must fail closed");
+            .expect_err("omitting the retained egress endpoint must fail closed");
+        assert!(error.contains("exact typed 58->59 ingress and 59->36 egress"));
+
+        // Both exact boundary portals survive this mutation, so rejection must
+        // come from the retained ordered runway rather than portal validation.
+        let backtracked = [ingress_from, first, last, first, last, egress_to]
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 0))
+            .collect::<Vec<_>>();
+        let error = transit
+            .validate_route(&backtracked, &masks)
+            .expect_err("backtracking inside the retained Patch-59 runway must fail closed");
         assert!(error.contains("ordered Patch-59 foundation spine"));
 
         let wrong_grade = [
@@ -5238,7 +5321,10 @@ mod tests {
             inner_peak_transit_authorities(&masks, &swaths, &allowed, &bounds, &[59, 36])
                 .expect("the connected full Patch-59 domain supplies the missing scenic runway");
         assert_eq!(transits.len(), 1);
-        assert_eq!(transits[0].runway_domain, full_runway);
+        let [transit] = transits.as_slice() else {
+            panic!("fixture retains exactly one transit");
+        };
+        assert_eq!(transit.runway_domain, full_runway);
 
         let mut search_budget = InnerPeakTransitSearchBudget::new();
         let route = segmented_inner_peak_route_ranked(
@@ -5249,11 +5335,11 @@ mod tests {
             &BTreeMap::new(),
             0,
             &bounds,
-            &transits[0],
+            transit,
             &mut search_budget,
         )
         .expect("the split transit proof follows the longer full-patch detour");
-        let admission = transits[0]
+        let admission = transit
             .validate_route(&route, &masks)
             .expect("the longer detour retains both exact typed portals");
         assert_eq!(admission.runway.len(), 4);
@@ -5647,7 +5733,9 @@ mod tests {
             path.iter().copied().collect::<BTreeSet<_>>().len(),
             path.len()
         );
-        assert!(path.windows(2).all(|pair| pair[0].distance(pair[1]) == 1));
+        assert!(path
+            .windows(2)
+            .all(|pair| matches!(pair, [first, second] if first.distance(*second) == 1)));
     }
 
     #[test]
@@ -5696,7 +5784,8 @@ mod tests {
             route.len()
         );
         assert!(route.windows(2).all(|pair| {
-            pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
+            matches!(pair, [first, second] if first.coord.distance(second.coord) == 1
+                && first.level.abs_diff(second.level) <= 1)
         }));
     }
 
@@ -5746,7 +5835,8 @@ mod tests {
             route.len()
         );
         assert!(route.windows(2).all(|pair| {
-            pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
+            matches!(pair, [first, second] if first.coord.distance(second.coord) == 1
+                && first.level.abs_diff(second.level) <= 1)
         }));
     }
 
@@ -5873,7 +5963,8 @@ mod tests {
             .expect("the valid history saves the choke for the rising tail");
         assert!(dominated_index < choke_index);
         assert!(route.windows(2).all(|pair| {
-            pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
+            matches!(pair, [first, second] if first.coord.distance(second.coord) == 1
+                && first.level.abs_diff(second.level) <= 1)
         }));
     }
 

@@ -231,7 +231,10 @@ pub(super) fn author_spring(
         None
     }).ok_or_else(|| schematic_contract("Garden spring cannot fit a bounded bowl and spillway on the waterfall-facing shore"))?;
 
-    let source = channel[2];
+    let source = channel
+        .get(2)
+        .copied()
+        .ok_or_else(|| schematic_contract("Garden spring lost its authored source cell"))?;
     if source.coord.distance(falls) >= center.distance(falls) {
         return Err(schematic_contract(
             "Garden spring is not on the shore facing the descending waterfall intake",
@@ -248,7 +251,9 @@ pub(super) fn author_spring(
     for (index, position) in channel.iter().copied().enumerate() {
         let downstream = match index {
             0 => outlet,
-            1 | 2 => channel[index - 1],
+            1 | 2 => channel.get(index - 1).copied().ok_or_else(|| {
+                schematic_contract("Garden spring lost its previous spillway cell")
+            })?,
             _ => source,
         };
         let node = LiquidNode {
@@ -293,7 +298,8 @@ pub(super) fn author_spring(
             .biome_regions
             .get(&old)
             .ok_or_else(|| schematic_contract("Garden spring bank lost its island biome"))?;
-        let cap = if named_sample(plan.provenance.world_seed, "garden_spring_bank", coord) % 3 == 0
+        let cap = if named_sample(plan.provenance.world_seed, "garden_spring_bank", coord)
+            .is_multiple_of(3)
         {
             SolidMaterialRole::Dirt
         } else {

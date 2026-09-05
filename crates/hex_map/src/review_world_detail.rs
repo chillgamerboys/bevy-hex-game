@@ -445,10 +445,11 @@ fn reject_unknown_current_section_fields(source: &str) -> Result<(), ReviewWorld
 }
 
 /// Review-only snow-line and vertical snow-shell presentation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SnowDetailV1 {
     /// Preserve the current rendered snow exactly.
+    #[default]
     Current,
     /// Apply one straight integer snow-line threshold.
     StraightThreshold {
@@ -469,12 +470,6 @@ pub enum SnowDetailV1 {
         /// Collisionless vertical shell height in world units; zero means masking only.
         vertical_shell_height: f32,
     },
-}
-
-impl Default for SnowDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl SnowDetailV1 {
@@ -586,10 +581,11 @@ impl SnowDetailV1 {
 }
 
 /// Review-only water optics.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WaterDetailV1 {
     /// Preserve the current opaque water geometry and material.
+    #[default]
     Current,
     /// Use a transparent water surface with uniform alpha.
     UniformAlpha {
@@ -623,12 +619,6 @@ pub enum WaterDetailV1 {
         /// Dielectric reflectance.
         reflectance: f32,
     },
-}
-
-impl Default for WaterDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl WaterDetailV1 {
@@ -790,10 +780,11 @@ pub enum CloudShapeV1 {
 }
 
 /// Review-only, deterministic world-space cloud geometry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PhysicalCloudsDetailV1 {
     /// Add no world-space clouds; preserve the existing sky-dome clouds.
+    #[default]
     Current,
     /// Add one faceted layer in a named altitude band.
     FacetedLayer {
@@ -843,12 +834,6 @@ pub enum PhysicalCloudsDetailV1 {
         /// World-space radial width of the shadow's outer feather transition.
         shadow_blur: f32,
     },
-}
-
-impl Default for PhysicalCloudsDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl PhysicalCloudsDetailV1 {
@@ -1021,10 +1006,11 @@ impl PhysicalCloudsDetailV1 {
 }
 
 /// Review-only shore wetness, foam, and waterfall spray.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ShoreAndFallsDetailV1 {
     /// Preserve the current shore and waterfall presentation.
+    #[default]
     Current,
     /// Add a dark, smoother collisionless rim at water contact.
     WetRim {
@@ -1074,12 +1060,6 @@ pub enum ShoreAndFallsDetailV1 {
         /// Pool-foam radius in hexes.
         pool_foam_radius_hexes: u8,
     },
-}
-
-impl Default for ShoreAndFallsDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl ShoreAndFallsDetailV1 {
@@ -1264,10 +1244,11 @@ impl ShoreAndFallsDetailV1 {
 }
 
 /// Review-only alpine vegetation render-child variation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AlpineVegetationDetailV1 {
     /// Preserve current render-child scale and materials.
+    #[default]
     Current,
     /// Apply deterministic horizontal and vertical render-child scale jitter.
     ScaleJitter {
@@ -1302,12 +1283,6 @@ pub enum AlpineVegetationDetailV1 {
         /// Shell height in world units.
         shell_height: f32,
     },
-}
-
-impl Default for AlpineVegetationDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl AlpineVegetationDetailV1 {
@@ -1502,10 +1477,11 @@ impl AlpineVegetationDetailV1 {
 }
 
 /// Review-only exposed cliff-side value and strata presentation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CliffStrataDetailV1 {
     /// Preserve current cliff-side materials.
+    #[default]
     Current,
     /// Darken eligible natural exposed sides without changing normals or silhouettes.
     SideValue {
@@ -1540,12 +1516,6 @@ pub enum CliffStrataDetailV1 {
         /// Relative side value delta.
         value_delta: f32,
     },
-}
-
-impl Default for CliffStrataDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl CliffStrataDetailV1 {
@@ -1661,10 +1631,11 @@ impl CliffStrataDetailV1 {
 }
 
 /// Review-only collisionless terrain props.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerrainPropsDetailV1 {
     /// Add no presentation-only terrain props.
+    #[default]
     Current,
     /// Scatter low-poly boulders.
     Boulders {
@@ -1702,12 +1673,6 @@ pub enum TerrainPropsDetailV1 {
         /// Absolute combined piece cap.
         cap: u16,
     },
-}
-
-impl Default for TerrainPropsDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl TerrainPropsDetailV1 {
@@ -1834,10 +1799,11 @@ impl TerrainPropsDetailV1 {
 }
 
 /// Review-only collisionless water-edge ice fringes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IceFringeDetailV1 {
     /// Add no ice-fringe presentation.
+    #[default]
     Current,
     /// Add fringes beside shore at or above one voxel level.
     LevelFringe {
@@ -1892,12 +1858,6 @@ pub enum IceFringeDetailV1 {
         /// Vertical presentation bias in world units.
         y_bias: f32,
     },
-}
-
-impl Default for IceFringeDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl IceFringeDetailV1 {
@@ -2094,10 +2054,11 @@ pub enum LocalFogPlacementV1 {
 }
 
 /// Review-only localized fog volumes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LocalFogDetailV1 {
     /// Add no local fog volumes.
+    #[default]
     Current,
     /// Place deterministic fog volumes at a named anchor class.
     Layer {
@@ -2116,12 +2077,6 @@ pub enum LocalFogDetailV1 {
         /// Bottom offset above the local surface in world units.
         bottom_offset: f32,
     },
-}
-
-impl Default for LocalFogDetailV1 {
-    fn default() -> Self {
-        Self::Current
-    }
 }
 
 impl LocalFogDetailV1 {
@@ -2672,9 +2627,13 @@ impl ReviewFogCoverageEvidenceV1 {
         let expected = (f64::from(self.sample_count) * f64::from(self.target_fraction))
             .ceil()
             .min(f64::from(self.sample_count));
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Evidence compares the renderer's f32 sample fraction with the same intentional u32-to-f32 rounding"
+        )]
+        let measured_fraction = self.active_samples as f32 / self.sample_count as f32;
         if f64::from(self.active_samples).to_bits() != expected.to_bits()
-            || self.measured_fraction.to_bits()
-                != (self.active_samples as f32 / self.sample_count as f32).to_bits()
+            || self.measured_fraction.to_bits() != measured_fraction.to_bits()
         {
             return Err(ReviewWorldDetailError::new(
                 "effect_validation.fog_coverage must report its exact ceiling-sized density subset",
@@ -3243,8 +3202,10 @@ mod tests {
 
     #[test]
     fn unsupported_version_is_rejected() {
-        let mut profile = ReviewWorldDetailProfileV1::default();
-        profile.version = 2;
+        let profile = ReviewWorldDetailProfileV1 {
+            version: 2,
+            ..ReviewWorldDetailProfileV1::default()
+        };
         assert!(profile.validate().is_err());
         let json = serde_json::to_string(&profile).expect("invalid version still serializes");
         assert!(ReviewWorldDetailProfileV1::from_json(&json).is_err());
@@ -3333,11 +3294,19 @@ mod tests {
         };
         assert!(evidence.validate().is_ok());
 
-        evidence.waterfall_anchors[0].distance_hexes = 2;
+        evidence
+            .waterfall_anchors
+            .first_mut()
+            .expect("the waterfall evidence fixture retains its one anchor")
+            .distance_hexes = 2;
         assert!(evidence.validate().is_err());
 
-        evidence.waterfall_anchors[0].anchor_position = [i32::MIN, i32::MIN, 3];
-        evidence.waterfall_anchors[0].landing_position = [i32::MAX, i32::MAX, 1];
+        let anchor = evidence
+            .waterfall_anchors
+            .first_mut()
+            .expect("the waterfall evidence fixture retains its one anchor");
+        anchor.anchor_position = [i32::MIN, i32::MIN, 3];
+        anchor.landing_position = [i32::MAX, i32::MAX, 1];
         assert!(evidence.validate().is_err());
     }
 

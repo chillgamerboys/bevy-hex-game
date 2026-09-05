@@ -29,6 +29,14 @@ exploration. Earlier measurements and approvals remain scoped to their recorded 
 - [ ] Verify both same-map Cargo launchers and record final PR checks.
 - [ ] Verify the exact merge on `dev` and preserve the dependent V4 branch ancestry.
 
+Current local evidence includes strict full-workspace Clippy, 84 combined Walking/launch
+checks, and the preceding candidate's final hero route, hydrology and tunnel contracts.
+The current tunnel narrows its protected-shell segment to the repaired four-wide core
+while retaining the ceiling increase and legal symmetric expansion. Inherited seed-zero
+Massif and alternate-seed terrain constraints still block the representative gate;
+thresholds and protected routes remain unchanged. The final head receives hosted
+combined checks and local windowless GPU review.
+
 ## Approved foundation
 
 - [x] Revision-2 schematic matches the source drawing cell for cell.

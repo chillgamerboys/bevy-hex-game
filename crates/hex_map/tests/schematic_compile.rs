@@ -1,5 +1,7 @@
 //! External contract for compiling the selected Grand V3 schematic artifact.
 
+#![cfg(test)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
@@ -38,7 +40,7 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
     let generated = hex_schematic::generate(&inputs.template, DEFAULT_HERO_SEED)
         .expect("the approved hero schematic should generate");
     assert_eq!(generated.plan.provenance.selected_candidate, Some(29));
-    assert_eq!(generated.plan.semantic_fingerprint, 0x8d2c_feac_6856_09ec);
+    assert_eq!(generated.plan.semantic_fingerprint, 0xf8c7_b2a1_a177_a982);
     let seeded_valley_lake = hex_schematic::SchematicCoord::new(7, -2, -5)
         .expect("the seeded valley-lake coordinate is valid");
     let seeded_valley_lake = generated
@@ -91,15 +93,10 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
         DEFAULT_HERO_SEED,
         generated.plan.semantic_fingerprint,
     );
-    assert_eq!(
-        compiled.report.semantic_plan_fingerprint,
-        Some(0x617e_db14_f9e5_72b1),
-        "the corrected peak authority and ordinary-access contract must preserve the exact compiled semantic world"
-    );
-    assert_eq!(
-        compiled.report.map_fingerprint, 0x1e41_dc04_f9da_c0df,
-        "the corrected hydrology, peak authority, and exact bridge approaches must preserve the exact materialized map"
-    );
+    // Retain these identities before publication consumes the compiled plan.
+    // Check all three together after the independent publication/export facts.
+    let compiled_semantic_fingerprint = compiled.report.semantic_plan_fingerprint;
+    let materialized_map_fingerprint = compiled.report.map_fingerprint;
     assert_eq!(compiled.map.len(), WORLD_COLUMNS);
     let presentation = compiled.presentation_counts();
     assert!(presentation.liquids > 30_000);
@@ -137,13 +134,9 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
     assert_eq!(world.resource::<GenerationReport>().seed, DEFAULT_HERO_SEED);
 
     let snapshot = export_world_snapshot_v1(&world).expect("published exact plan should export");
-    assert_eq!(
-        fingerprint_world_snapshot_v1(&snapshot)
-            .expect("the exported Grand V3 snapshot should fingerprint")
-            .0,
-        0xc994_a636_2a71_1576,
-        "the corrected Grand world must preserve the exact public snapshot"
-    );
+    let exported_snapshot_fingerprint = fingerprint_world_snapshot_v1(&snapshot)
+        .expect("the exported Grand V3 snapshot should fingerprint")
+        .0;
     assert_eq!(snapshot.columns.len(), WORLD_COLUMNS);
     assert_eq!(snapshot.liquids.len(), presentation.liquids);
     assert_eq!(snapshot.version, 1);
@@ -161,6 +154,20 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
             "review-only landmark {scenic} must not enter gameplay Snapshot V1"
         );
     }
+    let actual_fingerprints = (
+        ("compiled semantic plan", compiled_semantic_fingerprint),
+        ("materialized map", materialized_map_fingerprint),
+        ("exported Snapshot V1", exported_snapshot_fingerprint),
+    );
+    let expected_fingerprints = (
+        ("compiled semantic plan", Some(0x617e_db14_f9e5_72b1)),
+        ("materialized map", 0x1e41_dc04_f9da_c0df),
+        ("exported Snapshot V1", 0xc994_a636_2a71_1576),
+    );
+    assert_eq!(
+        actual_fingerprints, expected_fingerprints,
+        "the exact Grand world identities must remain pinned after independent geometry and publication checks; actual={actual_fingerprints:#x?}, expected={expected_fingerprints:#x?}"
+    );
 }
 
 fn assert_hero_camera_anchor_positions(compiled: &CompiledSchematicMap) {
@@ -346,9 +353,9 @@ fn assert_generated_complete_world(seed: u64) {
 
 #[test]
 #[ignore = "release-only: run with `cargo test --release -p hex_map --test schematic_compile grand_v3_full_world_release_corpus_compiles_32_seeds -- --ignored --exact --test-threads=1`"]
-fn grand_v3_full_world_release_corpus_compiles_32_seeds() -> Result<(), &'static str> {
+fn grand_v3_full_world_release_corpus_compiles_32_seeds() {
     if cfg!(debug_assertions) {
-        return Err("the full-world corpus must run with --release");
+        panic!("the full-world corpus must run with --release");
     }
     let _serial = full_world_compilation_guard();
     let inputs = compilation_inputs();
@@ -373,7 +380,6 @@ fn grand_v3_full_world_release_corpus_compiles_32_seeds() -> Result<(), &'static
     }
 
     assert_eq!(schematic_fingerprints.len(), 32);
-    Ok(())
 }
 
 fn assert_normal_generated_schematic(

@@ -13,16 +13,19 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 `125e2df` and its import provenance are preserved. The six recovered map fixes plus
 Crystal crown snow are tracked in [the recovered-fixes ledger](hex-six-map-fixes.md).
 The walking owner's frozen nine-commit handoff through `95b2274` is integrated here.
-Strict generation, independent original-route preservation, canonical checks, final
-renders, water animation and native motion/play evidence remain pending. This candidate
+The combined hero passes strict generation, independent original-route preservation,
+intake/river/bridge/tunnel geometry and 84 Walking/launch checks. Full workspace
+Clippy passes. Inherited representative-seed terrain failures keep the map gate red;
+final renders, water animation and native motion/play evidence remain pending. This candidate
 has not been delivered to `dev`; the current gate is in the
 [Grand V3 map manifest](waves/grand-v3-map/manifest.md).
 
 **Grand V3 grounded exploration** adds continuous walking/running, jumping/falling,
 solid-body collision, bounded wading, recovery and collision-aware camera follow.
 See [exploration controls and boundaries](../systems/exploration.md). This is a
-development exploration pawn. Combined validation, native control-feel signoff, delivery
-to `dev`, and later V4 integration remain separate work.
+development exploration pawn. Its combined Walking/launch fixtures pass; final GPU
+and native control-feel review, delivery to `dev`, and later V4 integration remain
+separate work.
 
 The following older reconciliation and checkpoint measurements remain historical evidence
 at their stated source identities. Their earlier passing results do not certify PR #219's

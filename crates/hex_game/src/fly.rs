@@ -966,6 +966,194 @@ mod tests {
         assert!(error.contains(FLY_MAP_ENV));
     }
 
+    #[cfg(feature = "map-review")]
+    #[test]
+    fn combined_features_preserve_ordinary_review_and_fly_launch_ownership() {
+        let authored_encounter: Encounter = ron::from_str(include_str!(
+            "../../../assets/config/encounters/grand-v3-baseline-showcase.ron"
+        ))
+        .expect("the ordinary Grand V3 roster must parse");
+        assert_eq!(authored_encounter.unit_count(EncounterFaction::Player), 3);
+
+        for (review_scenario, fly_map) in [
+            (None, None),
+            (Some("Grand V3 Baseline"), None),
+            (None, Some(GRAND_V3_MAP_ID)),
+        ] {
+            let is_fly = fly_map.is_some();
+            let expects_launch = review_scenario.is_some() || is_fly;
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+                .insert_state(Screen::Title)
+                .insert_resource(shipped_catalog())
+                .insert_resource(shipped_scenarios())
+                .insert_resource(GameplayPhase::Active)
+                .insert_resource(CameraMode::Map)
+                .insert_resource(camera_settings())
+                .insert_resource(ui_assets())
+                .init_resource::<Assets<StandardMaterial>>()
+                .add_systems(Update, launch_requested_map.run_if(in_state(Screen::Title)))
+                .add_systems(
+                    OnEnter(Screen::Gameplay),
+                    activate_fly_session.after(GameplaySetup::Finalize),
+                )
+                .add_systems(OnExit(Screen::Gameplay), clear_fly_session);
+            crate::screens::sandbox::install_headless_launch_finalize_for_test(&mut app);
+            crate::review::install_headless_review_launch_for_test(&mut app, review_scenario)
+                .expect("the typed review launch fixture is valid");
+            if let Some(request) = FlyLaunchRequest::from_value(fly_map.map(str::to_owned))
+                .expect("the typed Fly launch fixture is valid")
+            {
+                app.insert_resource(request);
+            }
+
+            let original_transform = Transform::from_translation(Vec3::new(12.0, 18.0, 24.0))
+                .with_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -0.25, 0.0));
+            let original_focus = Vec3::new(2.0, 4.0, -3.0);
+            let original_radius = 19.0_f32;
+            let camera = app
+                .world_mut()
+                .spawn((
+                    original_transform,
+                    PanOrbitCamera {
+                        focus: original_focus,
+                        radius: original_radius,
+                    },
+                ))
+                .id();
+
+            app.update();
+            app.update();
+
+            assert_eq!(
+                *app.world().resource::<State<Screen>>().get(),
+                if expects_launch {
+                    Screen::Loading
+                } else {
+                    Screen::Title
+                },
+            );
+            assert_eq!(
+                crate::review::headless_review_launch_state_for_test(app.world()),
+                review_scenario.map(|_| true),
+            );
+            assert_eq!(app.world().contains_resource::<FlySession>(), is_fly);
+            assert!(!app.world().contains_resource::<Explorer>());
+            assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+            assert_eq!(
+                *app.world().resource::<GameplayPhase>(),
+                if is_fly {
+                    GameplayPhase::Preparing
+                } else {
+                    GameplayPhase::Active
+                },
+            );
+            assert_eq!(
+                app.world().get::<Transform>(camera),
+                Some(&original_transform)
+            );
+
+            let launch = app.world().get_resource::<ScenarioToLoad>().cloned();
+            assert_eq!(launch.is_some(), expects_launch);
+            let player_count = if let Some(launch) = &launch {
+                assert_eq!(launch.scenario.name, "Grand V3 Baseline");
+                assert_eq!(launch.resolved_seed, Some(ResolvedMapSeed(1_592_598_566)));
+                assert_eq!(launch.encounter_override.is_some(), is_fly);
+                launch.encounter_override.as_ref().map_or_else(
+                    || authored_encounter.unit_count(EncounterFaction::Player),
+                    |encounter| {
+                        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+                        encounter.unit_count(EncounterFaction::Player)
+                    },
+                )
+            } else {
+                authored_encounter.unit_count(EncounterFaction::Player)
+            };
+            assert_eq!(player_count, if is_fly { 1 } else { 3 });
+            for _ in 0..player_count {
+                app.world_mut().spawn((Player, Transform::default()));
+            }
+
+            // Begin with the opposite phase so this proves the real Sandbox
+            // Finalize adapter ran before Fly reasserted its own authority.
+            *app.world_mut().resource_mut::<GameplayPhase>() = GameplayPhase::Deployment;
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Gameplay);
+            app.update();
+
+            assert_eq!(
+                *app.world().resource::<GameplayPhase>(),
+                if is_fly {
+                    GameplayPhase::Preparing
+                } else {
+                    GameplayPhase::Active
+                },
+            );
+            assert_eq!(
+                *app.world().resource::<CameraMode>(),
+                if is_fly {
+                    CameraMode::Fly
+                } else {
+                    CameraMode::Map
+                },
+            );
+            assert_eq!(app.world().contains_resource::<Explorer>(), is_fly);
+            assert_eq!(app.world().contains_resource::<CollisionWorld>(), is_fly);
+            let world = app.world_mut();
+            assert_eq!(
+                world
+                    .query_filtered::<Entity, With<FlyPawn>>()
+                    .iter(world)
+                    .count(),
+                usize::from(is_fly),
+            );
+            let transform = app
+                .world()
+                .get::<Transform>(camera)
+                .expect("the camera survives entry");
+            let orbit = app
+                .world()
+                .get::<PanOrbitCamera>(camera)
+                .expect("the orbit survives entry");
+            assert_eq!(transform.rotation, original_transform.rotation);
+            if is_fly {
+                assert_eq!(
+                    orbit.radius.to_bits(),
+                    camera_settings().character_radius.to_bits()
+                );
+            } else {
+                assert_eq!(*transform, original_transform);
+                assert_eq!(orbit.focus, original_focus);
+                assert_eq!(orbit.radius.to_bits(), original_radius.to_bits());
+            }
+            assert_eq!(
+                app.world().get_resource::<ScenarioToLoad>(),
+                launch.as_ref()
+            );
+            assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Title);
+            app.update();
+            assert!(!app.world().contains_resource::<FlySession>());
+            assert!(!app.world().contains_resource::<FlyLaunchRequest>());
+            assert!(!app.world().contains_resource::<Explorer>());
+            assert!(!app.world().contains_resource::<CollisionWorld>());
+            assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+            assert_eq!(
+                *app.world().resource::<GameplayPhase>(),
+                GameplayPhase::Active
+            );
+            assert_eq!(
+                app.world().get_resource::<ScenarioToLoad>(),
+                launch.as_ref()
+            );
+            assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+        }
+    }
+
     #[test]
     fn generated_map_launch_uses_one_player_at_the_catalog_center_and_fixed_seed() {
         let launch = resolve_launch("two-rings", &shipped_catalog(), &shipped_scenarios())

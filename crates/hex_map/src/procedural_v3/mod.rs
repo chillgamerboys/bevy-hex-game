@@ -1036,7 +1036,7 @@ fn finish_build<M>(
     let materialized = materialize::materialize(validated, palette, is_solid)
         .map_err(V3GenerationError::Materialization)?;
     if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
-        eprintln!(
+        bevy::log::info!(
             "v3 profile: materialization={:?} total_before_report={:?}",
             materialization_started.elapsed(),
             started.elapsed()

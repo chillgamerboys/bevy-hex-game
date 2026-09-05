@@ -7,6 +7,9 @@ use super::*;
 
 const SUPPORT_RADIUS: u32 = 18;
 const APPROACH_NORTHERN_ROW: i32 = -110;
+// Visual falloff is intentionally gentler than the inherited safety allowance:
+// three levels are 1.05 m in the canonical 0.35 m-per-level Grand world.
+const VISUAL_FALLOFF: Level = 3;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct FillProjection {
@@ -26,14 +29,16 @@ fn edge_allowance(
             ))
         })
     };
-    let difference = Level::try_from(source(a)?.abs_diff(source(b)?)).map_err(|_| {
-        schematic_contract("approach edge difference exceeds the bounded level domain")
+    let difference = Level::try_from(source(a)?.abs_diff(source(b)?)).map_err(|error| {
+        schematic_contract(format!(
+            "approach edge difference exceeds the bounded level domain: {error}"
+        ))
     })?;
     Ok(difference.max(NATURAL_PASS_SHOULDER_MAXIMUM_STEP))
 }
 
 /// Every original edge already satisfies its own allowance. Both propagated
-/// fields do too: the route field falls by nine, while boundary ceilings use
+/// fields do too: the route field falls by three, while boundary ceilings use
 /// the original allowance. Min/max of fields with those same edge bounds keep
 /// the bounds. Taking max(original, min(route, ceiling)) therefore only fills,
 /// and cannot create a steep edge or increase an existing cliff's difference.
@@ -58,8 +63,7 @@ fn project_fill(
                 && coord.neighbors().into_iter().any(|neighbor| {
                     !route.contains_key(&neighbor)
                         && original.get(&neighbor).is_some_and(|neighbor_level| {
-                            *level
-                                > neighbor_level.saturating_add(NATURAL_PASS_SHOULDER_MAXIMUM_STEP)
+                            *level > neighbor_level.saturating_add(VISUAL_FALLOFF)
                         })
                 }))
             .then_some((*coord, *level))
@@ -113,7 +117,7 @@ fn project_fill(
 
     let mut desired = BTreeMap::<HexCoord, Level>::new();
     for (seed, source_level) in &seeds {
-        let level = source_level.saturating_sub(NATURAL_PASS_SHOULDER_MAXIMUM_STEP);
+        let level = source_level.saturating_sub(VISUAL_FALLOFF);
         for neighbor in seed.neighbors().into_iter().filter(|n| domain.contains(n)) {
             desired
                 .entry(neighbor)
@@ -127,7 +131,7 @@ fn project_fill(
             continue;
         }
         for neighbor in coord.neighbors().into_iter().filter(|n| domain.contains(n)) {
-            let candidate = level.saturating_sub(NATURAL_PASS_SHOULDER_MAXIMUM_STEP);
+            let candidate = level.saturating_sub(VISUAL_FALLOFF);
             if desired
                 .get(&neighbor)
                 .is_none_or(|current| candidate > *current)
@@ -174,7 +178,7 @@ fn project_fill(
                     !route.contains_key(&neighbor)
                         && original.get(&neighbor).is_some_and(|before| {
                             let after = fills.get(&neighbor).copied().unwrap_or(*before);
-                            route_level > after.saturating_add(NATURAL_PASS_SHOULDER_MAXIMUM_STEP)
+                            route_level > after.saturating_add(VISUAL_FALLOFF)
                         })
                 })
                 .then_some(coord)
@@ -358,9 +362,10 @@ pub(super) fn grade(
     let projection = project_fill(&original, &route, &eligible)?;
     publish_fills(&projection.fills, fine_index, volume, biome_regions)?;
     if std::env::var_os("HEX_GRAND_MASSIF_PROFILE").is_some() {
-        eprintln!(
+        bevy::log::info!(
             "grand-v3 approach shoulders: filled={:?}, locally_deferred_seeds={:?}",
-            projection.fills, projection.deferred_seeds,
+            projection.fills,
+            projection.deferred_seeds,
         );
     }
     Ok(projection.fills.into_keys().collect())
@@ -407,10 +412,31 @@ mod tests {
         assert_eq!(original, before, "projection is read-only");
         assert!(!projection.fills.is_empty());
         assert!(projection.deferred_seeds.is_empty());
-        assert_eq!(projection.fills[&HexCoord::from_axial(1, 0)], 92);
-        assert_eq!(projection.fills[&HexCoord::from_axial(2, 0)], 84);
-        assert_eq!(projection.fills[&HexCoord::from_axial(6, 0)], 49);
-        assert!(!projection.fills.contains_key(&HexCoord::from_axial(7, 0)));
+        assert_eq!(
+            projection
+                .fills
+                .get(&HexCoord::from_axial(1, 0))
+                .copied()
+                .expect("expected shoulder fill"),
+            98
+        );
+        assert_eq!(
+            projection
+                .fills
+                .get(&HexCoord::from_axial(2, 0))
+                .copied()
+                .expect("expected shoulder fill"),
+            96
+        );
+        assert_eq!(
+            projection
+                .fills
+                .get(&HexCoord::from_axial(6, 0))
+                .copied()
+                .expect("expected shoulder fill"),
+            85
+        );
+        assert!(!projection.fills.contains_key(&HexCoord::from_axial(19, 0)));
         assert!(route
             .keys()
             .all(|coord| !projection.fills.contains_key(coord)));
@@ -419,6 +445,70 @@ mod tests {
             projection,
             project_fill(&original, &route, &eligible).expect("deterministic")
         );
+    }
+
+    #[test]
+    fn accepted_nine_level_shoulders_are_visually_feathered_to_three() {
+        let original = HexCoord::ORIGIN
+            .within_radius(24)
+            .into_iter()
+            .map(|coord| {
+                let distance = i32::try_from(coord.distance(HexCoord::ORIGIN))
+                    .expect("bounded fixture distance");
+                (coord, (100 - 9 * distance).max(40))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let route = BTreeMap::from([(HexCoord::ORIGIN, 100)]);
+        assert!(HexCoord::ORIGIN.neighbors().into_iter().all(|neighbor| {
+            original
+                .get(&HexCoord::ORIGIN)
+                .copied()
+                .expect("original shoulder height")
+                .abs_diff(
+                    original
+                        .get(&neighbor)
+                        .copied()
+                        .expect("original shoulder height"),
+                )
+                == 9
+        }));
+        let projection = project_fill(&original, &route, &original.keys().copied().collect())
+            .expect("already safe shoulders can receive gentler visual fill");
+        assert!(
+            !projection.fills.is_empty(),
+            "the old nine-level seed threshold was inert here"
+        );
+        assert!(projection.deferred_seeds.is_empty());
+        for (distance, level) in [(1, 97), (2, 94), (3, 91), (4, 88)] {
+            assert_eq!(
+                projection
+                    .fills
+                    .get(&HexCoord::from_axial(distance, 0))
+                    .copied()
+                    .expect("expected shoulder fill"),
+                level
+            );
+        }
+        assert!(!projection.fills.contains_key(&HexCoord::ORIGIN));
+        assert_edges_not_worsened(&original, &projection.fills);
+    }
+
+    #[test]
+    fn existing_three_level_shoulders_need_no_additional_fill() {
+        let original = HexCoord::ORIGIN
+            .within_radius(24)
+            .into_iter()
+            .map(|coord| {
+                let distance = i32::try_from(coord.distance(HexCoord::ORIGIN))
+                    .expect("bounded fixture distance");
+                (coord, (100 - 3 * distance).max(40))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let route = BTreeMap::from([(HexCoord::ORIGIN, 100)]);
+        let projection = project_fill(&original, &route, &original.keys().copied().collect())
+            .expect("the requested visual falloff already exists");
+        assert!(projection.fills.is_empty());
+        assert!(projection.deferred_seeds.is_empty());
     }
 
     #[test]
@@ -432,8 +522,23 @@ mod tests {
         let projection =
             project_fill(&original, &route, &eligible).expect("cliff is already legal");
         assert!(!projection.fills.contains_key(&cliff));
-        assert_eq!(projection.fills[&HexCoord::from_axial(4, 0)], 64);
-        assert!(!projection.fills.contains_key(&HexCoord::from_axial(7, 0)));
+        assert_eq!(
+            projection
+                .fills
+                .get(&HexCoord::from_axial(4, 0))
+                .copied()
+                .expect("expected shoulder fill"),
+            88
+        );
+        assert_eq!(
+            projection
+                .fills
+                .get(&HexCoord::from_axial(7, 0))
+                .copied()
+                .expect("expected shoulder fill"),
+            79
+        );
+        assert!(!projection.fills.contains_key(&HexCoord::from_axial(19, 0)));
         assert_edges_not_worsened(&original, &projection.fills);
     }
 
@@ -455,7 +560,14 @@ mod tests {
             projection.deferred_seeds,
             BTreeSet::from([HexCoord::ORIGIN])
         );
-        assert_eq!(projection.fills[&HexCoord::from_axial(1, -1)], 49);
+        assert_eq!(
+            projection
+                .fills
+                .get(&HexCoord::from_axial(1, -1))
+                .copied()
+                .expect("expected shoulder fill"),
+            49
+        );
         assert!(projection.fills.values().any(|level| *level > 49));
         assert_edges_not_worsened(&original, &projection.fills);
     }
@@ -501,7 +613,10 @@ mod tests {
             &mut biomes,
         )
         .expect("dry fill publishes");
-        assert_eq!(volume.columns[&route_coord], before.columns[&route_coord]);
+        assert_eq!(
+            (*volume.columns.get(&route_coord).expect("fixture column")),
+            (*before.columns.get(&route_coord).expect("fixture column"))
+        );
         assert_eq!(
             volume.top_surface_at_coord(route_coord),
             before.top_surface_at_coord(route_coord)
@@ -517,12 +632,12 @@ mod tests {
                 })
             };
             assert_eq!(
-                material_at(&volume.columns[&coord]),
-                material_at(&before.columns[&coord])
+                material_at(volume.columns.get(&coord).expect("fixture column")),
+                material_at(before.columns.get(&coord).expect("fixture column"))
             );
         }
         assert_eq!(
-            top_solid_material(&volume.columns[&coord]),
+            top_solid_material(volume.columns.get(&coord).expect("fixture column")),
             SolidMaterialRole::Grass
         );
         assert_eq!(
@@ -536,7 +651,13 @@ mod tests {
             ))
         );
         assert!(!biomes.contains_key(&TilePos::new(coord, 40)));
-        assert_eq!(biomes[&TilePos::new(coord, 55)], biome);
+        assert_eq!(
+            biomes
+                .get(&TilePos::new(coord, 55))
+                .copied()
+                .expect("fixture biome"),
+            biome
+        );
     }
 
     #[test]
@@ -584,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn author_freezes_water_prior_shoulders_shared_authority_and_route() {
+    fn author_freezes_water_explicit_scenic_protection_shared_authority_and_route() {
         let mask = HexCoord::ORIGIN
             .within_radius(20)
             .into_iter()
@@ -612,11 +733,18 @@ mod tests {
         let route = HexCoord::ORIGIN;
         let water = HexCoord::from_axial(1, 0);
         let prior_shoulder = HexCoord::from_axial(0, 1);
+        let mutable_shoulder = HexCoord::from_axial(0, -1);
         let shared = HexCoord::from_axial(-1, 1);
         let mut volume = VolumePlan::new(mask.clone());
         let mut biomes = BTreeMap::new();
         for coord in &mask {
-            let level = if *coord == route { 100 } else { 40 };
+            let level = if *coord == route {
+                100
+            } else if *coord == mutable_shoulder {
+                91
+            } else {
+                40
+            };
             replace_column_surface(
                 &mut volume,
                 &mut biomes,
@@ -624,7 +752,7 @@ mod tests {
                 land_column(level, SolidMaterialRole::Grass),
                 TilePos::new(*coord, level),
                 SurfaceMetadata {
-                    access: if *coord == prior_shoulder {
+                    access: if *coord == prior_shoulder || *coord == mutable_shoulder {
                         SurfaceAccess::SpecialMovement(SCENIC_MOVEMENT_REGION)
                     } else {
                         SurfaceAccess::Ordinary
@@ -650,19 +778,28 @@ mod tests {
         )
         .expect("fixed constraints clip without route changes");
         assert!(!filled.is_empty());
+        assert!(
+            filled.contains(&mutable_shoulder),
+            "unprotected Scenic support can receive visual fill"
+        );
+        assert_eq!(
+            volume
+                .top_surface_at_coord(mutable_shoulder)
+                .map(|(surface, _)| surface.level),
+            Some(97)
+        );
         for coord in [route, water, prior_shoulder, shared] {
             assert!(!filled.contains(&coord));
-            assert_eq!(volume.columns[&coord], before.columns[&coord]);
+            assert_eq!(
+                (*volume.columns.get(&coord).expect("fixture column")),
+                (*before.columns.get(&coord).expect("fixture column"))
+            );
             assert_eq!(
                 volume.top_surface_at_coord(coord),
                 before.top_surface_at_coord(coord)
             );
         }
-        let original = before
-            .surfaces
-            .iter()
-            .map(|(p, _)| (p.coord, p.level))
-            .collect();
+        let original = before.surfaces.keys().map(|p| (p.coord, p.level)).collect();
         let new_levels = filled
             .iter()
             .map(|coord| {

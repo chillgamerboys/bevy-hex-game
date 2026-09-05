@@ -216,6 +216,21 @@ pub(super) fn author(
         patch.rotation_turns,
     )
     .map_err(schematic_contract)?;
+    let upper_terminal = world
+        .features
+        .protected_routes
+        .get("crystal_ascent.upper_terminal_pad")
+        .ok_or_else(|| schematic_contract("Crystal crown snow lost its exact upper terminal"))?;
+    if upper_terminal.surfaces.len() != 4
+        || upper_terminal
+            .surfaces
+            .iter()
+            .any(|surface| surface.level != summit || !outer_trail.contains(&surface.coord))
+    {
+        return Err(schematic_contract(
+            "Crystal crown snow requires its unchanged four-wide summit terminal",
+        ));
+    }
     let mut caps = BTreeMap::new();
     for coord in &mask {
         let radius = center.distance(*coord);
@@ -234,8 +249,13 @@ pub(super) fn author(
             continue;
         };
         let material = solid_material_at(&world.volume, surface);
+        // Composite tunnel publication classifies the exact upper terminal as
+        // part of the shared interior without changing its summit cap. Retain
+        // that metadata while admitting snow on these four authored cells.
+        let interior_without_summit_cap =
+            metadata.interior.is_some() && !upper_terminal.surfaces.contains(&surface);
         if outer_trail.contains(coord)
-            && (metadata.interior.is_some()
+            && (interior_without_summit_cap
                 || !matches!(
                     material,
                     Some(SolidMaterialRole::Grass | SolidMaterialRole::Snow)
@@ -245,7 +265,7 @@ pub(super) fn author(
                 "Crystal outer summit trail has no unchanged natural cap at {coord:?}"
             )));
         }
-        if metadata.interior.is_some()
+        if interior_without_summit_cap
             || !matches!(
                 material,
                 Some(SolidMaterialRole::Grass | SolidMaterialRole::Snow)
@@ -414,6 +434,71 @@ mod tests {
     }
 
     #[test]
+    fn crystal_crown_snow_retains_composite_upper_terminal_metadata() {
+        let (plan, mut world) = crown_fixture();
+        let upper_terminal = world
+            .features
+            .protected_routes
+            .get("crystal_ascent.upper_terminal_pad")
+            .expect("upper terminal")
+            .surfaces
+            .clone();
+        assert_eq!(upper_terminal.len(), 4);
+        let (interior_id, interior) = world
+            .interiors
+            .by_id
+            .iter_mut()
+            .next()
+            .expect("Crystal interior");
+        for position in &upper_terminal {
+            let metadata = world
+                .volume
+                .surfaces
+                .get_mut(position)
+                .expect("exact terminal surface");
+            metadata.access = SurfaceAccess::Ordinary;
+            metadata.interior = Some(*interior_id);
+        }
+        interior.floors.extend(upper_terminal.iter().copied());
+        let before = world.clone();
+        let catalog = super::super::super::vegetation::tests::runtime_art_catalog();
+        let authority = author(&plan, 0, catalog, &mut world).expect("composite crown snow");
+        assert_eq!(world.volume.surfaces, before.volume.surfaces);
+        assert_eq!(world.interiors, before.interiors);
+        assert_eq!(
+            world.features.protected_routes,
+            before.features.protected_routes
+        );
+        for position in upper_terminal {
+            assert_eq!(
+                solid_material_at(&world.volume, position),
+                Some(SolidMaterialRole::Snow)
+            );
+            assert_eq!(
+                authority.caps.get(&position),
+                Some(&SolidMaterialRole::Snow)
+            );
+            let mut expected = before
+                .volume
+                .columns
+                .get(&position.coord)
+                .expect("before column")
+                .clone();
+            for element in &mut expected.elements {
+                if let VolumeElement::Solid(mass) = element {
+                    if mass.levels == LevelInterval::new(position.level, position.level + 1) {
+                        mass.material = SolidMaterialRole::Snow;
+                    }
+                }
+            }
+            assert_eq!(world.volume.columns.get(&position.coord), Some(&expected));
+        }
+        authority
+            .validate(&world)
+            .expect("retained composite authority");
+    }
+
+    #[test]
     fn crystal_crown_snow_preserves_final_geometry_strata_and_foliage() {
         let (plan, mut world) = crown_fixture();
         // A different owner's identical grass and tree are outside this pass.
@@ -422,7 +507,12 @@ mod tests {
             .iter()
             .find(|cell| has_overlay(cell, SchematicFeature::CrystalAscent))
             .expect("Crystal owner");
-        let crystal_mask = &world.layout.patches[&PatchId(u32::from(crystal_cell.id.get()))].mask;
+        let crystal_mask = &world
+            .layout
+            .patches
+            .get(&PatchId(u32::from(crystal_cell.id.get())))
+            .expect("Crystal fixture patch")
+            .mask;
         // VolumePlan::new preallocates all-air columns for the full footprint.
         // Find an empty site, with the complete tree outside the merged claim.
         let outside_coord = world
@@ -517,7 +607,11 @@ mod tests {
         assert_eq!(world.features.clearings, before.features.clearings);
         let mut changed_caps = 0;
         for (coord, original) in &before.volume.columns {
-            let after = &world.volume.columns[coord];
+            let after = world
+                .volume
+                .columns
+                .get(coord)
+                .expect("retained crown column");
             assert_eq!(after.elements.len(), original.elements.len());
             for (old, new) in original.elements.iter().zip(&after.elements) {
                 if old == new {
@@ -541,7 +635,11 @@ mod tests {
         let snowy = SnowyVegetationSet::resolve(catalog, "test").expect("snowy trees");
         let mut changed_trees = 0;
         for (id, old) in &before.features.by_id {
-            let new = &world.features.by_id[id];
+            let new = world
+                .features
+                .by_id
+                .get(id)
+                .expect("retained crown feature");
             assert_eq!(new.root, old.root);
             assert_eq!(new.rotation, old.rotation);
             assert_eq!(new.blocker_footprint, old.blocker_footprint);
@@ -574,7 +672,11 @@ mod tests {
         assert!(authority.validate(&world).is_err());
         world = snowed.clone();
         let column = world.volume.columns.get_mut(&cap.coord).expect("column");
-        let VolumeElement::Solid(first) = &mut column.elements[0] else {
+        let VolumeElement::Solid(first) = column
+            .elements
+            .first_mut()
+            .expect("crown column first element")
+        else {
             panic!("solid base");
         };
         first.material = SolidMaterialRole::Metal;
@@ -653,12 +755,16 @@ mod tests {
                     22..=26 => 2,
                     _ => continue,
                 };
-                bands[band].0 += u32::from(material == SolidMaterialRole::Snow);
-                bands[band].1 += 1;
+                let band = bands.get_mut(band).expect("radial coverage band");
+                band.0 += u32::from(material == SolidMaterialRole::Snow);
+                band.1 += 1;
                 assert_eq!(material, crown_cap_material(seed, coord));
             }
             for pair in bands.windows(2) {
-                assert!(pair[0].0 * pair[1].1 < pair[1].0 * pair[0].1);
+                let [inner, outer] = pair else {
+                    panic!("adjacent radial bands");
+                };
+                assert!(inner.0 * outer.1 < outer.0 * inner.1);
             }
             assert!(bands[0].0 * 100 < bands[0].1 * 35);
             assert!(bands[2].0 * 100 > bands[2].1 * 75);

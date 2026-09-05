@@ -529,10 +529,6 @@ fn mountain_range_materializes_the_authored_macro_world() {
     assert_eq!(second_anchors, first_anchors);
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the tracked Crystal Mountain review world is a compile-time integration fixture"
-)]
 fn v3_crystal_mountain_app() -> App {
     let mut app = test_app();
     let settings: MapSettings = ron::from_str(include_str!(

@@ -229,9 +229,12 @@ fn claim_site_with_stats(
         })
         .and_then(|edge| {
             edge.path.windows(2).find_map(|pair| {
-                (pair[0] == cell.coord)
-                    .then_some(pair[1])
-                    .or_else(|| (pair[1] == cell.coord).then_some(pair[0]))
+                let [first, second] = pair else {
+                    return None;
+                };
+                (*first == cell.coord)
+                    .then_some(*second)
+                    .or_else(|| (*second == cell.coord).then_some(*first))
             })
         })
         .map(|coord| {
@@ -909,7 +912,11 @@ mod tests {
         .expect("worked shell cap accepts real composite overburden");
 
         assert_eq!(
-            volume.columns[&coord].elements,
+            volume
+                .columns
+                .get(&coord)
+                .expect("authored Crystal fixture entry")
+                .elements,
             vec![
                 VolumeElement::Solid(SolidMass {
                     levels: LevelInterval::new(0, 9),
@@ -938,11 +945,19 @@ mod tests {
         assert_eq!(volume.surfaces.get(&natural_surface), Some(&metadata));
         assert_eq!(biome_regions.get(&natural_surface), Some(&biome));
         assert_eq!(
-            structures.by_id[&super::super::world::StructureId(1)].voxels,
+            structures
+                .by_id
+                .get(&super::super::world::StructureId(1))
+                .expect("authored Crystal fixture entry")
+                .voxels,
             BTreeSet::from([surface])
         );
         assert_eq!(
-            interiors.by_id[&interior].roof_voxels,
+            interiors
+                .by_id
+                .get(&interior)
+                .expect("authored Crystal fixture entry")
+                .roof_voxels,
             (9..=12)
                 .map(|level| TilePos::new(coord, level))
                 .collect::<BTreeSet<_>>()
@@ -1050,7 +1065,11 @@ mod tests {
             let interior = snow
                 .cutaway_for
                 .expect("natural cover keeps cutaway ownership");
-            assert!(fragment.interiors.by_id[&interior]
+            assert!(fragment
+                .interiors
+                .by_id
+                .get(&interior)
+                .expect("authored Crystal fixture entry")
                 .roof_voxels
                 .contains(&surface));
             assert!(before_structures
@@ -1149,8 +1168,23 @@ mod tests {
                 .expect("unoptimized reference claim validates");
 
         assert_eq!(layout.patches.len(), 217);
-        assert_eq!(layout.patches[&crystal].mask.len(), 3_169);
-        assert_eq!(layout.patches[&crystal].mask, site);
+        assert_eq!(
+            layout
+                .patches
+                .get(&crystal)
+                .expect("authored Crystal fixture entry")
+                .mask
+                .len(),
+            3_169
+        );
+        assert_eq!(
+            layout
+                .patches
+                .get(&crystal)
+                .expect("authored Crystal fixture entry")
+                .mask,
+            site
+        );
         assert_eq!(crystal, baseline_crystal);
         assert_eq!(layout, baseline_layout);
         assert_eq!(stats.donor_patches, 216);
@@ -1171,9 +1205,19 @@ mod tests {
             baseline_stats.orphan_components_rehomed
         );
         assert!(original_disjoint.iter().all(|(patch, original_mask)| {
-            original_mask.is_subset(&layout.patches[patch].mask)
+            original_mask.is_subset(
+                &layout
+                    .patches
+                    .get(patch)
+                    .expect("authored Crystal fixture entry")
+                    .mask,
+            )
         }));
-        let chosen = layout.patches[&crystal].rotation_turns;
+        let chosen = layout
+            .patches
+            .get(&crystal)
+            .expect("authored Crystal fixture entry")
+            .rotation_turns;
         let frozen_patches = plan
             .cells
             .iter()
@@ -1187,10 +1231,22 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let frozen_mask = frozen_patches
             .iter()
-            .flat_map(|patch| layout.patches[patch].mask.iter().copied())
+            .flat_map(|patch| {
+                layout
+                    .patches
+                    .get(patch)
+                    .expect("authored Crystal fixture entry")
+                    .mask
+                    .iter()
+                    .copied()
+            })
             .collect::<BTreeSet<_>>();
         let outward = super::super::crystal_ascent::macro_upper_terminal_outward_rows(
-            &layout.patches[&crystal].mask,
+            &layout
+                .patches
+                .get(&crystal)
+                .expect("authored Crystal fixture entry")
+                .mask,
             chosen,
             CRYSTAL_BASE_LEVEL + CRYSTAL_RISE_LEVELS,
             2,

@@ -1312,7 +1312,9 @@ pub(crate) mod tests {
             for steps in 0..6 {
                 let rotation =
                     HexObjectRotation::new(steps).expect("fixture rotation should be valid");
-                let clearance = clearance_projections[usize::from(rotation.steps())]
+                let clearance = clearance_projections
+                    .get(usize::from(rotation.steps()))
+                    .expect("one of six fixture rotations")
                     .as_ref()
                     .expect("fixture rotation should have a cached clearance projection");
                 let blockers = object

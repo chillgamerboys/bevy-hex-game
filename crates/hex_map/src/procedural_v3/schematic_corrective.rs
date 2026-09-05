@@ -1153,7 +1153,9 @@ pub(super) fn validate_massif_crown_shape(
                 .first()
                 .zip(levels.last())
                 .is_some_and(|(inner, outer)| outer < inner)
-                && levels.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 9)
+                && levels
+                    .windows(2)
+                    .all(|pair| matches!(pair, [first, second] if first.abs_diff(*second) <= 9))
                 && levels
                     .windows(5)
                     .all(|window| window.iter().copied().collect::<BTreeSet<_>>().len() > 1)
@@ -1438,24 +1440,35 @@ pub(super) fn validate_peak_ridge_authority(
                 let expected_runway = spine
                     .centerline
                     .iter()
-                    .map(|coord| TilePos::new(*coord, spine.authored_grades[coord]))
-                    .collect::<Vec<_>>();
+                    .map(|coord| {
+                        spine.authored_grades.get(coord).copied()
+                            .map(|level| TilePos::new(*coord, level))
+                            .ok_or_else(|| schematic_contract(format!(
+                                "final ordered peak-saddle spine {} lost authored grade at {coord:?}",
+                                owner.0
+                            )))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 let ingress = route
                     .centerline
                     .windows(2)
                     .filter_map(|pair| {
-                        (ingress_mask.contains(&pair[0].coord)
-                            && owner_mask.contains(&pair[1].coord))
-                        .then_some((pair[0].coord, pair[1].coord))
+                        let [first, second] = pair else {
+                            return None;
+                        };
+                        (ingress_mask.contains(&first.coord) && owner_mask.contains(&second.coord))
+                            .then_some((first.coord, second.coord))
                     })
                     .collect::<BTreeSet<_>>();
                 let egress = route
                     .centerline
                     .windows(2)
                     .filter_map(|pair| {
-                        (owner_mask.contains(&pair[0].coord)
-                            && egress_mask.contains(&pair[1].coord))
-                        .then_some((pair[0].coord, pair[1].coord))
+                        let [first, second] = pair else {
+                            return None;
+                        };
+                        (owner_mask.contains(&first.coord) && egress_mask.contains(&second.coord))
+                            .then_some((first.coord, second.coord))
                     })
                     .collect::<BTreeSet<_>>();
                 let changed_owner_coords = authorized_route_grades
@@ -1642,14 +1655,26 @@ pub(super) fn validate_peak_ridge_authority(
             )));
         }
         for ((first_patch, second_patch), swath) in &component.expected_saddle_swaths {
+            let first_body = component
+                .expected_peak_bodies
+                .get(first_patch)
+                .ok_or_else(|| {
+                    schematic_contract("adjacent peak saddle authority lost one summit owner")
+                })?;
+            let second_body = component
+                .expected_peak_bodies
+                .get(second_patch)
+                .ok_or_else(|| {
+                    schematic_contract("adjacent peak saddle authority lost one summit owner")
+                })?;
             let first_pin = component
                 .summit_pins
                 .iter()
-                .find(|(pin, _)| component.expected_peak_bodies[first_patch].contains_key(pin));
+                .find(|(pin, _)| first_body.contains_key(pin));
             let second_pin = component
                 .summit_pins
                 .iter()
-                .find(|(pin, _)| component.expected_peak_bodies[second_patch].contains_key(pin));
+                .find(|(pin, _)| second_body.contains_key(pin));
             let (Some((_, first_level)), Some((_, second_level))) = (first_pin, second_pin) else {
                 return Err(schematic_contract(
                     "adjacent peak saddle authority lost one summit owner",
@@ -1659,22 +1684,24 @@ pub(super) fn validate_peak_ridge_authority(
                 .min(*second_level)
                 .saturating_sub(30)
                 .min(PEAK_VISUAL_WALL_THRESHOLD.saturating_sub(1));
-            if let Some(coord) = swath
-                .iter()
-                .find(|coord| !component.expected_ridge_profile.contains_key(coord))
-            {
-                return Err(schematic_contract(format!(
-                    "adjacent peak saddle lost its sealed foundation level at {coord:?}"
-                )));
-            }
-            let high = swath
-                .iter()
-                .filter_map(|coord| {
-                    let admitted_ceiling =
-                        saddle_ceiling.max(component.expected_ridge_profile[coord]);
+            let mut high = Vec::new();
+            for coord in swath {
+                let foundation = component
+                    .expected_ridge_profile
+                    .get(coord)
+                    .copied()
+                    .ok_or_else(|| {
+                        schematic_contract(format!(
+                            "adjacent peak saddle lost its sealed foundation level at {coord:?}"
+                        ))
+                    })?;
+                let admitted_ceiling = saddle_ceiling.max(foundation);
+                if let Some(surface) =
                     top_surface(world, *coord).filter(|surface| surface.level > admitted_ceiling)
-                })
-                .collect::<Vec<_>>();
+                {
+                    high.push(surface);
+                }
+            }
             let liquid_coords = world
                 .liquids
                 .bodies
@@ -2541,10 +2568,15 @@ fn validate_vegetation_gradient(
                 )
             })
             .count();
-        bands[index].add_columns(
-            admitted,
-            super::super::schematic_ecology::vegetation_policy(cell).density,
-        );
+        bands
+            .get_mut(index)
+            .ok_or_else(|| {
+                schematic_contract("woodland gradient selected an absent coverage band")
+            })?
+            .add_columns(
+                admitted,
+                super::super::schematic_ecology::vegetation_policy(cell).density,
+            );
     }
 
     for (id, tree) in world
@@ -2591,7 +2623,10 @@ fn validate_vegetation_gradient(
             )));
         }
         if let Some(index) = gradient_band(cell.facts.landform) {
-            bands[index].final_tree_roots = bands[index].final_tree_roots.saturating_add(1);
+            let band = bands.get_mut(index).ok_or_else(|| {
+                schematic_contract("woodland gradient selected an absent root-count band")
+            })?;
+            band.final_tree_roots = band.final_tree_roots.saturating_add(1);
         }
     }
 
@@ -2771,7 +2806,10 @@ fn validate_waterfall_and_review_anchor(
         .windows(2)
         .enumerate()
         .filter_map(|(index, pair)| {
-            (pair[0].level.saturating_sub(pair[1].level) >= 4).then_some((index, pair))
+            let [first, second] = pair else {
+                return None;
+            };
+            (first.level.saturating_sub(second.level) >= 4).then_some((index, pair))
         })
         .collect::<Vec<_>>();
     if !(7..=9).contains(&drops.len()) {
@@ -2893,10 +2931,13 @@ fn validate_river_and_review_anchor(
     let direction_count = coords
         .windows(2)
         .filter_map(|pair| {
-            pair[0]
+            let [first, second] = pair else {
+                return None;
+            };
+            first
                 .neighbors()
                 .iter()
-                .position(|neighbor| *neighbor == pair[1])
+                .position(|neighbor| neighbor == second)
         })
         .collect::<BTreeSet<_>>()
         .len();
@@ -3640,13 +3681,21 @@ mod tests {
             })
             .map(|cell| PatchId(u32::from(cell.id.get())))
             .expect("seed 175 retains one Crystal cell");
-        let crystal_mask = layout.patches[&crystal_patch].mask.clone();
+        let crystal_mask = layout
+            .patches
+            .get(&crystal_patch)
+            .expect("corrective fixture patch")
+            .mask
+            .clone();
         let semantic_massif_mask = plan
             .cells
             .iter()
             .filter(|cell| cell.facts.landform == LandformKind::Massif)
             .flat_map(|cell| {
-                layout.patches[&PatchId(u32::from(cell.id.get()))]
+                layout
+                    .patches
+                    .get(&PatchId(u32::from(cell.id.get())))
+                    .expect("corrective fixture patch")
                     .mask
                     .iter()
                     .copied()
@@ -4156,7 +4205,10 @@ mod tests {
             let mut current = HexCoord::ORIGIN;
             let mut result = BTreeSet::new();
             for _ in 0..depth {
-                current = current.neighbors()[direction];
+                current = *current
+                    .neighbors()
+                    .get(direction)
+                    .expect("one of six fixture directions");
                 result.insert(current);
             }
             result

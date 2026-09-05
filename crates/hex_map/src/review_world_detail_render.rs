@@ -152,6 +152,13 @@ pub(crate) fn plugin(app: &mut App) {
 #[derive(Component, Debug)]
 pub struct ReviewWorldDetailEntity;
 
+/// Saved original material on a pickable water batch whose visible rendering is
+/// temporarily owned by this review projection. Only the suppression adapter
+/// inserts this component, together with removal of the live liquid binding.
+/// Teardown restores this exact handle and removes the component.
+#[derive(Component, Clone, Debug)]
+pub struct ReviewSuppressedWaterMaterial(pub Handle<LiquidMaterial>);
+
 /// Ordered stages of review-projection teardown and live zero-count proof.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReviewWorldDetailLifecycleSystems {
@@ -212,12 +219,13 @@ impl ReviewWaterSuppressionPlan {
 
     fn suppress(self, commands: &mut Commands, state: &mut ReviewWorldDetailProjectionState) {
         for (entity, original) in self.liquids {
-            state.suppressed_liquids.insert(entity, original);
+            state.suppressed_liquids.insert(entity, original.clone());
             // Keep the original mesh visible to picking while removing only its
             // render binding. The review surface is the sole visible water path.
             commands
                 .entity(entity)
-                .remove::<MeshMaterial3d<LiquidMaterial>>();
+                .remove::<MeshMaterial3d<LiquidMaterial>>()
+                .insert(ReviewSuppressedWaterMaterial(original));
         }
     }
 }
@@ -592,7 +600,8 @@ fn restore_review_world_detail(
     for (entity, original) in &state.suppressed_liquids {
         commands
             .entity(*entity)
-            .try_insert(MeshMaterial3d(original.clone()));
+            .try_insert(MeshMaterial3d(original.clone()))
+            .try_remove::<ReviewSuppressedWaterMaterial>();
     }
     for (entity, original) in &state.vegetation_original_scales {
         if let Ok(mut transform) = render_children.get_mut(*entity) {
@@ -636,6 +645,7 @@ fn publish_review_world_detail_teardown_receipt(
         &MeshMaterial3d<LiquidMaterial>,
         With<ReviewLiquidPresentationRole>,
     >,
+    suppressed_water: Query<Entity, With<ReviewSuppressedWaterMaterial>>,
     render_children: Query<&Transform>,
 ) {
     let Some(targets) = targets else {
@@ -658,7 +668,10 @@ fn publish_review_world_detail_teardown_receipt(
                 .get(**entity)
                 .map_or(true, |current| &current.0 != *original)
         })
-        .count();
+        .map(|(entity, _)| *entity)
+        .chain(suppressed_water.iter())
+        .collect::<BTreeSet<_>>()
+        .len();
     let vegetation_scale_overrides_remaining = targets
         .vegetation_original_scales
         .iter()
@@ -2414,10 +2427,6 @@ fn cloud_shadow_material() -> StandardMaterial {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "spawn helper reports exact asset/entity ownership explicitly"
-)]
 fn spawn_spray(
     sprays: &[crate::review_world_detail_effects::ReviewSprayVolumeV1],
     state: &mut ReviewWorldDetailProjectionState,
@@ -3708,12 +3717,10 @@ mod tests {
             review_effect_anchor_kind("grand_v3.river_bend"),
             Some(ReviewEffectAnchorKindV1::ValleyWater)
         );
-        for name in ["grand_v3.coast"] {
-            assert_eq!(
-                review_effect_anchor_kind(name),
-                Some(ReviewEffectAnchorKindV1::Water)
-            );
-        }
+        assert_eq!(
+            review_effect_anchor_kind("grand_v3.coast"),
+            Some(ReviewEffectAnchorKindV1::Water)
+        );
         for name in [
             "grand_v3.lake_island",
             "grand_v3.river_overlook",
@@ -4043,9 +4050,15 @@ mod tests {
         )
         .expect("valid rough-water material should build");
         assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
-        assert_eq!(material.base.base_color.to_srgba().alpha, 0.70);
-        assert_eq!(material.base.perceptual_roughness, 0.40);
-        assert_eq!(material.base.reflectance, 0.50);
+        assert_eq!(
+            material.base.base_color.to_srgba().alpha.to_bits(),
+            0.70_f32.to_bits()
+        );
+        assert_eq!(
+            material.base.perceptual_roughness.to_bits(),
+            0.40_f32.to_bits()
+        );
+        assert_eq!(material.base.reflectance.to_bits(), 0.50_f32.to_bits());
         assert_eq!(
             material.extension.params.flow_phase_scale.z.to_bits(),
             1.25_f32.to_bits()
@@ -4088,10 +4101,13 @@ mod tests {
         )
         .expect("valid transmission water should build");
         assert_eq!(material.base.alpha_mode, AlphaMode::Opaque);
-        assert_eq!(material.base.ior, 1.333);
-        assert_eq!(material.base.thickness, 0.08);
+        assert_eq!(material.base.ior.to_bits(), 1.333_f32.to_bits());
+        assert_eq!(material.base.thickness.to_bits(), 0.08_f32.to_bits());
         assert!(material.base.specular_transmission > 0.0);
-        assert_eq!(material.base.perceptual_roughness, 0.0);
+        assert_eq!(
+            material.base.perceptual_roughness.to_bits(),
+            0.0_f32.to_bits()
+        );
         assert_eq!(
             material.extension.params.refraction.x.to_bits(),
             REVIEW_MAX_REFRACTION_UV.to_bits()
@@ -4248,8 +4264,14 @@ mod tests {
             ),
             fixed_uniforms
         );
-        assert_eq!(material.base.base_color.to_srgba().alpha, alpha);
-        assert_eq!(material.base.perceptual_roughness, roughness);
+        assert_eq!(
+            material.base.base_color.to_srgba().alpha.to_bits(),
+            alpha.to_bits()
+        );
+        assert_eq!(
+            material.base.perceptual_roughness.to_bits(),
+            roughness.to_bits()
+        );
     }
 
     #[test]
@@ -4408,6 +4430,16 @@ mod tests {
             .get::<MeshMaterial3d<LiquidMaterial>>(water)
             .is_none());
         assert_eq!(
+            app.world()
+                .get::<ReviewSuppressedWaterMaterial>(water)
+                .map(|owner| &owner.0),
+            Some(&original)
+        );
+        assert!(app
+            .world()
+            .get::<ReviewSuppressedWaterMaterial>(lava)
+            .is_none());
+        assert_eq!(
             app.world().get::<Mesh3d>(water).map(|mesh| &mesh.0),
             Some(&mesh)
         );
@@ -4433,6 +4465,10 @@ mod tests {
 
         app.insert_resource(state);
         app.update();
+        assert!(app
+            .world()
+            .get::<ReviewSuppressedWaterMaterial>(water)
+            .is_none());
 
         assert_eq!(
             app.world()
@@ -4453,6 +4489,18 @@ mod tests {
                 .resource::<ReviewWorldDetailTeardownReceiptV1>()
                 .liquid_visibility_overrides_remaining,
             0
+        );
+        // A stale suppression owner must not disappear from teardown evidence
+        // merely because its target is absent from the just-cleared state.
+        app.world_mut()
+            .entity_mut(water)
+            .insert(ReviewSuppressedWaterMaterial(original));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<ReviewWorldDetailTeardownReceiptV1>()
+                .liquid_visibility_overrides_remaining,
+            1
         );
     }
 

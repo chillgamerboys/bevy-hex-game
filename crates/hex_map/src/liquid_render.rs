@@ -66,7 +66,7 @@ struct LiquidMaterialParams {
 
 /// PBR extension used only by map-owned liquid presentation geometry.
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
-pub(crate) struct LiquidExtension {
+pub struct LiquidExtension {
     // StandardMaterial owns the low binding numbers. Bevy's extension examples
     // reserve binding 100 and above for extension uniforms.
     #[uniform(100)]
@@ -79,7 +79,8 @@ impl MaterialExtension for LiquidExtension {
     }
 }
 
-pub(crate) type LiquidMaterial = ExtendedMaterial<StandardMaterial, LiquidExtension>;
+/// Original voxel-water and lava-overlay material owned by the map renderer.
+pub type LiquidMaterial = ExtendedMaterial<StandardMaterial, LiquidExtension>;
 
 /// Session-only visual phase. It never affects topology or map fingerprints.
 #[derive(Resource, Reflect, Clone, Debug, Default)]
@@ -1585,10 +1586,26 @@ mod tests {
 
         let expected_first_center =
             cap_transform(surfaces[0].position, 0.4).transform_point(Vec3::ZERO);
-        assert_vec3_near(Vec3::from_array(mesh.positions[0]), expected_first_center);
+        assert_vec3_near(
+            Vec3::from_array(
+                *mesh
+                    .positions
+                    .first()
+                    .expect("the first cap has a center vertex"),
+            ),
+            expected_first_center,
+        );
         let expected_second_center =
             cap_transform(surfaces[1].position, 0.4).transform_point(Vec3::ZERO);
-        assert_vec3_near(Vec3::from_array(mesh.positions[7]), expected_second_center);
+        assert_vec3_near(
+            Vec3::from_array(
+                *mesh
+                    .positions
+                    .get(7)
+                    .expect("the second cap has a center vertex after the first seven vertices"),
+            ),
+            expected_second_center,
+        );
     }
 
     #[test]
@@ -1619,14 +1636,37 @@ mod tests {
                 let mut shared_vertices = 0;
                 for first in 0..7 {
                     for second in 7..14 {
-                        let first_position = Vec3::from_array(mesh.positions[first]);
-                        let second_position = Vec3::from_array(mesh.positions[second]);
+                        let first_position = Vec3::from_array(
+                            *mesh
+                                .positions
+                                .get(first)
+                                .expect("the first cap retains all seven positions"),
+                        );
+                        let second_position = Vec3::from_array(
+                            *mesh
+                                .positions
+                                .get(second)
+                                .expect("the second cap retains all seven positions"),
+                        );
                         if !first_position.abs_diff_eq(second_position, 1.0e-5) {
                             continue;
                         }
                         shared_vertices += 1;
-                        assert!(Vec2::from_array(mesh.uvs[first])
-                            .abs_diff_eq(Vec2::from_array(mesh.uvs[second]), 1.0e-5));
+                        assert!(Vec2::from_array(
+                            *mesh
+                                .uvs
+                                .get(first)
+                                .expect("the first shared vertex retains its UV")
+                        )
+                        .abs_diff_eq(
+                            Vec2::from_array(
+                                *mesh
+                                    .uvs
+                                    .get(second)
+                                    .expect("the second shared vertex retains its UV")
+                            ),
+                            1.0e-5
+                        ));
                     }
                 }
                 assert_eq!(shared_vertices, 2, "one shared hex edge has two vertices");
@@ -1911,22 +1951,28 @@ mod tests {
         let strips = curtain_strips(&surfaces).expect("valid exposed liquid sides");
         assert_eq!(strips.len(), 2);
         assert_eq!(
-            strips[&LiquidCurtainBatchKey {
-                role: FillMaterialRole::Water,
-                style: MaterialStyle::Surface,
-            }],
-            vec![CurtainStrip {
+            strips
+                .get(&LiquidCurtainBatchKey {
+                    role: FillMaterialRole::Water,
+                    style: MaterialStyle::Surface,
+                })
+                .map(Vec::as_slice)
+                .expect("the exposed water edge retains its surface curtain batch"),
+            &[CurtainStrip {
                 source: generic_source,
                 downstream: generic_lower,
                 side: HexSide::East,
             }]
         );
         assert_eq!(
-            strips[&LiquidCurtainBatchKey {
-                role: FillMaterialRole::Water,
-                style: MaterialStyle::Fall,
-            }],
-            vec![CurtainStrip {
+            strips
+                .get(&LiquidCurtainBatchKey {
+                    role: FillMaterialRole::Water,
+                    style: MaterialStyle::Fall,
+                })
+                .map(Vec::as_slice)
+                .expect("the exposed water edge retains its fall curtain batch"),
+            &[CurtainStrip {
                 source: fall_source,
                 downstream: fall_lower,
                 side: HexSide::East,
@@ -1990,6 +2036,9 @@ mod tests {
 
     #[test]
     fn lava_material_preserves_opaque_overlay_depth_precedence() {
+        const {
+            assert!(LIQUID_PRESENTATION_DEPTH_BIAS > 0.0);
+        }
         for style in [MaterialStyle::Surface, MaterialStyle::Fall] {
             let material = liquid_material(
                 Color::srgb(0.9, 0.2, 0.04),
@@ -1997,7 +2046,6 @@ mod tests {
                 Color::srgb(0.90, 0.96, 0.99),
                 LiquidMaterialProfile::new(FillMaterialRole::Lava, style),
             );
-            assert!(LIQUID_PRESENTATION_DEPTH_BIAS > 0.0);
             assert!(cap_bias(0.4) > 0.0 && cap_bias(0.4) < 0.4);
             assert_f32_near(material.base.depth_bias, LIQUID_PRESENTATION_DEPTH_BIAS);
             assert_f32_near(material.base.base_color.alpha(), 1.0);

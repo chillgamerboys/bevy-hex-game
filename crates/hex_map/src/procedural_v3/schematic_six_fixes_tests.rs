@@ -8,6 +8,38 @@
 use super::*;
 
 #[test]
+fn garden_spring_stone_bed_keeps_exact_voxels_in_canonical_runs() {
+    let coord = HexCoord::ORIGIN;
+    let bed = TilePos::new(coord, 152);
+    let mut volume = VolumePlan::new(BTreeSet::from([coord]));
+    volume.columns.insert(
+        coord,
+        water_column(bed.level, 153, SolidMaterialRole::Stone),
+    );
+    volume.surfaces.insert(
+        bed,
+        SurfaceMetadata {
+            access: SurfaceAccess::NonStandable,
+            interior: None,
+        },
+    );
+    volume.validate().expect("spring column is canonical");
+    for level in 1..=bed.level {
+        assert_eq!(
+            solid_material_at(&volume, TilePos::new(coord, level)),
+            Some(SolidMaterialRole::Stone)
+        );
+    }
+    assert_eq!(
+        volume.fill_runs_by_top().get(&TilePos::new(coord, 153)),
+        Some(&NonSolidFill {
+            levels: LevelInterval::new(153, 154),
+            material: FillMaterialRole::Water,
+        })
+    );
+}
+
+#[test]
 fn final_hero_preserves_intake_river_bridges_and_expanded_tunnel() {
     assert_final_map_fixes(1_592_598_566);
 }
@@ -42,8 +74,8 @@ fn assert_final_map_fixes(seed: u64) {
     .unwrap_or_else(|error| panic!("seed {seed} final generation failed: {error}"));
     let world = &selection.validated.plan;
     assert_original_natural_pass(seed, world);
-    assert_final_hydrology(&schematic, world);
     assert_final_tunnel(&schematic, world);
+    assert_final_hydrology(&schematic, world);
 }
 
 #[derive(serde::Deserialize)]
@@ -100,6 +132,246 @@ fn assert_original_natural_pass(seed: u64, world: &GeneratedWorldPlan) {
             "every original route surface remains walkable after final publication"
         );
     }
+}
+
+/// Check published volume and graph facts in normalized river rows. Geometric
+/// centerline order is not a downstream path where a later row reclaims a bend.
+fn assert_published_river_flow(
+    rows: &[BTreeSet<TilePos>],
+    fills: &BTreeMap<TilePos, NonSolidFill>,
+    liquids: &LiquidPlan,
+    source_level: Level,
+    terminal_level: Level,
+    source_rapids: usize,
+) {
+    assert!(rows.iter().all(|row| row.len() == 3));
+    let sources = rows.first().expect("river retains its three source lanes");
+    let terminals = rows.last().expect("river retains its three terminal lanes");
+    assert!(sources
+        .iter()
+        .all(|position| position.level == source_level));
+    assert!(terminals
+        .iter()
+        .all(|position| position.level == terminal_level));
+    let positions = rows.iter().flatten().copied().collect::<BTreeSet<_>>();
+    let coords = positions
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        positions.len(),
+        coords.len(),
+        "normalized rows have one height per coordinate"
+    );
+    let mut owners = BTreeSet::new();
+    for position in &positions {
+        let actual = fills
+            .range(
+                TilePos::new(position.coord, Level::MIN)..=TilePos::new(position.coord, Level::MAX),
+            )
+            .filter(|(_, fill)| fill.material == FillMaterialRole::Water)
+            .map(|(top, _)| *top)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual.as_slice(),
+            [*position],
+            "river water changed at {position:?}"
+        );
+        let fill = fills.get(position).expect("exact river water is present");
+        assert_eq!(fill.levels.top, position.level + 1);
+        let exact_owners = liquids
+            .bodies
+            .iter()
+            .filter(|(_, body)| body.nodes.contains_key(position))
+            .map(|(id, body)| {
+                assert_eq!(body.material, FillMaterialRole::Water);
+                *id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exact_owners.len(),
+            1,
+            "river water needs one actual body at {position:?}"
+        );
+        owners.extend(exact_owners);
+    }
+    assert_eq!(owners.len(), 1, "all river lanes retain one water body");
+    let body = liquids
+        .bodies
+        .get(owners.first().expect("river has an owner"))
+        .expect("river owner exists");
+
+    // Trace every node, including side branches that the three source paths do
+    // not visit. This proves final reachability and exact flow states in addition
+    // to preserving all seven one-level drops on each complete 15-to-8 path.
+    for source in &positions {
+        let mut cursor = *source;
+        let mut seen = BTreeSet::new();
+        let mut rapids = 0_usize;
+        loop {
+            assert!(
+                seen.insert(cursor),
+                "river path from {source:?} cycles at {cursor:?}"
+            );
+            let node = body
+                .nodes
+                .get(&cursor)
+                .expect("actual river node retains its body");
+            if terminals.contains(&cursor) {
+                assert_eq!(cursor.level, terminal_level);
+                assert_eq!(node.state, LiquidFlowState::Still);
+                assert_eq!(node.downstream, None);
+                break;
+            }
+            let next = node
+                .downstream
+                .expect("every nonterminal river node must drain");
+            assert!(
+                positions.contains(&next),
+                "river edge leaves its normalized ribbon: {cursor:?} -> {next:?}"
+            );
+            assert_eq!(cursor.coord.distance(next.coord), 1);
+            let drop = cursor.level - next.level;
+            assert!(
+                [0, 1].contains(&drop),
+                "river edge must descend zero or one level: {cursor:?} -> {next:?}"
+            );
+            let expected_state = if drop == 1 {
+                rapids += 1;
+                LiquidFlowState::Rapid
+            } else {
+                LiquidFlowState::Current
+            };
+            assert_eq!(
+                node.state, expected_state,
+                "actual river flow at {cursor:?}"
+            );
+            cursor = next;
+        }
+        assert_eq!(
+            rapids,
+            usize::try_from(source.level - terminal_level)
+                .expect("river source is at or above its terminal")
+        );
+        if sources.contains(source) {
+            assert_eq!(
+                rapids, source_rapids,
+                "every inlet lane retains all authored river drops: {source:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn normalized_river_bend_flows_downstream_despite_raw_centerline_rebound() {
+    let centerline = [(-1, 0, 15), (0, 0, 15), (1, 0, 15), (1, -1, 14)]
+        .map(|(q, r, level)| TilePos::new(HexCoord::from_axial(q, r), level));
+    // Literal three-wide rows use the same transverse axis through the bend.
+    // The final row reclaims (0,0), but the previous center (1,0) is still high.
+    let authored_rows = centerline
+        .iter()
+        .map(|center| {
+            (-1..=1)
+                .map(|offset| {
+                    TilePos::new(
+                        HexCoord::from_axial(center.coord.x() + offset, center.coord.y() - offset),
+                        center.level,
+                    )
+                })
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    for (index, source) in authored_rows.iter().enumerate().take(3) {
+        let target = authored_rows
+            .get(index + 1)
+            .expect("fixture retains the next row");
+        assert!(three_lane_rows_preserve_exact_progression(
+            source,
+            target,
+            authored_rows.get(index + 2),
+        ));
+    }
+    let rows = normalize_three_lane_row_claims(&authored_rows);
+    let positions = rows.iter().flatten().copied().collect::<BTreeSet<_>>();
+    let actual_centers = centerline
+        .iter()
+        .map(|center| {
+            positions
+                .iter()
+                .find(|position| position.coord == center.coord)
+                .expect("every geometric center retains water")
+                .level
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual_centers, [15, 14, 15, 14]);
+    assert!(actual_centers
+        .windows(2)
+        .any(|pair| matches!(pair, [before, after] if after > before)));
+
+    let mut volume = VolumePlan::new(positions.iter().map(|position| position.coord).collect());
+    for position in &positions {
+        volume.columns.insert(
+            position.coord,
+            water_column(position.level - 1, position.level, SolidMaterialRole::Dirt),
+        );
+    }
+    let fills = volume.fill_runs_by_top();
+    let mut nodes = positions
+        .iter()
+        .map(|position| {
+            (
+                *position,
+                LiquidNode {
+                    state: LiquidFlowState::Still,
+                    downstream: None,
+                },
+            )
+        })
+        .collect();
+    apply_directed_watercourse(
+        &rows,
+        &OutletAuthority {
+            edges: BTreeMap::new(),
+            downstream_course: BTreeSet::new(),
+        },
+        &fills,
+        &mut nodes,
+    )
+    .expect("the bend admits actual downstream flow");
+    let owner = LiquidBodyId(1);
+    let mut liquids = LiquidPlan {
+        bodies: BTreeMap::from([(
+            owner,
+            LiquidBodyPlan {
+                material: FillMaterialRole::Water,
+                nodes,
+            },
+        )]),
+    };
+    assert!(
+        liquids.validate(&volume).is_empty(),
+        "synthetic flow meets canonical liquid contracts"
+    );
+    assert_published_river_flow(&rows, &fills, &liquids, 15, 14, 1);
+
+    // The oracle reads the published class, rather than deriving a replacement
+    // class and accidentally hiding a lost Rapid in the final liquid plan.
+    let rapid = liquids
+        .bodies
+        .get_mut(&owner)
+        .expect("fixture body exists")
+        .nodes
+        .values_mut()
+        .find(|node| node.state == LiquidFlowState::Rapid)
+        .expect("fixture contains a real one-level Rapid");
+    rapid.state = LiquidFlowState::Current;
+    assert!(
+        std::panic::catch_unwind(|| {
+            assert_published_river_flow(&rows, &fills, &liquids, 15, 14, 1);
+        })
+        .is_err(),
+        "misclassified final flow must fail the oracle"
+    );
 }
 
 fn assert_final_hydrology(schematic: &SchematicPlanV1, world: &GeneratedWorldPlan) {
@@ -179,24 +451,12 @@ fn assert_final_hydrology(schematic: &SchematicPlanV1, world: &GeneratedWorldPla
         assert_eq!(cursor.level, 8, "every intake lane must reach the sea");
     }
 
+    // The authored descent schedule remains seven one-level drops. At bends,
+    // actual flow follows normalized rows and published downstream edges below.
     let river_levels = ribbon
         .river_centerline
         .iter()
-        .map(|center| {
-            let actual = fills
-                .range(
-                    TilePos::new(center.coord, Level::MIN)..=TilePos::new(center.coord, Level::MAX),
-                )
-                .filter(|(_, fill)| fill.material == FillMaterialRole::Water)
-                .map(|(position, _)| position.level)
-                .collect::<Vec<_>>();
-            assert_eq!(
-                actual.len(),
-                1,
-                "river coordinate must retain one water surface"
-            );
-            *actual.first().expect("river water is present")
-        })
+        .map(|center| center.level)
         .collect::<Vec<_>>();
     assert_eq!(river_levels.first(), Some(&15));
     assert_eq!(river_levels.last(), Some(&8));
@@ -207,8 +467,27 @@ fn assert_final_hydrology(schematic: &SchematicPlanV1, world: &GeneratedWorldPla
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(drops.iter().all(|drop| [0, 1].contains(drop)));
+    assert!(
+        drops.iter().all(|drop| [0, 1].contains(drop)),
+        "authored river profile must descend one level at a time: levels={river_levels:?}, drops={drops:?}",
+    );
     assert_eq!(drops.iter().filter(|drop| **drop == 1).count(), 7);
+
+    let river_rows = ribbon
+        .watercourse_rows
+        .get(ribbon.waterfall_centerline.len().saturating_sub(1)..)
+        .expect("river rows begin at the waterfall receiving basin");
+    assert_eq!(river_rows.len(), ribbon.river_centerline.len());
+    let sea = semantic_sea_coords(schematic, &world.layout);
+    assert!(
+        river_rows
+            .last()
+            .expect("river has a terminal row")
+            .iter()
+            .all(|position| sea.contains(&position.coord)),
+        "river terminals remain in the actual sea"
+    );
+    assert_published_river_flow(river_rows, &fills, &world.liquids, 15, 8, 7);
 
     let bridges = world
         .structures

@@ -210,11 +210,12 @@ pub(super) fn lake_island_surface_level(
     }
     let inward = 10_i32.saturating_sub(distance).max(0);
     let broad_rise = span.saturating_mul(inward) / 10;
-    let terrace = if distance < 9 && named_sample(seed, "garden_island_terraces", coord) % 5 == 0 {
-        1
-    } else {
-        0
-    };
+    let terrace =
+        if distance < 9 && named_sample(seed, "garden_island_terraces", coord).is_multiple_of(5) {
+            1
+        } else {
+            0
+        };
     profile
         .lake_island_min_level
         .saturating_add(broad_rise)

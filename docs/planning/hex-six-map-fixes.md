@@ -1,83 +1,42 @@
 # Recovered Hex map fixes and Crystal crown snow
 
-## Integration and source
+## Source and integration
 
-One stacked follow-up from accepted V3 snapshot `125e2df`, on `fix/hex-six-map-fixes`. The snapshot was supplied by the V3 owner after the user accepted the original water tint at alpha 0.85 and combined voxel choices. Archive SHA-256: `a2c9e75a0220d8a1aad184289396b2d1838dcb0a3ffe16def9c9275f5e8bc155`; 762 recorded files and modes verified. Parent source commit: `bc06a8969532b807ec677928eee304bc28399386`.
+This follow-up starts from the V3 visual checkpoint accepted at `125e2df4df625c2d540a1dcf62e64ea2caf05b61`, parent `bc06a896`. Its source archive SHA-256 is `a2c9e75a0220d8a1aad184289396b2d1838dcb0a3ffe16def9c9275f5e8bc155`; all 762 recorded files and modes were verified. The original feedback was sent in “Test subtle map visual changes” on September 3 at 10:36 p.m. PDT, with five screenshots.
 
-Generation edits are sequential under one writer. Independent renderer work and read-only audits share this isolated integration checkout; no concurrent writers to shared generation files. This is one implementation and review unit, not six branches or PRs. No new save, network, or shared gameplay schema is planned. Private generation metadata owns bounded exceptions.
+One isolated worktree, `fix/hex-six-map-fixes`, owns sequential generation changes. The completed walking handoff `95b2274de9c9be23a2aaf75634c5a1cb03b1281b` is integrated with all nine commits through `a3c13d4`. PR219 remains the combined wave into `dev`; the V4 child keeps its wave-base ancestry. Readiness coordination uses direct task messages; no polling automation is active.
+
+All additions use existing voxel geometry and liquid states. Bounded private generation metadata owns the intake, spring, courtyard, shelf, crown and tunnel corrections. There is no decorative-object system, fluid simulation, or new save/network/shared gameplay schema.
 
 ## Scope ledger
 
-| Item | Status | Contract |
+| Item | Candidate behavior | Current evidence |
 |---|---|---|
-| Waterfall intake | Candidate authored; focused intake tests passed again in candidate07 | Four existing sections 9→7→5→3; preserve core elevations and downstream cascade; directed drainage for added water. |
-| Garden Island | Candidate authored; validation pending | Reserve complete courtyard against roots and crowns; retain surrounding trees; small supported voxel spring connected to upper lake. |
-| Natural pass | Candidate authored; independent baseline regression fixtures added | Feather adjacent shoulders; preserve exact walking centerline, grades, width, endpoints, and two-entrance topology. |
-| Rear shelf | Context matched; three bounded geometry tests passed in candidate07; full generation pending | Eastern rear apron connected to coarse cell128, outside the Peak ring, dry natural levels121..<200 with neighbor steps≤2. Record the exact contiguous mask before sparse deterministic snowy-tree clusters; preserve routes, water, summits, complete crowns and terrain. |
-| River | Candidate authored; final generation and animation review pending | Final lower-lake15→sea8 descent and both bridges; accepted water color/alpha in ordinary gameplay; directional Rapid movement and restrained foam. |
-| Tunnel | Candidate authored; shell-side expansion preference pending | Repair the bend, retain floor and tapered joins, add two ceiling voxels, and keep complete crystals clear. Unobstructed sections add two cells per side; beside the immutable Crystal shell, the current eight-wide candidate adds four outward. True symmetric widening would enter two protected shell columns. |
-| Crystal Ascent crown snow | Three focused geometry/distribution tests passed in candidate07; full generation/captures pending | Existing summit cap voxels only: bare radius11, full snow radius27 and existing outer summit trail; deterministic radial smoothstep with coherent patches and fine dither. Existing crown trees use accepted snowy-small-broadleaf with unchanged occupied voxels, roots, rotations and blockers. |
-| Minor rear peaks | Deferred by approved plan | Optional terrain reconstruction increases scope; sparse trees address the requested empty shelf. |
+| Waterfall intake | Four original sections widen to 9→7→5→3 at unchanged elevations. Private ownership and directed drainage converge into the original cascade. | Focused hero/seed 0 overlap, drainage and cascade checks pass. Final hero strict generation and the normalized published source-to-sea graph pass, including exactly seven one-level drops and both bridges. |
+| Garden Island | Full trunk/crown courtyard reservation within the six columns; surrounding trees retained. A supported stone/dirt spring feeds a short narrow spillway into the upper lake. | Courtyard and canonical spring run checks pass. Adjacent Stone intervals now join without changing occupied voxels; hero strict generation succeeds. |
+| Natural pass | Fill adjacent lower-approach terrain toward a three-level lateral falloff. No cuts, new/worsened steep edges, or movement of the original route. | Eight focused checks pass. The candidate fills 464 hero and 408 zero columns. The final hero world matches the independent accepted-baseline centerline, grades, complete footprint and width. |
+| Rear shelf | Screenshot 4 identifies the eastern rear apron connected to coarse cell 128 `(7,-6)`, outside the Peak ring. Capture its contiguous dry natural mask at levels 121..<200 with neighboring steps ≤2 before sparse deterministic snowy-tree clusters. | Three geometry/exclusion checks pass; final tree publication and visual review pending. |
+| River | Preserve lower lake 15→sea 8 and seven single-level drops, both bridges and the accepted seabed/water colors. Directional Rapid movement and restrained foam use the original pickable water faces. | 23 liquid-render checks and combined actual-material ownership, picking and camera/OIT ECS fixtures pass. Actual GPU shader compilation and sampled animation inspection remain pending. |
+| Tunnel | Two-phase planning preserves the original surface-route reservations. Repair the one-cell pinch to a true four-wide core, recess complete crystal geometry, and raise the interior ceiling two voxels. Add two cells on each side only where the untranslated symmetric extension fits; preserve floor, tapered joins and original niches. | Conservative partial candidate: the Crystal-adjacent core and corner fan remain four wide because inward widening intersects protected radius-31/32 columns. Clear stretches widen symmetrically to eight with six-wide transitions. No four-cell outward expansion is selected. Updated focused/final validation and committed-source captures remain pending; prior results describe the preceding candidate. |
+| Crystal crown snow | Existing crown cap voxels transition from bare inner radius 11 to full snow at radius 27 and the outer trail. Existing trees use accepted snowy foliage with unchanged complete geometry. | Four focused geometry/metadata/distribution checks pass, including the composed upper terminal. Final generation and crown images pending. |
+| Minor rear peaks | Deferred by the approved plan. | Optional peaks would enlarge the terrain reconstruction; sparse snowy trees address the empty shelf. |
 
-## Validation and evidence
+Implementation covers all seven requested items. The tunnel's lateral expansion is partially deferred only where symmetric growth conflicts with protected Crystal geometry; its pinch repair, crystal clearance and ceiling increase remain included. Optional rear peaks remain deferred as approved. Final geometry and visual checks below still govern acceptance.
 
-Focused tests during changes, then repository-selected combined validation from baseline125e2df. Validate final generated geometry, complete vegetation/crystal footprints, water graph and elevations, bridges, access and roof cover. Preserve seed0 overlap and representative-seed contracts. Fingerprints change only after independent geometry checks.
+## Exact geometry and presentation validation
 
-Capture windowless before/after frames for all five original references, whole map, and tunnel first-person views with fog-of-war off; inspect full frames and combined contact sheet. Check flowing water with a separate phase sequence. Native control/camera feel remains a separate user review unless requested.
+Final-world tests inspect actual generated water levels, complete intake flow, spring connectivity, both bridges, route reachability, original natural-pass fixtures, tunnel floor/width/roof and complete crystal clearance after all generation passes. Seed 0 overlap coverage and the repository's representative-seed tests remain selected. Final voxel-world and snapshot fingerprints have not been updated. Two contradictory coarse-schematic expectations were reconciled to `f8c7b2a1a177a982`: independent accepted-source and Walking-source receipts agree on this value and candidate 29, and all 13 generator/template files remain byte-identical. This correction changes no geometry.
 
-Inherited baseline caveats: ordinary water alpha0.85 was only a review replacement and needs production promotion; non-draft Massif-above-Crystal majority is 5628/10315 above182, below the existing55% contract. Diagnose actual terrain stages without weakening the threshold. Acceptance of V3 visuals did not claim shipping, motion, or alternate-light validation.
+The accepted source supplied 30 reference close-ups, two crown views and four shelf/tunnel diagnostics, plus two whole-map views. Before images are explicitly aesthetic evidence from the accepted structural-review checkpoint. After images must come from a clean committed candidate with structural draft disabled: one GPU overview smoke, 19 static views and 48 separate river phases. Fog-of-war shading stays off. Each sidecar must bind the current source/capture request and report operational OIT/depth sampling and the exact requested liquid phase. Every full-size frame and the complete contact sheet require inspection.
 
-The user added the Crystal Ascent crown snow transition while implementation was active. Include crown close-ups and a top view in the same final visual review.
+The merged source passed strict full-workspace, all-target/all-feature Clippy in `clippy-combined-17`. Inherited checked-index and test-helper diagnostics were corrected without suppressing lints, dropping assertions or blindly accepting changed geometry fingerprints. `focused-combined-10` passed 61 of 73 checks; the final hero strict world now generates after canonical spring-run encoding was repaired. `focused-render-camera-walk-01` passed 142 of 143 checks, including all 84 combined Walking/launch checks, actual liquid-material binding and camera restoration. The final review also preserves explicit material ownership during experimental water suppression and exact restoration, without accepting arbitrary missing terrain bindings. Its sole failure sampled a raw river centerline that doubles back across a normalized bend. The replacement oracle follows every published water edge, checks each source-to-sea path and requires exactly seven one-level Rapid drops. Its independent bend fixture deliberately includes the same raw-centerline rebound. `focused-combined-11` passed the final hero, normalized bend, hero coast and public topology checks. Its zero, maximum, 2 and 14 representative seeds still fail inherited terrain constraints. The maximum-seed experiment was removed after this run; it did not affect hero or zero source positions.
 
-## Crystal crown implementation handoff
+The candidate also restores Ring7's legacy orientation, checks shared natural-pass portals without removing overlapping hard reservations, and preserves the original shared highland source policy. A trial early summit relocation for the maximum seed failed the complete crown-component invariant and was removed. Representative-seed failures keep the map gate red. Full selector-chosen candidate validation, docs, shipping, captures and motion remain outstanding.
 
-The private `schematic_crystal_snow.rs` pass runs after global alpine cap reconciliation and before general vegetation. Its authority is the claimed radius32 Crystal patch, exact existing exterior summit surfaces at the authored upper-exit level (canonical150), radii11..27 plus the exact four-wide shell summit trail at radii28..32. It changes only existing one-voxel Grass/Snow material intervals and the existing crown tree object IDs. The radius-below11 hole, stair cutouts, all lower strata, worked-stone architecture, surface positions and metadata, cutaway tags, feature IDs, roots, rotations, complete visual occupancy, canopy membership and blockers remain unchanged. The accepted snowy tree retains green undersides beneath white canopy tops; no new asset is introduced.
+The inherited Massif majority is 5628 of 10,315 columns at or above 182, below the existing 55% requirement (5,674). The accepted hero has 5,931. Test-only exports measure the original shoulder sources, closed terrain bounds, exact current columns and protected masks. The bounded original-shoulder experiment was evaluated without changing terrain: it adds no columns at the required high band. A correction must preserve those authorities and accepted routes; the ineffective fill has not been applied. The threshold, denominator and Crystal reference height remain unchanged; a counter increase alone is not geometric or visual acceptance.
 
-The post-ecology Crystal column, metadata, feature and blocker authority is checked after vegetation and at final generation. The baseline diagnostic comparison proved the corrective validator still enforced the obsolete146 threshold despite the accepted ecology’s mean200 snowline. Final snow admission now follows the accepted organic cap policy and existing Frozen/summit rules, and permits only exact Grass cap positions sealed by the crown transition. This changes validation to agree with the accepted visuals; it does not alter the broad snowline or terrain. Neither broad Crystal membership nor another level of the same column is exempt. The existing outer-opening Snow requirement remains intact.
+## Morning launches and delivery
 
-Added tests: `crystal_crown_snow_preserves_final_geometry_strata_and_foliage` compares an actual merged Crystal fragment before/after, including another owner's grass/tree sentinel, exact strata, full tree projections, idempotence and mutation rejection; `crystal_snowy_tree_counterpart_changes_only_existing_foliage_styles` rejects occupancy, blocker or trunk-style drift; `crystal_crown_radial_snow_is_bare_at_hole_and_full_at_edge` checks exact endpoint coverage and increasing broad-band coverage over seeds0,1,7,14,175,9999. All three focused crown tests passed in focused-candidate-04; combined final-world validation and visual captures remain pending. Rustfmt parsed the new module with edition2021 and `git diff --check` passed.
+Both prepared Cargo shortcuts select Grand V3 Baseline seed 1592598566 from one exact combined revision. Ordinary opens the normal game controls with terrain fog shading off; exploration starts in Fly, with F toggling Walk/Fly, WASD movement, Shift run, Space jump in Walk, right-drag camera, wheel zoom and Backspace to title. Wrappers scrub inherited experiment variables and verify clean exact source. They remain disabled until the selected hero passes its generation and windowless render checks and the development build is warm. Broader representative-seed failures block PR delivery, independently of this hero-map play session.
 
-Visual witnesses to capture: the crown centered on its claimed Crystal center (seed0 world axial22,-132, summit150), with the unchanged central oculus and `crystal_ascent.upper_exit` visible; a top view must show bare inner radius11 and white outer radius27, and a close oblique view must show snowy foliage tops with retained green undersides. Review paths and observed runtime cap/tree counts will be recorded after capture; no unrendered frame is claimed as evidence.
-
-## Combined Grand V3 completion
-
-The user requested that this task finish the Grand V3 PR after both this candidate and `Add walk mode to Hex game` are complete, and prepare easy morning-test launches with and without grounded exploration. PR219 targets `dev` from `wave/grand-v3-schematic`; its inspected head is `bc06a896`. This candidate stacks accepted visual snapshot125e2df on that head. The walking task owns `feat/grand-v3-grounded-exploration`, separately based onbc06a896, and has been asked to send an exact committed readiness handoff directly to this task. This task owns combined integration, conflict resolution, final validation and PR reconciliation. No polling automation is active.
-
-Inspect and merge only the walking task's intended unique changes after its readiness message, preserve the accepted visuals and this candidate's camera OIT contract, and revalidate the combined behavior. Prepare separate Cargo-based launchers for ordinary play and walk/fly exploration on the same final map. Do not open a native game window during unattended preparation. Current PR checks contain inherited failures; their exact causes and current-candidate status must be recorded before merge.
-
-## Independent ascent and final tunnel validation
-
-The accepted-source diagnostic captured the original natural pass both at construction and after vegetation for generated seeds0 and1592598566; those stages were identical. The checked-in RON fixtures record all centerline coordinates and levels, every reserved walking surface, and physical widths4 and3 respectively. Final-world tests compare against those independent fixtures, including Ordinary access, so recomputing a changed solver cannot silently bless a moved route.
-
-Early tunnel expansion changed the two-dimensional route exclusion footprint and disconnected the lower natural ascent even though the added tunnel ceiling remained more than130 levels below the route. The candidate now retains the original tunnel footprint during surface terrain planning and performs the wider physical carve after those routes are fixed. Final publication preserves original named niches, replaces recessed crystal lights, adds expanded interior floors and roofs, and refreshes the graph. Both focused phase/publication tests passed in candidate07. Full-world validation stopped at the broadened shoulder field before it reached late expansion, so final-route and whole-world clearance checks remain pending.
-
-## Candidate07 focused result and bounded approach repair
-
-Candidate07 executed43 focused tests:40 passed and3 full-world tests failed. The successful
-set includes original-water seam/picking, all23 liquid-render tests, review material
-restoration, three crown tests, three rear-shelf tests, both tunnel-phase tests, bend width,
-complete crystal bounds and hero/zero intake fixtures. The full hero, generated zero and
-reference Garden tests stopped in the added broad shoulder field: immutable high-cliff
-bounds conflicted at(-31,-105) for the hero and(-31,-111) for zero/reference.
-
-The original Peak shoulder solver is restored. A separate bounded fill-only lower-approach
-extension is being integrated: it raises only lower adjacent terrain toward the route's
-existing nine-level falloff, preserves higher cliffs, pins the exact route and prior terrain
-authorities, and refuses to create or worsen steep boundary edges. No passing full-world
-result is claimed until that candidate is compiled and admitted.
-
-## Committed walking handoff integrated
-
-The walking owner completed and froze `95b2274de9c9be23a2aaf75634c5a1cb03b1281b`,
-based on `bc06a896`, and explicitly yielded its caches. All nine intended commits are
-integrated through a merge that preserves their history. The one status-document conflict
-was resolved around the combined candidate. Automatic source merges retain the candidate's
-OIT/depth/MSAA camera setup and capture-plan detection alongside exploration and windowless
-inspector suppression. Deferred visibility retirement uses the walking owner's
-`try_insert`/`try_remove` fix. The `dev,map-review` combination still needs validation.
-
-Exploration starts in Fly; F selects Walk/Fly. Its focused tests and static author/reviewer
-captures are source-scoped evidence from the walking task. Native feel/flicker remains
-pending the user's morning test. Same-map local launchers are prepared but remain disabled
-until the combined candidate is validated. Warm development and ci/map-test caches were
-APFS-cloned after the owner yielded them; the original caches are preserved.
+The walking owner's 83 focused tests and 13 static frames are source-scoped handoff evidence. The combined candidate passes 84 Walking/launch tests, including ordinary, review and Fly ownership, plus the water/camera composition fixtures. GPU and focused gameplay-camera integration still require their final runs. Human native movement feel, camera motion and flicker remain for the user's morning session. Routine preparation uses only windowless targets and does not open a visible game window. PR219's exact-head human-runtime requirement must be reported honestly; a static capture is not a human motion sign-off.

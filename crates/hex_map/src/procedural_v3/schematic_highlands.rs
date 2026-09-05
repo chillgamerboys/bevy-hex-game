@@ -897,6 +897,15 @@ impl MassifField {
                 .unwrap_or(i32::MAX)
                 .saturating_mul(MASSIF_ABSOLUTE_BODY_RISE_PER_HEX),
         );
+        #[cfg(all(test, feature = "map-review"))]
+        super::schematic::massif_diagnostic::observe_resolve([
+            body,
+            propagated_crown,
+            crown_resolved,
+            irregular_shoulder,
+            combined,
+            outer_cap.max(baseline),
+        ]);
         combined.min(outer_cap.max(baseline))
     }
 }
@@ -946,7 +955,9 @@ fn ordered_peak_saddle_projection_contract(
             ordered.len()
         )));
     }
-    let (component, spine) = ordered[0];
+    let (component, spine) = ordered.first().copied().ok_or_else(|| {
+        contract("Grand V3 highland projection lost its ordered peak-transit spine")
+    })?;
     if spine.owner != INNER_PEAK_TRANSIT_OWNER
         || spine.ingress_from != INNER_PEAK_TRANSIT_INGRESS.0
         || spine.egress_to != INNER_PEAK_TRANSIT_EGRESS.0
@@ -983,7 +994,14 @@ fn ordered_peak_saddle_projection_contract(
             .iter()
             .any(|coord| !reservation.contains(coord))
         || spine.centerline.windows(2).any(|pair| {
-            spine.authored_grades[&pair[0]].abs_diff(spine.authored_grades[&pair[1]]) > 1
+            let [first, second] = pair else {
+                return true;
+            };
+            spine
+                .authored_grades
+                .get(first)
+                .zip(spine.authored_grades.get(second))
+                .is_none_or(|(first_level, second_level)| first_level.abs_diff(*second_level) > 1)
         })
         || spine.authored_grades.values().any(|level| {
             *level < INNER_PEAK_TRANSIT_RUNWAY_ENDPOINT_LEVEL.saturating_sub(PEAK_SADDLE_DEPTH)
@@ -1410,59 +1428,78 @@ impl GrandHighlandField {
 
         let mut fixed = outer
             .iter()
-            .map(|coord| (*coord, raw_surface[coord]))
-            .collect::<BTreeMap<_, _>>();
-        let mut fix = |coord: HexCoord, level: Level, reason: &str| {
-            if !domain.contains(&coord) {
-                return Ok(());
+            .map(|coord| {
+                raw_surface
+                    .get(coord)
+                    .copied()
+                    .map(|level| (*coord, level))
+                    .ok_or_else(|| {
+                        contract(format!(
+                            "Grand V3 projection outer column {coord:?} has no raw surface"
+                        ))
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        {
+            let mut fix = |coord: HexCoord, level: Level, reason: &str| {
+                if !domain.contains(&coord) {
+                    return Ok(());
+                }
+                if let Some(previous) = fixed.insert(coord, level) {
+                    if previous != level {
+                        return Err(contract(format!(
+                            "Grand V3 combined highland projection has conflicting {reason} pin at {coord:?}: {previous} versus {level}"
+                        )));
+                    }
+                }
+                Ok(())
+            };
+            let crest_raw = raw_surface.get(&self.massif.crest).copied();
+            if crest_raw != Some(self.massif.summit) {
+                return Err(contract(format!(
+                    "Grand V3 combined highland projection received moved crest: expected {}, got {crest_raw:?}",
+                    self.massif.summit
+                )));
             }
-            if let Some(previous) = fixed.insert(coord, level) {
-                if previous != level {
-                    return Err(contract(format!(
-                        "Grand V3 combined highland projection has conflicting {reason} pin at {coord:?}: {previous} versus {level}"
-                    )));
+            fix(self.massif.crest, self.massif.summit, "crest")?;
+            for (coord, level) in &self.frozen_plateau.levels {
+                if !frozen_shell_transition.contains_key(coord) {
+                    fix(*coord, *level, "Frozen core")?;
                 }
             }
-            Ok(())
-        };
-        let crest_raw = raw_surface.get(&self.massif.crest).copied();
-        if crest_raw != Some(self.massif.summit) {
-            return Err(contract(format!(
-                "Grand V3 combined highland projection received moved crest: expected {}, got {crest_raw:?}",
-                self.massif.summit
-            )));
-        }
-        fix(self.massif.crest, self.massif.summit, "crest")?;
-        for (coord, level) in &self.frozen_plateau.levels {
-            if !frozen_shell_transition.contains_key(coord) {
-                fix(*coord, *level, "Frozen core")?;
+            for (coord, level) in &frozen_shell_transition {
+                fix(*coord, *level, "Crystal/Frozen shell transition")?;
             }
         }
-        for (coord, level) in &frozen_shell_transition {
-            fix(*coord, *level, "Crystal/Frozen shell transition")?;
-        }
-        drop(fix);
 
-        if let Some((coord, level, floor)) = crystal_shell_apron.iter().find_map(|coord| {
-            let floor = self.crystal_mantle_authority.shell_concealment_floors[coord];
-            fixed
-                .get(coord)
-                .copied()
-                .filter(|level| *level < floor)
-                .map(|level| (*coord, level, floor))
-        }) {
+        if let Some((coord, level, floor)) = self
+            .crystal_mantle_authority
+            .shell_concealment_floors
+            .iter()
+            .find_map(|(coord, &floor)| {
+                fixed
+                    .get(coord)
+                    .copied()
+                    .filter(|level| *level < floor)
+                    .map(|level| (*coord, level, floor))
+            })
+        {
             return Err(contract(format!(
                 "Grand V3 fixed terrain {coord:?}@{level} cuts below Crystal shell-concealment floor {floor} outside a declared opening"
             )));
         }
-        if let Some((coord, level, ceiling)) = crystal_shell_apron.iter().find_map(|coord| {
-            let ceiling = self.crystal_mantle_authority.shell_concealment_ceilings[coord];
-            fixed
-                .get(coord)
-                .copied()
-                .filter(|level| *level > ceiling)
-                .map(|level| (*coord, level, ceiling))
-        }) {
+        if let Some((coord, level, ceiling)) = self
+            .crystal_mantle_authority
+            .shell_concealment_ceilings
+            .iter()
+            .find_map(|(coord, &ceiling)| {
+                fixed
+                    .get(coord)
+                    .copied()
+                    .filter(|level| *level > ceiling)
+                    .map(|level| (*coord, level, ceiling))
+            })
+        {
             return Err(contract(format!(
                 "Grand V3 fixed terrain {coord:?}@{level} rises above Crystal shell-concealment ceiling {ceiling}"
             )));
@@ -1474,13 +1511,12 @@ impl GrandHighlandField {
                     "Grand V3 ordered peak-transit reservation {coord:?} escaped the variable projection domain"
                 )));
             }
-            if fixed
+            if let Some(fixed_level) = fixed
                 .get(coord)
-                .is_some_and(|fixed_level| fixed_level > ceiling)
+                .filter(|fixed_level| *fixed_level > ceiling)
             {
                 return Err(contract(format!(
-                    "Grand V3 fixed highland authority conflicts with ordered peak transit at {coord:?}: fixed={}, ceiling={ceiling}",
-                    fixed[coord]
+                    "Grand V3 fixed highland authority conflicts with ordered peak transit at {coord:?}: fixed={fixed_level}, ceiling={ceiling}"
                 )));
             }
         }
@@ -1559,21 +1595,26 @@ impl GrandHighlandField {
                 .and_modify(|current| *current = (*current).min(*level))
                 .or_insert(*level);
         }
-        if let Some((coord, ceiling, floor)) = crystal_shell_apron.iter().find_map(|coord| {
-            let floor = self.crystal_mantle_authority.shell_concealment_floors[coord];
-            authored_upper
-                .get(coord)
-                .copied()
-                .filter(|ceiling| *ceiling < floor)
-                .map(|ceiling| (*coord, ceiling, floor))
-        }) {
+        if let Some((coord, ceiling, floor)) = self
+            .crystal_mantle_authority
+            .shell_concealment_floors
+            .iter()
+            .find_map(|(coord, &floor)| {
+                authored_upper
+                    .get(coord)
+                    .copied()
+                    .filter(|ceiling| *ceiling < floor)
+                    .map(|ceiling| (*coord, ceiling, floor))
+            })
+        {
             return Err(contract(format!(
                 "Grand V3 authored ceiling {coord:?}@{ceiling} cuts below Crystal shell-concealment floor {floor} outside a declared opening"
             )));
         }
         let authored_upper_closed =
             minimum_lipschitz_envelope(&domain, &variable, &authored_upper, MAXIMUM_STEP);
-        let admissible_summit_ceiling = |coord: HexCoord| authored_upper_closed[&coord];
+        let admissible_summit_ceiling =
+            |coord: HexCoord| authored_upper_closed.get(&coord).copied();
         // A seeded summit can land in, or too near to, the separately authored
         // Crystal exit/Frozen transition. Those ceilings are immutable and
         // cannot support a 260+ crown under the nine-level slope contract, so
@@ -1610,7 +1651,11 @@ impl GrandHighlandField {
                         pins.len()
                     )));
                 };
-                let pin_ceiling = admissible_summit_ceiling(*pin);
+                let pin_ceiling = admissible_summit_ceiling(*pin).ok_or_else(|| {
+                    contract(format!(
+                        "Grand V3 peak summit {pin:?} has no closed authored ceiling"
+                    ))
+                })?;
                 let forbidden_pin = self.crystal_exit_ceiling.contains_key(pin)
                     || self
                         .crystal_mantle_authority
@@ -1635,9 +1680,9 @@ impl GrandHighlandField {
                         ))
                     })?;
                 let prospective_ceiling = |candidate: HexCoord| {
-                    let existing = admissible_summit_ceiling(candidate);
+                    let existing = admissible_summit_ceiling(candidate)?;
                     if candidate == *pin {
-                        existing
+                        Some(existing)
                     } else {
                         let retired = retired_component
                             .iter()
@@ -1650,7 +1695,7 @@ impl GrandHighlandField {
                             })
                             .min()
                             .unwrap_or(existing);
-                        existing.min(retired)
+                        Some(existing.min(retired))
                     }
                 };
                 let other_summit_pins = component
@@ -1688,7 +1733,10 @@ impl GrandHighlandField {
                     .filter(|coord| !saddle_exclusions.contains(coord))
                     .filter(|coord| !retired_peak_crown_ceilings.contains_key(coord))
                     .filter(|coord| !relocated_old_peak_pins.contains(coord))
-                    .filter(|coord| prospective_ceiling(*coord) >= PEAK_SUMMIT_MIN)
+                    .filter(|coord| {
+                        prospective_ceiling(*coord)
+                            .is_some_and(|ceiling| ceiling >= PEAK_SUMMIT_MIN)
+                    })
                     .min_by_key(|coord| (pin.distance(*coord), *coord));
                 let mut borrowed = BTreeSet::new();
                 let replacement = if let Some(replacement) = ordinary_replacement {
@@ -1724,7 +1772,10 @@ impl GrandHighlandField {
                     allowed.extend(borrow_region.iter().copied());
                     let goals = borrow_region
                         .iter()
-                        .filter(|coord| prospective_ceiling(**coord) >= PEAK_SUMMIT_MIN)
+                        .filter(|coord| {
+                            prospective_ceiling(**coord)
+                                .is_some_and(|ceiling| ceiling >= PEAK_SUMMIT_MIN)
+                        })
                         .copied()
                         .collect::<BTreeSet<_>>();
                     let path = shortest_path_between_sets(&allowed, &body_coords, &goals)
@@ -1749,7 +1800,10 @@ impl GrandHighlandField {
                         patch.0
                     )));
                 };
-                let recorded = (*authored_summit).min(prospective_ceiling(replacement));
+                let replacement_ceiling = prospective_ceiling(replacement).ok_or_else(|| {
+                    contract(format!("Grand V3 replacement summit {replacement:?} has no closed authored ceiling"))
+                })?;
+                let recorded = (*authored_summit).min(replacement_ceiling);
                 if recorded < PEAK_SUMMIT_MIN {
                     return Err(contract(format!(
                         "Grand V3 peak patch {} replacement {replacement:?} resolves below minimum summit: {recorded}",
@@ -1798,7 +1852,12 @@ impl GrandHighlandField {
                         .get_mut(&patch)
                         .ok_or_else(|| contract("Grand V3 peak crown borrow lost its body"))?;
                     for coord in &borrowed {
-                        physical_body.insert(*coord, raw_surface[coord]);
+                        let raw = raw_surface.get(coord).copied().ok_or_else(|| {
+                            contract(format!(
+                                "Grand V3 borrowed peak column {coord:?} has no raw surface"
+                            ))
+                        })?;
+                        physical_body.insert(*coord, raw);
                     }
                     component
                         .borrowed_crown_cells
@@ -1890,11 +1949,11 @@ impl GrandHighlandField {
                 .filter(|coord| variable.contains(coord) && self.massif.mask.contains(coord))
                 .filter_map(|coord| {
                     let baseline = baseline_surface.get(&coord).copied()?;
+                    let raw = raw_surface.get(&coord).copied()?;
                     let full = self.massif.resolve(coord, baseline);
                     let without = no_shoulders.resolve(coord, baseline);
-                    (full >= without.saturating_add(2)
-                        && raw_surface[&coord] >= without.saturating_add(2))
-                    .then_some((coord, without.saturating_add(2)))
+                    (full >= without.saturating_add(2) && raw >= without.saturating_add(2))
+                        .then_some((coord, without.saturating_add(2)))
                 })
                 .collect::<Vec<_>>();
             candidates.sort_by_key(|(coord, _)| (source.distance(*coord), *coord));
@@ -2051,20 +2110,141 @@ impl GrandHighlandField {
                 })
                 .take(12)
                 .collect::<Vec<_>>();
+            let lower_authorities = lower_contributors
+                .iter()
+                .map(|(source, floor)| {
+                    let shoulder_owners = shoulder_witness_clusters
+                        .iter()
+                        .filter(|(_, cluster)| cluster.contains(source))
+                        .map(|(owner, _)| *owner)
+                        .collect::<Vec<_>>();
+                    let peak_high_bands = self.peak_authority.components.iter()
+                        .filter_map(|component| component.expected_high_band.get(source).copied())
+                        .collect::<Vec<_>>();
+                    let summit_required_floor = self.massif.summit_sources.contains_key(source)
+                        .then(|| self.massif.summit.saturating_sub(
+                            MASSIF_BODY_NEAR_CREST_INITIAL_DROP.saturating_add(
+                                i32::try_from(self.massif.crest.distance(*source))
+                                    .unwrap_or(i32::MAX)
+                                    .saturating_mul(MASSIF_BODY_CREST_FALLOFF_PER_HEX),
+                            ),
+                        ).saturating_add(2));
+                    let shoulder_candidates = shoulder_owners.iter().map(|owner| {
+                        let candidates = owner.within_radius(3).into_iter()
+                            .filter(|candidate| candidate != owner)
+                            .filter(|candidate| variable.contains(candidate) && self.massif.mask.contains(candidate))
+                            .filter_map(|candidate| {
+                                let baseline = baseline_surface.get(&candidate).copied()?;
+                                let raw = raw_surface.get(&candidate).copied()?;
+                                let full = self.massif.resolve(candidate, baseline);
+                                let required = no_shoulders.resolve(candidate, baseline).saturating_add(2);
+                                (full >= required && raw >= required).then(|| (
+                                    candidate, required, upper_closed.get(&candidate).copied(),
+                                ))
+                            }).collect::<Vec<_>>();
+                        (*owner, candidates)
+                    }).collect::<Vec<_>>();
+                    format!(
+                        "{source:?}@{floor}: crest={:?}@{}, summit_source={:?}, summit_required_floor={summit_required_floor:?}, shoulder_witness_floor={:?}, shoulder_owners={shoulder_owners:?}, shoulder_candidates={shoulder_candidates:?}, peak_pin={:?}, expected_high_band_metadata={peak_high_bands:?}, fixed={:?}, sector_floor={:?}, shell_floor={:?}, transit_grade={:?}",
+                        self.massif.crest,
+                        self.massif.summit,
+                        self.massif.summit_sources.get(source),
+                        shoulder_witness_floors.get(source),
+                        peak_summit_ceilings.get(source),
+                        fixed.get(source),
+                        self.crystal_mantle_authority.sector_pins.values()
+                            .find_map(|(pin, level)| (pin == source).then_some(*level)),
+                        self.crystal_mantle_authority.shell_concealment_floors.get(source),
+                        ordered_transit.authored_grades.get(source),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let upper_authorities = upper_contributors
+                .iter()
+                .map(|(source, ceiling)| {
+                    format!(
+                        "{source:?}@{ceiling}: shell_ceiling={:?}, exit_ceiling={:?}, Frozen_core={:?}, Frozen_halo_distance={:?}, fixed={:?}, transit_ceiling={:?}",
+                        self.crystal_mantle_authority.shell_concealment_ceilings.get(source),
+                        self.crystal_exit_ceiling.get(source),
+                        self.frozen_plateau.levels.get(source),
+                        self.frozen_plateau.halo_distance.get(source),
+                        fixed.get(source),
+                        ordered_transit.reservation_ceilings.get(source),
+                    )
+                })
+                .collect::<Vec<_>>();
             return Err(contract(format!(
-                "Grand V3 combined highland projection is infeasible at {coord:?}: closed lower {minimum} exceeds upper {maximum}; lower contributors={lower_contributors:?}; upper contributors={upper_contributors:?}; nearby fixed pins={fixed_neighbors:?}"
+                "Grand V3 combined highland projection is infeasible at {coord:?}: closed lower {minimum} exceeds upper {maximum}; lower contributors={lower_contributors:?}; upper contributors={upper_contributors:?}; nearby fixed pins={fixed_neighbors:?}; lower authorities={lower_authorities:?}; upper authorities={upper_authorities:?}"
             )));
         }
         let desired = domain
             .iter()
             .map(|coord| {
-                let desired = raw_surface[coord]
-                    .max(lower_closed[coord])
-                    .min(upper_closed[coord]);
-                (*coord, desired)
+                let (raw, minimum, maximum) = raw_surface
+                    .get(coord)
+                    .zip(lower_closed.get(coord))
+                    .zip(upper_closed.get(coord))
+                    .map(|((raw, minimum), maximum)| (*raw, *minimum, *maximum))
+                    .ok_or_else(|| {
+                        contract(format!(
+                            "Grand V3 projection lacks a raw or closed bound at {coord:?}"
+                        ))
+                    })?;
+                Ok((*coord, raw.max(minimum).min(maximum)))
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Result<BTreeMap<_, _>, V3GenerationError>>()?;
         let projected = maximum_lipschitz_envelope(&domain, &variable, &desired, MAXIMUM_STEP);
+        #[cfg(all(test, feature = "map-review"))]
+        if super::schematic::massif_diagnostic::enabled() {
+            use super::schematic::massif_diagnostic as diagnostic;
+            let export_domain = self
+                .massif
+                .mask
+                .iter()
+                .copied()
+                .flat_map(|coord| std::iter::once(coord).chain(coord.neighbors()))
+                .filter(|coord| footprint.contains(coord))
+                .collect::<BTreeSet<_>>();
+            let rows = export_domain.iter().map(|coord| {
+                let baseline = *baseline_surface.get(coord).ok_or_else(|| contract(format!("Massif diagnostic baseline missing at {coord:?}")))?;
+                let raw = *raw_surface.get(coord).ok_or_else(|| contract(format!("Massif diagnostic raw surface missing at {coord:?}")))?;
+                let components = self.massif.mask.contains(coord).then(|| {
+                    diagnostic::capture_resolve(|| self.massif.resolve(*coord, baseline))
+                });
+                Ok(serde_json::json!({
+                    "coord": [coord.x(), coord.y()], "baseline": baseline, "raw": raw,
+                    "visual": self.massif.mask.contains(coord),
+                    "semantic": self.massif.semantic_owner_mask.contains(coord),
+                    "variable": variable.contains(coord), "fixed": fixed.get(coord),
+                    "resolved_massif": components.map(|(resolved, _)| resolved),
+                    "components": components.map(|(_, components)| components),
+                    "depth": self.massif.boundary_depth.get(coord),
+                    "connector_distance": self.massif.connector_distance.get(coord),
+                    "summit_support": self.massif.summit_support.get(coord),
+                    "shoulder_support": self.massif.shoulder_support.get(coord),
+                    "hard_lower": lower.get(coord), "hard_upper": upper.get(coord),
+                    "closed_lower": lower_closed.get(coord), "closed_upper": upper_closed.get(coord),
+                    "projected": projected.get(coord),
+                }))
+            }).collect::<Result<Vec<_>, V3GenerationError>>()?;
+            diagnostic::write(
+                "profile",
+                &serde_json::json!({
+                    "schema": 1,
+                    "crest": [self.massif.crest.x(), self.massif.crest.y(), self.massif.summit],
+                    "body_base": MASSIF_ABSOLUTE_BODY_BASE,
+                    "body_rise": MASSIF_ABSOLUTE_BODY_RISE_PER_HEX,
+                    "shoulder_slope": MASSIF_SHOULDER_SUPPORT_SLOPE,
+                    "shoulder_edge_lift": MASSIF_SHOULDER_EDGE_LIFT,
+                    "component_order": ["body", "propagated_crown", "crown_resolved", "nominal_shoulder", "combined_before_outer_cap", "outer_cap"],
+                    "summit_sources": diagnostic::levels(self.massif.summit_sources.iter().map(|(coord, level)| (*coord, *level))),
+                    "shoulder_sources": diagnostic::levels(self.massif.shoulder_sources.iter().map(|(coord, level)| (*coord, *level))),
+                    "semantic_mask": diagnostic::coords(self.massif.semantic_owner_mask.iter().copied()),
+                    "visual_mask": diagnostic::coords(self.massif.mask.iter().copied()),
+                    "rows": rows,
+                }),
+            );
+        }
         validate_massif_connector_profile(&self.massif, Some(&projected))?;
         validate_combined_surface_projection(
             self,
@@ -2079,8 +2259,18 @@ impl GrandHighlandField {
         )?;
         self.combined_surface_projection = variable
             .iter()
-            .map(|coord| (*coord, projected[coord]))
-            .collect();
+            .map(|coord| {
+                projected
+                    .get(coord)
+                    .copied()
+                    .map(|level| (*coord, level))
+                    .ok_or_else(|| {
+                        contract(format!(
+                            "Grand V3 projection lost variable column {coord:?}"
+                        ))
+                    })
+            })
+            .collect::<Result<_, _>>()?;
         Ok(())
     }
 
@@ -2201,30 +2391,56 @@ fn validate_combined_surface_projection(
             "Grand V3 combined highland projection moved fixed pin {coord:?}: expected {expected}, got {actual:?}"
         )));
     }
-    if let Some((coord, level, ceiling)) = variable.iter().find_map(|coord| {
-        let level = projected[coord];
-        let ceiling = local_upper[coord];
-        (level > ceiling).then_some((*coord, level, ceiling))
-    }) {
-        return Err(contract(format!(
-            "Grand V3 combined highland projection raised {coord:?} to {level} above ceiling {ceiling}"
-        )));
+    for coord in variable {
+        let (level, ceiling) = projected
+            .get(coord)
+            .zip(local_upper.get(coord))
+            .ok_or_else(|| {
+                contract(format!(
+                    "Grand V3 combined highland projection lacks a level or ceiling at {coord:?}"
+                ))
+            })?;
+        if level > ceiling {
+            return Err(contract(format!(
+                "Grand V3 combined highland projection raised {coord:?} to {level} above ceiling {ceiling}"
+            )));
+        }
     }
-    let crystal_shell_apron = field.crystal_mantle_authority.shell_concealment_apron();
-    if let Some((coord, actual, floor)) = crystal_shell_apron.iter().find_map(|coord| {
-        let actual = projected.get(coord).copied();
-        let floor = field.crystal_mantle_authority.shell_concealment_floors[coord];
-        (actual.is_none_or(|level| level < floor)).then_some((*coord, actual, floor))
-    }) {
+    if field
+        .crystal_mantle_authority
+        .shell_concealment_floors
+        .keys()
+        .ne(field
+            .crystal_mantle_authority
+            .shell_concealment_ceilings
+            .keys())
+    {
+        return Err(contract(
+            "Grand V3 combined highland projection has mismatched Crystal shell bounds",
+        ));
+    }
+    if let Some((coord, actual, floor)) = field
+        .crystal_mantle_authority
+        .shell_concealment_floors
+        .iter()
+        .find_map(|(coord, &floor)| {
+            let actual = projected.get(coord).copied();
+            (actual.is_none_or(|level| level < floor)).then_some((*coord, actual, floor))
+        })
+    {
         return Err(contract(format!(
             "Grand V3 combined highland projection left Crystal shell apron {coord:?} at {actual:?}, below concealment floor {floor}"
         )));
     }
-    if let Some((coord, actual, ceiling)) = crystal_shell_apron.iter().find_map(|coord| {
-        let actual = projected.get(coord).copied();
-        let ceiling = field.crystal_mantle_authority.shell_concealment_ceilings[coord];
-        (actual.is_none_or(|level| level > ceiling)).then_some((*coord, actual, ceiling))
-    }) {
+    if let Some((coord, actual, ceiling)) = field
+        .crystal_mantle_authority
+        .shell_concealment_ceilings
+        .iter()
+        .find_map(|(coord, &ceiling)| {
+            let actual = projected.get(coord).copied();
+            (actual.is_none_or(|level| level > ceiling)).then_some((*coord, actual, ceiling))
+        })
+    {
         return Err(contract(format!(
             "Grand V3 combined highland projection left Crystal shell apron {coord:?} at {actual:?}, above concealment ceiling {ceiling}"
         )));
@@ -2249,7 +2465,7 @@ fn validate_combined_surface_projection(
         })
         .map_err(contract)?;
     if let Some((first, first_level, second, second_level)) = variable.iter().find_map(|coord| {
-        let first_level = projected[coord];
+        let first_level = projected.get(coord).copied()?;
         coord.neighbors().into_iter().find_map(|neighbor| {
             if field.crystal_mask.contains(&neighbor) {
                 return None;
@@ -2481,7 +2697,8 @@ fn validate_combined_surface_projection(
                 .filter(|coord| {
                     projected
                         .get(coord)
-                        .is_some_and(|level| *level >= shoulder_witness_floors[*coord])
+                        .zip(shoulder_witness_floors.get(*coord))
+                        .is_some_and(|(level, floor)| level >= floor)
                 })
                 .count()
                 >= 3
@@ -3083,17 +3300,17 @@ fn build_inner_peak_ingress_profile(
     crystal_exit_clearance: &BTreeSet<HexCoord>,
 ) -> Result<InnerPeakIngressProfile, V3GenerationError> {
     let frozen_mask = frozen.levels.keys().copied().collect::<BTreeSet<_>>();
-    let runway_sources = frozen_mask
+    let runway_sources = frozen
+        .levels
         .iter()
-        .copied()
-        .filter(|coord| {
+        .filter(|&(coord, _)| {
             crystal_exit_clearance.contains(coord)
                 || coord
                     .neighbors()
                     .into_iter()
                     .any(|neighbor| crystal_exit_clearance.contains(&neighbor))
         })
-        .map(|coord| (coord, frozen.levels[&coord]))
+        .map(|(coord, level)| (*coord, *level))
         .collect::<BTreeMap<_, _>>();
     if runway_sources.is_empty() {
         return Err(contract(
@@ -3392,7 +3609,7 @@ fn inner_peak_ingress_lower_body_floors(
             })
             .map(|(coord, target)| (*coord, *target, coord.distance(summit)));
         if structural_review_draft {
-            eprintln!(
+            bevy::log::warn!(
                 "Grand V3 structural-review draft: retaining the inner-peak summit before its shoulder taper is complete"
             );
         } else {
@@ -3638,8 +3855,14 @@ fn build_peak_field(
                 })
                 .filter(|swath| !swath.is_empty())
                 .ok_or_else(|| contract("Grand V3 inner peak summit lost its 88/58 saddle"))?;
-            let summit = summit_by_patch[&INNER_PEAK_INGRESS_PEAK_PATCH];
-            let nominal = summit_coord_by_patch[&INNER_PEAK_INGRESS_PEAK_PATCH];
+            let summit = summit_by_patch
+                .get(&INNER_PEAK_INGRESS_PEAK_PATCH)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing inner peak ingress summit"))?;
+            let nominal = summit_coord_by_patch
+                .get(&INNER_PEAK_INGRESS_PEAK_PATCH)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing inner peak ingress summit coordinate"))?;
             let internal_ceiling = peak_saddle_ceiling(
                 (PatchId(58), INNER_PEAK_INGRESS_PEAK_PATCH),
                 &summit_by_patch,
@@ -3666,7 +3889,10 @@ fn build_peak_field(
                 .get(schematic)
                 .copied()
                 .ok_or_else(|| contract("Grand V3 peak component omitted one summit level"))?;
-            let summit_coord = summit_coord_by_patch[&cell.patch];
+            let summit_coord = summit_coord_by_patch
+                .get(&cell.patch)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing peak summit coordinate"))?;
             if peak_summit_pins
                 .insert(cell.patch, (summit_coord, summit))
                 .is_some()
@@ -3852,11 +4078,9 @@ fn build_peak_field(
             })
             .collect::<BTreeMap<_, _>>();
         let resolve_sources = |candidate_sources: &[(HexCoord, Level)]| {
-            component_mask
+            base_levels
                 .iter()
-                .copied()
-                .map(|coord| {
-                    let base = base_levels[&coord];
+                .map(|(&coord, &base)| {
                     let crown = candidate_sources
                         .iter()
                         .map(|(source, source_level)| {
@@ -3934,8 +4158,12 @@ fn build_peak_field(
             {
                 INNER_PEAK_ROUTE_SADDLE_CEILING
             } else {
-                summit_by_patch[first_patch]
-                    .min(summit_by_patch[second_patch])
+                summit_by_patch
+                    .get(first_patch)
+                    .copied()
+                    .zip(summit_by_patch.get(second_patch).copied())
+                    .map(|(first, second)| first.min(second))
+                    .ok_or_else(|| contract("Grand V3 peak saddle lost an endpoint summit"))?
                     .saturating_sub(PEAK_SADDLE_DEPTH)
                     .min(PEAK_VISUAL_WALL_THRESHOLD.saturating_sub(1))
             };
@@ -4016,8 +4244,14 @@ fn build_peak_field(
             let cell = cells
                 .get(schematic)
                 .ok_or_else(|| contract("Grand V3 peak chain lost one summit owner"))?;
-            let summit = summit_by_cell[schematic];
-            let summit_coord = summit_coord_by_patch[&cell.patch];
+            let summit = summit_by_cell
+                .get(schematic)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing peak summit level"))?;
+            let summit_coord = summit_coord_by_patch
+                .get(&cell.patch)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing peak summit coordinate"))?;
             if crystal_exit_ceiling
                 .get(&summit_coord)
                 .is_some_and(|ceiling| *ceiling < summit)
@@ -4050,8 +4284,14 @@ fn build_peak_field(
             let cell = cells
                 .get(schematic)
                 .ok_or_else(|| contract("Grand V3 peak chain lost one summit owner"))?;
-            let summit = summit_by_cell[schematic];
-            let summit_coord = summit_coord_by_patch[&cell.patch];
+            let summit = summit_by_cell
+                .get(schematic)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing peak summit level"))?;
+            let summit_coord = summit_coord_by_patch
+                .get(&cell.patch)
+                .copied()
+                .ok_or_else(|| contract("Grand V3 missing peak summit coordinate"))?;
             let patch_mask = patch_masks
                 .get(&cell.patch)
                 .ok_or_else(|| contract("Grand V3 peak chain lost one patch mask"))?;
@@ -4289,12 +4529,9 @@ fn canonical_edge(first: HexCoord, second: HexCoord) -> (HexCoord, HexCoord) {
 fn build_peak_saddle_swaths(
     patch_masks: &BTreeMap<PatchId, BTreeSet<HexCoord>>,
 ) -> Result<BTreeMap<(PatchId, PatchId), BTreeSet<HexCoord>>, V3GenerationError> {
-    let patches = patch_masks.keys().copied().collect::<Vec<_>>();
     let mut swaths = BTreeMap::new();
-    for (index, first_patch) in patches.iter().copied().enumerate() {
-        for second_patch in patches.iter().copied().skip(index.saturating_add(1)) {
-            let first_mask = &patch_masks[&first_patch];
-            let second_mask = &patch_masks[&second_patch];
+    for (index, (&first_patch, first_mask)) in patch_masks.iter().enumerate() {
+        for (&second_patch, second_mask) in patch_masks.iter().skip(index.saturating_add(1)) {
             let touches = first_mask.iter().any(|coord| {
                 coord
                     .neighbors()
@@ -4384,18 +4621,22 @@ fn connect_peak_patch_saddle_groups(
             .collect::<BTreeSet<_>>();
         let mut groups = saddle_swaths
             .iter()
-            .filter_map(|(edge, swath)| {
-                (edge.0 == *patch || edge.1 == *patch).then(|| {
-                    let local = swath
-                        .intersection(patch_mask)
-                        .filter(|coord| corridor_mask.contains(coord))
-                        .copied()
-                        .collect::<BTreeSet<_>>();
-                    (*edge, local, saddle_ceilings[edge])
-                })
+            .filter(|(edge, _)| edge.0 == *patch || edge.1 == *patch)
+            .map(|(edge, swath)| {
+                let local = swath
+                    .intersection(patch_mask)
+                    .filter(|coord| corridor_mask.contains(coord))
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                let ceiling = saddle_ceilings.get(edge).copied().ok_or_else(|| {
+                    contract(format!(
+                        "Grand V3 peak saddle {edge:?} has no authored ceiling"
+                    ))
+                })?;
+                Ok((*edge, local, ceiling))
             })
-            .filter(|(_, local, _)| !local.is_empty())
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, V3GenerationError>>()?;
+        groups.retain(|(_, local, _)| !local.is_empty());
         groups.sort_by_key(|(edge, _, _)| *edge);
         if groups.len() < 2 {
             continue;
@@ -4716,8 +4957,18 @@ fn extend_peak_saddle_swaths_through_patches(
                     .all(|neighbor| chain_mask.contains(&neighbor))
             })
             .collect::<BTreeSet<_>>();
-        let mut joined_edges = vec![edges[0]];
-        let mut joined = swaths[&edges[0]]
+        let first_edge = edges
+            .first()
+            .copied()
+            .ok_or_else(|| contract("Grand V3 peak saddle group lost its first edge"))?;
+        let mut joined_edges = vec![first_edge];
+        let mut joined = swaths
+            .get(&first_edge)
+            .ok_or_else(|| {
+                contract(format!(
+                    "Grand V3 peak saddle {first_edge:?} lost its swath"
+                ))
+            })?
             .intersection(patch_mask)
             .copied()
             .collect::<BTreeSet<_>>();
@@ -4731,7 +4982,9 @@ fn extend_peak_saddle_swaths_through_patches(
                         .is_some_and(|level| *level < PEAK_VISUAL_WALL_THRESHOLD)
                 })
                 .collect::<BTreeSet<_>>();
-            let target = swaths[&edge]
+            let target = swaths
+                .get(&edge)
+                .ok_or_else(|| contract(format!("Grand V3 peak saddle {edge:?} lost its swath")))?
                 .intersection(patch_mask)
                 .copied()
                 .collect::<BTreeSet<_>>();
@@ -5060,8 +5313,16 @@ fn grade_ordered_peak_saddle_path(
         && !has_chord
         && authored_grades.len() == centerline.len()
         && centerline.windows(2).all(|pair| {
-            pair[0].distance(pair[1]) == 1
-                && authored_grades[&pair[0]].abs_diff(authored_grades[&pair[1]]) <= 1
+            let [first, second] = pair else {
+                return false;
+            };
+            first.distance(*second) == 1
+                && authored_grades
+                    .get(first)
+                    .zip(authored_grades.get(second))
+                    .is_some_and(|(first_level, second_level)| {
+                        first_level.abs_diff(*second_level) <= 1
+                    })
         }))
     .then_some((centerline, authored_grades))
 }
@@ -5180,9 +5441,12 @@ fn build_ordered_peak_saddle_spines(
     });
     if centerline.len() < 2
         || unique.len() != centerline.len()
-        || centerline
-            .windows(2)
-            .any(|pair| pair[0].distance(pair[1]) != 1)
+        || centerline.windows(2).any(|pair| {
+            let [first, second] = pair else {
+                return true;
+            };
+            first.distance(*second) != 1
+        })
         || has_chord
         || centerline
             .first()
@@ -5203,7 +5467,10 @@ fn build_ordered_peak_saddle_spines(
             "Grand V3 ordered peak transit did not retain one induced, oriented, west-approach route-ready sub-240 Patch-59 spine",
         ));
     }
-    let first = centerline[0];
+    let first = centerline
+        .first()
+        .copied()
+        .ok_or_else(|| contract("Grand V3 ordered peak transit lost its first coordinate"))?;
     let last = *centerline
         .last()
         .ok_or_else(|| contract("Grand V3 ordered peak transit lost its last coordinate"))?;
@@ -5562,27 +5829,26 @@ fn build_massif_field(
             .collect::<BTreeSet<_>>()
             .len()
     };
-    let usable_sector_counts = eligible_crests
+    let sector_counts = eligible_crests
         .iter()
         .map(|coord| {
             (
                 *coord,
-                usable_sectors(*coord, MASSIF_DISTRIBUTED_SUMMIT_RADIUS),
+                (
+                    usable_sectors(*coord, MASSIF_DISTRIBUTED_SUMMIT_RADIUS),
+                    usable_sectors(*coord, MASSIF_SUMMIT_BODY_RADIUS),
+                ),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let protected_sector_counts = eligible_crests
+    let crest = sector_counts
         .iter()
-        .map(|coord| (*coord, usable_sectors(*coord, MASSIF_SUMMIT_BODY_RADIUS)))
-        .collect::<BTreeMap<_, _>>();
-    let crest = eligible_crests
-        .iter()
-        .copied()
-        .filter(|coord| usable_sector_counts[coord] >= 4 && protected_sector_counts[coord] >= 3)
-        .max_by_key(|coord| {
+        .filter(|(_, (usable, protected))| *usable >= 4 && *protected >= 3)
+        .max_by_key(|(coord, (usable, protected))| {
+            let coord = *coord;
             (
-                usable_sector_counts[coord],
-                protected_sector_counts[coord],
+                *usable,
+                *protected,
                 distance_from_connector
                     .get(coord)
                     .copied()
@@ -5600,6 +5866,7 @@ fn build_massif_field(
                 Reverse(*coord),
             )
         })
+        .map(|(coord, _)| *coord)
         .ok_or_else(|| {
             contract(
                 "Grand V3 massif cannot select a central crest with three protected and four distributed usable lobe sectors",
@@ -6307,9 +6574,12 @@ fn crystal_context(
         .flat_map(|network| &network.edges)
         .flat_map(|edge| edge.path.windows(2))
         .filter_map(|pair| {
-            (pair[0] == crystal_cell.coord)
-                .then_some(pair[1])
-                .or_else(|| (pair[1] == crystal_cell.coord).then_some(pair[0]))
+            let [first, second] = pair else {
+                return None;
+            };
+            (*first == crystal_cell.coord)
+                .then_some(*second)
+                .or_else(|| (*second == crystal_cell.coord).then_some(*first))
         })
         .collect::<BTreeSet<_>>();
     if tunnel_neighbors.len() != 1 {
@@ -6782,7 +7052,7 @@ fn crystal_mantle_exit_clearance(
             .saturating_add(profile.crystal_rise_levels),
         CRYSTAL_MANTLE_EXIT_CLEARANCE_DEPTH,
     )
-    .map_err(|error| contract(error))?;
+    .map_err(contract)?;
     Ok(upper_rows
         .into_iter()
         .flatten()
@@ -6793,7 +7063,15 @@ fn crystal_mantle_exit_clearance(
 
 pub(super) fn step_in_direction(mut coord: HexCoord, direction: usize, steps: u32) -> HexCoord {
     for _ in 0..steps {
-        coord = coord.neighbors()[direction % 6];
+        let [first, second, third, fourth, fifth, sixth] = coord.neighbors();
+        coord = match direction % 6 {
+            0 => first,
+            1 => second,
+            2 => third,
+            3 => fourth,
+            4 => fifth,
+            _ => sixth,
+        };
     }
     coord
 }
@@ -6817,7 +7095,8 @@ fn crystal_enclosure_required_radial_depth(available_radii: usize) -> usize {
 }
 
 fn integer_centroid(mask: &BTreeSet<HexCoord>) -> Result<HexCoord, V3GenerationError> {
-    let count = i64::try_from(mask.len()).map_err(|_| contract("highland mask is too large"))?;
+    let count = i64::try_from(mask.len())
+        .map_err(|error| contract(format!("highland mask is too large: {error}")))?;
     if count == 0 {
         return Err(contract(
             "cannot find the centroid of an empty highland mask",
@@ -7090,12 +7369,24 @@ mod tests {
                 let first_pin = component
                     .summit_pins
                     .iter()
-                    .find(|(pin, _)| component.expected_peak_bodies[first].contains_key(pin))
+                    .find(|(pin, _)| {
+                        component
+                            .expected_peak_bodies
+                            .get(first)
+                            .expect("first saddle owner retains its peak body")
+                            .contains_key(pin)
+                    })
                     .expect("first saddle owner retains one summit");
                 let second_pin = component
                     .summit_pins
                     .iter()
-                    .find(|(pin, _)| component.expected_peak_bodies[second].contains_key(pin))
+                    .find(|(pin, _)| {
+                        component
+                            .expected_peak_bodies
+                            .get(second)
+                            .expect("second saddle owner retains its peak body")
+                            .contains_key(pin)
+                    })
                     .expect("second saddle owner retains one summit");
                 let ceiling = (*first_pin.1)
                     .min(*second_pin.1)
@@ -7137,7 +7428,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(lower_profile
             .windows(2)
-            .all(|pair| pair[0].saturating_sub(pair[1]) == PEAK_LOWER_BODY_SLOPE));
+            .all(|pair| matches!(pair, [first, second] if first.saturating_sub(*second) == PEAK_LOWER_BODY_SLOPE)));
         assert!(peak_source_influence(summit, 16, 0) > summit.saturating_sub(16 * PEAK_BODY_SLOPE));
 
         let field = reference_field();
@@ -7226,7 +7517,10 @@ mod tests {
                 .is_some_and(|(level, ceiling)| *level <= ceiling)
         }));
 
-        let patch_mask = &component.patch_masks[&INNER_PEAK_INGRESS_PEAK_PATCH];
+        let patch_mask = component
+            .patch_masks
+            .get(&INNER_PEAK_INGRESS_PEAK_PATCH)
+            .expect("external ingress retains its peak patch");
         let internal = component
             .expected_saddle_swaths
             .get(&(PatchId(58), INNER_PEAK_INGRESS_PEAK_PATCH))
@@ -7287,9 +7581,18 @@ mod tests {
             .iter()
             .find(|component| component.patch_masks.contains_key(&spine.owner))
             .expect("the ordered spine retains its peak component");
-        let owner_mask = &component.patch_masks[&spine.owner];
-        let ingress_mask = &component.patch_masks[&spine.ingress_from];
-        let egress_mask = &component.patch_masks[&spine.egress_to];
+        let owner_mask = component
+            .patch_masks
+            .get(&spine.owner)
+            .expect("ordered spine retains its owner mask");
+        let ingress_mask = component
+            .patch_masks
+            .get(&spine.ingress_from)
+            .expect("ordered spine retains its ingress mask");
+        let egress_mask = component
+            .patch_masks
+            .get(&spine.egress_to)
+            .expect("ordered spine retains its egress mask");
         let unique = spine.centerline.iter().copied().collect::<BTreeSet<_>>();
 
         assert_eq!(spine.owner, INNER_PEAK_TRANSIT_OWNER);
@@ -7300,7 +7603,7 @@ mod tests {
         assert!(spine
             .centerline
             .windows(2)
-            .all(|pair| pair[0].distance(pair[1]) == 1));
+            .all(|pair| matches!(pair, [first, second] if first.distance(*second) == 1)));
         assert_eq!(spine.required_grade_coords(), unique);
         assert_eq!(
             spine
@@ -7311,7 +7614,12 @@ mod tests {
             unique
         );
         assert_eq!(
-            spine.authored_grades.get(&spine.centerline[0]),
+            spine.authored_grades.get(
+                spine
+                    .centerline
+                    .first()
+                    .expect("ordered spine has a first coordinate")
+            ),
             Some(&INNER_PEAK_TRANSIT_RUNWAY_ENDPOINT_LEVEL)
         );
         assert_eq!(
@@ -7321,7 +7629,20 @@ mod tests {
             Some(&INNER_PEAK_TRANSIT_RUNWAY_ENDPOINT_LEVEL)
         );
         assert!(spine.centerline.windows(2).all(|pair| {
-            spine.authored_grades[&pair[0]].abs_diff(spine.authored_grades[&pair[1]]) <= 1
+            let [first, second] = pair else {
+                panic!("two-coordinate spine window");
+            };
+            spine
+                .authored_grades
+                .get(first)
+                .expect("first spine coordinate retains its grade")
+                .abs_diff(
+                    *spine
+                        .authored_grades
+                        .get(second)
+                        .expect("second spine coordinate retains its grade"),
+                )
+                <= 1
         }));
         assert!(spine.authored_grades.values().all(|level| {
             *level <= INNER_PEAK_ROUTE_SADDLE_CEILING
@@ -7379,7 +7700,10 @@ mod tests {
                 })
                 && !component.summit_pins.contains_key(coord)
         }));
-        let first = spine.centerline[0];
+        let first = *spine
+            .centerline
+            .first()
+            .expect("ordered spine has a first coordinate");
         let last = *spine.centerline.last().expect("ordered spine has an end");
         assert!(spine.ingress_portals.iter().all(|(from, to)| {
             *to == first && ingress_mask.contains(from) && from.distance(*to) == 1
@@ -7443,17 +7767,16 @@ mod tests {
                 let groups = component
                     .expected_saddle_swaths
                     .iter()
-                    .filter_map(|(edge, swath)| {
-                        (edge.0 == *patch || edge.1 == *patch).then(|| {
-                            (
-                                *edge,
-                                swath
-                                    .intersection(patch_mask)
-                                    .copied()
-                                    .collect::<BTreeSet<_>>(),
-                                PEAK_VISUAL_WALL_THRESHOLD.saturating_sub(1),
-                            )
-                        })
+                    .filter(|(edge, _)| edge.0 == *patch || edge.1 == *patch)
+                    .map(|(edge, swath)| {
+                        (
+                            *edge,
+                            swath
+                                .intersection(patch_mask)
+                                .copied()
+                                .collect::<BTreeSet<_>>(),
+                            PEAK_VISUAL_WALL_THRESHOLD.saturating_sub(1),
+                        )
                     })
                     .filter(|(_, group, _)| !group.is_empty())
                     .collect::<Vec<_>>();
@@ -7509,29 +7832,34 @@ mod tests {
             .find(|component| component.patch_masks.contains_key(&PatchId(59)))
             .expect("reference highlands retain Patch59");
         let patch = PatchId(59);
-        let patch_mask = &component.patch_masks[&patch];
+        let patch_mask = component
+            .patch_masks
+            .get(&patch)
+            .expect("tested peak retains its patch mask");
         let groups = component
             .expected_saddle_swaths
             .iter()
-            .filter_map(|(edge, swath)| {
-                (edge.0 == patch || edge.1 == patch).then(|| {
-                    let other = if edge.0 == patch { edge.1 } else { edge.0 };
-                    let other_mask = &component.patch_masks[&other];
-                    (
-                        *edge,
-                        swath
-                            .intersection(patch_mask)
-                            .filter(|coord| {
-                                coord
-                                    .neighbors()
-                                    .into_iter()
-                                    .any(|neighbor| other_mask.contains(&neighbor))
-                            })
-                            .copied()
-                            .collect::<BTreeSet<_>>(),
-                        PEAK_VISUAL_WALL_THRESHOLD.saturating_sub(1),
-                    )
-                })
+            .filter(|(edge, _)| edge.0 == patch || edge.1 == patch)
+            .map(|(edge, swath)| {
+                let other = if edge.0 == patch { edge.1 } else { edge.0 };
+                let other_mask = component
+                    .patch_masks
+                    .get(&other)
+                    .expect("adjacent saddle retains its other patch mask");
+                (
+                    *edge,
+                    swath
+                        .intersection(patch_mask)
+                        .filter(|coord| {
+                            coord
+                                .neighbors()
+                                .into_iter()
+                                .any(|neighbor| other_mask.contains(&neighbor))
+                        })
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    PEAK_VISUAL_WALL_THRESHOLD.saturating_sub(1),
+                )
             })
             .filter(|(_, group, _)| !group.is_empty())
             .collect::<Vec<_>>();
@@ -8175,7 +8503,7 @@ mod tests {
         let baseline = 80;
         let expected = application_probe.massif.resolve(probe_coord, baseline);
         assert!(
-            application_probe.massif.boundary_depth[&probe_coord]
+            *application_probe.massif.boundary_depth.get(&probe_coord).expect("application probe retains its boundary depth")
                 >= MASSIF_CONNECTOR_MINIMUM_TAPER_DEPTH,
             "the exact Crystal hole must not collapse the connector back onto the scalar-field edge"
         );
@@ -8640,7 +8968,12 @@ mod tests {
         let fine_tunnel = tunnel_edge
             .path
             .windows(2)
-            .flat_map(|pair| schematic_to_world(pair[0]).line_between(schematic_to_world(pair[1])))
+            .flat_map(|pair| {
+                let [first, second] = pair else {
+                    panic!("two-coordinate tunnel window");
+                };
+                schematic_to_world(*first).line_between(schematic_to_world(*second))
+            })
             .collect::<BTreeSet<_>>();
         assert!(fine_tunnel
             .iter()
@@ -8672,7 +9005,14 @@ mod tests {
         assert!(!boundary.is_empty());
         assert!(boundary.iter().all(|coord| {
             field.crystal_mantle_edge_depth.get(coord) == Some(&0)
-                && edge_blended_uplift(113, field.crystal_mantle[coord], 0) == 113
+                && edge_blended_uplift(
+                    113,
+                    *field
+                        .crystal_mantle
+                        .get(coord)
+                        .expect("mantle boundary retains its scalar value"),
+                    0,
+                ) == 113
         }));
         assert_eq!(edge_blended_uplift(113, 208, 1), 120);
         assert_eq!(edge_blended_uplift(180, 160, 8), 180);
@@ -8698,7 +9038,13 @@ mod tests {
         assert!(authority
             .shell_concealment_floors
             .iter()
-            .all(|(coord, floor)| { *floor <= authority.shell_concealment_ceilings[coord] }));
+            .all(|(coord, floor)| {
+                *floor
+                    <= *authority
+                        .shell_concealment_ceilings
+                        .get(coord)
+                        .expect("shell floor retains its corresponding ceiling")
+            }));
         assert!(!shell_apron.is_empty());
         assert!(shell_apron
             .iter()
@@ -8726,7 +9072,10 @@ mod tests {
                 .is_some_and(|distance| distance <= CRYSTAL_SHELL_FROZEN_TRANSITION_DEPTH)
         }));
         assert!(shell_apron.iter().all(|coord| {
-            let floor = authority.shell_concealment_floors[coord];
+            let floor = *authority
+                .shell_concealment_floors
+                .get(coord)
+                .expect("shell witness retains its floor");
             field.frozen_plateau.levels.get(coord).is_none_or(|level| {
                 *level >= floor
                     || frozen_transition
@@ -8737,7 +9086,10 @@ mod tests {
         let suppressed_exit_conflicts = shell_apron
             .iter()
             .filter(|coord| {
-                let floor = authority.shell_concealment_floors[coord];
+                let floor = *authority
+                    .shell_concealment_floors
+                    .get(coord)
+                    .expect("shell witness retains its floor");
                 field
                     .crystal_exit_ceiling
                     .get(coord)

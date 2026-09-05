@@ -46,19 +46,11 @@ fn drain_replication_results(app: &mut App) -> Vec<WorldReplicationResultV1> {
         .collect()
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the malformed-snapshot fixtures must still have a valid canonical fingerprint"
-)]
 fn refresh_fingerprint(snapshot: &mut WorldSnapshotV1) {
     snapshot.public_fingerprint = fingerprint_world_snapshot_v1(snapshot)
         .expect("structurally valid content fixture should fingerprint");
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "malicious content fixtures must remain valid bounded wire collections"
-)]
 fn replace_first_run_substance(snapshot: &mut WorldSnapshotV1, name: &str) {
     let mut columns = snapshot.columns.clone().into_vec();
     let column = columns
@@ -72,10 +64,6 @@ fn replace_first_run_substance(snapshot: &mut WorldSnapshotV1, name: &str) {
     snapshot.columns = BoundedVec::new(columns).expect("fixture columns should remain bounded");
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the malicious object fixture must remain a valid bounded wire collection"
-)]
 fn replace_first_object_identity(snapshot: &mut WorldSnapshotV1, identity: &str) {
     let mut objects = snapshot.objects.clone().into_vec();
     objects
@@ -86,10 +74,6 @@ fn replace_first_object_identity(snapshot: &mut WorldSnapshotV1, identity: &str)
     snapshot.objects = BoundedVec::new(objects).expect("fixture objects should remain bounded");
 }
 
-#[expect(
-    clippy::panic,
-    reason = "the shared test helper reports the exact shipped fixture that violated setup or export"
-)]
 fn assert_round_trip(name: &str, mut app: App) {
     enter_gameplay(&mut app);
     if let Some(failure) = app.world().get_resource::<GameplaySetupFailure>() {
@@ -133,10 +117,6 @@ fn assert_round_trip(name: &str, mut app: App) {
     );
 }
 
-#[expect(
-    clippy::panic,
-    reason = "the cache-equivalence helper reports the exact edit fixture that drifted"
-)]
 fn assert_current_snapshot_matches_live_export(context: &str, app: &App) {
     let live = export_world_snapshot_v1(app.world())
         .unwrap_or_else(|error| panic!("{context} live world should export: {error}"));
@@ -253,10 +233,6 @@ fn editing_heart_footing_reprojects_its_contextual_object_blockers() {
     assert_eq!(after.liquids, before.liquids);
 }
 
-#[expect(
-    clippy::panic,
-    reason = "the shared test helper reports the exact shipped fixture that violated bootstrap"
-)]
 fn assert_campaign_process_round_trip(name: &str, fixture: fn() -> App) {
     let mut source = fixture();
     enter_gameplay(&mut source);

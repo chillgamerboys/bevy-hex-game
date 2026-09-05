@@ -87,7 +87,8 @@ use hex_map::{
         ReviewWorldDetailRuntimeAssetEvidenceV1, ReviewWorldDetailTeardownReceiptV1,
         ReviewWorldDetailTeardownRequestV1,
     },
-    CurrentWorldSnapshotV1, LiquidVisualTime, ReviewWorldDetailEntity, WorldReplicationStateV1,
+    CurrentWorldSnapshotV1, LiquidVisualTime, ReviewLiquidMaterial, ReviewSuppressedWaterMaterial,
+    ReviewWorldDetailEntity, WorldReplicationStateV1,
 };
 use hex_multiplayer::{CampaignSaveRefusalV2, CampaignSaveStateV2};
 use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
@@ -1205,7 +1206,7 @@ fn sha256_hex(input: &[u8]) -> String {
             b = a;
             a = temporary1.wrapping_add(temporary2);
         }
-        for (slot, value) in hash.iter_mut().zip([a, b, c, d, e, f, g, h].into_iter()) {
+        for (slot, value) in hash.iter_mut().zip([a, b, c, d, e, f, g, h]) {
             *slot = slot.wrapping_add(value);
         }
     }
@@ -2365,6 +2366,34 @@ impl CanonicalAuthorityEncoder {
     }
 }
 
+/// Ordinary batches retain one live material; an explicitly suppressed review
+/// water batch retains its saved original material owner instead. Share this
+/// classification between picking authority and capture readiness so arbitrary
+/// unbound terrain and duplicate visible bindings still fail closed.
+type ReviewTerrainMaterialBindings = (
+    Has<MeshMaterial3d<StandardMaterial>>,
+    Has<MeshMaterial3d<ReviewLiquidMaterial>>,
+    Has<ReviewSuppressedWaterMaterial>,
+);
+
+type ReviewCaptureTerrainBatchQuery = (
+    Entity,
+    &'static TerrainRenderBatch,
+    Option<&'static Mesh3d>,
+    ReviewTerrainMaterialBindings,
+    Option<&'static ViewVisibility>,
+);
+
+const fn review_terrain_material_tag(
+    (standard, liquid, suppressed_water): (bool, bool, bool),
+) -> Option<u8> {
+    match (standard, liquid, suppressed_water) {
+        (true, false, false) => Some(0),
+        (false, true, false) | (false, false, true) => Some(1),
+        _ => None,
+    }
+}
+
 #[derive(SystemParam)]
 struct ReviewAuthorityEvidence<'w, 's> {
     world_snapshot: Option<Res<'w, CurrentWorldSnapshotV1>>,
@@ -2411,7 +2440,7 @@ struct ReviewAuthorityEvidence<'w, 's> {
             &'static TerrainRenderBatch,
             Option<&'static Pickable>,
             Has<Mesh3d>,
-            Has<MeshMaterial3d<StandardMaterial>>,
+            ReviewTerrainMaterialBindings,
         ),
     >,
 }
@@ -2769,12 +2798,17 @@ fn encode_terrain_picking_authority(
 
     let mut encoder = CanonicalAuthorityEncoder::section(8);
     encoder.count(batches.len(), "terrain render batch")?;
-    for (entity, batch, pickable, has_mesh, has_material) in batches {
-        if !has_mesh || !has_material {
+    for (entity, batch, pickable, has_mesh, material_bindings) in batches {
+        if !has_mesh {
             return Err(format!(
-                "TerrainRenderBatch {entity:?} is missing its mesh or material handle"
+                "TerrainRenderBatch {entity:?} is missing its mesh handle"
             ));
         }
+        let material_tag = review_terrain_material_tag(material_bindings).ok_or_else(|| {
+            format!(
+                "TerrainRenderBatch {entity:?} requires exactly one ordinary material binding or exclusive review water suppression; found {material_bindings:?}"
+            )
+        })?;
         let Some(pickable) = pickable.copied() else {
             return Err(format!(
                 "TerrainRenderBatch {entity:?} has no explicit Pickable state"
@@ -2791,7 +2825,8 @@ fn encode_terrain_picking_authority(
         encoder.u16(batch.substance().0);
         encoder.entity(entity);
         encoder.boolean(has_mesh);
-        encoder.boolean(has_material);
+        encoder.boolean(true);
+        encoder.u8(material_tag);
         encoder.pickable(Some(pickable));
         let runs = batch.runs().collect::<Vec<_>>();
         encoder.count(runs.len(), "terrain pick run")?;
@@ -4019,8 +4054,8 @@ fn projections_equal(left: Option<&Projection>, right: Option<&Projection>) -> b
         (None, None) => true,
         (Some(left), Some(right)) => {
             std::mem::discriminant(left) == std::mem::discriminant(right)
-                && left.get_clip_from_view().to_cols_array()
-                    == right.get_clip_from_view().to_cols_array()
+                && left.get_clip_from_view().to_cols_array().map(f32::to_bits)
+                    == right.get_clip_from_view().to_cols_array().map(f32::to_bits)
         }
         _ => false,
     }
@@ -4468,7 +4503,7 @@ fn apply_review_view(
             );
         state.camera_snapshot = Some(ReviewCameraSnapshot {
             entity: camera_entity,
-            transform: transform.clone(),
+            transform: *transform,
             orbit_focus: orbit.focus,
             orbit_radius: orbit.radius,
             target: target.clone(),
@@ -4612,7 +4647,7 @@ fn apply_review_view(
     }
     if state.focus_world_target.is_some() && state.capture.camera != ReviewCamera::Map {
         state.focus_pose = Some(ReviewFocusPose {
-            transform: transform.clone(),
+            transform: *transform,
             orbit_focus: orbit.focus,
             orbit_radius: orbit.radius,
         });
@@ -4638,7 +4673,7 @@ fn pin_review_focus_pose(
     let Ok((mut transform, mut orbit)) = cameras.get_mut(snapshot.entity) else {
         return;
     };
-    *transform = pose.transform.clone();
+    *transform = pose.transform;
     orbit.focus = pose.orbit_focus;
     orbit.radius = pose.orbit_radius;
 }
@@ -5491,7 +5526,7 @@ impl fmt::Display for ReviewCaptureCoverageError {
             } => write!(
                 formatter,
                 "topmost boundary terrain entity {entity:?} at {position:?} belongs to batch \
-                 {batch:?}, which has no StandardMaterial handle"
+                 {batch:?}, which lacks exactly one ordinary material owner or exclusive review water suppression"
             ),
             Self::BoundaryBatchHidden {
                 batch,
@@ -5913,13 +5948,7 @@ fn capture_settled_frame(
     mut commands: Commands,
     ready: Option<Res<TerrainReady>>,
     mut state: ResMut<ReviewCaptureState>,
-    terrain_batches: Query<(
-        Entity,
-        &TerrainRenderBatch,
-        Option<&Mesh3d>,
-        Option<&MeshMaterial3d<StandardMaterial>>,
-        Option<&ViewVisibility>,
-    )>,
+    terrain_batches: Query<ReviewCaptureTerrainBatchQuery>,
     logical_runs: Query<(Entity, Option<&TilePos>, Option<&HexSpan>), With<HexTile>>,
     review_cameras: Query<(&Camera, &GlobalTransform, &Projection), With<PanOrbitCamera>>,
     evidence: ReviewRuntimeEvidence,
@@ -5969,7 +5998,7 @@ fn capture_settled_frame(
                         entity,
                         batch,
                         has_mesh: mesh.is_some(),
-                        has_material: material.is_some(),
+                        has_material: review_terrain_material_tag(material).is_some(),
                         visible: visibility.is_some_and(|visibility| visibility.get()),
                     },
                 ),
@@ -6171,7 +6200,7 @@ fn capture_settled_frame(
                         if lifecycle.is_some() {
                             commands.insert_resource(ReviewWorldDetailTeardownRequestV1);
                             commands.insert_resource(
-                                ReviewLifecycleCycleTeardownPendingV1::default(),
+                                ReviewLifecycleCycleTeardownPendingV1,
                             );
                             info!(
                                 "all {} review captures completed; requesting verified in-place projection teardown",
@@ -6547,6 +6576,42 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// A typed, renderer-free seam for the combined-feature launch ownership test.
+// It deliberately registers the actual launch system without capture or camera
+// presentation systems, which require the renderer under test elsewhere.
+#[cfg(all(test, feature = "dev"))]
+pub(super) fn install_headless_review_launch_for_test(
+    app: &mut App,
+    scenario: Option<&str>,
+) -> Result<(), String> {
+    let request = ReviewRequest::from_values(
+        scenario.map(str::to_owned),
+        scenario.map(|_| "1592598566".to_owned()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    if let Some(request) = request {
+        app.insert_resource(request).add_systems(
+            Update,
+            launch_review_scenario.run_if(in_state(Screen::Title)),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "dev"))]
+pub(super) fn headless_review_launch_state_for_test(world: &World) -> Option<bool> {
+    world
+        .get_resource::<ReviewRequest>()
+        .map(|request| request.launched)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -6588,6 +6653,183 @@ mod tests {
         mut observation: ResMut<AuthorityTeardownObservation>,
     ) {
         observation.0 = Some(validate_review_authority_teardown(&state, &evidence));
+    }
+
+    #[test]
+    fn original_water_binding_is_required_once_for_authority_and_capture_readiness() {
+        use bevy::ecs::system::SystemState;
+
+        fn inspect(
+            world: &mut World,
+        ) -> (
+            Result<Vec<u8>, String>,
+            Result<FullFootprintCoverage, ReviewCaptureCoverageError>,
+        ) {
+            let mut query = SystemState::<(
+                ReviewAuthorityEvidence,
+                Query<ReviewCaptureTerrainBatchQuery>,
+            )>::new(world);
+            let (evidence, batches) = query
+                .get(world)
+                .expect("review authority queries are available");
+            let authority = validate_authority_terrain_projection(&evidence)
+                .and_then(|()| encode_terrain_picking_authority(&evidence));
+            let coverage = validate_full_footprint_capture(
+                evidence
+                    .logical_terrain
+                    .iter()
+                    .map(|(entity, position, _, span, _, _, _)| {
+                        (entity, position.copied(), span.copied())
+                    }),
+                batches
+                    .iter()
+                    .map(
+                        |(entity, batch, mesh, material, visibility)| ReviewTerrainBatch {
+                            entity,
+                            batch,
+                            has_mesh: mesh.is_some(),
+                            has_material: review_terrain_material_tag(material).is_some(),
+                            visible: visibility.is_some_and(|visibility| visibility.get()),
+                        },
+                    ),
+                std::iter::empty::<(&Camera, &GlobalTransform, &Projection)>(),
+            );
+            (authority, coverage)
+        }
+
+        let mut world = World::new();
+        let position = TilePos::new(HexCoord::from_axial(2, -1), 3);
+        let span = HexSpan::new(0.0, 1.6);
+        let substance = SubstanceId(1);
+        let logical = world
+            .spawn((
+                HexTile,
+                position,
+                span,
+                substance,
+                RunBottom(0),
+                Headroom(2),
+            ))
+            .id();
+        let batch = world
+            .spawn((
+                TerrainRenderBatch::new(
+                    TerrainChunkRoot { q: 0, r: 0 },
+                    substance,
+                    vec![TerrainPickRun::new(logical, position, span)],
+                ),
+                Mesh3d::default(),
+                MeshMaterial3d::<ReviewLiquidMaterial>::default(),
+                Pickable::default(),
+                ViewVisibility::VISIBLE,
+            ))
+            .id();
+
+        let (water, coverage) = inspect(&mut world);
+        let water = water.expect("one original-water binding retains exact picking authority");
+        assert!(
+            matches!(
+                coverage,
+                Err(ReviewCaptureCoverageError::NoActiveReviewCamera)
+            ),
+            "water must pass renderability and reach the separate camera requirement"
+        );
+
+        let original = world
+            .get::<MeshMaterial3d<ReviewLiquidMaterial>>(batch)
+            .expect("the water fixture starts with its ordinary material")
+            .0
+            .clone();
+        world
+            .entity_mut(batch)
+            .remove::<MeshMaterial3d<ReviewLiquidMaterial>>()
+            .insert(ReviewSuppressedWaterMaterial(original.clone()));
+        let (suppressed, coverage) = inspect(&mut world);
+        assert_eq!(
+            suppressed.expect("explicit review suppression retains the original pick authority"),
+            water,
+        );
+        assert!(matches!(coverage, Err(ReviewCaptureCoverageError::NoActiveReviewCamera)),
+            "suppressed original water remains a valid pick proxy for the separately owned review surface");
+        world
+            .entity_mut(batch)
+            .insert(MeshMaterial3d(original.clone()));
+        let (duplicate_owner, coverage) = inspect(&mut world);
+        assert!(duplicate_owner
+            .expect_err("live water cannot coexist with a suppression owner")
+            .contains("exactly one"));
+        assert!(matches!(
+            coverage,
+            Err(ReviewCaptureCoverageError::BoundaryBatchMissingMaterial { .. })
+        ));
+        world
+            .entity_mut(batch)
+            .remove::<ReviewSuppressedWaterMaterial>();
+        assert_eq!(
+            inspect(&mut world)
+                .0
+                .expect("restoring the original binding restores ownership"),
+            water
+        );
+
+        world
+            .entity_mut(batch)
+            .insert(MeshMaterial3d::<StandardMaterial>::default());
+        let (duplicate, coverage) = inspect(&mut world);
+        assert!(duplicate
+            .expect_err("two materials would render the same water twice")
+            .contains("exactly one"));
+        assert!(matches!(
+            coverage,
+            Err(ReviewCaptureCoverageError::BoundaryBatchMissingMaterial { .. })
+        ));
+
+        world
+            .entity_mut(batch)
+            .remove::<MeshMaterial3d<ReviewLiquidMaterial>>();
+        let (standard, coverage) = inspect(&mut world);
+        assert_ne!(
+            water,
+            standard.expect("one standard terrain binding remains valid"),
+            "authority must retain the exact material kind rather than only a presence bit"
+        );
+        assert!(matches!(
+            coverage,
+            Err(ReviewCaptureCoverageError::NoActiveReviewCamera)
+        ));
+
+        world
+            .entity_mut(batch)
+            .remove::<MeshMaterial3d<StandardMaterial>>();
+        let (missing, coverage) = inspect(&mut world);
+        assert!(missing
+            .expect_err("unbound terrain is still rejected")
+            .contains("exactly one"));
+        assert!(matches!(
+            coverage,
+            Err(ReviewCaptureCoverageError::BoundaryBatchMissingMaterial { .. })
+        ));
+
+        world.entity_mut(batch).insert((
+            MeshMaterial3d::<ReviewLiquidMaterial>::default(),
+            TerrainRenderBatch::new(
+                TerrainChunkRoot { q: 0, r: 0 },
+                substance,
+                vec![TerrainPickRun::new(
+                    logical,
+                    TilePos::new(position.coord, position.level + 1),
+                    span,
+                )],
+            ),
+        ));
+        let (wrong_run, coverage) = inspect(&mut world);
+        assert!(wrong_run
+            .expect_err("a liquid material cannot excuse a changed exact pick run")
+            .contains("inconsistent"));
+        assert!(matches!(
+            coverage,
+            Err(ReviewCaptureCoverageError::BatchRunPositionMismatch { .. })
+        ));
     }
 
     #[test]
@@ -9067,7 +9309,7 @@ mod tests {
         let camera = app
             .world_mut()
             .spawn((
-                original_transform.clone(),
+                original_transform,
                 PanOrbitCamera {
                     focus: original_focus,
                     radius: original_radius,
@@ -9116,7 +9358,7 @@ mod tests {
             .get::<PanOrbitCamera>()
             .expect("camera keeps orbit state");
         assert_eq!(orbit.focus, original_focus);
-        assert_eq!(orbit.radius, original_radius);
+        assert_eq!(orbit.radius.to_bits(), original_radius.to_bits());
         assert_eq!(
             format!(
                 "{:?}",
@@ -9132,7 +9374,7 @@ mod tests {
         else {
             panic!("camera remains perspective");
         };
-        assert_eq!(projection.fov, original_fov);
+        assert_eq!(projection.fov.to_bits(), original_fov.to_bits());
         assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
         assert!(app
             .world()

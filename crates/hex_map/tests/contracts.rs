@@ -22,6 +22,8 @@
 //! the wrong scale still will not be caught here — only by looking at the window.
 //! These raise the floor; they do not replace running the game.
 
+#![cfg(test)]
+
 use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -120,10 +122,6 @@ fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
     substance_table_fixture(omitted)
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixture data should fail the integration test immediately"
-)]
 fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
     let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
     let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
@@ -191,10 +189,6 @@ fn runtime_art_catalog() -> RuntimeArtCatalog {
     runtime_art_catalog_without(None)
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time art fixtures should fail the integration test immediately"
-)]
 fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalog {
     let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
         .expect("tracked art palette should parse");
@@ -346,10 +340,6 @@ fn v3_waterfall_app() -> App {
     app
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the tracked Volcano world is a compile-time integration fixture"
-)]
 fn v3_volcano_app() -> App {
     let mut app = procedural_app();
     let settings: MapSettings = ron::from_str(include_str!(
@@ -567,10 +557,6 @@ fn v3_crystal_ascent_app() -> App {
     app
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the tracked Ring7 review world is a compile-time integration fixture"
-)]
 fn v3_ring7_app() -> App {
     let mut app = test_app();
     let settings: MapSettings = ron::from_str(include_str!(
@@ -583,10 +569,6 @@ fn v3_ring7_app() -> App {
     app
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the tracked Two Rings review world is a compile-time integration fixture"
-)]
 fn v3_ring19_app() -> App {
     let mut app = test_app();
     let settings: MapSettings = ron::from_str(include_str!(
@@ -599,10 +581,6 @@ fn v3_ring19_app() -> App {
     app
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "the tracked Mountain Range review world is a compile-time integration fixture"
-)]
 fn v3_mountain_range_app() -> App {
     let mut app = test_app();
     let settings: MapSettings = ron::from_str(include_str!(
@@ -822,10 +800,6 @@ fn object_instance_snapshot(app: &mut App) -> BTreeSet<(String, TilePos, u8)> {
         .collect()
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid generated crystal hierarchy is a broken integration-test fixture"
-)]
 fn cave_crystal_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
     let roots: Vec<_> = {
         let world = app.world_mut();
@@ -899,10 +873,6 @@ fn cave_crystal_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
     snapshots
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid generated cave vegetation is a broken integration-test fixture"
-)]
 fn cave_vegetation_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
     let world = app.world_mut();
     let mut query = world.query::<(
@@ -939,10 +909,6 @@ fn cave_vegetation_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
         .collect()
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid generated cave vegetation is a broken integration-test fixture"
-)]
 fn cave_vegetation_non_root_visual(app: &mut App) -> (TilePos, TilePos) {
     let instance = {
         let world = app.world_mut();
@@ -1024,10 +990,6 @@ fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
         .collect()
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "a generated visual origin below its exact footing is a broken test fixture"
-)]
 fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
     let world = app.world_mut();
     let level_height = world.resource::<MapSettings>().level_height;

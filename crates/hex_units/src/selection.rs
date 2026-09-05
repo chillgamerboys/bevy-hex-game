@@ -943,10 +943,6 @@ mod tests {
     use hex_test_app::HeadlessAppBuilder;
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "an explicit fixture window always normalizes for pointer events"
-    )]
     fn batch_out_without_hit_coordinates_clears_only_its_exact_hover() {
         let mut app = App::new();
         app.init_resource::<HoveredSurface>()
