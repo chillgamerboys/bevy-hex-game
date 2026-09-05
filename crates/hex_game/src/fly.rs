@@ -475,6 +475,7 @@ fn fly_encounter(definition: &SandboxMapDefinition) -> Encounter {
 
 fn activate_fly_session(
     mut commands: Commands,
+    ui_assets: Res<UiAssets>,
     fog: Option<Res<crate::fog::FogPresentationMode>>,
     #[cfg(feature = "visual-walk")] automation: Option<Res<crate::walk::AutomatedWalk>>,
     #[cfg(feature = "visual-walk")] mut virtual_time: ResMut<Time<Virtual>>,
@@ -538,6 +539,7 @@ fn activate_fly_session(
         Pickable::IGNORE,
         Text::new("Fly · WASD move · F walk · Right-drag look · Scroll zoom"),
         TextFont {
+            font: ui_assets.body.clone().into(),
             font_size: FontSize::Px(16.0),
             ..default()
         },
@@ -854,16 +856,16 @@ fn move_fly_pawn(
 }
 
 fn update_hint(explorer: Res<Explorer>, mut hints: Query<&mut Text, With<ExplorerHint>>) {
-    let mode = match explorer.mode {
-        Mode::Walk => "Walk",
-        Mode::Fly => "Fly",
+    let controls = match explorer.mode {
+        Mode::Walk => "Walk · WASD move · Shift run · Space jump · F fly",
+        Mode::Fly => "Fly · WASD move · F walk",
     };
     let notice = if explorer.notice_seconds > 0.0 {
         format!("\n{}", explorer.notice)
     } else {
         String::new()
     };
-    let text = format!("{mode} · WASD move · Shift run · Space jump · F walk/fly\nRight-drag look · Scroll zoom · Backspace menu{notice}");
+    let text = format!("{controls}\nRight-drag look · Scroll zoom · Backspace menu{notice}");
     for mut hint in &mut hints {
         if hint.0 != text {
             hint.0.clone_from(&text);
@@ -1125,6 +1127,7 @@ mod tests {
             .insert_resource(GameplayPhase::Active)
             .insert_resource(CameraMode::Map)
             .insert_resource(camera_settings())
+            .insert_resource(ui_assets())
             .add_systems(Update, activate_fly_session);
         let pawn_position = Vec3::new(2.0, 4.0, -3.0);
         let pawn = app
