@@ -1199,6 +1199,12 @@ fn spanning_object(id: &str) -> ObjectInstance {
 fn identity_projection_is_clipped_and_preserves_overlapping_contributors() {
     let a = spanning_object("a");
     let b = spanning_object("b");
+    for (coordinate, influence) in a.influences().expect("single-pass projection") {
+        assert_eq!(
+            a.influence(coordinate).expect("single clip"),
+            Some(influence)
+        );
+    }
     let coordinate = WorldHex::new(16, 0).chunk();
     let a = a
         .influence(coordinate)

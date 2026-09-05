@@ -93,6 +93,36 @@ impl ObjectInstance {
             .collect())
     }
 
+    /// Partition the full footprint once and hash its complete source exactly once.
+    /// Retain these clipped products while staging a multi-chunk operation.
+    pub fn influences(&self) -> Result<BTreeMap<ChunkId, ObjectInfluence>, ContractError> {
+        self.validate()?;
+        let source_fingerprint = hash_serializable(self)?;
+        let mut columns: BTreeMap<ChunkId, Vec<ColumnData>> = BTreeMap::new();
+        columns.insert(self.origin.column.chunk(), Vec::new());
+        for column in &self.occupancy {
+            columns
+                .entry(column.position.chunk())
+                .or_default()
+                .push(column.clone());
+        }
+        Ok(columns
+            .into_iter()
+            .map(|(coordinate, occupancy)| {
+                (
+                    coordinate,
+                    ObjectInfluence {
+                        id: self.id.clone(),
+                        source_fingerprint,
+                        origin: self.origin,
+                        region_id: self.region_id.clone(),
+                        occupancy,
+                    },
+                )
+            })
+            .collect())
+    }
+
     /// Produce the exact clipped contribution for one dependency chunk.
     pub fn influence(&self, coordinate: ChunkId) -> Result<Option<ObjectInfluence>, ContractError> {
         self.validate()?;
@@ -301,16 +331,14 @@ pub(crate) fn project_objects(
         .values()
         .flat_map(|chunk| &chunk.semantics.objects)
     {
-        for coordinate in object.dependency_chunks()? {
+        for (coordinate, influence) in object.influences()? {
             if !package.chunks.contains_key(&coordinate) {
                 return Err(ContractError::new(
                     "world.object",
                     "missing dependency chunk",
                 ));
             }
-            if let Some(influence) = object.influence(coordinate)? {
-                projected.entry(coordinate).or_default().push(influence);
-            }
+            projected.entry(coordinate).or_default().push(influence);
         }
     }
     for influences in projected.values_mut() {
