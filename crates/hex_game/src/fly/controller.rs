@@ -187,10 +187,14 @@ impl Body {
         if self.grounded && horizontal.length_squared() > f32::EPSILON {
             if (slid - original).length_squared() + SKIN * SKIN < horizontal.length_squared() {
                 let rise = Vec3::Y * (settings.step_levels * level + SKIN * 2.0);
+                // A ceiling may leave exactly enough space for the step. Use
+                // the available ascent and let the across/down sweeps decide
+                // whether the full body fits, including tangent headroom.
+                let rise = world
+                    .sweep(original, rise, height, radius)
+                    .map_or(rise, |hit| rise * hit.fraction);
                 let raised = original + rise;
-                if world.sweep(original, rise, height, radius).is_none()
-                    && world.clear(raised, height, radius)
-                {
+                if world.clear(raised, height, radius) {
                     let across = slide(world, raised, horizontal, height, radius);
                     if (across - raised).xz().length_squared()
                         > (slid - original).xz().length_squared() + SKIN * SKIN
@@ -498,6 +502,7 @@ mod tests {
             (0.4, None, true),
             (0.8, None, false),
             (0.4, Some(1.1), false),
+            (0.4, Some(1.2), true),
         ] {
             let mut world = floor(5);
             world.replace(
