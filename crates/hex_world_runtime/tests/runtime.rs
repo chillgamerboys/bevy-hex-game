@@ -797,7 +797,7 @@ fn malformed_save_head_is_atomic_and_corrupt_lazy_partition_never_publishes() {
         let update = restored.pump();
         if !update.failures.is_empty() {
             assert_eq!(
-                runtime.load_timing().samples,
+                restored.load_timing().samples,
                 0,
                 "failed reads are not successful ready latency"
             );
