@@ -132,19 +132,27 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     fn reside(&mut self, requested: &BTreeSet<ChunkId>) {
-        self.runtime
-            .set_interests(
-                requested
+        let interests = requested
+            .iter()
+            .map(|coordinate| ResidencyRequest {
+                id: format!("fixture/{}", coordinate.q),
+                // Radius-zero regions declare only these exact water columns.
+                // A different point in the same chunk may be outside the world.
+                center: self
+                    .runtime
+                    .manifest()
+                    .regions
                     .iter()
-                    .map(|coordinate| ResidencyRequest {
-                        id: format!("fixture/{}", coordinate.q),
-                        center: WorldHex::new(coordinate.q * 16 + 15, 5),
-                        radius: 0,
-                        retention_radius: 0,
-                        priority: 1,
-                    })
-                    .collect(),
-            )
+                    .find(|region| region.origin.chunk() == *coordinate)
+                    .expect("requested chunk has a declared fixture column")
+                    .origin,
+                radius: 0,
+                retention_radius: 0,
+                priority: 1,
+            })
+            .collect();
+        self.runtime
+            .set_interests(interests)
             .expect("bounded local interests");
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
