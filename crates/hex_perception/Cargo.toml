@@ -16,8 +16,10 @@ hex_assets = { workspace = true }
 hex_core = { workspace = true }
 hex_multiplayer = { workspace = true }
 hex_units = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts" }
 
 [dev-dependencies]
+hex_world_runtime = { path = "../hex_world_runtime" }
 bevy_platform = { workspace = true }
 bevy_time = { workspace = true }
 hex_test_app = { workspace = true }

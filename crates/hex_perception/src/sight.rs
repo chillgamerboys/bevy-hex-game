@@ -706,15 +706,33 @@ fn can_observe_resolved(
     terrain: &TerrainOccupancy,
     authored_objects: &AuthoredObjectOccupancy,
 ) -> bool {
-    let band = profile.band(target_light.level);
-    if !upper_dome_contains(
+    within_sight_band(observer, target, target_light, profile)
+        && terrain_and_authored_object_sight_is_clear(observer, target, terrain, authored_objects)
+}
+
+// V4 uses the same illumination gate and exact cached ray kernel as V3's resolver.
+pub(crate) fn can_observe_cached(
+    observer: TilePos,
+    target: TilePos,
+    target_light: ResolvedLight,
+    profile: SightProfile,
+    cache: &SightOccupancyCache<'_>,
+) -> bool {
+    within_sight_band(observer, target, target_light, profile)
+        && terrain_and_authored_object_sight_is_clear_cached(observer, target, cache)
+}
+
+fn within_sight_band(
+    observer: TilePos,
+    target: TilePos,
+    target_light: ResolvedLight,
+    profile: SightProfile,
+) -> bool {
+    upper_dome_contains(
         ExactGridPoint::standing_eye(observer),
         ExactGridPoint::voxel_top_center(target),
-        band.radius,
-    ) {
-        return false;
-    }
-    terrain_and_authored_object_sight_is_clear(observer, target, terrain, authored_objects)
+        profile.band(target_light.level).radius,
+    )
 }
 
 #[cfg(test)]
