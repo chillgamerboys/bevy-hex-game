@@ -528,7 +528,7 @@ impl Validate for WorldManifest {
                 ));
             }
         }
-        validate_chunk_catalogue(self)?;
+        drop(validate_chunk_catalogue(self)?);
         ordered(self.boundaries.iter().map(|entry| &entry.id), "boundaries")?;
         let mut boundary_pairs = BTreeSet::new();
         for boundary in &self.boundaries {
@@ -601,14 +601,16 @@ impl Validate for WorldManifest {
 
 // Prove availability metadata independently of terrain packages. Rectangle/hex
 // intersection needs only integer interval arithmetic, never per-voxel iteration.
-fn validate_chunk_catalogue(manifest: &WorldManifest) -> Result<(), ContractError> {
+pub(crate) fn validate_chunk_catalogue(
+    manifest: &WorldManifest,
+) -> Result<BTreeMap<ChunkId, Vec<usize>>, ContractError> {
     let actual: BTreeSet<_> = manifest
         .chunks
         .iter()
         .map(|entry| entry.coordinate)
         .collect();
-    let mut expected = BTreeSet::new();
-    for region in &manifest.regions {
+    let mut expected: BTreeMap<ChunkId, Vec<usize>> = BTreeMap::new();
+    for (region_index, region) in manifest.regions.iter().enumerate() {
         let radius = u128::from(region.radius);
         let columns = 1 + 3 * radius * (radius + 1);
         // Any one disk needs at least this many storage chunks, even when regions
@@ -647,33 +649,35 @@ fn validate_chunk_catalogue(manifest: &WorldManifest) -> Result<(), ContractErro
                             "catalogue omits a chunk intersecting the world footprint",
                         ));
                     }
-                    expected.insert(chunk);
+                    expected.entry(chunk).or_default().push(region_index);
                 }
             }
         }
     }
-    if actual != expected {
+    if actual.len() != expected.len() {
         return Err(reject(
             "chunks",
             "catalogue includes chunks outside the world footprint",
         ));
     }
-    Ok(())
+    Ok(expected)
 }
 
 impl WorldManifest {
-    /// Look up a stable material, rejecting unresolved source references.
+    /// Look up a stable material in a canonical manifest, rejecting unresolved references.
     pub fn material(&self, id: &str) -> Result<&MaterialSpec, ContractError> {
         self.materials
-            .iter()
-            .find(|entry| entry.id == id)
+            .binary_search_by(|entry| entry.id.as_str().cmp(id))
+            .ok()
+            .and_then(|index| self.materials.get(index))
             .ok_or_else(|| ContractError::new("material", format!("unknown material {id}")))
     }
-    /// Look up a stable source region.
+    /// Look up a stable source region in a canonical manifest.
     pub fn region(&self, id: &str) -> Result<&RegionDescriptor, ContractError> {
         self.regions
-            .iter()
-            .find(|entry| entry.id == id)
+            .binary_search_by(|entry| entry.id.as_str().cmp(id))
+            .ok()
+            .and_then(|index| self.regions.get(index))
             .ok_or_else(|| ContractError::new("region", format!("unknown region {id}")))
     }
     /// Test the union of declared finite world footprints without loading terrain.
@@ -743,7 +747,7 @@ fn column_at(columns: &[ColumnData], position: WorldHex) -> Result<&ColumnData, 
 fn solid_at(
     column: &ColumnData,
     level: i32,
-    manifest: &WorldManifest,
+    manifest: &ManifestIndex,
 ) -> Result<bool, ContractError> {
     column
         .material_at(level)
@@ -755,7 +759,7 @@ fn solid_at(
 fn supported(
     column: &ColumnData,
     position: VoxelPosition,
-    manifest: &WorldManifest,
+    manifest: &ManifestIndex,
 ) -> Result<(), ContractError> {
     if !solid_at(column, position.level, manifest)? {
         return Err(reject("support", "required surface has no solid support"));
@@ -780,7 +784,7 @@ fn interval_policy(
     bottom: i32,
     top: i32,
     solid: bool,
-    manifest: &WorldManifest,
+    manifest: &ManifestIndex,
 ) -> Result<(), ContractError> {
     let mut cursor = bottom;
     for run in &column.runs {
@@ -812,9 +816,26 @@ impl ChunkPackage {
     /// a runtime can validate an edited revision before publishing it. Cross-chunk
     /// liquid/object/light dependencies are additionally checked by [`WorldPackage`].
     pub fn validate_against_manifest(&self, manifest: &WorldManifest) -> Result<(), ContractError> {
+        let index = ManifestIndex::new(std::sync::Arc::new(manifest.clone()))?;
+        self.validate_with_index(&index)
+    }
+
+    /// Validate using a retained catalogue index, without scanning dormant regions or features.
+    ///
+    /// Preserves the complete checksum, exact footprint, material and semantic
+    /// checks of [`Self::validate_against_manifest`]. The index validates its manifest
+    /// once at construction and must be retained across resident chunk operations.
+    /// Edited payloads may differ from their original descriptor checksum.
+    pub fn validate_with_index(&self, manifest: &ManifestIndex) -> Result<(), ContractError> {
         self.validate()?;
-        if self.world_id != manifest.world_id {
+        if self.world_id != manifest.manifest().world_id {
             return Err(reject("chunk.world_id", "chunk belongs to another world"));
+        }
+        if !manifest.contains_chunk(self.coordinate) {
+            return Err(reject(
+                "chunk.coordinate",
+                "chunk is absent from the world index",
+            ));
         }
         let origin = self.coordinate.origin()?;
         for q in 0..CHUNK_SIZE {
@@ -839,11 +860,7 @@ impl ChunkPackage {
         }
         for feature in &self.features {
             manifest.validate_source_position(&feature.region_id, feature.anchor.column)?;
-            if !manifest
-                .features
-                .iter()
-                .any(|candidate| candidate == feature)
-            {
+            if manifest.feature(&feature.id) != Some(feature) {
                 return Err(reject(
                     "chunk.feature",
                     "feature differs from world registry",
@@ -913,7 +930,7 @@ impl ChunkPackage {
 
 impl Validate for WorldPackage {
     fn validate(&self) -> Result<(), ContractError> {
-        self.manifest.validate()?;
+        let index = ManifestIndex::new(std::sync::Arc::new(self.manifest.clone()))?;
         if self.chunks.len() != self.manifest.chunks.len() {
             return Err(reject("world.chunks", "package and descriptor sets differ"));
         }
@@ -937,7 +954,7 @@ impl Validate for WorldPackage {
                     "chunk key, address, or descriptor fingerprint mismatch",
                 ));
             }
-            chunk.validate_against_manifest(&self.manifest)?;
+            chunk.validate_with_index(&index)?;
             for column in &chunk.columns {
                 columns.insert(column.position, column);
             }
@@ -983,24 +1000,8 @@ impl Validate for WorldPackage {
                 "world registry has unpublished features",
             ));
         }
-        // Count existing columns instead of allocating each declared disk. A huge
-        // missing region fails by arithmetic, without a total-world size cap.
-        for region in &self.manifest.regions {
-            let mut actual = 0_u128;
-            for position in columns.keys() {
-                if region.contains(*position)? {
-                    actual += 1;
-                }
-            }
-            let radius = u128::from(region.radius);
-            let expected = 1 + 3 * radius * (radius + 1);
-            if actual != expected {
-                return Err(reject(
-                    "world.regions",
-                    "region footprint has missing chunks or columns",
-                ));
-            }
-        }
+        // Exact catalogue coverage plus every chunk's exact union footprint proves
+        // every region is complete. No region-by-all-world-columns rescan is needed.
         for chunk in self.chunks.values() {
             for object in &chunk.semantics.objects {
                 for column in &object.occupancy {
@@ -1033,13 +1034,10 @@ impl Validate for WorldPackage {
                     let column = columns
                         .get(&position)
                         .ok_or_else(|| reject("boundary", "missing sample column"))?;
-                    if !solid_at(column, sample.ground_level, &self.manifest)?
+                    if !solid_at(column, sample.ground_level, &index)?
                         || sample.ground_level.checked_add(1).is_some_and(|level| {
                             column.material_at(level).is_some_and(|id| {
-                                self.manifest
-                                    .materials
-                                    .iter()
-                                    .any(|material| material.id == id && material.solid)
+                                index.material(id).is_ok_and(|material| material.solid)
                             })
                         })
                     {
@@ -1055,7 +1053,7 @@ impl Validate for WorldPackage {
                                 column: position,
                                 level: sample.ground_level,
                             },
-                            &self.manifest,
+                            &index,
                         )?;
                     }
                     if let Some(level) = sample.water_level {

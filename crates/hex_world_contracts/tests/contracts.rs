@@ -821,3 +821,142 @@ fn huge_declared_region_with_tiny_catalogue_is_rejected_without_enumeration() {
     assert_eq!(error.context, "chunks");
     assert!(error.message.contains("cannot cover"));
 }
+
+#[test]
+fn manifest_index_footprint_matches_independent_fine_disk_membership() {
+    let origin = WorldHex::new(-17, 15);
+    let package = world(origin, 19);
+    let shared = std::sync::Arc::new(package.manifest);
+    let index = ManifestIndex::new(shared.clone()).expect("validated spatial index");
+    assert!(std::ptr::eq(index.manifest(), shared.as_ref()));
+    for q in -25_i64..=25 {
+        for r in -25_i64..=25 {
+            let position = origin
+                .checked_add(WorldHex::new(q, r))
+                .expect("small offset");
+            let expected = q.abs().max(r.abs()).max((q + r).abs()) <= 19;
+            assert_eq!(
+                index.contains(position).expect("indexed membership"),
+                expected
+            );
+        }
+    }
+    assert_eq!(
+        index.candidate_region_count(WorldHex::new(1000, 1000).chunk()),
+        0
+    );
+    assert!(index
+        .contains(WorldHex::new(i64::MAX, i64::MAX))
+        .is_ok_and(|inside| !inside));
+}
+
+#[test]
+fn dormant_catalogue_growth_does_not_expand_active_chunk_candidate_work() {
+    let mut package = world(WorldHex::new(0, 0), 1);
+    let active = WorldHex::new(0, 0).chunk();
+    let live_feature = FeatureSummary {
+        id: "live-feature".into(),
+        region_id: "region".into(),
+        kind: "landmark".into(),
+        anchor: VoxelPosition {
+            column: WorldHex::new(0, 0),
+            level: 0,
+        },
+        asset: None,
+    };
+    package.manifest.features.push(live_feature.clone());
+    package
+        .chunks
+        .get_mut(&active)
+        .expect("active chunk")
+        .features
+        .push(live_feature);
+    package.seal().expect("live feature");
+    for number in 1..=10_000 {
+        let origin = WorldHex::new(i64::from(number) * 1000, 0);
+        let region_id = format!("dormant-{number:04}");
+        package.manifest.regions.push(RegionDescriptor {
+            id: region_id.clone(),
+            origin,
+            radius: 0,
+            source_fingerprint: 1,
+        });
+        package.manifest.chunks.push(ChunkDescriptor {
+            coordinate: origin.chunk(),
+            fingerprint: 1,
+            path: format!("chunks/dormant-{number}.ron"),
+        });
+        package.manifest.features.push(FeatureSummary {
+            id: format!("dormant-feature-{number:04}"),
+            region_id,
+            kind: "landmark".into(),
+            anchor: VoxelPosition {
+                column: origin,
+                level: 0,
+            },
+            asset: None,
+        });
+        package.manifest.materials.push(MaterialSpec {
+            id: format!("dormant-material-{number:04}"),
+            solid: false,
+            diggable: false,
+            color: [1, 2, 3, 255],
+        });
+    }
+    package
+        .manifest
+        .seal()
+        .expect("complete distant metadata catalogue");
+    let index =
+        ManifestIndex::new(std::sync::Arc::new(package.manifest.clone())).expect("expanded index");
+    assert_eq!(index.candidate_region_count(active), 1);
+    assert_eq!(index.manifest().regions.len(), 10_001);
+    assert!(index.feature("dormant-feature-10000").is_some());
+    assert!(index.material("dormant-material-10000").is_ok());
+    assert!(index.region("dormant-10000").is_ok());
+    let chunk = package.chunks.get(&active).expect("active package");
+    chunk
+        .validate_with_index(&index)
+        .expect("unchanged active footprint");
+    let mut missing = chunk.clone();
+    missing.columns.pop().expect("one required column");
+    missing.seal().expect("locally canonical missing footprint");
+    assert!(missing.validate_with_index(&index).is_err());
+    let mut forged = chunk.clone();
+    forged.features.first_mut().expect("live feature").kind = "forged".into();
+    forged.seal().expect("locally canonical forged feature");
+    assert!(forged.validate_with_index(&index).is_err());
+    let mut revised = chunk.clone();
+    revised
+        .columns
+        .last_mut()
+        .expect("column")
+        .runs
+        .push(run(3, 4, "stone"));
+    revised.seal().expect("revised payload");
+    assert_ne!(revised.fingerprint, chunk.fingerprint);
+    revised
+        .validate_with_index(&index)
+        .expect("edited revisions need no immutable base hash match");
+}
+
+#[test]
+fn manifest_index_rejects_untrusted_hash_and_unindexed_empty_chunk() {
+    let package = world(WorldHex::new(0, 0), 1);
+    let mut corrupt = package.manifest.clone();
+    corrupt.fingerprint ^= 1;
+    assert!(ManifestIndex::new(std::sync::Arc::new(corrupt)).is_err());
+    let index = ManifestIndex::new(std::sync::Arc::new(package.manifest)).expect("index");
+    let mut empty = ChunkPackage {
+        schema_version: SCHEMA_VERSION,
+        world_id: "world".into(),
+        coordinate: ChunkId { q: 100, r: 100 },
+        source_fingerprint: 12,
+        columns: Vec::new(),
+        features: Vec::new(),
+        semantics: ChunkSemantics::default(),
+        fingerprint: 0,
+    };
+    empty.seal().expect("local empty chunk shape");
+    assert!(empty.validate_with_index(&index).is_err());
+}

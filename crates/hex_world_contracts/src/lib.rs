@@ -6,10 +6,12 @@
 //! Neither operation reads files, schedules work, or owns gameplay authority.
 
 mod geometry;
+mod index;
 mod model;
 mod validation;
 
 pub use geometry::*;
+pub use index::ManifestIndex;
 pub use model::*;
 pub use validation::*;
 
@@ -18,6 +20,13 @@ use std::fmt;
 
 /// Version of the initial streamed-world wire format.
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// Nominal axial q/r pitch of the regular schema-v1 map-summary lattice.
+///
+/// Producers and atlas consumers share this spacing instead of hardcoding it.
+/// Additional landmark observations may lie off the lattice. Summary spacing is
+/// a coarse presentation convention, never exact terrain coverage or disclosure.
+pub const SUMMARY_SAMPLE_PITCH: i64 = 12;
 
 /// A precise rejection at a public contract boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
