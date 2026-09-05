@@ -13,7 +13,7 @@ use std::{
     time::Instant,
 };
 
-const COMPILER_VERSION: &str = "hex-authoring/1";
+const COMPILER_VERSION: &str = "hex-authoring/3";
 
 /// One contextual, actionable authoring/compiler rejection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1310,7 +1310,9 @@ fn assemble(
                 .entry(coordinate)
                 .or_default()
                 .insert(region.id.clone(), cached.output_key);
-            if p.q.rem_euclid(12) == 0 && p.r.rem_euclid(12) == 0 {
+            if p.q.rem_euclid(hex_world_contracts::SUMMARY_SAMPLE_PITCH) == 0
+                && p.r.rem_euclid(hex_world_contracts::SUMMARY_SAMPLE_PITCH) == 0
+            {
                 if let Some(top) = runs.last() {
                     summary.push(MapSummaryCell {
                         position,

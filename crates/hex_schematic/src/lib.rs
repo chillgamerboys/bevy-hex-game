@@ -9,8 +9,8 @@ pub mod generator;
 pub mod metrics;
 pub mod model;
 pub mod template;
-pub mod validate;
 pub mod v4;
+pub mod validate;
 
 pub use fingerprint::semantic_fingerprint;
 pub use generator::{
