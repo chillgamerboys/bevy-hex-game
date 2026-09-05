@@ -216,7 +216,8 @@ impl TerrainPreparer {
     ///
     /// The canonical mask must use this chunk's object materials and lie wholly
     /// inside static object intervals. Logical runs, headroom and picking metadata
-    /// remain complete. Full occupancy still supplies neighboring face occlusion.
+    /// remain complete. Suppressed cells do not occlude render faces: their actual
+    /// stock art may be Cutout/Blend even when the logical palette color is opaque.
     /// The application owns atomic publication of matching stock-art fragments and
     /// rejects stale mask jobs before publishing a different suppression signature.
     pub fn prepare_with_suppressed_occupancy(
@@ -274,15 +275,7 @@ impl TerrainPreparer {
                     top,
                     cutaway: None,
                 };
-                geometry.push(ProjectedRun {
-                    run: SubstanceRun {
-                        bottom,
-                        top,
-                        substance: *substance,
-                    },
-                    cutaway: None,
-                });
-                grouped.entry(*substance).or_default().push(PreparedRun {
+                let prepared_run = PreparedRun {
                     geometry: mesh_run,
                     exact: ResidentRun {
                         position: VoxelPosition {
@@ -295,7 +288,18 @@ impl TerrainPreparer {
                         headroom,
                         source: *source,
                     },
-                });
+                };
+                for (bottom, top) in remaining_intervals(&prepared_run, suppression) {
+                    geometry.push(ProjectedRun {
+                        run: SubstanceRun {
+                            bottom: self.checked_level(bottom)?,
+                            top: self.checked_level(top)?,
+                            substance: *substance,
+                        },
+                        cutaway: None,
+                    });
+                }
+                grouped.entry(*substance).or_default().push(prepared_run);
             }
             projected.insert(local, geometry);
         }

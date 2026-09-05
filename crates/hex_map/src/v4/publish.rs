@@ -182,6 +182,23 @@ impl TerrainPresenter {
         world: &mut World,
         prepared: PreparedChunk,
     ) -> Result<ChunkReceipt, PresentationError> {
+        self.validate_publication(&prepared)?;
+        if let Some(old) = self.resident.get(&prepared.coordinate()) {
+            if prepared.revision == old.receipt.revision
+                && prepared.suppression_fingerprint == old.receipt.suppression_fingerprint
+            {
+                return Ok(old.receipt.clone());
+            }
+        }
+        Ok(self.install(world, prepared))
+    }
+
+    /// Validate every publication admission check without touching roots or assets.
+    ///
+    /// The application can preflight terrain, atomically replace the matching art
+    /// fragment set, and publish terrain in the same single-threaded operation.
+    /// The presenter and its origin must remain unchanged between preflight and publish.
+    pub fn validate_publication(&self, prepared: &PreparedChunk) -> Result<(), PresentationError> {
         if prepared.context.origin != self.context.origin
             || prepared.context.level_height.to_bits() != self.context.level_height.to_bits()
             || prepared.context.limits != self.context.limits
@@ -201,17 +218,12 @@ impl TerrainPresenter {
                     "stale or conflicting resident revision".into(),
                 ));
             }
-            if prepared.revision == old.receipt.revision
-                && prepared.suppression_fingerprint == old.receipt.suppression_fingerprint
-            {
-                return Ok(old.receipt.clone());
-            }
         } else if self.resident.len() >= self.context.limits.max_resident_chunks {
             return Err(PresentationError(
                 "active presentation root budget exhausted".into(),
             ));
         }
-        Ok(self.install(world, prepared))
+        Ok(())
     }
 
     /// Remove one root and all owned meshes, retaining shared palette materials.

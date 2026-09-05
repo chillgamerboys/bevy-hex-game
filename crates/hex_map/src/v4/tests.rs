@@ -918,3 +918,111 @@ fn rebase_preserves_full_suppression_and_failure_keeps_the_prior_mask() {
     assert_eq!(presenter.receipts().next(), Some(after));
     assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), before.meshes);
 }
+
+#[test]
+fn publication_preflight_rejects_stale_context_and_revision_without_mutation() {
+    let column = WorldHex::new(15, 0);
+    let package = tall_object_fixture(column);
+    let mut presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let initial = presenter.prepare(chunk, 4).expect("initial");
+    presenter
+        .validate_publication(&initial)
+        .expect("preflight empty presenter");
+    assert_eq!(presenter.receipts().len(), 0);
+    let mut world = World::new();
+    let receipt = presenter.publish(&mut world, initial).expect("publish");
+    let old = presenter.prepare(chunk, 3).expect("old");
+    assert!(presenter.validate_publication(&old).is_err());
+    let ready = presenter
+        .prepare_with_suppressed_occupancy(chunk, 4, &chunk.semantics.occupancy)
+        .expect("new mask");
+    presenter
+        .validate_publication(&ready)
+        .expect("same revision new mask is admissible");
+    assert_eq!(presenter.receipts().next(), Some(&receipt));
+    assert!(world.get_entity(receipt.root).is_ok());
+    presenter
+        .rebase(&mut world, RenderOrigin { column, level: 1 })
+        .expect("rebase");
+    assert!(presenter.validate_publication(&ready).is_err());
+}
+
+#[test]
+fn masked_opaque_occupancy_retains_background_faces_for_transparent_stock_art() {
+    let column = WorldHex::new(8, 8);
+    let mut package = tall_object_fixture(column);
+    package
+        .manifest
+        .materials
+        .iter_mut()
+        .find(|material| material.id == "glass_object")
+        .expect("logical object material")
+        .color = [30, 150, 200, 255];
+    let adjacent = column.checked_add(WorldHex::new(1, 0)).expect("adjacent");
+    package
+        .chunks
+        .get_mut(&adjacent.chunk())
+        .expect("same chunk")
+        .columns
+        .iter_mut()
+        .find(|entry| entry.position == adjacent)
+        .expect("neighbor")
+        .runs = vec![run(-4, 6, "custom_rock")];
+    package.seal().expect("opaque logical material source");
+    let presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let ordinary = presenter.prepare(chunk, 0).expect("opaque proxies");
+    let masked = presenter
+        .prepare_with_suppressed_occupancy(chunk, 0, &chunk.semantics.occupancy)
+        .expect("stock art mask");
+    assert_eq!(ordinary.logical_runs(), masked.logical_runs());
+    let direction = HexCoord::from_axial(1, 0).to_world(0.0).normalize();
+    let plane = HexCoord::from_axial(1, 0).to_world(0.0).length() * 0.5;
+    let background_vertices = |prepared: &PreparedChunk| {
+        prepared
+            .batches
+            .iter()
+            .filter(|batch| batch.material.id == "custom_rock")
+            .map(|batch| {
+                let mesh = batch.mesh.as_ref().expect("terrain mesh");
+                let Some(VertexAttributeValues::Float32x3(positions)) =
+                    mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                else {
+                    unreachable!("positions");
+                };
+                let Some(VertexAttributeValues::Float32x3(normals)) =
+                    mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+                else {
+                    unreachable!("normals");
+                };
+                positions
+                    .iter()
+                    .zip(normals)
+                    .filter(|(position, normal)| {
+                        let point = Vec3::from_array(**position);
+                        let normal = Vec3::from_array(**normal);
+                        point.y > 1.01
+                            && (point.dot(direction) - plane).abs() < 0.001
+                            && normal.dot(-direction) > 0.99
+                    })
+                    .count()
+            })
+            .sum::<usize>()
+    };
+    assert_eq!(background_vertices(&ordinary), 0);
+    assert!(background_vertices(&masked) > 0);
+    assert_eq!(
+        chunk
+            .semantics
+            .occupancy
+            .first()
+            .expect("logical object")
+            .runs,
+        vec![run(1, 6, "glass_object")]
+    );
+}
