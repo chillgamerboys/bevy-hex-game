@@ -1,8 +1,3 @@
-#![expect(
-    clippy::expect_used,
-    reason = "Test-controlled fixtures and exact publication assertions"
-)]
-
 use std::collections::BTreeMap;
 
 use bevy::{mesh::VertexAttributeValues, prelude::*};
