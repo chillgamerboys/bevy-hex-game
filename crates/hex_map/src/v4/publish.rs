@@ -4,7 +4,7 @@ use bevy::{picking::Pickable, prelude::*};
 use hex_core::{
     Headroom, HexTile, RunBottom, SubstanceId, TerrainPickRun, TerrainRenderBatch, MAX_HEADROOM,
 };
-use hex_world_contracts::{ChunkId, ChunkPackage, ManifestIndex, WorldManifest};
+use hex_world_contracts::{ChunkId, ChunkPackage, ColumnData, ManifestIndex, WorldManifest};
 
 use super::{
     PreparedChunk, PresentationError, PresentationLimits, RenderOrigin, RunSource, TerrainPreparer,
@@ -19,6 +19,8 @@ pub struct ResidentChunk {
     pub revision: u64,
     /// Exact revised payload checksum.
     pub fingerprint: u64,
+    /// Exact render-only static object suppression signature.
+    pub suppression_fingerprint: u64,
 }
 
 /// Measured publication outcome for a single root and its owned assets.
@@ -30,6 +32,8 @@ pub struct ChunkReceipt {
     pub revision: u64,
     /// Exact payload checksum, possibly different from the original manifest base.
     pub fingerprint: u64,
+    /// Canonical signature of the exact render-only static object suppression mask.
+    pub suppression_fingerprint: u64,
     /// Current disposable root; replacement/rebase returns a new entity.
     pub root: Entity,
     /// Number of exact logical interval entities.
@@ -50,6 +54,7 @@ struct PublishedChunk {
     receipt: ChunkReceipt,
     package: Arc<ChunkPackage>,
     meshes: Vec<Handle<Mesh>>,
+    suppression: Arc<Vec<ColumnData>>,
 }
 
 /// Owns the disposable roots/assets for one bounded local presentation window.
@@ -137,6 +142,17 @@ impl TerrainPresenter {
         self.context.prepare(package, revision)
     }
 
+    /// Prepare an exact render-only static-object mask with full logical metadata.
+    pub fn prepare_with_suppressed_occupancy(
+        &self,
+        package: &ChunkPackage,
+        revision: u64,
+        suppression: &[ColumnData],
+    ) -> Result<PreparedChunk, PresentationError> {
+        self.context
+            .prepare_with_suppressed_occupancy(package, revision, suppression)
+    }
+
     /// Current integer anchor of this presentation window.
     #[must_use]
     pub fn origin(&self) -> RenderOrigin {
@@ -158,7 +174,8 @@ impl TerrainPresenter {
 
     /// Publish or replace exactly one chunk; old revisions and stale contexts fail closed.
     ///
-    /// Equal revision/checksum is idempotent. Meshes and logical entities of other
+    /// Equal revision/checksum/suppression is idempotent. A changed valid suppression
+    /// mask may replace the same terrain revision. Meshes and logical entities of other
     /// roots remain untouched. Materials are shared and retained until [`Self::clear`].
     pub fn publish(
         &mut self,
@@ -184,7 +201,9 @@ impl TerrainPresenter {
                     "stale or conflicting resident revision".into(),
                 ));
             }
-            if prepared.revision == old.receipt.revision {
+            if prepared.revision == old.receipt.revision
+                && prepared.suppression_fingerprint == old.receipt.suppression_fingerprint
+            {
                 return Ok(old.receipt.clone());
             }
         } else if self.resident.len() >= self.context.limits.max_resident_chunks {
@@ -221,7 +240,13 @@ impl TerrainPresenter {
         let prepared = self
             .resident
             .values()
-            .map(|old| next.prepare(&old.package, old.receipt.revision))
+            .map(|old| {
+                next.prepare_with_suppressed_occupancy(
+                    &old.package,
+                    old.receipt.revision,
+                    &old.suppression,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         self.context = next;
         Ok(prepared
@@ -254,6 +279,7 @@ impl TerrainPresenter {
                     coordinate,
                     revision: prepared.revision,
                     fingerprint: prepared.package.fingerprint,
+                    suppression_fingerprint: prepared.suppression_fingerprint,
                 },
                 prepared.marker,
                 Transform::default(),
@@ -267,11 +293,12 @@ impl TerrainPresenter {
             coordinate,
             revision: prepared.revision,
             fingerprint: prepared.package.fingerprint,
+            suppression_fingerprint: prepared.suppression_fingerprint,
             root,
             logical_runs: 0,
             object_runs: 0,
             liquid_intervals: prepared.package.semantics.liquids.len(),
-            meshes: prepared.batches.len(),
+            meshes: prepared.meshes(),
             vertices: 0,
             unresolved_object_assets: prepared.package.semantics.objects.len(),
         };
@@ -323,26 +350,30 @@ impl TerrainPresenter {
                 ));
                 children.push(entity);
             }
-            receipt.vertices += batch.mesh.count_vertices();
-            let mesh = world.resource_mut::<Assets<Mesh>>().add(batch.mesh);
-            let entity = world
+            let batch_entity = world
                 .spawn((
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material),
                     Transform::default(),
                     Visibility::Inherited,
                     Pickable::default(),
                     TerrainRenderBatch::new(prepared.marker, batch.substance, lookup),
                 ))
                 .id();
-            children.push(entity);
-            meshes.push(mesh);
+            if let Some(raw) = batch.mesh {
+                receipt.vertices += raw.count_vertices();
+                let mesh = world.resource_mut::<Assets<Mesh>>().add(raw);
+                world
+                    .entity_mut(batch_entity)
+                    .insert((Mesh3d(mesh.clone()), MeshMaterial3d(material)));
+                meshes.push(mesh);
+            }
+            children.push(batch_entity);
         }
         world.entity_mut(root).add_children(&children);
         let entry = PublishedChunk {
             receipt: receipt.clone(),
             package: prepared.package,
             meshes,
+            suppression: prepared.suppression,
         };
         if let Some(old) = self.resident.insert(coordinate, entry) {
             cleanup(world, &old);

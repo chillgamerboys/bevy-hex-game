@@ -142,8 +142,11 @@ fn huge_global_coordinates_are_subtracted_before_float_geometry() {
         .expect("prepare");
     assert!(prepared.logical_runs() >= 2);
     for batch in &prepared.batches {
-        let Some(VertexAttributeValues::Float32x3(vertices)) =
-            batch.mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        let Some(VertexAttributeValues::Float32x3(vertices)) = batch
+            .mesh
+            .as_ref()
+            .expect("unmasked mesh")
+            .attribute(Mesh::ATTRIBUTE_POSITION)
         else {
             unreachable!("the shared terrain mesh has positions");
         };
@@ -475,13 +478,19 @@ fn shared_mesh_engine_keeps_negative_bottom_faces_and_resident_seam_walls() {
     let mut bottom_faces = 0;
     let mut seam_faces = 0;
     for batch in &prepared.batches {
-        let Some(VertexAttributeValues::Float32x3(positions)) =
-            batch.mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        let Some(VertexAttributeValues::Float32x3(positions)) = batch
+            .mesh
+            .as_ref()
+            .expect("unmasked mesh")
+            .attribute(Mesh::ATTRIBUTE_POSITION)
         else {
             unreachable!("positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) =
-            batch.mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        let Some(VertexAttributeValues::Float32x3(normals)) = batch
+            .mesh
+            .as_ref()
+            .expect("unmasked mesh")
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
         else {
             unreachable!("normals");
         };
@@ -579,13 +588,19 @@ fn translucent_neighbor_does_not_cull_the_opaque_wall_behind_it() {
         if batch.material.id != "custom_rock" {
             continue;
         }
-        let Some(VertexAttributeValues::Float32x3(positions)) =
-            batch.mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        let Some(VertexAttributeValues::Float32x3(positions)) = batch
+            .mesh
+            .as_ref()
+            .expect("unmasked mesh")
+            .attribute(Mesh::ATTRIBUTE_POSITION)
         else {
             unreachable!("positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) =
-            batch.mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        let Some(VertexAttributeValues::Float32x3(normals)) = batch
+            .mesh
+            .as_ref()
+            .expect("unmasked mesh")
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
         else {
             unreachable!("normals");
         };
@@ -645,4 +660,261 @@ fn explicit_preparation_run_budget_rejects_whole_product_without_truncating() {
     assert!(matches!(result, Err(error) if error.to_string().contains("max_runs_per_chunk")));
     assert_eq!(presenter.receipts().len(), 0);
     package.validate().expect("source remains a valid world");
+}
+
+fn tall_object_fixture(column: WorldHex) -> WorldPackage {
+    let mut package = fixture(column);
+    add_object(&mut package, column, column);
+    let root = package.chunks.get_mut(&column.chunk()).expect("root");
+    root.semantics
+        .objects
+        .first_mut()
+        .expect("object")
+        .occupancy
+        .first_mut()
+        .expect("occupancy")
+        .runs = vec![run(1, 6, "glass_object")];
+    let terrain = root
+        .columns
+        .iter_mut()
+        .find(|terrain| terrain.position == column)
+        .expect("terrain");
+    terrain.runs = vec![run(-4, 0, "custom_rock"), run(9, 10, "custom_rock")];
+    package.seal().expect("tall object source");
+    package
+}
+
+fn mask(column: WorldHex, bottom: i32, top: i32, material: &str) -> Vec<ColumnData> {
+    vec![ColumnData {
+        position: column,
+        runs: vec![run(bottom, top, material)],
+    }]
+}
+
+#[test]
+fn partial_object_suppression_splits_only_render_geometry_and_retains_exact_stacks() {
+    let column = WorldHex::new(15, 0);
+    let package = tall_object_fixture(column);
+    let presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let ordinary = presenter.prepare(chunk, 4).expect("ordinary");
+    let partial = presenter
+        .prepare_with_suppressed_occupancy(chunk, 4, &mask(column, 2, 4, "glass_object"))
+        .expect("partial");
+    assert_eq!(partial.logical_runs(), ordinary.logical_runs());
+    assert_ne!(
+        partial.suppression_fingerprint(),
+        ordinary.suppression_fingerprint()
+    );
+    let batch = partial
+        .batches
+        .iter()
+        .find(|batch| batch.material.id == "glass_object")
+        .expect("object batch");
+    assert_eq!(batch.runs.len(), 1);
+    let logical = &batch.runs.first().expect("logical run").exact;
+    assert_eq!(
+        (logical.bottom, logical.top, logical.headroom),
+        (1, 6, Some(3))
+    );
+    let Some(VertexAttributeValues::Float32x3(positions)) = batch
+        .mesh
+        .as_ref()
+        .expect("partial proxy")
+        .attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        unreachable!("mesh positions");
+    };
+    assert!(positions.iter().any(|position| position
+        .get(1)
+        .is_some_and(|height| (*height - 2.0).abs() < 0.001)));
+    assert!(positions.iter().any(|position| position
+        .get(1)
+        .is_some_and(|height| (*height - 4.0).abs() < 0.001)));
+    assert!(!positions.iter().any(|position| position
+        .get(1)
+        .is_some_and(|height| *height > 2.0 && *height < 4.0)));
+    let ordinary_terrain: Vec<_> = ordinary
+        .batches
+        .iter()
+        .filter(|batch| batch.material.id == "custom_rock")
+        .map(|batch| batch.mesh.as_ref().expect("terrain").count_vertices())
+        .collect();
+    let masked_terrain: Vec<_> = partial
+        .batches
+        .iter()
+        .filter(|batch| batch.material.id == "custom_rock")
+        .map(|batch| batch.mesh.as_ref().expect("terrain").count_vertices())
+        .collect();
+    assert_eq!(masked_terrain, ordinary_terrain);
+}
+
+#[test]
+fn full_suppression_preserves_logical_and_pick_metadata_without_object_meshes() {
+    let column = WorldHex::new(15, 0);
+    let package = tall_object_fixture(column);
+    let mut presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let suppressed = presenter
+        .prepare_with_suppressed_occupancy(chunk, 1, &chunk.semantics.occupancy)
+        .expect("full suppression");
+    let object_batch = suppressed
+        .batches
+        .iter()
+        .find(|batch| batch.material.id == "glass_object")
+        .expect("logical object batch");
+    assert!(object_batch.mesh.is_none());
+    assert_eq!(object_batch.runs.len(), 1);
+    let mut world = World::new();
+    let receipt = presenter
+        .publish(&mut world, suppressed)
+        .expect("publish logical metadata");
+    assert_eq!(receipt.object_runs, 1);
+    let object = world
+        .query::<(Entity, &ResidentRun, &Headroom)>()
+        .iter(&world)
+        .find(|(_, run, _)| run.source == RunSource::StaticObject)
+        .map(|(entity, run, headroom)| (entity, run.clone(), headroom.0))
+        .expect("exact object remains");
+    assert_eq!((object.1.bottom, object.1.top, object.2), (1, 6, 3));
+    assert_eq!(
+        world
+            .query::<&TerrainRenderBatch>()
+            .iter(&world)
+            .filter_map(|batch| batch.resolve_hit(Vec3::new(0.0, 6.0, 0.0), Some(Vec3::Y)))
+            .collect::<Vec<_>>(),
+        vec![object.0]
+    );
+    assert_eq!(
+        world.query::<&Mesh3d>().iter(&world).count(),
+        receipt.meshes
+    );
+    assert_eq!(
+        world.query::<&ResidentRun>().iter(&world).count(),
+        receipt.logical_runs
+    );
+}
+
+#[test]
+fn suppression_rejects_terrain_wrong_material_outside_chunk_and_noncanonical_masks() {
+    let column = WorldHex::new(15, 0);
+    let package = tall_object_fixture(column);
+    let presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let outside = column
+        .checked_add(WorldHex::new(1, 0))
+        .expect("outside chunk");
+    for bad in [
+        mask(column, -4, 0, "custom_rock"),
+        mask(column, 1, 6, "custom_rock"),
+        mask(column, 0, 6, "glass_object"),
+        mask(outside, 1, 6, "glass_object"),
+        vec![ColumnData {
+            position: column,
+            runs: Vec::new(),
+        }],
+        vec![ColumnData {
+            position: column,
+            runs: vec![run(1, 3, "glass_object"), run(3, 6, "glass_object")],
+        }],
+    ] {
+        assert!(presenter
+            .prepare_with_suppressed_occupancy(chunk, 1, &bad)
+            .is_err());
+    }
+    let mut duplicate = mask(column, 1, 2, "glass_object");
+    duplicate.extend(duplicate.clone());
+    assert!(presenter
+        .prepare_with_suppressed_occupancy(chunk, 1, &duplicate)
+        .is_err());
+    package.validate().expect("source untouched");
+}
+
+#[test]
+fn changed_suppression_can_replace_same_revision_without_touching_other_roots() {
+    let column = WorldHex::new(15, 0);
+    let package = tall_object_fixture(column);
+    let mut presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let other = package
+        .chunks
+        .values()
+        .find(|chunk| chunk.coordinate != column.chunk())
+        .expect("neighbor chunk");
+    let mut world = World::new();
+    let original = publish(&mut presenter, &mut world, chunk, 7);
+    let neighbor = publish(&mut presenter, &mut world, other, 2);
+    let prepared = presenter
+        .prepare_with_suppressed_occupancy(chunk, 7, &chunk.semantics.occupancy)
+        .expect("suppressed");
+    let fingerprint = prepared.suppression_fingerprint();
+    let replacement = presenter
+        .publish(&mut world, prepared)
+        .expect("same revision replacement");
+    assert_ne!(original.root, replacement.root);
+    assert_eq!(replacement.revision, original.revision);
+    assert_eq!(replacement.fingerprint, original.fingerprint);
+    assert_eq!(replacement.suppression_fingerprint, fingerprint);
+    assert!(world.get_entity(original.root).is_err());
+    assert!(world.get_entity(neighbor.root).is_ok());
+    let repeated = presenter
+        .prepare_with_suppressed_occupancy(chunk, 7, &chunk.semantics.occupancy)
+        .expect("repeat");
+    assert_eq!(
+        presenter.publish(&mut world, repeated).expect("idempotent"),
+        replacement
+    );
+    let older = presenter
+        .prepare_with_suppressed_occupancy(chunk, 6, &[])
+        .expect("older");
+    assert!(presenter.publish(&mut world, older).is_err());
+}
+
+#[test]
+fn rebase_preserves_full_suppression_and_failure_keeps_the_prior_mask() {
+    let column = WorldHex::new(15, 0);
+    let package = tall_object_fixture(column);
+    let mut presenter =
+        TerrainPresenter::new(&package.manifest, RenderOrigin { column, level: 0 }, 1.0)
+            .expect("presenter");
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let prepared = presenter
+        .prepare_with_suppressed_occupancy(chunk, 3, &chunk.semantics.occupancy)
+        .expect("suppressed");
+    let mut world = World::new();
+    let before = presenter.publish(&mut world, prepared).expect("published");
+    let origin = RenderOrigin {
+        column: column.checked_add(WorldHex::new(1, 0)).expect("new origin"),
+        level: 1,
+    };
+    let rebased = presenter
+        .rebase(&mut world, origin)
+        .expect("rebase with mask");
+    let after = rebased.first().expect("receipt");
+    assert_eq!(
+        after.suppression_fingerprint,
+        before.suppression_fingerprint
+    );
+    assert_eq!(after.meshes, before.meshes);
+    assert_eq!(after.object_runs, before.object_runs);
+    assert_eq!(after.logical_runs, before.logical_runs);
+    assert!(presenter
+        .rebase(
+            &mut world,
+            RenderOrigin {
+                column: WorldHex::new(1_000_000, 0),
+                level: 0
+            }
+        )
+        .is_err());
+    assert_eq!(presenter.receipts().next(), Some(after));
+    assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), before.meshes);
 }

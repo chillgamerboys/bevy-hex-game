@@ -8,7 +8,8 @@ use hex_core::{
     HexCoord, HexSpan, SubstanceId, TerrainChunkRoot, TilePos, MAX_TERRAIN_PICK_RUNS_PER_BATCH,
 };
 use hex_world_contracts::{
-    ChunkPackage, ManifestIndex, MaterialSpec, VoxelPosition, VoxelRun, WorldHex, WorldManifest,
+    ChunkPackage, ColumnData, ManifestIndex, MaterialSpec, VoxelPosition, VoxelRun, WorldHex,
+    WorldManifest,
 };
 
 use super::{PresentationError, ResidentRun, RunSource};
@@ -146,12 +147,14 @@ pub struct PreparedChunk {
     pub(super) context: TerrainPreparer,
     pub(super) marker: TerrainChunkRoot,
     pub(super) batches: Vec<PreparedBatch>,
+    pub(super) suppression: Arc<Vec<ColumnData>>,
+    pub(super) suppression_fingerprint: u64,
 }
 
 pub(super) struct PreparedBatch {
     pub substance: SubstanceId,
     pub material: MaterialSpec,
-    pub mesh: Mesh,
+    pub mesh: Option<Mesh>,
     pub runs: Vec<PreparedRun>,
 }
 
@@ -180,7 +183,16 @@ impl PreparedChunk {
     /// Number of independently owned mesh assets to publish.
     #[must_use]
     pub fn meshes(&self) -> usize {
-        self.batches.len()
+        self.batches
+            .iter()
+            .filter(|batch| batch.mesh.is_some())
+            .count()
+    }
+    /// Canonical checksum of the exact render-only object suppression mask.
+    /// Equal terrain revisions may replace presentation when this signature changes.
+    #[must_use]
+    pub const fn suppression_fingerprint(&self) -> u64 {
+        self.suppression_fingerprint
     }
 }
 
@@ -197,7 +209,25 @@ impl TerrainPreparer {
         package: &ChunkPackage,
         revision: u64,
     ) -> Result<PreparedChunk, PresentationError> {
+        self.prepare_with_suppressed_occupancy(package, revision, &[])
+    }
+
+    /// Prepare terrain with an exact render-only subset of static object occupancy hidden.
+    ///
+    /// The canonical mask must use this chunk's object materials and lie wholly
+    /// inside static object intervals. Logical runs, headroom and picking metadata
+    /// remain complete. Full occupancy still supplies neighboring face occlusion.
+    /// The application owns atomic publication of matching stock-art fragments and
+    /// rejects stale mask jobs before publishing a different suppression signature.
+    pub fn prepare_with_suppressed_occupancy(
+        &self,
+        package: &ChunkPackage,
+        revision: u64,
+        suppression: &[ColumnData],
+    ) -> Result<PreparedChunk, PresentationError> {
         package.validate_with_index(&self.index)?;
+        validate_suppression(package, suppression, self.limits.max_runs_per_chunk)?;
+        let suppression_fingerprint = hex_world_contracts::hash_serializable(suppression)?;
         let mut projected = BTreeMap::new();
         let mut grouped: BTreeMap<SubstanceId, Vec<PreparedRun>> = BTreeMap::new();
         let mut run_count = 0_usize;
@@ -276,6 +306,7 @@ impl TerrainPreparer {
             .map(|(id, _)| *id)
             .collect();
         let mut batches = Vec::new();
+        let mut rendered_runs = 0usize;
         for (substance, runs) in grouped {
             let material = self
                 .palette
@@ -303,9 +334,34 @@ impl TerrainPreparer {
                 })
                 .collect();
             for partition in runs.chunks(MAX_TERRAIN_PICK_RUNS_PER_BATCH) {
-                let geometry: Vec<_> = partition.iter().map(|run| run.geometry).collect();
-                let mesh = resident_terrain_mesh(&geometry, &occluders, self.level_height)
-                    .map_err(PresentationError)?;
+                let mut geometry = Vec::new();
+                for run in partition {
+                    for (bottom, top) in remaining_intervals(run, suppression) {
+                        rendered_runs += 1;
+                        if rendered_runs > self.limits.max_runs_per_chunk {
+                            return Err(PresentationError(
+                                "max_runs_per_chunk render fragment budget exceeded".into(),
+                            ));
+                        }
+                        let bottom = self.checked_level(bottom)?;
+                        let top = self.checked_level(top)?;
+                        geometry.push(TerrainMeshRun {
+                            position: TilePos::new(run.geometry.position.coord, top - 1),
+                            span: HexSpan::new(self.height(bottom)?, self.height(top)?),
+                            bottom,
+                            top,
+                            cutaway: None,
+                        });
+                    }
+                }
+                let mesh = if geometry.is_empty() {
+                    None
+                } else {
+                    Some(
+                        resident_terrain_mesh(&geometry, &occluders, self.level_height)
+                            .map_err(PresentationError)?,
+                    )
+                };
                 batches.push(PreparedBatch {
                     substance,
                     material: material.clone(),
@@ -325,6 +381,8 @@ impl TerrainPreparer {
             context: self.clone(),
             marker,
             batches,
+            suppression: Arc::new(suppression.to_vec()),
+            suppression_fingerprint,
         })
     }
 
@@ -351,6 +409,88 @@ impl TerrainPreparer {
         }
         Ok(value)
     }
+}
+
+fn validate_suppression(
+    package: &ChunkPackage,
+    suppression: &[ColumnData],
+    run_limit: usize,
+) -> Result<(), PresentationError> {
+    if suppression.len() > 256 {
+        return Err(PresentationError(
+            "suppression exceeds one chunk's column budget".into(),
+        ));
+    }
+    let mut previous = None;
+    let mut runs = 0usize;
+    for column in suppression {
+        if column.position.chunk() != package.coordinate
+            || previous.is_some_and(|position| position >= column.position)
+            || column.runs.is_empty()
+        {
+            return Err(PresentationError(
+                "suppression columns must be local, ordered, unique and nonempty".into(),
+            ));
+        }
+        column.validate()?;
+        runs = runs.saturating_add(column.runs.len());
+        if runs > run_limit {
+            return Err(PresentationError(
+                "max_runs_per_chunk suppression budget exceeded".into(),
+            ));
+        }
+        previous = Some(column.position);
+        let owner = package
+            .semantics
+            .occupancy
+            .binary_search_by_key(&column.position, |entry| entry.position)
+            .ok()
+            .and_then(|index| package.semantics.occupancy.get(index))
+            .ok_or_else(|| {
+                PresentationError("suppression targets terrain or absent object occupancy".into())
+            })?;
+        for run in &column.runs {
+            let index = owner
+                .runs
+                .partition_point(|candidate| candidate.top <= run.bottom);
+            if !owner.runs.get(index).is_some_and(|candidate| {
+                candidate.bottom <= run.bottom
+                    && candidate.top >= run.top
+                    && candidate.material == run.material
+            }) {
+                return Err(PresentationError("suppression is not an exact material-matching subset of static object occupancy".into()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remaining_intervals(run: &PreparedRun, suppression: &[ColumnData]) -> Vec<(i32, i32)> {
+    if run.exact.source != RunSource::StaticObject {
+        return vec![(run.exact.bottom, run.exact.top)];
+    }
+    let Some(mask) = suppression
+        .binary_search_by_key(&run.exact.position.column, |column| column.position)
+        .ok()
+        .and_then(|index| suppression.get(index))
+    else {
+        return vec![(run.exact.bottom, run.exact.top)];
+    };
+    let mut cursor = run.exact.bottom;
+    let mut intervals = Vec::new();
+    for hidden in &mask.runs {
+        if hidden.top <= cursor || hidden.bottom >= run.exact.top {
+            continue;
+        }
+        if hidden.bottom > cursor {
+            intervals.push((cursor, hidden.bottom));
+        }
+        cursor = cursor.max(hidden.top).min(run.exact.top);
+    }
+    if cursor < run.exact.top {
+        intervals.push((cursor, run.exact.top));
+    }
+    intervals
 }
 
 fn local_level(global: i32, origin: i32) -> Result<i32, PresentationError> {
