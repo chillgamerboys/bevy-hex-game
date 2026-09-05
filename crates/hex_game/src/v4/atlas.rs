@@ -387,7 +387,7 @@ pub(super) fn update(
                 || base.clone(),
                 |view| private_overlay(base.clone(), runtime.0.manifest(), projection, view),
             );
-            if let Some(image) = images.get_mut(texture) {
+            if let Some(mut image) = images.get_mut(texture) {
                 *image = updated;
             }
         }

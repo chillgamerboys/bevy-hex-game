@@ -290,7 +290,6 @@ struct Session {
     successful_saves: u64,
     gameplay_revision: u64,
     interests: Vec<ResidencyRequest>,
-    rendered: BTreeMap<ChunkId, (u64, u64, u64)>,
     desired: BTreeSet<ChunkId>,
     status: String,
     error: Option<String>,
@@ -442,7 +441,6 @@ fn build_app(options: Options) -> Result<App, String> {
         successful_saves: 0,
         gameplay_revision,
         interests: Vec::new(),
-        rendered: BTreeMap::new(),
         desired: BTreeSet::new(),
         status: "Loading nearby terrain...".into(),
         error: None,
@@ -765,7 +763,19 @@ fn tick(world: &mut World) {
                         &mut queue,
                         elapsed,
                     ) {
-                        session.error = Some(error);
+                        session.object_edit_requested = None;
+                        session.cancel_object_edit_requested = false;
+                        let cleanup = session
+                            .object_removal
+                            .take()
+                            .map(|mut removal| removal.cancel(&mut resident.0))
+                            .transpose();
+                        session.error = Some(match cleanup {
+                            Ok(_) => error,
+                            Err(cleanup) => {
+                                format!("{error}; object pin cleanup failed: {cleanup}")
+                            }
+                        });
                     }
                 });
             });
@@ -819,14 +829,8 @@ fn advance(
     if let Some(failure) = updates.failures.first() {
         return Err(format!("chunk {:?}: {}", failure.coordinate, failure.error));
     }
-    for coordinate in updates.removed {
-        let _removed = presenter.remove(world, coordinate);
-        session.rendered.remove(&coordinate);
-        queue.forget(coordinate);
-        if let Some(art) = &mut queue.art {
-            art.remove(world, coordinate)?;
-        }
-    }
+    // Runtime removal does not delete presentation immediately. The mesh queue
+    // restores adjacent boundary faces and retires the root atomically.
     let art_ready = {
         let art = world.resource::<ExplorerArt>();
         let server = world.resource::<AssetServer>();
@@ -904,33 +908,23 @@ fn advance(
         })
         .map(|product| product.coordinate)
         .collect::<BTreeSet<_>>();
-    let retired = session
-        .rendered
-        .keys()
-        .filter(|coordinate| !desired.contains(coordinate))
-        .copied()
-        .collect::<Vec<_>>();
-    for coordinate in retired {
-        let _removed = presenter.remove(world, coordinate);
-        session.rendered.remove(&coordinate);
-        queue.forget(coordinate);
-        if let Some(art) = &mut queue.art {
-            art.remove(world, coordinate)?;
-        }
-    }
     let level = selected
         .standing
         .map_or(selected.requested_level.unwrap_or(0), |position| {
             position.level
         });
-    if presenter
+    let needs_rebase = presenter
         .origin()
         .column
         .checked_distance(center)
         .map_err(|error| error.to_string())?
         > 128
-        || (i64::from(presenter.origin().level) - i64::from(level)).unsigned_abs() > 1024
-    {
+        || (i64::from(presenter.origin().level) - i64::from(level)).unsigned_abs() > 1024;
+    let draining = needs_rebase
+        && presenter
+            .receipts()
+            .any(|receipt| !desired.contains(&receipt.coordinate));
+    if needs_rebase && !draining {
         // Retain current nearby roots through an atomic origin change. Canceled
         // worker outputs carry the old epoch and cannot replace these meshes.
         queue.cancel();
@@ -954,38 +948,20 @@ fn advance(
         session
             .rebase_milliseconds
             .push(started.elapsed().as_secs_f64() * 1000.0);
-        // A rebase keeps the actually published masks. Newly learned object
-        // sources may already have different signatures; never label old meshes
-        // with that newer source identity.
-        session.rendered.clear();
-    }
-    for product in runtime
-        .resident_chunks()
-        .filter(|product| desired.contains(&product.coordinate))
-    {
-        let signature = (
-            product.revision,
-            product.package.fingerprint,
-            queue
-                .art
-                .as_ref()
-                .map_or(0, |art| art.signature(product.coordinate)),
-        );
-        if session.rendered.get(&product.coordinate) != Some(&signature) {
-            session.rendered.insert(product.coordinate, signature);
-            queue.enqueue(product);
-            session.settled_frames = 0;
-        }
+        // Rebase preserves each published source and exact halo. The queue's
+        // accepted source stamps therefore remain valid; its epoch rejects work
+        // prepared at the previous render origin.
     }
     session.desired = desired;
-    queue.tick(world, runtime, presenter, &session.desired)?;
+    queue.tick(world, runtime, presenter, &session.desired, !draining)?;
     let origin = presenter.origin();
     for actor in &session.actors {
         if let (Some(entity), Some(position)) = (actor.entity, actor.standing) {
-            let visible = position
-                .column
-                .checked_distance(center)
-                .is_ok_and(|distance| distance <= u64::from(options.radius));
+            let visible = !draining
+                && position
+                    .column
+                    .checked_distance(center)
+                    .is_ok_and(|distance| distance <= u64::from(options.radius));
             if let Ok(mut entity) = world.get_entity_mut(entity) {
                 entity.insert(if visible {
                     Visibility::Visible
@@ -1405,7 +1381,7 @@ fn update_view(
             view.map_or("loading party", |view| view.principal.as_str()),
             session.error.as_ref().unwrap_or(&session.status),
             counts.resident_chunks,
-            session.desired.len(),
+            presenter.receipts().count(),
             counts.queued_chunks + counts.in_flight_jobs,
             view.map_or(0, |view| view.discovered_column_count()),
             view.map_or(0, |view| view

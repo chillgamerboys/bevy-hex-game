@@ -216,9 +216,13 @@ impl StockArt {
                 .objects
                 .get(id)
                 .ok_or("stock object index lost its source")?;
-            let local = origin
-                .local_voxel(object.origin)
-                .map_err(|error| error.to_string())?;
+            let local = match origin.local_voxel(object.origin) {
+                Ok(local) => local,
+                Err(error) => {
+                    unresolved.push(format!("{id}: {error}"));
+                    continue;
+                }
+            };
             // Full exact-footprint validation precedes any proxy suppression.
             match self
                 .presenter
