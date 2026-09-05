@@ -2,8 +2,9 @@
 
 ## Header
 
-- Status: integrating
+- Status: implemented on review branch; acceptance pending
 - Wave branch: `wave/v4-foundation`
+- Draft PR: [#220](https://github.com/chillgamerboys/bevy-hex-game/pull/220), stacked on PR #219
 - Verified `origin/dev`: `495a73dcbe7edbab6d993867d91b15979fa6ce81`
 - Selected V3 reference: `bc06a8969532b807ec677928eee304bc28399386` (PR #219)
 - Coordinator: Codex, current V4 task
@@ -279,8 +280,8 @@ Repair exact failures and preserve their evidence. Do not edit other active chec
 
 ## Close-out
 
-All implementation lanes are integrated; the combined runtime/capture gate is in
-progress. The prebuilt authoring workflow, independent regions, local world authority,
+All implementation lanes are integrated in draft PR #220. Source-bound checks and
+windowless capture receipts record mechanical acceptance independently of human review. The prebuilt authoring workflow, independent regions, local world authority,
 actor-local motion, object edits, private exploration and partition persistence have
 concrete consumers. Final measurements and review remain separate from implementation.
 No protected branch has been changed. Detailed combat/online product integration,
@@ -328,3 +329,44 @@ Neighbor source/mask identity is nonrecursive, so remeshing does not invalidate 
 whole view. This changes the maximum atomic mesh upload from two chunks to seven;
 final renderer timings must include that cost. Real queue lifecycle regressions
 exercise admission, retirement, stale intent and origin changes.
+
+
+## Focused validation and delivery status
+
+The focused suite contains 55 schematic, 40 shared-contract, 53 runtime, 8 world-tool
+and 107 V4 engine tests (36 game, 25 map, 21 objects, 16 perception, 9 units). All
+passed; the affected 52 game/perception tests passed again after final walk diagnostics.
+The expanded runtime locality regression also passes with 2, 4,098 and 8,194 catalogue
+chunks, fixed one- then two-chunk interests, exact source-load counts and 600 quiet
+update/pump rounds. Its synthetic in-memory source does not prove constant total RSS.
+
+Strict pure-crate Clippy/rustdoc, game/perception all-target Clippy, dependency policy,
+format, selector regressions and review-driver checks pass in their recorded scopes.
+The complete CI gate is **failed**, not waived: unchanged V3 code/fixtures produce
+strict lint failures, a redundant rustdoc link, the catalog-26/27 mismatch and the
+empty-terrain structural-preview failure. The CI run for `4457995` also found three
+new V4 rustdoc links; qualified links repair those, and the subsequent scoped strict
+rustdoc run reports only the frozen `hex_map/src/lib.rs` link.
+
+The first clean release fixed-view captures at `4457995` cover one/two/seven-region
+catalogues; static inspection confirms stock art and removal of transverse water
+bands. Those short captures are historical evidence, not native frame-delivery or
+long-session acceptance. Their stale loading guidance was repaired. A scripted final
+return exhausted its old 900-update budget; current bounded fixtures allow uncapped
+rendering headroom and emit exact actor state plus elapsed time on failure. A later
+pre-render profiling-collector failure is retained as failed evidence, not a terrain
+or completed capture result. The PR records subsequent exact-candidate matrix outcomes.
+
+The repository and GitHub are reconciled against `dev` at
+`495a73dcbe7edbab6d993867d91b15979fa6ce81`; V4 is not merged or delivered there.
+The selected parent remains open at `bc06a89`. Linear requires reauthentication, so
+no issue changes or workspace-wide backlog verification were performed. There is no
+linked V4 epic to close. The two local UI intake records remain unlinked; if an owner
+later records them under HEX-67, their repaired source and capture evidence should be
+attached without closing the parent HUD program.
+
+Residual ownership: world/tooling owns persistent compiler caches, larger metadata
+paging and a future procedural producer; presentation owns measured render budgets,
+cold/long-session profiling and native motion acceptance; gameplay owns encounter
+joining/merging and production online integration. The authoring owner/user supplies
+the human active-hours trial. These future consumers do not acquire terrain authority.

@@ -9,6 +9,18 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+V4 foundation is implemented on the unmerged `wave/v4-foundation` review branch in
+[draft PR #220](https://github.com/chillgamerboys/bevy-hex-game/pull/220), stacked on
+Grand reference PR #219 at `bc06a89`. It is **not delivered on `dev`**. Runtime-loaded
+regional authoring, one/two/seven full-sized fixtures, availability-aware residency,
+local edits, fresh partition saves, resident stock art and private exploration have
+concrete consumers in the opt-in `hex_v4` explorer. Exact checks, capture provenance,
+remaining acceptance and scope limits are tracked in the
+[V4 wave](waves/v4-foundation/manifest.md) and
+[platform contract](../systems/world-platform-v4.md). The strict inherited V3 gate,
+human motion review and active-authoring-hour target remain open. No legacy save
+migration, complete online game, encounter merging or infinite generator is claimed.
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,
