@@ -1,14 +1,13 @@
 //! Gameplay adapters for the V4 world. No map provider or renderer is imported.
 //!
-//! Exact transitions reuse the established traversal predicate in a tiny translated
-//! coordinate frame. World coordinates and route identities remain exact i64 values.
+//! Exact transitions use the same pure aperture contract as the terrain compiler. World coordinates and route identities remain exact i64 values.
 //! Both turn consumers and a continuously interpolated motion controller use these
 //! queries; action-point spending and encounter scheduling stay with the caller.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
-use hex_core::{Headroom, HexCoord, TilePos, TraversalEndpoint, TraversalProfile};
+use hex_core::TraversalProfile;
 use hex_world_contracts::{ChunkId, QueryResult, Surface, VoxelPosition, WorldQuery};
 
 /// Operational search bounds, independent of total catalogue size.
@@ -45,6 +44,10 @@ impl WorldRoute {
     /// Check the revision proof again after the caller acquires residency pins.
     pub fn is_current(&self, query: &impl WorldQuery) -> bool {
         !self.waypoints.is_empty()
+            && self
+                .waypoints
+                .iter()
+                .all(|position| self.revisions.contains_key(&position.column.chunk()))
             && self
                 .revisions
                 .iter()
@@ -85,30 +88,12 @@ pub fn supporting_surface(
 
 /// Apply the existing complete traversal rule to exact V4 surface facts.
 pub fn admits_transition(profile: TraversalProfile, from: &Surface, to: &Surface) -> bool {
-    if from.position.column.checked_distance(to.position.column) != Ok(1) {
-        return false;
-    }
-    let delta = i64::from(to.position.level) - i64::from(from.position.level);
-    if delta > i64::from(profile.max_climb) || -delta > i64::from(profile.max_drop) {
-        return false;
-    }
-    // Translate vertical levels as well as horizontal coordinates. Absolute i32
-    // heights near an endpoint must not overflow the legacy positional predicate.
-    let Ok(delta) = i32::try_from(delta) else {
-        return false;
-    };
-    let clearance = |surface: &Surface| {
-        Headroom(
-            surface
-                .headroom
-                .and_then(|value| i32::try_from(value).ok())
-                .unwrap_or(i32::MAX),
-        )
-    };
-    let neighbor = HexCoord::new_cubic(1, 0, -1);
-    profile.admits_transition(
-        TraversalEndpoint::new(TilePos::new(HexCoord::ORIGIN, 0), true, clearance(from)),
-        TraversalEndpoint::new(TilePos::new(neighbor, delta), true, clearance(to)),
+    hex_world_contracts::admits_surface_transition(
+        from,
+        to,
+        profile.levels_tall,
+        profile.max_climb,
+        profile.max_drop,
     )
 }
 
@@ -556,5 +541,51 @@ mod tests {
             ),
             RouteResult::NoRoute
         );
+    }
+    #[test]
+    fn shared_aperture_matches_existing_gameplay_profiles() {
+        use hex_core::{Headroom, HexCoord, TilePos, TraversalEndpoint};
+        for levels_tall in 1..=3 {
+            for max_climb in 0..=3 {
+                for max_drop in 0..=3 {
+                    let profile = TraversalProfile {
+                        levels_tall,
+                        max_climb,
+                        max_drop,
+                    };
+                    for delta in -4..=4 {
+                        for from_clear in [Some(0), Some(1), Some(2), Some(3), Some(6), None] {
+                            for to_clear in [Some(0), Some(1), Some(2), Some(3), Some(6), None] {
+                                let legacy = |q, level, clearance: Option<u32>| {
+                                    TraversalEndpoint::new(
+                                        TilePos::new(HexCoord::from_axial(q, 0), level),
+                                        true,
+                                        Headroom(clearance.map_or(i32::MAX, |value| {
+                                            i32::try_from(value).expect("small test clearance")
+                                        })),
+                                    )
+                                };
+                                assert_eq!(
+                                    admits_transition(profile, &surface(0, 0, from_clear), &surface(1, delta, to_clear)),
+                                    profile.admits_transition(legacy(0, 0, from_clear), legacy(1, delta, to_clear)),
+                                    "profile {profile:?}, delta {delta}, clearances {from_clear:?}/{to_clear:?}",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_route_cannot_omit_a_waypoint_partition_from_its_revision_proof() {
+        let mut fixture = Fixture::default();
+        fixture.insert(surface(0, 4, None));
+        let route = WorldRoute {
+            waypoints: vec![surface(0, 4, None).position],
+            revisions: BTreeMap::new(),
+        };
+        assert!(!route.is_current(&fixture));
     }
 }
