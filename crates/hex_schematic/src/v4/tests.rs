@@ -258,6 +258,17 @@ fn seven_complete_regions_remain_exact_and_source_order_independent() {
     assert_eq!(first.report.columns, 738_283);
     assert_eq!(first.package.manifest.regions.len(), 7);
     assert_eq!(first.package.manifest.boundaries.len(), 12);
+    let two = fixture("two-regions");
+    assert_eq!(&source.regions[..2], two.regions.as_slice());
+    assert_eq!(source.recipes.get("caldera"), two.recipes.get("caldera"));
+    assert_eq!(source.recipes.len(), 4);
+    let later_recipes = source
+        .regions
+        .iter()
+        .skip(2)
+        .map(|region| region.recipe.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(later_recipes.len(), 3);
     let mut reordered = source;
     reordered.regions.reverse();
     reordered.connections.reverse();
@@ -265,6 +276,12 @@ fn seven_complete_regions_remain_exact_and_source_order_independent() {
     let second = compile_world_cached(&reordered, Some(&first)).expect("fixture invariant");
     assert_eq!(second.report.regions_reused, 7);
     assert_eq!(first.package, second.package);
+    drop(second);
+    // Compilation is currently serial. This proves input-order determinism across
+    // independent cold compiles; it does not claim worker-count determinism.
+    let clean_reordered = compile_world(&reordered).expect("cold reordered compile");
+    assert_eq!(first.package, clean_reordered);
+    drop(clean_reordered);
     let mut seam_edit = reordered;
     seam_edit
         .connections
@@ -279,6 +296,8 @@ fn seven_complete_regions_remain_exact_and_source_order_independent() {
         edited.report.regions_reused, 5,
         "one shared seam invalidates exactly its two region dependencies"
     );
+    let clean_seam_edit = compile_world(&seam_edit).expect("cold edited seam compile");
+    assert_eq!(edited.package, clean_seam_edit);
 }
 
 #[test]
@@ -304,67 +323,74 @@ fn exported_stock_prefabs_match_real_catalog_blueprint_voxels() {
     struct SourceCatalog {
         objects: Vec<String>,
     }
-    let source = fixture("rich-region");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog: SourceCatalog = ron::from_str(
         &fs::read_to_string(root.join("assets/art/object_catalog.ron")).expect("fixture invariant"),
     )
     .expect("fixture invariant");
-    let mut exports = 0;
-    for feature in &source
-        .recipes
-        .get("caldera")
-        .expect("fixture invariant")
-        .features
-    {
-        let Some(provenance) = &feature.provenance else {
-            assert!(feature.asset.starts_with("procedural/"));
-            continue;
-        };
-        assert!(catalog.objects.contains(&feature.asset));
-        assert_eq!(
-            provenance.source_revision,
-            "bc06a8969532b807ec677928eee304bc28399386"
-        );
-        let original: SourceBlueprint = ron::from_str(
-            &fs::read_to_string(root.join(&provenance.source_path)).expect("fixture invariant"),
-        )
-        .expect("fixture invariant");
-        assert_eq!(original.id, feature.asset);
-        let expected: BTreeMap<_, _> = original
-            .placements
-            .into_iter()
-            .map(|placement| {
-                (
-                    (
-                        placement.position.q - original.origin.q,
-                        placement.position.r - original.origin.r,
-                        placement.position.level - original.origin.level,
-                    ),
-                    provenance
-                        .style_materials
-                        .get(&placement.style)
-                        .expect("fixture invariant")
-                        .clone(),
+    for name in ["rich-region", "two-regions", "seven-regions"] {
+        let source = fixture(name);
+        let mut exports = 0;
+        let mut assets = std::collections::BTreeSet::new();
+        for recipe in source.recipes.values() {
+            for feature in &recipe.features {
+                let Some(provenance) = &feature.provenance else {
+                    assert!(feature.asset.starts_with("procedural/"));
+                    continue;
+                };
+                assert!(catalog.objects.contains(&feature.asset));
+                assert_eq!(
+                    provenance.source_revision,
+                    "bc06a8969532b807ec677928eee304bc28399386"
+                );
+                let original: SourceBlueprint = ron::from_str(
+                    &fs::read_to_string(root.join(&provenance.source_path))
+                        .expect("fixture invariant"),
                 )
-            })
-            .collect();
-        let actual: BTreeMap<_, _> = feature
-            .voxels
-            .iter()
-            .flat_map(|voxel| {
-                (voxel.bottom..voxel.top).map(move |level| {
-                    (
-                        (voxel.offset.q, voxel.offset.r, level),
-                        voxel.material.clone(),
-                    )
-                })
-            })
-            .collect();
-        assert_eq!(actual, expected);
-        exports += 1;
+                .expect("fixture invariant");
+                assert_eq!(original.id, feature.asset);
+                let expected: BTreeMap<_, _> = original
+                    .placements
+                    .into_iter()
+                    .map(|placement| {
+                        (
+                            (
+                                placement.position.q - original.origin.q,
+                                placement.position.r - original.origin.r,
+                                placement.position.level - original.origin.level,
+                            ),
+                            provenance
+                                .style_materials
+                                .get(&placement.style)
+                                .expect("fixture invariant")
+                                .clone(),
+                        )
+                    })
+                    .collect();
+                let actual: BTreeMap<_, _> = feature
+                    .voxels
+                    .iter()
+                    .flat_map(|voxel| {
+                        (voxel.bottom..voxel.top).map(move |level| {
+                            (
+                                (voxel.offset.q, voxel.offset.r, level),
+                                voxel.material.clone(),
+                            )
+                        })
+                    })
+                    .collect();
+                assert_eq!(actual, expected);
+                exports += 1;
+                assets.insert(feature.asset.clone());
+            }
+        }
+        assert!(exports >= 3, "{name} must retain its stock export corpus");
+        assert_eq!(
+            assets.len(),
+            3,
+            "all stock blueprint types must be checked for {name}"
+        );
     }
-    assert_eq!(exports, 3);
 }
 
 #[test]
