@@ -3903,6 +3903,8 @@ dependencies = [
  "hex_ui",
  "hex_units",
  "hex_world",
+ "hex_world_contracts",
+ "hex_world_runtime",
  "rand 0.8.7",
  "ron",
  "serde",
@@ -3941,6 +3943,7 @@ dependencies = [
  "hex_multiplayer",
  "hex_schematic",
  "hex_test_support",
+ "hex_world_contracts",
  "rand 0.8.7",
  "ron",
  "serde",
@@ -3983,6 +3986,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_test_app",
+ "hex_world_contracts",
 ]
 
 [[package]]
@@ -4012,6 +4016,8 @@ dependencies = [
  "hex_multiplayer",
  "hex_test_app",
  "hex_units",
+ "hex_world_contracts",
+ "hex_world_runtime",
 ]
 
 [[package]]
@@ -4019,6 +4025,7 @@ name = "hex_schematic"
 version = "0.4.0"
 dependencies = [
  "atomicwrites",
+ "hex_world_contracts",
  "ron",
  "rustix 1.1.4",
  "serde",
@@ -4067,6 +4074,7 @@ dependencies = [
  "hex_lattice",
  "hex_test_app",
  "hex_test_support",
+ "hex_world_contracts",
  "ron",
  "serde",
  "serde_json",
@@ -4080,6 +4088,38 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_test_app",
+]
+
+[[package]]
+name = "hex_world_contracts"
+version = "0.4.0"
+dependencies = [
+ "ron",
+ "serde",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "hex_world_runtime"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "hex_world_contracts",
+ "ron",
+ "serde",
+]
+
+[[package]]
+name = "hex_world_tool"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "hex_schematic",
+ "hex_world_contracts",
+ "hex_world_runtime",
+ "ron",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,14 @@
+[package]
+name = "hex_world_contracts"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Pure checked geometry, package and availability contracts for streamed hex worlds."
+
+[dependencies]
+ron = { workspace = true }
+serde = { workspace = true }
+xxhash-rust = { workspace = true, features = ["xxh3"] }
+
+[lints]
+workspace = true

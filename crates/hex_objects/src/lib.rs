@@ -11,6 +11,9 @@
 //! tree is live. The renderer restores each camera's previous MSAA mode as soon as
 //! the final blended presentation disappears, restoring true alpha-to-coverage.
 
+/// Opt-in resident presentation of validated V4 object records.
+pub mod v4;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::f32::consts::TAU;
 
@@ -818,6 +821,16 @@ fn bake_blueprint_with_edge(
     catalog: &RuntimeArtCatalog,
     edge_treatment: ReviewEdgeTreatment,
 ) -> Result<Vec<(ChunkKey, Mesh)>, String> {
+    bake_blueprint_selected(source_mesh, blueprint, catalog, edge_treatment, None)
+}
+
+fn bake_blueprint_selected(
+    source_mesh: &Mesh,
+    blueprint: &ObjectBlueprint,
+    catalog: &RuntimeArtCatalog,
+    edge_treatment: ReviewEdgeTreatment,
+    selected: Option<&BTreeSet<LocalVoxelCoord>>,
+) -> Result<Vec<(ChunkKey, Mesh)>, String> {
     let treated_source = mesh_with_micro_bevel_normals(source_mesh, edge_treatment)?;
     let canopy: BTreeSet<_> = blueprint.canopy_occluders.iter().copied().collect();
     let mut groups: BTreeMap<ChunkKey, Vec<LocalVoxelCoord>> = BTreeMap::new();
@@ -831,13 +844,15 @@ fn bake_blueprint_with_edge(
                 blueprint.id, placement.style
             )
         })?;
-        groups
-            .entry(ChunkKey {
-                style: placement.style.clone(),
-                canopy: is_canopy,
-            })
-            .or_default()
-            .push(placement.position);
+        if selected.is_none_or(|selected| selected.contains(&placement.position)) {
+            groups
+                .entry(ChunkKey {
+                    style: placement.style.clone(),
+                    canopy: is_canopy,
+                })
+                .or_default()
+                .push(placement.position);
+        }
         occupied_by_visibility.entry(is_canopy).or_default().insert(
             placement.position,
             OccupiedCell {
@@ -1248,7 +1263,7 @@ mod tests {
         }
     }
 
-    fn fixture_blueprint() -> ObjectBlueprint {
+    pub(super) fn fixture_blueprint() -> ObjectBlueprint {
         let origin = LocalVoxelCoord::new(-2, 1, 0);
         ObjectBlueprint {
             schema_version: hex_assets::OBJECT_BLUEPRINT_SCHEMA_VERSION,
@@ -1285,7 +1300,7 @@ mod tests {
         }
     }
 
-    fn material_fixture_blueprint() -> ObjectBlueprint {
+    pub(super) fn material_fixture_blueprint() -> ObjectBlueprint {
         let origin = LocalVoxelCoord::new(-1, 1, -2);
         ObjectBlueprint {
             schema_version: hex_assets::OBJECT_BLUEPRINT_SCHEMA_VERSION,
@@ -1331,7 +1346,7 @@ mod tests {
         }
     }
 
-    fn fixture_catalog(leaf_red: f32) -> RuntimeArtCatalog {
+    pub(super) fn fixture_catalog(leaf_red: f32) -> RuntimeArtCatalog {
         let palette = match ArtPalette::new(BTreeMap::from([
             (
                 swatch_id("test/bark"),

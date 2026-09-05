@@ -9,6 +9,18 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+V4 foundation is implemented on the unmerged `wave/v4-foundation` review branch in
+[draft PR #220](https://github.com/chillgamerboys/bevy-hex-game/pull/220), stacked on
+Grand reference PR #219 at `bc06a89`. It is **not delivered on `dev`**. Runtime-loaded
+regional authoring, one/two/seven full-sized fixtures, availability-aware residency,
+local edits, fresh partition saves, resident stock art and private exploration have
+concrete consumers in the opt-in `hex_v4` explorer. Exact checks, capture provenance,
+remaining acceptance and scope limits are tracked in the
+[V4 wave](waves/v4-foundation/manifest.md) and
+[platform contract](../systems/world-platform-v4.md). The strict inherited V3 gate,
+human motion review and active-authoring-hour target remain open. No legacy save
+migration, complete online game, encounter merging or infinite generator is claimed.
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,
@@ -30,13 +42,14 @@ four still require named-human exact-head presentation, motion/control-feel, and
 findings. They must land #210 → #211 → #212 → #213 under the
 [biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
 
-The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
-only after #213 lands; they are not merge-ready. Garden's published foundation plus nine
-local commits are near-ready after its two integration-golden repairs, current-base
-reconciliation, complete gate, and exact-head walk. Generic review/provenance and
-capture-sequence tooling, Grand structural review, route revision 3, time-cycle work, and
-subtle-geometry work remain unpublished and in progress; their inherited dirty snapshots
-are not suitable for whole-tree commits.
+At the earlier `4c97b75` delivery snapshot, the sixteen Grand V3 checkpoints were
+packageable only after #213, and Garden still needed its integration repairs and gates.
+Generic review/provenance, capture-sequence tooling, Grand structural review, route
+revision 3, time-cycle and subtle-geometry work were then unpublished. This is historical
+context: the selected V3 reference `bc06a89` already contains `tools/review.py`,
+`tools/test_review.py` and `tools/run_grand_v3_structural_review.sh`. Those earlier dirty
+snapshots remain unsuitable for whole-tree commits; their old publication labels do not
+describe the later #219 reference.
 Rejected Outpost checkpoint `f4f0e4c` is preserved only as
 `archive/outpost-rejected-f4f0e4c`; the replacement design has not started.
 
