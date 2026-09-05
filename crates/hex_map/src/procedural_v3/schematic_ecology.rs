@@ -504,6 +504,37 @@ pub(super) fn author_lake_island_garden(
     Ok(())
 }
 
+/// Private vegetation reservation; this leaves the scenic island's access
+/// metadata intact instead of turning it into an Ordinary feature clearing.
+pub(super) fn garden_courtyard_reservation(plan: &SchematicPlanV1) -> BTreeSet<HexCoord> {
+    plan.cells
+        .iter()
+        .find(|cell| has_overlay(cell, SchematicFeature::LakeIsland))
+        .map(|cell| {
+            garden_courtyard_coords(HexCoord::from_axial(
+                cell.coord.q().saturating_mul(SCHEMATIC_CELL_PITCH),
+                cell.coord.r().saturating_mul(SCHEMATIC_CELL_PITCH),
+            ))
+        })
+        .unwrap_or_default()
+}
+
+/// The closed polygon enclosed by the six authored supports. Reserving its full
+/// projection excludes overhanging crowns as well as tree roots, while leaving
+/// the surrounding island available for its temperate woodland.
+pub(super) fn garden_courtyard_coords(center: HexCoord) -> BTreeSet<HexCoord> {
+    HexCoord::ORIGIN
+        .within_radius(6)
+        .into_iter()
+        .filter(|offset| {
+            let q = offset.x();
+            let r = offset.y();
+            (q - r).abs() <= 9 && (2 * q + r).abs() <= 9 && (q + 2 * r).abs() <= 9
+        })
+        .map(|offset| translate(center, offset))
+        .collect()
+}
+
 fn organic_treeline(seed: u64, coord: HexCoord) -> Level {
     TREELINE_BASE.saturating_add(
         i32::try_from(
@@ -856,6 +887,20 @@ mod tests {
                 profile.lake_island_min_level
             );
         }
+    }
+
+    #[test]
+    fn garden_courtyard_reserves_the_enclosed_polygon_without_the_outer_woodland() {
+        let center = HexCoord::from_axial(44, -66);
+        let courtyard = garden_courtyard_coords(center);
+        // Area 81, boundary 18: Pick's theorem gives 91 occupied hex centres.
+        assert_eq!(courtyard.len(), 91);
+        assert!(courtyard.contains(&center));
+        assert!(GARDEN_COLUMNS
+            .iter()
+            .all(|support| { courtyard.contains(&translate(center, support.offset)) }));
+        assert!(!courtyard.contains(&translate(center, HexCoord::from_axial(6, 0))));
+        assert!(!courtyard.contains(&translate(center, HexCoord::from_axial(0, -6))));
     }
 
     #[test]

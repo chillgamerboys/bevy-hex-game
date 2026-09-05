@@ -876,23 +876,23 @@ fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
 }
 
 #[test]
-fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
+fn v3_waterfall_publishes_one_original_water_mesh_path() {
     let mut app = v3_waterfall_app();
     enter_gameplay(&mut app);
 
-    let (liquid_surfaces, resident_chunks) = {
+    let (liquid_runs, resident_chunks) = {
         let world = app.world();
         let table = world.resource::<SubstanceTable>();
         let water = table
             .id("water")
             .expect("the accepted table should contain water");
         let map = world.resource::<VoxelMap>();
-        let liquid_surfaces = map
+        let liquid_runs = map
             .columns()
             .map(|(_coord, column)| {
                 hex_map::runs(column)
                     .into_iter()
-                    .filter(|run| run.substance == water && column.get(run.top).is_air())
+                    .filter(|run| run.substance == water)
                     .count()
             })
             .sum::<usize>();
@@ -901,47 +901,16 @@ fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
             .map(|(coord, _column)| hex_map::terrain_chunk_key(coord))
             .collect::<BTreeSet<_>>()
             .len();
-        (liquid_surfaces, resident_chunks)
+        (liquid_runs, resident_chunks)
     };
-
-    let world = app.world_mut();
-    let mut query = world.query::<(
-        &Name,
-        &ChildOf,
-        &Pickable,
-        Option<&NotShadowCaster>,
-        Option<&HexTile>,
-    )>();
-    let mut caps = 0;
-    let mut curtains = 0;
-    for (name, _parent, pickable, no_shadow, tile) in query.iter(world) {
-        if !matches!(name.as_str(), "LiquidCap" | "LiquidFallCurtain") {
-            continue;
-        }
-        assert_eq!(*pickable, Pickable::IGNORE);
-        assert!(no_shadow.is_some());
-        assert!(tile.is_none());
-        match name.as_str() {
-            "LiquidCap" => caps += 1,
-            "LiquidFallCurtain" => curtains += 1,
-            _ => unreachable!(),
-        }
-    }
+    let water_batches = super::presentation::assert_original_water_batches(&mut app);
     assert!(
-        caps > 0,
-        "Waterfall liquid surfaces should publish cap batches"
+        water_batches.len() <= resident_chunks.saturating_mul(3),
+        "water meshes remain bounded by resident chunks and the existing run partition limit"
     );
     assert!(
-        caps <= resident_chunks.saturating_mul(3),
-        "water caps must be bounded by resident chunk and non-fall material style"
-    );
-    assert!(
-        caps < liquid_surfaces,
-        "the fixture should prove caps are no longer one entity per exposed liquid run"
-    );
-    assert_eq!(
-        curtains, 1,
-        "the three adjacent fall lanes share one water curtain mesh"
+        water_batches.len() < liquid_runs,
+        "the fixture must retain batching across multiple original water runs"
     );
 }
 

@@ -1,10 +1,8 @@
-//! Opaque, non-interactive presentation geometry for liquid voxel runs.
+//! Animated materials for liquid voxels and non-interactive lava presentation.
 //!
-//! The ordinary voxel prisms remain the authoritative volume, pick target, and
-//! shadow caster. This module adds only chunk-batched biased horizontal caps for
-//! exposed water or lava runs, combined vertical curtains for exposed liquid
-//! height edges, and deterministic landing-splash geometry for semantic lava
-//! falls.
+//! Ordinary water prisms retain the authoritative volume and pick target while
+//! their original faces use one transparent animated material. Lava retains its
+//! opaque volume plus non-pickable caps, curtains, and deterministic landing splash.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -159,8 +157,15 @@ fn wrap_phase(phase_seconds: f32) -> f32 {
 
 /// The bounded set of shared materials whose phase uniform changes each frame.
 #[derive(Resource, Clone, Debug, Default)]
-struct LiquidMaterialHandles {
+pub(crate) struct LiquidMaterialHandles {
     handles: Vec<Handle<LiquidMaterial>>,
+    pub(crate) water: Option<Handle<LiquidMaterial>>,
+}
+
+/// Prepared liquid assets shared by initial terrain publication and chunk edits.
+pub(crate) struct SpawnedLiquidPresentation {
+    pub(crate) entities: Vec<Entity>,
+    pub(crate) water_material: Option<Handle<LiquidMaterial>>,
 }
 
 /// Registers the material extension and its single visual-clock system.
@@ -183,6 +188,41 @@ pub(crate) fn plugin(app: &mut App) {
 /// Removes presentation material ownership during map teardown.
 pub(crate) fn clear_material_cache(commands: &mut Commands) {
     commands.remove_resource::<LiquidMaterialHandles>();
+}
+
+/// A dry legacy world may gain water through an edit. Share one animated water
+/// material with later chunk replacements, preserving any existing lava handles.
+pub(crate) fn ensure_water_material(
+    commands: &mut Commands,
+    materials: &mut Assets<LiquidMaterial>,
+    table: &SubstanceTable,
+    existing: Option<&LiquidMaterialHandles>,
+    phase_seconds: f32,
+) -> Result<Handle<LiquidMaterial>, LiquidPresentationError> {
+    if let Some(handle) = existing.and_then(|handles| handles.water.as_ref()) {
+        if materials.contains(handle.id()) {
+            return Ok(handle.clone());
+        }
+    }
+    let color = role_color(FillMaterialRole::Water, table)?;
+    let foam = table
+        .palette_color(LIQUID_FOAM_SWATCH)
+        .map(to_color)
+        .ok_or(LiquidPresentationError::MissingPaletteSwatch {
+            swatch: LIQUID_FOAM_SWATCH,
+        })?;
+    let handle = materials.add(liquid_material(
+        color,
+        phase_seconds,
+        foam,
+        LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Surface),
+    ));
+    let mut registry = existing.cloned().unwrap_or_default();
+    registry.handles.retain(|old| materials.contains(old.id()));
+    registry.handles.push(handle.clone());
+    registry.water = Some(handle.clone());
+    commands.insert_resource(registry);
+    Ok(handle)
 }
 
 fn advance_liquid_visual_time(
@@ -394,11 +434,14 @@ pub(crate) fn spawn_presentations(
     level_height: f32,
     phase_seconds: f32,
     projection: Option<&MapPresentationProjection>,
-) -> Result<Vec<Entity>, LiquidPresentationError> {
+) -> Result<SpawnedLiquidPresentation, LiquidPresentationError> {
     let plan = build_presentation_plan(map, table, level_height, projection)?;
-    if plan.surfaces.is_empty() {
+    if plan.roles.is_empty() {
         clear_material_cache(commands);
-        return Ok(Vec::new());
+        return Ok(SpawnedLiquidPresentation {
+            entities: Vec::new(),
+            water_material: None,
+        });
     }
     let cap_batches = batch_liquid_caps(&plan.surfaces)
         .into_iter()
@@ -429,6 +472,9 @@ pub(crate) fn spawn_presentations(
 
     let mut entities = Vec::with_capacity(cap_batches.len().saturating_add(plan.curtains.len()));
     for (key, surfaces, geometry) in cap_batches {
+        if key.role == FillMaterialRole::Water {
+            continue;
+        }
         let mesh = meshes.add(geometry.into_mesh());
         let material = material_handle(&material_sets, key.role, MaterialStyle::Surface);
         let entity = commands
@@ -450,6 +496,9 @@ pub(crate) fn spawn_presentations(
     }
 
     for (key, geometry) in plan.curtains {
+        if key.role == FillMaterialRole::Water {
+            continue;
+        }
         let mesh = meshes.add(geometry.into_mesh());
         let material = material_handle(&material_sets, key.role, key.style);
         let name = match key.style {
@@ -473,10 +522,18 @@ pub(crate) fn spawn_presentations(
         entities.push(entity);
     }
 
+    let water_material = material_sets
+        .iter()
+        .find(|set| set.role == FillMaterialRole::Water)
+        .map(|set| set.surface.clone());
     commands.insert_resource(LiquidMaterialHandles {
         handles: registered_handles,
+        water: water_material.clone(),
     });
-    Ok(entities)
+    Ok(SpawnedLiquidPresentation {
+        entities,
+        water_material,
+    })
 }
 
 fn build_presentation_plan(
@@ -491,6 +548,7 @@ fn build_presentation_plan(
     let substances = LiquidSubstances::resolve(table)?;
     let mut consumed_projection = BTreeSet::new();
     let mut surfaces = Vec::new();
+    let mut roles = BTreeSet::new();
     let mut coordinates: Vec<_> = map.columns().collect();
     coordinates.sort_by_key(|(coord, _column)| *coord);
 
@@ -499,6 +557,7 @@ fn build_presentation_plan(
             let Some(role) = substances.role(run.substance) else {
                 continue;
             };
+            roles.insert(role);
             let descriptor =
                 descriptor_for_run(coord, run, role, projection, &mut consumed_projection)?;
             if column.get(run.top).is_air() {
@@ -526,7 +585,6 @@ fn build_presentation_plan(
 
     validate_surface_directions(&surfaces)?;
     let curtains = build_curtain_meshes(&surfaces, level_height)?;
-    let roles = surfaces.iter().map(|surface| surface.role).collect();
     Ok(PresentationPlan {
         surfaces,
         curtains,
@@ -602,6 +660,29 @@ fn descriptor_for_run(
     descriptor.ok_or(LiquidPresentationError::MissingProjectionVoxel {
         position: TilePos::new(coord, run.bottom),
     })
+}
+
+/// Encodes the exact downstream angle and flow class on original water vertices.
+/// UV1 is presentation metadata; voxel identity and gameplay projections stay intact.
+pub(crate) fn water_vertex_flow(
+    position: TilePos,
+    projection: Option<&MapPresentationProjection>,
+) -> [f32; 2] {
+    let Some(projected) = projection.and_then(|projection| projection.liquids().get(&position))
+    else {
+        return [0.0, 0.0];
+    };
+    let angle = projected.downstream.map_or(0.0, |downstream| {
+        let direction = downstream.coord.to_world(0.0) - position.coord.to_world(0.0);
+        direction.z.atan2(direction.x)
+    });
+    let flow = match projected.flow {
+        LiquidFlowState::Still => 0.0,
+        LiquidFlowState::Current => 1.0,
+        LiquidFlowState::Rapid => 2.0,
+        LiquidFlowState::Fall => 3.0,
+    };
+    [angle, flow]
 }
 
 fn validate_surface_directions(surfaces: &[LiquidSurface]) -> Result<(), LiquidPresentationError> {
@@ -818,6 +899,7 @@ struct LiquidMaterialProfile {
     perceptual_roughness: f32,
     reflectance: f32,
     double_sided: bool,
+    transparent_water: bool,
 }
 
 impl LiquidMaterialProfile {
@@ -856,6 +938,7 @@ impl LiquidMaterialProfile {
             perceptual_roughness,
             reflectance,
             double_sided,
+            transparent_water: role == FillMaterialRole::Water,
         }
     }
 }
@@ -921,12 +1004,20 @@ fn liquid_material(
     let foam = foam.to_linear();
     LiquidMaterial {
         base: StandardMaterial {
-            base_color: color,
+            base_color: color.with_alpha(if profile.transparent_water { 0.85 } else { 1.0 }),
             perceptual_roughness: profile.perceptual_roughness,
             reflectance: profile.reflectance,
-            alpha_mode: AlphaMode::Opaque,
+            alpha_mode: if profile.transparent_water {
+                AlphaMode::Blend
+            } else {
+                AlphaMode::Opaque
+            },
             opaque_render_method: OpaqueRendererMethod::Forward,
-            depth_bias: LIQUID_PRESENTATION_DEPTH_BIAS,
+            depth_bias: if profile.transparent_water {
+                0.0
+            } else {
+                LIQUID_PRESENTATION_DEPTH_BIAS
+            },
             cull_mode: if profile.double_sided {
                 None
             } else {
@@ -1218,6 +1309,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
+    use crate::procedural_v3::MaterializedLiquidVoxel;
 
     fn coord(x: i32, y: i32, z: i32) -> HexCoord {
         HexCoord::new_cubic(x, y, z)
@@ -1446,7 +1538,7 @@ mod tests {
                 })
                 .map(Vec::len),
             Some(3),
-            "Current, Rapid, and Fall semantics must not split the opaque base surface"
+            "Current, Rapid, and Fall semantics must not split the role-wide surface"
         );
         let logical = batches
             .values()
@@ -1543,7 +1635,7 @@ mod tests {
     }
 
     #[test]
-    fn spawned_cap_batches_retain_exact_logical_coverage_and_teardown_cleanly() {
+    fn only_lava_spawns_overlays_while_original_water_reuses_the_cached_material() {
         let table = liquid_table();
         let Some(water) = table.id("water") else {
             unreachable!("test table contains water")
@@ -1552,7 +1644,7 @@ mod tests {
             unreachable!("test table contains lava")
         };
         let positions = [
-            (TilePos::new(HexCoord::from_axial(-17, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(-17, 0), 2), water),
             (TilePos::new(HexCoord::from_axial(-16, 0), 0), water),
             (TilePos::new(HexCoord::from_axial(-1, 0), 0), water),
             (TilePos::new(HexCoord::from_axial(0, 0), 0), water),
@@ -1567,7 +1659,7 @@ mod tests {
         let mut queue = CommandQueue::default();
         let mut meshes = Assets::<Mesh>::default();
         let mut materials = Assets::<LiquidMaterial>::default();
-        let entities = {
+        let spawned = {
             let mut commands = Commands::new(&mut queue, &world);
             spawn_presentations(
                 &mut commands,
@@ -1582,11 +1674,16 @@ mod tests {
             .expect("valid liquid batches should spawn")
         };
         queue.apply(&mut world);
+        let SpawnedLiquidPresentation {
+            entities,
+            water_material,
+        } = spawned;
+        let water_material = water_material.expect("original water needs its shared material");
 
         assert_eq!(
             entities.len(),
-            5,
-            "five chunk/role cap batches are expected and no curtains are needed"
+            1,
+            "only lava gets an overlay; water caps and the exposed water step reuse voxel faces"
         );
         assert_eq!(meshes.len(), entities.len());
         assert_eq!(
@@ -1599,11 +1696,24 @@ mod tests {
             materials.len(),
             "the teardown registry owns every role-wide material handle"
         );
+        assert_eq!(
+            world.resource::<LiquidMaterialHandles>().water.as_ref(),
+            Some(&water_material),
+            "terrain publication and later chunk edits must share one water material"
+        );
+        let water_base = &materials
+            .get(&water_material)
+            .expect("cached water material remains resident")
+            .base;
+        assert_eq!(water_base.alpha_mode, AlphaMode::Blend);
+        assert_f32_near(water_base.base_color.alpha(), 0.85);
+        assert_f32_near(water_base.depth_bias, 0.0);
         let mut logical = BTreeSet::new();
         let mut keys = BTreeSet::new();
         let mut query =
             world.query::<(&LiquidCapBatch, &Pickable, Has<NotShadowCaster>, &Transform)>();
         for (batch, pickable, no_shadow, transform) in query.iter(&world) {
+            assert_eq!(batch.key.role, FillMaterialRole::Lava);
             assert!(keys.insert(batch.key), "duplicate liquid batch key");
             assert_eq!(*pickable, Pickable::IGNORE);
             assert!(no_shadow);
@@ -1620,6 +1730,7 @@ mod tests {
             logical,
             positions
                 .into_iter()
+                .filter(|(_position, substance)| *substance == lava)
                 .map(|(position, _substance)| position)
                 .collect::<BTreeSet<_>>()
         );
@@ -1628,6 +1739,59 @@ mod tests {
             assert!(world.despawn(entity));
         }
         assert_eq!(query.iter(&world).count(), 0);
+        clear_material_cache(&mut Commands::new(&mut queue, &world));
+        queue.apply(&mut world);
+        assert!(!world.contains_resource::<LiquidMaterialHandles>());
+    }
+
+    #[test]
+    fn water_vertex_flow_preserves_exact_stack_and_all_six_world_directions() {
+        let position = TilePos::new(HexCoord::from_axial(-17, 16), 4);
+        let upper = TilePos::new(position.coord, 8);
+        for (flow, expected_code) in [
+            (LiquidFlowState::Current, 1.0),
+            (LiquidFlowState::Rapid, 2.0),
+            (LiquidFlowState::Fall, 3.0),
+        ] {
+            for side in HexSide::ALL {
+                let downstream = TilePos::new(side.neighbor(position.coord), 3);
+                let projection = MapPresentationProjection::from_snapshot_parts(
+                    BTreeMap::from([
+                        (
+                            position,
+                            MaterializedLiquidVoxel {
+                                material: FillMaterialRole::Water,
+                                flow,
+                                downstream: Some(downstream),
+                            },
+                        ),
+                        (
+                            upper,
+                            MaterializedLiquidVoxel {
+                                material: FillMaterialRole::Water,
+                                flow: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                );
+                let [angle, code] = water_vertex_flow(position, Some(&projection));
+                let expected_direction =
+                    (downstream.coord.to_world(0.0) - position.coord.to_world(0.0)).normalize();
+                assert_vec3_near(Vec3::new(angle.cos(), 0.0, angle.sin()), expected_direction);
+                assert_f32_near(code, expected_code);
+                let [upper_angle, upper_code] = water_vertex_flow(upper, Some(&projection));
+                assert_f32_near(upper_angle, 0.0);
+                assert_f32_near(upper_code, 0.0);
+            }
+        }
+        for projection in [None, Some(&MapPresentationProjection::default())] {
+            let [angle, code] = water_vertex_flow(position, projection);
+            assert_f32_near(angle, 0.0);
+            assert_f32_near(code, 0.0);
+        }
     }
 
     #[test]
@@ -1805,23 +1969,44 @@ mod tests {
     }
 
     #[test]
-    fn liquid_material_uses_depth_precedence_above_the_opaque_voxel_surface() {
+    fn water_material_keeps_original_alpha_without_overlay_depth_bias() {
+        let original_color = Color::srgb(0.02, 0.24, 0.76);
         let material = liquid_material(
-            Color::srgb(0.08, 0.32, 0.65),
+            original_color,
             0.0,
             Color::srgb(0.90, 0.96, 0.99),
             LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Surface),
         );
-        assert!(LIQUID_PRESENTATION_DEPTH_BIAS > 0.0);
-        assert!(cap_bias(0.4) > 0.0 && cap_bias(0.4) < 0.4);
-        assert_f32_near(material.base.depth_bias, LIQUID_PRESENTATION_DEPTH_BIAS);
+        assert_eq!(material.base.base_color, original_color.with_alpha(0.85));
+        assert_f32_near(material.base.depth_bias, 0.0);
         assert_f32_near(material.base.perceptual_roughness, WATER_SURFACE_ROUGHNESS);
         assert_f32_near(material.base.reflectance, WATER_SURFACE_REFLECTANCE);
-        assert_eq!(material.base.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
         assert_eq!(
             material.base.opaque_render_method,
             OpaqueRendererMethod::Forward
         );
+    }
+
+    #[test]
+    fn lava_material_preserves_opaque_overlay_depth_precedence() {
+        for style in [MaterialStyle::Surface, MaterialStyle::Fall] {
+            let material = liquid_material(
+                Color::srgb(0.9, 0.2, 0.04),
+                0.0,
+                Color::srgb(0.90, 0.96, 0.99),
+                LiquidMaterialProfile::new(FillMaterialRole::Lava, style),
+            );
+            assert!(LIQUID_PRESENTATION_DEPTH_BIAS > 0.0);
+            assert!(cap_bias(0.4) > 0.0 && cap_bias(0.4) < 0.4);
+            assert_f32_near(material.base.depth_bias, LIQUID_PRESENTATION_DEPTH_BIAS);
+            assert_f32_near(material.base.base_color.alpha(), 1.0);
+            assert_eq!(material.base.alpha_mode, AlphaMode::Opaque);
+            assert_eq!(
+                material.base.opaque_render_method,
+                OpaqueRendererMethod::Forward
+            );
+        }
     }
 
     #[test]
@@ -1940,7 +2125,7 @@ mod tests {
     }
 
     #[test]
-    fn shader_preserves_opaque_forward_pbr_contract() {
+    fn shader_preserves_forward_pbr_alpha_and_directional_water_oit_contract() {
         let shader = include_str!("../../../assets/shaders/liquid.wgsl");
         let flow = shader
             .find("flow_phase_scale: vec4<f32>")
@@ -1968,6 +2153,19 @@ mod tests {
         assert!(shader.contains(&format!(
             "liquid.flow_phase_scale.z * {SECONDARY_WAVE_PHASE_RATE}"
         )));
-        assert!(shader.contains("out.color.a = 1.0"));
+        assert!(!shader.contains("out.color.a = 1.0"));
+        assert!(shader.contains("#ifdef OIT_ENABLED"));
+        assert!(shader.contains("oit_draw(in.position, out.color)"));
+        assert!(shader.contains("discard;"));
+        assert!(
+            shader.contains("alpha_mode != pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE")
+        );
+        assert!(shader.contains("#ifdef VERTEX_UVS_B"));
+        assert!(shader.contains("cos(in.uv_b.x), sin(in.uv_b.x)"));
+        assert!(shader.contains("in.world_position.xz"));
+        assert!(shader.contains("-in.world_position.y"));
+        assert!(shader.contains("let rapid = step(1.5, in.uv_b.y)"));
+        assert!(shader.contains("dot(in.world_normal.xz, downstream)"));
+        assert!(shader.contains("max(top_face, downstream_face)"));
     }
 }

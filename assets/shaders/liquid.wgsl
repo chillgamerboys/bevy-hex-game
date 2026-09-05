@@ -1,11 +1,16 @@
-// Opaque animated liquid overlay. Extending StandardMaterial retains Bevy's
-// forward PBR lighting, shadows, fog, exposure, and tonemapping.
+// Animated original water voxels and opaque lava overlays. Extending
+// StandardMaterial retains forward PBR lighting, shadows, fog, and tonemapping.
 
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_types,
 }
+
+#ifdef OIT_ENABLED
+#import bevy_core_pipeline::oit::oit_draw
+#endif
 
 struct LiquidMaterialParams {
     // xy: downstream UV velocity, z: deterministic phase, w: UV scale.
@@ -30,13 +35,47 @@ fn fragment(
 ) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-    // Horizontal caps share one absolute world-space UV chart, so waves remain
-    // continuous across hex, flow-state, and chunk boundaries. Curtain +V runs
-    // from the lip to the landing and uses the dedicated fall material.
+    // Lava keeps its existing cap/curtain UV chart and material controls.
     let uv_scale = max(liquid.flow_phase_scale.w, 0.0001);
-    let scaled_uv = in.uv * uv_scale;
+    var scaled_uv = in.uv * uv_scale;
+    var flow_velocity = liquid.flow_phase_scale.xy;
+    var highlight_strength = max(liquid.modulation.x, 0.0);
+    var foam_strength = clamp(liquid.modulation.y, 0.0, 1.0);
+    var roughness_reduction = max(liquid.modulation.z, 0.0);
+
+#ifdef VERTEX_UVS_B
+    // Original water terrain batches carry one constant [angle, flow code] per
+    // run in UV1. Absolute coordinates avoid restarting waves at every hex or
+    // chunk, while the published downstream angle controls visible advection.
+    let downstream = vec2<f32>(cos(in.uv_b.x), sin(in.uv_b.x));
+    let across = vec2<f32>(-downstream.y, downstream.x);
+    let world_plane = in.world_position.xz;
+    let top_face = step(0.5, in.world_normal.y);
+    let downstream_face = smoothstep(
+        0.9,
+        0.98,
+        dot(in.world_normal.xz, downstream),
+    );
+    scaled_uv = vec2<f32>(
+        dot(world_plane, across),
+        mix(-in.world_position.y, dot(world_plane, downstream), top_face),
+    ) * uv_scale;
+    let moving = step(0.5, in.uv_b.y);
+    let rapid = step(1.5, in.uv_b.y);
+    let falling = step(2.5, in.uv_b.y);
+    // These cycle rates all meet the material's 400-second phase wrap exactly.
+    flow_velocity = vec2<f32>(0.0, 0.15 * moving + 0.50 * rapid + 0.20 * falling);
+    highlight_strength = 0.08 + 0.04 * moving + 0.10 * rapid + 0.04 * falling;
+    roughness_reduction = 0.04 + 0.01 * moving;
+    // The five other prism sides remain blue. Only the authored downstream
+    // face carries the descending white crests beside an animated top cap.
+    foam_strength =
+        (0.04 * moving + 0.20 * rapid + 0.06 * falling) *
+        max(top_face, downstream_face);
+#endif
+
     let advected_uv =
-        scaled_uv - liquid.flow_phase_scale.xy * liquid.flow_phase_scale.z;
+        scaled_uv - flow_velocity * liquid.flow_phase_scale.z;
 
     let cross_frequency = max(liquid.modulation.w, 0.0001);
     let cross_wave = sin(TAU * advected_uv.x * cross_frequency);
@@ -57,10 +96,6 @@ fn fragment(
         primary_wave,
     );
     let ripple = clamp(crest * 0.78 + secondary_wave * 0.22, 0.0, 1.0);
-
-    let highlight_strength = max(liquid.modulation.x, 0.0);
-    let foam_strength = clamp(liquid.modulation.y, 0.0, 1.0);
-    let roughness_reduction = max(liquid.modulation.z, 0.0);
 
     var liquid_color =
         pbr_input.material.base_color.rgb * (1.0 + ripple * highlight_strength);
@@ -103,6 +138,15 @@ fn fragment(
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-    out.color.a = 1.0;
+
+#ifdef OIT_ENABLED
+    let alpha_mode =
+        pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
+    if alpha_mode != pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE {
+        oit_draw(in.position, out.color);
+        discard;
+    }
+#endif
+
     return out;
 }

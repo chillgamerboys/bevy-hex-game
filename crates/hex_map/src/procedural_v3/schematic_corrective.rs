@@ -14,7 +14,6 @@ use hex_schematic::{
 use super::*;
 
 const CELL_PITCH: i32 = 22;
-const CERTAIN_SNOW_LEVEL: Level = 146;
 const PEAK_SUMMIT_MIN: Level = super::super::schematic_highlands::PEAK_SUMMIT_MIN;
 const PEAK_SUMMIT_MAX: Level = super::super::schematic_highlands::PEAK_SUMMIT_MAX;
 const MASSIF_SUMMIT_MIN: Level = super::super::schematic_highlands::MASSIF_SUMMIT_MIN;
@@ -33,6 +32,9 @@ const GARDEN_STRUCTURE_ID: StructureId = StructureId(WORLD_NAMESPACE | 0x0005_00
 
 pub(super) struct CorrectiveWorldValidation<'a> {
     pub(super) hydrology: &'a HydrologyCompilation,
+    pub(super) garden_spring: &'a garden::GardenSpring,
+    pub(super) crystal_crown_snow: &'a crystal_snow::CrystalCrownSnow,
+    pub(super) rear_shelf_trees: Option<&'a rear_shelf::RearShelfTrees>,
     pub(super) crystal_mask: &'a BTreeSet<HexCoord>,
     pub(super) crystal_mantle: &'a super::super::schematic_highlands::CrystalMantleAuthority,
     pub(super) crystal_terrain_top: Level,
@@ -95,12 +97,24 @@ pub(super) fn validate_corrective_world_contract(
         validation.fine_index,
         validation.tunnel_overburden,
     ));
-    audit!(validate_garden_island(plan, world));
-    audit!(validate_vegetation_gradient(plan, world));
+    audit!(validate_garden_island(
+        plan,
+        world,
+        validation.garden_spring
+    ));
+    audit!(validation.garden_spring.validate(world));
+    audit!(validate_vegetation_gradient(
+        plan,
+        world,
+        validation.rear_shelf_trees
+    ));
+    audit!(validation.crystal_crown_snow.validate(world));
     audit!(validate_certain_snow_caps(
         plan,
         world,
-        validation.crystal_mask
+        validation.crystal_mask,
+        validation.crystal_crown_snow,
+        validation.fine_index,
     ));
     audit!(validate_waterfall_and_review_anchor(
         world,
@@ -2286,6 +2300,7 @@ fn validate_frozen_exit(
 fn validate_garden_island(
     plan: &SchematicPlanV1,
     world: &GeneratedWorldPlan,
+    spring: &garden::GardenSpring,
 ) -> Result<(), V3GenerationError> {
     let garden_cell = overlay_cell(plan, SchematicFeature::LakeIsland)?;
     let garden_patch_id = PatchId(u32::from(garden_cell.id.get()));
@@ -2350,9 +2365,14 @@ fn validate_garden_island(
         let surface = top_surface(world, *coord).ok_or_else(|| {
             schematic_contract(format!("Garden island has no surface at {coord:?}"))
         })?;
-        if solid_material_at(&world.volume, surface) != Some(SolidMaterialRole::Grass) {
+        let expected = spring
+            .caps
+            .get(&surface)
+            .copied()
+            .unwrap_or(SolidMaterialRole::Grass);
+        if solid_material_at(&world.volume, surface) != Some(expected) {
             return Err(schematic_contract(format!(
-                "Garden island natural cap {surface:?} is not warm grass"
+                "Garden island cap {surface:?} does not match its bounded material authority {expected:?}"
             )));
         }
     }
@@ -2480,6 +2500,7 @@ fn validate_woodland_coverage_order(
 fn validate_vegetation_gradient(
     plan: &SchematicPlanV1,
     world: &GeneratedWorldPlan,
+    rear_shelf_trees: Option<&rear_shelf::RearShelfTrees>,
 ) -> Result<(), V3GenerationError> {
     let cells = plan
         .cells
@@ -2526,12 +2547,15 @@ fn validate_vegetation_gradient(
         );
     }
 
-    for tree in world
+    for (id, tree) in world
         .features
         .by_id
-        .values()
-        .filter(|feature| feature.kind == FeatureKind::Tree)
+        .iter()
+        .filter(|(_, feature)| feature.kind == FeatureKind::Tree)
     {
+        if rear_shelf_trees.is_some_and(|trees| trees.permits_tree(*id, tree)) {
+            continue;
+        }
         let patch_id = owner_by_coord.get(&tree.root.coord).ok_or_else(|| {
             schematic_contract(format!(
                 "final tree root {:?} has no schematic owner",
@@ -2579,9 +2603,11 @@ fn validate_certain_snow_caps(
     plan: &SchematicPlanV1,
     world: &GeneratedWorldPlan,
     crystal_mask: &BTreeSet<HexCoord>,
+    crystal_crown_snow: &crystal_snow::CrystalCrownSnow,
+    fine_index: &FineWorldIndex,
 ) -> Result<(), V3GenerationError> {
     // Route and broad Crystal membership are diagnostic facts, not exemptions.
-    // Every high Grass/Gravel/Dirt/Sand cap remains a visible stripe.
+    // Only the sealed, exact crown-transition Grass caps have a local allowance.
     let route_coords = world
         .features
         .protected_routes
@@ -2600,36 +2626,57 @@ fn validate_certain_snow_caps(
     );
     let garden_patches = patches_for_overlay(plan, SchematicFeature::LakeIsland);
     let garden_mask = union_patch_masks(world, &garden_patches)?;
-    let peak_mask = union_patch_masks(world, &patches_for_landform(plan, LandformKind::SharpPeak))?;
-    let massif_mask = union_patch_masks(world, &patches_for_landform(plan, LandformKind::Massif))?;
-    let unsnowed = world
-        .layout
-        .footprint
+    let cells = plan
+        .cells
         .iter()
-        .filter_map(|coord| {
-            let surface = top_surface(world, *coord)?;
-            if surface.level < CERTAIN_SNOW_LEVEL {
-                return None;
-            }
-            let material = solid_material_at(&world.volume, surface);
-            let requires_explicit_summit_snow = (peak_mask.contains(coord)
-                && surface.level >= PEAK_SUMMIT_MIN)
-                || (massif_mask.contains(coord) && surface.level >= MASSIF_SUMMIT_MIN);
-            high_cap_violates_snow_contract(
-                material,
-                fill_covers_surface(highest_fill_by_coord.get(coord).copied(), surface.level),
-                garden_mask.contains(coord),
-                requires_explicit_summit_snow,
-            )
-            .then_some((
+        .map(|cell| (PatchId(u32::from(cell.id.get())), cell))
+        .collect::<BTreeMap<_, _>>();
+    let mut unsnowed = Vec::new();
+    for coord in &world.layout.footprint {
+        let Some(surface) = top_surface(world, *coord) else {
+            continue;
+        };
+        let cell = fine_index
+            .patch(*coord)
+            .and_then(|patch| cells.get(&patch))
+            .copied()
+            .ok_or_else(|| {
+                schematic_contract(format!(
+                    "final snow cap at {coord:?} has no exact schematic owner"
+                ))
+            })?;
+        // Admission follows the accepted mean-200 organic snowline and the
+        // existing unconditional Frozen/summit rules. The former fixed146
+        // threshold rejected the accepted terrain below its actual snowline.
+        let requires_explicit_summit_snow =
+            schematic_ecology::summit_band_requires_snow_cap(cell, surface);
+        let requires_organic_snow =
+            schematic_ecology::cap_material_override(cell, surface, plan.provenance.world_seed)
+                == Some(SolidMaterialRole::Snow);
+        if !requires_explicit_summit_snow && !requires_organic_snow {
+            continue;
+        }
+        let material = solid_material_at(&world.volume, surface);
+        if crystal_crown_snow.permits_bare_cap(surface, material) {
+            continue;
+        }
+        if high_cap_violates_snow_contract(
+            material,
+            fill_covers_surface(highest_fill_by_coord.get(coord).copied(), surface.level),
+            garden_mask.contains(coord),
+            requires_explicit_summit_snow,
+        ) {
+            unsnowed.push((
                 surface,
                 material,
                 route_coords.contains(coord),
                 crystal_mask.contains(coord),
-            ))
-        })
-        .take(8)
-        .collect::<Vec<_>>();
+            ));
+            if unsnowed.len() == 8 {
+                break;
+            }
+        }
+    }
     if !unsnowed.is_empty() {
         return Err(schematic_contract(format!(
             "high-altitude natural or summit-band caps remain unsnowed (surface, material, protected-route, Crystal-site): {unsnowed:?}"
@@ -3411,6 +3458,157 @@ impl DistanceToSet for HexCoord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snow_admission_fixture(
+        landform: LandformKind,
+        level: Level,
+        material: SolidMaterialRole,
+    ) -> (SchematicPlanV1, GeneratedWorldPlan, FineWorldIndex) {
+        let plan = hex_schematic::reference_plan(
+            &hex_schematic::grand_v3_reference_template().expect("template"),
+            0,
+        )
+        .expect("reference plan")
+        .plan;
+        let owner = plan
+            .cells
+            .iter()
+            .find(|cell| {
+                cell.facts.landform == landform
+                    && cell.facts.climate == hex_schematic::ClimateKind::Alpine
+                    && !has_overlay(cell, SchematicFeature::LakeIsland)
+                    && !has_overlay(cell, SchematicFeature::CrystalAscent)
+                    && !has_overlay(cell, SchematicFeature::FrozenWoods)
+            })
+            .map(|cell| PatchId(u32::from(cell.id.get())))
+            .expect("authored Alpine owner");
+        let garden = patches_for_overlay(&plan, SchematicFeature::LakeIsland)
+            .first()
+            .copied()
+            .expect("authored Garden owner");
+        let coord = HexCoord::ORIGIN;
+        let garden_coord = HexCoord::from_axial(1, 0);
+        // Only snow admission is under test: one cap and one empty Garden
+        // coordinate keep its required exception mask explicit and disjoint.
+        let layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Schematic,
+            grid_radius: V3_SCHEMATIC_GRID_RADIUS,
+            footprint: BTreeSet::from([coord, garden_coord]),
+            patches: [(owner, coord), (garden, garden_coord)]
+                .into_iter()
+                .map(|(id, coord)| {
+                    (
+                        id,
+                        super::super::super::layout::ResolvedPatch {
+                            biome_region: BiomeRegionId::default(),
+                            rotation_turns: 0,
+                            mask: BTreeSet::from([coord]),
+                            edges: BTreeMap::new(),
+                        },
+                    )
+                })
+                .collect(),
+            shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
+        };
+        let fine_index = FineWorldIndex::from_layout(&layout).expect("exact two-column ownership");
+        let surface = TilePos::new(coord, level);
+        let mut volume = VolumePlan::new(layout.footprint.clone());
+        volume.columns.get_mut(&coord).expect("cap column").elements =
+            vec![VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(level, level + 1),
+                material,
+                cutaway_for: None,
+            })];
+        volume.surfaces.insert(
+            surface,
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: None,
+            },
+        );
+        let world = GeneratedWorldPlan {
+            source_schematic_fingerprint: Some(plan.semantic_fingerprint),
+            layout,
+            volume,
+            liquids: LiquidPlan::default(),
+            features: FeaturePlan::default(),
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::new(),
+            lights: BTreeMap::new(),
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan::default(),
+            anchors: BTreeMap::new(),
+            observation_anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((0.0, 10.0, 10.0), (0.0, 0.0, 0.0)),
+        };
+        (plan, world, fine_index)
+    }
+
+    #[test]
+    fn snow_admission_uses_the_accepted_organic_band_instead_of_level_146() {
+        let crown = crystal_snow::CrystalCrownSnow::without_bare_caps_for_test();
+        // Accepted snowline is 200 +/-32. Both probes avoid its variable band.
+        for (level, material, admitted) in [
+            (167, SolidMaterialRole::Grass, true),
+            (233, SolidMaterialRole::Grass, false),
+            (233, SolidMaterialRole::Snow, true),
+        ] {
+            let (plan, world, owners) =
+                snow_admission_fixture(LandformKind::Mountain, level, material);
+            let result =
+                validate_certain_snow_caps(&plan, &world, &BTreeSet::new(), &crown, &owners);
+            assert_eq!(result.is_ok(), admitted, "{level} {material:?}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn snow_admission_uses_exact_owners_for_pinned_summit_caps() {
+        let crown = crystal_snow::CrystalCrownSnow::without_bare_caps_for_test();
+        for (landform, level) in [(LandformKind::SharpPeak, 200), (LandformKind::Massif, 224)] {
+            for (material, admitted) in [
+                (SolidMaterialRole::Stone, false),
+                (SolidMaterialRole::Snow, true),
+            ] {
+                let (plan, world, owners) = snow_admission_fixture(landform, level, material);
+                assert_ne!(
+                    owners.patch(HexCoord::ORIGIN),
+                    Some(PatchId(0)),
+                    "the fixture transfers a coarse-center coordinate to its exact summit owner"
+                );
+                let result =
+                    validate_certain_snow_caps(&plan, &world, &BTreeSet::new(), &crown, &owners);
+                assert_eq!(
+                    result.is_ok(),
+                    admitted,
+                    "{landform:?} {material:?}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snow_admission_rejects_missing_and_absent_semantic_owners() {
+        let crown = crystal_snow::CrystalCrownSnow::without_bare_caps_for_test();
+        let (plan, world, mut owners) =
+            snow_admission_fixture(LandformKind::Mountain, 167, SolidMaterialRole::Grass);
+        let mut owner = owners
+            .by_coord
+            .remove(&HexCoord::ORIGIN)
+            .expect("fixture owner");
+        let result = validate_certain_snow_caps(&plan, &world, &BTreeSet::new(), &crown, &owners);
+        assert!(result
+            .expect_err("missing exact ownership must fail")
+            .to_string()
+            .contains("has no exact schematic owner"));
+        owner.patch = PatchId(u32::MAX);
+        owners.by_coord.insert(HexCoord::ORIGIN, owner);
+        let result = validate_certain_snow_caps(&plan, &world, &BTreeSet::new(), &crown, &owners);
+        assert!(result
+            .expect_err("absent schematic owner must fail")
+            .to_string()
+            .contains("has no exact schematic owner"));
+    }
 
     #[test]
     fn seed_175_final_visual_massif_authority_preserves_split_semantic_ownership() {

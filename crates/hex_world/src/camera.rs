@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::camera::CameraUpdateSystems;
+use bevy::core_pipeline::oit::OrderIndependentTransparencySettings;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureUsages;
 use bevy::transform::TransformSystems;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
@@ -414,7 +416,16 @@ fn spawn_camera(
     let radius = translation.length();
 
     commands.spawn((
-        Camera3d::default(),
+        Camera3d {
+            depth_texture_usages: (TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING)
+                .into(),
+            ..default()
+        },
+        // Translucent voxel water shares this camera with tree fades. Owning OIT
+        // here keeps water compositing active after temporary object fades end.
+        OrderIndependentTransparencySettings::default(),
+        Msaa::Off,
         Transform::from_translation(translation).looking_at(Vec3::ZERO, Vec3::Y),
         PanOrbitCamera {
             radius,
@@ -5427,6 +5438,37 @@ mod tests {
         assert_eq!(dome_visibility(&mut app), Some(Visibility::Visible));
         enter(&mut app, Screen::Title);
         assert_eq!(dome_visibility(&mut app), Some(Visibility::Hidden));
+    }
+
+    #[test]
+    fn game_camera_keeps_water_oit_through_gameplay_reentry() {
+        let mut app = sky_app();
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<PanOrbitCamera>>()
+            .single(app.world())
+            .expect("startup creates exactly one persistent game camera");
+
+        for screen in [
+            Screen::Title,
+            Screen::Gameplay,
+            Screen::Title,
+            Screen::Gameplay,
+        ] {
+            enter(&mut app, screen);
+            let camera_3d = app
+                .world()
+                .get::<Camera3d>(camera)
+                .expect("the same game camera survives screen transitions");
+            let depth_usage = TextureUsages::from(camera_3d.depth_texture_usages);
+            assert!(depth_usage.contains(TextureUsages::RENDER_ATTACHMENT));
+            assert!(depth_usage.contains(TextureUsages::TEXTURE_BINDING));
+            assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
+            assert!(app
+                .world()
+                .get::<OrderIndependentTransparencySettings>(camera)
+                .is_some());
+        }
     }
 
     /// An app running the real camera plugin, with everything that plugin declares.

@@ -16,8 +16,8 @@ use crate::review_world_detail::{
     AlpineVegetationDetailV1, CliffStrataDetailV1, ReviewWorldDetailProfileV1, SnowDetailV1,
     TerrainPropsDetailV1,
 };
-use crate::voxel::terrain_chunk_key;
 use crate::terrain_noise::coherent_level_offset;
+use crate::voxel::terrain_chunk_key;
 
 const SNOW_COLOR: [f32; 4] = [0.91, 0.96, 1.0, 1.0];
 const BOULDER_COLOR: [f32; 4] = [0.29, 0.30, 0.32, 1.0];

@@ -1,17 +1,33 @@
 # Grand V3 map delivery manifest
 
-- Status: `implementation-in-progress`
+- Status: `integration-and-validation-in-progress`
+- Delivery PR: [#219](https://github.com/chillgamerboys/bevy-hex-game/pull/219)
+- Integration candidate: `fix/hex-six-map-fixes`
 - Branch: `wave/grand-v3-schematic`
 - Fixed scenario: `Grand V3 Baseline`
 - Fixed world seed: `1_592_598_566`
-- Template: Grand V3 revision 2
-- Fine scale: pitch 22, radius 187, level height 0.4
+- Current template: Grand V3 revision 3
+- Current fine scale: pitch 22, radius 187, level height 0.35
 - Footprint: 105,469 columns in 444 resident 16 by 16 axial chunks
 
-This manifest is the fail-closed checklist for turning the approved schematic and
-historical proxy into the first complete Grand V3 baseline. Checked items describe landed
-contracts or named approval. Unchecked items are work or evidence still required; their
-presence here is not a completion claim.
+This manifest retains the original planner, proxy and final-content checkpoint evidence.
+Checked historical items do not certify the current combined PR head or delivery to `dev`.
+The current gate below owns the recovered fixes, accepted visual promotion and grounded
+exploration. Earlier measurements and approvals remain scoped to their recorded sources.
+
+## Current combined delivery gate
+
+- [ ] Record the exact geometry candidate, walking handoff and combined source identity.
+- [ ] Resolve all seven entries in [the recovered-fixes ledger](../../hex-six-map-fixes.md)
+  with final geometry evidence or the approved concrete deferral reason.
+- [ ] Preserve the independently captured original seed-zero and hero natural passes.
+- [ ] Pass strict current-source generation, retained corpora and the selector-chosen
+  combined gate, without structural draft or weakened geometry/majority contracts.
+- [ ] Inspect fresh changed-region and full-map captures and separate water animation.
+- [ ] Complete combined walking/controller/camera/lifecycle checks and record the exact
+  scope of native motion and play evidence.
+- [ ] Verify both same-map Cargo launchers and record final PR checks.
+- [ ] Verify the exact merge on `dev` and preserve the dependent V4 branch ancestry.
 
 ## Approved foundation
 
@@ -79,9 +95,12 @@ presence here is not a completion claim.
   for review anchors that must not promote a disconnected incidental cap into walker intent.
 - [ ] Pass the selector-chosen CI-equivalent gate.
 
-## Exact typed evidence
+## Historical typed evidence
 
-The following release-shaped gates have passed on the delivery worktree:
+The following commands passed at their original checkpoints. They require fresh receipts
+on the combined source before the current delivery gate is complete. The accepted-source
+diagnostic reproduced strict-admission failures; these historical results do not certify
+the recovered candidate:
 
 ```text
 CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 cargo test --release -p hex_map --test schematic_compile public_schematic_fine_topology_admits_256_seeds -- --exact --nocapture --test-threads=1

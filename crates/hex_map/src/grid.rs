@@ -829,7 +829,7 @@ fn build_grid(
     // Local chunk edits deliberately keep using the refreshed cache below.
     palette_materials.reset_for_world(materials, material_treatment);
     terrain_meshes.reset_for_world(meshes);
-    let mut children = liquid_render::spawn_presentations(
+    let liquid_presentation = liquid_render::spawn_presentations(
         commands,
         meshes,
         liquid_materials,
@@ -840,6 +840,7 @@ fn build_grid(
         presentation,
     )
     .map_err(MapPresentationError::Liquid)?;
+    let mut children = liquid_presentation.entities;
     children.extend(
         feature_render::spawn_presentations(commands, settings.level_height, presentation)
             .map_err(MapPresentationError::Feature)?,
@@ -874,6 +875,8 @@ fn build_grid(
             chunk,
             material_treatment,
             edge_treatment,
+            liquid_presentation.water_material.as_ref(),
+            presentation,
         )?;
         chunk_roots.insert(chunk, root);
     }
@@ -903,6 +906,8 @@ fn spawn_terrain_chunk(
     chunk: crate::voxel::TerrainChunkCoord,
     material_treatment: ReviewMaterialTreatment,
     edge_treatment: ReviewEdgeTreatment,
+    water_material: Option<&Handle<LiquidMaterial>>,
+    presentation: Option<&MapPresentationProjection>,
 ) -> Result<Entity, MapPresentationError> {
     let root = commands
         .spawn((
@@ -990,14 +995,22 @@ fn spawn_terrain_chunk(
     };
     let mut chunk_mesh_handles = Vec::new();
     for (key, runs) in batches {
-        let material =
-            palette_materials.get_or_create(key.substance, table, material_treatment, materials);
+        let is_water = table.id("water") == Some(key.substance);
+        if is_water && water_material.is_none() {
+            return Err(MapPresentationError::TerrainMesh(
+                "original water batch has no shared animated material".to_owned(),
+            ));
+        }
+        let material = (!is_water).then(|| {
+            palette_materials.get_or_create(key.substance, table, material_treatment, materials)
+        });
         for (partition, runs) in runs.chunks(MAX_TERRAIN_PICK_RUNS_PER_BATCH).enumerate() {
-            let mesh = combined_terrain_mesh_with_edge(
+            let mesh = combined_terrain_mesh_with_water(
                 runs,
                 &projected_columns,
                 settings.level_height,
                 edge_treatment,
+                is_water.then_some(presentation),
             )
             .map_err(MapPresentationError::TerrainMesh)?;
             let mesh = meshes.add(mesh);
@@ -1008,7 +1021,6 @@ fn spawn_terrain_chunk(
                 .collect();
             let mut batch = commands.spawn((
                 Mesh3d(mesh),
-                MeshMaterial3d(material.clone()),
                 Transform::default(),
                 Visibility::Inherited,
                 Pickable::default(),
@@ -1018,6 +1030,18 @@ fn spawn_terrain_chunk(
                     chunk.q, chunk.r, key.substance.0, partition
                 )),
             ));
+            if let Some(water_material) = water_material.filter(|_| is_water) {
+                batch.insert((
+                    MeshMaterial3d(water_material.clone()),
+                    bevy::light::NotShadowCaster,
+                ));
+                #[cfg(feature = "map-review")]
+                batch.insert(liquid_render::ReviewLiquidPresentationRole(
+                    procedural_v3::FillMaterialRole::Water,
+                ));
+            } else if let Some(material) = &material {
+                batch.insert(MeshMaterial3d(material.clone()));
+            }
             if let Some(region) = key.cutaway {
                 batch.insert((CutawayOccluder(region), PresentationOcclusion::default()));
             }
@@ -1081,6 +1105,8 @@ struct MapPresentationAssets<'w> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
+    liquid_handles: Option<Res<'w, liquid_render::LiquidMaterialHandles>>,
+    liquid_time: Option<Res<'w, LiquidVisualTime>>,
 }
 
 /// Borrow-only world inputs for canonical reconnect publication.
@@ -1585,6 +1611,7 @@ struct TerrainRawMesh {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
+    water_flow: Vec<[f32; 2]>,
     indices: Vec<u32>,
     edge_treatment: ReviewEdgeTreatment,
     geometric_bevel: Option<TerrainGeometricBevel>,
@@ -1824,18 +1851,26 @@ impl TerrainRawMesh {
             .flatten()
             .chain(self.normals.iter().flatten())
             .chain(self.uvs.iter().flatten())
+            .chain(self.water_flow.iter().flatten())
             .all(|component| component.is_finite())
         {
             return Err("terrain batch produced non-finite geometry".to_owned());
         }
-        Ok(Mesh::new(
+        if !self.water_flow.is_empty() && self.water_flow.len() != self.positions.len() {
+            return Err("water flow attributes do not cover every terrain vertex".to_owned());
+        }
+        let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
-        .with_inserted_indices(Indices::U32(self.indices)))
+        .with_inserted_indices(Indices::U32(self.indices));
+        if !self.water_flow.is_empty() {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, self.water_flow);
+        }
+        Ok(mesh)
     }
 }
 
@@ -1990,8 +2025,21 @@ fn combined_terrain_mesh_with_edge(
     level_height: f32,
     edge_treatment: ReviewEdgeTreatment,
 ) -> Result<Mesh, String> {
+    combined_terrain_mesh_with_water(runs, projected_columns, level_height, edge_treatment, None)
+}
+
+/// Original water faces carry their flow class in UV1. Cross-chunk water seams
+/// share the same occupancy culling as interior faces; exposed banks and drops remain.
+fn combined_terrain_mesh_with_water(
+    runs: &[PendingTerrainRun],
+    projected_columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
+    level_height: f32,
+    edge_treatment: ReviewEdgeTreatment,
+    water: Option<Option<&MapPresentationProjection>>,
+) -> Result<Mesh, String> {
     let mut combined = TerrainRawMesh::with_edge_treatment(edge_treatment, level_height)?;
     for run in runs {
+        let vertex_start = combined.positions.len();
         // Retaining each run's top cap preserves material boundaries and guarantees
         // every logical run has one exact pick surface in its bounded batch. Buried
         // caps remain depth-occluded; edits rebuild the chunk before exposure.
@@ -2014,15 +2062,16 @@ fn combined_terrain_mesh_with_edge(
             .into_iter()
             .zip(terrain_hex_sides())
         {
-            // Resident chunk meshes own their seam walls permanently. Depending on
-            // another chunk's columns here would force an otherwise local edit to
-            // replace neighbouring roots just to repair one culled face.
-            let neighbour_runs =
-                if terrain_chunk_coord(neighbour) == terrain_chunk_coord(run.position.coord) {
-                    projected_columns.get(&neighbour).map(Vec::as_slice)
-                } else {
-                    None
-                };
+            // Opaque chunks retain permanent seam walls. Transparent water cannot
+            // keep internal faces: their overlapping alpha would darken chunk seams.
+            // Edits also refresh any neighbouring water chunk affected by this cull.
+            let neighbour_runs = if water.is_some()
+                || terrain_chunk_coord(neighbour) == terrain_chunk_coord(run.position.coord)
+            {
+                projected_columns.get(&neighbour).map(Vec::as_slice)
+            } else {
+                None
+            };
             for (bottom, top) in exposed_intervals(run.bottom, run.top, neighbour_runs, run.cutaway)
             {
                 let trim_bottom = bottom_exposed && bottom == run.bottom;
@@ -2042,6 +2091,13 @@ fn combined_terrain_mesh_with_edge(
                     trim_top,
                 )?;
             }
+        }
+        if let Some(projection) = water {
+            let flow = liquid_render::water_vertex_flow(run.position, projection);
+            combined.water_flow.extend(std::iter::repeat_n(
+                flow,
+                combined.positions.len() - vertex_start,
+            ));
         }
     }
     combined.into_mesh()
@@ -2541,11 +2597,50 @@ fn apply_terrain_changes(
         retain_valid_blockers(&map, &table, &changed_coords, blockers);
     }
 
-    let affected_chunks = changed_coords
+    let mut affected_chunks = changed_coords
         .iter()
         .copied()
         .map(terrain_chunk_coord)
         .collect::<BTreeSet<_>>();
+    let water_id = table.id("water");
+    let column_has_water = |coord| {
+        map.column(coord).is_some_and(|column| {
+            runs(column)
+                .iter()
+                .any(|run| Some(run.substance) == water_id)
+        })
+    };
+    for neighbor in changed_coords.iter().flat_map(|coord| coord.neighbors()) {
+        if column_has_water(neighbor) {
+            affected_chunks.insert(terrain_chunk_coord(neighbor));
+        }
+    }
+    let water_material = if affected_chunks.iter().any(|chunk| {
+        map.columns_in_chunk(*chunk)
+            .any(|(coord, _)| column_has_water(coord))
+    }) {
+        let existing = presentation_assets.liquid_handles.as_deref().cloned();
+        let phase = presentation_assets
+            .liquid_time
+            .as_deref()
+            .map_or(0.0, LiquidVisualTime::phase_seconds);
+        match liquid_render::ensure_water_material(
+            &mut commands,
+            &mut presentation_assets.liquid_materials,
+            &table,
+            existing.as_ref(),
+            phase,
+        ) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                fail_presentation_setup(&mut commands, &MapPresentationError::Liquid(error));
+                terrain_presentation.next_screen.set(Screen::Title);
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let _accepted_hex_mesh = assets.hex_tile.id();
     let mut replacements = Vec::with_capacity(affected_chunks.len());
     for chunk in affected_chunks.iter().copied() {
@@ -2562,6 +2657,8 @@ fn apply_terrain_changes(
             chunk,
             material_treatment.as_deref().copied().unwrap_or_default(),
             edge_treatment.as_deref().copied().unwrap_or_default(),
+            water_material.as_ref(),
+            presentation.as_deref(),
         ) {
             Ok(root) => replacements.push(root),
             Err(error) => {
@@ -2796,6 +2893,90 @@ mod tests {
         ]);
         SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
             .expect("the fixture substances should resolve through their palette")
+    }
+
+    #[test]
+    fn original_water_culls_cross_chunk_seams_but_keeps_drop_faces_and_pick_caps() {
+        let coord = HexCoord::from_axial(crate::voxel::TERRAIN_CHUNK_SIDE - 1, 0);
+        let neighbor = coord
+            .neighbors()
+            .into_iter()
+            .find(|neighbor| terrain_chunk_coord(*neighbor) != terrain_chunk_coord(coord))
+            .expect("fixture straddles a chunk seam");
+        let projected_run = |top| ProjectedRun {
+            run: SubstanceRun {
+                bottom: 0,
+                top,
+                substance: SubstanceId(1),
+            },
+            cutaway: None,
+        };
+        let mut columns = BTreeMap::from([
+            (coord, vec![projected_run(3)]),
+            (neighbor, vec![projected_run(3)]),
+        ]);
+        let pending = PendingTerrainRun {
+            entity: Entity::from_raw_u32(1).expect("fixture entity"),
+            position: TilePos::new(coord, 2),
+            span: HexSpan::new(0.0, 1.2),
+            bottom: 0,
+            top: 3,
+            cutaway: None,
+        };
+        let build = |columns: &BTreeMap<_, _>, water| {
+            combined_terrain_mesh_with_water(
+                &[pending],
+                columns,
+                0.4,
+                ReviewEdgeTreatment::Current,
+                water,
+            )
+            .expect("valid original faces")
+        };
+        let opaque = build(&columns, None);
+        let water = build(&columns, Some(None));
+        assert_eq!(
+            opaque.count_vertices() - water.count_vertices(),
+            4,
+            "only the internal seam quad disappears"
+        );
+        let Some(bevy::mesh::VertexAttributeValues::Float32x2(flow)) =
+            water.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
+            panic!("every original water vertex needs UV1");
+        };
+        assert_eq!(flow.len(), water.count_vertices());
+        assert!(flow.iter().all(|flow| *flow == [0.0, 0.0]));
+        assert!(opaque.attribute(Mesh::ATTRIBUTE_UV_1).is_none());
+        let top_vertices = |mesh: &Mesh| {
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) =
+                mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+            else {
+                panic!("original normals");
+            };
+            normals
+                .iter()
+                .filter(|normal| Vec3::from(**normal).abs_diff_eq(Vec3::Y, 1e-6))
+                .count()
+        };
+        assert_eq!(
+            top_vertices(&water),
+            top_vertices(&opaque),
+            "exact pick cap retained"
+        );
+        columns.insert(neighbor, vec![projected_run(2)]);
+        let drop = build(&columns, Some(None));
+        assert_eq!(
+            drop.count_vertices(),
+            opaque.count_vertices(),
+            "one-level drop remains exposed"
+        );
+        columns.remove(&neighbor);
+        assert_eq!(
+            build(&columns, Some(None)).count_vertices(),
+            opaque.count_vertices(),
+            "a newly exposed map edge is restored on replacement"
+        );
     }
 
     #[test]

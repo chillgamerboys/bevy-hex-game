@@ -46,8 +46,20 @@ use crate::settings::{
 
 #[path = "schematic_corrective.rs"]
 mod corrective;
+#[cfg(test)]
+#[path = "schematic_six_fixes_tests.rs"]
+mod six_fixes_tests;
+
+#[path = "schematic_approach_shoulders.rs"]
+mod approach_shoulders;
+#[path = "schematic_crystal_snow.rs"]
+mod crystal_snow;
+#[path = "schematic_garden.rs"]
+mod garden;
 #[path = "schematic_peak_routes.rs"]
 mod peak_routes;
+#[path = "schematic_rear_shelf.rs"]
+mod rear_shelf;
 
 const WORLD_NAMESPACE: u32 = 255 << 24;
 const SCENIC_MOVEMENT_REGION: SpecialMovementRegion = SpecialMovementRegion(WORLD_NAMESPACE | 1);
@@ -154,6 +166,9 @@ struct WaterfallCliffAuthority {
 struct WaterfallLakeAprons {
     mountain_lake: BTreeSet<TilePos>,
     valley_lake: BTreeSet<TilePos>,
+    /// The short directed fan around the unchanged three-lane cascade spine.
+    /// Only its first section is lake-level water; the other sections descend.
+    intake_rows: Vec<BTreeSet<TilePos>>,
 }
 
 impl WaterfallLakeAprons {
@@ -161,6 +176,7 @@ impl WaterfallLakeAprons {
         self.mountain_lake
             .iter()
             .chain(&self.valley_lake)
+            .chain(self.intake_rows.iter().flatten())
             .map(|position| position.coord)
             .collect()
     }
@@ -194,13 +210,124 @@ struct OutletAuthority {
     downstream_course: BTreeSet<TilePos>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TunnelCompilation {
     route: ProtectedFeatureRoute,
     interior: PlannedInterior,
     lights: BTreeMap<LightId, PlannedGameplayLight>,
     anchors: BTreeMap<String, TilePos>,
     overburden: TunnelOverburdenAuthority,
+    geometry: Option<TunnelGeometryAuthority>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TunnelPhase {
+    /// Preserve the accepted horizontal reservations until terrain is complete.
+    InitialPlanning,
+    FinalExpansion,
+}
+
+#[derive(Debug)]
+struct TunnelPlanningPublication {
+    route: ProtectedFeatureRoute,
+    interior: PlannedInterior,
+    light_ids: BTreeSet<LightId>,
+    overburden: TunnelOverburdenAuthority,
+}
+
+impl TunnelPlanningPublication {
+    fn capture(tunnel: &TunnelCompilation) -> Self {
+        Self {
+            route: tunnel.route.clone(),
+            interior: tunnel.interior.clone(),
+            light_ids: tunnel.lights.keys().copied().collect(),
+            overburden: tunnel.overburden.clone(),
+        }
+    }
+}
+
+/// Retains the carving contract until the complete world has been sealed.
+#[derive(Debug)]
+struct TunnelGeometryAuthority {
+    carve: TunnelInteriorCarve,
+    alcoves: Vec<TilePos>,
+    route_coords: BTreeSet<HexCoord>,
+    lights: BTreeMap<LightId, PlannedGameplayLight>,
+    interior: InteriorRegionId,
+    floor: Level,
+    alcove_clearance: Level,
+    alcove_roof: Level,
+    retained_floors: BTreeSet<TilePos>,
+    retained_roofs: BTreeSet<TilePos>,
+    removed_light_ids: BTreeSet<LightId>,
+}
+
+impl TunnelGeometryAuthority {
+    fn validate(&self, world: &GeneratedWorldPlan) -> Result<(), V3GenerationError> {
+        validate_compiled_tunnel_geometry(&world.volume, self.interior, self.floor, &self.carve)?;
+        validate_tunnel_alcove_geometry(
+            &self.alcoves,
+            &self.route_coords,
+            &world.volume,
+            self.interior,
+            self.floor,
+            self.alcove_clearance,
+            self.alcove_roof,
+        )?;
+        if self
+            .lights
+            .iter()
+            .any(|(id, light)| world.lights.get(id) != Some(light))
+            || self
+                .removed_light_ids
+                .iter()
+                .any(|id| world.lights.contains_key(id))
+        {
+            return Err(schematic_contract(
+                "final tunnel changed a recessed crystal's complete geometry or placement",
+            ));
+        }
+        let interior = world.interiors.by_id.get(&self.interior).ok_or_else(|| {
+            schematic_contract("final tunnel lost its unified interior publication")
+        })?;
+        for floor in &self.retained_floors {
+            if !interior.floors.contains(floor)
+                || world.volume.surfaces.get(floor).is_none_or(|metadata| {
+                    metadata.access != SurfaceAccess::Ordinary
+                        || metadata.interior != Some(self.interior)
+                })
+                || nearest_tunnel_light_distance(*floor, &self.alcoves) > TUNNEL_DIM_LIGHT_RADIUS
+            {
+                return Err(schematic_contract(format!(
+                    "final tunnel lost retained, lit interior footing at {floor:?}"
+                )));
+            }
+        }
+        if self.retained_roofs.iter().any(|roof| {
+            !interior.roof_voxels.contains(roof)
+                || world
+                    .volume
+                    .columns
+                    .get(&roof.coord)
+                    .and_then(|column| solid_mass_at_level(column, roof.level))
+                    .is_none_or(|mass| mass.cutaway_for != Some(self.interior))
+        }) {
+            return Err(schematic_contract(
+                "final tunnel lost a retained alcove roof",
+            ));
+        }
+        for (coord, shape) in &self.carve.columns {
+            if !interior.floors.contains(&TilePos::new(*coord, self.floor))
+                || (shape.clearance_top..shape.roof_top())
+                    .any(|level| !interior.roof_voxels.contains(&TilePos::new(*coord, level)))
+            {
+                return Err(schematic_contract(format!(
+                    "final tunnel lost expanded floor or roof membership at {coord:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Exact natural strata that must remain visually unchanged above the tunnel.
@@ -1449,6 +1576,44 @@ fn grand_profile_surface_checkpoint(stage: &str, volume: &VolumePlan) {
     );
 }
 
+// Temporary read-only histogram. Its ownership and 182 threshold are fixed;
+// enabling it never changes generation or structural admission.
+fn grand_profile_massif_checkpoint(
+    stage: &str,
+    semantic_owner_mask: &BTreeSet<HexCoord>,
+    level_at: impl Fn(HexCoord) -> Option<Level>,
+) {
+    if std::env::var_os("HEX_GRAND_MASSIF_PROFILE").is_none() {
+        return;
+    }
+    const THRESHOLD: Level = 182;
+    let mut histogram = BTreeMap::<Level, usize>::new();
+    let mut missing = 0_usize;
+    for coord in semantic_owner_mask {
+        if let Some(level) = level_at(*coord) {
+            *histogram.entry(level).or_default() += 1;
+            if std::env::var_os("HEX_GRAND_MASSIF_COLUMNS").is_some() {
+                eprintln!(
+                    "grand-v3 massif column: stage={stage}, q={}, r={}, level={level}",
+                    coord.x(),
+                    coord.y()
+                );
+            }
+        } else {
+            missing += 1;
+        }
+    }
+    let high = histogram
+        .range(THRESHOLD..)
+        .map(|(_, count)| *count)
+        .sum::<usize>();
+    let total = histogram.values().sum::<usize>();
+    eprintln!(
+        "grand-v3 massif histogram: stage={stage}, high={high}, total={total}, owner_total={}, missing={missing}, threshold={THRESHOLD}, histogram={histogram:?}",
+        semantic_owner_mask.len()
+    );
+}
+
 /// Exact pre-feature terrain shared by runtime compilation and the lightweight
 /// multi-seed admission corpus.
 ///
@@ -1515,7 +1680,7 @@ fn classify_peak_feather_connector_edges(
             _ => {
                 return Err(schematic_contract(format!(
                     "peak group {component_index} connector boundary {first:?} -> {second:?} does not have exactly one feather endpoint"
-                )))
+                )));
             }
         };
         reserved_coords.extend([feather, other]);
@@ -2398,6 +2563,11 @@ fn build_schematic_foundation(
             layout.footprint.len()
         )));
     }
+    grand_profile_massif_checkpoint(
+        "foundation raw",
+        &massif_visual.semantic_owner_mask,
+        |coord| raw_surface_levels.get(&coord).copied(),
+    );
     highlands.project_combined_surface(
         &raw_surface_levels,
         &foundation_baselines,
@@ -2522,6 +2692,11 @@ fn build_proxy_world(
     validate_crystal_shell_concealment("foundation materialization", &volume, &crystal_mantle)?;
     grand_profile_checkpoint("base volume", profile_started, &mut profile_previous);
     grand_profile_surface_checkpoint("base volume", &volume);
+    grand_profile_massif_checkpoint("foundation", &massif_visual.semantic_owner_mask, |coord| {
+        volume
+            .top_surface_at_coord(coord)
+            .map(|(surface, _)| surface.level)
+    });
 
     apply_coast_detail(
         plan,
@@ -2699,11 +2874,19 @@ fn build_proxy_world(
         &fine_index,
         &mut world.volume,
         &mut world.biome_regions,
+        TunnelPhase::InitialPlanning,
+        &BTreeSet::new(),
     )?;
     validate_crystal_shell_concealment("tunnel construction", &world.volume, &crystal_mantle)?;
-    let tunnel_overburden = tunnel.overburden.clone();
+    let tunnel_planning = TunnelPlanningPublication::capture(&tunnel);
     grand_profile_checkpoint("tunnel", profile_started, &mut profile_previous);
     grand_profile_surface_checkpoint("tunnel", &world.volume);
+    grand_profile_massif_checkpoint("tunnel", &massif_visual.semantic_owner_mask, |coord| {
+        world
+            .volume
+            .top_surface_at_coord(coord)
+            .map(|(surface, _)| surface.level)
+    });
     let connected_lower_terminal = tunnel
         .interior
         .floors
@@ -2825,6 +3008,12 @@ fn build_proxy_world(
         .insert("grand_v3.frozen_exit".to_owned(), frozen_exit_anchor);
     validate_crystal_shell_concealment("Frozen-exit construction", &world.volume, &crystal_mantle)?;
     grand_profile_surface_checkpoint("frozen exit", &world.volume);
+    grand_profile_massif_checkpoint("frozen exit", &massif_visual.semantic_owner_mask, |coord| {
+        world
+            .volume
+            .top_surface_at_coord(coord)
+            .map(|(surface, _)| surface.level)
+    });
 
     let crystal_mantle_screen = crystal_mantle.route_exclusion.clone();
     let crystal_shell_apron = crystal_mantle.shell_concealment_apron();
@@ -3132,9 +3321,27 @@ fn build_proxy_world(
         &world.volume,
         &crystal_mantle,
     )?;
+    if std::env::var_os("HEX_GRAND_MASSIF_PROFILE").is_some() {
+        eprintln!(
+            "grand-v3 natural-pass profile: centerline={:?}, width={}, support_count={}",
+            natural_pass.route.centerline,
+            natural_pass.width,
+            natural_pass.support_coords.len()
+        );
+    }
     let expected_natural_pass_width = natural_pass.width;
     grand_profile_checkpoint("natural pass", profile_started, &mut profile_previous);
     grand_profile_surface_checkpoint("natural pass", &world.volume);
+    grand_profile_massif_checkpoint(
+        "natural pass",
+        &massif_visual.semantic_owner_mask,
+        |coord| {
+            world
+                .volume
+                .top_surface_at_coord(coord)
+                .map(|(surface, _)| surface.level)
+        },
+    );
     surface_route_exclusion.extend(natural_pass.support_coords.iter().copied());
     connector_route_exclusion.extend(natural_pass.support_coords.iter().copied());
     // Let minimax routing see the complete connected highland field so it can
@@ -3623,13 +3830,83 @@ fn build_proxy_world(
         &centers,
     )?;
     grand_profile_checkpoint("review anchors", profile_started, &mut profile_previous);
+    // Surface routes and their exact grades now own the final terrain. Widen
+    // the buried passage against those caps so its floor reservations cannot
+    // move the original overland pass during the earlier terrain search.
+    let expanded_tunnel = compile_tunnel(
+        plan,
+        profile,
+        world_seed,
+        crystal_interior,
+        ascent_target,
+        &lower_terminal,
+        &crystal_mask,
+        &world.layout,
+        &fine_index,
+        &mut world.volume,
+        &mut world.biome_regions,
+        TunnelPhase::FinalExpansion,
+        &tunnel_planning.interior.floors,
+    )?;
+    let (tunnel_overburden, tunnel_geometry) = publish_expanded_tunnel(
+        &mut world,
+        &mut ordinary_graph,
+        &tunnel_planning,
+        expanded_tunnel,
+    )?;
+    grand_profile_checkpoint(
+        "late tunnel expansion",
+        profile_started,
+        &mut profile_previous,
+    );
     schematic_ecology::reconcile_alpine_caps(plan, world_seed, &mut world)?;
     grand_profile_checkpoint("alpine ecology", profile_started, &mut profile_previous);
     grand_profile_surface_checkpoint("alpine ecology", &world.volume);
+    let crystal_crown_snow = crystal_snow::author(plan, world_seed, art_catalog, &mut world)?;
+    let garden_spring = garden::author_spring(plan, profile, &hydrology, &mut world)?;
+    let rear_shelf_crest_exclusion = massif_crest
+        .coords()
+        .chain(peak_ridges.components.iter().flat_map(|component| {
+            component
+                .expected_high_band
+                .keys()
+                .copied()
+                .chain(component.summit_pins.keys().copied())
+                .chain(component.borrowed_crown_cells.values().flatten().copied())
+        }))
+        .collect::<BTreeSet<_>>();
+    let rear_shelf_site =
+        rear_shelf::prepare(plan, &world, &crystal_mask, &rear_shelf_crest_exclusion)?;
+    if std::env::var_os("HEX_GRAND_MASSIF_PROFILE").is_some() {
+        if let Some(site) = &rear_shelf_site {
+            let surfaces = site
+                .surfaces()
+                .values()
+                .map(|surface| (surface.coord.x(), surface.coord.y(), surface.level))
+                .collect::<Vec<_>>();
+            eprintln!("grand-v3 prepared rear-shelf surfaces: {surfaces:?}");
+        }
+    }
     let blockers_before_vegetation = world.blockers.clone();
     compile_schematic_vegetation(plan, world_seed, art_catalog, &crystal_mask, &mut world)?;
+    let rear_shelf_trees = rear_shelf_site
+        .map(|site| rear_shelf::author(site, plan, world_seed, art_catalog, &mut world))
+        .transpose()?;
+
+    garden_spring.validate(&world)?;
+    crystal_crown_snow.validate(&world)?;
     grand_profile_checkpoint("vegetation", profile_started, &mut profile_previous);
     grand_profile_surface_checkpoint("vegetation", &world.volume);
+    grand_profile_massif_checkpoint(
+        "final after vegetation",
+        &massif_visual.semantic_owner_mask,
+        |coord| {
+            world
+                .volume
+                .top_surface_at_coord(coord)
+                .map(|(surface, _)| surface.level)
+        },
+    );
     let vegetation_blocker_coords = world
         .blockers
         .difference(&blockers_before_vegetation)
@@ -3648,6 +3925,8 @@ fn build_proxy_world(
     // reprojects only newly blocked tree columns instead of rebuilding all
     // 105,469 columns after decoration. The explicit structural-review draft
     // keeps today's geometry launchable while this gameplay route is unfinished.
+    add_exact_corrective_observation_anchors(&mut world, plan, &centers, massif_crest.crest)?;
+    add_corrective_capture_witnesses(&mut world, plan, &centers, &hydrology)?;
     let (_final_reachable, final_reachability) = if structural_review_draft {
         eprintln!(
             "Grand V3 structural-review draft: skipping final traversal and corrective admission checks"
@@ -3746,7 +4025,6 @@ fn build_proxy_world(
             )?;
         }
         massif_crest.validate_geometry("final corrective construction", &world.volume)?;
-        add_exact_corrective_observation_anchors(&mut world, plan, &centers, massif_crest.crest)?;
         grand_profile_surface_checkpoint("before corrective world validation", &world.volume);
         corrective::validate_corrective_world_contract(
             plan,
@@ -3754,6 +4032,9 @@ fn build_proxy_world(
             profile,
             corrective::CorrectiveWorldValidation {
                 hydrology: &hydrology,
+                garden_spring: &garden_spring,
+                crystal_crown_snow: &crystal_crown_snow,
+                rear_shelf_trees: rear_shelf_trees.as_ref(),
                 crystal_mask: &crystal_mask,
                 crystal_mantle: &crystal_mantle,
                 crystal_terrain_top: crystal_terrain_top_authority,
@@ -3775,6 +4056,7 @@ fn build_proxy_world(
         (final_reachable, final_reachability)
     };
 
+    crystal_crown_snow.validate(&world)?;
     minimum_surface = world
         .volume
         .surfaces
@@ -3816,6 +4098,12 @@ fn build_proxy_world(
     };
     let admitted =
         admit_reconciled_grand_world(plan, &peak_ridges, world, crystal_interior, claimed_layout)?;
+    tunnel_geometry.validate(&admitted.plan)?;
+    if let Some(trees) = &rear_shelf_trees {
+        trees.validate(plan, art_catalog, &admitted.plan)?;
+    }
+    garden_spring.validate(&admitted.plan)?;
+    crystal_crown_snow.validate(&admitted.plan)?;
     grand_profile_checkpoint(
         "interior reconciliation",
         profile_started,
@@ -4391,6 +4679,358 @@ fn connected_coords(coords: &BTreeSet<HexCoord>) -> bool {
     reached.len() == coords.len()
 }
 
+const WATERFALL_INTAKE_WIDTHS: [usize; 4] = [9, 7, 5, 3];
+
+fn waterfall_intake_start(plunge_lip_index: usize) -> Result<usize, V3GenerationError> {
+    plunge_lip_index
+        .checked_sub(WATERFALL_CASCADE_TRANSITIONS)
+        .map(|start| start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS))
+        .ok_or_else(|| schematic_contract("waterfall intake starts outside its cascade"))
+}
+
+/// Extend each side of one existing row, preferring the straight transverse
+/// stencil. At a concave spine turn an arm may fold one cell inward while
+/// retaining its maximum radius. This lets the fan round the preserved corner
+/// without moving the spine or lowering a shared lake-level coordinate.
+fn waterfall_intake_side_candidates(
+    center: HexCoord,
+    axis: usize,
+    side: i32,
+    extra: usize,
+    available: &BTreeSet<HexCoord>,
+) -> Vec<BTreeSet<HexCoord>> {
+    let endpoint = step_in_direction(center, axis, side);
+    let mut paths = vec![(endpoint, BTreeSet::new(), 0_u32)];
+    for distance in 2..=extra.saturating_add(1) {
+        let radius = u32::try_from(distance).unwrap_or(u32::MAX);
+        let offset = i32::try_from(distance)
+            .unwrap_or(i32::MAX)
+            .saturating_mul(side);
+        let ideal = step_in_direction(center, axis, offset);
+        paths = paths
+            .into_iter()
+            .flat_map(|(previous, path, cost)| {
+                previous.neighbors().into_iter().filter_map(move |coord| {
+                    let deviation = coord.distance(ideal);
+                    let actual_radius = center.distance(coord);
+                    let follows_outer_arm = actual_radius == radius && deviation <= 1;
+                    let rounds_inner_corner =
+                        actual_radius == radius.saturating_sub(1) && deviation <= 2;
+                    if !available.contains(&coord)
+                        || !(follows_outer_arm || rounds_inner_corner)
+                        || path.contains(&coord)
+                    {
+                        return None;
+                    }
+                    let mut extended = path.clone();
+                    extended.insert(coord);
+                    Some((coord, extended, cost.saturating_add(deviation)))
+                })
+            })
+            .collect();
+    }
+    paths.sort_by_key(|(_, path, cost)| (*cost, path.clone()));
+    let mut seen = BTreeSet::new();
+    paths
+        .into_iter()
+        .filter_map(|(_, path, _)| seen.insert(path.clone()).then_some(path))
+        .collect()
+}
+
+fn waterfall_intake_row_candidates(
+    core: &BTreeSet<TilePos>,
+    width: usize,
+    available: &BTreeSet<HexCoord>,
+) -> Result<Vec<BTreeSet<TilePos>>, V3GenerationError> {
+    let center = waterfall_three_lane_center(core)?;
+    let axis = waterfall_three_lane_axis(core, center)?;
+    let extra = width.saturating_sub(core.len()) / 2;
+    let left = waterfall_intake_side_candidates(center.coord, axis, -1, extra, available);
+    let right = waterfall_intake_side_candidates(center.coord, axis, 1, extra, available);
+    let mut candidates = Vec::new();
+    for first in &left {
+        for second in &right {
+            if !first.is_disjoint(second) {
+                continue;
+            }
+            let mut row = core.clone();
+            row.extend(
+                first
+                    .iter()
+                    .chain(second)
+                    .map(|coord| TilePos::new(*coord, center.level)),
+            );
+            if row.len() == width {
+                candidates.push(row);
+            }
+        }
+    }
+    // The side lists already put the exact symmetric stencil first. Retain
+    // that stable geometric order rather than allowing hash/map order to pick
+    // a different intake when unrelated world content changes.
+    Ok(candidates)
+}
+
+fn waterfall_intake_has_downstream_paths(rows: &[BTreeSet<TilePos>]) -> bool {
+    let Some(last) = rows.last() else {
+        return false;
+    };
+    let positions = rows.iter().flatten().copied().collect::<BTreeSet<_>>();
+    let ranks = rows
+        .iter()
+        .enumerate()
+        .flat_map(|(rank, row)| row.iter().map(move |position| (*position, rank)))
+        .collect::<BTreeMap<_, _>>();
+    let mut reached = last.clone();
+    let mut frontier = last.iter().copied().collect::<VecDeque<_>>();
+    while let Some(target) = frontier.pop_front() {
+        let Some(target_rank) = ranks.get(&target).copied() else {
+            return false;
+        };
+        for source in positions.iter().copied().filter(|source| {
+            source.coord.distance(target.coord) == 1
+                && source.level >= target.level
+                && ranks.get(source).is_some_and(|rank| {
+                    rank.saturating_add(1) == target_rank
+                        || (*rank == target_rank && source.level == target.level)
+                })
+        }) {
+            if reached.insert(source) {
+                frontier.push_back(source);
+            }
+        }
+    }
+    reached == positions
+}
+
+fn select_waterfall_intake_rows(
+    candidates: &[Vec<BTreeSet<TilePos>>],
+    core_coords: &BTreeSet<HexCoord>,
+    selected: &mut Vec<BTreeSet<TilePos>>,
+    claimed: &mut BTreeSet<HexCoord>,
+) -> bool {
+    let Some(next) = candidates.get(selected.len()) else {
+        return waterfall_intake_has_downstream_paths(selected);
+    };
+    for row in next {
+        let added = row
+            .iter()
+            .map(|position| position.coord)
+            .filter(|coord| !core_coords.contains(coord))
+            .collect::<BTreeSet<_>>();
+        if !claimed.is_disjoint(&added) {
+            continue;
+        }
+        claimed.extend(added.iter().copied());
+        selected.push(row.clone());
+        if select_waterfall_intake_rows(candidates, core_coords, selected, claimed) {
+            return true;
+        }
+        let _removed = selected.pop();
+        for coord in added {
+            claimed.remove(&coord);
+        }
+    }
+    false
+}
+
+/// Resolve a short 9/7/5/3 directed intake around the existing rows. The entire
+/// original core is excluded from new side claims, including equal-level
+/// shared corners; those retain their original progression ranks exactly.
+fn resolve_waterfall_intake_rows(
+    watercourse_rows: &[BTreeSet<TilePos>],
+    plunge_lip_index: usize,
+    footprint: &BTreeSet<HexCoord>,
+    semantic_mountain_lake: &BTreeSet<HexCoord>,
+    protected: &BTreeSet<HexCoord>,
+) -> Result<Vec<BTreeSet<TilePos>>, V3GenerationError> {
+    let start = waterfall_intake_start(plunge_lip_index)?;
+    let core = watercourse_rows
+        .get(start..start.saturating_add(WATERFALL_INTAKE_WIDTHS.len()))
+        .ok_or_else(|| schematic_contract("waterfall intake has no complete handoff"))?;
+    let core_coords = watercourse_coords(watercourse_rows);
+    let available = footprint
+        .difference(&core_coords)
+        .copied()
+        .filter(|coord| !protected.contains(coord))
+        .collect::<BTreeSet<_>>();
+    let source_available = available
+        .intersection(semantic_mountain_lake)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let candidates = core
+        .iter()
+        .zip(WATERFALL_INTAKE_WIDTHS)
+        .enumerate()
+        .map(|(index, (row, width))| {
+            waterfall_intake_row_candidates(
+                row,
+                width,
+                if index == 0 {
+                    &source_available
+                } else {
+                    &available
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut selected = Vec::new();
+    if !select_waterfall_intake_rows(
+        &candidates,
+        &core_coords,
+        &mut selected,
+        &mut BTreeSet::new(),
+    ) {
+        return Err(schematic_contract(format!(
+            "waterfall intake cannot fit its bounded 9/7/5/3 taper without reclaiming the existing spine or protected terrain: core={core:?}, candidates={:?}",
+            candidates.iter().map(Vec::len).collect::<Vec<_>>(),
+        )));
+    }
+    validate_waterfall_intake_rows(watercourse_rows, plunge_lip_index, &selected)?;
+    if selected.first().is_none_or(|row| {
+        row.iter()
+            .any(|position| !semantic_mountain_lake.contains(&position.coord))
+    }) {
+        return Err(schematic_contract(
+            "waterfall intake source escaped its mountain lake",
+        ));
+    }
+    Ok(selected)
+}
+
+fn validate_waterfall_intake_rows(
+    core_rows: &[BTreeSet<TilePos>],
+    plunge_lip_index: usize,
+    intake_rows: &[BTreeSet<TilePos>],
+) -> Result<(), V3GenerationError> {
+    let start = waterfall_intake_start(plunge_lip_index)?;
+    let core_coords = watercourse_coords(core_rows);
+    let mut added_coords = BTreeSet::new();
+    if intake_rows.len() != WATERFALL_INTAKE_WIDTHS.len() {
+        return Err(schematic_contract(
+            "waterfall intake lost its four exact sections",
+        ));
+    }
+    for (offset, (row, width)) in intake_rows.iter().zip(WATERFALL_INTAKE_WIDTHS).enumerate() {
+        let core = core_rows
+            .get(start.saturating_add(offset))
+            .ok_or_else(|| schematic_contract("waterfall intake has no original core row"))?;
+        let center = waterfall_three_lane_center(core)?;
+        if row.len() != width || !core.is_subset(row) {
+            return Err(schematic_contract(
+                "waterfall intake changed its core or taper width",
+            ));
+        }
+        for position in row.difference(core) {
+            if position.level != center.level
+                || core_coords.contains(&position.coord)
+                || !added_coords.insert(position.coord)
+                || center.coord.distance(position.coord)
+                    > u32::try_from(width / 2).unwrap_or(u32::MAX)
+            {
+                return Err(schematic_contract(format!(
+                    "waterfall intake has a conflicting or out-of-bounds side claim at {position:?}"
+                )));
+            }
+        }
+    }
+    let source = intake_rows.first().and_then(|row| row.first());
+    let next = core_rows
+        .get(start.saturating_add(1))
+        .map(waterfall_three_lane_center)
+        .transpose()?;
+    if source.is_none_or(|position| position.level != 150)
+        || intake_rows
+            .first()
+            .is_none_or(|row| row.iter().any(|position| position.level != 150))
+        || next.is_none_or(|position| position.level >= 150)
+        || !waterfall_intake_has_downstream_paths(intake_rows)
+    {
+        return Err(schematic_contract(
+            "waterfall intake must descend from the lake into its unchanged three-wide handoff",
+        ));
+    }
+    Ok(())
+}
+
+fn watercourse_with_intake(
+    core_rows: &[BTreeSet<TilePos>],
+    plunge_lip_index: usize,
+    intake_rows: &[BTreeSet<TilePos>],
+) -> Result<Vec<BTreeSet<TilePos>>, V3GenerationError> {
+    validate_waterfall_intake_rows(core_rows, plunge_lip_index, intake_rows)?;
+    let start = waterfall_intake_start(plunge_lip_index)?;
+    let mut rows = core_rows.to_vec();
+    for (offset, intake) in intake_rows.iter().enumerate() {
+        let row = rows.get_mut(start.saturating_add(offset)).ok_or_else(|| {
+            schematic_contract("waterfall intake replacement escaped its original rows")
+        })?;
+        *row = intake.clone();
+    }
+    Ok(rows)
+}
+
+fn validate_waterfall_intake_flow(
+    rows: &[BTreeSet<TilePos>],
+    nodes: &BTreeMap<TilePos, LiquidNode>,
+) -> Result<(), V3GenerationError> {
+    let source = rows
+        .first()
+        .ok_or_else(|| schematic_contract("waterfall intake has no source"))?;
+    let handoff = rows
+        .last()
+        .ok_or_else(|| schematic_contract("waterfall intake has no handoff"))?;
+    let positions = rows.iter().flatten().copied().collect::<BTreeSet<_>>();
+    for start in &positions {
+        let mut cursor = *start;
+        let mut seen = BTreeSet::new();
+        while !handoff.contains(&cursor) {
+            if !seen.insert(cursor) {
+                return Err(schematic_contract(
+                    "waterfall intake contains a directed cycle",
+                ));
+            }
+            let node = nodes.get(&cursor).ok_or_else(|| {
+                schematic_contract(format!(
+                    "waterfall intake lost its liquid node at {cursor:?}"
+                ))
+            })?;
+            let Some(next) = node.downstream else {
+                return Err(schematic_contract(format!(
+                    "waterfall intake has stagnant water at {cursor:?}"
+                )));
+            };
+            if node.state == LiquidFlowState::Still
+                || !positions.contains(&next)
+                || cursor.coord.distance(next.coord) != 1
+                || next.level > cursor.level
+            {
+                return Err(schematic_contract(format!(
+                    "waterfall intake leaves its descending fan at {cursor:?} -> {next:?}"
+                )));
+            }
+            cursor = next;
+        }
+    }
+    let descending_sources = source
+        .iter()
+        .filter(|position| {
+            nodes.get(position).is_some_and(|node| {
+                matches!(node.state, LiquidFlowState::Rapid | LiquidFlowState::Fall)
+                    && node
+                        .downstream
+                        .is_some_and(|next| next.level < position.level)
+            })
+        })
+        .count();
+    if descending_sources <= 3 {
+        return Err(schematic_contract(format!(
+            "waterfall intake widened its lake surface without widening real downhill flow: {descending_sources} descending source cells"
+        )));
+    }
+    Ok(())
+}
+
 fn compile_authoritative_hydrology(
     plan: &SchematicPlanV1,
     profile: V3GrandV3BasicTerrainProfile,
@@ -4408,9 +5048,36 @@ fn compile_authoritative_hydrology(
         watercourse_rows,
     } = authoritative_hydrology_centerlines(plan, profile, seed, layout)?;
 
+    let semantic_mountain_lake =
+        semantic_overlay_coords(plan, layout, SchematicFeature::MountainLake);
+    let mut protected_intake = immutable_peak_summit_levels
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    protected_intake.extend(volume.columns.iter().filter_map(|(coord, column)| {
+        (volume.surfaces_at_coord(*coord).count() != 1
+            || volume
+                .top_surface_at_coord(*coord)
+                .is_none_or(|(_, metadata)| metadata.interior.is_some())
+            || column.elements.iter().any(|element| match element {
+                VolumeElement::Solid(mass) => {
+                    mass.cutaway_for.is_some() || mass.material == SolidMaterialRole::WorkedStone
+                }
+                VolumeElement::Fill(fill) => fill.material != FillMaterialRole::Water,
+            }))
+        .then_some(*coord)
+    }));
+    let intake_rows = resolve_waterfall_intake_rows(
+        &watercourse_rows,
+        waterfall_lip_index,
+        &layout.footprint,
+        &semantic_mountain_lake,
+        &protected_intake,
+    )?;
+    let flow_rows = watercourse_with_intake(&watercourse_rows, waterfall_lip_index, &intake_rows)?;
     let mut authored_water = BTreeMap::<HexCoord, (Level, Level, SolidMaterialRole)>::new();
     let mut claim_indices = BTreeMap::<HexCoord, Vec<usize>>::new();
-    for (index, row) in watercourse_rows.iter().enumerate() {
+    for (index, row) in flow_rows.iter().enumerate() {
         let falling = index.saturating_add(1) < waterfall_centerline.len();
         let next_level = watercourse_rows
             .get(index.saturating_add(1))
@@ -4420,6 +5087,17 @@ fn compile_authoritative_hydrology(
                 |next| next.level,
             );
         for position in row {
+            let next_level = if watercourse_rows
+                .get(index)
+                .is_some_and(|core| core.contains(position))
+            {
+                next_level
+            } else {
+                flow_rows
+                    .get(index.saturating_add(1))
+                    .and_then(|next| next.iter().map(|water| water.level).min())
+                    .unwrap_or(next_level)
+            };
             let bed = if falling {
                 position.level.saturating_sub(1).min(next_level)
             } else {
@@ -4492,8 +5170,6 @@ fn compile_authoritative_hydrology(
     // begin inside the mountain and open into an asymmetric receiving basin,
     // so the dominant curtain is recessed instead of projecting from one
     // straight outer lip.
-    let semantic_mountain_lake =
-        semantic_overlay_coords(plan, layout, SchematicFeature::MountainLake);
     let semantic_valley_lake = semantic_overlay_coords(plan, layout, SchematicFeature::ValleyLake);
     let (
         cascade_rows,
@@ -4505,6 +5181,7 @@ fn compile_authoritative_hydrology(
     ) = sculpt_recessed_waterfall_gorge(
         &watercourse_rows,
         waterfall_lip_index,
+        &intake_rows,
         &semantic_mountain_lake,
         &semantic_valley_lake,
         profile.mountain_lake_level,
@@ -4643,7 +5320,8 @@ fn compile_authoritative_hydrology(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    apply_directed_watercourse(&watercourse_rows, &outlet_authority, &fill_runs, &mut nodes)?;
+    apply_directed_watercourse(&flow_rows, &outlet_authority, &fill_runs, &mut nodes)?;
+    validate_waterfall_intake_flow(&intake_rows, &nodes)?;
     let outlet = exact_three_lane_outlet(&nodes, &outlet_authority)?;
     let liquids = liquid_components_with_flow(nodes);
 
@@ -4720,7 +5398,10 @@ fn authoritative_hydrology_centerlines(
         .iter()
         .position(|coord| {
             semantic_sea.contains(coord)
-                || coord.neighbors().iter().any(|neighbor| semantic_sea.contains(neighbor))
+                || coord
+                    .neighbors()
+                    .iter()
+                    .any(|neighbor| semantic_sea.contains(neighbor))
         })
         .ok_or_else(|| schematic_contract("river never reaches the semantic sea"))?;
     let mut river_levels = descending_levels(
@@ -7659,12 +8340,14 @@ fn waterfall_lake_aprons(
     Ok(WaterfallLakeAprons {
         mountain_lake,
         valley_lake,
+        intake_rows: Vec::new(),
     })
 }
 
 fn sculpt_recessed_waterfall_gorge(
     watercourse_rows: &[BTreeSet<TilePos>],
     plunge_lip_index: usize,
+    intake_rows: &[BTreeSet<TilePos>],
     semantic_mountain_lake: &BTreeSet<HexCoord>,
     semantic_valley_lake: &BTreeSet<HexCoord>,
     mountain_lake_level: Level,
@@ -7693,7 +8376,7 @@ fn sculpt_recessed_waterfall_gorge(
     // must still become a dry gorge. Preserve the two semantic lakes and only
     // a compact local fan at each cascade endpoint; the directed watercourse
     // itself remains exactly three lanes.
-    let lake_aprons = waterfall_lake_aprons(
+    let mut lake_aprons = waterfall_lake_aprons(
         volume,
         &cascade_rows,
         semantic_mountain_lake,
@@ -7701,6 +8384,13 @@ fn sculpt_recessed_waterfall_gorge(
         mountain_lake_level,
         valley_lake_level,
     )?;
+    if !intake_rows.is_empty() {
+        validate_waterfall_intake_rows(watercourse_rows, plunge_lip_index, intake_rows)?;
+        if let Some(source) = intake_rows.first() {
+            lake_aprons.mountain_lake.extend(source.iter().copied());
+        }
+        lake_aprons.intake_rows = intake_rows.to_vec();
+    }
     let mut water_coords = watercourse_coords(watercourse_rows);
     water_coords.extend(lake_aprons.coords());
     let mut gorge_coords = waterfall_gorge_footprint(&volume.mask, &cascade_rows, &water_coords)?;
@@ -8491,6 +9181,7 @@ fn validate_waterfall_cliff_interface(
         .mountain_lake
         .iter()
         .chain(&authority.lake_aprons.valley_lake)
+        .chain(authority.lake_aprons.intake_rows.iter().flatten())
         .find(|position| actual_fills.get(position).is_none())
     {
         return Err(schematic_contract(format!(
@@ -9539,12 +10230,19 @@ fn waterfall_open_water_bank_edges(
             "waterfall source and receiving semantic lake masks overlap",
         ));
     }
-    let eligible_open_water = waterfall_open_water_sources(
+    let mut eligible_open_water = waterfall_open_water_sources(
         &water_levels,
         cascade_rows,
         semantic_mountain_lake,
         semantic_valley_lake,
         valley_lake_level,
+    );
+    eligible_open_water.extend(
+        lake_aprons
+            .intake_rows
+            .iter()
+            .flatten()
+            .map(|position| position.coord),
     );
     let edges = clearance_floors
         .iter()
@@ -10602,12 +11300,12 @@ fn validate_grand_hydrology(
             }
         }
     }
-    let course = hydrology
-        .watercourse_rows
-        .iter()
-        .flatten()
-        .copied()
-        .collect::<BTreeSet<_>>();
+    let flow_rows = watercourse_with_intake(
+        &hydrology.watercourse_rows,
+        hydrology.waterfall_lip_index,
+        &hydrology.waterfall_cliff.lake_aprons.intake_rows,
+    )?;
+    let course = flow_rows.iter().flatten().copied().collect::<BTreeSet<_>>();
     let body_ids = course
         .iter()
         .filter_map(|position| node_owners.get(position).map(|(body, _)| *body))
@@ -10638,8 +11336,7 @@ fn validate_grand_hydrology(
         .watercourse_rows
         .last()
         .ok_or_else(|| schematic_contract("authoritative hydrology has no sea sink row"))?;
-    let ranks = hydrology
-        .watercourse_rows
+    let ranks = flow_rows
         .iter()
         .enumerate()
         .flat_map(|(index, row)| row.iter().map(move |position| (position.coord, index)))
@@ -10703,6 +11400,10 @@ fn validate_grand_hydrology(
         .iter()
         .map(|(position, (_, node))| (*position, *node))
         .collect::<BTreeMap<_, _>>();
+    validate_waterfall_intake_flow(
+        &hydrology.waterfall_cliff.lake_aprons.intake_rows,
+        &liquid_nodes,
+    )?;
     let semantic_sea = semantic_sea_coords(plan, &world.layout);
     let outlet_authority = exact_outlet_authority(
         &hydrology.river_centerline,
@@ -10890,6 +11591,250 @@ fn solid_material_at(volume: &VolumePlan, voxel: TilePos) -> Option<SolidMateria
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TunnelCarveProfile {
+    clearance_top: Level,
+    gothic: bool,
+}
+
+impl TunnelCarveProfile {
+    fn roof_top(self) -> Level {
+        self.clearance_top.saturating_add(3)
+    }
+}
+
+#[derive(Debug)]
+struct TunnelInteriorCarve {
+    columns: BTreeMap<HexCoord, TunnelCarveProfile>,
+    /// Actual transverse sections, unlike the old longitudinal ring windows.
+    sections: Vec<BTreeSet<HexCoord>>,
+}
+
+/// Adds two lateral cells on each side of the four-wide walking corridor.
+/// The old radius-33 windows slide along the direction of travel, so their
+/// union is only one cell thick. A transverse section fixes that pinch first.
+/// Beside the immutable Crystal shell, the section slides outward just far
+/// enough to fit; its inner edge retains the old connected walking spine.
+fn tunnel_transverse_section(
+    center: HexCoord,
+    direction: usize,
+    offsets: [i32; 4],
+    extra: i32,
+    crystal_mask: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+) -> Result<BTreeSet<HexCoord>, V3GenerationError> {
+    let minimum = offsets
+        .into_iter()
+        .min()
+        .unwrap_or_default()
+        .saturating_sub(extra);
+    let maximum = offsets
+        .into_iter()
+        .max()
+        .unwrap_or_default()
+        .saturating_add(extra);
+    let lateral = (direction + 2) % 6;
+    // An eight-wide row needs at most seven cells of lateral displacement.
+    // Enumerating both signs preserves either authored even-width bias.
+    for displacement in 0_i32..=7 {
+        for sign in [1_i32, -1] {
+            let shift = displacement.saturating_mul(sign);
+            let row = (minimum..=maximum)
+                .map(|offset| step_in_direction(center, lateral, offset.saturating_add(shift)))
+                .collect::<BTreeSet<_>>();
+            if row.contains(&center)
+                && row
+                    .iter()
+                    .all(|coord| footprint.contains(coord) && !crystal_mask.contains(coord))
+            {
+                return Ok(row);
+            }
+        }
+    }
+    Err(schematic_contract(format!(
+        "tunnel cannot fit its {}-wide transverse section beside Crystal at {center:?}",
+        maximum.saturating_sub(minimum).saturating_add(1)
+    )))
+}
+
+fn plan_tunnel_interior_carve(
+    lane: &ResolvedTunnelLane,
+    crystal_mask: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+    approach_footprint: &BTreeSet<HexCoord>,
+    gothic_rows: usize,
+) -> Result<TunnelInteriorCarve, V3GenerationError> {
+    if lane.rows.len() != lane.centerline.len() || lane.rows.len() < 4 {
+        return Err(schematic_contract("tunnel carve has malformed source rows"));
+    }
+    let terminal = lane.rows.first().cloned().unwrap_or_default();
+    let foot = lane.rows.last().cloned().unwrap_or_default();
+    let joins = terminal.union(&foot).copied().collect::<BTreeSet<_>>();
+    let original = lane.rows.iter().flatten().copied().collect::<BTreeSet<_>>();
+    let crystal_center = exact_hex_disk_center(crystal_mask, CRYSTAL_CONNECTOR_SITE_RADIUS);
+    let mut columns = BTreeMap::<HexCoord, TunnelCarveProfile>::new();
+    let mut sections = Vec::new();
+    for (index, center) in lane.centerline.iter().copied().enumerate().skip(1) {
+        let remaining = lane
+            .centerline
+            .len()
+            .saturating_sub(index.saturating_add(1));
+        let extra = index
+            .saturating_sub(1)
+            .min(remaining.saturating_sub(1))
+            .min(2);
+        let source_row = lane
+            .rows
+            .get(index)
+            .ok_or_else(|| schematic_contract("tunnel carve lost an exact source row"))?;
+        let mut occupied = source_row.clone();
+        // The exterior foot and its preceding row retain the original four
+        // lanes. Elsewhere sweep both tangents at a turn, filling the corner
+        // rather than accepting two broad rows joined by one narrow cell.
+        if remaining > 1 {
+            let mut directions = BTreeSet::from([forward_path_direction(&lane.centerline, index)]);
+            if index > 1 {
+                directions.insert(forward_path_direction(&lane.centerline, index - 1));
+            }
+            // Two transverse segments can meet through only one or two
+            // columns at a convex ring corner. Fill its outer fan as part of
+            // the same carve mask: the annular limit keeps the physical band
+            // four/six/eight deep instead of making a wider room at the bend.
+            if let Some(site_center) = crystal_center.filter(|site_center| {
+                directions.len() > 1
+                    && site_center.distance(center) == CRYSTAL_CONNECTOR_RING_RADIUS
+            }) {
+                let width = u32::try_from(TUNNEL_LANE_WIDTH + extra * 2).unwrap_or(8);
+                let outer_radius = CRYSTAL_CONNECTOR_SITE_RADIUS.saturating_add(width);
+                let fan = center
+                    .within_radius(width.saturating_sub(1))
+                    .into_iter()
+                    .filter(|coord| {
+                        let radius = site_center.distance(*coord);
+                        (CRYSTAL_CONNECTOR_RING_RADIUS..=outer_radius).contains(&radius)
+                    })
+                    .collect::<BTreeSet<_>>();
+                if !fan.is_subset(footprint) {
+                    return Err(schematic_contract(format!(
+                        "tunnel corner fan at {center:?} leaves its owned footprint"
+                    )));
+                }
+                occupied.extend(fan);
+            }
+            for direction in directions {
+                let section = tunnel_transverse_section(
+                    center,
+                    direction,
+                    lane.lane_offsets,
+                    i32::try_from(extra).unwrap_or(2),
+                    crystal_mask,
+                    footprint,
+                )?;
+                occupied.extend(section.iter().copied());
+                sections.push(section);
+            }
+        } else {
+            sections.push(source_row.clone());
+        }
+        for coord in occupied {
+            if crystal_mask.contains(&coord)
+                || (!original.contains(&coord) && approach_footprint.contains(&coord))
+            {
+                return Err(schematic_contract(format!(
+                    "expanded tunnel enters its immutable Crystal or exterior join at {coord:?}"
+                )));
+            }
+            let join_distance = joins
+                .iter()
+                .map(|join| join.distance(coord))
+                .min()
+                .unwrap_or(0);
+            let rise = i32::try_from(extra)
+                .unwrap_or(2)
+                .min(i32::try_from(join_distance).unwrap_or(2));
+            let requested = TunnelCarveProfile {
+                clearance_top: 13_i32.saturating_add(rise),
+                gothic: index <= gothic_rows,
+            };
+            columns
+                .entry(coord)
+                .and_modify(|current| {
+                    current.clearance_top = current.clearance_top.max(requested.clearance_top);
+                    current.gothic |= requested.gothic;
+                })
+                .or_insert(requested);
+        }
+    }
+    // Shared rows must not raise a join's roof through a neighboring request.
+    for coord in &foot {
+        if let Some(profile) = columns.get_mut(coord) {
+            profile.clearance_top = 13;
+        }
+    }
+    Ok(TunnelInteriorCarve { columns, sections })
+}
+
+/// The initial phase must retain the accepted sliding-window footprint,
+/// including its original pinch, until all surface routes have been planned.
+fn plan_original_tunnel_carve(
+    lane: &ResolvedTunnelLane,
+    gothic_rows: usize,
+) -> TunnelInteriorCarve {
+    let mut columns = BTreeMap::<HexCoord, TunnelCarveProfile>::new();
+    for (index, row) in lane.rows.iter().enumerate().skip(1) {
+        for coord in row {
+            columns
+                .entry(*coord)
+                .and_modify(|shape| {
+                    shape.gothic |= index <= gothic_rows;
+                })
+                .or_insert(TunnelCarveProfile {
+                    clearance_top: 13,
+                    gothic: index <= gothic_rows,
+                });
+        }
+    }
+    TunnelInteriorCarve {
+        columns,
+        sections: lane.rows.iter().skip(1).cloned().collect(),
+    }
+}
+
+fn capture_expanded_tunnel_overburden(
+    volume: &VolumePlan,
+    carve: &TunnelInteriorCarve,
+    concealed: &BTreeSet<HexCoord>,
+) -> Result<TunnelOverburdenAuthority, V3GenerationError> {
+    let fill_coords = volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let mut groups = BTreeMap::<Level, BTreeSet<HexCoord>>::new();
+    for (coord, profile) in &carve.columns {
+        if fill_coords.contains(coord) {
+            return Err(schematic_contract(format!(
+                "expanded tunnel would intersect water at {coord:?}"
+            )));
+        }
+        groups.entry(profile.roof_top()).or_default().insert(*coord);
+    }
+    if !concealed.is_empty() {
+        groups
+            .entry(16)
+            .or_default()
+            .extend(concealed.iter().copied());
+    }
+    let mut authority = TunnelOverburdenAuthority {
+        columns: BTreeMap::new(),
+    };
+    for (roof_top, coords) in groups {
+        let captured = capture_tunnel_overburden_authority(volume, &coords, roof_top)?;
+        authority.columns.extend(captured.columns);
+    }
+    Ok(authority)
+}
+
 fn compile_tunnel(
     plan: &SchematicPlanV1,
     profile: V3GrandV3BasicTerrainProfile,
@@ -10902,6 +11847,8 @@ fn compile_tunnel(
     fine_index: &FineWorldIndex,
     volume: &mut VolumePlan,
     biome_regions: &mut BTreeMap<TilePos, hex_core::BiomeRegionId>,
+    phase: TunnelPhase,
+    retained_floors: &BTreeSet<TilePos>,
 ) -> Result<TunnelCompilation, V3GenerationError> {
     const CLEARANCE_TOP: Level = 13;
     const ROOF_TOP: Level = 16;
@@ -11088,96 +12035,80 @@ fn compile_tunnel(
         .flatten()
         .copied()
         .collect::<BTreeSet<_>>();
-    let roofed_overburden_coords = planned_rows
+    let lane = ResolvedTunnelLane {
+        centerline: centerline.clone(),
+        rows: planned_rows.clone(),
+        lane_offsets,
+    };
+    let carve = match phase {
+        TunnelPhase::InitialPlanning => plan_original_tunnel_carve(&lane, GOTHIC_ROWS),
+        TunnelPhase::FinalExpansion => plan_tunnel_interior_carve(
+            &lane,
+            crystal_mask,
+            &layout.footprint,
+            &approach_footprint,
+            GOTHIC_ROWS,
+        )?,
+    };
+    let concealed_coords = approach_rows
         .iter()
         .skip(1)
-        .chain(approach_rows.iter().skip(1).take(concealed_approach_rows))
+        .take(concealed_approach_rows)
         .flatten()
         .copied()
-        .filter(|coord| !crystal_mask.contains(coord))
         .collect::<BTreeSet<_>>();
-    let overburden =
-        capture_tunnel_overburden_authority(volume, &roofed_overburden_coords, ROOF_TOP)?;
-
-    let mut floors = BTreeSet::new();
+    // Validate the complete widened roof before changing a single column.
+    // Capturing each height band also preserves natural strata above its roof.
+    let mut overburden = capture_expanded_tunnel_overburden(volume, &carve, &concealed_coords)?;
+    let mut floors = lower_terminal.clone();
     let mut roofs = BTreeSet::new();
-    let mut route_centerline = Vec::new();
-    // Consecutive four-wide rows intentionally share cells while turning.  A
-    // coordinate touched by any of the twelve authored transition rows must
-    // therefore remain Gothic even if a later rough-hewn row visits the same
-    // cell at the bend.
-    let gothic_coords = planned_rows
+    let mut route_centerline = centerline
         .iter()
-        .enumerate()
-        .filter(|(index, _)| *index > 0 && *index <= GOTHIC_ROWS)
-        .flat_map(|(_, row)| row.iter().copied())
-        .collect::<BTreeSet<_>>();
-    for (index, center) in centerline.iter().copied().enumerate() {
-        // Row zero is the exact authored Crystal terminal. The next twelve
-        // outside rows are the Gothic transition; every remaining roofed row
-        // stays rough-hewn stone.
-        let row = planned_rows[index].clone();
-        for coord in row {
-            let biome = fine_index.biome(coord).ok_or_else(|| {
-                schematic_contract(format!("tunnel lane {coord:?} has no biome owner"))
+        .copied()
+        .map(|coord| TilePos::new(coord, profile.crystal_base_level))
+        .collect::<Vec<_>>();
+    for (coord, shape) in &carve.columns {
+        let biome = fine_index.biome(*coord).ok_or_else(|| {
+            schematic_contract(format!("expanded tunnel lane {coord:?} has no biome owner"))
+        })?;
+        let (top_surface, top_metadata) = volume
+            .top_surface_at_coord(*coord)
+            .ok_or_else(|| schematic_contract("expanded tunnel column has no surface"))?;
+        let existing_column =
+            volume.columns.get(coord).cloned().ok_or_else(|| {
+                schematic_contract("expanded tunnel column disappeared before carve")
             })?;
-            if crystal_mask.contains(&coord) {
-                let floor = TilePos::new(coord, profile.crystal_base_level);
-                if volume
-                    .surfaces
-                    .get(&floor)
-                    .is_none_or(|metadata| metadata.access != SurfaceAccess::Ordinary)
-                {
-                    return Err(schematic_contract(format!(
-                        "exact Crystal connector is missing ordinary floor {floor:?}"
-                    )));
-                }
-                floors.insert(floor);
-                continue;
-            }
-            let (top_surface, top_metadata) = volume
-                .top_surface_at_coord(coord)
-                .ok_or_else(|| schematic_contract("tunnel column has no surface"))?;
-            let existing_column = volume
-                .columns
-                .get(&coord)
-                .cloned()
-                .ok_or_else(|| schematic_contract("tunnel column disappeared before carve"))?;
-            let preserved_surface_level = top_surface.level;
-            let column = tunnel_column(
-                &existing_column,
-                preserved_surface_level,
-                profile.crystal_base_level,
-                CLEARANCE_TOP,
-                ROOF_TOP,
-                gothic_coords.contains(&coord),
-                interior_id,
-            );
-            remove_column_surfaces(volume, biome_regions, coord);
-            volume.columns.insert(coord, column);
-            let floor = TilePos::new(coord, profile.crystal_base_level);
-            volume.surfaces.insert(
-                floor,
-                SurfaceMetadata {
-                    access: SurfaceAccess::Ordinary,
-                    interior: Some(interior_id),
-                },
-            );
-            biome_regions.insert(floor, biome);
-            floors.insert(floor);
-            let preserved_surface = TilePos::new(coord, preserved_surface_level);
-            volume.surfaces.insert(preserved_surface, top_metadata);
-            biome_regions.insert(preserved_surface, biome);
-            for level in CLEARANCE_TOP..ROOF_TOP {
-                roofs.insert(TilePos::new(coord, level));
-            }
-        }
-        route_centerline.push(TilePos::new(center, profile.crystal_base_level));
+        let column = tunnel_column(
+            &existing_column,
+            top_surface.level,
+            profile.crystal_base_level,
+            shape.clearance_top,
+            shape.roof_top(),
+            shape.gothic,
+            interior_id,
+        );
+        remove_column_surfaces(volume, biome_regions, *coord);
+        volume.columns.insert(*coord, column);
+        let floor = TilePos::new(*coord, profile.crystal_base_level);
+        volume.surfaces.insert(
+            floor,
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: Some(interior_id),
+            },
+        );
+        biome_regions.insert(floor, biome);
+        floors.insert(floor);
+        volume.surfaces.insert(top_surface, top_metadata);
+        biome_regions.insert(top_surface, biome);
+        roofs.extend(
+            (shape.clearance_top..shape.roof_top()).map(|level| TilePos::new(*coord, level)),
+        );
     }
 
     // Nonblocking cave-crystal fixtures occupy small carved side alcoves. Their
     // paired gameplay sources are spaced from the ordered centerline so every
-    // four-wide floor remains within Dim-18 while the visible object belongs to
+    // widened floor remains within Dim-18 while the visible object belongs to
     // the Bright-4 member only.
     let lit_centerline = centerline
         .iter()
@@ -11205,6 +12136,7 @@ fn compile_tunnel(
         .iter()
         .copied()
         .map(|coord| TilePos::new(coord, profile.crystal_base_level))
+        .chain(retained_floors.iter().copied())
         .collect::<BTreeSet<_>>();
     let required_lit_centerline = lit_centerline
         .iter()
@@ -11232,7 +12164,11 @@ fn compile_tunnel(
         search.into_iter().find_map(|center_index| {
             let center = *search_centerline.get(center_index)?;
             let mut candidates = center
-                .within_radius(4)
+                .within_radius(if phase == TunnelPhase::InitialPlanning {
+                    4
+                } else {
+                    10
+                })
                 .into_iter()
                 .filter(|candidate| {
                     !adjacent_route_coords.contains(candidate)
@@ -11243,10 +12179,14 @@ fn compile_tunnel(
                         && must_cover.is_none_or(|floor| {
                             candidate.distance(floor) <= TUNNEL_DIM_LIGHT_RADIUS
                         })
-                        && candidate
-                            .neighbors()
-                            .into_iter()
-                            .any(|neighbor| adjacent_route_coords.contains(&neighbor))
+                        && if phase == TunnelPhase::InitialPlanning {
+                            candidate
+                                .neighbors()
+                                .into_iter()
+                                .any(|neighbor| adjacent_route_coords.contains(&neighbor))
+                        } else {
+                            tunnel_crystal_footprint_is_recessed(*candidate, adjacent_route_coords)
+                        }
                         && tunnel_alcove_candidate_has_complete_roof_support(
                             *candidate,
                             adjacent_route_coords,
@@ -11337,8 +12277,24 @@ fn compile_tunnel(
         alcove_origins.push(TilePos::new(origin, profile.crystal_base_level));
     }
 
+    let alcove_coords = alcove_origins
+        .iter()
+        .flat_map(|origin| origin.coord.within_radius(1))
+        .collect::<BTreeSet<_>>();
+    if phase == TunnelPhase::FinalExpansion
+        && !alcove_coords.is_disjoint(&required_interior_route_coords)
+    {
+        return Err(schematic_contract(
+            "a complete crystal footprint enters the enlarged tunnel",
+        ));
+    }
+    if phase == TunnelPhase::FinalExpansion && !alcove_coords.is_empty() {
+        let alcove_overburden =
+            capture_tunnel_overburden_authority(volume, &alcove_coords, ROOF_TOP)?;
+        overburden.columns.extend(alcove_overburden.columns);
+    }
     for origin in alcove_origins.iter().map(|position| position.coord) {
-        // The side chamber may touch the four-wide ribbon, but it must never
+        // The side chamber may touch the widened ribbon, but it must never
         // recarve a route column: doing so would erase Gothic materials (and,
         // at tall rows, the authored clearance/roof profile) as the alcove's
         // rough-stone column replaces it.
@@ -11531,7 +12487,12 @@ fn compile_tunnel(
         ));
     }
 
-    validate_tunnel_alcove_geometry(
+    let validate_alcoves = if phase == TunnelPhase::InitialPlanning {
+        validate_tunnel_alcove_voxels
+    } else {
+        validate_tunnel_alcove_geometry
+    };
+    validate_alcoves(
         &alcove_origins,
         &required_interior_route_coords,
         volume,
@@ -11541,6 +12502,7 @@ fn compile_tunnel(
         ROOF_TOP,
     )?;
 
+    floors.extend(retained_floors.iter().copied());
     if let Some((uncovered, nearest)) =
         first_uncovered_tunnel_floor(&floors, crystal_mask, &alcove_origins)
     {
@@ -11571,16 +12533,24 @@ fn compile_tunnel(
     let mouth_anchor = mouth_anchor.ok_or_else(|| {
         schematic_contract("concealed tunnel approach omitted its first exterior mouth surface")
     })?;
-    validate_compiled_tunnel_geometry(
-        volume,
-        interior_id,
-        profile.crystal_base_level,
-        crystal_mask,
-        &planned_rows,
-        GOTHIC_ROWS,
-        CLEARANCE_TOP,
-        ROOF_TOP,
-    )?;
+    validate_compiled_tunnel_geometry(volume, interior_id, profile.crystal_base_level, &carve)?;
+    let geometry = (phase == TunnelPhase::FinalExpansion).then_some(TunnelGeometryAuthority {
+        carve,
+        alcoves: alcove_origins,
+        route_coords: required_interior_route_coords,
+        lights: lights.clone(),
+        interior: interior_id,
+        floor: profile.crystal_base_level,
+        alcove_clearance: CLEARANCE_TOP,
+        alcove_roof: ROOF_TOP,
+        retained_floors: retained_floors
+            .iter()
+            .copied()
+            .filter(|floor| !crystal_mask.contains(&floor.coord))
+            .collect(),
+        retained_roofs: BTreeSet::new(),
+        removed_light_ids: BTreeSet::new(),
+    });
     Ok(TunnelCompilation {
         route: ProtectedFeatureRoute {
             centerline: route_centerline,
@@ -11599,7 +12569,155 @@ fn compile_tunnel(
             ("grand_v3.ascent_threshold".to_owned(), ascent_target),
         ]),
         overburden,
+        geometry,
     })
+}
+
+/// Publishes one completed underground expansion after terrain construction.
+/// Empty original niches remain valid footing for already-authored hub routes.
+fn publish_expanded_tunnel(
+    world: &mut GeneratedWorldPlan,
+    graph: &mut OrdinaryGraph,
+    planning: &TunnelPlanningPublication,
+    expanded: TunnelCompilation,
+) -> Result<(TunnelOverburdenAuthority, TunnelGeometryAuthority), V3GenerationError> {
+    let TunnelCompilation {
+        mut route,
+        interior,
+        lights,
+        anchors,
+        mut overburden,
+        geometry,
+    } = expanded;
+    let mut geometry = geometry.ok_or_else(|| {
+        schematic_contract("only the final tunnel expansion may publish geometry authority")
+    })?;
+    if route.centerline != planning.route.centerline
+        || interior.entrances != planning.interior.entrances
+        || anchors
+            .iter()
+            .any(|(name, position)| world.anchors.get(name) != Some(position))
+    {
+        return Err(schematic_contract(
+            "late tunnel expansion moved an existing route or entrance",
+        ));
+    }
+    if lights
+        .keys()
+        .any(|id| !planning.light_ids.contains(id) && world.lights.contains_key(id))
+    {
+        return Err(schematic_contract(
+            "late tunnel lights collide with another authored source",
+        ));
+    }
+    // The original roof may rise by two levels. Only that exact interval is
+    // released; every earlier natural stratum above the final roof stays exact.
+    for (coord, original) in &planning.overburden.columns {
+        let roof_top = geometry
+            .carve
+            .columns
+            .get(coord)
+            .map_or(16, |shape| shape.roof_top());
+        if world
+            .volume
+            .top_surface_at_coord(*coord)
+            .map(|(surface, _)| surface)
+            != Some(original.surface)
+        {
+            return Err(schematic_contract(format!(
+                "late tunnel moved original overburden cap at {coord:?}"
+            )));
+        }
+        let column = world
+            .volume
+            .columns
+            .get(coord)
+            .ok_or_else(|| schematic_contract("late tunnel lost original overburden"))?;
+        for (level, expected) in original.voxels.range(roof_top..) {
+            if solid_mass_at_level(column, *level).is_none_or(|mass| {
+                mass.material != expected.material || mass.cutaway_for != expected.cutaway_for
+            }) {
+                return Err(schematic_contract(format!(
+                    "late tunnel changed preserved natural stratum at {coord:?}@{level}"
+                )));
+            }
+        }
+        if !overburden.columns.contains_key(coord) {
+            let mut retained = original.clone();
+            retained.voxels.retain(|level, _| *level >= roof_top);
+            overburden.columns.insert(*coord, retained);
+        }
+    }
+    let replaced_roof_coords = interior
+        .roof_voxels
+        .iter()
+        .map(|roof| roof.coord)
+        .chain(geometry.carve.columns.keys().copied())
+        .collect::<BTreeSet<_>>();
+    geometry.retained_roofs = planning
+        .interior
+        .roof_voxels
+        .iter()
+        .copied()
+        .filter(|roof| !replaced_roof_coords.contains(&roof.coord))
+        .collect();
+    let retained_overburden_coords = geometry
+        .retained_roofs
+        .iter()
+        .map(|roof| roof.coord)
+        .filter(|coord| !overburden.columns.contains_key(coord))
+        .collect::<BTreeSet<_>>();
+    if !retained_overburden_coords.is_empty() {
+        overburden.columns.extend(
+            capture_tunnel_overburden_authority(&world.volume, &retained_overburden_coords, 16)?
+                .columns,
+        );
+    }
+    let unified = world
+        .interiors
+        .by_id
+        .get_mut(&geometry.interior)
+        .ok_or_else(|| schematic_contract("late tunnel lost the unified Crystal interior"))?;
+    unified
+        .roof_voxels
+        .retain(|roof| !replaced_roof_coords.contains(&roof.coord));
+    unified.roof_voxels.extend(interior.roof_voxels);
+    unified.floors.extend(interior.floors);
+    unified
+        .floors
+        .extend(planning.interior.floors.iter().copied());
+    route
+        .surfaces
+        .extend(planning.route.surfaces.iter().copied());
+    let changed_coords = route
+        .surfaces
+        .iter()
+        .map(|surface| surface.coord)
+        .chain(replaced_roof_coords)
+        .collect::<BTreeSet<_>>();
+    world
+        .features
+        .protected_routes
+        .get_mut("grand_v3.crystal_route")
+        .ok_or_else(|| schematic_contract("late tunnel lost the composite Crystal route"))?
+        .surfaces
+        .extend(route.surfaces.iter().copied());
+    world
+        .features
+        .protected_routes
+        .insert("grand_v3.tunnel".to_owned(), route);
+    geometry.removed_light_ids = planning
+        .light_ids
+        .difference(&lights.keys().copied().collect())
+        .copied()
+        .collect();
+    for id in &planning.light_ids {
+        world.lights.remove(id);
+    }
+    world.lights.extend(lights);
+    let _affected = graph.refresh_coords(&world.volume, Some(&world.blockers), changed_coords);
+    geometry.validate(world)?;
+    Ok((overburden, geometry))
 }
 
 /// Resolves the canonical foot-to-summit route as one exact walker path.
@@ -12201,106 +13319,69 @@ fn tunnel_approach_lane_offsets(lane_offsets: [i32; 4]) -> Vec<i32> {
     lane_offsets.into_iter().collect()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the tunnel validator compares exact volume, interior, route, material, and clearance authorities"
-)]
 fn validate_compiled_tunnel_geometry(
     volume: &VolumePlan,
     interior_id: InteriorRegionId,
     floor_level: Level,
-    crystal_mask: &BTreeSet<HexCoord>,
-    rows: &[BTreeSet<HexCoord>],
-    gothic_rows: usize,
-    clearance_top: Level,
-    roof_top: Level,
+    carve: &TunnelInteriorCarve,
 ) -> Result<(), V3GenerationError> {
-    if rows.is_empty() || rows.iter().any(|row| row.len() != 4) {
+    if carve.sections.is_empty()
+        || carve.sections.iter().any(|row| {
+            ![4, 6, 8].contains(&row.len())
+                || row.iter().any(|coord| !carve.columns.contains_key(coord))
+        })
+    {
         return Err(schematic_contract(
-            "compiled tunnel must retain exactly four lanes in every roofed row",
+            "tunnel lost an exact transverse four/six/eight-wide section",
         ));
     }
-    let gothic_coords = rows
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| *index > 0 && *index <= gothic_rows)
-        .flat_map(|(_, row)| row.iter().copied())
-        .collect::<BTreeSet<_>>();
-    let mut outside_rows = 0_usize;
-    let mut gothic_outside_rows = 0_usize;
-    for (index, row) in rows.iter().enumerate() {
-        let authored_terminal = index == 0 && row.iter().all(|coord| crystal_mask.contains(coord));
-        if authored_terminal {
-            continue;
+    for (coord, shape) in &carve.columns {
+        let expected_material = if shape.gothic {
+            SolidMaterialRole::WorkedStone
+        } else {
+            SolidMaterialRole::Stone
+        };
+        let floor = TilePos::new(*coord, floor_level);
+        if volume.surfaces.get(&floor).is_none_or(|metadata| {
+            metadata.access != SurfaceAccess::Ordinary || metadata.interior != Some(interior_id)
+        }) {
+            return Err(schematic_contract(format!(
+                "expanded tunnel floor {floor:?} lost its unified interior footing"
+            )));
         }
-        outside_rows = outside_rows.saturating_add(1);
-        let gothic = index > 0 && index <= gothic_rows;
-        gothic_outside_rows = gothic_outside_rows.saturating_add(usize::from(gothic));
-        for coord in row {
-            let expected_material = if gothic_coords.contains(coord) {
-                SolidMaterialRole::WorkedStone
-            } else {
-                SolidMaterialRole::Stone
+        let column = volume.columns.get(coord).ok_or_else(|| {
+            schematic_contract(format!("expanded tunnel column {coord:?} is missing"))
+        })?;
+        if solid_mass_at_level(column, floor_level)
+            .is_none_or(|mass| mass.material != expected_material)
+            || (floor_level.saturating_add(1)..shape.clearance_top)
+                .any(|level| solid_mass_at_level(column, level).is_some())
+        {
+            return Err(schematic_contract(format!(
+                "expanded tunnel floor or clearance is malformed at {floor:?}"
+            )));
+        }
+        if column.elements.iter().any(|element| {
+            let VolumeElement::Fill(fill) = element else {
+                return false;
             };
-            let floor = TilePos::new(*coord, floor_level);
-            let metadata = volume.surfaces.get(&floor).ok_or_else(|| {
-                schematic_contract(format!("compiled tunnel floor is missing at {floor:?}"))
-            })?;
-            if metadata.access != SurfaceAccess::Ordinary || metadata.interior != Some(interior_id)
-            {
+            fill.levels.bottom < shape.clearance_top
+                && fill.levels.top > floor_level.saturating_add(1)
+        }) {
+            return Err(schematic_contract(format!(
+                "expanded tunnel acquired liquid in its clear passage at {floor:?}"
+            )));
+        }
+        for level in shape.clearance_top..shape.roof_top() {
+            if solid_mass_at_level(column, level).is_none_or(|mass| {
+                mass.material != expected_material || mass.cutaway_for != Some(interior_id)
+            }) {
                 return Err(schematic_contract(format!(
-                    "compiled tunnel floor {floor:?} is not ordinary footing in the unified interior"
+                    "expanded tunnel lacks its three-level roof at {:?}",
+                    TilePos::new(*coord, level)
                 )));
-            }
-            let column = volume.columns.get(coord).ok_or_else(|| {
-                schematic_contract(format!("compiled tunnel column {coord:?} is missing"))
-            })?;
-            let floor_mass = solid_mass_at_level(column, floor_level).ok_or_else(|| {
-                schematic_contract(format!("compiled tunnel floor {floor:?} is unsupported"))
-            })?;
-            if floor_mass.material != expected_material {
-                let row_memberships = rows
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(row_index, candidate)| {
-                        candidate.contains(coord).then_some(row_index)
-                    })
-                    .collect::<Vec<_>>();
-                return Err(schematic_contract(format!(
-                    "compiled tunnel floor {floor:?} has {:?}, expected {expected_material:?}; rows={row_memberships:?}, column={:?}",
-                    floor_mass.material, column.elements
-                )));
-            }
-            for level in floor_level.saturating_add(1)..clearance_top {
-                if solid_mass_at_level(column, level).is_some() {
-                    return Err(schematic_contract(format!(
-                        "compiled tunnel clearance is occupied at {:?}",
-                        TilePos::new(*coord, level)
-                    )));
-                }
-            }
-            for level in clearance_top..roof_top {
-                let roof = solid_mass_at_level(column, level).ok_or_else(|| {
-                    schematic_contract(format!(
-                        "compiled tunnel lacks its three-level roof at {:?}",
-                        TilePos::new(*coord, level)
-                    ))
-                })?;
-                if roof.material != expected_material || roof.cutaway_for != Some(interior_id) {
-                    return Err(schematic_contract(format!(
-                        "compiled tunnel roof {:?} has {:?}/{:?}, expected {expected_material:?}/{interior_id:?}",
-                        TilePos::new(*coord, level),
-                        roof.material,
-                        roof.cutaway_for
-                    )));
-                }
             }
         }
-    }
-    if outside_rows < gothic_rows || gothic_outside_rows != gothic_rows {
-        return Err(schematic_contract(format!(
-            "compiled tunnel requires exactly {gothic_rows} outside Gothic rows, got {gothic_outside_rows} across {outside_rows} outside rows"
-        )));
     }
     Ok(())
 }
@@ -12427,7 +13508,15 @@ fn grade_natural_pass_shoulders(
             coord
                 .neighbors()
                 .into_iter()
-                .filter(|neighbor| shoulder_focus.contains(neighbor))
+                .filter(|neighbor| {
+                    shoulder_focus.contains(neighbor)
+                        && !pass_coords.contains(neighbor)
+                        && !water_coords.contains(neighbor)
+                        && !surface_route_exclusion.contains(neighbor)
+                        && volume
+                            .top_surface_at_coord(*neighbor)
+                            .is_some_and(|(_, metadata)| metadata.interior.is_none())
+                })
                 .filter_map(|neighbor| {
                     volume
                         .top_surface_at_coord(neighbor)
@@ -13068,6 +14157,20 @@ fn project_crystal_mantle_transit_shoulder(
     Ok(projected)
 }
 
+/// All authored cave crystals (including their glow) have radius-one bounds.
+/// Reserving the complete disk makes every kind and rotation safe without
+/// changing their existing nonblocking object contract.
+fn tunnel_crystal_footprint_is_recessed(origin: HexCoord, route: &BTreeSet<HexCoord>) -> bool {
+    let footprint = origin.within_radius(1);
+    footprint.iter().all(|coord| !route.contains(coord))
+        && footprint.iter().any(|coord| {
+            coord
+                .neighbors()
+                .iter()
+                .any(|neighbor| route.contains(neighbor))
+        })
+}
+
 fn tunnel_alcove_candidate_has_complete_roof_support(
     origin: HexCoord,
     protected_route_coords: &BTreeSet<HexCoord>,
@@ -13086,6 +14189,36 @@ fn tunnel_alcove_candidate_has_complete_roof_support(
 }
 
 fn validate_tunnel_alcove_geometry(
+    origins: &[TilePos],
+    protected_route_coords: &BTreeSet<HexCoord>,
+    volume: &VolumePlan,
+    interior_id: InteriorRegionId,
+    floor_level: Level,
+    clearance_top: Level,
+    roof_top: Level,
+) -> Result<(), V3GenerationError> {
+    for origin in origins {
+        if !tunnel_crystal_footprint_is_recessed(origin.coord, protected_route_coords) {
+            return Err(schematic_contract(format!(
+                "crystal at {:?} intrudes into its walking corridor or has no alcove connection",
+                origin.coord
+            )));
+        }
+    }
+    validate_tunnel_alcove_voxels(
+        origins,
+        protected_route_coords,
+        volume,
+        interior_id,
+        floor_level,
+        clearance_top,
+        roof_top,
+    )
+}
+
+/// Original column/roof check, also used by the private planning phase whose
+/// fixtures are replaced before the completed world can be published.
+fn validate_tunnel_alcove_voxels(
     origins: &[TilePos],
     protected_route_coords: &BTreeSet<HexCoord>,
     volume: &VolumePlan,
@@ -13806,6 +14939,20 @@ fn compile_natural_pass(
         fine_index,
         water_coords,
         shoulder_exclusion,
+        shared_terrain_minimums,
+        volume,
+        biome_regions,
+    )?);
+    let approach_protected = shoulder_exclusion
+        .union(&support_coords)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    support_coords.extend(approach_shoulders::grade(
+        &pass_coords,
+        layout,
+        fine_index,
+        water_coords,
+        &approach_protected,
         shared_terrain_minimums,
         volume,
         biome_regions,
@@ -17229,6 +18376,16 @@ fn compile_ordinary_hub_network(
         &mut surface_by_coord,
     )?;
     grand_profile_surface_checkpoint("ordinary / Massif edge blend", &world.volume);
+    grand_profile_massif_checkpoint(
+        "Massif edge blend",
+        &massif_visual.semantic_owner_mask,
+        |coord| {
+            world
+                .volume
+                .top_surface_at_coord(coord)
+                .map(|(surface, _)| surface.level)
+        },
+    );
     for (coord, minimum) in &water_bank_minimums {
         let Some(current) = surface_by_coord.get(coord).copied() else {
             continue;
@@ -17932,6 +19089,16 @@ fn compile_ordinary_hub_network(
         &mut surface_by_coord,
     )?;
     grand_profile_surface_checkpoint("ordinary / Massif internal network", &world.volume);
+    grand_profile_massif_checkpoint(
+        "Massif internal network",
+        &massif_visual.semantic_owner_mask,
+        |coord| {
+            world
+                .volume
+                .top_surface_at_coord(coord)
+                .map(|(surface, _)| surface.level)
+        },
+    );
     massif_route_authority
         .original_surfaces
         .extend(internal_authority.original_surfaces);
@@ -22308,8 +23475,8 @@ fn author_massif_internal_network(
                         .collect::<BTreeMap<_, _>>();
                     if centerline_anchors.len() != component_anchors.len() {
                         return Err(schematic_contract(format!(
-                        "Massif internal component {component_index} centerline fallback omits an exact authored anchor"
-                    )));
+                            "Massif internal component {component_index} centerline fallback omits an exact authored anchor"
+                        )));
                     }
                     let component_levels = massif_internal_level_field_with_shared_bounds(
                         &centerline,
@@ -22381,6 +23548,16 @@ fn author_massif_internal_network(
             authority.changed_taper.insert(*coord);
         }
     }
+    grand_profile_massif_checkpoint(
+        "initial Massif corridor",
+        &massif_visual.semantic_owner_mask,
+        |coord| {
+            world
+                .volume
+                .top_surface_at_coord(coord)
+                .map(|(surface, _)| surface.level)
+        },
+    );
     let outer_taper = massif_visual.outer_taper_band();
     // Publish a bounded scenic field around the internal three-wide contour.
     // The route core remains a one-level walking grade and every scenic cell
@@ -22633,6 +23810,16 @@ fn author_massif_internal_network(
         );
         surface_by_coord.insert(coord, position);
     }
+    grand_profile_massif_checkpoint(
+        "Massif scenic blend",
+        &massif_visual.semantic_owner_mask,
+        |coord| {
+            world
+                .volume
+                .top_surface_at_coord(coord)
+                .map(|(surface, _)| surface.level)
+        },
+    );
     transit_gateways.validate_current(
         "Massif internal feather publication",
         &world.volume,
@@ -25290,7 +26477,11 @@ fn compile_schematic_vegetation(
         .map_err(schematic_contract)?;
     let frozen =
         SnowyVegetationSet::resolve(catalog, "Grand V3 schematic").map_err(schematic_contract)?;
-    let snowy_tree_objects = [&frozen.old_growth, &frozen.small_broadleaf, &frozen.tall_narrow];
+    let snowy_tree_objects = [
+        &frozen.old_growth,
+        &frozen.small_broadleaf,
+        &frozen.tall_narrow,
+    ];
     let snowy_clearance = snowy_tree_objects
         .iter()
         .map(|object| object.clearance_projections())
@@ -25311,7 +26502,7 @@ fn compile_schematic_vegetation(
             },
         );
 
-    let reserved = schematic_vegetation_reserved(world, crystal_mask, &world.blockers);
+    let reserved = schematic_vegetation_reserved(plan, world, crystal_mask, &world.blockers);
 
     let mut occupied_visual = BTreeSet::new();
     let mut occupied_blockers = world.blockers.clone();
@@ -25409,12 +26600,15 @@ fn compile_schematic_vegetation(
             // Snow-covered ground uses the same authored voxel trees as the
             // Frozen Forest. Select the template before clearance and blocker
             // projection, because snowy old-growth has its own exact shape.
-            let snow_covered = solid_material_at(&world.volume, root)
-                == Some(SolidMaterialRole::Snow);
+            let snow_covered =
+                solid_material_at(&world.volume, root) == Some(SolidMaterialRole::Snow);
             let (tree_objects, tree_clearance_projections) = if snow_covered {
                 (snowy_tree_objects.as_slice(), snowy_clearance.as_slice())
             } else {
-                (tree_objects.as_slice(), tree_clearance_projections.as_slice())
+                (
+                    tree_objects.as_slice(),
+                    tree_clearance_projections.as_slice(),
+                )
             };
             let family = named_sample(seed, "vegetation_tree_family", root_coord);
             let family_start = if ecology.prefer_old_growth {
@@ -25551,11 +26745,13 @@ fn compile_schematic_vegetation(
 /// architecture, ordinary routes, review/sight clearings, anchors, lights, and
 /// the separately authored Crystal site.
 fn schematic_vegetation_reserved(
+    plan: &SchematicPlanV1,
     world: &GeneratedWorldPlan,
     crystal_mask: &BTreeSet<HexCoord>,
     preexisting_blockers: &BTreeSet<TilePos>,
 ) -> BTreeSet<HexCoord> {
     let mut reserved = crystal_mask.clone();
+    reserved.extend(schematic_ecology::garden_courtyard_reservation(plan));
     reserved.extend(
         world
             .volume
@@ -26996,6 +28192,117 @@ fn add_exact_corrective_observation_anchors(
     Ok(())
 }
 
+/// Publishes exact diagnostic targets after decoration without reserving ground,
+/// clearing vegetation, or turning an observation into a gameplay destination.
+fn add_corrective_capture_witnesses(
+    world: &mut GeneratedWorldPlan,
+    plan: &SchematicPlanV1,
+    centers: &BTreeMap<PatchId, HexCoord>,
+    hydrology: &HydrologyCompilation,
+) -> Result<(), V3GenerationError> {
+    let lower_pass = world
+        .features
+        .protected_routes
+        .get("grand_v3.natural_pass")
+        .and_then(|route| {
+            route
+                .centerline
+                .iter()
+                .min_by_key(|surface| (surface.level, **surface))
+        })
+        .copied()
+        .ok_or_else(|| schematic_contract("capture witness has no lower natural-pass approach"))?;
+    world
+        .observation_anchors
+        .insert("grand_v3.lower_pass_witness".to_owned(), lower_pass);
+    bevy::log::info!(
+        "capture witness grand_v3.lower_pass_witness at {lower_pass:?}; owner=protected route grand_v3.natural_pass"
+    );
+
+    let river_positions = hydrology
+        .river_rows
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let rapid = world
+        .liquids
+        .bodies
+        .iter()
+        .find_map(|(body_id, body)| {
+            body.nodes.iter().find_map(|(position, node)| {
+                (body.material == FillMaterialRole::Water
+                    && river_positions.contains(position)
+                    && node.state == LiquidFlowState::Rapid
+                    && node
+                        .downstream
+                        .is_some_and(|next| next.level < position.level))
+                .then_some((*position, *body_id, *node))
+            })
+        })
+        .ok_or_else(|| schematic_contract("capture witness has no exact descending river Rapid"))?;
+    let rapid_bank = world
+        .volume
+        .surfaces
+        .keys()
+        .filter(|surface| {
+            surface.coord.distance(rapid.0.coord) <= 3
+                && !hydrology.water_coords.contains(&surface.coord)
+        })
+        .min_by_key(|surface| {
+            (
+                surface.coord.distance(rapid.0.coord),
+                surface.level.abs_diff(rapid.0.level),
+                **surface,
+            )
+        })
+        .copied()
+        .ok_or_else(|| {
+            schematic_contract("river Rapid witness has no exact dry bank within three hexes")
+        })?;
+    world
+        .observation_anchors
+        .insert("grand_v3.river_rapid_witness".to_owned(), rapid_bank);
+    bevy::log::info!(
+        "capture witness grand_v3.river_rapid_witness bank {rapid_bank:?}, Rapid {:?}; owner=hydrology river_rows body {:?}; flow {:?}",
+        rapid.0,
+        rapid.1,
+        rapid.2
+    );
+
+    // These are candidate perimeter owners from the preserved screenshot audit,
+    // not a claim that the screenshot's bare apron has already been identified.
+    for (cell_id, q, r) in [(127_u16, 7, -7), (128, 7, -6), (214, 5, -8), (215, 6, -8)] {
+        let cell = plan
+            .cells
+            .iter()
+            .find(|cell| cell.id.get() == cell_id)
+            .filter(|cell| cell.coord.q() == q && cell.coord.r() == r)
+            .ok_or_else(|| {
+                schematic_contract(format!(
+                    "rear perimeter witness cell {cell_id} changed identity"
+                ))
+            })?;
+        let center = centers.get(&PatchId(u32::from(cell_id))).ok_or_else(|| {
+            schematic_contract(format!(
+                "rear perimeter witness cell {cell_id} has no fine center"
+            ))
+        })?;
+        let (surface, _) = world.volume.top_surface_at_coord(*center).ok_or_else(|| {
+            schematic_contract(format!(
+                "rear perimeter witness cell {cell_id} has no exact surface"
+            ))
+        })?;
+        let name = format!("grand_v3.rear_perimeter_cell_{cell_id}");
+        world.observation_anchors.insert(name.clone(), surface);
+        bevy::log::info!(
+            "capture witness {name} at {surface:?}; owner=coarse cell {cell_id} ({q},{r}), facts {:?}",
+            cell.facts
+        );
+    }
+    Ok(())
+}
+
 fn schematic_view_hint(
     footprint: &BTreeSet<HexCoord>,
     level_height: f32,
@@ -27209,6 +28516,274 @@ mod tests {
                 V3_GRAND_V3_TEMPLATE_REVISION
             )))
         );
+    }
+
+    #[test]
+    fn initial_tunnel_phase_keeps_the_original_surface_planner_reservation() {
+        let crystal = HexCoord::from_axial(22, -132)
+            .within_radius(32)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let footprint = HexCoord::ORIGIN
+            .within_radius(187)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        // Actual terminal and locked suffix recorded by the BEFORE oracle.
+        let terminal = (-117..=-114)
+            .map(|r| TilePos::new(HexCoord::from_axial(-10, r), 6))
+            .collect::<BTreeSet<_>>();
+        let lane = resolve_exact_terminal_lane(
+            &terminal,
+            &crystal,
+            &footprint,
+            (-132..=22).map(|r| HexCoord::from_axial(22, r)).collect(),
+        )
+        .expect("the unchanged original lane resolves");
+        let original = plan_original_tunnel_carve(&lane, 12);
+        assert_eq!(lane.centerline.len(), 171);
+        assert_eq!(original.columns.len(), 536);
+        assert!(original
+            .columns
+            .values()
+            .all(|shape| shape.clearance_top == 13));
+        let overland = HexCoord::from_axial(-16, -100);
+        assert!(
+            original
+                .columns
+                .keys()
+                .all(|coord| coord.distance(overland) > 2),
+            "the initial tunnel must preserve the surface planner's two-cell pass buffer"
+        );
+        let expanded =
+            plan_tunnel_interior_carve(&lane, &crystal, &footprint, &BTreeSet::new(), 12)
+                .expect("the physical expansion resolves after surface planning");
+        assert!(expanded.columns.contains_key(&overland));
+        assert_eq!(expanded.columns[&overland].roof_top(), 18);
+    }
+
+    #[test]
+    fn late_tunnel_publication_preserves_named_niches_and_overland_caps_and_replaces_lights_roofs()
+    {
+        let interior_id = InteriorRegionId(7);
+        let floor = |q, r| TilePos::new(HexCoord::from_axial(q, r), 6);
+        let main = (0..4).map(|q| floor(q, 0)).collect::<BTreeSet<_>>();
+        let old_floor = floor(0, 0);
+        let niche = floor(0, 1);
+        let crystal = floor(1, -2);
+        let alcove = crystal
+            .coord
+            .within_radius(1)
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 6))
+            .collect::<BTreeSet<_>>();
+        let coords = main
+            .iter()
+            .chain(&alcove)
+            .chain([&niche])
+            .map(|position| position.coord)
+            .collect::<BTreeSet<_>>();
+        let mut volume = VolumePlan::new(coords.clone());
+        let cap_metadata = SurfaceMetadata {
+            access: SurfaceAccess::Ordinary,
+            interior: None,
+        };
+        for coord in &coords {
+            volume
+                .columns
+                .insert(*coord, land_column(166, SolidMaterialRole::Gravel));
+            volume
+                .surfaces
+                .insert(TilePos::new(*coord, 166), cap_metadata);
+        }
+        let inside_metadata = SurfaceMetadata {
+            access: SurfaceAccess::Ordinary,
+            interior: Some(interior_id),
+        };
+        let initial_floors = BTreeSet::from([old_floor, niche]);
+        for position in &initial_floors {
+            let source = volume.columns[&position.coord].clone();
+            volume.columns.insert(
+                position.coord,
+                tunnel_column(&source, 166, 6, 13, 16, false, interior_id),
+            );
+            volume.surfaces.insert(*position, inside_metadata);
+        }
+        let initial_roofs = initial_floors
+            .iter()
+            .flat_map(|position| (13..16).map(move |level| TilePos::new(position.coord, level)))
+            .collect::<BTreeSet<_>>();
+        let initial_route = ProtectedFeatureRoute {
+            centerline: vec![old_floor],
+            surfaces: initial_floors.clone(),
+        };
+        let old_lights = tunnel_crystal_lights(7, &[niche, old_floor]).expect("old fixtures");
+        let planning = TunnelPlanningPublication {
+            route: initial_route.clone(),
+            interior: PlannedInterior {
+                floors: initial_floors.clone(),
+                entrances: BTreeSet::from([old_floor]),
+                roof_voxels: initial_roofs.clone(),
+            },
+            light_ids: old_lights.keys().copied().collect(),
+            overburden: capture_tunnel_overburden_authority(
+                &volume,
+                &BTreeSet::from([old_floor.coord]),
+                16,
+            )
+            .expect("original rock"),
+        };
+        let anchors = BTreeMap::from([("grand_v3.tunnel_mouth".to_owned(), old_floor)]);
+        let mut world = GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
+            layout: resolve_layout(V3_SCHEMATIC_GRID_RADIUS, &settings()).expect("layout"),
+            volume,
+            liquids: LiquidPlan::default(),
+            features: FeaturePlan::default(),
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::new(),
+            lights: old_lights,
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan {
+                by_id: BTreeMap::from([(interior_id, planning.interior.clone())]),
+            },
+            anchors: anchors.clone(),
+            observation_anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((0.0, 10.0, 10.0), (0.0, 0.0, 0.0)),
+        };
+        world
+            .anchors
+            .insert("already_named_niche".to_owned(), niche);
+        world
+            .features
+            .protected_routes
+            .insert("grand_v3.tunnel".to_owned(), initial_route.clone());
+        world
+            .features
+            .protected_routes
+            .insert("grand_v3.crystal_route".to_owned(), initial_route);
+        world.features.protected_routes.insert(
+            "grand_v3.ordinary_hubs".to_owned(),
+            ProtectedFeatureRoute {
+                centerline: vec![niche],
+                surfaces: BTreeSet::from([niche]),
+            },
+        );
+        let mut graph = OrdinaryGraph::from_volume(&world.volume, None);
+        assert!(!graph.distances_from(old_floor).contains_key(&floor(3, 0)));
+        let expected_caps = coords
+            .iter()
+            .map(|coord| {
+                (
+                    *coord,
+                    world.volume.top_surface_at_coord(*coord).expect("top"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let carve = TunnelInteriorCarve {
+            columns: main
+                .iter()
+                .map(|position| {
+                    (
+                        position.coord,
+                        TunnelCarveProfile {
+                            clearance_top: 15,
+                            gothic: false,
+                        },
+                    )
+                })
+                .collect(),
+            sections: vec![main.iter().map(|position| position.coord).collect()],
+        };
+        let mut final_roofs = BTreeSet::new();
+        for position in main.iter().chain(&alcove) {
+            let clearance = if main.contains(position) { 15 } else { 13 };
+            let source = world.volume.columns[&position.coord].clone();
+            world.volume.columns.insert(
+                position.coord,
+                tunnel_column(
+                    &source,
+                    166,
+                    6,
+                    clearance,
+                    clearance + 3,
+                    false,
+                    interior_id,
+                ),
+            );
+            world.volume.surfaces.insert(*position, inside_metadata);
+            final_roofs.extend(
+                (clearance..clearance + 3).map(|level| TilePos::new(position.coord, level)),
+            );
+        }
+        let final_floors = main.union(&alcove).copied().collect::<BTreeSet<_>>();
+        let new_lights = tunnel_crystal_lights(7, &[crystal]).expect("recessed fixture");
+        let obsolete = planning
+            .light_ids
+            .difference(&new_lights.keys().copied().collect())
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert!(!obsolete.is_empty());
+        let overburden =
+            capture_expanded_tunnel_overburden(&world.volume, &carve, &BTreeSet::new())
+                .expect("final caps above expanded roof");
+        let expanded = TunnelCompilation {
+            route: ProtectedFeatureRoute {
+                centerline: vec![old_floor],
+                surfaces: final_floors.clone(),
+            },
+            interior: PlannedInterior {
+                floors: final_floors,
+                entrances: BTreeSet::from([old_floor]),
+                roof_voxels: final_roofs,
+            },
+            lights: new_lights.clone(),
+            anchors,
+            overburden,
+            geometry: Some(TunnelGeometryAuthority {
+                carve,
+                alcoves: vec![crystal],
+                route_coords: main.iter().map(|position| position.coord).collect(),
+                lights: new_lights,
+                interior: interior_id,
+                floor: 6,
+                alcove_clearance: 13,
+                alcove_roof: 16,
+                retained_floors: initial_floors,
+                retained_roofs: BTreeSet::new(),
+                removed_light_ids: BTreeSet::new(),
+            }),
+        };
+        let (_, authority) = publish_expanded_tunnel(&mut world, &mut graph, &planning, expanded)
+            .expect("late stacked publication");
+        for (coord, expected) in expected_caps {
+            assert_eq!(world.volume.top_surface_at_coord(coord), Some(expected));
+            assert_eq!(
+                solid_material_at(&world.volume, expected.0),
+                Some(SolidMaterialRole::Gravel)
+            );
+        }
+        assert_eq!(world.anchors["already_named_niche"], niche);
+        assert!(world.features.protected_routes["grand_v3.ordinary_hubs"]
+            .surfaces
+            .contains(&niche));
+        assert!(world.features.protected_routes["grand_v3.tunnel"]
+            .surfaces
+            .contains(&niche));
+        assert!(obsolete.iter().all(|id| !world.lights.contains_key(id)));
+        assert!(graph.distances_from(old_floor).contains_key(&floor(3, 0)));
+        let interior = &world.interiors.by_id[&interior_id];
+        assert!(!interior
+            .roof_voxels
+            .contains(&TilePos::new(old_floor.coord, 13)));
+        assert!((15..18).all(|level| interior
+            .roof_voxels
+            .contains(&TilePos::new(old_floor.coord, level))));
+        assert!((13..16).all(|level| interior
+            .roof_voxels
+            .contains(&TilePos::new(niche.coord, level))));
+        authority
+            .validate(&world)
+            .expect("final retained and expanded geometry");
     }
 
     fn reference_fixture() -> &'static ReferenceFixture {
@@ -27876,6 +29451,269 @@ mod tests {
     }
 
     #[test]
+    fn waterfall_intake_rounds_the_preserved_seed_zero_spine_corner() {
+        let center = HexCoord::from_axial(109, -84);
+        let core = BTreeSet::from([
+            TilePos::new(HexCoord::from_axial(109, -85), 140),
+            TilePos::new(center, 140),
+            TilePos::new(HexCoord::from_axial(109, -83), 140),
+        ]);
+        let spine = [
+            (108, -86),
+            (109, -86),
+            (110, -86),
+            (108, -85),
+            (109, -85),
+            (110, -85),
+            (109, -84),
+            (109, -83),
+            (107, -83),
+            (108, -83),
+        ]
+        .into_iter()
+        .map(|(q, r)| HexCoord::from_axial(q, r))
+        .collect::<BTreeSet<_>>();
+        let mut available = center
+            .within_radius(2)
+            .into_iter()
+            .filter(|coord| !spine.contains(coord))
+            .collect::<BTreeSet<_>>();
+        let corner = TilePos::new(HexCoord::from_axial(108, -84), 140);
+        let candidates = waterfall_intake_row_candidates(&core, 5, &available)
+            .expect("the fan can round the unchanged concave spine");
+        assert!(!candidates.is_empty());
+        assert!(candidates.iter().all(|row| {
+            row.len() == 5
+                && core.is_subset(row)
+                && row.contains(&corner)
+                && row.difference(&core).all(|position| {
+                    position.level == 140
+                        && position.coord.distance(center) <= 2
+                        && !spine.contains(&position.coord)
+                })
+        }));
+        available.remove(&corner.coord);
+        assert!(waterfall_intake_row_candidates(&core, 5, &available)
+            .expect("protected corner is a valid empty candidate set")
+            .is_empty());
+    }
+
+    #[test]
+    fn waterfall_intake_expands_hero_and_seed_zero_without_reclaiming_the_spine() {
+        let template = hex_schematic::grand_v3_reference_template().expect("template parses");
+        let layout =
+            resolve_layout(V3_SCHEMATIC_GRID_RADIUS, &settings()).expect("layout resolves");
+        let profile = V3GrandV3BasicTerrainProfile::canonical();
+        for seed in [0, 1_592_598_566] {
+            let plan = hex_schematic::generate(&template, seed)
+                .expect("seed generates")
+                .plan;
+            let ribbon = authoritative_hydrology_centerlines(&plan, profile, seed, &layout)
+                .expect("seeded hydrology resolves");
+            let lake = semantic_overlay_coords(&plan, &layout, SchematicFeature::MountainLake);
+            let intake = resolve_waterfall_intake_rows(
+                &ribbon.watercourse_rows,
+                ribbon.waterfall_lip_index,
+                &layout.footprint,
+                &lake,
+                &BTreeSet::new(),
+            )
+            .expect("bounded intake fits the seeded bend");
+            assert_eq!(
+                intake.iter().map(BTreeSet::len).collect::<Vec<_>>(),
+                [9, 7, 5, 3]
+            );
+            assert_eq!(
+                intake,
+                resolve_waterfall_intake_rows(
+                    &ribbon.watercourse_rows,
+                    ribbon.waterfall_lip_index,
+                    &layout.footprint,
+                    &lake,
+                    &BTreeSet::new()
+                )
+                .expect("repeat resolves")
+            );
+            let flow = watercourse_with_intake(
+                &ribbon.watercourse_rows,
+                ribbon.waterfall_lip_index,
+                &intake,
+            )
+            .expect("expanded flow retains every core position");
+            let start = waterfall_intake_start(ribbon.waterfall_lip_index).expect("intake starts");
+            for (index, original) in ribbon.watercourse_rows.iter().enumerate() {
+                assert!(original.is_subset(&flow[index]));
+                if !(start..start + 4).contains(&index) {
+                    assert_eq!(*original, flow[index]);
+                }
+            }
+            let mut fills = BTreeMap::<TilePos, NonSolidFill>::new();
+            for (index, row) in flow.iter().enumerate() {
+                let next = flow
+                    .get(index + 1)
+                    .and_then(|row| row.first())
+                    .map(|p| p.level);
+                for position in row {
+                    let bottom = position
+                        .level
+                        .min(next.unwrap_or(position.level).saturating_add(1));
+                    fills
+                        .entry(*position)
+                        .and_modify(|fill| fill.levels.bottom = fill.levels.bottom.min(bottom))
+                        .or_insert(NonSolidFill {
+                            levels: LevelInterval::new(bottom, position.level + 1),
+                            material: FillMaterialRole::Water,
+                        });
+                }
+            }
+            let sea = semantic_sea_coords(&plan, &layout);
+            let river_rows = &ribbon.watercourse_rows[ribbon.waterfall_centerline.len() - 1..];
+            let outlet = exact_outlet_authority(&ribbon.river_centerline, river_rows, &sea)
+                .expect("outlet resolves");
+            let mut nodes = fills
+                .keys()
+                .map(|position| {
+                    (
+                        *position,
+                        LiquidNode {
+                            state: LiquidFlowState::Still,
+                            downstream: None,
+                        },
+                    )
+                })
+                .collect();
+            apply_directed_watercourse(&flow, &outlet, &fills, &mut nodes)
+                .expect("added water drains");
+            validate_waterfall_intake_flow(&intake, &nodes)
+                .expect("more than the core flows downhill");
+            let side = *intake[0]
+                .difference(&ribbon.watercourse_rows[start])
+                .next()
+                .expect("source is wider");
+            nodes.insert(
+                side,
+                LiquidNode {
+                    state: LiquidFlowState::Still,
+                    downstream: None,
+                },
+            );
+            assert!(
+                validate_waterfall_intake_flow(&intake, &nodes).is_err(),
+                "a stagnant added pocket fails"
+            );
+            let blocked = intake
+                .iter()
+                .flat_map(|row| row.iter().map(|p| p.coord))
+                .collect::<BTreeSet<_>>();
+            assert!(
+                resolve_waterfall_intake_rows(
+                    &ribbon.watercourse_rows,
+                    ribbon.waterfall_lip_index,
+                    &layout.footprint,
+                    &lake,
+                    &blocked
+                )
+                .is_err(),
+                "protected water-side claims cannot be reclaimed"
+            );
+        }
+    }
+
+    #[test]
+    fn final_garden_keeps_its_courtyard_and_connected_five_cell_spring() {
+        let fixture = reference_fixture();
+        let world = &fixture.selection.validated.plan;
+        let island =
+            semantic_overlay_coords(&fixture.plan, &world.layout, SchematicFeature::LakeIsland);
+        let courtyard = schematic_ecology::garden_courtyard_reservation(&fixture.plan);
+        assert!(world
+            .features
+            .by_id
+            .values()
+            .all(|feature| !courtyard.contains(&feature.root.coord)));
+        assert!(!world
+            .features
+            .clearings
+            .contains_key("grand_v3.garden_courtyard"));
+        let water = world
+            .liquids
+            .bodies
+            .iter()
+            .flat_map(|(body, plan)| {
+                plan.nodes
+                    .iter()
+                    .filter(|(position, _)| island.contains(&position.coord))
+                    .map(move |(position, node)| (*position, (*body, *node)))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(water.len(), 5);
+        assert_eq!(
+            water.keys().map(|p| p.level).collect::<BTreeSet<_>>(),
+            BTreeSet::from([151, 152, 153])
+        );
+        for (start, (body, _)) in &water {
+            let mut cursor = *start;
+            let mut seen = BTreeSet::new();
+            while island.contains(&cursor.coord) {
+                assert!(seen.insert(cursor));
+                let (_, node) = water[&cursor];
+                let next = node.downstream.expect("all spring water flows");
+                assert!(world.liquids.bodies[body].nodes.contains_key(&next));
+                assert_eq!(cursor.coord.distance(next.coord), 1);
+                assert!(cursor.level >= next.level && cursor.level - next.level <= 1);
+                cursor = next;
+            }
+            assert_eq!(cursor.level, 150);
+        }
+        let fills = world.volume.fill_runs_by_top();
+        for spring_water in water.keys() {
+            for neighbor in spring_water.coord.neighbors() {
+                if island.contains(&neighbor) {
+                    continue;
+                }
+                for (external, _) in fills
+                    .range(TilePos::new(neighbor, Level::MIN)..=TilePos::new(neighbor, Level::MAX))
+                {
+                    assert_eq!(
+                        spring_water.level, 151,
+                        "only the spillway mouth may touch the existing lake"
+                    );
+                    assert_eq!(external.level, 150);
+                }
+            }
+        }
+        let spring = world
+            .observation_anchors
+            .get("grand_v3.garden_spring")
+            .expect("spring retains its bounded observation reservation");
+        let island_cell = fixture
+            .plan
+            .cells
+            .iter()
+            .find(|cell| has_overlay(cell, SchematicFeature::LakeIsland))
+            .expect("the final world retains its Garden island");
+        let island_center = schematic_to_world(island_cell.coord, 22);
+        let hydrology = authoritative_hydrology_centerlines(
+            &fixture.plan,
+            V3GrandV3BasicTerrainProfile::canonical(),
+            fixture.plan.provenance.world_seed,
+            &world.layout,
+        )
+        .expect("the final world's locked waterfall intake resolves");
+        let intake = hydrology
+            .waterfall_centerline
+            .get(
+                waterfall_intake_start(hydrology.waterfall_lip_index)
+                    .expect("the cascade has its exact lake-level intake"),
+            )
+            .expect("the intake belongs to the existing centerline");
+        assert!(
+            spring.coord.distance(intake.coord) < island_center.distance(intake.coord),
+            "the spring must sit on the shore facing the falling intake"
+        );
+    }
+
+    #[test]
     fn physical_waterfall_rejects_side_lane_collapse_and_shifted_level_pins() {
         let lip = 44;
         let levels = plunge_levels(150, 15, 67, lip).expect("fixture has a cascade profile");
@@ -28490,6 +30328,7 @@ mod tests {
         ) = sculpt_recessed_waterfall_gorge(
             &rows,
             lip,
+            &[],
             &semantic_mountain,
             &semantic_valley,
             150,
@@ -29566,13 +31405,9 @@ mod tests {
         let profile = V3GrandV3BasicTerrainProfile::canonical();
         let seed = fixture.plan.provenance.world_seed;
         let semantic_sea = semantic_sea_coords(&fixture.plan, &world.layout);
-        let ribbon = authoritative_hydrology_centerlines(
-            &fixture.plan,
-            profile,
-            seed,
-            &world.layout,
-        )
-        .expect("reference hydrology resolves");
+        let ribbon =
+            authoritative_hydrology_centerlines(&fixture.plan, profile, seed, &world.layout)
+                .expect("reference hydrology resolves");
         let river_rows = &ribbon.watercourse_rows[ribbon.waterfall_centerline.len() - 1..];
         assert_eq!(river_rows.len(), ribbon.river_centerline.len());
         let offshore = river_rows
@@ -29581,7 +31416,10 @@ mod tests {
             .copied()
             .filter(|position| semantic_sea.contains(&position.coord))
             .collect::<BTreeSet<_>>();
-        assert!(offshore.len() > 3, "fixture must exercise the offshore tail");
+        assert!(
+            offshore.len() > 3,
+            "fixture must exercise the offshore tail"
+        );
         for position in ribbon
             .river_centerline
             .iter()
@@ -29630,7 +31468,10 @@ mod tests {
                 .get(&TilePos::new(position.coord, profile.sea_level))
                 .unwrap_or_else(|| panic!("missing pre-hydrology ocean at {position:?}"));
             assert_eq!(fill.material, FillMaterialRole::Water);
-            assert_eq!(fill.levels, expected.levels, "ocean depth changed at {position:?}");
+            assert_eq!(
+                fill.levels, expected.levels,
+                "ocean depth changed at {position:?}"
+            );
             assert_eq!(fill.levels.top - 1, profile.sea_level);
             let solids = solid_runs(&world.volume.columns[&position.coord]);
             let original_solids = solid_runs(&before.volume.columns[&position.coord]);
@@ -29640,9 +31481,15 @@ mod tests {
                 .filter(|solid| solid.levels.top <= fill.levels.bottom)
                 .max_by_key(|solid| solid.levels.top)
                 .expect("offshore water has a solid seabed");
-            assert_eq!(bed.levels.top, fill.levels.bottom, "water must meet its bed");
+            assert_eq!(
+                bed.levels.top, fill.levels.bottom,
+                "water must meet its bed"
+            );
             let depth = fill.levels.top - fill.levels.bottom;
-            assert!(depth >= 1, "preserved coastal water must have positive depth");
+            assert!(
+                depth >= 1,
+                "preserved coastal water must have positive depth"
+            );
             assert!(
                 bed.levels.top - 1 <= profile.sea_level - 1,
                 "the seabed must remain submerged at {position:?}"
@@ -31928,6 +33775,305 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_ring_bend_has_eight_transverse_floors_without_entering_crystal() {
+        let center = HexCoord::ORIGIN;
+        let crystal = center
+            .within_radius(32)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let site_ring = canonical_convex_hex_ring(center, 32).expect("site ring");
+        let terminal = convex_ring_window(&site_ring, 14, 4)
+            .expect("terminal")
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 6))
+            .collect::<BTreeSet<_>>();
+        let footprint = center
+            .within_radius(80)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for direction in 0..6 {
+            let locked = center.line_between(step_in_direction(center, direction, 55));
+            let lane = resolve_exact_terminal_lane(&terminal, &crystal, &footprint, locked)
+                .expect("the original terminal and locked route connect");
+            let carve =
+                plan_tunnel_interior_carve(&lane, &crystal, &footprint, &BTreeSet::new(), 12)
+                    .expect("the transverse tunnel fits outside Crystal");
+            assert!(carve.columns.keys().all(|coord| !crystal.contains(coord)));
+            assert!(terminal
+                .iter()
+                .all(|floor| !carve.columns.contains_key(&floor.coord)));
+            let old_floors = lane.rows.iter().flatten().copied().collect::<BTreeSet<_>>();
+            let mut expanded_bends = 0;
+            for (index, anchor) in lane.centerline.iter().copied().enumerate() {
+                if index < 3 || index + 3 >= lane.centerline.len() || center.distance(anchor) != 33
+                {
+                    continue;
+                }
+                // Probe eight consecutive floors across the local heading.
+                // A four-cell window along the ring cannot satisfy this width.
+                let normal = (forward_path_direction(&lane.centerline, index) + 2) % 6;
+                let transverse_rows = (-7..=0)
+                    .map(|start| {
+                        (start..start + 8)
+                            .map(|offset| step_in_direction(anchor, normal, offset))
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .filter(|row| row.iter().all(|coord| !crystal.contains(coord)))
+                    .collect::<Vec<_>>();
+                assert!(transverse_rows
+                    .iter()
+                    .any(|row| row.iter().all(|coord| carve.columns.contains_key(coord))));
+                if transverse_rows
+                    .iter()
+                    .all(|row| !row.is_subset(&old_floors))
+                {
+                    expanded_bends += 1;
+                }
+            }
+            assert!(
+                expanded_bends > 0,
+                "fixture direction {direction} must exercise the former one-cell bend"
+            );
+        }
+    }
+
+    /// Vertex-capacity flow counts independent floor paths rather than row
+    /// lengths, so a pair of wide arms meeting through two cells cannot pass.
+    fn independent_tunnel_floor_paths(
+        floors: &BTreeSet<HexCoord>,
+        starts: &BTreeSet<HexCoord>,
+        ends: &BTreeSet<HexCoord>,
+    ) -> usize {
+        let indices = floors
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, coord)| (coord, index))
+            .collect::<BTreeMap<_, _>>();
+        let source = indices.len() * 2;
+        let sink = source + 1;
+        let mut residual = vec![BTreeMap::<usize, usize>::new(); sink + 1];
+        let mut edge = |from: usize, to: usize, capacity: usize| {
+            residual[from].insert(to, capacity);
+            residual[to].entry(from).or_default();
+        };
+        for (coord, index) in &indices {
+            edge(index * 2, index * 2 + 1, 1);
+            for neighbor in coord.neighbors() {
+                if let Some(next) = indices.get(&neighbor) {
+                    edge(index * 2 + 1, next * 2, floors.len());
+                }
+            }
+        }
+        for start in starts {
+            edge(source, indices[start] * 2, 1);
+        }
+        for end in ends {
+            edge(indices[end] * 2 + 1, sink, 1);
+        }
+        let mut count = 0;
+        loop {
+            let mut parent = vec![None; residual.len()];
+            parent[source] = Some(source);
+            let mut frontier = VecDeque::from([source]);
+            while let Some(node) = frontier.pop_front() {
+                if node == sink {
+                    break;
+                }
+                for (next, capacity) in &residual[node] {
+                    if *capacity > 0 && parent[*next].is_none() {
+                        parent[*next] = Some(node);
+                        frontier.push_back(*next);
+                    }
+                }
+            }
+            if parent[sink].is_none() {
+                return count;
+            }
+            let mut node = sink;
+            while node != source {
+                let previous = parent[node].expect("augmenting path");
+                *residual[previous].get_mut(&node).expect("forward edge") -= 1;
+                *residual[node].entry(previous).or_default() += 1;
+                node = previous;
+            }
+            count += 1;
+        }
+    }
+
+    #[test]
+    fn tunnel_corner_fan_preserves_eight_independent_paths_in_both_directions() {
+        let crystal = HexCoord::ORIGIN
+            .within_radius(32)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let footprint = HexCoord::ORIGIN
+            .within_radius(80)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let base_path = (-14..=0)
+            .map(|r| HexCoord::from_axial(33, r))
+            .chain((1..=14).map(|step| HexCoord::from_axial(33 - step, step)))
+            .collect::<Vec<_>>();
+        for rotation in 0..6 {
+            let rotate = |mut coord: HexCoord| {
+                for _ in 0..rotation {
+                    coord = HexCoord::from_axial(-coord.y(), coord.x() + coord.y());
+                }
+                coord
+            };
+            for reverse in [false, true] {
+                let mut path = base_path.iter().copied().map(rotate).collect::<Vec<_>>();
+                if reverse {
+                    path.reverse();
+                }
+                let offsets = [-2, -1, 0, 1];
+                let rows = path
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(index, center)| {
+                        tunnel_transverse_section(
+                            center,
+                            forward_path_direction(&path, index),
+                            offsets,
+                            0,
+                            &crystal,
+                            &footprint,
+                        )
+                        .expect("four-wide source row")
+                    })
+                    .collect();
+                let lane = ResolvedTunnelLane {
+                    rows,
+                    centerline: path,
+                    lane_offsets: offsets,
+                };
+                let carve =
+                    plan_tunnel_interior_carve(&lane, &crystal, &footprint, &BTreeSet::new(), 12)
+                        .expect("corner fan fits its annular band");
+                let floors = carve.columns.keys().copied().collect::<BTreeSet<_>>();
+                let start_index = 4;
+                let end_index = lane.centerline.len() - 5;
+                let probe = |index| {
+                    tunnel_transverse_section(
+                        lane.centerline[index],
+                        forward_path_direction(&lane.centerline, index),
+                        offsets,
+                        2,
+                        &crystal,
+                        &footprint,
+                    )
+                    .expect("independent eight-wide endpoint")
+                };
+                assert_eq!(
+                    independent_tunnel_floor_paths(&floors, &probe(start_index), &probe(end_index)),
+                    8,
+                    "corner rotation={rotation}, reverse={reverse} still has a narrow bottleneck"
+                );
+                let fan_only = rotate(HexCoord::from_axial(34, 1));
+                assert_eq!(carve.columns[&fan_only].clearance_top, 15);
+                assert_eq!(carve.columns[&fan_only].roof_top(), 18);
+                assert!(floors.is_disjoint(&crystal));
+            }
+        }
+    }
+    #[test]
+    fn tunnel_expansion_adds_two_sides_and_ceiling_levels_with_unchanged_joins() {
+        let path = (0..25)
+            .map(|q| HexCoord::from_axial(q, 0))
+            .collect::<Vec<_>>();
+        let offsets = [-2, -1, 0, 1];
+        let lane = ResolvedTunnelLane {
+            rows: path
+                .iter()
+                .enumerate()
+                .map(|(index, _)| tunnel_lane_row(&path, index, offsets))
+                .collect(),
+            centerline: path,
+            lane_offsets: offsets,
+        };
+        let footprint = HexCoord::ORIGIN
+            .within_radius(50)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let carve =
+            plan_tunnel_interior_carve(&lane, &BTreeSet::new(), &footprint, &BTreeSet::new(), 12)
+                .expect("straight expansion");
+        let middle = HexCoord::from_axial(12, 0);
+        let lateral = (forward_path_direction(&lane.centerline, 12) + 2) % 6;
+        for offset in -4..=3 {
+            let coord = step_in_direction(middle, lateral, offset);
+            let shape = carve.columns.get(&coord).expect("eight-wide floor");
+            assert_eq!(shape.clearance_top, 15);
+            assert_eq!(shape.roof_top(), 18);
+        }
+        assert!(lane
+            .rows
+            .first()
+            .expect("terminal")
+            .iter()
+            .all(|coord| !carve.columns.contains_key(coord)));
+        assert!(lane
+            .rows
+            .last()
+            .expect("foot")
+            .iter()
+            .all(|coord| carve.columns[coord].clearance_top == 13));
+        assert!(carve.sections.iter().any(|row| row.len() == 6));
+        assert!(carve.sections.iter().any(|row| row.len() == 8));
+    }
+
+    #[test]
+    fn expanded_tunnel_preflight_rejects_shallow_roof_without_changing_volume() {
+        let coord = HexCoord::ORIGIN;
+        let mut volume = VolumePlan::new(BTreeSet::from([coord]));
+        volume
+            .columns
+            .insert(coord, land_column(17, SolidMaterialRole::Grass));
+        volume.surfaces.insert(
+            TilePos::new(coord, 17),
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: None,
+            },
+        );
+        let carve = TunnelInteriorCarve {
+            columns: BTreeMap::from([(
+                coord,
+                TunnelCarveProfile {
+                    clearance_top: 15,
+                    gothic: false,
+                },
+            )]),
+            sections: Vec::new(),
+        };
+        let before = volume.clone();
+        let error = capture_expanded_tunnel_overburden(&volume, &carve, &BTreeSet::new())
+            .expect_err("the raised ceiling must still retain a complete roof");
+        assert!(error.to_string().contains("below required roof top 18"));
+        assert_eq!(volume, before);
+    }
+
+    #[test]
+    fn tunnel_crystal_reserves_its_entire_radius_one_body_outside_the_corridor() {
+        let route = (-4..=4)
+            .map(|r| HexCoord::from_axial(0, r))
+            .collect::<BTreeSet<_>>();
+        assert!(!tunnel_crystal_footprint_is_recessed(
+            HexCoord::from_axial(1, 0),
+            &route
+        ));
+        assert!(tunnel_crystal_footprint_is_recessed(
+            HexCoord::from_axial(2, 0),
+            &route
+        ));
+        assert!(!tunnel_crystal_footprint_is_recessed(
+            HexCoord::from_axial(4, 0),
+            &route
+        ));
+    }
+    #[test]
     fn tunnel_alcove_rejects_one_shallow_radius_one_side_cell() {
         let origin = HexCoord::ORIGIN;
         let footprint = origin.within_radius(1).into_iter().collect::<BTreeSet<_>>();
@@ -33113,8 +35259,7 @@ mod tests {
             .last()
             .expect("replacement inner ledge reaches its cell-38 review terminal");
         assert_eq!(
-            world.anchors["grand_v3.inner_peak_ledge"],
-            terminal,
+            world.anchors["grand_v3.inner_peak_ledge"], terminal,
             "the ridge-composition overlook must face the waterfall from the authored route terminal"
         );
         assert!(world.layout.patches[&PatchId(38)]
@@ -34635,7 +36780,12 @@ mod tests {
             .difference(&schematic_blockers)
             .copied()
             .collect::<BTreeSet<_>>();
-        let reserved = schematic_vegetation_reserved(world, crystal_mask, &preexisting_blockers);
+        let reserved = schematic_vegetation_reserved(
+            &fixture.plan,
+            world,
+            crystal_mask,
+            &preexisting_blockers,
+        );
         assert!(!world.volume.fill_runs_by_top().is_empty());
         assert!(!world.structures.by_id.is_empty());
         assert!(!world.features.protected_routes.is_empty());
@@ -34643,6 +36793,9 @@ mod tests {
         assert!(!world.anchors.is_empty());
         assert!(!world.lights.is_empty());
         let mut expected_reserved = crystal_mask.clone();
+        expected_reserved.extend(schematic_ecology::garden_courtyard_reservation(
+            &fixture.plan,
+        ));
         expected_reserved.extend(
             world
                 .volume
@@ -34686,10 +36839,18 @@ mod tests {
                 .values()
                 .flat_map(|light| light.origin.coord.within_radius(2)),
         );
-        assert!(reserved == expected_reserved,
+        assert!(
+            reserved == expected_reserved,
             "Grand vegetation exclusion authority differs: actual-only {:?}; expected-only {:?}",
-            reserved.difference(&expected_reserved).take(12).collect::<Vec<_>>(),
-            expected_reserved.difference(&reserved).take(12).collect::<Vec<_>>());
+            reserved
+                .difference(&expected_reserved)
+                .take(12)
+                .collect::<Vec<_>>(),
+            expected_reserved
+                .difference(&reserved)
+                .take(12)
+                .collect::<Vec<_>>()
+        );
         let mut occupied_visual = BTreeSet::new();
         let mut occupied_blockers = preexisting_blockers;
 
@@ -34813,7 +36974,11 @@ mod tests {
                 );
                 let object = match feature.kind {
                     FeatureKind::Tree => {
-                        let snowy = [&frozen.old_growth, &frozen.small_broadleaf, &frozen.tall_narrow];
+                        let snowy = [
+                            &frozen.old_growth,
+                            &frozen.small_broadleaf,
+                            &frozen.tall_narrow,
+                        ];
                         let expected = if solid_material_at(&world.volume, feature.root)
                             == Some(SolidMaterialRole::Snow)
                         {
@@ -34822,11 +36987,11 @@ mod tests {
                             trees.as_slice()
                         };
                         expected
-                        .iter()
-                        .copied()
-                        .find(|object| object.id == feature.object_id)
-                        .expect("tree uses the resolved climate and voxel-snow asset")
-                    },
+                            .iter()
+                            .copied()
+                            .find(|object| object.id == feature.object_id)
+                            .expect("tree uses the resolved climate and voxel-snow asset")
+                    }
                     FeatureKind::TallGrass => {
                         assert_eq!(feature.object_id, grass.id);
                         grass

@@ -170,10 +170,18 @@ composites mesh fragments and whole-tree identity also fades chunks outside the 
 corridor.
 
 Material authority stays in `hex_objects`. It lazily clones each actively fading
-tree's shared source materials, participates in OIT while those clones are blended,
+tree's shared source materials, uses OIT while those clones are blended,
 and restores the exact handles before deleting the clones. A neighboring tree using
 the same catalog style is never mutated. Authored `CanopyOccluder` metadata remains a
 separate art boundary and does not create camera behavior by itself.
+
+The persistent game camera owns order-independent transparency (OIT), disables MSAA,
+and exposes its depth texture for compositing ordinary translucent voxel water. This
+configuration remains active when tree fading ends or gameplay exits. The object
+renderer preserves camera-owned OIT; on another camera without persistent OIT, it
+temporarily enables OIT for translucent objects and restores that camera's previous
+sampling settings after those objects disappear. Windowless visual-walk UI rendering
+uses the same sampling setting as the game camera.
 
 Ordinary gameplay never removes authored interior occluders. Cave roofs and Crystal
 Ascent's enclosing worked-stone shell remain visible collision geometry, allowing the
@@ -195,7 +203,8 @@ material changes settle before composed visibility, and fog/review reasons remai
 independent. Near-character and First Person hiding add and remove only their shared
 camera-owned composable reason.
 Gameplay exit clears collision indexes, effective-radius recovery state, proximity
-ownership, fade timelines, temporary material clones, and OIT ownership. Retargeting
+ownership, fade timelines, temporary material clones, and temporary object-owned OIT.
+Persistent game-camera OIT remains available for the next map. Retargeting
 inspection or gameplay selection also discards the previous unit's collision history
 and resolves the new unit's own clear or obstructed corridor in the same frame.
 
@@ -242,9 +251,11 @@ enters the four-wide mouth once in default Group mode, then chooses Solo movemen
 the two allies at the threshold so the vertical camera proof does not become a formation
 benchmark.
 
-Review focus and review look-at deliberately use different anchor contracts. A focus
-override relocates an actor and therefore resolves only `MapAnchors`, whose surfaces
-must satisfy live footing. A free-camera look-at may additionally resolve
+Review focus and review look-at use different anchor contracts. A focus override
+resolves only `MapAnchors`, whose surfaces must satisfy live footing, and holds the
+requested Character or FirstPerson capture pose after the ordinary camera follower.
+It leaves actors unchanged. These fixed views show the shipped lens and eye height
+at that anchor; they do not establish following, collision, or native-input behavior. A free-camera look-at may additionally resolve
 `MapObservationAnchors`, which can name a blocked crest, scenic island, or other exact
 rendered surface. If one identity appears in both namespaces, capture setup fails
 closed. Observation anchors are review metadata and are not serialized in Snapshot V1.

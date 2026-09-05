@@ -2549,8 +2549,9 @@ pub struct ReviewWorldDetailTeardownReceiptV1 {
     /// Ordinary terrain-material bindings that are missing or differ from their
     /// exact pre-review handles after restoration.
     pub terrain_material_overrides_remaining: u64,
-    /// Ordinary liquid-presentation entities that are missing or retain a
-    /// review-time visibility value after restoration.
+    /// Ordinary liquid material bindings that are missing or differ from their
+    /// exact pre-review handles. The V1 field spelling is retained for report
+    /// compatibility; review suppression leaves mesh visibility and picking intact.
     pub liquid_visibility_overrides_remaining: u64,
     /// Existing vegetation render children that are missing or retain a
     /// review-time scale after restoration.

@@ -78,4 +78,3 @@ fn rounded_ratio(numerator: i64, denominator: i64) -> i32 {
         }
     })
 }
-

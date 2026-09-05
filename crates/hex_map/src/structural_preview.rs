@@ -1938,11 +1938,70 @@ mod tests {
         let generated =
             hex_schematic::reference_plan(&template, GRAND_V3_STRUCTURAL_PREVIEW_HERO_SEED)
                 .expect("reference plan remains valid");
-        let sections = peak_chain_sections(&generated.plan, &StructuralFields::default())
-            .expect("reference peak rings remain two six-cell chains");
+        let peaks = generated
+            .plan
+            .cells
+            .iter()
+            .filter(|cell| cell.facts.overlays.contains(&FeatureKind::PeakRing))
+            .map(|cell| {
+                (
+                    u32::from(cell.id.get()),
+                    cell.coord,
+                    schematic_world_center(cell.coord).expect("coarse center projects"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(peaks.len(), 12, "the authored plan retains twelve peaks");
+
+        // The preview consumes exact owned terrain. Give each authored peak a
+        // summit and each neighboring pair a lower, adjacent ownership seam.
+        let mut fields = StructuralFields::default();
+        for (first_region, first_cell, first_center) in peaks.iter().copied() {
+            for (second_region, second_cell, second_center) in peaks.iter().copied() {
+                if first_region >= second_region
+                    || first_cell.checked_distance(second_cell) != Some(1)
+                {
+                    continue;
+                }
+                for coord in first_center.line_between(second_center) {
+                    let first_distance = coord.distance(first_center);
+                    let second_distance = coord.distance(second_center);
+                    let biome_region = if first_distance <= second_distance {
+                        first_region
+                    } else {
+                        second_region
+                    };
+                    fields.terrain.insert(
+                        coord,
+                        TerrainSurface {
+                            position: TilePos::new(coord, 120),
+                            biome_region,
+                        },
+                    );
+                    fields.material.insert(coord, 120);
+                }
+            }
+        }
+        for (region, _, center) in peaks.iter().copied() {
+            fields.terrain.insert(
+                center,
+                TerrainSurface {
+                    position: TilePos::new(center, 200),
+                    biome_region: region,
+                },
+            );
+            fields.material.insert(center, 200);
+        }
+
+        let sections = peak_chain_sections(&generated.plan, &fields)
+            .expect("reference peak rings retain owned summits and saddle seams");
+        assert_eq!(sections.len(), 38);
         assert_eq!(
             sections
                 .iter()
+                .filter(|section| {
+                    !section.name.contains("-summit-") && !section.name.contains("-saddle-")
+                })
                 .map(|section| section.name.as_str())
                 .collect::<Vec<_>>(),
             vec![
@@ -1952,13 +2011,63 @@ mod tests {
                 "peak-chain-2-side",
             ]
         );
-        assert!(sections.iter().all(|section| !section.samples.is_empty()));
-        let peak_centers = generated
-            .plan
-            .cells
+        assert!(sections.iter().all(|section| {
+            section
+                .samples
+                .iter()
+                .any(|sample| sample.terrain_level.is_some())
+        }));
+        for (region, _, center) in &peaks {
+            let summit_sections = sections
+                .iter()
+                .filter(|section| section.name.contains(&format!("-cell-{region}-")))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                summit_sections.len(),
+                2,
+                "each summit has front and side views"
+            );
+            for section in summit_sections {
+                let pin = section
+                    .samples
+                    .iter()
+                    .find(|sample| sample.offset == 0)
+                    .expect("the exact summit pin is sampled");
+                assert_eq!(pin.coord, *center);
+                assert_eq!(pin.terrain_level, Some(200));
+                assert_eq!(pin.material_top_level, Some(200));
+                assert_eq!(pin.biome_region, Some(*region));
+            }
+        }
+        let saddle_sections = sections
             .iter()
-            .filter(|cell| cell.facts.overlays.contains(&FeatureKind::PeakRing))
-            .map(|cell| schematic_world_center(cell.coord).expect("coarse center projects"))
+            .filter(|section| section.name.contains("-saddle-"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            saddle_sections.len(),
+            10,
+            "each chain has five saddle views"
+        );
+        for section in saddle_sections {
+            let seam = section
+                .samples
+                .iter()
+                .find(|sample| sample.offset == 0)
+                .expect("the exact saddle seam is sampled");
+            assert_eq!(seam.terrain_level, Some(120));
+            assert!(
+                seam.coord.neighbors().iter().any(|coord| {
+                    fields.terrain.get(coord).is_some_and(|neighbor| {
+                        neighbor.position.level == 120
+                            && Some(neighbor.biome_region) != seam.biome_region
+                    })
+                }),
+                "the saddle joins two exact neighboring owners"
+            );
+        }
+        let peak_centers = peaks
+            .iter()
+            .map(|(_, _, center)| *center)
             .collect::<BTreeSet<_>>();
         let sampled_front = sections
             .iter()

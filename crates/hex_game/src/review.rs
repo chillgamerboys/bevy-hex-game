@@ -302,6 +302,11 @@ fn install_capture_sequence_inner(
                 .before(CameraSystems::FollowCharacter)
                 .before(TransformSystems::Propagate)
                 .before(CameraUpdateSystems),
+            pin_review_focus_pose
+                .after(CameraSystems::FollowCharacter)
+                .before(CameraSystems::FollowPresentation)
+                .before(TransformSystems::Propagate)
+                .before(CameraUpdateSystems),
             capture_settled_frame
                 .after(configure_review_camera_features)
                 .after(TransformSystems::Propagate)
@@ -1905,6 +1910,13 @@ impl ReviewView {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ReviewFocusPose {
+    transform: Transform,
+    orbit_focus: Vec3,
+    orbit_radius: f32,
+}
+
 #[derive(Resource, Debug)]
 struct ReviewCaptureState {
     capture: ReviewCapture,
@@ -1919,6 +1931,7 @@ struct ReviewCaptureState {
     final_exit_sent: bool,
     focus_relocated: bool,
     focus_world_target: Option<Vec3>,
+    focus_pose: Option<ReviewFocusPose>,
     anchor_look_at_target: Option<Vec3>,
     anchor_look_at_resolved: bool,
     view_applied: bool,
@@ -2014,6 +2027,7 @@ impl ReviewCaptureState {
             final_exit_sent: false,
             focus_relocated,
             focus_world_target: None,
+            focus_pose: None,
             anchor_look_at_target: None,
             anchor_look_at_resolved,
             view_applied: false,
@@ -2050,6 +2064,7 @@ impl ReviewCaptureState {
         self.capture = next;
         self.focus_relocated = self.capture.focus_anchor.is_none();
         self.focus_world_target = None;
+        self.focus_pose = None;
         self.anchor_look_at_target = None;
         self.anchor_look_at_resolved = self.capture.anchor_look_at.is_none();
         self.view_applied = false;
@@ -4595,7 +4610,37 @@ fn apply_review_view(
             *mode = CameraMode::FirstPerson;
         }
     }
+    if state.focus_world_target.is_some() && state.capture.camera != ReviewCamera::Map {
+        state.focus_pose = Some(ReviewFocusPose {
+            transform: transform.clone(),
+            orbit_focus: orbit.focus,
+            orbit_radius: orbit.radius,
+        });
+    }
     state.view_applied = true;
+}
+
+/// Keep an explicitly anchored review camera at its resolved viewpoint through
+/// every settle frame. The ordinary follower still owns native gameplay, and
+/// actors retain their exact original footing, transforms and focus components.
+/// These are fixed review views using the configured close-camera lens and eye
+/// height, not evidence for native following or collision response.
+fn pin_review_focus_pose(
+    state: Res<ReviewCaptureState>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+) {
+    if state.failed || state.teardown_requested || !state.view_applied {
+        return;
+    }
+    let (Some(pose), Some(snapshot)) = (&state.focus_pose, &state.camera_snapshot) else {
+        return;
+    };
+    let Ok((mut transform, mut orbit)) = cameras.get_mut(snapshot.entity) else {
+        return;
+    };
+    *transform = pose.transform.clone();
+    orbit.focus = pose.orbit_focus;
+    orbit.radius = pose.orbit_radius;
 }
 
 /// Restores the exact camera pose, lens, orbit state, target, and mode captured
@@ -8667,6 +8712,66 @@ mod tests {
         );
         assert!(!path.exists());
         let _cleanup = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn anchored_first_person_pose_survives_following_during_every_settle_frame() {
+        fn ordinary_follow(mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>) {
+            for (mut transform, mut orbit) in &mut cameras {
+                transform.translation = Vec3::splat(999.0);
+                orbit.focus = Vec3::splat(999.0);
+            }
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(test_camera_settings());
+        app.insert_resource(CameraMode::Map);
+        app.insert_resource(Assets::<Image>::default());
+        app.add_systems(
+            PostUpdate,
+            ordinary_follow.in_set(CameraSystems::FollowCharacter),
+        );
+        let mut capture = review_capture_with_focus("deep_chamber");
+        capture.camera = ReviewCamera::FirstPerson;
+        install_capture_systems(&mut app, capture);
+        let target = Vec3::new(32.0, 4.0, 16.0);
+        {
+            let mut state = app.world_mut().resource_mut::<ReviewCaptureState>();
+            state.focus_relocated = true;
+            state.focus_world_target = Some(target);
+        }
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                RenderTarget::default(),
+                Projection::Perspective(PerspectiveProjection::default()),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..3 {
+            app.update();
+            let state = app.world().resource::<ReviewCaptureState>();
+            let expected = state
+                .focus_pose
+                .as_ref()
+                .expect("anchored close view stores its exact pose");
+            let actual = app.world().entity(camera);
+            assert_eq!(actual.get::<Transform>(), Some(&expected.transform));
+            assert_eq!(
+                actual.get::<PanOrbitCamera>().expect("orbit remains").focus,
+                expected.orbit_focus
+            );
+            assert!((expected.transform.translation - target).length() < 4.0);
+        }
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
     }
 
     #[test]

@@ -174,7 +174,7 @@ struct ReviewWorldDetailProjectionState {
     materials: Vec<Handle<StandardMaterial>>,
     review_water_materials: Vec<Handle<ReviewWaterMaterial>>,
     suppressed_terrain: BTreeMap<Entity, Handle<StandardMaterial>>,
-    suppressed_liquids: BTreeMap<Entity, Visibility>,
+    suppressed_liquids: BTreeMap<Entity, Handle<LiquidMaterial>>,
     vegetation_treatments: BTreeMap<u32, Vec3>,
     vegetation_original_scales: BTreeMap<Entity, Vec3>,
     effects_phase_neutral_hash: u64,
@@ -188,7 +188,7 @@ struct ReviewWorldDetailTeardownTargets {
     meshes: Vec<Handle<Mesh>>,
     images: Vec<Handle<Image>>,
     suppressed_terrain: BTreeMap<Entity, Handle<StandardMaterial>>,
-    suppressed_liquids: BTreeMap<Entity, Visibility>,
+    suppressed_liquids: BTreeMap<Entity, Handle<LiquidMaterial>>,
     vegetation_original_scales: BTreeMap<Entity, Vec3>,
 }
 
@@ -199,12 +199,26 @@ struct ReviewWorldDetailTeardownTargets {
 #[derive(Debug)]
 struct ReviewWaterSuppressionPlan {
     terrain: Vec<(Entity, Handle<StandardMaterial>)>,
-    liquids: Vec<(Entity, Visibility)>,
+    liquids: Vec<(Entity, Handle<LiquidMaterial>)>,
+    water_batches: usize,
 }
 
 impl ReviewWaterSuppressionPlan {
     fn is_complete(&self) -> bool {
-        !self.terrain.is_empty() && !self.liquids.is_empty()
+        self.terrain.is_empty()
+            && self.water_batches > 0
+            && self.liquids.len() == self.water_batches
+    }
+
+    fn suppress(self, commands: &mut Commands, state: &mut ReviewWorldDetailProjectionState) {
+        for (entity, original) in self.liquids {
+            state.suppressed_liquids.insert(entity, original);
+            // Keep the original mesh visible to picking while removing only its
+            // render binding. The review surface is the sole visible water path.
+            commands
+                .entity(entity)
+                .remove::<MeshMaterial3d<LiquidMaterial>>();
+        }
     }
 }
 
@@ -258,7 +272,7 @@ struct ReviewWorldDetailAdapter<'w, 's> {
         (
             Entity,
             &'static TerrainRenderBatch,
-            &'static mut MeshMaterial3d<StandardMaterial>,
+            &'static MeshMaterial3d<StandardMaterial>,
         ),
     >,
     liquid_presentations: Query<
@@ -266,8 +280,9 @@ struct ReviewWorldDetailAdapter<'w, 's> {
         's,
         (
             Entity,
-            &'static ReviewLiquidPresentationRole,
-            &'static mut Visibility,
+            &'static TerrainRenderBatch,
+            Option<&'static ReviewLiquidPresentationRole>,
+            Option<&'static MeshMaterial3d<LiquidMaterial>>,
         ),
     >,
     liquid_material_bindings: Query<'w, 's, &'static MeshMaterial3d<LiquidMaterial>>,
@@ -280,10 +295,6 @@ struct ReviewWorldDetailAdapter<'w, 's> {
 }
 
 /// Builds the review layer after ordinary terrain publication has completed.
-#[expect(
-    clippy::expect_used,
-    reason = "suppression targets are resolved from exclusively borrowed queries and cannot disappear within this system"
-)]
 fn apply_review_world_detail(
     mut commands: Commands,
     sources: ReviewWorldDetailSources,
@@ -310,8 +321,8 @@ fn apply_review_world_detail(
     } = sources;
     let ReviewWorldDetailAdapter {
         grids,
-        mut terrain_batches,
-        mut liquid_presentations,
+        terrain_batches,
+        liquid_presentations,
         liquid_material_bindings,
         mut materials,
         liquid_materials,
@@ -350,24 +361,35 @@ fn apply_review_world_detail(
             );
             return;
         };
-        let terrain = (&mut terrain_batches)
+        let terrain = (&terrain_batches)
             .into_iter()
             .filter(|(_, batch, _)| batch.substance() == water)
             .map(|(entity, _, material)| (entity, material.0.clone()))
             .collect::<Vec<_>>();
-        let liquids = (&mut liquid_presentations)
-            .into_iter()
-            .filter(|(_, role, _)| role.0 == FillMaterialRole::Water)
-            .map(|(entity, _, visibility)| (entity, *visibility))
+        let water_batches = liquid_presentations
+            .iter()
+            .filter(|(_, batch, _, _)| batch.substance() == water)
             .collect::<Vec<_>>();
-        let plan = ReviewWaterSuppressionPlan { terrain, liquids };
+        let liquids = water_batches
+            .iter()
+            .filter_map(|(entity, _, role, material)| {
+                role.filter(|role| role.0 == FillMaterialRole::Water)
+                    .and_then(|_| material.map(|material| (*entity, material.0.clone())))
+            })
+            .collect::<Vec<_>>();
+        let plan = ReviewWaterSuppressionPlan {
+            terrain,
+            liquids,
+            water_batches: water_batches.len(),
+        };
         if !plan.is_complete() {
             fail_review_world_detail(
                 &mut commands,
                 &format!(
-                    "water treatment requires both ordinary voxel-water and liquid-presentation suppression targets (found {} terrain, {} liquid)",
+                    "water treatment requires exactly one extended-material binding per original water batch and no duplicate standard-material water (found {} standard, {} extended of {} water batches)",
                     plan.terrain.len(),
-                    plan.liquids.len()
+                    plan.liquids.len(),
+                    plan.water_batches,
                 ),
             );
             return;
@@ -392,7 +414,6 @@ fn apply_review_world_detail(
         biomes,
         generation.as_deref(),
         art_catalog.as_deref(),
-        water_suppression.is_some(),
         runtime_receipt.as_deref(),
         &mut materials,
         &mut review_water_materials,
@@ -435,29 +456,7 @@ fn apply_review_world_detail(
     };
 
     if let Some(water_suppression) = water_suppression {
-        let suppression = materials.add(StandardMaterial {
-            base_color: Color::srgba(0.0, 0.0, 0.0, 0.0),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        });
-        state.materials.push(suppression.clone());
-        for (entity, original) in water_suppression.terrain {
-            let mut material = terrain_batches
-                .get_mut(entity)
-                .expect("prevalidated terrain-water suppression target remains live")
-                .2;
-            state.suppressed_terrain.insert(entity, original);
-            material.0 = suppression.clone();
-        }
-        for (entity, original) in water_suppression.liquids {
-            let mut visibility = liquid_presentations
-                .get_mut(entity)
-                .expect("prevalidated liquid-water suppression target remains live")
-                .2;
-            state.suppressed_liquids.insert(entity, original);
-            *visibility = Visibility::Hidden;
-        }
+        water_suppression.suppress(&mut commands, &mut state);
     }
 
     if !state.entities.is_empty() {
@@ -553,13 +552,12 @@ fn update_review_water_material_phase(
     }
 }
 
-/// Restores every ordinary renderer handle/visibility and explicitly removes review
+/// Restores every ordinary renderer handle and explicitly removes review
 /// assets before the map itself is torn down.
 fn restore_review_world_detail(
     mut commands: Commands,
     state: Option<Res<ReviewWorldDetailProjectionState>>,
     mut terrain_batches: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    mut liquid_presentations: Query<&mut Visibility, With<ReviewLiquidPresentationRole>>,
     mut render_children: Query<&mut Transform>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut review_water_materials: ResMut<Assets<ReviewWaterMaterial>>,
@@ -592,9 +590,9 @@ fn restore_review_world_detail(
         }
     }
     for (entity, original) in &state.suppressed_liquids {
-        if let Ok(mut current) = liquid_presentations.get_mut(*entity) {
-            *current = *original;
-        }
+        commands
+            .entity(*entity)
+            .try_insert(MeshMaterial3d(original.clone()));
     }
     for (entity, original) in &state.vegetation_original_scales {
         if let Ok(mut transform) = render_children.get_mut(*entity) {
@@ -634,7 +632,10 @@ fn publish_review_world_detail_teardown_receipt(
     meshes: Res<Assets<Mesh>>,
     images: Res<Assets<Image>>,
     terrain_batches: Query<&MeshMaterial3d<StandardMaterial>>,
-    liquid_presentations: Query<&Visibility, With<ReviewLiquidPresentationRole>>,
+    liquid_presentations: Query<
+        &MeshMaterial3d<LiquidMaterial>,
+        With<ReviewLiquidPresentationRole>,
+    >,
     render_children: Query<&Transform>,
 ) {
     let Some(targets) = targets else {
@@ -655,7 +656,7 @@ fn publish_review_world_detail_teardown_receipt(
         .filter(|(entity, original)| {
             liquid_presentations
                 .get(**entity)
-                .map_or(true, |current| current != *original)
+                .map_or(true, |current| &current.0 != *original)
         })
         .count();
     let vegetation_scale_overrides_remaining = targets
@@ -712,7 +713,6 @@ fn build_review_projection(
     biomes: Option<&BiomeRegions>,
     generation: Option<&GenerationReport>,
     art_catalog: Option<&RuntimeArtCatalog>,
-    will_suppress_water: bool,
     runtime_receipt: Option<&ReviewRuntimeReceiptV1>,
     materials: &mut Assets<StandardMaterial>,
     review_water_materials: &mut Assets<ReviewWaterMaterial>,
@@ -745,8 +745,7 @@ fn build_review_projection(
     let build_report = |hashes: &ReviewWorldDetailProjectionHashesV1,
                         effect_validation: &ReviewWorldDetailEffectValidationV1,
                         counts: ReviewWorldDetailCountsV1,
-                        state: &ReviewWorldDetailProjectionState,
-                        suppresses_water: bool|
+                        state: &ReviewWorldDetailProjectionState|
      -> Result<Option<ReviewWorldDetailReportV1>, String> {
         let Some(runtime_receipt) = runtime_receipt else {
             return Ok(None);
@@ -782,12 +781,7 @@ fn build_review_projection(
             cleanup: ReviewCleanupStateV1 {
                 completed_cycles: 0,
                 entities_remaining: u64::try_from(state.entities.len()).unwrap_or(u64::MAX),
-                materials_remaining: u64::try_from(
-                    state
-                        .material_count()
-                        .saturating_add(if suppresses_water { 1 } else { 0 }),
-                )
-                .unwrap_or(u64::MAX),
+                materials_remaining: u64::try_from(state.material_count()).unwrap_or(u64::MAX),
                 meshes_remaining: u64::try_from(state.meshes.len()).unwrap_or(u64::MAX),
                 target_images_remaining: 0,
                 camera_state_restored: false,
@@ -843,7 +837,6 @@ fn build_review_projection(
             &effects_plan.effect_validation,
             ReviewWorldDetailCountsV1::default(),
             &state,
-            false,
         )?;
         return Ok((state, report, hashes));
     }
@@ -1118,9 +1111,6 @@ fn build_review_projection(
             images,
             commands,
         )?;
-        if will_suppress_water {
-            counts.water.materials = counts.water.materials.saturating_add(1);
-        }
         counts.total = counts.computed_total();
 
         let hashes = ReviewWorldDetailProjectionHashesV1 {
@@ -1128,13 +1118,7 @@ fn build_review_projection(
             liquid_atmosphere_plan: hex64(effects_plan.plan_hash),
             mesh_projection: hex64(xxh3_64(&mesh_hash_bytes)),
         };
-        let report = build_report(
-            &hashes,
-            &effects_plan.effect_validation,
-            counts,
-            &state,
-            will_suppress_water,
-        )?;
+        let report = build_report(&hashes, &effects_plan.effect_validation, counts, &state)?;
         Ok((report, hashes))
     })();
     match built {
@@ -3596,7 +3580,6 @@ mod tests {
                 None,
                 None,
                 None,
-                false,
                 None,
                 &mut materials,
                 &mut review_water_materials,
@@ -3799,21 +3782,32 @@ mod tests {
     fn incomplete_water_suppression_plan_is_rejected_before_commit() {
         let mut materials = Assets::<StandardMaterial>::default();
         let material = materials.add(StandardMaterial::default());
+        let liquid_materials = Assets::<LiquidMaterial>::default();
+        let liquid = liquid_materials.reserve_handle();
         let terrain_only = ReviewWaterSuppressionPlan {
             terrain: vec![(Entity::PLACEHOLDER, material.clone())],
             liquids: Vec::new(),
+            water_batches: 1,
         };
         let liquid_only = ReviewWaterSuppressionPlan {
             terrain: Vec::new(),
-            liquids: vec![(Entity::PLACEHOLDER, Visibility::Inherited)],
+            liquids: vec![(Entity::PLACEHOLDER, liquid.clone())],
+            water_batches: 1,
         };
-        let complete = ReviewWaterSuppressionPlan {
+        let duplicate_paths = ReviewWaterSuppressionPlan {
             terrain: vec![(Entity::PLACEHOLDER, material)],
-            liquids: vec![(Entity::PLACEHOLDER, Visibility::Inherited)],
+            liquids: vec![(Entity::PLACEHOLDER, liquid.clone())],
+            water_batches: 1,
+        };
+        let incomplete = ReviewWaterSuppressionPlan {
+            terrain: Vec::new(),
+            liquids: vec![(Entity::PLACEHOLDER, liquid)],
+            water_batches: 2,
         };
         assert!(!terrain_only.is_complete());
-        assert!(!liquid_only.is_complete());
-        assert!(complete.is_complete());
+        assert!(liquid_only.is_complete());
+        assert!(!duplicate_paths.is_complete());
+        assert!(!incomplete.is_complete());
     }
 
     #[test]
@@ -4314,6 +4308,9 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<StandardMaterial>>()
             .add(StandardMaterial::default());
+        let liquid_materials = Assets::<LiquidMaterial>::default();
+        let original_liquid = liquid_materials.reserve_handle();
+        let wrong_liquid_material = liquid_materials.reserve_handle();
         let terrain = app.world_mut().spawn_empty().id();
         let liquid = app.world_mut().spawn_empty().id();
         let vegetation = app.world_mut().spawn_empty().id();
@@ -4325,7 +4322,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ReviewLiquidPresentationRole(FillMaterialRole::Water),
-                Visibility::Hidden,
+                MeshMaterial3d(wrong_liquid_material),
             ))
             .id();
         let wrong_vegetation = app
@@ -4339,8 +4336,8 @@ mod tests {
                     (wrong_terrain, original_material),
                 ]),
                 suppressed_liquids: BTreeMap::from([
-                    (liquid, Visibility::Visible),
-                    (wrong_liquid, Visibility::Visible),
+                    (liquid, original_liquid.clone()),
+                    (wrong_liquid, original_liquid),
                 ]),
                 vegetation_original_scales: BTreeMap::from([
                     (vegetation, Vec3::ONE),
@@ -4355,6 +4352,108 @@ mod tests {
         assert_eq!(receipt.terrain_material_overrides_remaining, 2);
         assert_eq!(receipt.liquid_visibility_overrides_remaining, 2);
         assert_eq!(receipt.vegetation_scale_overrides_remaining, 2);
+    }
+
+    #[test]
+    fn water_review_suppression_preserves_pick_mesh_and_restores_exact_material() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(Assets::<Mesh>::default());
+        app.insert_resource(Assets::<StandardMaterial>::default());
+        app.insert_resource(Assets::<ReviewWaterMaterial>::default());
+        app.insert_resource(Assets::<Image>::default());
+        app.add_systems(
+            Update,
+            (
+                restore_review_world_detail,
+                publish_review_world_detail_teardown_receipt,
+            )
+                .chain(),
+        );
+
+        let liquid_materials = Assets::<LiquidMaterial>::default();
+        let original = liquid_materials.reserve_handle();
+        let mesh = app.world().resource::<Assets<Mesh>>().reserve_handle();
+        let water = app
+            .world_mut()
+            .spawn((
+                ReviewLiquidPresentationRole(FillMaterialRole::Water),
+                MeshMaterial3d(original.clone()),
+                Mesh3d(mesh.clone()),
+                Visibility::Inherited,
+                Pickable::default(),
+            ))
+            .id();
+        let lava = app
+            .world_mut()
+            .spawn((
+                ReviewLiquidPresentationRole(FillMaterialRole::Lava),
+                MeshMaterial3d(original.clone()),
+                Visibility::Inherited,
+            ))
+            .id();
+        let plan = ReviewWaterSuppressionPlan {
+            terrain: Vec::new(),
+            liquids: vec![(water, original.clone())],
+            water_batches: 1,
+        };
+        assert!(plan.is_complete());
+        let mut state = ReviewWorldDetailProjectionState::default();
+        let mut queue = CommandQueue::default();
+        plan.suppress(&mut Commands::new(&mut queue, app.world()), &mut state);
+        queue.apply(app.world_mut());
+
+        assert!(app
+            .world()
+            .get::<MeshMaterial3d<LiquidMaterial>>(water)
+            .is_none());
+        assert_eq!(
+            app.world().get::<Mesh3d>(water).map(|mesh| &mesh.0),
+            Some(&mesh)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(water),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Pickable>(water),
+            Some(&Pickable::default())
+        );
+        assert_eq!(
+            app.world()
+                .get::<MeshMaterial3d<LiquidMaterial>>(lava)
+                .map(|material| &material.0),
+            Some(&original)
+        );
+        assert_eq!(
+            state.material_count(),
+            0,
+            "suppressing a binding allocates no material asset"
+        );
+
+        app.insert_resource(state);
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<MeshMaterial3d<LiquidMaterial>>(water)
+                .map(|material| &material.0),
+            Some(&original)
+        );
+        assert_eq!(
+            app.world().get::<Mesh3d>(water).map(|mesh| &mesh.0),
+            Some(&mesh)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(water),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ReviewWorldDetailTeardownReceiptV1>()
+                .liquid_visibility_overrides_remaining,
+            0
+        );
     }
 
     #[test]

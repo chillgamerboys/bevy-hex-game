@@ -81,8 +81,9 @@ review.
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
 cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds and
 freezes liquid presentation there; captures default to `0.0`, while launches without a
-capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
-an exact generated anchor before framing and requires a capture.
+capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` holds the review camera at an exact generated gameplay
+anchor without moving the selected actor and requires a capture. Fixed anchor views
+do not establish live camera following, collision, or native-input behavior.
 `HEX_REVIEW_CHARACTER_RADIUS_SCALE` accepts a finite value in `[1, 20]` for Character
 captures and pulls the review camera back without changing shipped camera settings.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview

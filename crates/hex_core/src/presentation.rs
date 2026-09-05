@@ -322,11 +322,30 @@ mod tests {
     #[test]
     fn review_edge_treatments_are_exact_and_default_to_hard_normals() {
         assert_eq!(ReviewEdgeTreatment::default(), ReviewEdgeTreatment::Current);
-        assert_eq!(ReviewEdgeTreatment::Current.normal_blend(), 0.0);
-        assert_eq!(ReviewEdgeTreatment::MicroBevel04.normal_blend(), 0.04);
-        assert_eq!(ReviewEdgeTreatment::MicroBevel08.normal_blend(), 0.08);
-        assert_eq!(ReviewEdgeTreatment::GeometricBevel04.normal_blend(), 0.0);
-        assert_eq!(ReviewEdgeTreatment::GeometricBevel08.normal_blend(), 0.0);
+        assert_eq!(
+            ReviewEdgeTreatment::Current.normal_blend().to_bits(),
+            0.0_f32.to_bits()
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::MicroBevel04.normal_blend().to_bits(),
+            0.04_f32.to_bits()
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::MicroBevel08.normal_blend().to_bits(),
+            0.08_f32.to_bits()
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::GeometricBevel04
+                .normal_blend()
+                .to_bits(),
+            0.0_f32.to_bits()
+        );
+        assert_eq!(
+            ReviewEdgeTreatment::GeometricBevel08
+                .normal_blend()
+                .to_bits(),
+            0.0_f32.to_bits()
+        );
         assert_eq!(
             ReviewEdgeTreatment::Current.geometric_bevel_fraction(),
             None

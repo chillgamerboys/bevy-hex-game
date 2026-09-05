@@ -9,6 +9,19 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Grand V3 completion is being assembled for PR #219.** The accepted visual source
+`125e2df` and its import provenance are preserved. The six recovered map fixes plus
+Crystal crown snow are tracked in [the recovered-fixes ledger](hex-six-map-fixes.md).
+Grounded exploration awaits its owner's committed handoff and combined integration.
+Strict generation, independent original-route preservation, canonical checks, final
+renders, water animation and native motion/play evidence remain pending. This candidate
+has not been delivered to `dev`; the current gate is in the
+[Grand V3 map manifest](waves/grand-v3-map/manifest.md).
+
+The following older reconciliation and checkpoint measurements remain historical evidence
+at their stated source identities. Their earlier passing results do not certify PR #219's
+current combined candidate.
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,
@@ -30,8 +43,8 @@ four still require named-human exact-head presentation, motion/control-feel, and
 findings. They must land #210 → #211 → #212 → #213 under the
 [biome stack reconciliation](waves/biome-stack-reconciliation/manifest.md).
 
-The sixteen committed Grand V3 checkpoints are attributable and mechanically packageable
-only after #213 lands; they are not merge-ready. Garden's published foundation plus nine
+The earlier sixteen-checkpoint Grand V3 packaging plan remains historical provenance
+in the biome-stack reconciliation; the current outcome is the combined PR #219 gate above. Garden's published foundation plus nine
 local commits are near-ready after its two integration-golden repairs, current-base
 reconciliation, complete gate, and exact-head walk. Generic review/provenance and
 capture-sequence tooling, Grand structural review, route revision 3, time-cycle work, and
