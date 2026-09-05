@@ -299,6 +299,16 @@ impl TerrainPreparer {
             }
             projected.insert(local, geometry);
         }
+        let rendered_runs = grouped.values().flatten().try_fold(0usize, |count, run| {
+            count
+                .checked_add(remaining_intervals(run, suppression).len())
+                .ok_or_else(|| PresentationError("render fragment count overflow".into()))
+        })?;
+        if rendered_runs > self.limits.max_runs_per_chunk {
+            return Err(PresentationError(
+                "max_runs_per_chunk render fragment budget exceeded".into(),
+            ));
+        }
         let opaque: BTreeSet<_> = self
             .palette
             .values()
@@ -306,7 +316,6 @@ impl TerrainPreparer {
             .map(|(id, _)| *id)
             .collect();
         let mut batches = Vec::new();
-        let mut rendered_runs = 0usize;
         for (substance, runs) in grouped {
             let material = self
                 .palette
@@ -337,12 +346,6 @@ impl TerrainPreparer {
                 let mut geometry = Vec::new();
                 for run in partition {
                     for (bottom, top) in remaining_intervals(run, suppression) {
-                        rendered_runs += 1;
-                        if rendered_runs > self.limits.max_runs_per_chunk {
-                            return Err(PresentationError(
-                                "max_runs_per_chunk render fragment budget exceeded".into(),
-                            ));
-                        }
                         let bottom = self.checked_level(bottom)?;
                         let top = self.checked_level(top)?;
                         geometry.push(TerrainMeshRun {
@@ -478,10 +481,15 @@ fn remaining_intervals(run: &PreparedRun, suppression: &[ColumnData]) -> Vec<(i3
     };
     let mut cursor = run.exact.bottom;
     let mut intervals = Vec::new();
-    for hidden in &mask.runs {
-        if hidden.top <= cursor || hidden.bottom >= run.exact.top {
-            continue;
-        }
+    let start = mask
+        .runs
+        .partition_point(|hidden| hidden.top <= run.exact.bottom);
+    for hidden in mask
+        .runs
+        .iter()
+        .skip(start)
+        .take_while(|hidden| hidden.bottom < run.exact.top)
+    {
         if hidden.bottom > cursor {
             intervals.push((cursor, hidden.bottom));
         }
