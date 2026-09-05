@@ -165,6 +165,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(clippy::expect_used, reason = "the fixture owns an unpoisoned test mutex")]
     fn failed_completion_stays_failed_even_if_a_later_callback_succeeds() {
         let completion = GpuCompletion::default();
         assert!(completion.receipt().is_err());
