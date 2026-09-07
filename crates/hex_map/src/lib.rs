@@ -37,6 +37,10 @@
 
 use bevy::prelude::*;
 
+/// Isolated real-time duel terrain using the production voxel and damage authorities.
+#[cfg(feature = "arena-prototype")]
+pub mod arena;
+
 mod crystal_render;
 mod feature_render;
 /// Terrain height generation.

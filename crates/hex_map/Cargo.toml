@@ -6,6 +6,10 @@ publish = false
 autotests = false
 description = "Voxel storage, terrain generation, tile spawning, and map settings."
 
+[features]
+default = []
+arena-prototype = ["dep:ron"]
+
 # A leaf crate. Nothing depends on it except the binary, so gameplay, camera, sky,
 # and screens cannot import its implementation. The ECS component contract still
 # matters at runtime: bad tile metadata can break movement or presentation.
@@ -20,6 +24,7 @@ hex_assets = { workspace = true }
 hex_core = { workspace = true }
 hex_multiplayer = { workspace = true }
 rand = { workspace = true }
+ron = { workspace = true, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 xxhash-rust = { workspace = true }
 
