@@ -32,6 +32,41 @@ fn tick(app: &mut App) {
 }
 
 #[test]
+fn enabled_bot_damages_a_player_from_normal_arena_spawns() {
+    let mut app = app(60);
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = true;
+    let initial_world = app.world().resource::<ArenaTerrainView>().voxels.len();
+    let mut casts = 0;
+    for _ in 0..120 * 20 {
+        tick(&mut app);
+        let session = app.world().resource::<ArenaSession>();
+        casts += session
+            .projectiles
+            .iter()
+            .filter(|shot| shot.owner == 1 && shot.age < hex_arena::STEP)
+            .count();
+        if session
+            .actors
+            .iter()
+            .any(|actor| actor.id == 0 && actor.hp < 80.0)
+        {
+            break;
+        }
+    }
+    // Settle the impact through the world owner on the following physics tick.
+    tick(&mut app);
+    let session = app.world().resource::<ArenaSession>();
+    assert!(session
+        .actors
+        .iter()
+        .any(|actor| actor.id == 0 && actor.hp < 80.0));
+    assert!(session.actors.iter().all(|actor| actor.feet.is_finite()));
+    assert!(casts > 0);
+    assert!(session.terrain_outcomes > 0);
+    assert!(app.world().resource::<ArenaTerrainView>().voxels.len() < initial_world);
+}
+
+#[test]
 fn paused_last_tick_cast_survives_message_expiry_then_refreshes_before_movement() {
     let mut app = app(60);
     let original = app.world().resource::<ArenaTerrainView>().clone();

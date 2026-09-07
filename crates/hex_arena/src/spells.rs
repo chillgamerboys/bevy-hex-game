@@ -13,7 +13,7 @@ use crate::{
 };
 
 const PROJECTILE_RADIUS: f32 = 0.06;
-const MAX_FLIGHT_SECONDS: f32 = 8.0;
+pub(super) const MAX_FLIGHT_SECONDS: f32 = 8.0;
 pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 
 #[derive(Debug, Clone)]
@@ -514,6 +514,25 @@ pub(super) fn preview(
     let Some(actor) = session.actors.iter().find(|a| a.id == 0) else {
         return Preview::default();
     };
+    preview_actor(
+        actor,
+        &session.actors,
+        &session.collision,
+        world,
+        geometry,
+        tuning,
+    )
+}
+
+/// Shared stationary-body forecast for human assistance and bot shot admission.
+pub(super) fn preview_actor(
+    actor: &Actor,
+    actors: &[Actor],
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
+) -> Preview {
     if actor.selected == Spell::AreaBlast {
         return Preview {
             impact: Some(actor.center()),
@@ -528,7 +547,7 @@ pub(super) fn preview(
     };
     let mut tick = 0_u16;
     while flight_active(&shot) {
-        let impact = advance_shot(&mut shot, &session.collision, &session.actors, true);
+        let impact = advance_shot(&mut shot, collision, actors, true);
         if tick.is_multiple_of(4) || impact.is_some() {
             result.points.push(shot.position);
         }
@@ -541,7 +560,7 @@ pub(super) fn preview(
                     shot.parameters.wall_dimensions,
                     world,
                     geometry,
-                    &session.actors,
+                    actors,
                 );
                 result.valid = !result.wall_voxels.is_empty();
             } else {

@@ -15,10 +15,12 @@ use hex_core::{
 };
 use serde::{Deserialize, Serialize};
 
+mod bot;
 mod collision;
 mod controller;
 mod spells;
 
+use bot::Bot;
 use collision::{CollisionWorld, SKIN};
 use controller::Body;
 use spells::{PendingWall, ShotParameters};
@@ -471,7 +473,14 @@ impl ArenaSession {
         }
         self.tick += 1;
         let bot = if self.bot_enabled {
-            self.bot.intent(&self.actors, &self.collision, tuning)
+            self.bot.intent(
+                &self.actors,
+                &self.projectiles,
+                &self.collision,
+                world,
+                geometry,
+                tuning,
+            )
         } else {
             ActorIntent::default()
         };
@@ -587,89 +596,6 @@ fn separate_actors(actors: &mut [Actor], world: &CollisionWorld) {
     let correction = direction * ((BODY_RADIUS * 2.0 - distance) * 0.5 + SKIN);
     a.feet = collision::slide(world, a.feet, correction, BODY_HEIGHT, BODY_RADIUS);
     b.feet = collision::slide(world, b.feet, -correction, BODY_HEIGHT, BODY_RADIUS);
-}
-
-#[derive(Debug)]
-struct Bot {
-    seed: u32,
-    movement: Vec2,
-    move_ticks: u16,
-    fire_ticks: u16,
-}
-
-impl Default for Bot {
-    fn default() -> Self {
-        Self {
-            seed: 0x6A09_E667,
-            movement: Vec2::ZERO,
-            move_ticks: 0,
-            fire_ticks: 150,
-        }
-    }
-}
-
-impl Bot {
-    fn random(&mut self) -> f32 {
-        self.seed ^= self.seed << 13;
-        self.seed ^= self.seed >> 17;
-        self.seed ^= self.seed << 5;
-        f32::from(u16::try_from(self.seed & 0xffff).unwrap_or(0)) / 65535.0
-    }
-
-    fn intent(
-        &mut self,
-        actors: &[Actor],
-        collision: &CollisionWorld,
-        tuning: &ArenaTuning,
-    ) -> ActorIntent {
-        let (Some(human), Some(bot)) = (
-            actors.iter().find(|a| a.id == 0),
-            actors.iter().find(|a| a.id == 1),
-        ) else {
-            return ActorIntent::default();
-        };
-        self.move_ticks = self.move_ticks.saturating_sub(1);
-        self.fire_ticks = self.fire_ticks.saturating_sub(1);
-        if self.move_ticks == 0 {
-            self.movement =
-                Vec2::new(self.random() * 2.0 - 1.0, self.random() * 1.4 - 0.5).normalize_or_zero();
-            self.move_ticks = 100;
-        }
-        let cast = self.fire_ticks == 0;
-        if cast {
-            self.fire_ticks = 190;
-        }
-        let noisy_target = human.center()
-            + Vec3::new(
-                self.random() * 2.2 - 1.1,
-                self.random() * 0.8,
-                self.random() * 2.2 - 1.1,
-            );
-        let mut aim = (noisy_target - bot.eye()).normalize_or_zero();
-        // Coarse distance lob only: enough to threaten the opposite platform,
-        // with the existing noise and no interception/pathfinding solver.
-        let distance = noisy_target.distance(bot.eye());
-        aim.y += distance * tuning.projectile_gravity
-            / (2.0 * tuning.projectile_speed * tuning.projectile_speed);
-        let planar = Vec3::new(aim.x, 0.0, aim.z).normalize_or_zero();
-        let travel = planar * self.movement.y + planar.cross(Vec3::Y) * self.movement.x;
-        let ahead = bot.feet + travel * 0.9 + Vec3::Y * 0.4;
-        if bot.grounded
-            && collision
-                .ground(ahead, BODY_HEIGHT, BODY_RADIUS, 1.3)
-                .is_none()
-        {
-            self.movement = -self.movement;
-        }
-        ActorIntent {
-            movement: self.movement,
-            aim: aim.normalize_or_zero(),
-            run: false,
-            jump: self.move_ticks == 1,
-            cast,
-            selected: Some(Spell::Fireball),
-        }
-    }
 }
 
 /// One shared prediction: the same integration, nearest-hit and footprint routines

@@ -15,8 +15,11 @@ native duel against one disposable bot on `experiment/spell-combat-arena`.
 `hex_arena` owns continuous movement, HP, cooldowns, ballistic Shield/Fireball,
 Area Blast, and knockback; world-owned arena terrain retains the existing damage
 and edit authority. First-person/close-third-person input, paused tuning, reset,
-and windowless capture tooling are part of the candidate. Combined validation,
-render inspection, and native playtesting remain pending. This work has not landed
+and windowless capture tooling are implemented. The original local candidate
+`6c89d48` passed all 19 combined checks and static inspection of 22 windowless
+captures. A subsequent bot follow-up adds gravity-aware aim with modest movement
+lead, close-range Area Blast, defensive Shield, and local strafing/obstacle probes;
+its focused validation is recorded separately. Native playtesting remains pending. This work has not landed
 on `dev`, does not install tactical gameplay or networking, and does not deliver
 multiplayer. See the [arena manifest](waves/spell-combat-arena/manifest.md).
 

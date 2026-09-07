@@ -1,6 +1,6 @@
 # Spell Combat Arena — local experiment
 
-Status: integrating. Branch: experiment/spell-combat-arena. Base: dev 495a73dcbe7edbab6d993867d91b15979fa6ce81. Coordinator: root. Ticket: null (Linear reauthentication required). Combined locally; integration validation in progress.
+Status: implemented locally, native playtest pending. Branch: experiment/spell-combat-arena. Base: dev 495a73dcbe7edbab6d993867d91b15979fa6ce81. Coordinator: root. Ticket: null (Linear reauthentication required). Original combined candidate 6c89d48 passed all 19 required checks and static inspection of 22 windowless captures; later follow-ups retain separate validation receipts in task outputs.
 
 Outcome: native offline first-person spell duel against one disposable bot. The user explicitly chose a local experiment branch until playtesting, so the shared foundation and lanes stay local; no remote PR/merge or production promotion is part of this experiment.
 
@@ -91,4 +91,22 @@ No deletion of source/saves/review evidence; disk cleanup authorized separately 
 - Gameplay committed and integrated; first focused run passed 26 arena tests and 124 core tests. Round-ending, moving-body ordering, enclosed launch, and full ballistic-lifetime regressions are included in the combined candidate.
 - Native composition, input, two cameras, HUD, tuning, windowless capture matrix, and combined lifecycle tests are authored. Native build, seven lifecycle tests, and strict workspace lint passed before the final layout correction. Initial static review found and corrected paused-panel height, footer readability, and third-person self obstruction. The final source-specific gate and capture receipts are retained in the task outputs; native playtesting remains pending.
 - Obsolete generated caches were removed under the user's explicit cleanup instruction; the output receipt records 14,178,758,656 physical bytes recovered. Source checkouts and review evidence were preserved.
-- Hourly overnight follow-up is attached to this task until delivery or September 7, 08:00 America/Los_Angeles.
+- Overnight follow-up was paused after the original local delivery.
+
+## Requested bot follow-up
+
+This bounded follow-up uses one gameplay implementation owner, with independently
+reviewed tests and a shared-application integration check. It creates no additional
+branch, lane, PR, or world authority. The bot still submits ordinary `ActorIntent`
+values and obeys the same movement, spell physics, HP, and cooldown rules.
+
+At five decisions per second it checks terrain line of sight, approaches distant
+visible targets, strafes, and retreats from unsafe fireball range. It uses Area
+Blast nearby, attempts a validated Shield when hurt, low on health, or facing an
+incoming visible fireball, and otherwise fires a low ballistic arc with a small
+horizontal lead and seeded error. Shield and fireball admission reuse the human
+trajectory preview; the actual shot still resolves against moving bodies and the
+current world. Local probes avoid immediate obstacles and unsupported steps. There
+is no navigation, learning, intercept search, or tracking through opaque walls.
+Bot pressure and motion remain native-playtest questions; typed tests establish
+its decisions, actual hits, wall edits, reset, and normal-arena composition.
