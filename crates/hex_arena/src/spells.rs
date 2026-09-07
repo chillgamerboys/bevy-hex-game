@@ -580,4 +580,46 @@ mod tests {
         assert!(sweep_actor(Vec3::new(0.29, 0.79, -2.0), Vec3::Z * 4.0, Vec3::ZERO).is_none());
         assert!(sweep_actor(Vec3::Y * 10.0, Vec3::NEG_Y * 20.0, Vec3::ZERO).is_some());
     }
+
+    #[test]
+    fn nearest_contact_wins_between_terrain_and_actors_in_either_order() {
+        let geometry = ArenaVoxelGeometry::default();
+        let view = ArenaTerrainView {
+            voxels: (0..=5)
+                .map(|level| {
+                    (
+                        TilePos::new(HexCoord::from_axial(2, 0), level),
+                        hex_core::SubstanceId(1),
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut world = CollisionWorld::default();
+        world.refresh(&view, geometry);
+        let shooter = Actor::spawn(0, Vec3::ZERO, Vec3::X);
+        let behind = Actor::spawn(1, Vec3::X * 5.0, Vec3::NEG_X);
+        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
+        shot.velocity = Vec3::X * 1200.0;
+        let contact = advance_shot(&mut shot, &world, &[behind.clone()], false)
+            .expect("the wall must be hit before the distant body");
+        assert!(contact.terrain && contact.point.x < 3.0);
+        let near = Actor::spawn(2, Vec3::X * 1.5, Vec3::NEG_X);
+        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
+        shot.velocity = Vec3::X * 1200.0;
+        let contact = advance_shot(&mut shot, &world, &[behind, near], false).expect("nearer body");
+        assert!(!contact.terrain && contact.point.x < 1.5);
+    }
+
+    #[test]
+    fn relative_sweep_hits_an_actor_crossing_between_tick_endpoints() {
+        let shooter = Actor::spawn(0, Vec3::ZERO, Vec3::X);
+        let mut target = Actor::spawn(1, Vec3::new(5.0, 0.0, 2.0), Vec3::NEG_X);
+        target.previous_feet = Vec3::new(5.0, 0.0, -2.0);
+        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
+        shot.velocity = Vec3::X * 1200.0;
+        let contact = advance_shot(&mut shot, &CollisionWorld::default(), &[target], false)
+            .expect("moving actor crosses the ray");
+        assert!(!contact.terrain && (4.0..5.0).contains(&contact.point.x));
+    }
 }
