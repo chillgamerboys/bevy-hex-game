@@ -204,6 +204,10 @@ pub(crate) fn slide(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "these tests require the explicitly constructed collision contact"
+)]
 mod tests {
     use super::*;
 

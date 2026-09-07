@@ -548,6 +548,10 @@ pub(super) fn preview(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "the fixed capsule fixtures must produce the characterized contact"
+)]
 mod tests {
     use super::*;
 

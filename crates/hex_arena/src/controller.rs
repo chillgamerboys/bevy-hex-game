@@ -233,4 +233,88 @@ mod tests {
         }
         assert!(feet.y < -5.0);
     }
+
+    #[test]
+    fn one_level_step_is_accepted_but_two_levels_require_a_jump() {
+        let make_world = |levels| {
+            let mut view = ArenaTerrainView {
+                voxels: HexCoord::ORIGIN
+                    .within_radius(10)
+                    .into_iter()
+                    .map(|coord| (TilePos::new(coord, 0), SubstanceId(1)))
+                    .collect(),
+                ..Default::default()
+            };
+            for level in 1..=levels {
+                view.voxels.insert(
+                    TilePos::new(HexCoord::from_axial(1, 0), level),
+                    SubstanceId(1),
+                );
+            }
+            let mut world = CollisionWorld::default();
+            world.refresh(&view, ArenaVoxelGeometry::default());
+            world
+        };
+        let mut body = Body::default();
+        let mut feet = Vec3::ZERO;
+        let mut accepted_step: f32 = 0.0;
+        let low = make_world(1);
+        for _ in 0..90 {
+            body.tick(&mut feet, Vec3::X, false, false, &low);
+            accepted_step = accepted_step.max(body.step_rise);
+        }
+        assert!(feet.x > 2.0 && (accepted_step - 0.4).abs() < 0.001);
+        let high = make_world(2);
+        body = Body::default();
+        feet = Vec3::ZERO;
+        for _ in 0..120 {
+            body.tick(&mut feet, Vec3::X, false, false, &high);
+        }
+        assert!(feet.x < 0.62);
+        body = Body::default();
+        feet = Vec3::ZERO;
+        for tick in 0..120 {
+            body.tick(&mut feet, Vec3::X, false, tick == 0, &high);
+        }
+        assert!(feet.x > 2.0);
+    }
+
+    #[test]
+    fn coyote_jump_expires_and_airborne_edges_cannot_jump_again() {
+        let supported = floor(5);
+        let empty = CollisionWorld::default();
+        let mut body = Body::default();
+        let mut feet = Vec3::ZERO;
+        body.tick(&mut feet, Vec3::ZERO, false, false, &supported);
+        for _ in 0..5 {
+            body.tick(&mut feet, Vec3::ZERO, false, false, &empty);
+        }
+        body.tick(&mut feet, Vec3::ZERO, false, true, &empty);
+        assert!(body.vertical_velocity > 5.0);
+        let before = body.vertical_velocity;
+        body.tick(&mut feet, Vec3::ZERO, false, true, &empty);
+        assert!(body.vertical_velocity < before);
+        body = Body::default();
+        feet = Vec3::ZERO;
+        body.tick(&mut feet, Vec3::ZERO, false, false, &supported);
+        for _ in 0..20 {
+            body.tick(&mut feet, Vec3::ZERO, false, false, &empty);
+        }
+        body.tick(&mut feet, Vec3::ZERO, false, true, &empty);
+        assert!(body.vertical_velocity < 0.0);
+    }
+
+    #[test]
+    fn buffered_jump_is_consumed_after_landing_and_does_not_report_a_step() {
+        let world = floor(5);
+        let mut body = Body::default();
+        let mut feet = Vec3::Y * 0.05;
+        let mut jumped = false;
+        for tick in 0..25 {
+            body.tick(&mut feet, Vec3::ZERO, false, tick == 0, &world);
+            assert!(body.step_rise.abs() < 0.00001);
+            jumped |= body.vertical_velocity > 1.0;
+        }
+        assert!(jumped);
+    }
 }

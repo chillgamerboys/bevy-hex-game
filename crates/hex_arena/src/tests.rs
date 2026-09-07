@@ -1,5 +1,10 @@
 //! Headless acceptance of continuous authority and the shared input/spell path.
 
+#![expect(
+    clippy::expect_used,
+    reason = "tests construct and require these exact two-actor fixtures and messages"
+)]
+
 use super::*;
 use hex_core::{ElementId, HexCoord, SubstanceId, TerrainImpactRejection};
 
