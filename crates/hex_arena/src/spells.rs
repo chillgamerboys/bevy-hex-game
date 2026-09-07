@@ -529,7 +529,7 @@ pub(super) fn preview(
     let mut tick = 0_u16;
     while flight_active(&shot) {
         let impact = advance_shot(&mut shot, &session.collision, &session.actors, true);
-        if tick % 4 == 0 || impact.is_some() {
+        if tick.is_multiple_of(4) || impact.is_some() {
             result.points.push(shot.position);
         }
         if let Some(impact) = impact {
