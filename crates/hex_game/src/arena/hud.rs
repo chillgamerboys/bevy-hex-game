@@ -278,9 +278,7 @@ pub(super) fn update(
     for (label, mut text) in &mut labels {
         text.0 = match label {
             Label::Charge => match charge {
-                Some(charge) if charge.spell == Spell::AreaBlast => {
-                    "AREA BLAST / Release to cast".into()
-                }
+                Some(charge) if charge.spell == Spell::AreaBlast => "Release to cast".into(),
                 Some(_) => format!("{:.0}% / Release to cast", progress * 100.0),
                 None => String::new(),
             },
