@@ -1,6 +1,6 @@
 # Spell Combat Arena — local experiment
 
-Status: combined locally; integration validation in progress. Branch: experiment/spell-combat-arena. Base: dev 495a73dcbe7edbab6d993867d91b15979fa6ce81. Coordinator: root. Ticket: null (Linear reauthentication required).
+Status: integrating. Branch: experiment/spell-combat-arena. Base: dev 495a73dcbe7edbab6d993867d91b15979fa6ce81. Coordinator: root. Ticket: null (Linear reauthentication required). Combined locally; integration validation in progress.
 
 Outcome: native offline first-person spell duel against one disposable bot. The user explicitly chose a local experiment branch until playtesting, so the shared foundation and lanes stay local; no remote PR/merge or production promotion is part of this experiment.
 

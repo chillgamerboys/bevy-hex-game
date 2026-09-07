@@ -23,11 +23,17 @@ pub(super) fn actors(
         {
             transform.translation = actor.feet;
             transform.rotation = Quat::from_rotation_y((-actor.aim.x).atan2(-actor.aim.z));
+            let external_capture = state.capture.is_some()
+                && state.capture_view != "first"
+                && state.capture_view != "third"
+                && state.capture_view != "tuning";
+            let retracted_into_body =
+                super::camera_origin(&session, &state, actor.eye(), super::aim(&state))
+                    .distance(actor.eye())
+                    < 0.45;
             *visibility = if actor.id == 0
-                && !state.third_person
-                && !(state.capture.is_some()
-                    && state.capture_view != "first"
-                    && state.capture_view != "tuning")
+                && !external_capture
+                && (!state.third_person || retracted_into_body)
             {
                 Visibility::Hidden
             } else {
@@ -193,7 +199,7 @@ pub(super) fn effects(
     if actor.selected == Spell::Shield {
         for pos in predicted.wall_voxels {
             let center = geometry.center(pos);
-            gizmos.cuboid(
+            gizmos.cube(
                 Transform::from_translation(center).with_scale(Vec3::new(
                     1.6,
                     geometry.level_height,

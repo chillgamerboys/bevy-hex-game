@@ -31,7 +31,7 @@ fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, T
     (
         Text::new(value),
         TextFont {
-            font_size: size,
+            font_size: FontSize::Px(size),
             ..default()
         },
         TextColor(color),
@@ -41,7 +41,7 @@ fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, T
 pub(super) fn setup(mut commands: Commands) {
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(10)))
         .with_children(|root| {
-            root.spawn((Node { position_type: PositionType::Absolute, top: px(24), left: px(30), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }))
+            root.spawn(Node { position_type: PositionType::Absolute, top: px(24), left: px(30), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() })
                 .with_children(|area| {
                     area.spawn(text("SPELL ARENA", 25.0, INK));
                     area.spawn(text("OFFLINE DUEL  /  COMBAT EXPERIMENT", 11.0, MUTED));
@@ -52,8 +52,8 @@ pub(super) fn setup(mut commands: Commands) {
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(52), width: percent(100), justify_content: JustifyContent::Center, column_gap: px(10), ..default() })
                 .with_children(|bar| {
                     for (index, name) in ["1  SHIELD", "2  FIREBALL", "3  AREA BLAST"].into_iter().enumerate() {
-                        bar.spawn((Node { width: px(190), min_height: px(64), padding: UiRect::all(px(14)), border: UiRect::all(px(2)), ..default() },
-                            BackgroundColor(PANEL), BorderColor::all(MUTED), BorderRadius::all(px(7)), SpellCard(index)))
+                        bar.spawn((Node { width: px(190), min_height: px(64), padding: UiRect::all(px(14)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(7)), ..default() },
+                            BackgroundColor(PANEL), BorderColor::all(MUTED), SpellCard(index)))
                             .with_children(|card| { card.spawn((text(format!("{name}\nREADY"), 15.0, INK), Label::Spell(index))); });
                     }
                 });
@@ -63,7 +63,7 @@ pub(super) fn setup(mut commands: Commands) {
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, display: Display::None, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)), GlobalZIndex(20), PausePanel))
         .with_children(|overlay| {
-            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(24)), flex_direction: FlexDirection::Column, row_gap: px(8), ..default() }, BackgroundColor(PANEL), BorderRadius::all(px(12))))
+            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(24)), flex_direction: FlexDirection::Column, row_gap: px(8), border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|panel| {
                     panel.spawn(text("PAUSED / COMBAT TUNING", 24.0, INK));
                     panel.spawn(text("Change one variable at a time. Sizes are independent.", 13.0, MUTED));
@@ -71,7 +71,7 @@ pub(super) fn setup(mut commands: Commands) {
                         panel.spawn(Node { width: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
                             row.spawn((Node { width: px(375), ..default() }, text("", 15.0, INK), Label::Parameter(index)));
                             for (label, amount) in [("-", -1.0), ("+", 1.0)] {
-                                row.spawn((Button, Node { width: px(48), height: px(30), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), BorderRadius::all(px(4)), Action::Change(index, amount)))
+                                row.spawn((Button, Node { width: px(48), height: px(30), border_radius: BorderRadius::all(px(4)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Change(index, amount)))
                                     .with_children(|button| { button.spawn(text(label, 20.0, INK)); });
                             }
                         });
@@ -79,7 +79,7 @@ pub(super) fn setup(mut commands: Commands) {
                     panel.spawn(text("Splash passes through walls. Your fireball can hurt you.\nShield walls remain until destroyed; restart restores all terrain.", 12.0, MUTED));
                     panel.spawn(Node { column_gap: px(12), margin: UiRect::top(px(10)), ..default() }).with_children(|row| {
                         for (label, action) in [("RESUME", Action::Resume), ("RESET ARENA", Action::Restart)] {
-                            row.spawn((Button, Node { width: px(260), height: px(42), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), BorderRadius::all(px(5)), action))
+                            row.spawn((Button, Node { width: px(260), height: px(42), border_radius: BorderRadius::all(px(5)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), action))
                                 .with_children(|button| { button.spawn(text(label, 15.0, INK)); });
                         }
                     });

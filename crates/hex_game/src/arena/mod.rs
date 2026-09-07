@@ -189,6 +189,7 @@ fn setup(
             WIDTH,
             HEIGHT,
             bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            None,
         ));
         state.image = Some(handle.clone());
         RenderTarget::Image(handle.into())
