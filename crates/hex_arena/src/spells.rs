@@ -622,4 +622,47 @@ mod tests {
             .expect("moving actor crosses the ray");
         assert!(!contact.terrain && (4.0..5.0).contains(&contact.point.x));
     }
+
+    #[test]
+    fn shield_requires_ground_contact_and_complete_supported_headroom() {
+        let geometry = ArenaVoxelGeometry::default();
+        let mut world = ArenaTerrainView {
+            voxels: HexCoord::ORIGIN
+                .within_radius(5)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, 0), hex_core::SubstanceId(1)))
+                .collect(),
+            ..Default::default()
+        };
+        let ground = Impact {
+            point: Vec3::Y * PROJECTILE_RADIUS,
+            normal: Vec3::Y,
+            terrain: true,
+        };
+        let volume = wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]);
+        assert_eq!(volume.len(), 12);
+        for normal in [Vec3::X, Vec3::NEG_Y] {
+            assert!(wall_volume(
+                Impact { normal, ..ground },
+                Vec3::X,
+                (3, 4),
+                &world,
+                geometry,
+                &[]
+            )
+            .is_empty());
+        }
+        let first = volume.first().copied().expect("complete volume");
+        let support = TilePos::new(first.coord, 0);
+        world.voxels.remove(&support);
+        assert!(wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]).is_empty());
+        world.voxels.insert(support, hex_core::SubstanceId(1));
+        world
+            .voxels
+            .insert(TilePos::new(first.coord, 3), hex_core::SubstanceId(1));
+        assert!(
+            wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]).is_empty(),
+            "a low ceiling must reject the entire wall"
+        );
+    }
 }

@@ -150,7 +150,7 @@ mod tests {
             voxels: HexCoord::ORIGIN
                 .within_radius(radius)
                 .into_iter()
-                .map(|coord| (TilePos::new(coord, 0), SubstanceId::AIR))
+                .map(|coord| (TilePos::new(coord, 0), SubstanceId(1)))
                 .collect(),
             ..Default::default()
         };

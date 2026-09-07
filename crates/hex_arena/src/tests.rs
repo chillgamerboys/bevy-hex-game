@@ -421,3 +421,85 @@ fn zero_knockback_is_a_valid_comparison_but_nan_and_bad_size_are_rejected() {
     assert!(tuning.validate().is_err());
     assert!(ron::from_str::<ArenaTuning>("(unknown: 2)").is_err());
 }
+
+#[test]
+fn knockout_ends_the_round_until_reset_restores_both_combatants() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    set_actor(&mut session, 1, Vec3::new(-4.5, SKIN, 0.0), Vec3::NEG_X);
+    if let Some(actor) = session.actors.iter_mut().find(|a| a.id == 1) {
+        actor.hp = 1.0;
+    }
+    session.advance(
+        ActorIntent {
+            selected: Some(Spell::AreaBlast),
+            cast: true,
+            ..Default::default()
+        },
+        &view,
+        geometry,
+        materials,
+        &tuning,
+    );
+    assert_eq!(session.outcome, Some(ArenaOutcome::Winner(0)));
+    let frozen_tick = session.tick;
+    let frozen_feet = human(&session).feet;
+    for _ in 0..20 {
+        let out = session.advance(
+            ActorIntent {
+                movement: Vec2::Y,
+                cast: true,
+                ..Default::default()
+            },
+            &view,
+            geometry,
+            materials,
+            &tuning,
+        );
+        assert!(out.impacts.is_empty() && out.edits.is_empty());
+    }
+    assert_eq!(session.tick, frozen_tick);
+    assert!(human(&session).feet.distance(frozen_feet) < SKIN);
+    session.reset(1, &view, geometry);
+    assert!(session.outcome.is_none());
+    assert!(session.actors.iter().all(|a| (a.hp - 100.0).abs() < SKIN));
+    session.advance(
+        ActorIntent {
+            aim: Vec3::Y,
+            cast: true,
+            ..Default::default()
+        },
+        &view,
+        geometry,
+        materials,
+        &tuning,
+    );
+    assert_eq!(session.projectiles.len(), 1);
+}
+
+#[test]
+fn one_fireball_can_produce_a_simultaneous_draw_including_its_caster() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    set_actor(&mut session, 1, Vec3::new(-4.8, SKIN, 0.0), Vec3::NEG_X);
+    for actor in &mut session.actors {
+        actor.hp = 1.0;
+    }
+    for tick in 0..10 {
+        session.advance(
+            ActorIntent {
+                aim: Vec3::NEG_Y,
+                cast: tick == 0,
+                ..Default::default()
+            },
+            &view,
+            geometry,
+            materials,
+            &tuning,
+        );
+        if session.outcome.is_some() {
+            break;
+        }
+    }
+    assert_eq!(session.outcome, Some(ArenaOutcome::Draw));
+    assert!(session.actors.iter().all(|a| a.hp <= 0.0));
+    assert!(session.projectiles.is_empty() && session.pending_walls.is_empty());
+}
