@@ -1,10 +1,5 @@
 //! Headless acceptance of continuous authority and the shared input/spell path.
 
-#![expect(
-    clippy::expect_used,
-    reason = "tests construct and require these exact two-actor fixtures and messages"
-)]
-
 use super::*;
 use hex_core::{ElementId, HexCoord, SubstanceId, TerrainImpactRejection};
 
@@ -172,6 +167,39 @@ fn fireball_damages_and_knocks_back_its_caster() {
     assert!(human(&session).feet.y > 0.1);
     assert_eq!(published.len(), 1);
     assert!(published.iter().all(TerrainImpact::is_canonical));
+}
+
+#[test]
+fn default_vertical_fireball_returns_after_five_seconds_and_matches_preview() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    let feet = human(&session).feet;
+    set_actor(&mut session, 0, feet, Vec3::Y);
+    let predicted = preview(&session, &view, &geometry, &tuning)
+        .impact
+        .expect("the full upward arc returns to its caster");
+    let mut detonation_tick = None;
+    for tick in 0..960 {
+        session.advance(
+            ActorIntent {
+                aim: Vec3::Y,
+                cast: tick == 0,
+                ..Default::default()
+            },
+            &view,
+            geometry,
+            materials,
+            &tuning,
+        );
+        if let Some(effect) = session.effects.first() {
+            assert!(effect.center.distance(predicted) < 0.001);
+            assert_eq!(effect.kind, Spell::Fireball);
+            detonation_tick = Some(tick);
+            break;
+        }
+    }
+    assert!(detonation_tick.expect("returning fireball detonates") > 600);
+    assert!(session.projectiles.is_empty());
+    assert!(human(&session).hp < 100.0);
 }
 
 #[test]

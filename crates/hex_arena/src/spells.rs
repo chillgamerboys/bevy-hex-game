@@ -13,7 +13,7 @@ use crate::{
 };
 
 const PROJECTILE_RADIUS: f32 = 0.06;
-const MAX_FLIGHT_SECONDS: f32 = 5.0;
+const MAX_FLIGHT_SECONDS: f32 = 8.0;
 pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 
 #[derive(Debug, Clone)]
@@ -66,6 +66,10 @@ fn projectile(actor: &Actor, spell: Spell, tuning: &ArenaTuning, id: u64) -> Pro
 /// Analytic constant-gravity displacement, shared by preview and actual shots.
 fn displacement(velocity: Vec3, gravity: f32) -> Vec3 {
     velocity * STEP - Vec3::Y * (0.5 * gravity * STEP * STEP)
+}
+
+fn flight_active(shot: &Projectile) -> bool {
+    shot.age + STEP * 0.01 < MAX_FLIGHT_SECONDS && shot.position.y > -10.0
 }
 
 fn capsule_distance(point: Vec3, feet: Vec3) -> f32 {
@@ -390,7 +394,7 @@ impl ArenaSession {
                         out,
                     );
                 }
-            } else if shot.age < MAX_FLIGHT_SECONDS && shot.position.y > -10.0 {
+            } else if flight_active(&shot) {
                 survivors.push(shot);
             } else if shot.spell == Spell::Shield {
                 self.notice = "Shield fizzled beyond the arena.".into();
@@ -522,7 +526,8 @@ pub(super) fn preview(
         points: vec![shot.position],
         ..Default::default()
     };
-    for tick in 0..600 {
+    let mut tick = 0_u16;
+    while flight_active(&shot) {
         let impact = advance_shot(&mut shot, &session.collision, &session.actors, true);
         if tick % 4 == 0 || impact.is_some() {
             result.points.push(shot.position);
@@ -544,18 +549,12 @@ pub(super) fn preview(
             }
             break;
         }
-        if shot.position.y < -10.0 {
-            break;
-        }
+        tick += 1;
     }
     result
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "the fixed capsule fixtures must produce the characterized contact"
-)]
 mod tests {
     use super::*;
 
@@ -605,7 +604,7 @@ mod tests {
         let behind = Actor::spawn(1, Vec3::X * 5.0, Vec3::NEG_X);
         let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
         shot.velocity = Vec3::X * 1200.0;
-        let contact = advance_shot(&mut shot, &world, &[behind.clone()], false)
+        let contact = advance_shot(&mut shot, &world, std::slice::from_ref(&behind), false)
             .expect("the wall must be hit before the distant body");
         assert!(contact.terrain && contact.point.x < 3.0);
         let near = Actor::spawn(2, Vec3::X * 1.5, Vec3::NEG_X);
