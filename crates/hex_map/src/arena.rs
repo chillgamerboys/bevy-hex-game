@@ -12,6 +12,7 @@ use hex_assets::{
 };
 use hex_core::arena::{
     ArenaMaterials, ArenaReset, ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
+    ARENA_MAX_LEVEL,
 };
 use hex_core::{
     DamagedVoxels, HexCoord, SubstanceId, TerrainEdit, TerrainImpact, TerrainImpactOutcome,
@@ -26,7 +27,6 @@ mod render;
 mod tests;
 
 const GROUND_LEVEL: i32 = 8;
-const MAX_EDIT_LEVEL: i32 = 128;
 
 #[derive(Resource, Default)]
 struct ArenaWorldState {
@@ -270,7 +270,7 @@ fn apply_terrain(
         .chain(edits.drain())
     {
         let pos = edit.pos();
-        if !geometry.contains_column(pos.coord) || !(0..=MAX_EDIT_LEVEL).contains(&pos.level) {
+        if !geometry.contains_column(pos.coord) || !(0..=ARENA_MAX_LEVEL).contains(&pos.level) {
             continue;
         }
         let current = map.get(pos);

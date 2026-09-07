@@ -8,6 +8,13 @@ use bevy_math::Vec3;
 
 use crate::{ElementId, HexCoord, SubstanceId, TilePos};
 
+/// Highest editable or solid voxel level in the isolated arena, inclusive.
+///
+/// World mutation enforces this storage bound. Terrain-creating gameplay must
+/// validate its complete footprint against the same bound before emitting edits,
+/// so an otherwise clear shield cannot become a partially admitted wall.
+pub const ARENA_MAX_LEVEL: i32 = 128;
+
 /// Fixed-step schedule shared by the arena's world and gameplay producers.
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArenaTick;
