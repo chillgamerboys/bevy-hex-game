@@ -14,7 +14,7 @@ use crate::{
 
 const PROJECTILE_RADIUS: f32 = 0.06;
 const MAX_FLIGHT_SECONDS: f32 = 5.0;
-const EMERGENCE_SECONDS: f32 = 0.18;
+pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShotParameters {
@@ -29,8 +29,8 @@ pub(crate) struct ShotParameters {
 
 #[derive(Debug)]
 pub(crate) struct PendingWall {
-    voxels: Vec<TilePos>,
-    age: f32,
+    pub(super) voxels: Vec<TilePos>,
+    pub(super) age: f32,
     center: Vec3,
 }
 

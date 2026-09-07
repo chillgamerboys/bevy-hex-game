@@ -1,5 +1,5 @@
 //! Continuous actor and spell authority for the opt-in local duel experiment.
-//! World facts arrive through `hex_core::ArenaTerrainView`; terrain mutations leave
+//! World facts arrive through `hex_core::arena::ArenaTerrainView`; terrain mutations leave
 //! through the existing world messages. No tactical unit or renderer owns combat.
 
 use std::collections::BTreeMap;
@@ -389,6 +389,17 @@ impl Default for ArenaSession {
 }
 
 impl ArenaSession {
+    /// Complete staged wall volumes and their cosmetic rise progress in 0–1.
+    /// They become physical cover only after the final footprint validation.
+    pub fn emerging_shields(&self) -> impl Iterator<Item = (&[TilePos], f32)> {
+        self.pending_walls.iter().map(|wall| {
+            (
+                wall.voxels.as_slice(),
+                (wall.age / spells::EMERGENCE_SECONDS).clamp(0.0, 1.0),
+            )
+        })
+    }
+
     /// Retract a close third-person camera with the same solid collision cache.
     #[must_use]
     pub fn camera_position(&self, eye: Vec3, desired: Vec3) -> Vec3 {
