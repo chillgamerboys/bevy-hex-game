@@ -41,14 +41,14 @@ fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, T
 pub(super) fn setup(mut commands: Commands) {
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(10)))
         .with_children(|root| {
-            root.spawn(Node { position_type: PositionType::Absolute, top: px(24), left: px(30), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() })
+            root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|area| {
                     area.spawn(text("SPELL ARENA", 25.0, INK));
                     area.spawn(text("OFFLINE DUEL  /  COMBAT EXPERIMENT", 11.0, MUTED));
                     area.spawn((text("100 HP", 32.0, Color::srgb(0.36, 0.90, 0.78)), Label::Health));
                 });
-            root.spawn((Node { position_type: PositionType::Absolute, right: px(30), top: px(26), max_width: px(450), ..default() }, text("", 15.0, INK), Label::Status));
-            root.spawn((Node { position_type: PositionType::Absolute, top: percent(50), left: percent(50), margin: UiRect { left: px(-7), top: px(-15), ..default() }, ..default() }, text("+", 24.0, INK)));
+            root.spawn((Node { position_type: PositionType::Absolute, right: px(18), top: px(14), max_width: px(474), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 15.0, INK), Label::Status));
+            root.spawn((Node { position_type: PositionType::Absolute, top: percent(50), left: percent(50), margin: UiRect { left: px(-7), top: px(-15), ..default() }, ..default() }, text("+", 24.0, INK), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }));
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(52), width: percent(100), justify_content: JustifyContent::Center, column_gap: px(10), ..default() })
                 .with_children(|bar| {
                     for (index, name) in ["1  SHIELD", "2  FIREBALL", "3  AREA BLAST"].into_iter().enumerate() {
