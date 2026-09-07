@@ -1,0 +1,17 @@
+[package]
+name = "hex_arena"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Headless continuous movement and spell authority for the opt-in duel arena."
+
+[dependencies]
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bevy_math.workspace = true
+hex_core.workspace = true
+serde.workspace = true
+ron.workspace = true
+
+[lints]
+workspace = true
