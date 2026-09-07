@@ -108,7 +108,18 @@ impl CollisionWorld {
     }
 
     pub fn sweep_sphere(&self, center: Vec3, delta: Vec3, radius: f32) -> Option<Hit> {
-        self.sweep(center - Vec3::Y * radius, delta, radius * 2.0, radius)
+        let feet = center - Vec3::Y * radius;
+        let height = radius * 2.0;
+        // Terrain can publish around an in-flight projectile. That is an
+        // immediate contact, even when its velocity points out of the solid.
+        // Keep body sweeps unchanged: their tangent/step semantics are distinct.
+        if !self.clear(feet, height, radius) {
+            return Some(Hit {
+                fraction: 0.0,
+                normal: Vec3::ZERO,
+            });
+        }
+        self.sweep(feet, delta, height, radius)
     }
 }
 

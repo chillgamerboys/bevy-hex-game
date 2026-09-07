@@ -416,7 +416,10 @@ impl ArenaSession {
                 continue;
             }
             reserved.extend(wall.voxels.iter().copied());
-            if wall.age + STEP * 0.01 >= EMERGENCE_SECONDS {
+            // This tick's explosions are applied by the world before the next
+            // simulation tick. Their outcomes and updated projection must arrive
+            // before we can trust support/headroom and commit a complete wall.
+            if wall.age + STEP * 0.01 >= EMERGENCE_SECONDS && self.pending_impacts.is_empty() {
                 for pos in wall.voxels {
                     out.edits.push(TerrainEdit::Set {
                         pos,

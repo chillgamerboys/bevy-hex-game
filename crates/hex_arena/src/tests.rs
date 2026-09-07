@@ -291,6 +291,148 @@ fn shield_emergence_revalidates_an_actor_entering_the_footprint() {
 }
 
 #[test]
+fn mature_shield_waits_for_blast_outcome_before_rechecking_support() {
+    use hex_core::{TerrainImpactDisposition, TerrainVoxelHealth, TerrainVoxelOutcome};
+
+    for support_destroyed in [false, true] {
+        let (mut session, mut view, geometry, materials, tuning) = fixture();
+        let aim = Vec3::new(1.0, -0.12, 0.0).normalize();
+        for tick in 0..30 {
+            session.advance(
+                ActorIntent {
+                    selected: Some(Spell::Shield),
+                    aim,
+                    cast: tick == 0,
+                    ..Default::default()
+                },
+                &view,
+                geometry,
+                materials,
+                &tuning,
+            );
+            if !session.pending_walls.is_empty() {
+                break;
+            }
+        }
+        let wall = session.pending_walls.first_mut().expect("emerging wall");
+        wall.age = spells::EMERGENCE_SECONDS - STEP;
+        let supports: Vec<_> = wall
+            .voxels
+            .iter()
+            .filter(|pos| pos.level == 1)
+            .map(|pos| TilePos::new(pos.coord, 0))
+            .collect();
+        let emitted = session.advance(
+            ActorIntent {
+                selected: Some(Spell::AreaBlast),
+                aim,
+                cast: true,
+                ..Default::default()
+            },
+            &view,
+            geometry,
+            materials,
+            &tuning,
+        );
+        let impact = emitted.impacts.first().expect("blast near wall support");
+        let support = *impact
+            .volume
+            .iter()
+            .find(|pos| supports.contains(pos))
+            .expect("blast overlaps a required support");
+        assert!(emitted.edits.is_empty());
+        assert_eq!(session.pending_walls.len(), 1);
+        assert_eq!(session.shields_raised, 0);
+
+        // Only the world's resolved result decides whether the support survived.
+        let outcome = TerrainImpactOutcome {
+            batch: impact.batch,
+            result: TerrainImpactResult::Applied(
+                impact
+                    .volume
+                    .iter()
+                    .map(|pos| {
+                        let destroyed = support_destroyed && *pos == support;
+                        TerrainVoxelOutcome {
+                            pos: *pos,
+                            disposition: if destroyed {
+                                TerrainImpactDisposition::Destroyed
+                            } else {
+                                TerrainImpactDisposition::Resisted
+                            },
+                            before: Some(materials.stone),
+                            after: (!destroyed).then_some(materials.stone),
+                            health_before: destroyed.then_some(TerrainVoxelHealth {
+                                remaining: 2,
+                                maximum: 2,
+                            }),
+                            health_after: None,
+                        }
+                    })
+                    .collect(),
+            ),
+        };
+        assert!(outcome.is_consistent_with(impact));
+        if support_destroyed {
+            view.voxels.remove(&support);
+            view.revision += 1;
+        }
+        session.accept_outcome(&outcome);
+        let next = session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+        assert!(session.pending_walls.is_empty());
+        assert_eq!(next.edits.len(), if support_destroyed { 0 } else { 25 });
+        assert_eq!(session.shields_raised, u64::from(!support_destroyed));
+    }
+}
+
+#[test]
+fn fireball_enveloped_by_new_terrain_detonates_once_at_its_start_position() {
+    let (mut session, mut view, geometry, materials, tuning) = fixture();
+    for tick in 0..18 {
+        session.advance(
+            ActorIntent {
+                aim: Vec3::X,
+                cast: tick == 0,
+                ..Default::default()
+            },
+            &view,
+            geometry,
+            materials,
+            &tuning,
+        );
+    }
+    let enclosed = session
+        .projectiles
+        .first()
+        .expect("in-flight fireball")
+        .position;
+    let coord = HexCoord::from_world(enclosed);
+    for level in 1..=5 {
+        view.voxels
+            .insert(TilePos::new(coord, level), materials.stone);
+    }
+    view.revision += 1;
+    let emitted = session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    assert!(session.projectiles.is_empty());
+    assert_eq!(emitted.impacts.len(), 1);
+    assert_eq!(session.effects.len(), 1);
+    assert!(
+        session
+            .effects
+            .first()
+            .expect("one explosion")
+            .center
+            .distance(enclosed)
+            < SKIN
+    );
+    assert!(session
+        .advance(ActorIntent::default(), &view, geometry, materials, &tuning)
+        .impacts
+        .is_empty());
+    assert_eq!(session.effects.len(), 1);
+}
+
+#[test]
 fn preview_and_released_projectile_report_the_same_impact() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     let aim = Vec3::new(1.0, -0.2, 0.0).normalize();
