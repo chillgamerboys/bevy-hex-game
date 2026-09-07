@@ -97,6 +97,60 @@ fn one_click_is_consumed_once_and_cooldown_is_charged_on_release() {
 }
 
 #[test]
+fn fresh_cast_does_not_replay_a_targets_completed_movement() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    set_actor(&mut session, 0, Vec3::ZERO, Vec3::X);
+    set_actor(&mut session, 1, Vec3::X * 0.5, Vec3::X);
+    for actor in &mut session.actors {
+        actor.body.impulse_velocity = Vec3::X * (0.22 / STEP);
+    }
+    let emitted = session.advance(
+        ActorIntent {
+            aim: Vec3::X,
+            cast: true,
+            ..Default::default()
+        },
+        &view,
+        geometry,
+        materials,
+        &tuning,
+    );
+    assert!((human(&session).feet.x - 0.22).abs() < SKIN);
+    assert!((bot(&session).previous_feet.x - 0.5).abs() < SKIN);
+    assert!((bot(&session).feet.x - 0.72).abs() < SKIN);
+    let shot = session
+        .projectiles
+        .first()
+        .expect("fresh shot survives launch");
+    assert!(shot.position.distance(human(&session).eye()) < SKIN);
+    assert!(shot.age.abs() < f32::EPSILON);
+    assert!(session.effects.is_empty() && emitted.impacts.is_empty());
+    assert!(session
+        .actors
+        .iter()
+        .all(|actor| (actor.hp - 100.0).abs() < SKIN));
+    assert!(
+        (human(&session)
+            .cooldowns
+            .get(1)
+            .copied()
+            .unwrap_or_default()
+            - 1.25)
+            .abs()
+            < SKIN
+    );
+    let start = shot.position;
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let shot = session
+        .projectiles
+        .first()
+        .expect("shot trails the moving target");
+    assert!((shot.age - STEP).abs() < SKIN);
+    assert!(shot.position.x > start.x);
+    assert!(session.effects.is_empty());
+}
+
+#[test]
 fn fireball_damages_and_knocks_back_its_caster() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     let mut published = Vec::new();

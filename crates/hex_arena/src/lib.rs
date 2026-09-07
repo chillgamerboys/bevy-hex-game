@@ -526,6 +526,10 @@ impl ArenaSession {
             }
         }
         separate_actors(&mut self.actors, &self.collision);
+        // Existing shots share this tick's previous-to-current actor interval.
+        // New casts originate at the current eye and start traveling next tick;
+        // replaying completed actor motion against that origin creates false hits.
+        self.advance_projectiles(world, geometry, materials, &mut commands);
         for (owner, spell) in casts {
             self.release(
                 owner,
@@ -537,7 +541,6 @@ impl ArenaSession {
                 &mut commands,
             );
         }
-        self.advance_projectiles(world, geometry, materials, &mut commands);
         self.advance_walls(world, geometry, materials, &mut commands);
         let alive: Vec<_> = self
             .actors
