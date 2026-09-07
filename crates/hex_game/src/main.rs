@@ -16,5 +16,9 @@ fn main() -> AppExit {
         bevy::log::error!("panic: {info}");
         default_hook(info);
     }));
+    #[cfg(feature = "arena-prototype")]
+    if std::env::args().any(|arg| arg == "--arena") {
+        return hex_game::arena::run();
+    }
     hex_game::run()
 }

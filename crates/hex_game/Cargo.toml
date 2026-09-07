@@ -19,6 +19,7 @@ hex_assets = { workspace = true }
 hex_objects = { workspace = true }
 hex_combat = { workspace = true }
 hex_core = { workspace = true }
+hex_arena = { workspace = true, optional = true }
 hex_gameplay_model = { workspace = true }
 hex_ui = { workspace = true }
 hex_lattice = { workspace = true }
@@ -40,11 +41,14 @@ xxhash-rust = { workspace = true }
 ron = { workspace = true }
 hex_ai = { workspace = true }
 hex_test_support = { workspace = true }
+hex_test_app = { workspace = true }
 
 [features]
 # Empty by default so `cargo build --release` ships without the inspector. Use
 # `cargo dev` (aliased in .cargo/config.toml) for a build with dev tooling.
 default = []
+# Local real-time spell arena; no tactical or network plugins installed by --arena.
+arena-prototype = ["dep:hex_arena", "hex_map/arena-prototype"]
 # Store-neutral EOS integration. Merely compiling this feature does not load an EOS
 # runtime or open a socket; a configured application flow must install the backend.
 online = ["dep:hex_online"]

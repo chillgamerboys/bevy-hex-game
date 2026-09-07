@@ -1,0 +1,16 @@
+// Isolated spell arena. Independent size indices: 0 compact, 1 standard, 2 large.
+(
+    shield_size: 1,
+    fireball_size: 1,
+    blast_size: 1,
+    projectile_speed: 32.0,
+    projectile_gravity: 12.0,
+    shield_cooldown: 5.0,
+    fireball_cooldown: 1.25,
+    blast_cooldown: 7.0,
+    fireball_damage: 35.0,
+    blast_damage: 45.0,
+    fireball_knockback: 8.0,
+    blast_knockback: 11.0,
+    terrain_power: 2,
+)

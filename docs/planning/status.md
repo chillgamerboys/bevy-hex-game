@@ -9,6 +9,17 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Spell Combat Arena — local experiment, 2026-09-06.** The default-off
+`arena-prototype` feature and explicit `--arena` launch now implement a separate
+native duel against one disposable bot on `experiment/spell-combat-arena`.
+`hex_arena` owns continuous movement, HP, cooldowns, ballistic Shield/Fireball,
+Area Blast, and knockback; world-owned arena terrain retains the existing damage
+and edit authority. First-person/close-third-person input, paused tuning, reset,
+and windowless capture tooling are part of the candidate. Combined validation,
+render inspection, and native playtesting remain pending. This work has not landed
+on `dev`, does not install tactical gameplay or networking, and does not deliver
+multiplayer. See the [arena manifest](waves/spell-combat-arena/manifest.md).
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,

@@ -22,6 +22,8 @@ use hex_core::{
     PerceptionSystems, Screen,
 };
 
+#[cfg(feature = "arena-prototype")]
+pub mod arena;
 pub mod campaign_authority;
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;

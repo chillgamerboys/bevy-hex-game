@@ -1,6 +1,6 @@
 # Spell Combat Arena — local experiment
 
-Status: dispatching. Branch: experiment/spell-combat-arena. Base: dev 495a73dcbe7edbab6d993867d91b15979fa6ce81. Coordinator: root. Ticket: null (Linear reauthentication required).
+Status: combined locally; integration validation in progress. Branch: experiment/spell-combat-arena. Base: dev 495a73dcbe7edbab6d993867d91b15979fa6ce81. Coordinator: root. Ticket: null (Linear reauthentication required).
 
 Outcome: native offline first-person spell duel against one disposable bot. The user explicitly chose a local experiment branch until playtesting, so the shared foundation and lanes stay local; no remote PR/merge or production promotion is part of this experiment.
 
@@ -37,7 +37,7 @@ lanes:
     selector: {concerns: [map_unit, map_contracts, clippy, docs, shipping], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: dispatched
     pr: null
   - id: L2
     title: Continuous actors and spell simulation
@@ -53,7 +53,7 @@ lanes:
     selector: {concerns: [contracts, simulation, clippy, docs], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: dispatched
     pr: null
   - id: L3
     title: Native launch, input, camera, HUD, capture and integration
@@ -62,7 +62,7 @@ lanes:
     authority: shared
     builder: worker
     branch: experiment/spell-combat-arena
-    owns: [crates/hex_game/, Cargo.toml, Cargo.lock, assets/config/arena.ron, tools/arena.py, docs/planning/waves/spell-combat-arena/]
+    owns: [crates/hex_game/, Cargo.toml, Cargo.lock, assets/config/arena.ron, tools/arena.py, docs/planning/waves/spell-combat-arena/, docs/architecture.md, docs/contracts.md, docs/planning/status.md]
     dispatch_blockers: []
     merge_blockers: [L1, L2]
     fences: []
@@ -84,3 +84,11 @@ At 120Hz apply/reset world, publish/flush, refresh collision, simulate actors an
 ## Stop conditions and close-out
 
 No deletion of source/saves/review evidence; disk cleanup authorized separately by user and receipted in task outputs. No native focus-stealing review. Missing authoritative fact requires a shared-contract correction, never private world reconstruction. Finish with committed local prototype, launcher, controls/tuning guide, and exact-head validation report. No automatic merge.
+
+## Local checkpoints
+
+- World producer committed and integrated; eight focused world tests passed.
+- Gameplay committed and integrated; first focused run passed 26 arena tests and 124 core tests. Additional round-ending and race regressions are being added before combined validation.
+- Native composition, input, two cameras, HUD, tuning, windowless capture matrix, and combined lifecycle tests are authored. Combined native build and render inspection remain pending.
+- Obsolete generated caches were removed under the user's explicit cleanup instruction; the output receipt records 14,178,758,656 physical bytes recovered. Source checkouts and review evidence were preserved.
+- Hourly overnight follow-up is attached to this task until delivery or September 7, 08:00 America/Los_Angeles.

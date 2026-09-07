@@ -12,6 +12,7 @@ hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, contro
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
 {bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
 {Bevy, hex_core, hex_assets, hex_gameplay_model} → hex_ui → hex_game  (runtime presentation)
+hex_core → hex_arena → hex_game  (default-off local arena experiment)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -38,6 +39,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
+| `hex_arena` | Continuous actors, HP, cooldowns, ballistic spells, collision queries, and disposable bot for the isolated arena experiment | `hex_core`, Bevy app/ECS/math sub-crates, serialization support; no renderer or private map implementation | gameplay |
 | `hex_gameplay_model` | Pure Main Menu, Campaign, Sandbox, Multiplayer, and Creator routes; bounded slot/seat identities; draft edits; launch blockers; and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
 | `hex_ui` | Runtime UI rendering, immutable presentation models, typed UI intentions, responsive scale, semantic styling, focus/accessibility, and presentation-only observations | Bevy, `hex_core`, `hex_assets`, `hex_gameplay_model`; never gameplay/world implementations | shared presentation |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
@@ -139,6 +141,31 @@ The boundary does not make malformed output harmless. Those crates consume the
 components the map publishes, so a wrong `TilePos`, `RunBottom`, `HexSpan` or
 `Headroom` can still break movement or presentation. Cargo protects the dependency
 graph; tests and visual review protect the component contract.
+
+### The spell arena has an isolated authority
+
+The default-off `arena-prototype` feature and explicit `--arena` argument compose a
+separate native application in `hex_game`. It installs the arena world producer and
+`hex_arena` simulation without tactical gameplay, perception, or networking plugins.
+This is an implemented local experiment on `experiment/spell-combat-arena`, pending
+combined validation and playtesting; it has not landed on `dev`. Its decisions and
+ownership are recorded in the [arena manifest](planning/waves/spell-combat-arena/manifest.md).
+
+World-owned `hex_map::arena` publishes `hex_core::arena` geometry, complete solid-voxel
+occupancy, material identities, revision, and spawn positions. Gameplay consumes this
+public projection to build collision queries; it never imports `VoxelMap`. At 120 Hz,
+`ArenaTick` orders `ApplyTerrain → PublishTerrain → Simulate`. Gameplay emits existing
+`TerrainEdit` and `TerrainImpact` messages for the next tick; the world admits edits,
+applies damage, and publishes correlated `TerrainImpactOutcome` messages before
+simulation consumes them. A world-owned `PreUpdate` inbox retains pending edits and
+impacts while the tick is paused. Reset clears this inbox and outstanding messages
+before both owners adopt the new `ArenaReset` generation.
+
+`hex_arena` owns actor movement, projectile sweeps, HP, cooldowns, explosions, and bot
+decisions. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
+the terrain projection. `ActorIntent` is the intended ingress seam for a future
+network adapter, not an implemented wire protocol or authorization layer. Captures
+and camera transforms carry no gameplay authority.
 
 ### `hex_lattice` is the rules engine, built like `hex_core`
 

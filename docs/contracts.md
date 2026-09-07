@@ -11,6 +11,7 @@ something reserved for later, or something still being asked for?*
 | Status | Meaning |
 |---|---|
 | **live** | Published and consumed in the shipped build |
+| **experimental** | Implemented in a default-off local experiment; combined validation and playtesting remain pending, and no `dev` delivery is claimed |
 | **partial** | One side is live, while the row names the required producer or consumer still pending |
 | **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
 | **reserved** | Shared vocabulary and/or ordering is defined for later use; no runtime producer or consumer is live |
@@ -125,6 +126,21 @@ masquerading as the new revision. Loading proceeds only when every raw catalog,
 direct catalog, and all derived tables match one published
 `AcceptedContentRevision`; resource presence and Bevy change ticks are not readiness
 signals.
+
+## Isolated spell arena
+
+These contracts apply only to the local `arena-prototype` / `--arena` application.
+It installs no tactical authority or networking plugins. See the
+[arena manifest](planning/waves/spell-combat-arena/manifest.md) for the experiment's
+locked behavior and ownership.
+
+| Contract | Publisher | Consumer | Status |
+|---|---|---|---|
+| `ArenaVoxelGeometry`, `ArenaTerrainView`, `ArenaMaterials` — physical geometry methods, complete solid occupancy keyed by `TilePos`, revision, spawns, and accepted catalog identities; only world writes these facts | world | `hex_arena` collision/spells and arena presentation | **experimental** |
+| `ArenaTick` / `ArenaSystems` — 120 Hz `ApplyTerrain → PublishTerrain → Simulate`; gameplay's edits/impacts settle on the next tick, then matching outcomes are consumed in that tick's simulation | core ordering; world and gameplay implementations | both | **experimental** |
+| Existing `TerrainEdit`, `TerrainImpact`, `TerrainImpactOutcome` in the arena — world-owned mutation and damage admission; a `PreUpdate` inbox retains pending edits/impacts across pauses | gameplay requests; world outcomes | world / `hex_arena` | **experimental** arena composition of existing live message types |
+| `ArenaReset` generation — clear queued world messages/inbox and damage state, restore authored terrain, then reset actors and gameplay ledgers before advancing the new round | shared input adapter | world / `hex_arena` | **experimental** |
+| `ActorIntent` / `ArenaInput` and read-only `ArenaSession` projection — held movement/aim plus consumed jump/cast/selection edges; human and bot use the same simulation path | native input / gameplay bot | gameplay authority / presentation | **experimental**; future network ingress seam only, with no current wire or admission contract |
 
 ## What each side commits to
 
