@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use bevy_math::Vec3;
-use hex_core::arena::{ArenaMaterials, ArenaTerrainView, ArenaVoxelGeometry};
+use hex_core::arena::{ArenaMaterials, ArenaTerrainView, ArenaVoxelGeometry, ARENA_MAX_LEVEL};
 use hex_core::{HexCoord, TerrainBatchId, TerrainEdit, TerrainImpact, TilePos};
 
 use crate::collision::{voxel_overlaps_body, CollisionWorld, SKIN};
@@ -281,6 +281,7 @@ fn wall_is_clear(
     let mut bottoms = BTreeSet::new();
     for pos in volume {
         if !geometry.contains_column(pos.coord)
+            || !(0..=ARENA_MAX_LEVEL).contains(&pos.level)
             || world.voxels.contains_key(pos)
             || actors.iter().filter(|a| a.hp > 0.0).any(|a| {
                 voxel_overlaps_body(
@@ -667,5 +668,33 @@ mod tests {
             wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]).is_empty(),
             "a low ceiling must reject the entire wall"
         );
+    }
+
+    #[test]
+    fn shield_rejects_whole_footprint_above_world_edit_ceiling() {
+        let geometry = ArenaVoxelGeometry::default();
+        for (support_level, expected_voxels) in
+            [(ARENA_MAX_LEVEL - 4, 12), (ARENA_MAX_LEVEL - 3, 0)]
+        {
+            let world = ArenaTerrainView {
+                voxels: HexCoord::ORIGIN
+                    .within_radius(5)
+                    .into_iter()
+                    .map(|coord| (TilePos::new(coord, support_level), hex_core::SubstanceId(1)))
+                    .collect(),
+                ..Default::default()
+            };
+            let impact = Impact {
+                point: Vec3::Y
+                    * (geometry.top(TilePos::new(HexCoord::ORIGIN, support_level))
+                        + PROJECTILE_RADIUS),
+                normal: Vec3::Y,
+                terrain: true,
+            };
+            assert_eq!(
+                wall_volume(impact, Vec3::X, (3, 4), &world, geometry, &[]).len(),
+                expected_voxels,
+            );
+        }
     }
 }
