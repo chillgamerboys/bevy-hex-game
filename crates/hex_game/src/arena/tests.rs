@@ -33,6 +33,97 @@ fn tick(app: &mut App) {
     app.world_mut().run_schedule(ArenaTick);
 }
 
+#[test]
+fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
+    use bevy::ecs::system::RunSystemOnce;
+    use hex_core::{HexCoord, TerrainEdit, TilePos};
+
+    let mut fixture = app(60);
+    let stone = fixture
+        .world()
+        .resource::<hex_core::arena::ArenaMaterials>()
+        .stone;
+    for level in 9..=13 {
+        fixture.world_mut().write_message(TerrainEdit::Set {
+            pos: TilePos::new(HexCoord::ORIGIN, level),
+            substance: stone,
+        });
+    }
+    tick(&mut fixture);
+    let eye = {
+        let mut session = fixture.world_mut().resource_mut::<ArenaSession>();
+        let human = session.actors.first_mut().expect("human initialized");
+        human.feet = Vec3::new(1.2, 3.2, 0.0);
+        human.aim = Vec3::X;
+        human.eye()
+    };
+    fixture
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<StandardMaterial>>();
+    let camera_entity = fixture
+        .world_mut()
+        .spawn((ArenaCamera, Transform::default()))
+        .id();
+
+    // Actor aim looks away from the wall, retracting the camera into the body.
+    // The deliberately stale view aim points along the wall into open space.
+    // Check first model spawn, existing models, and the initialized live policy.
+    for (capture, initialized, retracted) in [
+        (false, false, true),
+        (true, true, true),
+        (false, true, false),
+    ] {
+        {
+            let mut state = fixture.world_mut().resource_mut::<ViewState>();
+            state.third_person = true;
+            state.initialized = initialized;
+            state.capture = capture.then(|| PathBuf::from("unused-test-capture.png"));
+            state.capture_view = "bot-combat-third".into();
+            state.yaw = 0.0;
+            state.pitch = 0.0;
+        }
+        fixture
+            .world_mut()
+            .run_system_once(presentation::actors)
+            .expect("actor presentation");
+        fixture
+            .world_mut()
+            .run_system_once(presentation::camera)
+            .expect("camera presentation");
+        let camera = fixture
+            .world()
+            .get::<Transform>(camera_entity)
+            .expect("camera transform");
+        assert_eq!(camera.translation.distance(eye) < 0.45, retracted);
+        let direction = if retracted { Vec3::X } else { Vec3::NEG_Z };
+        assert!(Vec3::from(camera.forward()).dot(direction) > 0.999);
+        let expected = if retracted {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+        let mut models = fixture.world_mut().query::<(&Name, &Visibility)>();
+        let mut seen = 0;
+        for (name, visibility) in models.iter(fixture.world()) {
+            match name.as_str() {
+                "Arena actor 0" => {
+                    assert_eq!(
+                        *visibility, expected,
+                        "capture={capture}, initialized={initialized}"
+                    );
+                    seen += 1;
+                }
+                "Arena actor 1" => {
+                    assert_eq!(*visibility, Visibility::Visible);
+                    seen += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(seen, 2);
+    }
+}
+
 fn menu_app() -> (App, Entity) {
     menu_app_at(60)
 }

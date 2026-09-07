@@ -8,6 +8,16 @@ use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
 #[derive(Component)]
 pub(super) struct ActorModel(u8);
 
+fn player_camera(session: &ArenaSession, state: &ViewState, actor: &hex_arena::Actor) -> Transform {
+    let direction = if state.capture.is_none() && state.initialized {
+        super::aim(state)
+    } else {
+        actor.aim.normalize_or(Vec3::NEG_Z)
+    };
+    let position = super::camera_origin(session, state, actor.eye(), direction);
+    Transform::from_translation(position).looking_to(direction, Vec3::Y)
+}
+
 pub(super) fn actors(
     mut commands: Commands,
     session: Res<ArenaSession>,
@@ -17,25 +27,25 @@ pub(super) fn actors(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for actor in &session.actors {
+        let retracted_into_body = player_camera(&session, &state, actor)
+            .translation
+            .distance(actor.eye())
+            < 0.45;
+        let actor_visibility = if actor.id == 0
+            && !state.external_camera()
+            && (!state.third_person || retracted_into_body)
+        {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
         if let Some((_, _, mut transform, mut visibility)) = models
             .iter_mut()
             .find(|(_, model, _, _)| model.0 == actor.id)
         {
             transform.translation = actor.feet;
             transform.rotation = Quat::from_rotation_y((-actor.aim.x).atan2(-actor.aim.z));
-            let external_capture = state.external_camera();
-            let retracted_into_body =
-                super::camera_origin(&session, &state, actor.eye(), super::aim(&state))
-                    .distance(actor.eye())
-                    < 0.45;
-            *visibility = if actor.id == 0
-                && !external_capture
-                && (!state.third_person || retracted_into_body)
-            {
-                Visibility::Hidden
-            } else {
-                Visibility::Visible
-            };
+            *visibility = actor_visibility;
             continue;
         }
         let color = if actor.id == 0 {
@@ -60,7 +70,7 @@ pub(super) fn actors(
             .spawn((
                 ActorModel(actor.id),
                 Transform::from_translation(actor.feet),
-                Visibility::default(),
+                actor_visibility,
                 Name::new(format!("Arena actor {}", actor.id)),
             ))
             .with_children(|body| {
@@ -129,14 +139,7 @@ pub(super) fn camera(
             _ => {}
         }
     }
-    let eye = actor.eye();
-    let direction = if state.capture.is_none() && state.initialized {
-        super::aim(&state)
-    } else {
-        actor.aim.normalize_or(Vec3::NEG_Z)
-    };
-    let position = super::camera_origin(&session, &state, eye, direction);
-    *transform = Transform::from_translation(position).looking_to(direction, Vec3::Y);
+    *transform = player_camera(&session, &state, actor);
 }
 
 pub(super) fn effects(
