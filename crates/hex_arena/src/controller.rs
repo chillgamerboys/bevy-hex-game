@@ -1,9 +1,10 @@
 //! Accepted M01 walk/jump/step behavior, extracted from lab revision 9ffc6bf.
-//! The arena adds independently swept impulse velocity and removes fly/recovery.
+//! The arena combines input and persistent impulse velocity before sweeping and
+//! removes the inspection controller's fly/recovery behavior.
 
 use bevy_math::{Vec3, Vec3Swizzles};
 
-use crate::collision::{slide, CollisionWorld, SKIN};
+use crate::collision::{slide_with_contacts, CollisionWorld, SKIN};
 use crate::{BODY_HEIGHT, BODY_RADIUS, STEP};
 
 const GRAVITY: f32 = 17.333_334;
@@ -61,20 +62,43 @@ impl Body {
             self.coyote = 0.0;
             self.jump_buffer = 0.0;
         }
+        // Transfer vertical impulse into the ordinary ballistic channel exactly
+        // once, then sweep the sum of requested motion and external momentum.
+        self.vertical_velocity += self.impulse_velocity.y;
+        if self.impulse_velocity.y > 0.0 {
+            self.grounded = false;
+        }
+        self.impulse_velocity.y = 0.0;
         let direction = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero();
-        let horizontal = direction * (if run { RUN } else { WALK }) * STEP;
+        let horizontal =
+            (direction * (if run { RUN } else { WALK }) + self.impulse_velocity) * STEP;
+        let vertical = if !self.grounded || self.vertical_velocity > 0.0 {
+            let delta = self.vertical_velocity * STEP - 0.5 * GRAVITY * STEP * STEP;
+            self.vertical_velocity -= GRAVITY * STEP;
+            Vec3::Y * delta
+        } else {
+            self.vertical_velocity = 0.0;
+            Vec3::ZERO
+        };
         let original = *feet;
-        let slid = slide(world, original, horizontal, BODY_HEIGHT, BODY_RADIUS);
+        let (slid, mut contacts) = slide_with_contacts(
+            world,
+            original,
+            horizontal + vertical,
+            BODY_HEIGHT,
+            BODY_RADIUS,
+        );
         *feet = slid;
         if self.grounded && horizontal.length_squared() > f32::EPSILON {
-            if (slid - original).length_squared() + SKIN * SKIN < horizontal.length_squared() {
+            if (slid - original).xz().length_squared() + SKIN * SKIN < horizontal.length_squared() {
                 let rise = Vec3::Y * (STEP_HEIGHT + SKIN * 2.0);
                 let rise = world
                     .sweep(original, rise, BODY_HEIGHT, BODY_RADIUS)
                     .map_or(rise, |hit| rise * hit.fraction);
                 let raised = original + rise;
                 if world.clear(raised, BODY_HEIGHT, BODY_RADIUS) {
-                    let across = slide(world, raised, horizontal, BODY_HEIGHT, BODY_RADIUS);
+                    let (across, across_contacts) =
+                        slide_with_contacts(world, raised, horizontal, BODY_HEIGHT, BODY_RADIUS);
                     if (across - raised).xz().length_squared()
                         > (slid - original).xz().length_squared() + SKIN * SKIN
                     {
@@ -84,6 +108,9 @@ impl Body {
                             if world.clear(landing, BODY_HEIGHT, BODY_RADIUS) {
                                 *feet = landing;
                                 self.step_rise = (landing.y - original.y).max(0.0);
+                                // The lower-wall trial was rejected. Only the
+                                // accepted step route clips retained momentum.
+                                contacts = across_contacts;
                             }
                         }
                     }
@@ -91,41 +118,17 @@ impl Body {
             }
         }
 
-        // External momentum is neither replaced by WASD nor removed by releasing
-        // input. Contacts clip its normal component while preserving wall slides.
-        self.vertical_velocity += self.impulse_velocity.y;
-        if self.impulse_velocity.y > 0.0 {
-            self.grounded = false;
-        }
-        self.impulse_velocity.y = 0.0;
-        let mut remaining = self.impulse_velocity * STEP;
-        for _ in 0..6 {
-            if remaining.length_squared() < SKIN * SKIN {
-                break;
-            }
-            let Some(hit) = world.sweep(*feet, remaining, BODY_HEIGHT, BODY_RADIUS) else {
-                *feet += remaining;
-                break;
-            };
-            *feet += remaining * hit.fraction + hit.normal * SKIN;
-            remaining *= 1.0 - hit.fraction;
-            remaining -= hit.normal * remaining.dot(hit.normal).min(0.0);
-            self.impulse_velocity -= hit.normal * self.impulse_velocity.dot(hit.normal).min(0.0);
-        }
-        // Horizontal drag leaves a readable displacement. Vertical impulse is
-        // transferred to the jump/fall channel so ordinary gravity controls it.
-        self.impulse_velocity *= (-3.0 * STEP).exp();
-        if !self.grounded || self.vertical_velocity > 0.0 {
-            let delta = Vec3::Y * (self.vertical_velocity * STEP - 0.5 * GRAVITY * STEP * STEP);
-            self.vertical_velocity -= GRAVITY * STEP;
-            if let Some(hit) = world.sweep(*feet, delta, BODY_HEIGHT, BODY_RADIUS) {
-                *feet += delta * hit.fraction + hit.normal * SKIN;
+        // Input remains a request; only independent momentum is retained and
+        // clipped by actual contact normals. Opposing input cannot be discarded
+        // at a wall before an outward impulse gets applied.
+        for normal in contacts {
+            self.impulse_velocity -= normal * self.impulse_velocity.dot(normal).min(0.0);
+            if normal.y.abs() > 0.5 && self.vertical_velocity * normal.y < 0.0 {
                 self.vertical_velocity = 0.0;
-                self.grounded = hit.normal.y > 0.5;
-            } else {
-                *feet += delta;
+                self.grounded = normal.y > 0.5;
             }
         }
+        self.impulse_velocity *= (-3.0 * STEP).exp();
         if self.grounded
             && world
                 .ground(*feet, BODY_HEIGHT, BODY_RADIUS, SKIN * 8.0)
@@ -316,5 +319,37 @@ mod tests {
             jumped |= body.vertical_velocity > 1.0;
         }
         assert!(jumped);
+    }
+
+    #[test]
+    fn opposing_input_and_outward_wall_impulse_sweep_their_net_displacement() {
+        let mut view = ArenaTerrainView {
+            voxels: HexCoord::ORIGIN
+                .within_radius(5)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, 0), SubstanceId(1)))
+                .collect(),
+            ..Default::default()
+        };
+        for level in 1..=6 {
+            view.voxels
+                .insert(TilePos::new(HexCoord::ORIGIN, level), SubstanceId(1));
+        }
+        let mut world = CollisionWorld::default();
+        world.refresh(&view, ArenaVoxelGeometry::default());
+        let mut feet = Vec3::new(
+            -hex_core::config::HEX_SMALL_DIAMETER * 0.5 - BODY_RADIUS - SKIN * 2.0,
+            SKIN,
+            0.0,
+        );
+        let start = feet;
+        let mut body = Body {
+            impulse_velocity: Vec3::NEG_X * 8.0,
+            ..Default::default()
+        };
+        body.tick(&mut feet, Vec3::X, false, false, &world);
+        let expected = (WALK - 8.0) * STEP;
+        assert!((feet.x - start.x - expected).abs() < 0.0001);
+        assert!(body.impulse_velocity.x < -7.0);
     }
 }

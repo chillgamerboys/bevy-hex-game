@@ -639,10 +639,10 @@ impl Bot {
             / (2.0 * tuning.projectile_speed * tuning.projectile_speed);
         let planar = Vec3::new(aim.x, 0.0, aim.z).normalize_or_zero();
         let travel = planar * self.movement.y + planar.cross(Vec3::Y) * self.movement.x;
-        let ahead = bot.feet + travel * 0.9;
+        let ahead = bot.feet + travel * 0.9 + Vec3::Y * 0.4;
         if bot.grounded
             && collision
-                .ground(ahead, BODY_HEIGHT, BODY_RADIUS, 0.9)
+                .ground(ahead, BODY_HEIGHT, BODY_RADIUS, 1.3)
                 .is_none()
         {
             self.movement = -self.movement;

@@ -184,23 +184,35 @@ fn sweep_span(span: Span, feet: Vec3, delta: Vec3, height: f32, radius: f32) -> 
 
 pub(crate) fn slide(
     world: &CollisionWorld,
+    feet: Vec3,
+    delta: Vec3,
+    height: f32,
+    radius: f32,
+) -> Vec3 {
+    slide_with_contacts(world, feet, delta, height, radius).0
+}
+
+pub(crate) fn slide_with_contacts(
+    world: &CollisionWorld,
     mut feet: Vec3,
     mut delta: Vec3,
     height: f32,
     radius: f32,
-) -> Vec3 {
+) -> (Vec3, Vec<Vec3>) {
+    let mut contacts = Vec::new();
     for _ in 0..6 {
         if delta.length_squared() < SKIN * SKIN {
             break;
         }
         let Some(hit) = world.sweep(feet, delta, height, radius) else {
-            return feet + delta;
+            return (feet + delta, contacts);
         };
+        contacts.push(hit.normal);
         feet += delta * hit.fraction + hit.normal * SKIN;
         delta *= 1.0 - hit.fraction;
         delta -= hit.normal * delta.dot(hit.normal).min(0.0);
     }
-    feet
+    (feet, contacts)
 }
 
 #[cfg(test)]
