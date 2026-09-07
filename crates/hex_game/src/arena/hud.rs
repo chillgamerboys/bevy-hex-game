@@ -17,6 +17,7 @@ pub(super) enum Label {
     Spell(usize),
     Parameter(usize),
     WindowMode,
+    Charge,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
@@ -26,6 +27,12 @@ pub(super) struct StartPanel;
 pub(super) struct CombatHud;
 #[derive(Component)]
 pub(super) struct SpellCard(usize);
+#[derive(Component)]
+pub(super) enum ChargeNode {
+    Panel,
+    Track,
+    Fill,
+}
 #[derive(Component, Clone, Copy)]
 pub(super) enum Action {
     Start,
@@ -58,6 +65,12 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn((Node { position_type: PositionType::Absolute, right: px(18), top: px(14), max_width: px(474), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 15.0, INK), Label::Status));
             root.spawn((Node { position_type: PositionType::Absolute, top: percent(50), left: percent(50), margin: UiRect { left: px(-7), top: px(-15), ..default() }, ..default() }, text("+", 24.0, INK), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }));
+            root.spawn((Node { position_type: PositionType::Absolute, top: percent(50), left: percent(50), width: px(236), margin: UiRect { left: px(-118), top: px(28), ..default() }, padding: UiRect::all(px(8)), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(6), border_radius: BorderRadius::all(px(5)), display: Display::None, ..default() }, BackgroundColor(PANEL), ChargeNode::Panel, Name::new("Charge panel")))
+                .with_children(|charge| {
+                    charge.spawn((Node { width: percent(100), height: px(8), flex_shrink: 0.0, border_radius: BorderRadius::all(px(4)), overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::srgb(0.18, 0.26, 0.31)), ChargeNode::Track, Name::new("Charge track")))
+                        .with_children(|track| { track.spawn((Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(Color::srgb(0.35, 0.94, 0.79)), ChargeNode::Fill, Name::new("Charge fill"))); });
+                    charge.spawn((text("", 14.0, INK), Label::Charge, Name::new("Charge guidance")));
+                });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(52), width: percent(100), justify_content: JustifyContent::Center, column_gap: px(10), ..default() })
                 .with_children(|bar| {
                     for (index, name) in ["1  SHIELD", "2  FIREBALL", "3  AREA BLAST"].into_iter().enumerate() {
@@ -68,7 +81,7 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), height: px(28), justify_content: JustifyContent::Center, ..default() })
                 .with_children(|footer| { footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL),
-                    text("WASD move   SHIFT sprint   SPACE jump   CLICK cast   C camera   T trajectory   ESC / TAB pause   R reset", 12.0, INK))); });
+                    text("WASD move   SHIFT sprint   SPACE jump   HOLD charge / RELEASE cast   C camera   T trajectory   ESC / TAB pause   R reset", 12.0, INK))); });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.78)), GlobalZIndex(20), StartPanel))
@@ -77,7 +90,7 @@ pub(super) fn setup(mut commands: Commands) {
                 .with_children(|panel| {
                     panel.spawn(text("SPELL ARENA", 36.0, INK));
                     panel.spawn(text("One player. One opponent. Three spells.", 18.0, INK));
-                    panel.spawn(text("WASD move / mouse look / Space jump / Shift sprint\n1 Shield / 2 Fireball / 3 Area Blast / click to cast", 15.0, INK));
+                    panel.spawn(text("WASD move / mouse look / Space jump / Shift sprint\n1 Shield / 2 Fireball / 3 Area Blast\nHold mouse to charge Shield or Fireball. Release to cast.\nArea Blast casts on release with fixed power.", 15.0, INK));
                     panel.spawn(text("ESC or TAB pauses combat and frees the mouse.\nUse the paused menu for fullscreen, tuning, or quitting.", 16.0, Color::srgb(0.36, 0.90, 0.78)));
                     panel.spawn(text("Combat waits until you start.", 15.0, INK));
                     panel.spawn((Button, Node { width: percent(100), height: px(46), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), Action::Start))
@@ -135,6 +148,7 @@ pub(super) fn buttons(
     mut tuning: ResMut<ArenaTuning>,
     mut reset: ResMut<ArenaReset>,
     mut input: ResMut<ArenaInput>,
+    mut session: ResMut<ArenaSession>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -170,6 +184,7 @@ pub(super) fn buttons(
             _ => continue,
         }
         // UI clicks cannot leak into casting when the simulation resumes.
+        session.cancel_charges();
         input.human = ActorIntent {
             aim: super::aim(&state),
             ..default()
@@ -209,13 +224,42 @@ pub(super) fn update(
     mut labels: Query<(&Label, &mut Text)>,
     mut cards: Query<(&SpellCard, &mut BorderColor)>,
     mut panels: Query<
-        (&mut Node, Has<PausePanel>, Has<StartPanel>, Has<CombatHud>),
-        Or<(With<PausePanel>, With<StartPanel>, With<CombatHud>)>,
+        (
+            &mut Node,
+            Has<PausePanel>,
+            Has<StartPanel>,
+            Has<CombatHud>,
+            Option<&ChargeNode>,
+        ),
+        Or<(
+            With<PausePanel>,
+            With<StartPanel>,
+            With<CombatHud>,
+            With<ChargeNode>,
+        )>,
     >,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let actor = session.actors.first();
-    for (mut node, pause, start, combat) in &mut panels {
+    let charge = actor.and_then(|actor| actor.charge());
+    let progress = charge.map_or(0.0, |charge| {
+        (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0)
+    });
+    for (mut node, pause, start, combat, charge_node) in &mut panels {
+        if let Some(kind) = charge_node {
+            let visible =
+                state.started && !state.paused && session.outcome.is_none() && charge.is_some();
+            let has_bar = charge.is_some_and(|charge| charge.spell != Spell::AreaBlast);
+            node.display = if visible && (matches!(kind, ChargeNode::Panel) || has_bar) {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            if matches!(kind, ChargeNode::Fill) {
+                node.width = percent(progress * 100.0);
+            }
+            continue;
+        }
         node.display = if (pause && state.paused && state.started)
             || (start && !state.started)
             || (combat && state.started)
@@ -233,6 +277,13 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::Charge => match charge {
+                Some(charge) if charge.spell == Spell::AreaBlast => {
+                    "AREA BLAST / Release to cast".into()
+                }
+                Some(_) => format!("{:.0}% / Release to cast", progress * 100.0),
+                None => String::new(),
+            },
             Label::WindowMode => {
                 if windows
                     .iter()
@@ -300,7 +351,7 @@ pub(super) fn update(
                 ),
                 2 => format!("Area Blast size           {}", size_name(tuning.blast_size)),
                 3 => format!(
-                    "Launch speed              {:.0} units/s",
+                    "Base launch speed         {:.0} units/s",
                     tuning.projectile_speed
                 ),
                 4 => format!(

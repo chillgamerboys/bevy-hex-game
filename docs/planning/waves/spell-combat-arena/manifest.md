@@ -6,8 +6,8 @@ Outcome: native offline first-person spell duel against one disposable bot. The 
 
 ## Locked decisions
 
-1. First person default; C toggles tightly constrained third person. WASD, mouse look, Space jump, Shift sprint, 1/2/3 select, left click casts, T toggles selected projectile preview. Enter or Start begins from a frozen ready screen. Escape/Tab pauses and releases the mouse; no live HUD menu button. The paused menu includes Resume, Reset, Fullscreen/Windowed, Quit, and tuning. R fully resets to the ready screen.
-2. Shield is a physical ballistic seed, cover-only stone wall, persists until destroyed. Revalidate complete supported footprint including both continuous bodies before creation. Invalid hits/footprints fizzle and consume cooldown.
+1. First person default; C toggles tightly constrained third person. WASD, mouse look, Space jump, Shift sprint, 1/2/3 select. All spells release on mouse-up; Shield/Fireball gain launch speed over a one-second hold and Area Blast stays fixed. T toggles selected projectile preview. Enter or Start begins from a frozen ready screen. Escape/Tab pauses and releases the mouse; no live HUD menu button. The paused menu includes Resume, Reset, Fullscreen/Windowed, Quit, and tuning. R fully resets to the ready screen.
+2. Shield is a physical ballistic seed whose first terrain or actor impact anchors upright stone cover, persistent until destroyed. No support requirement: filter terrain, bounds, and both bodies per cell at emergence completion. Actor hits add a gentle horizontal impulse with zero direct HP damage. Partial/no-space results still consume the release cooldown; existing terrain and its damage remain untouched.
 3. Fireball is ballistic, detonates once at earliest body/terrain hit, damages its caster. Area Blast is self-centered and excludes its caster. Radial damage and knockback ignore cover. All explosive damage uses world-space spheres.
 4. HP100; shield/fireball/area cooldowns5/1.25/7 seconds; max actor damage0/35/45; terrain power2. Projectile launch speed32, gravity12. Three independently chosen size presets: shield3x4/5x5/7x6 at thickness1; fireball radius1.5/2.5/3.5; blast radius2.5/4/5.5. Standard default.
 5. Accepted M01 walk3.5/run7/body2 levels/radius.25/step1/jump3.25/gravity17.333334/coyote and buffer.1; no flight, no automatic terrain recovery teleport for ordinary falling. External impulse velocity survives input.
@@ -125,3 +125,48 @@ native window mode while combat remains frozen; Quit requests normal app exit.
 Typed input, window, exit, and layout checks cover the transitions. A fresh six-view
 windowless menu matrix covers ready, paused, both playable cameras, and both arena
 azimuths; native key and window-manager feel remain a playtest route.
+
+## Charged shots and forgiving shields
+
+Approved follow-up from local `ca1b06e`. The existing gameplay and shared-application
+lanes form one combined local review unit. Root owns charge contracts and integration;
+contributors own disjoint spell, bot, and presentation files. No new world mutation
+contract or remote release is introduced. The shared interface is established before
+adapting the bot and native input.
+
+Actor-owned charge state advances at 120 Hz, accepts press/release/held intent, and
+is cancelled immediately on pause/focus loss, spell switch, reset, or knockout.
+Release uses current aim, and a refused cooldown press cannot auto-arm later. A
+zero-duration tap and one-second charge use reference range multipliers one-third
+and 1.3, linearly interpolated, with launch speed equal to reference speed times
+the square root of that multiplier. The bot uses this same path and aims with the
+actual release speed. UI shows charge progress or the fixed Area Blast release
+prompt; trajectory assistance shares construction and collision with real shots.
+
+Shield footprints stay at the physical contact point and grow upward even on
+wall/ceiling/actor hits. Every cell is independently clipped against current
+occupancy, bounds, actors, and same-tick shield reservations after 0.18 seconds.
+Existing impact outcomes settle before admission; surviving cells publish through
+TerrainEdit before the next movement tick. Actor impact applies a single 2 units/s
+horizontal impulse, with no teleport, vertical launch, or HP damage. Pinned actors
+leave gaps. An empty result reports no room without overwriting terrain or healing
+existing stone. Preview outlines the lowest surviving cell in each column.
+
+Acceptance adds real charged-flight range and preview tests, release/cancellation
+and render-rate input checks, gentle push and partial-placement races, preservation
+of existing voxel damage, and a fresh exact-commit charge/partial-preview capture
+matrix. Record focused automated checks and static review separately from native
+short-lob and shield-usability playtesting.
+
+### Charged-shot follow-up validation scope
+
+The combined candidate uses the existing 120 Hz world publication lane. Follow-up
+checks include the entire `hex_arena` unit suite, arena application tests with
+`arena-prototype,test-support`, workspace formatting/link checks, strict all-feature
+workspace Clippy, and the native Cargo launcher build. Fresh windowless captures
+cover the ready/menu states, partial/full charge meters, release-only Area Blast,
+and per-column partial Shield previews in both playable cameras. Runtime receipts
+record actual input edges and authoritative charge state; image review remains
+separate from gameplay tests. The original prototype's broader gate receipt is
+historical evidence, not certification of this follow-up. Native charge feel and
+subjective Shield balance remain pending the user's playtest.

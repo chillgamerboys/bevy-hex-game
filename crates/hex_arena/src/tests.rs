@@ -32,7 +32,14 @@ fn fixture() -> (
         ..Default::default()
     };
     session.reset(0, &view, geometry);
-    (session, view, geometry, materials, ArenaTuning::default())
+    // These pre-existing physics regressions isolate casting from charge tuning.
+    // Default charged speeds are covered separately in charge_tests.
+    let tuning = ArenaTuning {
+        tap_range_multiplier: 1.0,
+        max_range_multiplier: 1.0,
+        ..Default::default()
+    };
+    (session, view, geometry, materials, tuning)
 }
 
 fn human(session: &ArenaSession) -> &Actor {
@@ -76,17 +83,26 @@ fn one_click_is_consumed_once_and_cooldown_is_charged_on_release() {
     app.world_mut().run_schedule(ArenaTick);
     app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
         aim: Vec3::Y,
-        cast: true,
+        cast_pressed: true,
+        cast_released: true,
         ..Default::default()
     };
     app.world_mut().run_schedule(ArenaTick);
     let session = app.world().resource::<ArenaSession>();
     assert_eq!(session.projectiles.len(), 1);
     assert!((human(session).cooldowns.get(1).copied().unwrap_or_default() - 1.25).abs() < 0.001);
-    assert!(!app.world().resource::<ArenaInput>().human.cast);
+    assert!(!app.world().resource::<ArenaInput>().human.cast_pressed);
+    assert!(!app.world().resource::<ArenaInput>().human.cast_released);
     app.world_mut().run_schedule(ArenaTick);
     assert_eq!(app.world().resource::<ArenaSession>().projectiles.len(), 1);
-    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_pressed = true;
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_released = true;
     app.world_mut().run_schedule(ArenaTick);
     assert_eq!(app.world().resource::<ArenaSession>().projectiles.len(), 1);
 }
@@ -102,7 +118,8 @@ fn fresh_cast_does_not_replay_a_targets_completed_movement() {
     let emitted = session.advance(
         ActorIntent {
             aim: Vec3::X,
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             ..Default::default()
         },
         &view,
@@ -153,7 +170,8 @@ fn fireball_damages_and_knocks_back_its_caster() {
         let emitted = session.advance(
             ActorIntent {
                 aim: Vec3::NEG_Y,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -170,7 +188,7 @@ fn fireball_damages_and_knocks_back_its_caster() {
 }
 
 #[test]
-fn default_vertical_fireball_returns_after_five_seconds_and_matches_preview() {
+fn reference_speed_vertical_fireball_returns_after_five_seconds_and_matches_preview() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     let feet = human(&session).feet;
     set_actor(&mut session, 0, feet, Vec3::Y);
@@ -182,7 +200,8 @@ fn default_vertical_fireball_returns_after_five_seconds_and_matches_preview() {
         session.advance(
             ActorIntent {
                 aim: Vec3::Y,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -217,7 +236,8 @@ fn self_centered_area_excludes_caster_and_damages_through_cover() {
     let emitted = session.advance(
         ActorIntent {
             selected: Some(Spell::AreaBlast),
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             aim: Vec3::X,
             ..Default::default()
         },
@@ -244,7 +264,7 @@ fn self_centered_area_excludes_caster_and_damages_through_cover() {
 }
 
 #[test]
-fn invalid_shield_fizzles_without_damage_and_keeps_cooldown() {
+fn shield_at_the_casters_feet_forms_safe_partial_cover_and_keeps_cooldown() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     let mut edits = Vec::new();
     for tick in 0..45 {
@@ -252,7 +272,8 @@ fn invalid_shield_fizzles_without_damage_and_keeps_cooldown() {
             ActorIntent {
                 selected: Some(Spell::Shield),
                 aim: Vec3::NEG_Y,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -263,11 +284,20 @@ fn invalid_shield_fizzles_without_damage_and_keeps_cooldown() {
         edits.extend(emitted.edits);
         assert!(emitted.impacts.is_empty());
     }
-    assert!(
-        edits.is_empty(),
-        "a wall cannot materialize through its caster"
-    );
-    assert_eq!(session.shields_raised, 0);
+    assert!(!edits.is_empty() && edits.len() < 25);
+    for edit in &edits {
+        let TerrainEdit::Set { pos, .. } = edit else {
+            panic!("shield sets stone")
+        };
+        assert!(!collision::voxel_overlaps_body(
+            *pos,
+            geometry,
+            human(&session).feet,
+            BODY_HEIGHT,
+            BODY_RADIUS + SKIN * 4.0
+        ));
+    }
+    assert_eq!(session.shields_raised, 1);
     assert!(
         human(&session)
             .cooldowns
@@ -277,7 +307,6 @@ fn invalid_shield_fizzles_without_damage_and_keeps_cooldown() {
             > 4.5
     );
     assert!((human(&session).hp - 100.0).abs() < 0.001);
-    assert!(session.notice.contains("fizzled"));
 }
 
 #[test]
@@ -290,7 +319,8 @@ fn supported_shield_emits_one_complete_persistent_wall() {
             ActorIntent {
                 selected: Some(Spell::Shield),
                 aim,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -332,7 +362,8 @@ fn shield_emergence_revalidates_an_actor_entering_the_footprint() {
             ActorIntent {
                 selected: Some(Spell::Shield),
                 aim,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -347,33 +378,48 @@ fn shield_emergence_revalidates_an_actor_entering_the_footprint() {
     }
     assert_eq!(session.pending_walls.len(), 1);
     // At this launch angle the contact column is axial (-1,0), with a clear
-    // support. Moving the bot there before emergence must cancel all voxels.
+    // support. Moving the bot there leaves a gap instead of cancelling the wall.
     set_actor(
         &mut session,
         1,
         HexCoord::from_axial(-1, 0).to_world(SKIN),
         Vec3::NEG_X,
     );
+    let mut edits = Vec::new();
     for _ in 0..40 {
-        assert!(session
-            .advance(
-                ActorIntent {
-                    aim,
-                    ..Default::default()
-                },
-                &view,
-                geometry,
-                materials,
-                &tuning
-            )
-            .edits
-            .is_empty());
+        edits.extend(
+            session
+                .advance(
+                    ActorIntent {
+                        aim,
+                        ..Default::default()
+                    },
+                    &view,
+                    geometry,
+                    materials,
+                    &tuning,
+                )
+                .edits,
+        );
     }
-    assert_eq!(session.shields_raised, 0);
+    assert!(!edits.is_empty() && edits.len() < 25);
+    for edit in &edits {
+        let TerrainEdit::Set { pos, .. } = edit else {
+            panic!("shield sets stone")
+        };
+        assert!(!collision::voxel_overlaps_body(
+            *pos,
+            geometry,
+            bot(&session).feet,
+            BODY_HEIGHT,
+            BODY_RADIUS + SKIN * 4.0
+        ));
+    }
+    assert_eq!(session.shields_raised, 1);
 }
 
 #[test]
-fn mature_shield_waits_for_blast_outcome_before_rechecking_support() {
+fn mature_shield_waits_for_blast_outcome_then_can_form_without_support() {
     use hex_core::{TerrainImpactDisposition, TerrainVoxelHealth, TerrainVoxelOutcome};
 
     for support_destroyed in [false, true] {
@@ -384,7 +430,8 @@ fn mature_shield_waits_for_blast_outcome_before_rechecking_support() {
                 ActorIntent {
                     selected: Some(Spell::Shield),
                     aim,
-                    cast: tick == 0,
+                    cast_pressed: tick == 0,
+                    cast_released: tick == 0,
                     ..Default::default()
                 },
                 &view,
@@ -408,7 +455,8 @@ fn mature_shield_waits_for_blast_outcome_before_rechecking_support() {
             ActorIntent {
                 selected: Some(Spell::AreaBlast),
                 aim,
-                cast: true,
+                cast_pressed: true,
+                cast_released: true,
                 ..Default::default()
             },
             &view,
@@ -462,8 +510,8 @@ fn mature_shield_waits_for_blast_outcome_before_rechecking_support() {
         session.accept_outcome(&outcome);
         let next = session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
         assert!(session.pending_walls.is_empty());
-        assert_eq!(next.edits.len(), if support_destroyed { 0 } else { 25 });
-        assert_eq!(session.shields_raised, u64::from(!support_destroyed));
+        assert_eq!(next.edits.len(), 25);
+        assert_eq!(session.shields_raised, 1);
     }
 }
 
@@ -474,7 +522,8 @@ fn fireball_enveloped_by_new_terrain_detonates_once_at_its_start_position() {
         session.advance(
             ActorIntent {
                 aim: Vec3::X,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -528,7 +577,8 @@ fn preview_and_released_projectile_report_the_same_impact() {
         session.advance(
             ActorIntent {
                 aim,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,
@@ -553,7 +603,8 @@ fn reset_restores_health_cooldowns_projectiles_and_bot_preference() {
     session.advance(
         ActorIntent {
             aim: Vec3::Y,
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             ..Default::default()
         },
         &view,
@@ -582,7 +633,8 @@ fn correlated_world_rejection_is_reported_and_not_silently_retried() {
     let emitted = session.advance(
         ActorIntent {
             selected: Some(Spell::AreaBlast),
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             ..Default::default()
         },
         &view,
@@ -656,7 +708,8 @@ fn knockout_ends_the_round_until_reset_restores_both_combatants() {
     session.advance(
         ActorIntent {
             selected: Some(Spell::AreaBlast),
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             ..Default::default()
         },
         &view,
@@ -671,7 +724,8 @@ fn knockout_ends_the_round_until_reset_restores_both_combatants() {
         let out = session.advance(
             ActorIntent {
                 movement: Vec2::Y,
-                cast: true,
+                cast_pressed: true,
+                cast_released: true,
                 ..Default::default()
             },
             &view,
@@ -689,7 +743,8 @@ fn knockout_ends_the_round_until_reset_restores_both_combatants() {
     session.advance(
         ActorIntent {
             aim: Vec3::Y,
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             ..Default::default()
         },
         &view,
@@ -711,7 +766,8 @@ fn one_fireball_can_produce_a_simultaneous_draw_including_its_caster() {
         session.advance(
             ActorIntent {
                 aim: Vec3::NEG_Y,
-                cast: tick == 0,
+                cast_pressed: tick == 0,
+                cast_released: tick == 0,
                 ..Default::default()
             },
             &view,

@@ -37,7 +37,7 @@ pub const EYE_HEIGHT: f32 = 0.62;
 /// Three independently cooled spells, in HUD/key order.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Spell {
-    /// A ballistic seed that raises supported stone cover.
+    /// A ballistic seed that adds stone cover wherever its impact footprint fits.
     Shield,
     /// A ballistic projectile with an explosive impact.
     #[default]
@@ -79,9 +79,13 @@ pub struct ActorIntent {
     pub run: bool,
     /// Single jump edge, consumed by the next fixed tick.
     pub jump: bool,
-    /// Single cast edge, consumed by the next fixed tick even when refused.
-    pub cast: bool,
-    /// Optional selected spell, applied before a same-tick cast.
+    /// Press edge, retained until the next fixed tick even for a quick tap.
+    pub cast_pressed: bool,
+    /// Release edge. Only an armed press can release a spell.
+    pub cast_released: bool,
+    /// Current held state, preserved across fixed ticks in one render frame.
+    pub cast_held: bool,
+    /// Optional selected spell, applied before same-tick casting input.
     pub selected: Option<Spell>,
 }
 
@@ -92,7 +96,9 @@ impl Default for ActorIntent {
             aim: Vec3::NEG_Z,
             run: false,
             jump: false,
-            cast: false,
+            cast_pressed: false,
+            cast_released: false,
+            cast_held: false,
             selected: None,
         }
     }
@@ -105,6 +111,15 @@ pub struct ArenaInput {
     pub human: ActorIntent,
 }
 
+/// Read-only projection of an actor's currently armed spell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChargeState {
+    /// Spell captured on the accepted press.
+    pub spell: Spell,
+    /// Held simulation time, capped by the configured charge duration.
+    pub elapsed: f32,
+}
+
 /// Runtime comparison controls. Geometry indices select compact, standard, or large.
 #[derive(Resource, Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -115,8 +130,16 @@ pub struct ArenaTuning {
     pub fireball_size: usize,
     /// Area Blast sphere preset (0, 1, or 2).
     pub blast_size: usize,
-    /// Shared initial seed/fireball speed in world units per second.
+    /// Reference seed/fireball speed before the charge range multiplier.
     pub projectile_speed: f32,
+    /// Seconds held to reach maximum projectile charge.
+    pub charge_seconds: f32,
+    /// Tap range relative to the reference same-height, same-angle shot.
+    pub tap_range_multiplier: f32,
+    /// Fully charged range relative to the same reference shot.
+    pub max_range_multiplier: f32,
+    /// Horizontal impulse speed from a shield's first actor impact; no HP damage.
+    pub shield_push: f32,
     /// Downward projectile acceleration in world units per second squared.
     pub projectile_gravity: f32,
     /// Shield cooldown, charged immediately on release.
@@ -144,6 +167,10 @@ impl Default for ArenaTuning {
             fireball_size: 1,
             blast_size: 1,
             projectile_speed: 32.0,
+            charge_seconds: 1.0,
+            tap_range_multiplier: 1.0 / 3.0,
+            max_range_multiplier: 1.3,
+            shield_push: 2.0,
             projectile_gravity: 12.0,
             shield_cooldown: 5.0,
             fireball_cooldown: 1.25,
@@ -168,6 +195,9 @@ impl ArenaTuning {
         }
         for (name, value, max) in [
             ("projectile_speed", self.projectile_speed, 100.0),
+            ("charge_seconds", self.charge_seconds, 5.0),
+            ("tap_range_multiplier", self.tap_range_multiplier, 4.0),
+            ("max_range_multiplier", self.max_range_multiplier, 4.0),
             ("projectile_gravity", self.projectile_gravity, 100.0),
             ("shield_cooldown", self.shield_cooldown, 60.0),
             ("fireball_cooldown", self.fireball_cooldown, 60.0),
@@ -179,7 +209,14 @@ impl ArenaTuning {
                 return Err(format!("{name} must be finite and in (0, {max}]."));
             }
         }
-        for value in [self.fireball_knockback, self.blast_knockback] {
+        if self.tap_range_multiplier > self.max_range_multiplier {
+            return Err("Tap range must not exceed full-charge range.".into());
+        }
+        for value in [
+            self.fireball_knockback,
+            self.blast_knockback,
+            self.shield_push,
+        ] {
             if !value.is_finite() || !(0.0..=40.0).contains(&value) {
                 return Err("Knockback must be finite and in 0..=40.".into());
             }
@@ -188,6 +225,30 @@ impl ArenaTuning {
             return Err("terrain_power must be in 1..=8.".into());
         }
         Ok(())
+    }
+
+    /// One shared charge-to-speed rule for release, prediction, and bot aiming.
+    #[must_use]
+    pub fn launch_speed(&self, elapsed: f32) -> f32 {
+        let progress = if elapsed.is_finite() {
+            (elapsed / self.charge_seconds).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let range = self.tap_range_multiplier
+            + (self.max_range_multiplier - self.tap_range_multiplier) * progress;
+        self.projectile_speed * range.sqrt()
+    }
+
+    /// Charge duration closest to the original reference speed, for the simple bot.
+    #[must_use]
+    pub fn reference_charge_seconds(&self) -> f32 {
+        let span = self.max_range_multiplier - self.tap_range_multiplier;
+        if span <= f32::EPSILON {
+            0.0
+        } else {
+            ((1.0 - self.tap_range_multiplier) / span).clamp(0.0, 1.0) * self.charge_seconds
+        }
     }
 
     /// Wall width in hex columns and height in voxel levels, thickness one column.
@@ -248,6 +309,8 @@ pub struct Actor {
     pub cooldowns: [f32; 3],
     /// Latest accepted support contact.
     pub grounded: bool,
+    charge: Option<ChargeState>,
+    cast_needs_release: bool,
     body: Body,
 }
 
@@ -262,6 +325,8 @@ impl Actor {
             selected: Spell::Fireball,
             cooldowns: [0.0; 3],
             grounded: false,
+            charge: None,
+            cast_needs_release: false,
             body: Body::default(),
         }
     }
@@ -276,6 +341,57 @@ impl Actor {
     #[must_use]
     pub fn center(&self) -> Vec3 {
         self.feet + Vec3::Y * (BODY_HEIGHT * 0.5)
+    }
+
+    /// Current authoritative charge, without allowing input/presentation to set it.
+    #[must_use]
+    pub fn charge(&self) -> Option<ChargeState> {
+        self.charge
+    }
+
+    fn cancel_charge(&mut self) {
+        self.cast_needs_release |= self.charge.is_some();
+        self.charge = None;
+    }
+
+    fn casting(&mut self, intent: ActorIntent, tuning: &ArenaTuning) -> Option<(Spell, f32)> {
+        // A cancelled or refused hold cannot re-arm itself. A neutral sample or
+        // release restores eligibility for the next genuine press.
+        if !intent.cast_held && !intent.cast_pressed && !intent.cast_released {
+            self.charge = None;
+            self.cast_needs_release = false;
+            return None;
+        }
+        if intent.cast_pressed && !self.cast_needs_release && self.charge.is_none() {
+            self.cast_needs_release = true;
+            if self
+                .cooldowns
+                .get(self.selected.index())
+                .is_some_and(|v| *v <= STEP * 0.01)
+            {
+                self.charge = Some(ChargeState {
+                    spell: self.selected,
+                    elapsed: 0.0,
+                });
+            }
+        }
+        if intent.cast_released {
+            self.cast_needs_release = false;
+            let charge = self.charge.take()?;
+            if self.hp > 0.0 && charge.spell == self.selected {
+                let cooldown = self.cooldowns.get(charge.spell.index())?;
+                if *cooldown <= STEP * 0.01 {
+                    return Some((charge.spell, tuning.launch_speed(charge.elapsed)));
+                }
+            }
+        } else if intent.cast_held {
+            if let Some(charge) = &mut self.charge {
+                charge.elapsed = (charge.elapsed + STEP).min(tuning.charge_seconds);
+            }
+        } else {
+            self.cancel_charge();
+        }
+        None
     }
 
     /// Current independent knockback momentum, for exact-state review hooks.
@@ -356,7 +472,7 @@ pub struct ArenaSession {
     pub notice: String,
     /// Number of correlated terrain outcomes accepted since reset.
     pub terrain_outcomes: u64,
-    /// Number of accepted complete shield placements since reset.
+    /// Number of shield impacts that added at least one safe cell since reset.
     pub shields_raised: u64,
     collision: CollisionWorld,
     generation: Option<u64>,
@@ -365,6 +481,7 @@ pub struct ArenaSession {
     next_impact: u64,
     pending_impacts: BTreeMap<TerrainBatchId, TerrainImpact>,
     pending_walls: Vec<PendingWall>,
+    shield_notice_until: Option<u64>,
 }
 
 impl Default for ArenaSession {
@@ -386,13 +503,28 @@ impl Default for ArenaSession {
             next_impact: 0,
             pending_impacts: BTreeMap::new(),
             pending_walls: Vec::new(),
+            shield_notice_until: None,
         }
     }
 }
 
 impl ArenaSession {
-    /// Complete staged wall volumes and their cosmetic rise progress in 0–1.
-    /// They become physical cover only after the final footprint validation.
+    fn shield_no_room_notice(&mut self) {
+        self.notice = "No room for new shield blocks".into();
+        self.shield_notice_until = Some(self.tick.saturating_add(240));
+    }
+
+    /// Cancel armed casts immediately, including while the fixed simulation is paused.
+    /// Input adapters must also discard queued edges and wait for a fresh press.
+    pub fn cancel_charges(&mut self) {
+        for actor in &mut self.actors {
+            actor.cancel_charge();
+        }
+        self.bot.cancel_charge();
+    }
+
+    /// Currently available staged wall cells and cosmetic rise progress in 0–1.
+    /// Formation rechecks the fixed impact footprint before adding physical cover.
     pub fn emerging_shields(&self) -> impl Iterator<Item = (&[TilePos], f32)> {
         self.pending_walls.iter().map(|wall| {
             (
@@ -472,6 +604,15 @@ impl ArenaSession {
             return commands;
         }
         self.tick += 1;
+        if self
+            .shield_notice_until
+            .is_some_and(|until| self.tick >= until)
+        {
+            if self.notice == "No room for new shield blocks" {
+                self.notice.clear();
+            }
+            self.shield_notice_until = None;
+        }
         let bot = if self.bot_enabled {
             self.bot.intent(
                 &self.actors,
@@ -495,6 +636,9 @@ impl ArenaSession {
                 actor.aim = intent.aim.normalize();
             }
             if let Some(spell) = intent.selected {
+                if spell != actor.selected && actor.charge.is_some() {
+                    actor.cancel_charge();
+                }
                 actor.selected = spell;
             }
             for cooldown in &mut actor.cooldowns {
@@ -523,14 +667,18 @@ impl ArenaSession {
             if actor.feet.y < -8.0 || !actor.feet.is_finite() {
                 actor.hp = 0.0;
             }
-            if intent.cast && actor.hp > 0.0 {
-                if let Some(cooldown) = actor.cooldowns.get_mut(actor.selected.index()) {
-                    if *cooldown <= STEP * 0.01 {
-                        *cooldown = tuning.cooldown(actor.selected);
-                        casts.push((actor.id, actor.selected));
-                    } else if actor.id == 0 {
-                        self.notice = format!("{} is cooling down.", actor.selected.name());
-                    }
+            if actor.hp > 0.0 {
+                if intent.cast_pressed
+                    && actor
+                        .cooldowns
+                        .get(actor.selected.index())
+                        .is_some_and(|v| *v > STEP * 0.01)
+                    && actor.id == 0
+                {
+                    self.notice = format!("{} is cooling down.", actor.selected.name());
+                }
+                if let Some((spell, speed)) = actor.casting(intent, tuning) {
+                    casts.push((actor.id, spell, speed));
                 }
             }
         }
@@ -539,11 +687,28 @@ impl ArenaSession {
         // New casts originate at the current eye and start traveling next tick;
         // replaying completed actor motion against that origin creates false hits.
         self.advance_projectiles(world, geometry, materials, &mut commands);
-        for (owner, spell) in casts {
+        // A projectile already in flight can knock out an actor before release.
+        // Admit this phase's living casters together, then preserve simultaneous
+        // new-cast ordering without charging a dead actor's cancelled release.
+        casts.retain(|(owner, _, _)| {
+            self.actors
+                .iter()
+                .any(|actor| actor.id == *owner && actor.hp > 0.0)
+        });
+        for (owner, spell, speed) in casts {
+            if let Some(cooldown) = self
+                .actors
+                .iter_mut()
+                .find(|actor| actor.id == owner)
+                .and_then(|actor| actor.cooldowns.get_mut(spell.index()))
+            {
+                *cooldown = tuning.cooldown(spell);
+            }
             self.release(
                 owner,
                 spell,
                 tuning,
+                speed,
                 world,
                 geometry,
                 materials,
@@ -563,6 +728,7 @@ impl ArenaSession {
             _ => None,
         };
         if self.outcome.is_some() {
+            self.cancel_charges();
             self.projectiles.clear();
             self.pending_walls.clear();
         }
@@ -604,7 +770,7 @@ fn separate_actors(actors: &mut [Actor], world: &CollisionWorld) {
 pub struct Preview {
     /// Sampled launch-to-impact trajectory points in world units.
     pub points: Vec<Vec3>,
-    /// Complete shield volume only when its support and both bodies are clear.
+    /// Currently available shield cells after terrain, bounds, and body clipping.
     pub wall_voxels: Vec<TilePos>,
     /// Earliest physical contact or Area Blast center.
     pub impact: Option<Vec3>,
@@ -652,14 +818,17 @@ fn simulate(
         if let Some(actor) = session.actors.first() {
             input.human.aim = actor.aim;
         }
-        input.human.cast = false;
+        input.human.cast_pressed = false;
+        input.human.cast_released = false;
+        input.human.cast_held = false;
         input.human.jump = false;
     }
     for outcome in outcomes.read() {
         session.accept_outcome(outcome);
     }
     let human = input.human;
-    input.human.cast = false;
+    input.human.cast_pressed = false;
+    input.human.cast_released = false;
     input.human.jump = false;
     input.human.selected = None;
     if let Err(reason) = tuning.validate() {
@@ -675,5 +844,9 @@ fn simulate(
     }
 }
 
+#[cfg(test)]
+mod charge_tests;
+#[cfg(test)]
+mod shield_tests;
 #[cfg(test)]
 mod tests;

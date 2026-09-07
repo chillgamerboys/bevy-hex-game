@@ -64,6 +64,14 @@ impl Fixture {
             .expect("fixture actor")
     }
 
+    fn bot_cooldown(&self, spell: Spell) -> f32 {
+        self.actor(1)
+            .cooldowns
+            .get(spell.index())
+            .copied()
+            .expect("spell slot")
+    }
+
     fn refresh(&mut self) {
         self.world.revision += 1;
         self.session.collision.refresh(&self.world, self.geometry);
@@ -108,7 +116,7 @@ fn low_arc_reaches_level_elevated_and_vertical_targets_at_the_tuned_speed() {
             ..Default::default()
         };
         let target = origin + delta;
-        let (aim, time) = ballistic_aim(origin, target, &tuning).expect("reachable low arc");
+        let (aim, time) = ballistic_aim(origin, target, &tuning, speed).expect("reachable low arc");
         let velocity = aim * speed;
         let endpoint = origin + velocity * time - Vec3::Y * (0.5 * gravity * time * time);
         assert!(aim.is_finite() && time > 0.0 && time < 2.0);
@@ -130,9 +138,15 @@ fn ballistic_aim_rejects_impossible_expired_and_nonfinite_requests() {
         Vec3::splat(f32::NAN),
         Vec3::splat(f32::INFINITY),
     ] {
-        assert!(ballistic_aim(Vec3::ZERO, target, &tuning).is_none());
+        assert!(ballistic_aim(Vec3::ZERO, target, &tuning, tuning.projectile_speed).is_none());
     }
-    assert!(ballistic_aim(Vec3::splat(f32::NAN), Vec3::X, &tuning).is_none());
+    assert!(ballistic_aim(
+        Vec3::splat(f32::NAN),
+        Vec3::X,
+        &tuning,
+        tuning.projectile_speed
+    )
+    .is_none());
     for (speed, gravity) in [
         (0.0, 12.0),
         (-1.0, 12.0),
@@ -148,14 +162,20 @@ fn ballistic_aim_rejects_impossible_expired_and_nonfinite_requests() {
             projectile_gravity: gravity,
             ..Default::default()
         };
-        assert!(ballistic_aim(Vec3::ZERO, Vec3::X, &invalid).is_none());
+        assert!(ballistic_aim(Vec3::ZERO, Vec3::X, &invalid, speed).is_none());
     }
     let long_flight = ArenaTuning {
         projectile_speed: 64.0,
         projectile_gravity: 2.0,
         ..Default::default()
     };
-    assert!(ballistic_aim(Vec3::ZERO, Vec3::X * 700.0, &long_flight).is_none());
+    assert!(ballistic_aim(
+        Vec3::ZERO,
+        Vec3::X * 700.0,
+        &long_flight,
+        long_flight.projectile_speed
+    )
+    .is_none());
 }
 
 #[test]
@@ -163,11 +183,26 @@ fn bot_fireball_actually_damages_stationary_targets_at_near_and_far_range() {
     for distance in [8.0, 28.0] {
         let mut fixture = Fixture::new(distance);
         fixture.advance();
+        assert!(fixture.session.projectiles.is_empty());
+        assert!(fixture.actor(1).charge().is_some());
+        assert!(fixture.bot_cooldown(Spell::Fireball).abs() < SKIN);
+        for _ in 0..240 {
+            fixture.advance();
+            if !fixture.session.projectiles.is_empty() {
+                break;
+            }
+        }
         let shot = fixture
             .session
             .projectiles
             .first()
-            .expect("bot launches fireball");
+            .expect("bot launches after holding fireball");
+        assert!(fixture.actor(1).charge().is_none());
+        assert!(fixture.bot_cooldown(Spell::Fireball) > 0.0);
+        assert!(
+            (shot.velocity.length() - fixture.tuning.projectile_speed).abs() < 0.5,
+            "charged launch should recover the previous reference speed"
+        );
         assert_eq!(shot.owner, 1);
         assert_eq!(shot.spell, Spell::Fireball);
         assert!(shot.position.distance(fixture.actor(1).eye()) < SKIN);
@@ -234,7 +269,7 @@ fn fully_hidden_target_does_not_update_aim_or_trigger_any_spell() {
     fixture.refresh();
     fixture.actor_mut(1).hp = 40.0; // Low HP must not reveal a hidden target through shield choice.
     let before = fixture.decide();
-    assert!(!before.cast && before.selected.is_none());
+    assert!(!before.cast_pressed && !before.cast_released && before.selected.is_none());
     {
         let target = fixture.actor_mut(0);
         target.feet.z = 3.0;
@@ -243,14 +278,14 @@ fn fully_hidden_target_does_not_update_aim_or_trigger_any_spell() {
     fixture.session.bot.think_ticks = 0;
     fixture.session.bot.release_ticks = 0;
     let hidden = fixture.decide();
-    assert!(!hidden.cast && hidden.selected.is_none());
+    assert!(!hidden.cast_pressed && !hidden.cast_released && hidden.selected.is_none());
     assert!(hidden.aim.distance(before.aim) < SKIN);
     fixture.world.voxels.retain(|pos, _| pos.level == 0);
     fixture.refresh();
     fixture.actor_mut(1).hp = 100.0;
     fixture.session.bot.think_ticks = 0;
     let visible = fixture.decide();
-    assert!(visible.cast);
+    assert!(visible.cast_pressed && visible.cast_held && !visible.cast_released);
     assert_eq!(visible.selected, Some(Spell::Fireball));
     assert!(visible.aim.distance(before.aim) > 0.05);
 }
@@ -285,13 +320,12 @@ fn defensive_shield_seed_produces_one_complete_supported_wall() {
 }
 
 #[test]
-fn unsupported_defensive_footprints_fall_back_without_spending_shield_cooldown() {
+fn defensive_seed_without_any_impact_falls_back_without_spending_shield_cooldown() {
     let mut fixture = Fixture::new(14.0);
     fixture.actor_mut(1).hp = 50.0;
-    fixture.world.voxels.retain(|pos, _| {
-        let x = fixture.geometry.center(*pos).x;
-        !(-5.7..=-1.0).contains(&x)
-    });
+    // No surface exists for either short defensive seed to hit. A floating wall
+    // is allowed, but a seed still needs an actual terrain or actor contact.
+    fixture.world.voxels.clear();
     fixture.refresh();
     fixture.advance();
     assert_eq!(fixture.actor(1).selected, Spell::Fireball);
@@ -300,19 +334,13 @@ fn unsupported_defensive_footprints_fall_back_without_spending_shield_cooldown()
         .cooldowns
         .first()
         .is_some_and(|cooldown| cooldown.abs() < SKIN));
-    assert_eq!(
-        fixture.session.projectiles.first().map(|shot| shot.spell),
-        Some(Spell::Fireball)
-    );
+    let charge = fixture
+        .actor(1)
+        .charge()
+        .expect("fallback charges fireball");
+    assert_eq!(charge.spell, Spell::Fireball);
+    assert!(fixture.session.projectiles.is_empty());
     assert!(fixture.session.pending_walls.is_empty());
-    fixture.session.bot_enabled = false;
-    for _ in 0..120 {
-        fixture.advance();
-        if fixture.actor(0).hp < 100.0 {
-            break;
-        }
-    }
-    assert!(fixture.actor(0).hp < 100.0);
     assert_eq!(fixture.session.shields_raised, 0);
 }
 
@@ -331,7 +359,7 @@ fn visible_target_beyond_low_overhang_does_not_provoke_nearby_self_splash() {
     ));
     let intent = fixture.decide();
     assert!(
-        !intent.cast && intent.selected.is_none(),
+        !intent.cast_pressed && !intent.cast_released && intent.selected.is_none(),
         "nearby ballistic obstruction should suppress the shot"
     );
 }
@@ -341,7 +369,7 @@ fn reset_replays_the_same_seeded_bot_movement_and_cast_sequence() {
     let mut fixture = Fixture::new(14.0);
     fixture.session.bot = Bot::default();
     let record = |fixture: &mut Fixture| {
-        (0..120)
+        (0..240)
             .map(|_| {
                 fixture.advance();
                 let actor = fixture.actor(1);
@@ -349,6 +377,7 @@ fn reset_replays_the_same_seeded_bot_movement_and_cast_sequence() {
                     actor.feet,
                     actor.aim,
                     actor.selected,
+                    actor.charge(),
                     fixture
                         .session
                         .projectiles
@@ -360,6 +389,8 @@ fn reset_replays_the_same_seeded_bot_movement_and_cast_sequence() {
             .collect::<Vec<_>>()
     };
     let first = record(&mut fixture);
+    assert!(first.iter().any(|(_, _, _, charge, _)| charge.is_some()));
+    assert!(first.iter().any(|(_, _, _, _, shots)| !shots.is_empty()));
     fixture.session.reset(1, &fixture.world, fixture.geometry);
     let second = record(&mut fixture);
     assert_eq!(first, second);
@@ -388,6 +419,23 @@ fn bot_leads_and_damages_a_target_that_keeps_sprinting_sideways() {
     advance_moving(&mut fixture);
     fixture.session.bot_enabled = true;
     advance_moving(&mut fixture);
+    assert!(fixture.actor(1).charge().is_some());
+    let charge_start = fixture.actor(1).feet;
+    for _ in 0..240 {
+        advance_moving(&mut fixture);
+        if fixture
+            .session
+            .projectiles
+            .iter()
+            .any(|shot| shot.owner == 1)
+        {
+            break;
+        }
+    }
+    assert!(
+        fixture.actor(1).feet.distance(charge_start) > 0.5,
+        "bot should keep ordinary movement while holding fireball"
+    );
     let direct = (fixture.actor(0).center() - fixture.actor(1).eye()).normalize();
     let shot = fixture
         .session
@@ -397,7 +445,7 @@ fn bot_leads_and_damages_a_target_that_keeps_sprinting_sideways() {
         .expect("bot releases a fireball at the moving target");
     assert_eq!(shot.spell, Spell::Fireball);
     assert!(
-        shot.velocity.z > direct.z * fixture.tuning.projectile_speed + 2.0,
+        shot.velocity.z > direct.z * shot.velocity.length() + 2.0,
         "the shot must lead the observed sideways motion"
     );
     fixture.session.bot_enabled = false;
@@ -426,7 +474,8 @@ fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
         fixture.session.advance(
             ActorIntent {
                 aim: if approaching { Vec3::NEG_X } else { Vec3::X },
-                cast: true,
+                cast_pressed: true,
+                cast_released: true,
                 selected: Some(Spell::Fireball),
                 ..Default::default()
             },
@@ -440,21 +489,26 @@ fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
         assert!(incoming.position.distance(fixture.actor(1).center()) < 14.0);
         fixture.session.bot_enabled = true;
         fixture.advance();
-        let response = fixture
-            .session
-            .projectiles
-            .iter()
-            .find(|shot| shot.owner == 1)
-            .expect("healthy bot responds to the visible combat situation");
-        assert_eq!(
-            response.spell,
-            if approaching {
-                Spell::Shield
-            } else {
-                Spell::Fireball
-            }
-        );
-        assert_eq!(fixture.actor(1).selected, response.spell);
+        if approaching {
+            let response = fixture
+                .session
+                .projectiles
+                .iter()
+                .find(|shot| shot.owner == 1)
+                .expect("incoming fireball triggers a quick defensive shield");
+            assert_eq!(response.spell, Spell::Shield);
+            assert_eq!(fixture.actor(1).selected, Spell::Shield);
+            assert!((response.velocity.length() - fixture.tuning.launch_speed(0.0)).abs() < SKIN);
+        } else {
+            assert!(!fixture
+                .session
+                .projectiles
+                .iter()
+                .any(|shot| shot.owner == 1));
+            let charge = fixture.actor(1).charge().expect("ordinary fireball charge");
+            assert_eq!(charge.spell, Spell::Fireball);
+            assert_eq!(fixture.actor(1).selected, Spell::Fireball);
+        }
         assert!(
             (fixture.actor(1).hp - 100.0).abs() < SKIN,
             "shield choice must come from the approaching projectile, not lost HP"
@@ -467,4 +521,64 @@ fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
             .unwrap_or_default();
         assert_eq!(shield_cooldown > 0.0, approaching);
     }
+}
+
+#[test]
+fn charged_bot_cancels_when_its_target_becomes_hidden_before_release() {
+    let mut fixture = Fixture::new(14.0);
+    fixture.advance();
+    assert!(fixture.actor(1).charge().is_some());
+    let last_visible_aim = fixture.actor(1).aim;
+    for coord in HexCoord::ORIGIN.within_radius(2) {
+        for level in 1..=8 {
+            fixture
+                .world
+                .voxels
+                .insert(TilePos::new(coord, level), fixture.materials.stone);
+        }
+    }
+    fixture.refresh();
+    for _ in 0..120 {
+        fixture.advance();
+        assert!(fixture.session.projectiles.is_empty());
+        if fixture.actor(1).charge().is_none() {
+            break;
+        }
+    }
+    assert!(
+        fixture.actor(1).charge().is_none(),
+        "hidden release must cancel the hold"
+    );
+    assert!(!fixture.session.bot.charging_fireball);
+    assert!(fixture.bot_cooldown(Spell::Fireball).abs() < SKIN);
+    assert!(fixture.actor(1).aim.distance(last_visible_aim) < SKIN);
+    assert!((fixture.actor(0).hp - 100.0).abs() < SKIN);
+}
+
+#[test]
+fn cancelling_a_bot_charge_discards_the_release_without_resetting_its_seed() {
+    let mut fixture = Fixture::new(14.0);
+    for _ in 0..12 {
+        fixture.advance();
+    }
+    assert!(fixture.actor(1).charge().is_some());
+    assert!(fixture.session.bot.charging_fireball);
+    let seed = fixture.session.bot.seed;
+    fixture.session.cancel_charges();
+    assert_eq!(fixture.session.bot.seed, seed);
+    assert!(!fixture.session.bot.charging_fireball);
+    assert!(fixture.actor(1).charge().is_none());
+    // Suppress fresh decisions while proving the discarded plan cannot fire later.
+    fixture.session.bot.think_ticks = 600;
+    fixture.session.bot.release_ticks = 600;
+    for _ in 0..120 {
+        fixture.advance();
+    }
+    assert!(fixture.session.projectiles.is_empty());
+    assert!(fixture.bot_cooldown(Spell::Fireball).abs() < SKIN);
+    assert!((fixture.actor(0).hp - 100.0).abs() < SKIN);
+    fixture.session.reset(1, &fixture.world, fixture.geometry);
+    assert_eq!(fixture.session.bot.seed, Bot::default().seed);
+    assert!(!fixture.session.bot.charging_fireball);
+    assert!(fixture.actor(1).charge().is_none());
 }

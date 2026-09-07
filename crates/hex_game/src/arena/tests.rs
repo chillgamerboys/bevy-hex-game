@@ -34,9 +34,15 @@ fn tick(app: &mut App) {
 }
 
 fn menu_app() -> (App, Entity) {
+    menu_app_at(60)
+}
+
+fn menu_app_at(frame_hz: u32) -> (App, Entity) {
     let mut builder = HeadlessAppBuilder::new()
         .with_minimal_plugins()
-        .with_fixed_step(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        .with_fixed_step(std::time::Duration::from_secs_f64(
+            1.0 / f64::from(frame_hz),
+        ));
     builder
         .app_mut()
         .insert_resource(ViewState {
@@ -160,7 +166,10 @@ fn start_and_resume_buttons_clear_stale_casts_and_hide_cursor_in_the_same_frame(
     app.world_mut()
         .resource_mut::<ButtonInput<MouseButton>>()
         .press(MouseButton::Left);
-    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_pressed = true;
     app.world_mut().resource_mut::<ArenaInput>().human.jump = true;
     press_action(&mut app, hud::Action::Start);
     assert!(app.world().resource::<ViewState>().started);
@@ -176,9 +185,12 @@ fn start_and_resume_buttons_clear_stale_casts_and_hide_cursor_in_the_same_frame(
         .resource::<ArenaSession>()
         .projectiles
         .is_empty());
-    assert!(!app.world().resource::<ArenaInput>().human.cast);
+    assert!(!app.world().resource::<ArenaInput>().human.cast_pressed);
     tap_key(&mut app, KeyCode::Escape);
-    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_pressed = true;
     press_action(&mut app, hud::Action::Resume);
     assert!(!app.world().resource::<ViewState>().paused);
     assert!(
@@ -198,6 +210,24 @@ fn start_and_resume_buttons_clear_stale_casts_and_hide_cursor_in_the_same_frame(
         .resource_mut::<ButtonInput<MouseButton>>()
         .press(MouseButton::Left);
     app.update();
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .first()
+        .is_some_and(|actor| actor.charge().is_some()));
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .projectiles
+        .is_empty());
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .clear();
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .release(MouseButton::Left);
+    app.update();
     assert!(
         app.world()
             .resource::<ArenaSession>()
@@ -207,7 +237,7 @@ fn start_and_resume_buttons_clear_stale_casts_and_hide_cursor_in_the_same_frame(
                 .cooldowns
                 .get(1)
                 .is_some_and(|cooldown| *cooldown > 1.0)),
-        "a fresh gameplay click after release must still cast"
+        "a fresh gameplay press followed by release must cast"
     );
 }
 
@@ -240,7 +270,7 @@ fn escape_and_tab_pause_all_combat_release_cursor_and_resume_without_a_cast() {
             .get::<CursorOptions>(window)
             .expect("synthetic cursor");
         assert!(cursor.visible && cursor.grab_mode == CursorGrabMode::None);
-        assert!(!app.world().resource::<ArenaInput>().human.cast);
+        assert!(!app.world().resource::<ArenaInput>().human.cast_pressed);
         tap_key(&mut app, key);
         assert!(!app.world().resource::<ViewState>().paused);
         assert!(app.world().resource::<ArenaSession>().tick > frozen.tick);
@@ -416,7 +446,8 @@ fn paused_last_tick_cast_survives_message_expiry_then_refreshes_before_movement(
     let initial_feet = original.spawns.first().copied().unwrap_or_default();
     app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
         selected: Some(Spell::AreaBlast),
-        cast: true,
+        cast_pressed: true,
+        cast_released: true,
         ..default()
     };
     tick(&mut app);
@@ -460,8 +491,15 @@ fn predicted_wall_is_published_persists_and_reset_restores_complete_world() {
         app.world().resource::<ArenaTuning>(),
     );
     assert!(forecast.valid);
-    assert_eq!(forecast.wall_voxels.len(), 25);
-    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    assert!(!forecast.wall_voxels.is_empty() && forecast.wall_voxels.len() <= 25);
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_pressed = true;
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_released = true;
     for _ in 0..120 {
         tick(&mut app);
     }
@@ -506,7 +544,8 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
             movement: Vec2::Y,
             aim: Vec3::X,
             selected: Some(Spell::Fireball),
-            cast: true,
+            cast_pressed: true,
+            cast_released: true,
             ..default()
         };
         for _ in 0..hz {
@@ -518,7 +557,7 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
             .actors
             .first()
             .is_some_and(|a| a.cooldowns.get(1).is_some_and(|v| (0.2..0.3).contains(v))));
-        assert!(!app.world().resource::<ArenaInput>().human.cast);
+        assert!(!app.world().resource::<ArenaInput>().human.cast_pressed);
     }
     for pair in positions.windows(2) {
         if let [a, b] = pair {
@@ -545,10 +584,13 @@ fn focus_loss_clears_edges_and_resume_click_cannot_cast() {
             PrimaryWindow,
         ))
         .id();
-    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    app.world_mut()
+        .resource_mut::<ArenaInput>()
+        .human
+        .cast_pressed = true;
     app.update();
     assert!(app.world().resource::<ViewState>().paused);
-    assert!(!app.world().resource::<ArenaInput>().human.cast);
+    assert!(!app.world().resource::<ArenaInput>().human.cast_pressed);
     if let Some(mut window) = app.world_mut().get_mut::<Window>(window) {
         window.focused = true;
     }
@@ -615,7 +657,8 @@ fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
             tick(&mut app);
             app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
                 selected: Some(Spell::AreaBlast),
-                cast: true,
+                cast_pressed: true,
+                cast_released: true,
                 ..default()
             };
             tick(&mut app);
@@ -642,6 +685,680 @@ fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
             "method":"headless CPU app update, 120Hz simulation, large blasts, no GPU"
         })
     );
+}
+
+fn clear_mouse_edges(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .clear();
+}
+
+fn charge_with_mouse(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.update();
+    clear_mouse_edges(app);
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .first()
+        .is_some_and(|actor| actor.charge().is_some()));
+}
+
+#[test]
+fn quick_tap_between_fixed_ticks_retains_both_edges_and_casts_only_on_release() {
+    let (mut app, _) = menu_app_at(480);
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    {
+        let mut state = app.world_mut().resource_mut::<ViewState>();
+        state.begin_play();
+        state.suppress_click = false;
+    }
+    let initial_tick = app.world().resource::<ArenaSession>().tick;
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.update();
+    clear_mouse_edges(&mut app);
+    assert_eq!(app.world().resource::<ArenaSession>().tick, initial_tick);
+    assert!(app.world().resource::<ArenaInput>().human.cast_pressed);
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .release(MouseButton::Left);
+    app.update();
+    clear_mouse_edges(&mut app);
+    assert_eq!(app.world().resource::<ArenaSession>().tick, initial_tick);
+    let input = &app.world().resource::<ArenaInput>().human;
+    assert!(input.cast_pressed && input.cast_released && !input.cast_held);
+    for _ in 0..3 {
+        app.update();
+    }
+    let session = app.world().resource::<ArenaSession>();
+    assert!(session
+        .actors
+        .first()
+        .is_some_and(|actor| actor.charge().is_none()
+            && actor
+                .cooldowns
+                .get(1)
+                .is_some_and(|cooldown| *cooldown > 1.2)));
+    let input = &app.world().resource::<ArenaInput>().human;
+    assert!(!input.cast_pressed && !input.cast_released && !input.cast_held);
+}
+
+#[test]
+fn release_frame_aim_survives_camera_motion_before_the_next_fixed_tick() {
+    for third_person in [false, true] {
+        let (mut app, _) = menu_app_at(480);
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        {
+            let mut state = app.world_mut().resource_mut::<ViewState>();
+            state.begin_play();
+            state.suppress_click = false;
+            state.initialized = true;
+            state.third_person = third_person;
+            state.pitch = 0.25;
+        }
+        let initial_tick = app.world().resource::<ArenaSession>().tick;
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        clear_mouse_edges(&mut app);
+        app.world_mut().resource_mut::<ViewState>().yaw = 0.3;
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        clear_mouse_edges(&mut app);
+        let released_aim = app.world().resource::<ArenaInput>().human.aim;
+        assert_eq!(app.world().resource::<ArenaSession>().tick, initial_tick);
+        assert!(app.world().resource::<ArenaInput>().human.cast_released);
+        app.world_mut().resource_mut::<ViewState>().yaw = 1.3;
+        app.update();
+        assert_eq!(app.world().resource::<ArenaSession>().tick, initial_tick);
+        assert!(
+            app.world()
+                .resource::<ArenaInput>()
+                .human
+                .aim
+                .distance(released_aim)
+                < 0.001
+        );
+        // Duration rounds 1/480 s to nanoseconds, so four render frames can
+        // still fall just short of a physics tick. Allow up to six in total.
+        for _ in 0..3 {
+            if app.world().resource::<ArenaSession>().tick > initial_tick {
+                break;
+            }
+            let input = &app.world().resource::<ArenaInput>().human;
+            assert!(input.cast_released && input.aim.distance(released_aim) < 0.001);
+            app.update();
+        }
+        let session = app.world().resource::<ArenaSession>();
+        assert_eq!(session.tick, initial_tick + 1);
+        let shot = session
+            .projectiles
+            .first()
+            .expect("tap must release on the first physics tick");
+        assert!(shot.velocity.normalize_or_zero().dot(released_aim) > 0.999);
+        assert!(!app.world().resource::<ArenaInput>().human.cast_released);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ArenaInput>()
+                .human
+                .aim
+                .distance(released_aim)
+                > 0.2,
+            "current aim resumes after physics consumes the release"
+        );
+    }
+}
+
+#[test]
+fn selection_and_pause_discard_queued_release_aim_before_a_fixed_tick() {
+    for key in [KeyCode::Digit1, KeyCode::Escape] {
+        let (mut app, _) = menu_app_at(480);
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        {
+            let mut state = app.world_mut().resource_mut::<ViewState>();
+            state.begin_play();
+            state.suppress_click = false;
+            state.initialized = true;
+            state.pitch = 0.25;
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        clear_mouse_edges(&mut app);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        clear_mouse_edges(&mut app);
+        let released_aim = app.world().resource::<ArenaInput>().human.aim;
+        app.world_mut().resource_mut::<ViewState>().yaw = 1.3;
+        tap_key(&mut app, key);
+        let input = &app.world().resource::<ArenaInput>().human;
+        assert!(!input.cast_pressed && !input.cast_released);
+        if key == KeyCode::Escape {
+            tap_key(&mut app, KeyCode::Escape);
+        }
+        assert!(
+            app.world()
+                .resource::<ArenaInput>()
+                .human
+                .aim
+                .distance(released_aim)
+                > 0.2
+        );
+        for _ in 0..5 {
+            app.update();
+        }
+        assert!(app
+            .world()
+            .resource::<ArenaSession>()
+            .projectiles
+            .is_empty());
+        assert!(app
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .iter()
+            .all(|actor| actor.charge().is_none()));
+    }
+}
+
+#[test]
+fn held_charge_progress_uses_physics_time_at_all_render_rates() {
+    for hz in [30, 60, 144, 240] {
+        let mut app = app(hz);
+        app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+            cast_pressed: true,
+            cast_held: true,
+            aim: Vec3::X,
+            ..default()
+        };
+        for _ in 0..hz / 2 {
+            app.update();
+        }
+        let session = app.world().resource::<ArenaSession>();
+        let actor = session.actors.first().expect("human actor");
+        let charge = actor.charge().expect("held input arms the selected spell");
+        assert!(
+            (charge.elapsed - 0.5).abs() <= hex_arena::STEP * 2.0,
+            "{hz} Hz produced {}s charge",
+            charge.elapsed
+        );
+        assert!(session.projectiles.is_empty());
+        assert!(actor
+            .cooldowns
+            .iter()
+            .all(|cooldown| cooldown.abs() < 0.001));
+        {
+            let mut input = app.world_mut().resource_mut::<ArenaInput>();
+            input.human.cast_held = false;
+            input.human.cast_released = true;
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        let session = app.world().resource::<ArenaSession>();
+        assert!(session
+            .actors
+            .first()
+            .is_some_and(|actor| actor.charge().is_none()
+                && actor
+                    .cooldowns
+                    .get(1)
+                    .is_some_and(|cooldown| *cooldown > 1.1)));
+        assert!(!app.world().resource::<ArenaInput>().human.cast_released);
+    }
+}
+
+#[test]
+fn fresh_press_can_arm_a_spell_selected_in_the_same_render_frame() {
+    let (mut app, _) = menu_app();
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    tap_key(&mut app, KeyCode::Enter);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Digit1);
+    charge_with_mouse(&mut app);
+    let charge = app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .first()
+        .and_then(|actor| actor.charge())
+        .expect("fresh same-frame press");
+    assert_eq!(charge.spell, Spell::Shield);
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .projectiles
+        .is_empty());
+}
+
+#[test]
+fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
+    for cancellation in ["escape", "tab", "focus", "reset", "selection", "knockout"] {
+        let (mut app, window) = menu_app();
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        tap_key(&mut app, KeyCode::Enter);
+        charge_with_mouse(&mut app);
+        match cancellation {
+            "escape" => tap_key(&mut app, KeyCode::Escape),
+            "tab" => tap_key(&mut app, KeyCode::Tab),
+            "reset" => tap_key(&mut app, KeyCode::KeyR),
+            "selection" => tap_key(&mut app, KeyCode::Digit1),
+            "focus" => {
+                app.world_mut()
+                    .get_mut::<Window>(window)
+                    .expect("synthetic window")
+                    .focused = false;
+                app.update();
+            }
+            "knockout" => {
+                app.world_mut()
+                    .resource_mut::<ArenaSession>()
+                    .actors
+                    .first_mut()
+                    .expect("human")
+                    .hp = 0.0;
+                app.update();
+            }
+            _ => unreachable!(),
+        }
+        let session = app.world().resource::<ArenaSession>();
+        assert!(
+            session.actors.iter().all(|actor| actor.charge().is_none()),
+            "{cancellation} must cancel an active charge"
+        );
+        assert!(
+            session.projectiles.is_empty(),
+            "{cancellation} must not release a spell"
+        );
+        assert!(session.actors.iter().all(|actor| actor
+            .cooldowns
+            .iter()
+            .all(|cooldown| cooldown.abs() < 0.001)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        clear_mouse_edges(&mut app);
+        assert!(
+            app.world()
+                .resource::<ArenaSession>()
+                .projectiles
+                .is_empty(),
+            "release after {cancellation} must stay cancelled"
+        );
+        if cancellation == "selection" {
+            charge_with_mouse(&mut app);
+            assert!(app
+                .world()
+                .resource::<ArenaSession>()
+                .actors
+                .first()
+                .and_then(|actor| actor.charge())
+                .is_some_and(|charge| charge.spell == Spell::Shield));
+        }
+    }
+}
+
+#[test]
+fn pausing_cancels_human_and_bot_charges_without_advancing_a_tick() {
+    let (mut app, _) = menu_app();
+    tap_key(&mut app, KeyCode::Enter);
+    charge_with_mouse(&mut app);
+    for _ in 0..600 {
+        if app
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .iter()
+            .any(|actor| actor.id == 1 && actor.charge().is_some())
+        {
+            break;
+        }
+        app.update();
+    }
+    assert!(
+        app.world()
+            .resource::<ArenaSession>()
+            .actors
+            .iter()
+            .all(|actor| actor.charge().is_some()),
+        "fixture must catch both actors holding a charge"
+    );
+    let previous_tick = app.world().resource::<ArenaSession>().tick;
+    tap_key(&mut app, KeyCode::Escape);
+    let session = app.world().resource::<ArenaSession>();
+    assert_eq!(session.tick, previous_tick);
+    assert!(session.actors.iter().all(|actor| actor.charge().is_none()));
+    let input = &app.world().resource::<ArenaInput>().human;
+    assert!(!input.cast_pressed && !input.cast_released && !input.cast_held);
+}
+
+#[test]
+fn paused_programmatic_frames_and_menu_buttons_cancel_charges_immediately() {
+    for action in [
+        hud::Action::Resume,
+        hud::Action::Restart,
+        hud::Action::Fullscreen,
+        hud::Action::Quit,
+    ] {
+        let (mut app, _) = menu_app();
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        tap_key(&mut app, KeyCode::Enter);
+        charge_with_mouse(&mut app);
+        app.world_mut().resource_mut::<ViewState>().paused = true;
+        press_action(&mut app, action);
+        assert!(app
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .iter()
+            .all(|actor| actor.charge().is_none()));
+        assert!(app
+            .world()
+            .resource::<ArenaSession>()
+            .projectiles
+            .is_empty());
+    }
+    let mut app = app(240);
+    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+        cast_pressed: true,
+        cast_held: true,
+        ..default()
+    };
+    tick(&mut app);
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .first()
+        .is_some_and(|actor| actor.charge().is_some()));
+    app.world_mut().resource_mut::<ViewState>().paused = true;
+    let previous_tick = app.world().resource::<ArenaSession>().tick;
+    app.update();
+    assert_eq!(app.world().resource::<ArenaSession>().tick, previous_tick);
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .iter()
+        .all(|actor| actor.charge().is_none()));
+}
+
+#[test]
+fn release_uses_current_camera_aim_in_first_and_third_person() {
+    for third_person in [false, true] {
+        let (mut app, _) = menu_app();
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        tap_key(&mut app, KeyCode::Enter);
+        charge_with_mouse(&mut app);
+        {
+            let mut state = app.world_mut().resource_mut::<ViewState>();
+            state.third_person = third_person;
+            state.yaw += 0.5;
+            state.pitch = 0.25;
+        }
+        let session = app.world().resource::<ArenaSession>();
+        let state = app.world().resource::<ViewState>();
+        let actor = session.actors.first().expect("human");
+        let direction = aim(state);
+        let camera = camera_origin(session, state, actor.eye(), direction);
+        let expected = session
+            .aim_from_camera(actor.id, camera, direction)
+            .with_y(0.0)
+            .normalize_or_zero();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        let session = app.world().resource::<ArenaSession>();
+        let shot = session
+            .projectiles
+            .first()
+            .expect("released fireball must leave the open spawn");
+        let actual = shot.velocity.with_y(0.0).normalize_or_zero();
+        assert!(
+            actual.dot(expected) > 0.999,
+            "third={third_person}: {actual:?} != {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn clipped_shield_footprint_keeps_lowest_surviving_level_in_each_column() {
+    use hex_core::{HexCoord, TilePos};
+    let low = TilePos {
+        coord: HexCoord::ORIGIN,
+        level: 3,
+    };
+    let high = TilePos {
+        coord: HexCoord::new_cubic(1, 0, -1),
+        level: 7,
+    };
+    let clipped = [high.above(), low.above(), high, low, high.above().above()];
+    let footprint = presentation::shield_footprint(&clipped);
+    assert_eq!(footprint.len(), 2);
+    assert!(footprint.contains(&low) && footprint.contains(&high));
+}
+
+#[test]
+fn capture_charge_scenarios_are_driven_by_authoritative_input() {
+    for (view, spell, expected_progress) in [
+        ("shield-charge-partial-first", Spell::Shield, 0.52),
+        ("shield-charge-full-third", Spell::Shield, 1.0),
+        ("fireball-charge-partial-third", Spell::Fireball, 0.52),
+        ("fireball-charge-full-first", Spell::Fireball, 1.0),
+        ("blast-armed-first", Spell::AreaBlast, 0.87),
+    ] {
+        let mut app = app(60);
+        for frame in 1..=capture_frame_index(view) {
+            let direction = app
+                .world()
+                .resource::<ArenaSession>()
+                .actors
+                .first()
+                .expect("human")
+                .aim;
+            let sample = capture_intent(
+                frame,
+                view,
+                app.world().resource::<ArenaTuning>(),
+                direction,
+            );
+            app.world_mut().resource_mut::<ArenaInput>().human = sample;
+            app.update();
+        }
+        let session = app.world().resource::<ArenaSession>();
+        let charge = session
+            .actors
+            .first()
+            .and_then(|actor| actor.charge())
+            .expect("capture must retain an authoritative charge");
+        assert_eq!(charge.spell, spell);
+        if spell != Spell::AreaBlast {
+            assert!(
+                (charge.elapsed - expected_progress).abs() < 0.03,
+                "{view}: {}",
+                charge.elapsed
+            );
+        }
+        assert!(session.projectiles.is_empty());
+    }
+}
+
+#[test]
+fn partial_preview_capture_clips_cells_through_world_authority() {
+    let mut app = app(60);
+    {
+        let mut state = app.world_mut().resource_mut::<ViewState>();
+        state.capture = Some(PathBuf::from("unused-test-capture.png"));
+        state.capture_view = "shield-partial-preview-first".into();
+        state.frames = 0;
+    }
+    for _ in 0..90 {
+        app.update();
+    }
+    let fixture = &app.world().resource::<ViewState>().capture_fixture_voxels;
+    assert_eq!(
+        fixture.len(),
+        2,
+        "fixture must place two occupied slots in one outer column"
+    );
+    let terrain = app.world().resource::<ArenaTerrainView>();
+    assert!(fixture.iter().all(|pos| terrain.voxels.contains_key(pos)));
+    let predicted = preview(
+        app.world().resource::<ArenaSession>(),
+        terrain,
+        app.world().resource::<ArenaVoxelGeometry>(),
+        app.world().resource::<ArenaTuning>(),
+    );
+    assert!(predicted.valid && !predicted.wall_voxels.is_empty());
+    assert!(fixture
+        .iter()
+        .all(|pos| !predicted.wall_voxels.contains(pos)));
+    let footprint = presentation::shield_footprint(&predicted.wall_voxels);
+    let edge = fixture.first().expect("fixture edge");
+    assert!(
+        footprint
+            .iter()
+            .any(|pos| pos.coord == edge.coord && pos.level > edge.level + 1),
+        "preview must keep the clipped column's higher surviving outline"
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled() {
+    use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
+
+    for (width, height) in [(1600, 900), (1280, 720)] {
+        for (spell, ticks) in [
+            (Spell::Shield, 60),
+            (Spell::Fireball, 120),
+            (Spell::AreaBlast, 60),
+        ] {
+            let mut fixture = app(120);
+            fixture.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+                selected: Some(spell),
+                cast_pressed: true,
+                cast_held: true,
+                ..default()
+            };
+            for _ in 0..ticks {
+                tick(&mut fixture);
+            }
+            let session = fixture
+                .world_mut()
+                .remove_resource::<ArenaSession>()
+                .expect("charged authority fixture");
+            let charge = session
+                .actors
+                .first()
+                .and_then(|actor| actor.charge())
+                .expect("armed spell");
+            let mut ui = App::new();
+            ui.add_plugins(HeadlessUiPlugin::new(width, height))
+                .insert_resource(ViewState {
+                    started: true,
+                    paused: false,
+                    capture: None,
+                    ..default()
+                })
+                .insert_resource(session)
+                .init_resource::<ArenaTuning>()
+                .add_systems(Startup, hud::setup)
+                .add_systems(Update, hud::update);
+            for _ in 0..8 {
+                ui.update();
+            }
+            let snapshot = ui_tree_snapshot(ui.world_mut());
+            let nodes = snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.name.starts_with("Charge "))
+                .collect::<Vec<_>>();
+            assert_eq!(nodes.len(), if spell == Spell::AreaBlast { 2 } else { 4 });
+            let panel = nodes
+                .iter()
+                .find(|node| node.name == "Charge panel")
+                .expect("visible charge panel");
+            assert!((panel.center.x - snapshot.metrics.logical_size.x * 0.5).abs() < 1.0);
+            for node in &nodes {
+                let bounds = Rect::from_center_size(node.center, node.size);
+                assert!(
+                    node.fully_visible
+                        && bounds.min.y > snapshot.metrics.logical_size.y * 0.5
+                        && bounds.max.cmple(snapshot.metrics.logical_size).all(),
+                    "{width}x{height}: {node:?}"
+                );
+            }
+            let label = nodes
+                .iter()
+                .find(|node| node.name == "Charge guidance")
+                .expect("release guidance");
+            let glyphs = label
+                .rendered_text_bounds
+                .expect("release guidance has real glyphs");
+            let panel_bounds = Rect::from_center_size(panel.center, panel.size);
+            assert!(
+                glyphs.min.cmpge(panel_bounds.min).all()
+                    && glyphs.max.cmple(panel_bounds.max + Vec2::splat(1.0)).all()
+            );
+            let text = ui
+                .world_mut()
+                .query::<(&hud::Label, &Text)>()
+                .iter(ui.world())
+                .find_map(|(label, text)| {
+                    matches!(label, hud::Label::Charge).then_some(text.0.clone())
+                })
+                .expect("charge label");
+            assert!(text.contains("Release to cast"));
+            if spell == Spell::AreaBlast {
+                assert!(!text.contains('%'));
+            } else {
+                let track = nodes
+                    .iter()
+                    .find(|node| node.name == "Charge track")
+                    .expect("charge track");
+                let fill = nodes
+                    .iter()
+                    .find(|node| node.name == "Charge fill")
+                    .expect("charge fill");
+                assert!((fill.size.x / track.size.x - charge.elapsed).abs() < 0.01);
+            }
+            ui.world_mut().resource_mut::<ViewState>().pause();
+            for _ in 0..2 {
+                ui.update();
+            }
+            assert!(ui_tree_snapshot(ui.world_mut())
+                .nodes
+                .iter()
+                .all(|node| !node.name.starts_with("Charge ")));
+            ui.world_mut()
+                .resource_mut::<ArenaSession>()
+                .cancel_charges();
+            ui.world_mut().resource_mut::<ViewState>().begin_play();
+            for _ in 0..2 {
+                ui.update();
+            }
+            assert!(ui_tree_snapshot(ui.world_mut())
+                .nodes
+                .iter()
+                .all(|node| !node.name.starts_with("Charge ")));
+        }
+    }
 }
 
 #[cfg(feature = "test-support")]
@@ -838,4 +1555,21 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             "live play must hide start/pause controls, including any Menu button"
         );
     }
+}
+
+#[path = "terrain_preservation_tests.rs"]
+mod terrain_preservation_tests;
+
+#[test]
+fn trajectory_toggle_uses_new_selection_before_its_physics_tick() {
+    let (mut app, _) = menu_app_at(480);
+    tap_key(&mut app, KeyCode::Enter);
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::Digit1);
+        keys.press(KeyCode::KeyT);
+    }
+    app.update();
+    assert_eq!(app.world().resource::<ViewState>().previews, [false, false]);
 }

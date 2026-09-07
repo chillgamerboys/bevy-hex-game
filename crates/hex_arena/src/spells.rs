@@ -24,6 +24,7 @@ pub(crate) struct ShotParameters {
     knockback: f32,
     terrain_power: u8,
     wall_dimensions: (i32, i32),
+    shield_push: f32,
     direction: Vec3,
 }
 
@@ -31,6 +32,7 @@ pub(crate) struct ShotParameters {
 pub(crate) struct PendingWall {
     pub(super) voxels: Vec<TilePos>,
     pub(super) age: f32,
+    candidates: Vec<TilePos>,
     center: Vec3,
 }
 
@@ -38,16 +40,22 @@ pub(crate) struct PendingWall {
 struct Impact {
     point: Vec3,
     normal: Vec3,
-    terrain: bool,
+    actor: Option<u8>,
 }
 
-fn projectile(actor: &Actor, spell: Spell, tuning: &ArenaTuning, id: u64) -> Projectile {
+fn projectile(
+    actor: &Actor,
+    spell: Spell,
+    tuning: &ArenaTuning,
+    id: u64,
+    launch_speed: f32,
+) -> Projectile {
     Projectile {
         id,
         owner: actor.id,
         position: actor.eye(),
         previous_position: actor.eye(),
-        velocity: actor.aim * tuning.projectile_speed,
+        velocity: actor.aim * launch_speed,
         spell,
         age: 0.0,
         parameters: ShotParameters {
@@ -57,6 +65,7 @@ fn projectile(actor: &Actor, spell: Spell, tuning: &ArenaTuning, id: u64) -> Pro
             knockback: tuning.fireball_knockback,
             terrain_power: tuning.terrain_power,
             wall_dimensions: tuning.shield_dimensions(),
+            shield_push: tuning.shield_push,
             direction: actor.aim,
         },
         owner_cleared: false,
@@ -178,7 +187,7 @@ fn advance_shot(
     let delta = displacement(shot.velocity, shot.parameters.gravity);
     let mut hit = collision
         .sweep_sphere(shot.position, delta, PROJECTILE_RADIUS)
-        .map(|hit| (hit.fraction, hit.normal, true));
+        .map(|hit| (hit.fraction, hit.normal, None));
     for actor in actors.iter().filter(|a| a.hp > 0.0) {
         if actor.id == shot.owner && !shot.owner_cleared {
             if capsule_distance(shot.position, actor.feet) > PROJECTILE_RADIUS + SKIN {
@@ -198,21 +207,26 @@ fn advance_shot(
             // Exact ties favor terrain, preserving a closed wall's blocker.
             if hit.is_none_or(|(old, _, _)| fraction < old) {
                 let point = shot.position + delta * fraction;
-                let center = previous_feet
-                    + (actor.feet - previous_feet) * fraction
-                    + Vec3::Y * (BODY_HEIGHT * 0.5);
-                hit = Some((fraction, (point - center).normalize_or_zero(), false));
+                let feet = previous_feet + (actor.feet - previous_feet) * fraction;
+                let axis = Vec3::new(
+                    feet.x,
+                    point
+                        .y
+                        .clamp(feet.y + BODY_RADIUS, feet.y + BODY_HEIGHT - BODY_RADIUS),
+                    feet.z,
+                );
+                hit = Some((fraction, (point - axis).normalize_or_zero(), Some(actor.id)));
             }
         }
     }
     shot.age += STEP;
     shot.velocity -= Vec3::Y * (shot.parameters.gravity * STEP);
-    if let Some((fraction, normal, terrain)) = hit {
+    if let Some((fraction, normal, actor)) = hit {
         shot.position += delta * fraction;
         Some(Impact {
             point: shot.position,
             normal,
-            terrain,
+            actor,
         })
     } else {
         shot.position += delta;
@@ -220,26 +234,38 @@ fn advance_shot(
     }
 }
 
-fn wall_volume(
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the finite anchor level is bounded before integer conversion"
+)]
+fn wall_candidates(
     impact: Impact,
     direction: Vec3,
     dimensions: (i32, i32),
-    world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
-    actors: &[Actor],
 ) -> Vec<TilePos> {
-    if !impact.terrain || impact.normal.y < 0.5 {
+    // Impact.point is the projectile center. Anchor at its physical contact,
+    // choosing the free side of a hex face and the level above an exact top face.
+    let contact = impact.point - impact.normal * PROJECTILE_RADIUS;
+    let horizontal_normal = Vec3::new(impact.normal.x, 0.0, impact.normal.z);
+    let sample = contact + horizontal_normal * (SKIN * 2.0) + Vec3::Y * (SKIN * 2.0);
+    if !sample.is_finite()
+        || sample.abs().max_element() > 10_000.0
+        || !geometry.level_height.is_finite()
+        || geometry.level_height <= 0.0
+    {
         return Vec::new();
     }
-    // Sphere contact is above the upper face; sample narrowly inside that voxel.
-    let Some(support) =
-        geometry.voxel_at(impact.point - impact.normal * (PROJECTILE_RADIUS + SKIN * 2.0))
-    else {
+    let level = (sample.y / geometry.level_height).ceil();
+    if !(-100_000.0..=100_000.0).contains(&level) {
         return Vec::new();
-    };
+    }
+    // The anchor may be outside the arena while part of its width reaches in.
+    // Admit bounds per candidate cell, not for the anchor as a whole.
+    let base = TilePos::new(HexCoord::from_world(sample), level as i32);
     let tangent = Vec3::new(direction.z, 0.0, -direction.x).normalize_or_zero();
-    let candidates = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
-    let Some((dq, dr)) = candidates.into_iter().max_by(|(aq, ar), (bq, br)| {
+    let directions = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
+    let Some((dq, dr)) = directions.into_iter().max_by(|(aq, ar), (bq, br)| {
         HexCoord::from_axial(*aq, *ar)
             .to_world(0.0)
             .dot(tangent)
@@ -250,63 +276,58 @@ fn wall_volume(
     let (width, height) = dimensions;
     let mut volume = BTreeSet::new();
     for offset in -(width / 2)..=width / 2 {
-        let coord = HexCoord::from_axial(
-            support.coord.x() + dq * offset,
-            support.coord.y() + dr * offset,
-        );
-        if !geometry.contains_column(coord)
-            || !world
-                .voxels
-                .contains_key(&TilePos::new(coord, support.level))
-        {
-            return Vec::new();
-        }
-        for rise in 1..=height {
-            volume.insert(TilePos::new(coord, support.level + rise));
+        let coord =
+            HexCoord::from_axial(base.coord.x() + dq * offset, base.coord.y() + dr * offset);
+        for rise in 0..height {
+            volume.insert(TilePos::new(coord, base.level + rise));
         }
     }
-    let volume: Vec<_> = volume.into_iter().collect();
-    if wall_is_clear(&volume, world, geometry, actors) {
-        volume
-    } else {
-        Vec::new()
-    }
+    volume.into_iter().collect()
 }
 
-fn wall_is_clear(
-    volume: &[TilePos],
+fn available_wall_voxels(
+    candidates: &[TilePos],
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
     actors: &[Actor],
-) -> bool {
-    if volume.is_empty() {
-        return false;
-    }
-    let mut bottoms = BTreeSet::new();
-    for pos in volume {
-        if !geometry.contains_column(pos.coord)
-            || !(0..=ARENA_MAX_LEVEL).contains(&pos.level)
-            || world.voxels.contains_key(pos)
-            || actors.iter().filter(|a| a.hp > 0.0).any(|a| {
-                voxel_overlaps_body(
-                    *pos,
-                    geometry,
-                    a.feet,
-                    BODY_HEIGHT,
-                    BODY_RADIUS + SKIN * 4.0,
-                )
-            })
-        {
-            return false;
-        }
-        let below = TilePos::new(pos.coord, pos.level - 1);
-        if volume.binary_search(&below).is_err() {
-            bottoms.insert(below);
-        }
-    }
-    bottoms
-        .into_iter()
-        .all(|pos| world.voxels.contains_key(&pos))
+    reserved: &BTreeSet<TilePos>,
+) -> Vec<TilePos> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|pos| {
+            geometry.contains_column(pos.coord)
+                && (0..=ARENA_MAX_LEVEL).contains(&pos.level)
+                && !world.voxels.contains_key(pos)
+                && !reserved.contains(pos)
+                && !actors.iter().filter(|actor| actor.hp > 0.0).any(|actor| {
+                    voxel_overlaps_body(
+                        *pos,
+                        geometry,
+                        actor.feet,
+                        BODY_HEIGHT,
+                        BODY_RADIUS + SKIN * 4.0,
+                    )
+                })
+        })
+        .collect()
+}
+
+fn wall_volume(
+    impact: Impact,
+    direction: Vec3,
+    dimensions: (i32, i32),
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    actors: &[Actor],
+) -> Vec<TilePos> {
+    available_wall_voxels(
+        &wall_candidates(impact, direction, dimensions, geometry),
+        world,
+        geometry,
+        actors,
+        &BTreeSet::new(),
+    )
 }
 
 impl ArenaSession {
@@ -315,6 +336,7 @@ impl ArenaSession {
         owner: u8,
         spell: Spell,
         tuning: &ArenaTuning,
+        launch_speed: f32,
         world: &ArenaTerrainView,
         geometry: ArenaVoxelGeometry,
         materials: ArenaMaterials,
@@ -338,7 +360,7 @@ impl ArenaSession {
                 out,
             );
         } else {
-            let shot = projectile(actor, spell, tuning, self.next_projectile);
+            let shot = projectile(actor, spell, tuning, self.next_projectile, launch_speed);
             self.next_projectile += 1;
             self.projectiles.push(shot);
         }
@@ -355,21 +377,48 @@ impl ArenaSession {
         for mut shot in std::mem::take(&mut self.projectiles) {
             if let Some(impact) = advance_shot(&mut shot, &self.collision, &self.actors, false) {
                 if shot.spell == Spell::Shield {
-                    let volume = wall_volume(
+                    if let Some(actor) = impact
+                        .actor
+                        .and_then(|id| self.actors.iter_mut().find(|actor| actor.id == id))
+                    {
+                        let incoming = Vec3::new(
+                            shot.parameters.direction.x,
+                            0.0,
+                            shot.parameters.direction.z,
+                        );
+                        let away = Vec3::new(-impact.normal.x, 0.0, -impact.normal.z);
+                        let direction = if incoming.length_squared() > SKIN * SKIN {
+                            incoming.normalize()
+                        } else if away.length_squared() > SKIN * SKIN {
+                            away.normalize()
+                        } else {
+                            Vec3::X
+                        };
+                        // Once per seed hit, without HP damage or teleporting.
+                        // Ordinary swept movement resolves the impulse next tick.
+                        actor.body.impulse_velocity += direction * shot.parameters.shield_push;
+                    }
+                    let candidates = wall_candidates(
                         impact,
                         shot.parameters.direction,
                         shot.parameters.wall_dimensions,
-                        world,
                         geometry,
-                        &self.actors,
                     );
-                    if volume.is_empty() {
-                        self.notice = "Shield fizzled: needs a clear, supported footprint.".into();
+                    if candidates.is_empty() {
+                        self.shield_no_room_notice();
                     } else {
+                        let voxels = available_wall_voxels(
+                            &candidates,
+                            world,
+                            geometry,
+                            &self.actors,
+                            &BTreeSet::new(),
+                        );
                         self.pending_walls.push(PendingWall {
-                            voxels: volume,
+                            voxels,
                             age: 0.0,
-                            center: impact.point,
+                            candidates,
+                            center: impact.point - impact.normal * PROJECTILE_RADIUS,
                         });
                         self.effects.push(VisualEffect {
                             center: impact.point,
@@ -414,17 +463,17 @@ impl ArenaSession {
         let mut reserved = BTreeSet::new();
         for mut wall in std::mem::take(&mut self.pending_walls) {
             wall.age += STEP;
-            if !wall_is_clear(&wall.voxels, world, geometry, &self.actors)
-                || wall.voxels.iter().any(|p| reserved.contains(p))
-            {
-                self.notice = "Shield fizzled: its emerging footprint became blocked.".into();
-                continue;
-            }
+            wall.voxels =
+                available_wall_voxels(&wall.candidates, world, geometry, &self.actors, &reserved);
             reserved.extend(wall.voxels.iter().copied());
-            // This tick's explosions are applied by the world before the next
-            // simulation tick. Their outcomes and updated projection must arrive
-            // before we can trust support/headroom and commit a complete wall.
+            // Announced explosions settle before creation. Recheck the fixed
+            // mask against the resulting occupancy, including actors that have
+            // moved during emergence; a blocked cell never cancels its neighbors.
             if wall.age + STEP * 0.01 >= EMERGENCE_SECONDS && self.pending_impacts.is_empty() {
+                if wall.voxels.is_empty() {
+                    self.shield_no_room_notice();
+                    continue;
+                }
                 for pos in wall.voxels {
                     out.edits.push(TerrainEdit::Set {
                         pos,
@@ -521,6 +570,7 @@ pub(super) fn preview(
         world,
         geometry,
         tuning,
+        tuning.launch_speed(actor.charge().map_or(0.0, |charge| charge.elapsed)),
     )
 }
 
@@ -532,6 +582,7 @@ pub(super) fn preview_actor(
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
     tuning: &ArenaTuning,
+    launch_speed: f32,
 ) -> Preview {
     if actor.selected == Spell::AreaBlast {
         return Preview {
@@ -540,7 +591,7 @@ pub(super) fn preview_actor(
             ..Default::default()
         };
     }
-    let mut shot = projectile(actor, actor.selected, tuning, 0);
+    let mut shot = projectile(actor, actor.selected, tuning, 0, launch_speed);
     let mut result = Preview {
         points: vec![shot.position],
         ..Default::default()
@@ -581,7 +632,7 @@ mod tests {
     fn ballistic_step_matches_analytic_parabola_and_downhill_has_more_reach() {
         let tuning = ArenaTuning::default();
         let actor = Actor::spawn(0, Vec3::ZERO, Vec3::X);
-        let mut shot = projectile(&actor, Spell::Fireball, &tuning, 0);
+        let mut shot = projectile(&actor, Spell::Fireball, &tuning, 0, tuning.projectile_speed);
         let start = shot.position;
         for _ in 0..120 {
             assert!(advance_shot(&mut shot, &CollisionWorld::default(), &[], false).is_none());
@@ -621,16 +672,16 @@ mod tests {
         world.refresh(&view, geometry);
         let shooter = Actor::spawn(0, Vec3::ZERO, Vec3::X);
         let behind = Actor::spawn(1, Vec3::X * 5.0, Vec3::NEG_X);
-        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
+        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0, 32.0);
         shot.velocity = Vec3::X * 1200.0;
         let contact = advance_shot(&mut shot, &world, std::slice::from_ref(&behind), false)
             .expect("the wall must be hit before the distant body");
-        assert!(contact.terrain && contact.point.x < 3.0);
+        assert!(contact.actor.is_none() && contact.point.x < 3.0);
         let near = Actor::spawn(2, Vec3::X * 1.5, Vec3::NEG_X);
-        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
+        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0, 32.0);
         shot.velocity = Vec3::X * 1200.0;
         let contact = advance_shot(&mut shot, &world, &[behind, near], false).expect("nearer body");
-        assert!(!contact.terrain && contact.point.x < 1.5);
+        assert!(contact.actor == Some(2) && contact.point.x < 1.5);
     }
 
     #[test]
@@ -638,81 +689,250 @@ mod tests {
         let shooter = Actor::spawn(0, Vec3::ZERO, Vec3::X);
         let mut target = Actor::spawn(1, Vec3::new(5.0, 0.0, 2.0), Vec3::NEG_X);
         target.previous_feet = Vec3::new(5.0, 0.0, -2.0);
-        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0);
+        let mut shot = projectile(&shooter, Spell::Fireball, &ArenaTuning::default(), 0, 32.0);
         shot.velocity = Vec3::X * 1200.0;
         let contact = advance_shot(&mut shot, &CollisionWorld::default(), &[target], false)
             .expect("moving actor crosses the ray");
-        assert!(!contact.terrain && (4.0..5.0).contains(&contact.point.x));
+        assert!(contact.actor == Some(1) && (4.0..5.0).contains(&contact.point.x));
+    }
+
+    fn shield_impact(contact: Vec3, normal: Vec3) -> Impact {
+        Impact {
+            point: contact + normal * PROJECTILE_RADIUS,
+            normal,
+            actor: None,
+        }
+    }
+
+    fn shield_materials() -> ArenaMaterials {
+        ArenaMaterials {
+            stone: hex_core::SubstanceId(1),
+            bedrock: hex_core::SubstanceId(2),
+            grass: hex_core::SubstanceId(3),
+            dirt: hex_core::SubstanceId(4),
+            fire: hex_core::ElementId(1),
+        }
+    }
+
+    fn staged_wall(candidates: Vec<TilePos>) -> PendingWall {
+        PendingWall {
+            voxels: candidates.clone(),
+            candidates,
+            age: EMERGENCE_SECONDS - STEP,
+            center: Vec3::ZERO,
+        }
     }
 
     #[test]
-    fn shield_requires_ground_contact_and_complete_supported_headroom() {
+    fn shields_accept_floor_wall_ceiling_and_actor_contact_at_the_same_height() {
         let geometry = ArenaVoxelGeometry::default();
-        let mut world = ArenaTerrainView {
-            voxels: HexCoord::ORIGIN
-                .within_radius(5)
-                .into_iter()
-                .map(|coord| (TilePos::new(coord, 0), hex_core::SubstanceId(1)))
-                .collect(),
-            ..Default::default()
-        };
-        let ground = Impact {
-            point: Vec3::Y * PROJECTILE_RADIUS,
-            normal: Vec3::Y,
-            terrain: true,
-        };
-        let volume = wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]);
-        assert_eq!(volume.len(), 12);
-        for normal in [Vec3::X, Vec3::NEG_Y] {
-            assert!(wall_volume(
-                Impact { normal, ..ground },
+        let world = ArenaTerrainView::default();
+        let contact = Vec3::Y * 1.2;
+        for normal in [Vec3::Y, Vec3::NEG_Y, Vec3::X] {
+            let impact = shield_impact(contact, normal);
+            let volume = wall_volume(impact, Vec3::X, (3, 4), &world, geometry, &[]);
+            assert_eq!(volume.len(), 12);
+            assert!(volume.iter().all(|pos| (4..=7).contains(&pos.level)));
+            let actor_hit = wall_volume(
+                Impact {
+                    actor: Some(1),
+                    ..impact
+                },
                 Vec3::X,
                 (3, 4),
                 &world,
                 geometry,
-                &[]
-            )
-            .is_empty());
+                &[],
+            );
+            assert_eq!(actor_hit, volume);
         }
-        let first = volume.first().copied().expect("complete volume");
-        let support = TilePos::new(first.coord, 0);
-        world.voxels.remove(&support);
-        assert!(wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]).is_empty());
-        world.voxels.insert(support, hex_core::SubstanceId(1));
-        world
-            .voxels
-            .insert(TilePos::new(first.coord, 3), hex_core::SubstanceId(1));
-        assert!(
-            wall_volume(ground, Vec3::X, (3, 4), &world, geometry, &[]).is_empty(),
-            "a low ceiling must reject the entire wall"
-        );
     }
 
     #[test]
-    fn shield_rejects_whole_footprint_above_world_edit_ceiling() {
+    fn wall_face_contact_anchors_on_the_free_neighbor_and_floor_preserves_height() {
         let geometry = ArenaVoxelGeometry::default();
-        for (support_level, expected_voxels) in
-            [(ARENA_MAX_LEVEL - 4, 12), (ARENA_MAX_LEVEL - 3, 0)]
-        {
-            let world = ArenaTerrainView {
-                voxels: HexCoord::ORIGIN
-                    .within_radius(5)
-                    .into_iter()
-                    .map(|coord| (TilePos::new(coord, support_level), hex_core::SubstanceId(1)))
-                    .collect(),
-                ..Default::default()
-            };
-            let impact = Impact {
-                point: Vec3::Y
-                    * (geometry.top(TilePos::new(HexCoord::ORIGIN, support_level))
-                        + PROJECTILE_RADIUS),
-                normal: Vec3::Y,
-                terrain: true,
-            };
-            assert_eq!(
-                wall_volume(impact, Vec3::X, (3, 4), &world, geometry, &[]).len(),
-                expected_voxels,
-            );
-        }
+        let mut world = ArenaTerrainView::default();
+        world
+            .voxels
+            .insert(TilePos::new(HexCoord::ORIGIN, 4), shield_materials().stone);
+        let face = hex_core::config::HEX_SMALL_DIAMETER * 0.5;
+        let volume = wall_volume(
+            shield_impact(Vec3::new(face, 1.4, 0.0), Vec3::X),
+            Vec3::NEG_X,
+            (1, 3),
+            &world,
+            geometry,
+            &[],
+        );
+        assert_eq!(volume.len(), 3);
+        assert!(volume
+            .iter()
+            .all(|pos| pos.coord == HexCoord::from_axial(1, 0)));
+        let floor = wall_volume(
+            shield_impact(Vec3::ZERO, Vec3::Y),
+            Vec3::X,
+            (5, 5),
+            &world,
+            geometry,
+            &[],
+        );
+        assert_eq!(floor.len(), 24, "only the pre-existing cell is skipped");
+        assert!(floor.iter().all(|pos| (1..=5).contains(&pos.level)));
+    }
+
+    #[test]
+    fn shield_skips_only_occupied_and_out_of_bounds_cells_without_support() {
+        let geometry = ArenaVoxelGeometry::default();
+        let impact = shield_impact(Vec3::ZERO, Vec3::Y);
+        let mut world = ArenaTerrainView::default();
+        let complete = wall_volume(impact, Vec3::X, (3, 4), &world, geometry, &[]);
+        let occupied = *complete.first().expect("wall candidate");
+        world.voxels.insert(occupied, shield_materials().dirt);
+        let partial = wall_volume(impact, Vec3::X, (3, 4), &world, geometry, &[]);
+        assert_eq!(partial.len(), 11);
+        assert!(!partial.contains(&occupied));
+        let top = geometry.top(TilePos::new(HexCoord::ORIGIN, ARENA_MAX_LEVEL - 2));
+        let clipped = wall_volume(
+            shield_impact(Vec3::Y * top, Vec3::Y),
+            Vec3::X,
+            (3, 4),
+            &world,
+            geometry,
+            &[],
+        );
+        assert_eq!(clipped.len(), 6);
+        assert!(clipped.iter().all(|pos| pos.level <= ARENA_MAX_LEVEL));
+        let edge = HexCoord::from_axial(12, 0).to_world(0.0);
+        let clipped = wall_volume(
+            shield_impact(edge, Vec3::Y),
+            Vec3::X,
+            (7, 4),
+            &world,
+            geometry,
+            &[],
+        );
+        assert!(!clipped.is_empty() && clipped.len() < 28);
+        assert!(clipped
+            .iter()
+            .all(|pos| geometry.contains_column(pos.coord)));
+    }
+
+    #[test]
+    fn shield_anchor_outside_arena_keeps_cells_crossing_back_inside() {
+        let geometry = ArenaVoxelGeometry::default();
+        let world = ArenaTerrainView::default();
+        let contact = HexCoord::from_axial(13, 0).to_world(0.0);
+        let volume = wall_volume(
+            shield_impact(contact, Vec3::Y),
+            Vec3::Z,
+            (7, 4),
+            &world,
+            geometry,
+            &[],
+        );
+        assert_eq!(volume.len(), 12, "three of seven columns enter the arena");
+        assert!(volume.iter().all(|pos| geometry.contains_column(pos.coord)));
+        assert!(volume
+            .iter()
+            .any(|pos| pos.coord == HexCoord::from_axial(12, 0)));
+    }
+
+    #[test]
+    fn pinned_actor_and_new_terrain_leave_gaps_in_a_mature_wall_without_overwrites() {
+        let geometry = ArenaVoxelGeometry::default();
+        let mut world = ArenaTerrainView::default();
+        let candidates = wall_candidates(
+            shield_impact(Vec3::ZERO, Vec3::Y),
+            Vec3::X,
+            (3, 4),
+            geometry,
+        );
+        let occupied = *candidates.first().expect("wall cell");
+        let materials = shield_materials();
+        world.voxels.insert(occupied, materials.stone);
+        let feet = Vec3::Y * SKIN;
+        let mut session = ArenaSession {
+            actors: vec![Actor::spawn(0, feet, Vec3::X)],
+            pending_walls: vec![staged_wall(candidates)],
+            ..Default::default()
+        };
+        let mut out = CommandsOut::default();
+        session.advance_walls(&world, geometry, materials, &mut out);
+        assert!(!out.edits.is_empty() && out.edits.len() < 12);
+        assert!(out.edits.iter().all(|edit| edit.pos() != occupied
+            && !voxel_overlaps_body(
+                edit.pos(),
+                geometry,
+                feet,
+                BODY_HEIGHT,
+                BODY_RADIUS + SKIN * 4.0
+            )));
+        let actor = session.actors.first().expect("pinned actor");
+        assert_eq!(actor.feet, feet);
+        assert_eq!(
+            actor.body.impulse_velocity,
+            Vec3::ZERO,
+            "formation does not keep pushing"
+        );
+        assert_eq!(session.shields_raised, 1);
+        assert!(session.pending_walls.is_empty());
+    }
+
+    #[test]
+    fn overlapping_shields_reserve_cells_deterministically_without_cancelling_neighbors() {
+        let geometry = ArenaVoxelGeometry::default();
+        let world = ArenaTerrainView::default();
+        let a = TilePos::new(HexCoord::ORIGIN, 1);
+        let b = a.above();
+        let c = b.above();
+        let mut session = ArenaSession {
+            pending_walls: vec![staged_wall(vec![a, b]), staged_wall(vec![b, c])],
+            ..Default::default()
+        };
+        let mut out = CommandsOut::default();
+        session.advance_walls(&world, geometry, shield_materials(), &mut out);
+        assert_eq!(
+            out.edits.iter().map(TerrainEdit::pos).collect::<Vec<_>>(),
+            vec![a, b, c]
+        );
+        assert_eq!(session.shields_raised, 2);
+    }
+
+    #[test]
+    fn emergence_rechecks_fixed_candidates_after_pending_impact_settles() {
+        let geometry = ArenaVoxelGeometry::default();
+        let mut world = ArenaTerrainView::default();
+        let materials = shield_materials();
+        let a = TilePos::new(HexCoord::ORIGIN, 1);
+        let b = a.above();
+        world.voxels.insert(a, materials.stone);
+        let impact = TerrainImpact {
+            batch: TerrainBatchId(9),
+            volume: vec![a],
+            element: materials.fire,
+            power: 2,
+        };
+        let mut session = ArenaSession {
+            pending_walls: vec![staged_wall(vec![a, b])],
+            pending_impacts: [(impact.batch, impact)].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut out = CommandsOut::default();
+        session.advance_walls(&world, geometry, materials, &mut out);
+        assert!(out.edits.is_empty());
+        assert_eq!(
+            session.pending_walls.first().expect("waiting wall").voxels,
+            vec![b]
+        );
+        // The settled world frees one original candidate and occupies the other.
+        world.voxels.remove(&a);
+        world.voxels.insert(b, materials.dirt);
+        session.pending_impacts.clear();
+        session.advance_walls(&world, geometry, materials, &mut out);
+        assert_eq!(
+            out.edits.iter().map(TerrainEdit::pos).collect::<Vec<_>>(),
+            vec![a]
+        );
+        assert!(session.pending_walls.is_empty());
     }
 }

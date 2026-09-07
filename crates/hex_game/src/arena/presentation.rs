@@ -196,7 +196,6 @@ pub(super) fn effects(
     if actor.selected == Spell::Shield {
         // Outline the landing footprint, keeping the wall's full height out of
         // the aiming view. These pointy-hex corners match the public voxel geometry.
-        let bottom = predicted.wall_voxels.iter().map(|pos| pos.level).min();
         let corners = [
             Vec3::new(0.0, 0.0, 1.0),
             Vec3::new(0.866_025_4, 0.0, 0.5),
@@ -205,10 +204,7 @@ pub(super) fn effects(
             Vec3::new(-0.866_025_4, 0.0, -0.5),
             Vec3::new(-0.866_025_4, 0.0, 0.5),
         ];
-        for pos in predicted.wall_voxels {
-            if Some(pos.level) != bottom {
-                continue;
-            }
+        for pos in shield_footprint(&predicted.wall_voxels) {
             let center = geometry.center(pos) - Vec3::Y * (geometry.level_height * 0.5 - 0.015);
             for (a, b) in corners.into_iter().zip(corners.into_iter().cycle().skip(1)) {
                 gizmos.line(center + a, center + b, c);
@@ -221,6 +217,22 @@ pub(super) fn effects(
             c.with_alpha(0.5),
         );
     }
+}
+
+/// Partial shields can begin at a different surviving level in every column.
+pub(super) fn shield_footprint(voxels: &[hex_core::TilePos]) -> Vec<hex_core::TilePos> {
+    let mut columns = std::collections::BTreeMap::new();
+    for pos in voxels {
+        columns
+            .entry(pos.coord)
+            .and_modify(|lowest: &mut hex_core::TilePos| {
+                if pos.level < lowest.level {
+                    *lowest = *pos;
+                }
+            })
+            .or_insert(*pos);
+    }
+    columns.into_values().collect()
 }
 
 #[derive(Resource)]

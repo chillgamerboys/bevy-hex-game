@@ -31,8 +31,17 @@ VIEWS = (
     "shield-first", "shield-third", "fireball-first", "fireball-third",
     "blast-first", "blast-third", "shield-preview-first", "shield-preview-third", "start",
 )
-MATRIX = "arena-v4"
+MATRIX = "arena-v5-release-casting"
 MENU_VIEWS = ("start", "tuning", "first", "third", "overview", "rear")
+CHARGE_VIEWS = (
+    "start", "tuning", "first", "third",
+    "shield-charge-partial-first", "shield-charge-partial-third",
+    "shield-charge-full-first", "shield-charge-full-third",
+    "fireball-charge-partial-first", "fireball-charge-partial-third",
+    "fireball-charge-full-first", "fireball-charge-full-third",
+    "blast-armed-first", "blast-armed-third",
+    "shield-partial-preview-first", "shield-partial-preview-third",
+)
 CANVAS = [1600, 900]
 CARGO_ARGS = ("run", "-p", "hex_game", "--features", "dev,arena-prototype", "--", "--arena")
 
@@ -170,13 +179,36 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         raise RuntimeError(f"Native state receipt does not identify view {view}: {path}")
     if [state.get("width"), state.get("height")] != pixels or pixels != CANVAS:
         raise RuntimeError(f"Native receipt/PNG dimensions disagree with the {CANVAS} capture canvas.")
+    if view in CHARGE_VIEWS and ("charge-" in view or "armed" in view or "partial-preview" in view):
+        human = next((actor for actor in state.get("actors", []) if actor.get("id") == 0), {})
+        charge = human.get("charge")
+        expected_spell = "Shield" if view.startswith("shield") else "Fireball" if view.startswith("fireball") else "AreaBlast"
+        if not isinstance(charge, dict) or charge.get("spell") != expected_spell:
+            raise RuntimeError(f"{view} did not retain the expected authoritative {expected_spell} charge.")
+        progress = charge.get("progress")
+        if not isinstance(progress, (int, float)) or not 0 <= progress <= 1:
+            raise RuntimeError(f"{view} has no valid charge progress in its native receipt.")
+        if "charge-partial" in view and not 0.35 <= progress <= 0.65:
+            raise RuntimeError(f"{view} missed the partial-charge capture interval: {progress}.")
+        if ("charge-full" in view or "partial-preview" in view) and progress < 0.99:
+            raise RuntimeError(f"{view} did not reach full charge: {progress}.")
+        samples = state.get("capture_inputs", [])
+        if not any(sample.get("pressed") for sample in samples) or any(sample.get("released") for sample in samples):
+            raise RuntimeError(f"{view} must retain a recorded press/hold sequence without a release.")
+        if "partial-preview" in view:
+            fixture = state.get("fixture_voxels", [])
+            preview = state.get("preview", {})
+            if len(fixture) != 2 or not preview.get("valid") or not preview.get("wall_voxels"):
+                raise RuntimeError(f"{view} is missing its world-published partial shield fixture.")
+            if any(voxel in preview["wall_voxels"] for voxel in fixture):
+                raise RuntimeError(f"{view} preview failed to omit its occupied fixture slots.")
     return {"file": path.name, "sha256": digest(data), "bytes": len(data),
             "frame": state.get("frame"), "tick": state.get("tick")}
 
 
 def capture(args: argparse.Namespace) -> int:
-    views = MENU_VIEWS if args.menu_review else VIEWS
-    matrix = "arena-menu-v1" if args.menu_review else MATRIX
+    views = CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
+    matrix = "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
     output = args.output
     if not output.is_absolute():
         raise RuntimeError("--output must be an absolute path to a new directory.")
@@ -209,10 +241,10 @@ def capture(args: argparse.Namespace) -> int:
         "terrain_seed": None, "terrain_seed_note": "Authored arena; no terrain seed override.",
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": list(views), "mechanical_status": "INCOMPLETE",
         "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
-        "human_route": "Move, jump, sprint, look near walls, toggle camera, cast all spells, reset.",
+        "human_route": "Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
         "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS")},
@@ -281,8 +313,11 @@ def main(argv: list[str] | None = None) -> int:
                           help="New absolute parent directory; receives a state-named capture pack.")
     captures.add_argument("--timeout", type=float, default=300,
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
-    captures.add_argument("--menu-review", action="store_true",
-                          help="Capture the six ready/menu/HUD review views.")
+    review = captures.add_mutually_exclusive_group()
+    review.add_argument("--menu-review", action="store_true",
+                        help="Capture the six ready/menu/HUD review views.")
+    review.add_argument("--charge-review", action="store_true",
+                        help="Capture 16 charge/release, clipped shield, ready/menu, and actor-camera views.")
     args = parser.parse_args(argv)
     try:
         if not args.target_dir.is_absolute():

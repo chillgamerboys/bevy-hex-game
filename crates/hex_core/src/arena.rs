@@ -11,8 +11,8 @@ use crate::{ElementId, HexCoord, SubstanceId, TilePos};
 /// Highest editable or solid voxel level in the isolated arena, inclusive.
 ///
 /// World mutation enforces this storage bound. Terrain-creating gameplay must
-/// validate its complete footprint against the same bound before emitting edits,
-/// so an otherwise clear shield cannot become a partially admitted wall.
+/// filter candidate cells against the same bound before emitting edits. Shields
+/// intentionally admit partial footprints when terrain, bounds, or bodies clip them.
 pub const ARENA_MAX_LEVEL: i32 = 128;
 
 /// Fixed-step schedule shared by the arena's world and gameplay producers.
