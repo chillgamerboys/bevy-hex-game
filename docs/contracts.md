@@ -141,6 +141,7 @@ locked behavior and ownership.
 | Existing `TerrainEdit`, `TerrainImpact`, `TerrainImpactOutcome` in the arena — world-owned mutation and damage admission; a `PreUpdate` inbox retains pending edits/impacts across pauses | gameplay requests; world outcomes | world / `hex_arena` | **experimental** arena composition of existing live message types |
 | `ArenaReset` generation — clear queued world messages/inbox and damage state, restore authored terrain, then reset actors and gameplay ledgers before advancing the new round | shared input adapter | world / `hex_arena` | **experimental** |
 | `ActorIntent` / `ArenaInput` and read-only `ArenaSession` projection — held movement/aim/cast state plus consumed jump, cast-press/release, and selection edges; actor-owned charge advances at 120 Hz and a session cancellation method clears charges while paused; human and bot use the same simulation path | native input / gameplay bot | gameplay authority / presentation | **experimental**; future network ingress seam only, with no current wire or admission contract |
+| Arena bot observations and combat cues — gameplay filters sight and publishes coarse discrete release/impact locations; decision forecasts consume observed bodies or explicit memory hypotheses, never hidden live actor bodies | gameplay | private arena bot; read-only debug and round summaries for local validation | **experimental**; no tactical perception dependency or normal HUD disclosure |
 
 ## What each side commits to
 

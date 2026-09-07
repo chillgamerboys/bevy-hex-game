@@ -170,3 +170,26 @@ record actual input edges and authoritative charge state; image review remains
 separate from gameplay tests. The original prototype's broader gate receipt is
 historical evidence, not certification of this follow-up. Native charge feel and
 subjective Shield balance remain pending the user's playtest.
+
+## Stronger bot and faster charging
+
+This follow-up supersedes the earlier reactive bot description and one-second
+charge default. It remains one gameplay-owned local candidate: root integrates
+configuration, cue/forecast contracts, charge timing, and telemetry before the bot
+implementation; independent regression and application evaluation work shares the
+combined verification. No new branch, remote PR, world API, or separate release is
+introduced. The active visual experiment remains untouched.
+
+Both actors reach maximum charge in 0.75 seconds with unchanged range endpoints and
+spell rules. The bot uses observed target memory, coarse combat cues, persistent
+preparation, limited recent-cover suppression, occasional timed ambushes, and
+bounded controller-validated routes around cover. It has a fixed strength profile,
+with no access to hidden live actor state in decisions or trajectory forecasts.
+The behavior and local comparison procedure are documented in
+[the arena bot guide](../../../systems/arena-bot.md).
+
+The combined follow-up gate covers arena unit tests, real-world arena application
+checks and paired frozen-baseline evaluations, workspace formatting and strict
+all-feature Clippy, documentation links, and a native Cargo build. Charge capture
+fixtures scale to the configured duration. Static captures establish presentation
+only; beginner and practiced human win rates remain playtest targets.

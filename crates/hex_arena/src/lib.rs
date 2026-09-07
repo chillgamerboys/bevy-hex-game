@@ -16,9 +16,18 @@ use hex_core::{
 use serde::{Deserialize, Serialize};
 
 mod bot;
+#[cfg(any(test, feature = "test-support"))]
+mod bot_baseline;
+mod bot_config;
 mod collision;
 mod controller;
 mod spells;
+mod telemetry;
+
+pub use bot::BotDebugSnapshot;
+pub use bot_config::BotTuning;
+pub use telemetry::{ActorCombatStats, RoundSummary};
+use telemetry::{CombatCue, CombatCueKind};
 
 use bot::Bot;
 use collision::{CollisionWorld, SKIN};
@@ -124,6 +133,8 @@ pub struct ChargeState {
 #[derive(Resource, Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArenaTuning {
+    /// Fixed-strength opponent behavior; no adaptive difficulty or extra spell power.
+    pub bot: BotTuning,
     /// Shield width/height preset (0, 1, or 2).
     pub shield_size: usize,
     /// Fireball sphere preset (0, 1, or 2).
@@ -163,11 +174,12 @@ pub struct ArenaTuning {
 impl Default for ArenaTuning {
     fn default() -> Self {
         Self {
+            bot: BotTuning::default(),
             shield_size: 1,
             fireball_size: 1,
             blast_size: 1,
             projectile_speed: 32.0,
-            charge_seconds: 1.0,
+            charge_seconds: 0.75,
             tap_range_multiplier: 1.0 / 3.0,
             max_range_multiplier: 1.3,
             shield_push: 2.0,
@@ -187,6 +199,7 @@ impl Default for ArenaTuning {
 impl ArenaTuning {
     /// Reject nonfinite, out-of-range, or unusable authoring values.
     pub fn validate(&self) -> Result<(), String> {
+        self.bot.validate()?;
         if [self.shield_size, self.fireball_size, self.blast_size]
             .into_iter()
             .any(|i| i > 2)
@@ -240,7 +253,7 @@ impl ArenaTuning {
         self.projectile_speed * range.sqrt()
     }
 
-    /// Charge duration closest to the original reference speed, for the simple bot.
+    /// Charge duration closest to the original reference speed, useful for comparisons.
     #[must_use]
     pub fn reference_charge_seconds(&self) -> f32 {
         let span = self.max_range_multiplier - self.tap_range_multiplier;
@@ -466,7 +479,7 @@ pub struct ArenaSession {
     pub outcome: Option<ArenaOutcome>,
     /// Fixed simulation tick number, reset to zero with the authored arena.
     pub tick: u64,
-    /// Allow the disposable random-motion/fireball controller to submit input.
+    /// Allow the fixed-strength opponent controller to submit input.
     pub bot_enabled: bool,
     /// Last human-readable fizzle or validation message.
     pub notice: String,
@@ -482,6 +495,11 @@ pub struct ArenaSession {
     pending_impacts: BTreeMap<TerrainBatchId, TerrainImpact>,
     pending_walls: Vec<PendingWall>,
     shield_notice_until: Option<u64>,
+    combat_cues: Vec<CombatCue>,
+    next_cue: u64,
+    combat_stats: [ActorCombatStats; 2],
+    #[cfg(any(test, feature = "test-support"))]
+    baseline_bot: Option<bot_baseline::Bot>,
 }
 
 impl Default for ArenaSession {
@@ -504,6 +522,11 @@ impl Default for ArenaSession {
             pending_impacts: BTreeMap::new(),
             pending_walls: Vec::new(),
             shield_notice_until: None,
+            combat_cues: Vec::new(),
+            next_cue: 0,
+            combat_stats: Default::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            baseline_bot: None,
         }
     }
 }
@@ -521,6 +544,10 @@ impl ArenaSession {
             actor.cancel_charge();
         }
         self.bot.cancel_charge();
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(bot) = &mut self.baseline_bot {
+            bot.cancel_charge();
+        }
     }
 
     /// Currently available staged wall cells and cosmetic rise progress in 0–1.
@@ -561,11 +588,15 @@ impl ArenaSession {
         let [human, bot] = world.spawns;
         let aim = (bot - human).normalize_or_zero();
         let bot_enabled = self.bot_enabled;
+        #[cfg(any(test, feature = "test-support"))]
+        let baseline = self.baseline_bot.is_some();
         *self = Self {
             actors: vec![Actor::spawn(0, human, aim), Actor::spawn(1, bot, -aim)],
             generation: Some(generation),
             bot_enabled,
             bot: Bot::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            baseline_bot: baseline.then(bot_baseline::Bot::default),
             ..Default::default()
         };
         self.collision.refresh(world, geometry);
@@ -604,6 +635,8 @@ impl ArenaSession {
             return commands;
         }
         self.tick += 1;
+        self.combat_cues
+            .retain(|cue| self.tick.saturating_sub(cue.tick) <= 120);
         if self
             .shield_notice_until
             .is_some_and(|until| self.tick >= until)
@@ -613,8 +646,26 @@ impl ArenaSession {
             }
             self.shield_notice_until = None;
         }
-        let bot = if self.bot_enabled {
+        let use_current_bot = self.bot_enabled;
+        #[cfg(any(test, feature = "test-support"))]
+        let use_current_bot = use_current_bot && self.baseline_bot.is_none();
+        let bot = if use_current_bot {
             self.bot.intent(
+                &self.actors,
+                &self.projectiles,
+                &self.collision,
+                world,
+                geometry,
+                tuning,
+                &self.combat_cues,
+                self.tick,
+            )
+        } else {
+            ActorIntent::default()
+        };
+        #[cfg(any(test, feature = "test-support"))]
+        let bot = if let Some(baseline) = self.baseline_bot.as_mut().filter(|_| self.bot_enabled) {
+            baseline.intent(
                 &self.actors,
                 &self.projectiles,
                 &self.collision,
@@ -623,7 +674,7 @@ impl ArenaSession {
                 tuning,
             )
         } else {
-            ActorIntent::default()
+            bot
         };
         let mut casts = Vec::new();
         for actor in &mut self.actors {
@@ -846,6 +897,8 @@ fn simulate(
 
 #[cfg(test)]
 mod charge_tests;
+#[cfg(test)]
+mod knowledge_tests;
 #[cfg(test)]
 mod shield_tests;
 #[cfg(test)]

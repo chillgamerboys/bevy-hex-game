@@ -78,6 +78,7 @@ impl Fixture {
     }
 
     fn decide(&mut self) -> ActorIntent {
+        self.session.bot.sense_ticks = 0;
         self.session.bot.intent(
             &self.session.actors,
             &self.session.projectiles,
@@ -85,6 +86,8 @@ impl Fixture {
             &self.world,
             self.geometry,
             &self.tuning,
+            &[],
+            self.session.tick,
         )
     }
 
@@ -183,10 +186,10 @@ fn bot_fireball_actually_damages_stationary_targets_at_near_and_far_range() {
     for distance in [8.0, 28.0] {
         let mut fixture = Fixture::new(distance);
         fixture.advance();
-        assert!(fixture.session.projectiles.is_empty());
-        assert!(fixture.actor(1).charge().is_some());
-        assert!(fixture.bot_cooldown(Spell::Fireball).abs() < SKIN);
         for _ in 0..240 {
+            if !fixture.session.projectiles.is_empty() {
+                break;
+            }
             fixture.advance();
             if !fixture.session.projectiles.is_empty() {
                 break;
@@ -200,8 +203,10 @@ fn bot_fireball_actually_damages_stationary_targets_at_near_and_far_range() {
         assert!(fixture.actor(1).charge().is_none());
         assert!(fixture.bot_cooldown(Spell::Fireball) > 0.0);
         assert!(
-            (shot.velocity.length() - fixture.tuning.projectile_speed).abs() < 0.5,
-            "charged launch should recover the previous reference speed"
+            shot.velocity.length() >= fixture.tuning.launch_speed(0.0) - SKIN
+                && shot.velocity.length()
+                    <= fixture.tuning.launch_speed(fixture.tuning.charge_seconds) + SKIN,
+            "launch must use an admitted charge strength"
         );
         assert_eq!(shot.owner, 1);
         assert_eq!(shot.spell, Spell::Fireball);
@@ -285,7 +290,7 @@ fn fully_hidden_target_does_not_update_aim_or_trigger_any_spell() {
     fixture.actor_mut(1).hp = 100.0;
     fixture.session.bot.think_ticks = 0;
     let visible = fixture.decide();
-    assert!(visible.cast_pressed && visible.cast_held && !visible.cast_released);
+    assert!(visible.cast_pressed && (visible.cast_held || visible.cast_released));
     assert_eq!(visible.selected, Some(Spell::Fireball));
     assert!(visible.aim.distance(before.aim) > 0.05);
 }
@@ -359,8 +364,8 @@ fn visible_target_beyond_low_overhang_does_not_provoke_nearby_self_splash() {
     ));
     let intent = fixture.decide();
     assert!(
-        !intent.cast_pressed && !intent.cast_released && intent.selected.is_none(),
-        "nearby ballistic obstruction should suppress the shot"
+        !intent.cast_released,
+        "nearby ballistic obstruction must suppress release; preparation is allowed"
     );
 }
 
@@ -389,7 +394,6 @@ fn reset_replays_the_same_seeded_bot_movement_and_cast_sequence() {
             .collect::<Vec<_>>()
     };
     let first = record(&mut fixture);
-    assert!(first.iter().any(|(_, _, _, charge, _)| charge.is_some()));
     assert!(first.iter().any(|(_, _, _, _, shots)| !shots.is_empty()));
     fixture.session.reset(1, &fixture.world, fixture.geometry);
     let second = record(&mut fixture);
@@ -414,13 +418,14 @@ fn bot_leads_and_damages_a_target_that_keeps_sprinting_sideways() {
             &fixture.tuning,
         )
     };
-    // Establish an observed velocity through real movement before the bot thinks.
-    fixture.session.bot_enabled = false;
-    advance_moving(&mut fixture);
-    fixture.session.bot_enabled = true;
-    advance_moving(&mut fixture);
-    assert!(fixture.actor(1).charge().is_some());
-    let charge_start = fixture.actor(1).feet;
+    // Establish velocity from two actual sight samples, without reading the
+    // target's hidden previous-tick state or requiring a fixed hold duration.
+    fixture.actor_mut(1).cooldowns = [600.0; 3];
+    for _ in 0..14 {
+        advance_moving(&mut fixture);
+    }
+    fixture.actor_mut(1).cooldowns = [0.0; 3];
+    fixture.session.bot.think_ticks = 0;
     for _ in 0..240 {
         advance_moving(&mut fixture);
         if fixture
@@ -432,10 +437,6 @@ fn bot_leads_and_damages_a_target_that_keeps_sprinting_sideways() {
             break;
         }
     }
-    assert!(
-        fixture.actor(1).feet.distance(charge_start) > 0.5,
-        "bot should keep ordinary movement while holding fireball"
-    );
     let direct = (fixture.actor(0).center() - fixture.actor(1).eye()).normalize();
     let shot = fixture
         .session
@@ -469,11 +470,19 @@ fn bot_leads_and_damages_a_target_that_keeps_sprinting_sideways() {
 #[test]
 fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
     for approaching in [true, false] {
-        let mut fixture = Fixture::new(10.0);
+        let mut fixture = Fixture::new(14.0);
         fixture.session.bot_enabled = false;
+        let incoming_aim = ballistic_aim(
+            fixture.actor(0).eye(),
+            fixture.actor(1).center(),
+            &fixture.tuning,
+            fixture.tuning.launch_speed(0.0),
+        )
+        .expect("incoming low arc")
+        .0;
         fixture.session.advance(
             ActorIntent {
-                aim: if approaching { Vec3::NEG_X } else { Vec3::X },
+                aim: if approaching { incoming_aim } else { Vec3::X },
                 cast_pressed: true,
                 cast_released: true,
                 selected: Some(Spell::Fireball),
@@ -486,7 +495,7 @@ fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
         );
         let incoming = fixture.session.projectiles.first().expect("human fireball");
         assert_eq!(incoming.owner, 0);
-        assert!(incoming.position.distance(fixture.actor(1).center()) < 14.0);
+        assert!(incoming.position.distance(fixture.actor(1).center()) < 18.0);
         fixture.session.bot_enabled = true;
         fixture.advance();
         if approaching {
@@ -504,9 +513,7 @@ fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
                 .session
                 .projectiles
                 .iter()
-                .any(|shot| shot.owner == 1));
-            let charge = fixture.actor(1).charge().expect("ordinary fireball charge");
-            assert_eq!(charge.spell, Spell::Fireball);
+                .any(|shot| shot.owner == 1 && shot.spell == Spell::Shield));
             assert_eq!(fixture.actor(1).selected, Spell::Fireball);
         }
         assert!(
@@ -524,11 +531,13 @@ fn healthy_bot_shields_against_approaching_fireball_but_not_one_moving_away() {
 }
 
 #[test]
-fn charged_bot_cancels_when_its_target_becomes_hidden_before_release() {
-    let mut fixture = Fixture::new(14.0);
+fn prepared_charge_releases_after_reacquiring_target() {
+    let mut fixture = Fixture::new(28.0);
+    fixture.tuning.bot.blind_fire_enabled = false;
+    fixture.tuning.bot.flank_enabled = false;
+    fixture.tuning.bot.ambush_chance = 0.0;
     fixture.advance();
     assert!(fixture.actor(1).charge().is_some());
-    let last_visible_aim = fixture.actor(1).aim;
     for coord in HexCoord::ORIGIN.within_radius(2) {
         for level in 1..=8 {
             fixture
@@ -538,26 +547,38 @@ fn charged_bot_cancels_when_its_target_becomes_hidden_before_release() {
         }
     }
     fixture.refresh();
-    for _ in 0..120 {
+    for _ in 0..100 {
         fixture.advance();
         assert!(fixture.session.projectiles.is_empty());
-        if fixture.actor(1).charge().is_none() {
+    }
+    assert!(fixture
+        .actor(1)
+        .charge()
+        .is_some_and(|charge| (charge.elapsed - fixture.tuning.charge_seconds).abs() < SKIN));
+    fixture.world.voxels.retain(|pos, _| pos.level == 0);
+    fixture.refresh();
+    for _ in 0..25 {
+        fixture.advance();
+        if !fixture.session.projectiles.is_empty() {
             break;
         }
     }
+    let shot = fixture
+        .session
+        .projectiles
+        .first()
+        .expect("prepared shot releases on reacquisition");
+    assert_eq!(shot.owner, 1);
     assert!(
-        fixture.actor(1).charge().is_none(),
-        "hidden release must cancel the hold"
+        (shot.velocity.length() - fixture.tuning.launch_speed(fixture.tuning.charge_seconds)).abs()
+            < 0.01
     );
-    assert!(!fixture.session.bot.charging_fireball);
-    assert!(fixture.bot_cooldown(Spell::Fireball).abs() < SKIN);
-    assert!(fixture.actor(1).aim.distance(last_visible_aim) < SKIN);
-    assert!((fixture.actor(0).hp - 100.0).abs() < SKIN);
+    assert!(fixture.actor(1).charge().is_none());
 }
 
 #[test]
 fn cancelling_a_bot_charge_discards_the_release_without_resetting_its_seed() {
-    let mut fixture = Fixture::new(14.0);
+    let mut fixture = Fixture::new(28.0);
     for _ in 0..12 {
         fixture.advance();
     }
@@ -582,3 +603,101 @@ fn cancelling_a_bot_charge_discards_the_release_without_resetting_its_seed() {
     assert!(!fixture.session.bot.charging_fireball);
     assert!(fixture.actor(1).charge().is_none());
 }
+
+#[path = "strong_tests.rs"]
+mod strong_tests;
+
+#[test]
+fn prepared_peek_reacts_on_the_sight_sample_between_behavior_decisions() {
+    let mut fixture = Fixture::new(28.0);
+    fixture.tuning.bot.blind_fire_enabled = false;
+    fixture.tuning.bot.flank_enabled = false;
+    fixture.tuning.bot.ambush_chance = 0.0;
+    fixture.advance();
+    for coord in HexCoord::ORIGIN.within_radius(2) {
+        for level in 1..=8 {
+            fixture
+                .world
+                .voxels
+                .insert(TilePos::new(coord, level), fixture.materials.stone);
+        }
+    }
+    fixture.refresh();
+    for _ in 0..100 {
+        fixture.advance();
+    }
+    assert!(fixture.session.projectiles.is_empty());
+    assert!(fixture
+        .actor(1)
+        .charge()
+        .is_some_and(|charge| (charge.elapsed - fixture.tuning.charge_seconds).abs() < SKIN));
+    assert!(fixture.session.bot.observation.target.is_none());
+    fixture.world.voxels.retain(|pos, _| pos.level == 0);
+    fixture.refresh();
+    fixture.session.bot.think_ticks = 20;
+    fixture.session.bot.sense_ticks = 1;
+    fixture.advance();
+    let shot = fixture
+        .session
+        .projectiles
+        .first()
+        .expect("a prepared peek releases on the next sight sample");
+    assert_eq!(shot.owner, 1);
+    assert!(shot.age.abs() < SKIN);
+    assert!(fixture.actor(1).charge().is_none());
+}
+
+#[test]
+fn interrupted_defense_revalidates_range_and_terrain_before_the_queued_tap() {
+    for spell in [Spell::AreaBlast, Spell::Shield] {
+        let mut fixture = Fixture::new(if spell == Spell::AreaBlast { 2.0 } else { 14.0 });
+        let tuning = fixture.tuning.clone();
+        if spell == Spell::Shield {
+            fixture.actor_mut(1).hp = 50.0;
+        }
+        fixture.actor_mut(1).casting(
+            ActorIntent {
+                cast_pressed: true,
+                cast_held: true,
+                selected: Some(Spell::Fireball),
+                ..Default::default()
+            },
+            &tuning,
+        );
+        fixture.session.bot.charging_fireball = true;
+        fixture.advance();
+        assert!(fixture.actor(1).charge().is_none());
+        assert_eq!(
+            fixture.session.bot.pending_tap.map(|tap| tap.0),
+            Some(spell)
+        );
+        assert!(fixture.session.projectiles.is_empty());
+        if spell == Spell::AreaBlast {
+            let human = fixture.actor_mut(0);
+            human.feet = Vec3::new(9.0, SKIN, 0.0);
+            human.previous_feet = human.feet;
+        } else {
+            let blocker = HexCoord::from_world(fixture.actor(1).feet + Vec3::X * 1.7);
+            for level in 1..=5 {
+                fixture
+                    .world
+                    .voxels
+                    .insert(TilePos::new(blocker, level), fixture.materials.stone);
+            }
+            fixture.refresh();
+            assert!(fixture.session.collision.clear(
+                fixture.actor(1).feet,
+                BODY_HEIGHT,
+                BODY_RADIUS
+            ));
+        }
+        let output = fixture.advance();
+        assert!(fixture.session.projectiles.is_empty());
+        assert!(output.impacts.is_empty() && output.edits.is_empty());
+        assert!(fixture.bot_cooldown(spell).abs() < SKIN);
+        assert!((fixture.actor(0).hp - 100.0).abs() < SKIN);
+    }
+}
+
+#[path = "navigation_tests.rs"]
+mod navigation_tests;

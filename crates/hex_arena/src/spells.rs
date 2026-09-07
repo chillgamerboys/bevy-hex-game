@@ -8,8 +8,8 @@ use hex_core::{HexCoord, TerrainBatchId, TerrainEdit, TerrainImpact, TilePos};
 
 use crate::collision::{voxel_overlaps_body, CollisionWorld, SKIN};
 use crate::{
-    Actor, ArenaSession, ArenaTuning, CommandsOut, Preview, Projectile, Spell, VisualEffect,
-    BODY_HEIGHT, BODY_RADIUS, STEP,
+    Actor, ArenaSession, ArenaTuning, CombatCueKind, CommandsOut, Preview, Projectile, Spell,
+    VisualEffect, BODY_HEIGHT, BODY_RADIUS, STEP,
 };
 
 const PROJECTILE_RADIUS: f32 = 0.06;
@@ -81,7 +81,7 @@ fn flight_active(shot: &Projectile) -> bool {
     shot.age + STEP * 0.01 < MAX_FLIGHT_SECONDS && shot.position.y > -10.0
 }
 
-fn capsule_distance(point: Vec3, feet: Vec3) -> f32 {
+pub(super) fn capsule_distance(point: Vec3, feet: Vec3) -> f32 {
     let low = feet.y + BODY_RADIUS;
     let high = feet.y + BODY_HEIGHT - BODY_RADIUS;
     let axis = Vec3::new(feet.x, point.y.clamp(low, high), feet.z);
@@ -342,9 +342,11 @@ impl ArenaSession {
         materials: ArenaMaterials,
         out: &mut CommandsOut,
     ) {
-        let Some(actor) = self.actors.iter().find(|a| a.id == owner) else {
+        let Some(actor) = self.actors.iter().find(|a| a.id == owner).cloned() else {
             return;
         };
+        self.combat_cue(owner, actor.eye(), CombatCueKind::Release);
+        self.record_cast(owner, spell);
         if spell == Spell::AreaBlast {
             self.explode(
                 actor.center(),
@@ -360,7 +362,7 @@ impl ArenaSession {
                 out,
             );
         } else {
-            let shot = projectile(actor, spell, tuning, self.next_projectile, launch_speed);
+            let shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
             self.next_projectile += 1;
             self.projectiles.push(shot);
         }
@@ -376,6 +378,7 @@ impl ArenaSession {
         let mut survivors = Vec::new();
         for mut shot in std::mem::take(&mut self.projectiles) {
             if let Some(impact) = advance_shot(&mut shot, &self.collision, &self.actors, false) {
+                self.combat_cue(shot.owner, impact.point, CombatCueKind::Impact);
                 if shot.spell == Spell::Shield {
                     if let Some(actor) = impact
                         .actor
@@ -509,6 +512,8 @@ impl ArenaSession {
         materials: ArenaMaterials,
         out: &mut CommandsOut,
     ) {
+        let mut damage_events = Vec::new();
+        let mut useful_fireball = false;
         for actor in &mut self.actors {
             if actor.hp <= 0.0 || (spell == Spell::AreaBlast && actor.id == owner) {
                 continue;
@@ -519,7 +524,10 @@ impl ArenaSession {
             }
             // No LOS query: radial effects intentionally pass through cover.
             let falloff = (1.0 - distance / radius).clamp(0.0, 1.0);
-            actor.hp = (actor.hp - damage * falloff).max(0.0);
+            useful_fireball |= actor.id != owner && damage > 0.0 && falloff >= 0.4;
+            let removed = actor.hp.min(damage * falloff);
+            actor.hp -= removed;
+            damage_events.push((actor.id, removed));
             let away = actor.center() - center;
             let outward = if away.length_squared() > SKIN * SKIN {
                 away.normalize()
@@ -531,6 +539,12 @@ impl ArenaSession {
             if impulse.y > 0.0 {
                 actor.body.grounded = false;
             }
+        }
+        for (victim, removed) in damage_events {
+            self.record_damage(owner, victim, removed);
+        }
+        if spell == Spell::Fireball {
+            self.record_fireball_impact(owner, useful_fireball);
         }
         let volume = geometry.sphere(world, center, radius);
         if !volume.is_empty() {
@@ -622,6 +636,93 @@ pub(super) fn preview_actor(
         tick += 1;
     }
     result
+}
+
+/// Deliberate observed body or memory hypothesis, never a reference to hidden state.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ForecastBody {
+    pub id: u8,
+    pub feet: Vec3,
+    pub velocity: Vec3,
+    pub predict_seconds: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ForecastImpact {
+    pub point: Vec3,
+    pub actor: Option<u8>,
+    pub time: f32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SpellForecast {
+    pub impact: Option<ForecastImpact>,
+    pub wall_voxels: Vec<TilePos>,
+}
+
+/// The production sweep with explicitly supplied knowledge and bounded motion lead.
+/// The caster is always included so owner clearance and self-hit rules stay intact.
+pub(crate) fn forecast_spell(
+    caster: &Actor,
+    observed: &[ForecastBody],
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
+    launch_speed: f32,
+) -> SpellForecast {
+    if caster.selected == Spell::AreaBlast {
+        return SpellForecast {
+            impact: Some(ForecastImpact {
+                point: caster.center(),
+                actor: None,
+                time: 0.0,
+            }),
+            ..Default::default()
+        };
+    }
+    let mut bodies = vec![caster.clone()];
+    bodies.extend(
+        observed
+            .iter()
+            .filter(|body| body.id != caster.id)
+            .map(|body| Actor::spawn(body.id, body.feet, Vec3::NEG_Z)),
+    );
+    if let Some(owner) = bodies.first_mut() {
+        owner.previous_feet = owner.feet;
+    }
+    let mut shot = projectile(caster, caster.selected, tuning, 0, launch_speed);
+    while flight_active(&shot) {
+        for body in bodies.iter_mut().skip(1) {
+            if let Some(fact) = observed.iter().find(|fact| fact.id == body.id) {
+                body.previous_feet = body.feet;
+                body.feet = fact.feet
+                    + fact.velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
+            }
+        }
+        if let Some(hit) = advance_shot(&mut shot, collision, &bodies, false) {
+            return SpellForecast {
+                impact: Some(ForecastImpact {
+                    point: hit.point,
+                    actor: hit.actor,
+                    time: shot.age,
+                }),
+                wall_voxels: if caster.selected == Spell::Shield {
+                    wall_volume(
+                        hit,
+                        shot.parameters.direction,
+                        shot.parameters.wall_dimensions,
+                        world,
+                        geometry,
+                        &bodies,
+                    )
+                } else {
+                    Vec::new()
+                },
+            };
+        }
+    }
+    SpellForecast::default()
 }
 
 #[cfg(test)]

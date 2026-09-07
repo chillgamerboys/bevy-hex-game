@@ -75,6 +75,7 @@ map-review = []
 visual-walk = ["hex_ui/visual-review", "hex_ui/test-support"]
 # Headless game/UI observation helpers. Never enabled by the shipping build.
 test-support = [
+    "hex_arena?/test-support",
     "hex_assets/test-support",
     "hex_core/test-support",
     "hex_ui/test-support",

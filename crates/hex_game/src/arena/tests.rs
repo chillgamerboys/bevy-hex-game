@@ -1189,7 +1189,10 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
         assert_eq!(charge.spell, spell);
         if spell != Spell::AreaBlast {
             assert!(
-                (charge.elapsed - expected_progress).abs() < 0.03,
+                (charge.elapsed / app.world().resource::<ArenaTuning>().charge_seconds
+                    - expected_progress)
+                    .abs()
+                    < 0.03,
                 "{view}: {}",
                 charge.elapsed
             );
@@ -1336,7 +1339,8 @@ fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled()
                     .iter()
                     .find(|node| node.name == "Charge fill")
                     .expect("charge fill");
-                assert!((fill.size.x / track.size.x - charge.elapsed).abs() < 0.01);
+                let progress = charge.elapsed / ui.world().resource::<ArenaTuning>().charge_seconds;
+                assert!((fill.size.x / track.size.x - progress).abs() < 0.01);
             }
             ui.world_mut().resource_mut::<ViewState>().pause();
             for _ in 0..2 {
@@ -1572,4 +1576,100 @@ fn trajectory_toggle_uses_new_selection_before_its_physics_tick() {
     }
     app.update();
     assert_eq!(app.world().resource::<ViewState>().previews, [false, false]);
+}
+
+#[path = "bot_evaluation_tests.rs"]
+mod bot_evaluation_tests;
+
+#[test]
+fn bot_combat_capture_exercises_live_decisions_casts_and_terrain_publication() {
+    let mut fixture = app(60);
+    {
+        let mut state = fixture.world_mut().resource_mut::<ViewState>();
+        state.capture = Some(PathBuf::from("unused-bot-capture.png"));
+        state.capture_view = "bot-combat-first".into();
+    }
+    for _ in 0..360 {
+        fixture.update();
+    }
+    let session = fixture.world().resource::<ArenaSession>();
+    assert!(session.bot_debug().decisions > 0);
+    assert!(session
+        .round_summary()
+        .actors
+        .get(1)
+        .expect("bot stats")
+        .casts
+        .iter()
+        .any(|count| *count > 0));
+    assert!(session.terrain_outcomes > 0);
+    assert!(fixture
+        .world()
+        .resource::<ViewState>()
+        .tick_times
+        .iter()
+        .any(|(_, changed, _)| *changed));
+}
+
+#[test]
+fn bot_combat_is_identical_across_render_batch_rates() {
+    let mut reference = None;
+    for hz in [30, 60, 144, 480] {
+        let mut fixture = app(hz);
+        fixture.world_mut().resource_mut::<ArenaReset>().generation = 1;
+        tick(&mut fixture);
+        {
+            let mut state = fixture.world_mut().resource_mut::<ViewState>();
+            state.reset_seen = 1;
+            state.accumulator = 0.0;
+        }
+        fixture
+            .world_mut()
+            .resource_mut::<ArenaSession>()
+            .bot_enabled = true;
+        for frame in 0..u64::from(hz) * 2 {
+            // Distribute nanosecond rounding so every cadence represents exactly
+            // two seconds, rather than comparing 239 ticks with 240 at an edge.
+            let nanos =
+                (frame + 1) * 1_000_000_000 / u64::from(hz) - frame * 1_000_000_000 / u64::from(hz);
+            fixture
+                .world_mut()
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::from_nanos(nanos),
+                ));
+            fixture.update();
+        }
+        let session = fixture.world().resource::<ArenaSession>();
+        let snapshot = (
+            session.tick,
+            session
+                .actors
+                .iter()
+                .map(|actor| {
+                    (
+                        actor.feet,
+                        actor.aim,
+                        actor.hp.to_bits(),
+                        actor.cooldowns.map(f32::to_bits),
+                        actor.charge(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            session
+                .projectiles
+                .iter()
+                .map(|shot| (shot.owner, shot.spell, shot.position, shot.velocity))
+                .collect::<Vec<_>>(),
+            serde_json::to_value(session.bot_debug()).expect("serializable bot evidence"),
+            serde_json::to_value(session.round_summary()).expect("serializable round evidence"),
+        );
+        if let Some(expected) = &reference {
+            assert_eq!(
+                &snapshot, expected,
+                "render rate {hz} changed fixed simulation"
+            );
+        } else {
+            reference = Some(snapshot);
+        }
+    }
 }

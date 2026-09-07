@@ -5,6 +5,11 @@ edition.workspace = true
 publish = false
 description = "Headless continuous movement and spell authority for the opt-in duel arena."
 
+[features]
+default = []
+# Frozen previous bot and explicit evaluation selection, never in ordinary play.
+test-support = []
+
 [dependencies]
 bevy_app.workspace = true
 bevy_ecs.workspace = true

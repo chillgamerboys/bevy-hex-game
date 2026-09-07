@@ -82,7 +82,7 @@ impl Fixture {
 #[test]
 fn tap_half_and_full_charge_match_reference_range_in_actual_flights() {
     let aim = (Vec3::X + Vec3::Y).normalize();
-    for (ticks, ratio) in [(0, 1.0 / 3.0), (60, (1.0 / 3.0 + 1.3) * 0.5), (120, 1.3)] {
+    for (ticks, ratio) in [(0, 1.0 / 3.0), (45, (1.0 / 3.0 + 1.3) * 0.5), (90, 1.3)] {
         let mut f = Fixture::new();
         if ticks == 0 {
             f.tick(ActorIntent {
@@ -131,15 +131,56 @@ fn maximum_charge_waits_for_release_then_uses_current_aim_once() {
     let mut f = Fixture::new();
     f.hold(300, Spell::Fireball, Vec3::Y);
     assert!(f.session.projectiles.is_empty());
-    assert!((f.actor().charge().expect("held spell").elapsed - 1.0).abs() < SKIN);
+    assert!(
+        (f.actor().charge().expect("held spell").elapsed - f.tuning.charge_seconds).abs() < SKIN
+    );
     assert!(f.actor().cooldowns.iter().all(|v| v.abs() < SKIN));
     f.release(Vec3::X);
     let shot = f.session.projectiles.first().expect("release fires");
-    assert!(shot.velocity.distance(Vec3::X * f.tuning.launch_speed(1.0)) < 0.001);
+    assert!(
+        shot.velocity
+            .distance(Vec3::X * f.tuning.launch_speed(f.tuning.charge_seconds))
+            < 0.001
+    );
     assert!(f.actor().charge().is_none());
     assert!((f.actor().cooldowns.get(1).copied().unwrap_or_default() - 1.25).abs() < SKIN);
     f.release(Vec3::X);
     assert_eq!(f.session.projectiles.len(), 1);
+}
+
+#[test]
+fn both_actor_identities_reach_full_charge_in_exactly_ninety_fixed_ticks() {
+    let tuning = ArenaTuning::default();
+    assert!((tuning.charge_seconds - 0.75).abs() < SKIN);
+    for id in [0, 1] {
+        let mut actor = Actor::spawn(id, Vec3::ZERO, Vec3::X);
+        for tick in 0..90 {
+            assert!(actor
+                .casting(
+                    ActorIntent {
+                        cast_pressed: tick == 0,
+                        cast_held: true,
+                        ..Default::default()
+                    },
+                    &tuning
+                )
+                .is_none());
+            if tick == 88 {
+                assert!(actor.charge().expect("held").elapsed < tuning.charge_seconds);
+            }
+        }
+        assert!((actor.charge().expect("maximum").elapsed - tuning.charge_seconds).abs() < SKIN);
+        let (_, speed) = actor
+            .casting(
+                ActorIntent {
+                    cast_released: true,
+                    ..Default::default()
+                },
+                &tuning,
+            )
+            .expect("release");
+        assert!((speed - 32.0 * 1.3_f32.sqrt()).abs() < SKIN);
+    }
 }
 
 #[test]
@@ -250,7 +291,7 @@ fn reset_and_knockout_clear_armed_spells() {
 #[test]
 fn charge_tuning_rejects_invalid_values_and_reference_duration_is_consistent() {
     let tuning = ArenaTuning::default();
-    assert!((tuning.reference_charge_seconds() - 0.6896552).abs() < 0.0001);
+    assert!((tuning.reference_charge_seconds() - 0.5172414).abs() < 0.0001);
     assert!((tuning.launch_speed(tuning.reference_charge_seconds()) - 32.0).abs() < 0.001);
     for bad in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
         assert!(ArenaTuning {

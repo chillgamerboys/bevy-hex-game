@@ -188,12 +188,21 @@ pub fn run() -> AppExit {
                 presentation::effects,
                 presentation::solid_effects,
                 hud::update,
+                log_round,
             )
                 .chain()
                 .in_set(ArenaFrame::Present),
         )
         .add_systems(Update, capture_frame.in_set(ArenaFrame::Capture));
     app.run()
+}
+
+fn log_round(session: Res<ArenaSession>, mut logged: Local<bool>) {
+    let finished = session.outcome.is_some();
+    if finished && !*logged {
+        info!(summary = ?session.round_summary(), "Arena round complete");
+    }
+    *logged = finished;
 }
 
 fn setup(
@@ -266,7 +275,9 @@ fn setup(
         },
         Transform::from_xyz(-15.0, 30.0, 18.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    info!("Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold LMB to charge Shield/Fireball; release LMB to cast any spell. Controls WASD mouse Space Shift 1/2/3 C T R.");
+    info!(
+        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold LMB to charge Shield/Fireball; release LMB to cast any spell. Controls WASD mouse Space Shift 1/2/3 C T R."
+    );
 }
 
 fn aim(state: &ViewState) -> Vec3 {
@@ -482,7 +493,7 @@ fn drive_simulation(world: &mut World) {
         }
     };
     if capture {
-        world.resource_mut::<ArenaSession>().bot_enabled = false;
+        world.resource_mut::<ArenaSession>().bot_enabled = view.starts_with("bot-combat-");
         let direction = world
             .resource::<ArenaSession>()
             .actors
@@ -563,7 +574,11 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
     } else {
         48
     };
-    let press_frame = if hold_review || spell == Some(Spell::Shield) {
+    let press_frame = if view.contains("charge-partial") {
+        capture_frame_index(view)
+            .saturating_sub((tuning.charge_seconds * 0.5 * 60.0).round() as u32)
+            .saturating_add(1)
+    } else if hold_review || spell == Some(Spell::Shield) {
         6
     } else if spell == Some(Spell::AreaBlast) {
         release_frame
@@ -586,7 +601,9 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
 }
 
 fn capture_frame_index(view: &str) -> u32 {
-    if view.contains("charge-partial") {
+    if view.starts_with("bot-combat-") {
+        600
+    } else if view.contains("charge-partial") {
         36
     } else if view.contains("charge-full") || view.contains("partial-preview") {
         90
@@ -666,7 +683,11 @@ fn capture_frame(
     let Some(path) = state.capture.clone() else {
         return;
     };
-    let frame = capture_frame_index(&state.capture_view);
+    let frame = if state.capture_view.starts_with("bot-combat-") && session.outcome.is_some() {
+        state.frames
+    } else {
+        capture_frame_index(&state.capture_view)
+    };
     if state.frames < frame || state.requested {
         return;
     }
@@ -675,7 +696,7 @@ fn capture_frame(
     };
     state.requested = true;
     let predicted = hex_arena::preview(&session, &view, &geometry, &tuning);
-    let receipt = serde_json::json!({"view":state.capture_view,"started":state.started,"paused":state.paused,"frame":state.frames,"tick":session.tick,"terrain_revision":view.revision,"voxels":view.voxels.len(),"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z],"cooldowns":a.cooldowns,"charge":a.charge().map(|charge|serde_json::json!({"spell":charge.spell,"elapsed":charge.elapsed,"progress":(charge.elapsed/tuning.charge_seconds).clamp(0.0,1.0),"launch_speed":tuning.launch_speed(charge.elapsed)}))})).collect::<Vec<_>>(),"capture_inputs":state.capture_inputs.iter().map(|(frame,input)|serde_json::json!({"frame":frame,"selected":input.selected,"pressed":input.cast_pressed,"released":input.cast_released,"held":input.cast_held})).collect::<Vec<_>>(),"fixture_voxels":state.capture_fixture_voxels,"preview":{"valid":predicted.valid,"wall_voxels":predicted.wall_voxels,"footprint":presentation::shield_footprint(&predicted.wall_voxels)},"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,"effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),"frame_ms":state.frame_times,"tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),"width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"});
+    let receipt = serde_json::json!({"view":state.capture_view,"started":state.started,"paused":state.paused,"frame":state.frames,"tick":session.tick,"terrain_revision":view.revision,"voxels":view.voxels.len(),"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z],"cooldowns":a.cooldowns,"charge":a.charge().map(|charge|serde_json::json!({"spell":charge.spell,"elapsed":charge.elapsed,"progress":(charge.elapsed/tuning.charge_seconds).clamp(0.0,1.0),"launch_speed":tuning.launch_speed(charge.elapsed)}))})).collect::<Vec<_>>(),"capture_inputs":state.capture_inputs.iter().map(|(frame,input)|serde_json::json!({"frame":frame,"selected":input.selected,"pressed":input.cast_pressed,"released":input.cast_released,"held":input.cast_held})).collect::<Vec<_>>(),"fixture_voxels":state.capture_fixture_voxels,"preview":{"valid":predicted.valid,"wall_voxels":predicted.wall_voxels,"footprint":presentation::shield_footprint(&predicted.wall_voxels)},"bot_debug":session.bot_debug(),"round_summary":session.round_summary(),"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,"effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),"frame_ms":state.frame_times,"tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),"width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"});
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             let result = (|| -> Result<(), String> {

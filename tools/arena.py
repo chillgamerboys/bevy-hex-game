@@ -33,6 +33,7 @@ VIEWS = (
 )
 MATRIX = "arena-v5-release-casting"
 MENU_VIEWS = ("start", "tuning", "first", "third", "overview", "rear")
+BOT_VIEWS = ("bot-combat-first", "bot-combat-third")
 CHARGE_VIEWS = (
     "start", "tuning", "first", "third",
     "shield-charge-partial-first", "shield-charge-partial-third",
@@ -179,6 +180,12 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         raise RuntimeError(f"Native state receipt does not identify view {view}: {path}")
     if [state.get("width"), state.get("height")] != pixels or pixels != CANVAS:
         raise RuntimeError(f"Native receipt/PNG dimensions disagree with the {CANVAS} capture canvas.")
+    if view in BOT_VIEWS:
+        actors = state.get("round_summary", {}).get("actors", [])
+        if len(actors) != 2 or not any(actors[1].get("casts", [])):
+            raise RuntimeError(f"{view} did not exercise actual bot releases.")
+        if not state.get("bot_debug", {}).get("decisions") or not state.get("terrain_outcomes"):
+            raise RuntimeError(f"{view} did not exercise bot decisions and terrain damage publication.")
     if view in CHARGE_VIEWS and ("charge-" in view or "armed" in view or "partial-preview" in view):
         human = next((actor for actor in state.get("actors", []) if actor.get("id") == 0), {})
         charge = human.get("charge")
@@ -207,8 +214,8 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 
 
 def capture(args: argparse.Namespace) -> int:
-    views = CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
-    matrix = "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
+    views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
+    matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
     output = args.output
     if not output.is_absolute():
         raise RuntimeError("--output must be an absolute path to a new directory.")
@@ -318,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Capture the six ready/menu/HUD review views.")
     review.add_argument("--charge-review", action="store_true",
                         help="Capture 16 charge/release, clipped shield, ready/menu, and actor-camera views.")
+    review.add_argument("--bot-review", action="store_true",
+                        help="Run up to ten seconds of real bot combat in each camera and retain renderer/tick timings.")
     args = parser.parse_args(argv)
     try:
         if not args.target_dir.is_absolute():
