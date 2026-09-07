@@ -10,6 +10,7 @@
 //! their common language belongs.
 
 pub mod app;
+pub mod arena;
 pub mod authored_occupancy;
 pub mod commands;
 pub mod config;
