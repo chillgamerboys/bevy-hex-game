@@ -89,29 +89,30 @@ impl Body {
             BODY_RADIUS,
         );
         *feet = slid;
-        if self.grounded && horizontal.length_squared() > f32::EPSILON {
-            if (slid - original).xz().length_squared() + SKIN * SKIN < horizontal.length_squared() {
-                let rise = Vec3::Y * (STEP_HEIGHT + SKIN * 2.0);
-                let rise = world
-                    .sweep(original, rise, BODY_HEIGHT, BODY_RADIUS)
-                    .map_or(rise, |hit| rise * hit.fraction);
-                let raised = original + rise;
-                if world.clear(raised, BODY_HEIGHT, BODY_RADIUS) {
-                    let (across, across_contacts) =
-                        slide_with_contacts(world, raised, horizontal, BODY_HEIGHT, BODY_RADIUS);
-                    if (across - raised).xz().length_squared()
-                        > (slid - original).xz().length_squared() + SKIN * SKIN
+        if self.grounded
+            && horizontal.length_squared() > f32::EPSILON
+            && (slid - original).xz().length_squared() + SKIN * SKIN < horizontal.length_squared()
+        {
+            let rise = Vec3::Y * (STEP_HEIGHT + SKIN * 2.0);
+            let rise = world
+                .sweep(original, rise, BODY_HEIGHT, BODY_RADIUS)
+                .map_or(rise, |hit| rise * hit.fraction);
+            let raised = original + rise;
+            if world.clear(raised, BODY_HEIGHT, BODY_RADIUS) {
+                let (across, across_contacts) =
+                    slide_with_contacts(world, raised, horizontal, BODY_HEIGHT, BODY_RADIUS);
+                if (across - raised).xz().length_squared()
+                    > (slid - original).xz().length_squared() + SKIN * SKIN
+                {
+                    if let Some(landing) =
+                        world.ground(across, BODY_HEIGHT, BODY_RADIUS, rise.y + SKIN * 4.0)
                     {
-                        if let Some(landing) =
-                            world.ground(across, BODY_HEIGHT, BODY_RADIUS, rise.y + SKIN * 4.0)
-                        {
-                            if world.clear(landing, BODY_HEIGHT, BODY_RADIUS) {
-                                *feet = landing;
-                                self.step_rise = (landing.y - original.y).max(0.0);
-                                // The lower-wall trial was rejected. Only the
-                                // accepted step route clips retained momentum.
-                                contacts = across_contacts;
-                            }
+                        if world.clear(landing, BODY_HEIGHT, BODY_RADIUS) {
+                            *feet = landing;
+                            self.step_rise = (landing.y - original.y).max(0.0);
+                            // The lower-wall trial was rejected. Only the
+                            // accepted step route clips retained momentum.
+                            contacts = across_contacts;
                         }
                     }
                 }
