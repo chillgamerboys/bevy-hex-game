@@ -10,18 +10,18 @@ const MUTED: Color = Color::srgb(0.57, 0.66, 0.73);
 const PANEL: Color = Color::srgba(0.035, 0.055, 0.075, 0.94);
 
 #[derive(Component)]
-enum Label {
+pub(super) enum Label {
     Health,
     Status,
     Spell(usize),
     Parameter(usize),
 }
 #[derive(Component)]
-struct PausePanel;
+pub(super) struct PausePanel;
 #[derive(Component)]
-struct SpellCard(usize);
+pub(super) struct SpellCard(usize);
 #[derive(Component, Clone, Copy)]
-enum Action {
+pub(super) enum Action {
     Resume,
     Restart,
     Change(usize, f32),
