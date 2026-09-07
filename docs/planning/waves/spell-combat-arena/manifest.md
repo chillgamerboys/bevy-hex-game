@@ -6,7 +6,7 @@ Outcome: native offline first-person spell duel against one disposable bot. The 
 
 ## Locked decisions
 
-1. First person default; C toggles tightly constrained third person. WASD, mouse look, Space jump, Shift sprint, 1/2/3 select, left click casts, T toggles selected projectile preview, Escape pauses, R fully resets.
+1. First person default; C toggles tightly constrained third person. WASD, mouse look, Space jump, Shift sprint, 1/2/3 select, left click casts, T toggles selected projectile preview. Enter or Start begins from a frozen ready screen. Escape/Tab pauses and releases the mouse; no live HUD menu button. The paused menu includes Resume, Reset, Fullscreen/Windowed, Quit, and tuning. R fully resets to the ready screen.
 2. Shield is a physical ballistic seed, cover-only stone wall, persists until destroyed. Revalidate complete supported footprint including both continuous bodies before creation. Invalid hits/footprints fizzle and consume cooldown.
 3. Fireball is ballistic, detonates once at earliest body/terrain hit, damages its caster. Area Blast is self-centered and excludes its caster. Radial damage and knockback ignore cover. All explosive damage uses world-space spheres.
 4. HP100; shield/fireball/area cooldowns5/1.25/7 seconds; max actor damage0/35/45; terrain power2. Projectile launch speed32, gravity12. Three independently chosen size presets: shield3x4/5x5/7x6 at thickness1; fireball radius1.5/2.5/3.5; blast radius2.5/4/5.5. Standard default.
@@ -110,3 +110,18 @@ current world. Local probes avoid immediate obstacles and unsupported steps. The
 is no navigation, learning, intercept search, or tracking through opaque walls.
 Bot pressure and motion remain native-playtest questions; typed tests establish
 its decisions, actual hits, wall edits, reset, and normal-arena composition.
+
+## Requested start/menu follow-up
+
+One shared-application implementation owner handles the ready gate, keyboard
+pause, cursor lifecycle, and menu actions together, with separately authored
+regressions in the same local candidate. A setup/reset tick publishes the actors
+and terrain with player input cleared and the bot disabled; the ready screen and
+paused menu then stop simulation ticks and discard elapsed catch-up time. Enter
+and Start explicitly begin combat. Escape or Tab is the menu key; the player's
+correction explicitly excludes a live on-screen Menu button. Focus loss pauses;
+UI start/resume clicks never cast. Reset returns to ready. Fullscreen toggles the
+native window mode while combat remains frozen; Quit requests normal app exit.
+Typed input, window, exit, and layout checks cover the transitions. A fresh six-view
+windowless menu matrix covers ready, paused, both playable cameras, and both arena
+azimuths; native key and window-manager feel remain a playtest route.

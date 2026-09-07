@@ -2,7 +2,8 @@
 
 use super::ViewState;
 use bevy::prelude::*;
-use hex_arena::{ArenaOutcome, ArenaSession, ArenaTuning, Spell};
+use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
+use hex_arena::{ActorIntent, ArenaInput, ArenaOutcome, ArenaSession, ArenaTuning, Spell};
 use hex_core::arena::ArenaReset;
 
 const INK: Color = Color::srgb(0.91, 0.94, 0.96);
@@ -15,15 +16,23 @@ pub(super) enum Label {
     Status,
     Spell(usize),
     Parameter(usize),
+    WindowMode,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
 #[derive(Component)]
+pub(super) struct StartPanel;
+#[derive(Component)]
+pub(super) struct CombatHud;
+#[derive(Component)]
 pub(super) struct SpellCard(usize);
 #[derive(Component, Clone, Copy)]
 pub(super) enum Action {
+    Start,
     Resume,
     Restart,
+    Fullscreen,
+    Quit,
     Change(usize, f32),
 }
 
@@ -39,7 +48,7 @@ fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, T
 }
 
 pub(super) fn setup(mut commands: Commands) {
-    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(10)))
+    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(10), CombatHud))
         .with_children(|root| {
             root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|area| {
@@ -59,15 +68,38 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), height: px(28), justify_content: JustifyContent::Center, ..default() })
                 .with_children(|footer| { footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL),
-                    text("WASD move   SHIFT sprint   SPACE jump   CLICK cast   C camera   T trajectory   ESC tune   R restart", 12.0, INK))); });
+                    text("WASD move   SHIFT sprint   SPACE jump   CLICK cast   C camera   T trajectory   ESC / TAB pause   R reset", 12.0, INK))); });
+        });
+    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
+        BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.78)), GlobalZIndex(20), StartPanel))
+        .with_children(|overlay| {
+            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(28)), flex_direction: FlexDirection::Column, row_gap: px(18), border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
+                .with_children(|panel| {
+                    panel.spawn(text("SPELL ARENA", 36.0, INK));
+                    panel.spawn(text("One player. One opponent. Three spells.", 18.0, INK));
+                    panel.spawn(text("WASD move / mouse look / Space jump / Shift sprint\n1 Shield / 2 Fireball / 3 Area Blast / click to cast", 15.0, INK));
+                    panel.spawn(text("ESC or TAB pauses combat and frees the mouse.\nUse the paused menu for fullscreen, tuning, or quitting.", 16.0, Color::srgb(0.36, 0.90, 0.78)));
+                    panel.spawn(text("Combat waits until you start.", 15.0, INK));
+                    panel.spawn((Button, Node { width: percent(100), height: px(46), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), Action::Start))
+                        .with_children(|button| { button.spawn(text("START DUEL  /  ENTER", 17.0, INK)); });
+                    panel.spawn(Node { height: px(42), column_gap: px(12), ..default() }).with_children(|row| {
+                        for (label, action) in [("FULLSCREEN", Action::Fullscreen), ("QUIT GAME", Action::Quit)] {
+                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(42), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), action))
+                                .with_children(|button| {
+                                    let mut label_entity = button.spawn(text(label, 15.0, INK));
+                                    if matches!(action, Action::Fullscreen) { label_entity.insert(Label::WindowMode); }
+                                });
+                        }
+                    });
+                });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, display: Display::None, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)), GlobalZIndex(20), PausePanel))
         .with_children(|overlay| {
             overlay.spawn((Node { width: px(600), height: px(710), max_width: percent(95), padding: UiRect::all(px(20)), flex_direction: FlexDirection::Column, row_gap: px(5), flex_shrink: 0.0, border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|panel| {
-                    panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("PAUSED / COMBAT TUNING", 24.0, INK)));
-                    panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("Change one variable at a time. Sizes are independent.", 13.0, MUTED)));
+                    panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("PAUSED / COMBAT MENU", 24.0, INK)));
+                    panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("Mouse is free. ESC / TAB resumes. Sizes are independent.", 13.0, INK)));
                     for index in 0..12 {
                         panel.spawn(Node { width: percent(100), height: px(30), flex_shrink: 0.0, align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
                             row.spawn((Node { width: px(375), height: px(20), flex_shrink: 0.0, ..default() }, text("", 15.0, INK), Label::Parameter(index)));
@@ -84,6 +116,15 @@ pub(super) fn setup(mut commands: Commands) {
                                 .with_children(|button| { button.spawn(text(label, 15.0, INK)); });
                         }
                     });
+                    panel.spawn(Node { height: px(42), flex_shrink: 0.0, column_gap: px(12), ..default() }).with_children(|row| {
+                        for (label, action) in [("FULLSCREEN", Action::Fullscreen), ("QUIT GAME", Action::Quit)] {
+                            row.spawn((Button, Node { width: px(260), height: px(42), border_radius: BorderRadius::all(px(5)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), action))
+                                .with_children(|button| {
+                                    let mut label_entity = button.spawn(text(label, 15.0, INK));
+                                    if matches!(action, Action::Fullscreen) { label_entity.insert(Label::WindowMode); }
+                                });
+                        }
+                    });
                 });
         });
 }
@@ -93,24 +134,46 @@ pub(super) fn buttons(
     mut state: ResMut<ViewState>,
     mut tuning: ResMut<ArenaTuning>,
     mut reset: ResMut<ArenaReset>,
+    mut input: ResMut<ArenaInput>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for (interaction, action) in &interactions {
-        if *interaction != Interaction::Pressed || !state.paused {
+        if *interaction != Interaction::Pressed
+            || !state.paused
+            || windows.iter().any(|window| !window.focused)
+        {
             continue;
         }
         match *action {
-            Action::Resume => {
-                state.paused = false;
-                state.suppress_click = true;
-            }
-            Action::Restart => {
+            Action::Start if !state.started => state.begin_play(),
+            Action::Resume if state.started => state.begin_play(),
+            Action::Restart if state.started => {
                 reset.generation = reset.generation.saturating_add(1);
-                state.paused = false;
-                state.initialized = false;
-                state.suppress_click = true;
+                state.prepare_round();
             }
-            Action::Change(index, direction) => change(&mut tuning, index, direction),
+            Action::Fullscreen => {
+                for mut window in &mut windows {
+                    window.mode = if window.mode == WindowMode::Windowed {
+                        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+                    } else {
+                        WindowMode::Windowed
+                    };
+                }
+            }
+            Action::Quit => {
+                exit.write(AppExit::Success);
+            }
+            Action::Change(index, direction) if state.started => {
+                change(&mut tuning, index, direction)
+            }
+            _ => continue,
         }
+        // UI clicks cannot leak into casting when the simulation resumes.
+        input.human = ActorIntent {
+            aim: super::aim(&state),
+            ..default()
+        };
     }
 }
 
@@ -145,11 +208,18 @@ pub(super) fn update(
     state: Res<ViewState>,
     mut labels: Query<(&Label, &mut Text)>,
     mut cards: Query<(&SpellCard, &mut BorderColor)>,
-    mut panels: Query<&mut Node, With<PausePanel>>,
+    mut panels: Query<
+        (&mut Node, Has<PausePanel>, Has<StartPanel>, Has<CombatHud>),
+        Or<(With<PausePanel>, With<StartPanel>, With<CombatHud>)>,
+    >,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let actor = session.actors.first();
-    for mut node in &mut panels {
-        node.display = if state.paused {
+    for (mut node, pause, start, combat) in &mut panels {
+        node.display = if (pause && state.paused && state.started)
+            || (start && !state.started)
+            || (combat && state.started)
+        {
             Display::Flex
         } else {
             Display::None
@@ -163,6 +233,16 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::WindowMode => {
+                if windows
+                    .iter()
+                    .any(|window| window.mode != WindowMode::Windowed)
+                {
+                    "WINDOWED".into()
+                } else {
+                    "FULLSCREEN".into()
+                }
+            }
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
             Label::Status => {
                 if let Some(outcome) = &session.outcome {

@@ -29,9 +29,10 @@ VIEWS = (
     "shield-compact", "shield-large", "fireball-compact", "fireball-large",
     "blast-compact", "blast-large",
     "shield-first", "shield-third", "fireball-first", "fireball-third",
-    "blast-first", "blast-third", "shield-preview-first", "shield-preview-third",
+    "blast-first", "blast-third", "shield-preview-first", "shield-preview-third", "start",
 )
-MATRIX = "arena-v3"
+MATRIX = "arena-v4"
+MENU_VIEWS = ("start", "tuning", "first", "third", "overview", "rear")
 CANVAS = [1600, 900]
 CARGO_ARGS = ("run", "-p", "hex_game", "--features", "dev,arena-prototype", "--", "--arena")
 
@@ -174,6 +175,8 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 
 
 def capture(args: argparse.Namespace) -> int:
+    views = MENU_VIEWS if args.menu_review else VIEWS
+    matrix = "arena-menu-v1" if args.menu_review else MATRIX
     output = args.output
     if not output.is_absolute():
         raise RuntimeError("--output must be an absolute path to a new directory.")
@@ -193,21 +196,21 @@ def capture(args: argparse.Namespace) -> int:
     state_id = initial["head"]
     if initial["dirty"]:
         state_id += "-dirty-" + initial["state_sha256"][:12]
-    pack = output / f"{state_id}-{MATRIX}"
+    pack = output / f"{state_id}-{matrix}"
     pack.mkdir()
     (pack / "staged.patch").write_bytes(staged)
     (pack / "unstaged.patch").write_bytes(unstaged)
     write_json(pack / "source-state.json", initial)
     receipt = {
-        "schema_version": 1, "matrix": MATRIX, "pack": str(pack), "repository": str(ROOT),
+        "schema_version": 1, "matrix": matrix, "pack": str(pack), "repository": str(ROOT),
         "started_at": utc_now(), "source": initial,
         "source_label": "UNAPPROVABLE-DIRTY" if initial["dirty"] else "COMMITTED-CANDIDATE",
         "scenario": "Spell Combat Arena / authored radius-12 arena",
         "terrain_seed": None, "terrain_seed_note": "Authored arena; no terrain seed override.",
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning"],
-        "expected_views": list(VIEWS), "mechanical_status": "INCOMPLETE",
+        "changed_surfaces": ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "expected_views": list(views), "mechanical_status": "INCOMPLETE",
         "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
         "human_route": "Move, jump, sprint, look near walls, toggle camera, cast all spells, reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
@@ -219,7 +222,7 @@ def capture(args: argparse.Namespace) -> int:
     print(f"Windowless capture pack: {pack}", flush=True)
     try:
         seen = {}
-        for view in VIEWS:
+        for view in views:
             if source_state()[0] != initial:
                 raise RuntimeError("Source changed during capture; this pack is stale.")
             png = pack / f"{view}.png"
@@ -270,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     launch = commands.add_parser("launch", help="Explicitly open the native playable arena through Cargo.")
-    captures = commands.add_parser("capture", help="Capture all 14 views without a native window.")
+    captures = commands.add_parser("capture", help="Capture all 23 views without a native window.")
     for command in (launch, captures):
         command.add_argument("--target-dir", type=Path, default=DEFAULT_TARGET,
                              help="Explicit shared Cargo target directory (absolute path).")
@@ -278,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="New absolute parent directory; receives a state-named capture pack.")
     captures.add_argument("--timeout", type=float, default=300,
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
+    captures.add_argument("--menu-review", action="store_true",
+                          help="Capture the six ready/menu/HUD review views.")
     args = parser.parse_args(argv)
     try:
         if not args.target_dir.is_absolute():

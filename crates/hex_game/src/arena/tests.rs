@@ -14,6 +14,8 @@ fn app(frame_hz: u32) -> App {
     builder
         .app_mut()
         .insert_resource(ViewState {
+            started: true,
+            paused: false,
             capture: None,
             capture_view: "first".into(),
             ..default()
@@ -29,6 +31,347 @@ fn app(frame_hz: u32) -> App {
 
 fn tick(app: &mut App) {
     app.world_mut().run_schedule(ArenaTick);
+}
+
+fn menu_app() -> (App, Entity) {
+    let mut builder = HeadlessAppBuilder::new()
+        .with_minimal_plugins()
+        .with_fixed_step(std::time::Duration::from_secs_f64(1.0 / 60.0));
+    builder
+        .app_mut()
+        .insert_resource(ViewState {
+            capture: None,
+            ..default()
+        })
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ButtonInput<MouseButton>>()
+        .add_message::<CursorMoved>()
+        .add_message::<AppExit>()
+        .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
+        .add_systems(PreUpdate, (input, hud::buttons, sync_cursor).chain())
+        .add_systems(Update, drive_simulation);
+    let mut app = builder.build();
+    let window = app
+        .world_mut()
+        .spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            CursorOptions::default(),
+            PrimaryWindow,
+        ))
+        .id();
+    app.update();
+    (app, window)
+}
+
+fn tap_key(app: &mut App, key: KeyCode) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(key);
+    app.update();
+    *app.world_mut().resource_mut::<ButtonInput<KeyCode>>() = ButtonInput::default();
+}
+
+fn press_action(app: &mut App, action: hud::Action) {
+    let button = app.world_mut().spawn((Interaction::Pressed, action)).id();
+    app.update();
+    app.world_mut().despawn(button);
+}
+
+#[derive(Debug, PartialEq)]
+struct CombatSnapshot {
+    tick: u64,
+    actors: Vec<(u8, Vec3, f32, [f32; 3])>,
+    projectiles: Vec<(Vec3, Vec3, f32)>,
+    terrain_revision: u64,
+}
+
+fn combat_snapshot(app: &App) -> CombatSnapshot {
+    let session = app.world().resource::<ArenaSession>();
+    CombatSnapshot {
+        tick: session.tick,
+        actors: session
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.feet, actor.hp, actor.cooldowns))
+            .collect(),
+        projectiles: session
+            .projectiles
+            .iter()
+            .map(|shot| (shot.position, shot.velocity, shot.age))
+            .collect(),
+        terrain_revision: app.world().resource::<ArenaTerrainView>().revision,
+    }
+}
+
+#[test]
+fn ready_screen_freezes_combat_and_only_enter_starts_keyboard_play() {
+    let (mut app, window) = menu_app();
+    assert_eq!(app.world().resource::<ArenaSession>().actors.len(), 2);
+    assert!(!app.world().resource::<ViewState>().started);
+    assert!(app.world().resource::<ViewState>().paused);
+    let frozen = combat_snapshot(&app);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyW);
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    for _ in 0..180 {
+        app.update();
+    }
+    assert_eq!(combat_snapshot(&app), frozen);
+    for key in [KeyCode::Escape, KeyCode::Tab] {
+        tap_key(&mut app, key);
+        assert!(!app.world().resource::<ViewState>().started);
+        assert!(app.world().resource::<ViewState>().paused);
+        assert_eq!(combat_snapshot(&app), frozen);
+    }
+    let cursor = app
+        .world()
+        .get::<CursorOptions>(window)
+        .expect("synthetic cursor");
+    assert!(cursor.visible && cursor.grab_mode == CursorGrabMode::None);
+    tap_key(&mut app, KeyCode::Enter);
+    assert!(app.world().resource::<ViewState>().started);
+    assert!(!app.world().resource::<ViewState>().paused);
+    assert!(app.world().resource::<ArenaSession>().tick > frozen.tick);
+    assert!(
+        app.world()
+            .resource::<ArenaSession>()
+            .projectiles
+            .is_empty(),
+        "held start click must not cast"
+    );
+    assert!(
+        !app.world()
+            .get::<CursorOptions>(window)
+            .expect("synthetic cursor")
+            .visible
+    );
+}
+
+#[test]
+fn start_and_resume_buttons_clear_stale_casts_and_hide_cursor_in_the_same_frame() {
+    let (mut app, window) = menu_app();
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    app.world_mut().resource_mut::<ArenaInput>().human.jump = true;
+    press_action(&mut app, hud::Action::Start);
+    assert!(app.world().resource::<ViewState>().started);
+    assert!(!app.world().resource::<ViewState>().paused);
+    assert!(
+        !app.world()
+            .get::<CursorOptions>(window)
+            .expect("synthetic cursor")
+            .visible
+    );
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .projectiles
+        .is_empty());
+    assert!(!app.world().resource::<ArenaInput>().human.cast);
+    tap_key(&mut app, KeyCode::Escape);
+    app.world_mut().resource_mut::<ArenaInput>().human.cast = true;
+    press_action(&mut app, hud::Action::Resume);
+    assert!(!app.world().resource::<ViewState>().paused);
+    assert!(
+        !app.world()
+            .get::<CursorOptions>(window)
+            .expect("synthetic cursor")
+            .visible
+    );
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .projectiles
+        .is_empty());
+    *app.world_mut().resource_mut::<ButtonInput<MouseButton>>() = ButtonInput::default();
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<ArenaSession>()
+            .actors
+            .first()
+            .is_some_and(|actor| actor
+                .cooldowns
+                .get(1)
+                .is_some_and(|cooldown| *cooldown > 1.0)),
+        "a fresh gameplay click after release must still cast"
+    );
+}
+
+#[test]
+fn escape_and_tab_pause_all_combat_release_cursor_and_resume_without_a_cast() {
+    for key in [KeyCode::Escape, KeyCode::Tab] {
+        let (mut app, window) = menu_app();
+        tap_key(&mut app, KeyCode::Enter);
+        if let Some(actor) = app
+            .world_mut()
+            .resource_mut::<ArenaSession>()
+            .actors
+            .first_mut()
+        {
+            actor.hp = 78.0;
+            actor.cooldowns = [2.0, 1.0, 4.0];
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        tap_key(&mut app, key);
+        assert!(app.world().resource::<ViewState>().paused);
+        let frozen = combat_snapshot(&app);
+        for _ in 0..90 {
+            app.update();
+        }
+        assert_eq!(combat_snapshot(&app), frozen);
+        let cursor = app
+            .world()
+            .get::<CursorOptions>(window)
+            .expect("synthetic cursor");
+        assert!(cursor.visible && cursor.grab_mode == CursorGrabMode::None);
+        assert!(!app.world().resource::<ArenaInput>().human.cast);
+        tap_key(&mut app, key);
+        assert!(!app.world().resource::<ViewState>().paused);
+        assert!(app.world().resource::<ArenaSession>().tick > frozen.tick);
+        assert!(app
+            .world()
+            .resource::<ArenaSession>()
+            .projectiles
+            .is_empty());
+        assert!(
+            !app.world()
+                .get::<CursorOptions>(window)
+                .expect("synthetic cursor")
+                .visible
+        );
+    }
+}
+
+#[test]
+fn keyboard_and_menu_reset_restore_the_round_and_return_to_frozen_ready_screen() {
+    for keyboard in [true, false] {
+        let (mut app, window) = menu_app();
+        tap_key(&mut app, KeyCode::Enter);
+        if let Some(actor) = app
+            .world_mut()
+            .resource_mut::<ArenaSession>()
+            .actors
+            .first_mut()
+        {
+            actor.hp = 20.0;
+            actor.cooldowns = [2.0, 1.0, 4.0];
+        }
+        let generation = app.world().resource::<ArenaReset>().generation;
+        if keyboard {
+            tap_key(&mut app, KeyCode::KeyR);
+        } else {
+            tap_key(&mut app, KeyCode::Tab);
+            press_action(&mut app, hud::Action::Restart);
+        }
+        assert_eq!(
+            app.world().resource::<ArenaReset>().generation,
+            generation + 1
+        );
+        let state = app.world().resource::<ViewState>();
+        assert!(!state.started && state.paused && state.suppress_click);
+        let session = app.world().resource::<ArenaSession>();
+        assert_eq!(session.actors.len(), 2);
+        assert!(session
+            .actors
+            .iter()
+            .all(|actor| (actor.hp - 100.0).abs() < 0.001
+                && actor
+                    .cooldowns
+                    .iter()
+                    .all(|cooldown| cooldown.abs() < 0.001)));
+        assert!(session.outcome.is_none() && session.projectiles.is_empty());
+        assert!(
+            app.world()
+                .get::<CursorOptions>(window)
+                .expect("synthetic cursor")
+                .visible
+        );
+        let frozen = combat_snapshot(&app);
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(combat_snapshot(&app), frozen);
+    }
+}
+
+#[test]
+fn fullscreen_toggle_preserves_pause_and_quit_emits_successful_app_exit() {
+    use bevy::ecs::message::Messages;
+    use bevy::window::WindowMode;
+
+    let (mut app, window) = menu_app();
+    tap_key(&mut app, KeyCode::Enter);
+    tap_key(&mut app, KeyCode::Escape);
+    let label = app
+        .world_mut()
+        .spawn((Text::new(""), hud::Label::WindowMode))
+        .id();
+    app.add_systems(Update, hud::update);
+    app.update();
+    let windowed_label = app
+        .world()
+        .get::<Text>(label)
+        .expect("window mode label")
+        .0
+        .clone();
+    let frozen = combat_snapshot(&app);
+    press_action(&mut app, hud::Action::Fullscreen);
+    assert!(!matches!(
+        app.world()
+            .get::<Window>(window)
+            .expect("synthetic window")
+            .mode,
+        WindowMode::Windowed
+    ));
+    assert!(app.world().resource::<ViewState>().paused);
+    assert!(
+        app.world()
+            .get::<CursorOptions>(window)
+            .expect("synthetic cursor")
+            .visible
+    );
+    assert_eq!(combat_snapshot(&app), frozen);
+    assert_ne!(
+        app.world().get::<Text>(label).expect("window mode label").0,
+        windowed_label
+    );
+    press_action(&mut app, hud::Action::Fullscreen);
+    assert!(matches!(
+        app.world()
+            .get::<Window>(window)
+            .expect("synthetic window")
+            .mode,
+        WindowMode::Windowed
+    ));
+    assert_eq!(combat_snapshot(&app), frozen);
+    assert_eq!(
+        app.world().get::<Text>(label).expect("window mode label").0,
+        windowed_label
+    );
+    press_action(&mut app, hud::Action::Quit);
+    let exits = app
+        .world_mut()
+        .resource_mut::<Messages<AppExit>>()
+        .drain()
+        .collect::<Vec<_>>();
+    assert!(matches!(exits.as_slice(), [AppExit::Success]));
+    assert_eq!(combat_snapshot(&app), frozen);
 }
 
 #[test]
@@ -190,7 +533,7 @@ fn focus_loss_clears_edges_and_resume_click_cannot_cast() {
     app.init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
-        .add_systems(PreUpdate, input);
+        .add_systems(PreUpdate, (input, sync_cursor).chain());
     let window = app
         .world_mut()
         .spawn((
@@ -303,13 +646,14 @@ fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
 
 #[cfg(feature = "test-support")]
 #[test]
-fn paused_tuning_controls_fit_computed_layout_at_supported_window_sizes() {
+fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
     use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
 
     for (width, height) in [(1600, 900), (1280, 720)] {
         let mut app = App::new();
         app.add_plugins(HeadlessUiPlugin::new(width, height))
             .insert_resource(ViewState {
+                started: false,
                 paused: true,
                 capture: None,
                 ..default()
@@ -322,8 +666,19 @@ fn paused_tuning_controls_fit_computed_layout_at_supported_window_sizes() {
             app.update();
         }
 
-        // Name the actual typed controls only in this fixture so the shared
-        // observer can inspect their computed boxes, clipping, and laid-out glyphs.
+        // Every interactive action belongs to an overlay; live play has no Menu button.
+        let overlay = |world: &World, mut entity: Entity| loop {
+            if world.get::<hud::StartPanel>(entity).is_some() {
+                break "start";
+            }
+            if world.get::<hud::PausePanel>(entity).is_some() {
+                break "pause";
+            }
+            entity = world
+                .get::<ChildOf>(entity)
+                .expect("arena actions must belong to start or pause panels")
+                .parent();
+        };
         let parameters = app
             .world_mut()
             .query::<(Entity, &hud::Label, &ChildOf)>()
@@ -333,32 +688,69 @@ fn paused_tuning_controls_fit_computed_layout_at_supported_window_sizes() {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        assert_eq!(parameters.len(), 12);
+        for (entity, index, row) in parameters {
+            assert_eq!(overlay(app.world(), entity), "pause");
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(Name::new(format!("Arena pause parameter {index}")));
+            app.world_mut()
+                .entity_mut(row)
+                .insert(Name::new(format!("Arena pause row {index}")));
+        }
         let actions = app
             .world_mut()
             .query::<(Entity, &hud::Action, &Children)>()
             .iter(app.world())
             .map(|(entity, action, children)| {
-                let name = match action {
-                    hud::Action::Resume => "Arena action resume".into(),
-                    hud::Action::Restart => "Arena action restart".into(),
-                    hud::Action::Change(index, amount) => {
-                        format!("Arena action {index} {amount}")
-                    }
+                let phase = overlay(app.world(), entity);
+                let label = match action {
+                    hud::Action::Start => "start".into(),
+                    hud::Action::Resume => "resume".into(),
+                    hud::Action::Restart => "restart".into(),
+                    hud::Action::Fullscreen => "fullscreen".into(),
+                    hud::Action::Quit => "quit".into(),
+                    hud::Action::Change(index, amount) => format!("change {index} {amount}"),
                 };
-                (entity, name, children.iter().collect::<Vec<_>>())
+                if phase == "start" {
+                    assert!(!matches!(
+                        action,
+                        hud::Action::Resume | hud::Action::Restart | hud::Action::Change(..)
+                    ));
+                } else {
+                    assert!(!matches!(action, hud::Action::Start));
+                }
+                (entity, phase, label, children.iter().collect::<Vec<_>>())
             })
             .collect::<Vec<_>>();
-        assert_eq!(parameters.len(), 12);
-        assert_eq!(actions.len(), 26);
-        for (entity, index, row) in parameters {
-            app.world_mut()
-                .entity_mut(entity)
-                .insert(Name::new(format!("Arena parameter {index}")));
-            app.world_mut()
-                .entity_mut(row)
-                .insert(Name::new(format!("Arena row {index}")));
+        let start_actions = actions
+            .iter()
+            .filter(|(_, phase, _, _)| *phase == "start")
+            .count();
+        let pause_actions = actions
+            .iter()
+            .filter(|(_, phase, _, _)| *phase == "pause")
+            .count();
+        assert_eq!(start_actions, 3);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|(_, phase, label, _)| *phase == "start" && label == "start")
+                .count(),
+            1
+        );
+        assert_eq!(pause_actions, 28); // Twelve +/- pairs plus the four pause-menu actions.
+        for required in ["resume", "restart", "fullscreen", "quit"] {
+            assert_eq!(
+                actions
+                    .iter()
+                    .filter(|(_, phase, label, _)| *phase == "pause" && label == required)
+                    .count(),
+                1
+            );
         }
-        for (entity, name, children) in actions {
+        for (entity, phase, label, children) in actions {
+            let name = format!("Arena {phase} action {label}");
             app.world_mut()
                 .entity_mut(entity)
                 .insert(Name::new(name.clone()));
@@ -370,51 +762,80 @@ fn paused_tuning_controls_fit_computed_layout_at_supported_window_sizes() {
             }
         }
 
-        let snapshot = ui_tree_snapshot(app.world_mut());
-        let viewport = Rect::from_corners(Vec2::ZERO, snapshot.metrics.logical_size);
-        let contains = |outer: Rect, inner: Rect| {
-            let tolerance = Vec2::splat(1.0);
-            (inner.min + tolerance).cmpge(outer.min).all()
-                && inner.max.cmple(outer.max + tolerance).all()
-        };
-        let observed = snapshot
-            .nodes
-            .iter()
-            .filter(|node| node.name.starts_with("Arena "))
-            .collect::<Vec<_>>();
-        assert_eq!(observed.len(), 12 + 12 + 26 + 26);
-        for node in &observed {
-            let bounds = Rect::from_center_size(node.center, node.size);
-            assert!(
-                node.size.cmpgt(Vec2::ZERO).all()
-                    && node.fully_visible
-                    && contains(viewport, bounds),
-                "{} must fit at {width}x{height}: {node:?}",
-                node.name
+        for (started, phase, expected) in [
+            (false, "start", start_actions * 2),
+            (true, "pause", 24 + pause_actions * 2),
+        ] {
+            {
+                let mut state = app.world_mut().resource_mut::<ViewState>();
+                state.started = started;
+                state.paused = true;
+            }
+            for _ in 0..8 {
+                app.update();
+            }
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            let viewport = Rect::from_corners(Vec2::ZERO, snapshot.metrics.logical_size);
+            let contains = |outer: Rect, inner: Rect| {
+                let tolerance = Vec2::splat(1.0);
+                (inner.min + tolerance).cmpge(outer.min).all()
+                    && inner.max.cmple(outer.max + tolerance).all()
+            };
+            let observed = snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.name.starts_with("Arena "))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed.len(),
+                expected,
+                "wrong visible controls for {phase}"
             );
-            if node.name.starts_with("Arena parameter ") || node.name.ends_with(" glyphs") {
-                let glyphs = node
-                    .rendered_text_bounds
-                    .expect("real text layout must produce visible glyphs");
+            for node in &observed {
+                assert!(node.name.starts_with(&format!("Arena {phase} ")));
+                let bounds = Rect::from_center_size(node.center, node.size);
                 assert!(
-                    contains(viewport, glyphs) && contains(bounds, glyphs),
-                    "{} glyphs must fit their node at {width}x{height}: {node:?}",
+                    node.size.cmpgt(Vec2::ZERO).all()
+                        && node.fully_visible
+                        && contains(viewport, bounds),
+                    "{} must fit at {width}x{height}: {node:?}",
                     node.name
+                );
+                if node.name.contains(" parameter ") || node.name.ends_with(" glyphs") {
+                    let glyphs = node
+                        .rendered_text_bounds
+                        .expect("real text layout must produce visible glyphs");
+                    assert!(
+                        contains(viewport, glyphs) && contains(bounds, glyphs),
+                        "{} glyphs must fit their node at {width}x{height}: {node:?}",
+                        node.name
+                    );
+                }
+            }
+            let mut rows = observed
+                .iter()
+                .filter(|node| node.name.starts_with("Arena pause row "))
+                .map(|node| Rect::from_center_size(node.center, node.size))
+                .collect::<Vec<_>>();
+            rows.sort_by(|left, right| left.min.y.total_cmp(&right.min.y));
+            for pair in rows.windows(2) {
+                let [upper, lower] = pair else { unreachable!() };
+                assert!(
+                    upper.max.y <= lower.min.y + 0.5,
+                    "parameter rows overlap at {width}x{height}: {upper:?}, {lower:?}"
                 );
             }
         }
-        let mut rows = observed
-            .iter()
-            .filter(|node| node.name.starts_with("Arena row "))
-            .map(|node| Rect::from_center_size(node.center, node.size))
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.min.y.total_cmp(&right.min.y));
-        for pair in rows.windows(2) {
-            let [upper, lower] = pair else { unreachable!() };
-            assert!(
-                upper.max.y <= lower.min.y + 0.5,
-                "parameter rows overlap at {width}x{height}: {upper:?}, {lower:?}"
-            );
+        app.world_mut().resource_mut::<ViewState>().begin_play();
+        for _ in 0..2 {
+            app.update();
         }
+        let live = ui_tree_snapshot(app.world_mut());
+        assert!(
+            live.nodes
+                .iter()
+                .all(|node| !node.name.starts_with("Arena ")),
+            "live play must hide start/pause controls, including any Menu button"
+        );
     }
 }

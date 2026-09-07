@@ -20,6 +20,7 @@ const FIXED_SECONDS: f64 = 1.0 / 120.0;
 
 #[derive(Resource)]
 struct ViewState {
+    started: bool,
     paused: bool,
     third_person: bool,
     yaw: f32,
@@ -41,16 +42,20 @@ struct ViewState {
 
 impl Default for ViewState {
     fn default() -> Self {
+        let capture = std::env::var_os("HEX_ARENA_CAPTURE").map(PathBuf::from);
+        let capture_view = std::env::var("HEX_ARENA_VIEW").unwrap_or_else(|_| "first".into());
+        let started = capture.is_some() && capture_view != "start";
         Self {
-            paused: false,
+            started,
+            paused: !started,
             third_person: false,
             yaw: 0.0,
             pitch: 0.0,
             initialized: false,
             previews: [true, false],
             suppress_click: true,
-            capture: std::env::var_os("HEX_ARENA_CAPTURE").map(PathBuf::from),
-            capture_view: std::env::var("HEX_ARENA_VIEW").unwrap_or_else(|_| "first".into()),
+            capture,
+            capture_view,
             image: None,
             frames: 0,
             requested: false,
@@ -64,9 +69,31 @@ impl Default for ViewState {
 }
 
 impl ViewState {
+    fn begin_play(&mut self) {
+        self.started = true;
+        self.paused = false;
+        self.suppress_click = true;
+        self.accumulator = 0.0;
+    }
+
+    fn pause(&mut self) {
+        self.paused = true;
+        self.suppress_click = true;
+        self.accumulator = 0.0;
+    }
+
+    fn prepare_round(&mut self) {
+        self.started = false;
+        self.initialized = false;
+        self.pause();
+    }
+
     fn external_camera(&self) -> bool {
         self.capture.is_some()
-            && !matches!(self.capture_view.as_str(), "first" | "third" | "tuning")
+            && !matches!(
+                self.capture_view.as_str(),
+                "first" | "third" | "tuning" | "start"
+            )
             && !self.capture_view.ends_with("-first")
             && !self.capture_view.ends_with("-third")
     }
@@ -144,7 +171,9 @@ pub fn run() -> AppExit {
         )
         .add_systems(
             Update,
-            (input, hud::buttons).chain().in_set(ArenaFrame::Input),
+            (input, hud::buttons, sync_cursor)
+                .chain()
+                .in_set(ArenaFrame::Input),
         )
         .add_systems(Update, drive_simulation.in_set(ArenaFrame::Tick))
         .add_systems(
@@ -233,7 +262,7 @@ fn setup(
         },
         Transform::from_xyz(-15.0, 30.0, 18.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    info!("Spell arena initialized; fixed step120Hz, local-only, radius12. Controls WASD mouse Space Shift 1/2/3 LMB C T Escape R.");
+    info!("Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Controls WASD mouse Space Shift 1/2/3 LMB C T R.");
 }
 
 fn aim(state: &ViewState) -> Vec3 {
@@ -266,23 +295,29 @@ fn input(
         }
     }
     if !window.focused {
-        state.paused = true;
-        state.suppress_click = true;
+        state.pause();
     }
-    if keys.just_pressed(KeyCode::Escape) && window.focused {
-        state.paused = !state.paused;
-        state.suppress_click = true;
+    if window.focused && !state.started && keys.just_pressed(KeyCode::Enter) {
+        state.begin_play();
     }
-    if keys.just_pressed(KeyCode::KeyR) {
+    if window.focused
+        && state.started
+        && (keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Tab))
+    {
+        if state.paused {
+            state.begin_play();
+        } else {
+            state.pause();
+        }
+    }
+    if window.focused && state.started && keys.just_pressed(KeyCode::KeyR) {
         reset.generation = reset.generation.saturating_add(1);
-        state.paused = false;
-        state.initialized = false;
-        state.suppress_click = true;
+        state.prepare_round();
     }
-    if keys.just_pressed(KeyCode::KeyC) {
+    if window.focused && state.started && !state.paused && keys.just_pressed(KeyCode::KeyC) {
         state.third_person = !state.third_person;
     }
-    if keys.just_pressed(KeyCode::KeyT) {
+    if window.focused && state.started && !state.paused && keys.just_pressed(KeyCode::KeyT) {
         let spell = session
             .actors
             .first()
@@ -297,7 +332,7 @@ fn input(
             *enabled = !*enabled;
         }
     }
-    let active = window.focused && !state.paused && session.outcome.is_none();
+    let active = window.focused && state.started && !state.paused && session.outcome.is_none();
     cursor.visible = !active;
     // CursorMoved plus recentering preserves the repository's WSLg held-button path.
     // Ignore warp-to-center events, so recentering never contributes camera rotation.
@@ -350,11 +385,26 @@ fn input(
     }
 }
 
+// UI buttons run after input. Synchronize the cursor again so Start/Resume take
+// effect in this same frame, and menus never keep a hidden cursor for a frame.
+fn sync_cursor(
+    state: Res<ViewState>,
+    session: Res<ArenaSession>,
+    mut windows: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
+) {
+    for (window, mut cursor) in &mut windows {
+        cursor.visible =
+            !window.focused || !state.started || state.paused || session.outcome.is_some();
+        cursor.grab_mode = CursorGrabMode::None;
+    }
+}
+
 fn drive_simulation(world: &mut World) {
     let delta = world.resource::<Time>().delta_secs_f64();
     let delta_f32 = world.resource::<Time>().delta_secs();
     let generation = world.resource::<ArenaReset>().generation;
     let capture = world.resource::<ViewState>().capture.is_some();
+    let needs_initialization = world.resource::<ArenaSession>().actors.is_empty();
     let (steps, frame, view) = {
         let mut state = world.resource_mut::<ViewState>();
         state.frames = state.frames.saturating_add(1);
@@ -368,9 +418,13 @@ fn drive_simulation(world: &mut World) {
         } else if !state.paused {
             state.step_offset *= (-12.0 * delta_f32.min(0.1)).exp();
         }
-        if state.paused && !changed {
+        if state.paused || !state.started {
             state.accumulator = 0.0;
-            (0, state.frames, state.capture_view.clone())
+            (
+                u32::from(changed || needs_initialization),
+                state.frames,
+                state.capture_view.clone(),
+            )
         } else {
             state.accumulator += if capture { 1.0 / 60.0 } else { delta.min(0.1) };
             let mut steps = 0;
@@ -416,6 +470,14 @@ fn drive_simulation(world: &mut World) {
             world.resource_mut::<ViewState>().paused = true;
         }
     }
+    let frozen = world.resource::<ViewState>().paused || !world.resource::<ViewState>().started;
+    let bot_enabled = world.resource::<ArenaSession>().bot_enabled;
+    if frozen {
+        // A single setup/reset tick publishes the complete world and actors.
+        // It must not consume player input or advance the bot's reaction clock.
+        world.resource_mut::<ArenaInput>().human = ActorIntent::default();
+        world.resource_mut::<ArenaSession>().bot_enabled = false;
+    }
     for _ in 0..steps {
         let before = world.resource::<ArenaTerrainView>().revision;
         let started = std::time::Instant::now();
@@ -438,6 +500,9 @@ fn drive_simulation(world: &mut World) {
             let mut state = world.resource_mut::<ViewState>();
             state.step_offset = (state.step_offset - rise).max(-0.8);
         }
+    }
+    if frozen {
+        world.resource_mut::<ArenaSession>().bot_enabled = bot_enabled;
     }
 }
 
@@ -475,7 +540,7 @@ fn capture_frame(
         return;
     };
     state.requested = true;
-    let receipt = serde_json::json!({"view":state.capture_view,"frame":state.frames,"tick":session.tick,"terrain_revision":view.revision,"voxels":view.voxels.len(),"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z],"cooldowns":a.cooldowns})).collect::<Vec<_>>(),"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,"effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),"frame_ms":state.frame_times,"tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),"width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"});
+    let receipt = serde_json::json!({"view":state.capture_view,"started":state.started,"paused":state.paused,"frame":state.frames,"tick":session.tick,"terrain_revision":view.revision,"voxels":view.voxels.len(),"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z],"cooldowns":a.cooldowns})).collect::<Vec<_>>(),"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,"effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),"frame_ms":state.frame_times,"tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),"width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"});
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             let result = (|| -> Result<(), String> {
