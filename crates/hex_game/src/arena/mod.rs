@@ -608,15 +608,22 @@ fn stage_partial_preview(world: &mut World) {
     let Some(impact) = predicted.impact else {
         return;
     };
-    // Occupy the outer column's two lowest slots. The central projectile path
-    // remains clear, so the preview can demonstrate independently clipped cells.
+    let Some(actor) = world.resource::<ArenaSession>().actors.first() else {
+        return;
+    };
+    let contact_column = hex_core::HexCoord::from_world(impact);
+    let visible_side = impact + actor.aim.with_y(0.0).normalize_or_zero();
+    // Clip an adjacent column forward of contact, inside both playable views.
+    // The nearest outer endpoint can sit beside/behind the first-person camera.
+    // Leave the impact column clear so the seed keeps the same anchored footprint.
     let edge = presentation::shield_footprint(&predicted.wall_voxels)
         .into_iter()
-        .max_by(|a, b| {
+        .filter(|pos| pos.coord != contact_column)
+        .min_by(|a, b| {
             geometry
                 .center(*a)
-                .distance_squared(impact)
-                .total_cmp(&geometry.center(*b).distance_squared(impact))
+                .distance_squared(visible_side)
+                .total_cmp(&geometry.center(*b).distance_squared(visible_side))
         });
     let Some(edge) = edge else {
         return;
