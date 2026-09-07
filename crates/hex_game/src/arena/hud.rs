@@ -57,27 +57,28 @@ pub(super) fn setup(mut commands: Commands) {
                             .with_children(|card| { card.spawn((text(format!("{name}\nREADY"), 15.0, INK), Label::Spell(index))); });
                     }
                 });
-            root.spawn((Node { position_type: PositionType::Absolute, bottom: px(20), width: percent(100), justify_content: JustifyContent::Center, ..default() },
-                text("WASD move   SHIFT sprint   SPACE jump   CLICK cast   C camera   T trajectory   ESC tune   R restart", 12.0, INK)));
+            root.spawn(Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), height: px(28), justify_content: JustifyContent::Center, ..default() })
+                .with_children(|footer| { footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL),
+                    text("WASD move   SHIFT sprint   SPACE jump   CLICK cast   C camera   T trajectory   ESC tune   R restart", 12.0, INK))); });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, display: Display::None, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)), GlobalZIndex(20), PausePanel))
         .with_children(|overlay| {
-            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(24)), flex_direction: FlexDirection::Column, row_gap: px(8), border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
+            overlay.spawn((Node { width: px(600), height: px(710), max_width: percent(95), padding: UiRect::all(px(20)), flex_direction: FlexDirection::Column, row_gap: px(5), flex_shrink: 0.0, border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|panel| {
-                    panel.spawn(text("PAUSED / COMBAT TUNING", 24.0, INK));
-                    panel.spawn(text("Change one variable at a time. Sizes are independent.", 13.0, MUTED));
+                    panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("PAUSED / COMBAT TUNING", 24.0, INK)));
+                    panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("Change one variable at a time. Sizes are independent.", 13.0, MUTED)));
                     for index in 0..12 {
-                        panel.spawn(Node { width: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                            row.spawn((Node { width: px(375), ..default() }, text("", 15.0, INK), Label::Parameter(index)));
+                        panel.spawn(Node { width: percent(100), height: px(30), flex_shrink: 0.0, align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
+                            row.spawn((Node { width: px(375), height: px(20), flex_shrink: 0.0, ..default() }, text("", 15.0, INK), Label::Parameter(index)));
                             for (label, amount) in [("-", -1.0), ("+", 1.0)] {
                                 row.spawn((Button, Node { width: px(48), height: px(30), border_radius: BorderRadius::all(px(4)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Change(index, amount)))
                                     .with_children(|button| { button.spawn(text(label, 20.0, INK)); });
                             }
                         });
                     }
-                    panel.spawn(text("Splash passes through walls. Your fireball can hurt you.\nShield walls remain until destroyed; restart restores all terrain.", 12.0, MUTED));
-                    panel.spawn(Node { column_gap: px(12), margin: UiRect::top(px(10)), ..default() }).with_children(|row| {
+                    panel.spawn((Node { height: px(32), flex_shrink: 0.0, ..default() }, text("Splash passes through walls. Your fireball can hurt you.\nShield walls remain until destroyed; restart restores all terrain.", 12.0, MUTED)));
+                    panel.spawn(Node { height: px(42), flex_shrink: 0.0, column_gap: px(12), margin: UiRect::top(px(8)), ..default() }).with_children(|row| {
                         for (label, action) in [("RESUME", Action::Resume), ("RESET ARENA", Action::Restart)] {
                             row.spawn((Button, Node { width: px(260), height: px(42), border_radius: BorderRadius::all(px(5)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), action))
                                 .with_children(|button| { button.spawn(text(label, 15.0, INK)); });
@@ -176,7 +177,9 @@ pub(super) fn update(
                 } else {
                     format!(
                         "{}  /  {}\n{}",
-                        if state.third_person {
+                        if state.external_camera() {
+                            "REVIEW CAMERA"
+                        } else if state.third_person {
                             "CLOSE THIRD PERSON"
                         } else {
                             "FIRST PERSON"
@@ -221,7 +224,7 @@ pub(super) fn update(
                     tuning.projectile_speed
                 ),
                 4 => format!(
-                    "Projectile gravity       {:.0} units/s²",
+                    "Projectile gravity       {:.0} units/s^2",
                     tuning.projectile_gravity
                 ),
                 5 => format!("Shield cooldown          {:.1}s", tuning.shield_cooldown),

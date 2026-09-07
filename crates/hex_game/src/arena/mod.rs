@@ -63,6 +63,15 @@ impl Default for ViewState {
     }
 }
 
+impl ViewState {
+    fn external_camera(&self) -> bool {
+        self.capture.is_some()
+            && !matches!(self.capture_view.as_str(), "first" | "third" | "tuning")
+            && !self.capture_view.ends_with("-first")
+            && !self.capture_view.ends_with("-third")
+    }
+}
+
 #[derive(Component)]
 struct ArenaCamera;
 
@@ -182,7 +191,8 @@ fn setup(
         tuning.shield_size = size;
         tuning.fireball_size = size;
         tuning.blast_size = size;
-        state.third_person = state.capture_view == "third";
+        state.third_person =
+            state.capture_view == "third" || state.capture_view.ends_with("-third");
     }
     let target = if state.capture.is_some() {
         let handle = images.add(Image::new_target_texture(
@@ -391,7 +401,7 @@ fn drive_simulation(world: &mut World) {
             };
             if frame == 6 && view.starts_with("shield") {
                 input.human.selected = Some(Spell::Shield);
-                input.human.cast = true;
+                input.human.cast = !view.contains("preview");
             }
             if frame == 48 && view.starts_with("fireball") {
                 input.human.selected = Some(Spell::Fireball);
@@ -434,7 +444,9 @@ fn drive_simulation(world: &mut World) {
 fn camera_origin(session: &ArenaSession, state: &ViewState, eye: Vec3, direction: Vec3) -> Vec3 {
     let smoothed_eye = eye + Vec3::Y * state.step_offset;
     let desired = if state.third_person {
-        smoothed_eye - direction * 1.25 + Vec3::Y * 0.18
+        smoothed_eye - direction * 1.25
+            + Vec3::Y * 0.38
+            + direction.cross(Vec3::Y).normalize_or_zero() * 0.28
     } else {
         smoothed_eye
     };

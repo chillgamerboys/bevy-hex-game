@@ -28,8 +28,10 @@ VIEWS = (
     "overview", "first", "third", "rear", "shield", "fireball", "blast", "tuning",
     "shield-compact", "shield-large", "fireball-compact", "fireball-large",
     "blast-compact", "blast-large",
+    "shield-first", "shield-third", "fireball-first", "fireball-third",
+    "blast-first", "blast-third", "shield-preview-first", "shield-preview-third",
 )
-MATRIX = "arena-v2"
+MATRIX = "arena-v3"
 CANVAS = [1600, 900]
 CARGO_ARGS = ("run", "-p", "hex_game", "--features", "dev,arena-prototype", "--", "--arena")
 

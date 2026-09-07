@@ -37,7 +37,7 @@ lanes:
     selector: {concerns: [map_unit, map_contracts, clippy, docs, shipping], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: inherited}
-    state: dispatched
+    state: merged-to-wave
     pr: null
   - id: L2
     title: Continuous actors and spell simulation
@@ -53,7 +53,7 @@ lanes:
     selector: {concerns: [contracts, simulation, clippy, docs], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: dispatched
+    state: merged-to-wave
     pr: null
   - id: L3
     title: Native launch, input, camera, HUD, capture and integration
@@ -69,7 +69,7 @@ lanes:
     selector: {concerns: [app, clippy, docs, shipping], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: dispatched
+    state: merged-to-wave
     pr: null
 ```
 
@@ -88,7 +88,7 @@ No deletion of source/saves/review evidence; disk cleanup authorized separately 
 ## Local checkpoints
 
 - World producer committed and integrated; eight focused world tests passed.
-- Gameplay committed and integrated; first focused run passed 26 arena tests and 124 core tests. Additional round-ending and race regressions are being added before combined validation.
-- Native composition, input, two cameras, HUD, tuning, windowless capture matrix, and combined lifecycle tests are authored. Combined native build and render inspection remain pending.
+- Gameplay committed and integrated; first focused run passed 26 arena tests and 124 core tests. Round-ending, moving-body ordering, enclosed launch, and full ballistic-lifetime regressions are included in the combined candidate.
+- Native composition, input, two cameras, HUD, tuning, windowless capture matrix, and combined lifecycle tests are authored. Native build, seven lifecycle tests, and strict workspace lint passed before the final layout correction. Initial static review found and corrected paused-panel height, footer readability, and third-person self obstruction. The final source-specific gate and capture receipts are retained in the task outputs; native playtesting remains pending.
 - Obsolete generated caches were removed under the user's explicit cleanup instruction; the output receipt records 14,178,758,656 physical bytes recovered. Source checkouts and review evidence were preserved.
 - Hourly overnight follow-up is attached to this task until delivery or September 7, 08:00 America/Los_Angeles.

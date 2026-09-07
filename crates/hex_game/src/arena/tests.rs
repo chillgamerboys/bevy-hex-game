@@ -265,3 +265,121 @@ fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
         })
     );
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn paused_tuning_controls_fit_computed_layout_at_supported_window_sizes() {
+    use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
+
+    for (width, height) in [(1600, 900), (1280, 720)] {
+        let mut app = App::new();
+        app.add_plugins(HeadlessUiPlugin::new(width, height))
+            .insert_resource(ViewState {
+                paused: true,
+                capture: None,
+                ..default()
+            })
+            .init_resource::<ArenaSession>()
+            .init_resource::<ArenaTuning>()
+            .add_systems(Startup, hud::setup)
+            .add_systems(Update, hud::update);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        // Name the actual typed controls only in this fixture so the shared
+        // observer can inspect their computed boxes, clipping, and laid-out glyphs.
+        let parameters = app
+            .world_mut()
+            .query::<(Entity, &hud::Label, &ChildOf)>()
+            .iter(app.world())
+            .filter_map(|(entity, label, parent)| match label {
+                hud::Label::Parameter(index) => Some((entity, *index, parent.parent())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let actions = app
+            .world_mut()
+            .query::<(Entity, &hud::Action, &Children)>()
+            .iter(app.world())
+            .map(|(entity, action, children)| {
+                let name = match action {
+                    hud::Action::Resume => "Arena action resume".into(),
+                    hud::Action::Restart => "Arena action restart".into(),
+                    hud::Action::Change(index, amount) => {
+                        format!("Arena action {index} {amount}")
+                    }
+                };
+                (entity, name, children.iter().collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parameters.len(), 12);
+        assert_eq!(actions.len(), 26);
+        for (entity, index, row) in parameters {
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(Name::new(format!("Arena parameter {index}")));
+            app.world_mut()
+                .entity_mut(row)
+                .insert(Name::new(format!("Arena row {index}")));
+        }
+        for (entity, name, children) in actions {
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(Name::new(name.clone()));
+            assert_eq!(children.len(), 1, "each button has one text label");
+            for child in children {
+                app.world_mut()
+                    .entity_mut(child)
+                    .insert(Name::new(format!("{name} glyphs")));
+            }
+        }
+
+        let snapshot = ui_tree_snapshot(app.world_mut());
+        let viewport = Rect::from_corners(Vec2::ZERO, snapshot.metrics.logical_size);
+        let contains = |outer: Rect, inner: Rect| {
+            let tolerance = Vec2::splat(1.0);
+            (inner.min + tolerance).cmpge(outer.min).all()
+                && inner.max.cmple(outer.max + tolerance).all()
+        };
+        let observed = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.name.starts_with("Arena "))
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 12 + 12 + 26 + 26);
+        for node in &observed {
+            let bounds = Rect::from_center_size(node.center, node.size);
+            assert!(
+                node.size.cmpgt(Vec2::ZERO).all()
+                    && node.fully_visible
+                    && contains(viewport, bounds),
+                "{} must fit at {width}x{height}: {node:?}",
+                node.name
+            );
+            if node.name.starts_with("Arena parameter ") || node.name.ends_with(" glyphs") {
+                let glyphs = node
+                    .rendered_text_bounds
+                    .expect("real text layout must produce visible glyphs");
+                assert!(
+                    contains(viewport, glyphs) && contains(bounds, glyphs),
+                    "{} glyphs must fit their node at {width}x{height}: {node:?}",
+                    node.name
+                );
+            }
+        }
+        let mut rows = observed
+            .iter()
+            .filter(|node| node.name.starts_with("Arena row "))
+            .map(|node| Rect::from_center_size(node.center, node.size))
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.min.y.total_cmp(&right.min.y));
+        for pair in rows.windows(2) {
+            let [upper, lower] = pair else { unreachable!() };
+            assert!(
+                upper.max.y <= lower.min.y + 0.5,
+                "parameter rows overlap at {width}x{height}: {upper:?}, {lower:?}"
+            );
+        }
+    }
+}

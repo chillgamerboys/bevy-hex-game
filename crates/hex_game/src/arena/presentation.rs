@@ -23,10 +23,7 @@ pub(super) fn actors(
         {
             transform.translation = actor.feet;
             transform.rotation = Quat::from_rotation_y((-actor.aim.x).atan2(-actor.aim.z));
-            let external_capture = state.capture.is_some()
-                && state.capture_view != "first"
-                && state.capture_view != "third"
-                && state.capture_view != "tuning";
+            let external_capture = state.external_camera();
             let retracted_into_body =
                 super::camera_origin(&session, &state, actor.eye(), super::aim(&state))
                     .distance(actor.eye())
@@ -109,7 +106,7 @@ pub(super) fn camera(
     let Ok(mut transform) = cameras.single_mut() else {
         return;
     };
-    if state.capture.is_some() {
+    if state.external_camera() {
         match state.capture_view.as_str() {
             "overview" => {
                 *transform = Transform::from_xyz(28.0, 34.0, 32.0)
