@@ -181,7 +181,7 @@ fn calibrate_original_monster_groups() {
                             "ARENA_BATTLE_TRACE {}",
                             serde_json::json!({
                                 "seed":seed,"map":format!("{map:?}"),"left":left.slug(),"right":right.slug(),"tick":session.tick,
-                                "revision":terrain.revision,"knowledge":session.party_knowledge(),
+                            "revision":terrain.revision,"knowledge":session.party_knowledge(),"decisions":session.creature_decisions(),
                                 "actors":session.actors.iter().filter(|actor|actor.hp>0.0).map(|actor|serde_json::json!({
                                     "id":actor.id,"team":actor.team,"species":actor.species,"hp":actor.hp,"feet":actor.feet.to_array(),
                                     "eye":actor.eye().to_array(),"aim":actor.aim.to_array(),"body_rotation":actor.body_rotation().to_array(),

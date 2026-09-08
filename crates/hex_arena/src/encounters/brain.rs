@@ -3,7 +3,6 @@
 use super::*;
 use crate::bot::ballistic_aim;
 use crate::spells::{forecast_spell, ForecastBody};
-use bevy_math::Quat;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Request {
@@ -23,10 +22,14 @@ pub(super) struct Brain {
     shadow: Bot,
     home: Vec3,
     seed: u32,
-    travel: Vec3,
-    decided: u64,
-    revision: Option<u64>,
-    last_feet: Vec3,
+    steering: steering::Steering,
+    shadow_travel: steering::ShadowTravel,
+    retreat_goal: Option<Vec3>,
+    retreat_reconsider: u64,
+    flight_recovery: Option<(Vec3, u64)>,
+    shooting_angle: bool,
+    next_shot_probe: u64,
+    pub decision: Option<CreatureDecisionSnapshot>,
     spell_gap: f32,
     error: Vec3,
     was_visible: bool,
@@ -44,10 +47,14 @@ impl Brain {
             shadow: Bot::default(),
             home,
             seed: 0x9175_BAFF ^ (u32::from(id) * 1973),
-            travel: Vec3::ZERO,
-            decided: 0,
-            revision: None,
-            last_feet: home,
+            steering: steering::Steering::default(),
+            shadow_travel: steering::ShadowTravel::new(home),
+            retreat_goal: None,
+            retreat_reconsider: 0,
+            flight_recovery: None,
+            shooting_angle: false,
+            next_shot_probe: 0,
+            decision: None,
             spell_gap: 0.0,
             error: Vec3::ZERO,
             was_visible: false,
@@ -119,9 +126,9 @@ impl Brain {
                 self.battle_sense_tick = Some(tick);
             }
             self.battle_seen
-                .first()
+                .iter()
                 .copied()
-                .filter(|target| collision.sight_clear(actor.eye(), target.center()))
+                .find(|target| collision.sight_clear(actor.eye(), target.sight_point))
                 .map(|target| Knowledge {
                     point: target.body.feet,
                     velocity: target.body.velocity,
@@ -248,21 +255,69 @@ impl Brain {
             }
             _ => target.unwrap_or(party.battle_search.unwrap_or(self.home)),
         };
+        if !retreat {
+            self.retreat_goal = None;
+        }
         if actor.species == Species::Dragon {
             flight = party.snapshot.phase == PartyPhase::Dormant
                 || (party.snapshot.phase == PartyPhase::Active && sight.is_none())
                 || retreat;
             if retreat {
-                if let Some(target) = target {
-                    goal = actor.feet
-                        + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 5.0;
+                self.flight_recovery = None;
+                let invalid = self.retreat_goal.is_none_or(|point| {
+                    steering::flight_goal(actor, point, collision, world, geometry, c)
+                        .is_none_or(|valid| valid.distance(point) > 0.5)
+                });
+                let reached = self
+                    .retreat_goal
+                    .is_some_and(|point| actor.feet.distance(point) < 0.6);
+                if invalid || (reached && tick >= self.retreat_reconsider) {
+                    self.retreat_goal = steering::retreat_goal(
+                        actor,
+                        target.unwrap_or(actor.feet - actor.aim),
+                        collision,
+                        world,
+                        geometry,
+                        c,
+                    );
+                    self.retreat_reconsider = tick + 120;
                 }
-            }
-            if flight {
-                let probe = actor.feet + Vec3::Y * 4.0;
-                let floor =
-                    shapes::ground(collision, actor, probe, 12.0).map_or(self.home.y, |p| p.y);
-                goal.y = floor + c.dragon_cruise_height;
+                goal = self
+                    .retreat_goal
+                    .or_else(|| {
+                        steering::flight_goal(actor, self.home, collision, world, geometry, c)
+                    })
+                    .unwrap_or(actor.feet);
+            } else {
+                let recovery_done = self.flight_recovery.is_some_and(|(point, until)| {
+                    tick >= until || actor.feet.distance(point) < 0.4
+                });
+                if recovery_done {
+                    self.flight_recovery = None;
+                }
+                if sight.is_some()
+                    && self.steering.blocked_ticks(tick) >= 48
+                    && self.flight_recovery.is_none()
+                {
+                    if let Some(target) = target {
+                        let away = (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z);
+                        let approach =
+                            target + away * (actor.dimensions.z * 0.5 + c.bite_range * 0.6);
+                        self.flight_recovery =
+                            steering::flight_goal(actor, approach, collision, world, geometry, c)
+                                .map(|point| (point, tick + 240));
+                    }
+                }
+                if let Some((point, _)) = self.flight_recovery {
+                    flight = true;
+                    goal = point;
+                } else if flight {
+                    goal = steering::flight_goal(actor, goal, collision, world, geometry, c)
+                        .or_else(|| {
+                            steering::flight_goal(actor, self.home, collision, world, geometry, c)
+                        })
+                        .unwrap_or(actor.feet);
+                }
             }
             if (hurt || threatened) && target.is_some() && self.ready(CreatureAbility::Barrier) {
                 request = Some(Request {
@@ -293,7 +348,10 @@ impl Brain {
                         aim: input.aim,
                     });
                 }
-                if distance < c.bite_range * 0.7 {
+                if distance < c.bite_range * 0.7
+                    && facing >= (c.bite_angle.to_radians() * 0.5).cos()
+                    && self.flight_recovery.is_none()
+                {
                     goal = actor.feet;
                 }
             }
@@ -319,9 +377,29 @@ impl Brain {
                 }
             }
         } else if actor.species == Species::Shaman {
+            if tick >= self.next_shot_probe || sight.is_none() {
+                self.shooting_angle = sight.is_some_and(|seen| {
+                    self.shot_aim_at_speed(
+                        actor,
+                        seen,
+                        collision,
+                        world,
+                        geometry,
+                        tuning,
+                        tuning.launch_speed(c.shaman_charge.min(tuning.charge_seconds)),
+                        Vec3::ZERO,
+                    )
+                    .is_some()
+                });
+                self.next_shot_probe = tick + 24 + u64::from(actor.id % 4);
+            }
             if let Some(target) = target {
-                goal = target + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 8.0;
-                if actor.center().distance(target) < 5.0 {
+                // Memory supplies a search destination, not proof of a firing lane.
+                // An obstructed shot seeks a new angle instead of parking at 8u.
+                if self.shooting_angle && sight.is_some() {
+                    goal =
+                        target + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 8.0;
+                } else if sight.is_some() && actor.center().distance(target) < 5.0 {
                     goal = actor.feet
                         + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 4.0;
                 }
@@ -437,26 +515,72 @@ impl Brain {
         } else {
             Vec3::ZERO
         };
-        let revise = self.revision != collision.revision
-            || tick.saturating_sub(self.decided) >= 24
-            || actor.feet.distance(self.last_feet) > 2.0;
-        if revise {
-            self.travel = steer(actor, desired, flight, collision, world, geometry, c);
-            self.decided = tick + u64::from(actor.id % 4);
-            self.revision = collision.revision;
-            self.last_feet = actor.feet;
-        }
         if let Some(active) = &self.active {
             input.aim = active.direction();
         }
-        if self.active.is_some() || request.is_some() || input.cast_released {
-            self.travel = Vec3::ZERO;
-        }
-        input.run = party.snapshot.phase != PartyPhase::Dormant;
+        input.run = party.snapshot.phase != PartyPhase::Dormant || self.steering.jumping();
+        let (direction, jump) = if actor.species == Species::Shadow {
+            (
+                self.shadow_travel.travel(
+                    actor,
+                    desired,
+                    flight,
+                    self.active.is_some() || request.is_some() || input.cast_released,
+                    collision,
+                    world,
+                    geometry,
+                    c,
+                    tick,
+                ),
+                false,
+            )
+        } else if self.steering.jumping() {
+            // Finish the already validated landing before starting a stationary
+            // windup; pausing midair would discard the route's safety proof.
+            request = None;
+            input.cast_pressed = false;
+            input.cast_released = false;
+            input.cast_held = actor.charge().is_some();
+            self.steering.travel(
+                actor, desired, false, input.run, collision, world, geometry, c, tick,
+            )
+        } else if self.active.is_some() || request.is_some() || input.cast_released {
+            self.steering.hold(actor, tick);
+            (Vec3::ZERO, false)
+        } else {
+            self.steering.travel(
+                actor, desired, flight, input.run, collision, world, geometry, c, tick,
+            )
+        };
+        input.jump = jump;
+        self.decision = Some(CreatureDecisionSnapshot {
+            id: actor.id,
+            target: sight.and_then(|s| s.observed.map(|o| o.body.id)),
+            observation_tick: known.map(|k| k.tick),
+            own_sight: sight.is_some(),
+            goal: goal.to_array(),
+            direction: direction.to_array(),
+            flying: flight,
+            retreat_seconds: if retreat {
+                let duration = if actor.hp < actor.max_hp * 0.5 {
+                    c.dragon_hurt_retreat_seconds
+                } else {
+                    c.dragon_retreat_seconds
+                };
+                actor
+                    .last_damage_tick
+                    .map_or(0.0, |since| (duration - elapsed(tick, since)).max(0.0))
+            } else {
+                0.0
+            },
+            jump_recovery: self.steering.jumping(),
+            blocked_ticks: self.steering.blocked_ticks(tick),
+            useful_shot: self.shooting_angle,
+        });
         (
             MotionIntent {
                 input,
-                direction: self.travel,
+                direction,
                 flight,
             },
             request,
@@ -472,7 +596,29 @@ impl Brain {
         geometry: ArenaVoxelGeometry,
         tuning: &ArenaTuning,
     ) -> Option<Vec3> {
-        let speed = tuning.launch_speed(actor.charge()?.elapsed);
+        self.shot_aim_at_speed(
+            actor,
+            seen,
+            collision,
+            world,
+            geometry,
+            tuning,
+            tuning.launch_speed(actor.charge()?.elapsed),
+            self.error,
+        )
+    }
+
+    fn shot_aim_at_speed(
+        &self,
+        actor: &Actor,
+        seen: Knowledge,
+        collision: &CollisionWorld,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        tuning: &ArenaTuning,
+        speed: f32,
+        error: Vec3,
+    ) -> Option<Vec3> {
         let target = seen.observed.map_or(
             seen.point + Vec3::Y * 0.4,
             targeting::ObservedTarget::center,
@@ -486,9 +632,13 @@ impl Brain {
         )?;
         let mut caster = actor.clone();
         caster.selected = Spell::Fireball;
-        caster.aim = (aim + self.error).normalize_or(aim);
+        caster.aim = (aim + error).normalize_or(aim);
         let bodies: Vec<_> = if seen.observed.is_some() {
-            self.battle_seen.iter().map(|seen| seen.body).collect()
+            self.battle_seen
+                .iter()
+                .filter(|seen| collision.sight_clear(actor.eye(), seen.sight_point))
+                .map(|seen| seen.body)
+                .collect()
         } else {
             vec![ForecastBody::human(0, seen.point, seen.velocity, 0.5)]
         };
@@ -500,43 +650,4 @@ impl Brain {
             }))
         .then_some(caster.aim)
     }
-}
-
-fn steer(
-    actor: &Actor,
-    desired: Vec3,
-    flight: bool,
-    world: &CollisionWorld,
-    view: &ArenaTerrainView,
-    geometry: ArenaVoxelGeometry,
-    tuning: &EncounterTuning,
-) -> Vec3 {
-    if desired.length_squared() < 0.001 {
-        return Vec3::ZERO;
-    }
-    // Four short production-controller rollouts. This preserves stacked support,
-    // exact step and turn limits without introducing a coordinate-only nav graph.
-    let mut best = (f32::NEG_INFINITY, Vec3::ZERO);
-    for angle in [0.0, 0.65, -0.65, 1.3, -1.3] {
-        let direction = Quat::from_rotation_y(angle) * desired;
-        let mut body = actor.clone();
-        let mut safe = true;
-        for _ in 0..12 {
-            motion::tick(&mut body, direction, true, false, flight, world, tuning);
-            if !shapes::clear(world, &body, body.feet, body.body_yaw)
-                || (!flight && (!dry(&body, view, geometry) || body.feet.y < actor.feet.y - 0.45))
-            {
-                safe = false;
-                break;
-            }
-        }
-        if safe {
-            let moved = body.feet - actor.feet;
-            let score = moved.dot(desired.normalize_or_zero()) - 0.05 * angle.abs();
-            if moved.length() > 0.02 && score > best.0 {
-                best = (score, direction);
-            }
-        }
-    }
-    best.1
 }

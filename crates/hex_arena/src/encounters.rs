@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 mod abilities;
 mod battle_runtime;
 mod brain;
+mod steering;
 #[cfg(test)]
 mod tests;
 
@@ -985,7 +986,43 @@ pub struct PartyKnowledgeSnapshot {
     /// Tick when the discrete observation was made, never refreshed by memory.
     pub tick: Option<u64>,
 }
+
+/// Read-only creature plans based exclusively on admitted observations and geometry.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CreatureDecisionSnapshot {
+    /// Stable controlled actor.
+    pub id: ActorId,
+    /// Currently visible selected opponent, when available.
+    pub target: Option<ActorId>,
+    /// Timestamp of sight or dated party knowledge used for the goal.
+    pub observation_tick: Option<u64>,
+    /// The selected observation remains visible from this creature.
+    pub own_sight: bool,
+    /// Intended physical destination.
+    pub goal: [f32; 3],
+    /// Applied movement direction.
+    pub direction: [f32; 3],
+    /// Flight requested this tick.
+    pub flying: bool,
+    /// Remaining damage-refreshed retreat time.
+    pub retreat_seconds: f32,
+    /// Following a jump with a previously verified landing.
+    pub jump_recovery: bool,
+    /// Ticks without meaningful body progress, excluding deliberate windups.
+    pub blocked_ticks: u64,
+    /// Shaman has a current safe useful firing angle.
+    pub useful_shot: bool,
+}
 impl ArenaSession {
+    /// Inspect existing decisions without advancing brains or reading hidden targets.
+    #[must_use]
+    pub fn creature_decisions(&self) -> Vec<CreatureDecisionSnapshot> {
+        self.encounter
+            .brains
+            .values()
+            .filter_map(|brain| brain.decision.clone())
+            .collect()
+    }
     /// Read dated party knowledge without sampling hidden actors or changing AI.
     #[must_use]
     pub fn party_knowledge(&self) -> Vec<PartyKnowledgeSnapshot> {

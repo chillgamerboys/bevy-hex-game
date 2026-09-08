@@ -10,6 +10,8 @@ use crate::{shapes, Actor, STEP};
 pub(crate) struct ObservedTarget {
     pub body: ForecastBody,
     pub tick: u64,
+    /// Endpoint admitted at observation time, never reconstructed from hidden state.
+    pub sight_point: Vec3,
 }
 
 impl ObservedTarget {
@@ -63,6 +65,11 @@ pub(crate) fn observe(
                 (change / seconds).clamp(-6.0, 6.0)
             });
             ObservedTarget {
+                sight_point: if collision.sight_clear(observer.eye(), actor.center()) {
+                    actor.center()
+                } else {
+                    actor.eye()
+                },
                 body: ForecastBody {
                     id: actor.id,
                     feet: actor.feet,
