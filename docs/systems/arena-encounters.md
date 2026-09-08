@@ -183,5 +183,5 @@ It must physically raise its head before firing: current Boulder damage is 70,
 splash radius 2.5, impulse 8, windup .8 seconds and cooldown 3.5 seconds. It cannot
 fire through earth. Its own Boulder causes it no damage or knockback. Opaque ground hides its body; explosions still splash through
 cover. The supported optional six-segment setting may be refused where an authored
-spawn pocket is too small; bodies are never compressed to fit. These remain initial
-balance values until the paired comparison and human playtest.
+spawn pocket is too small; bodies are never compressed to fit. These are provisional
+balance values from the machine comparisons; human playtesting remains pending.

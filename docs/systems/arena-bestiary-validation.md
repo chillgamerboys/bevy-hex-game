@@ -1,7 +1,8 @@
 # Spectator battles and bestiary validation
 
-Status: original groups, Golem and Ember Wisp have recorded machine calibration.
-Worm integration is active; final combined validation and human playtesting remain pending. The [local wave](../planning/waves/arena-bestiary/manifest.md)
+Status: all seven enemy profiles have recorded machine calibration. Worm
+implementation, scoped static review and the final combined gate are complete;
+human playtesting remains pending. The [local wave](../planning/waves/arena-bestiary/manifest.md)
 and [approved requirements](../planning/waves/arena-bestiary/plan.md) govern this work.
 The accepted human/Shadow reference remains `127d1ce`; no remote merge is authorized.
 The original map/creature milestone has [separate evidence](arena-encounters-validation.md).
@@ -728,7 +729,7 @@ Evidence: `outputs/arena-final-seven-stress-02`, including independent audit fil
 
 ## Combined gate and current-example refresh — 2026-09-08
 
-`outputs/arena-final-combined-gates-01` passes the initial sixteen rows, including
+`outputs/arena-final-combined-gates-01` passes the initial seventeen rows, including
 93 trajectory contracts, application checks and all three exhaustive map partitions
 (109 unit, 440 generation and 94 contract tests). Residual passes 1,415 of 1,416,
 but the current elemental example save has a stale catalog fingerprint. It is
@@ -742,3 +743,29 @@ Party Trial migration/restore test now passes using the canonical workspace feat
 graph. Evidence: `work/save-fixture-refresh-01` and `work/save-fixture-focus-01.log`.
 An unnecessary package-only reproduction began a different feature build and was
 cancelled before tests; it supplies no result. The full corrected gate follows.
+
+## Final local acceptance at `25fa64d` — 2026-09-08
+
+`outputs/arena-final-combined-gates-02` records **ALL-CHECKS-PASSED: 29/29 rows**
+from 18:46 to 19:26 UTC, with identical clean source before and after. This is the
+complete selector-selected closure against accepted base `127d1ce`, including
+rules, trajectory contracts, contracts, simulation, application, exhaustive map
+partitions, residual tests, doctests, dependency isolation, links, formatting,
+strict workspace Clippy, warnings-denied docs and the default-feature release
+build. Residual passes all **1,416 tests**, including the refreshed current example.
+
+Additional arena rows pass 33 Python checks, 24 world tests, 82 application tests,
+271 gameplay tests, six encounter tests, eight route tests and eleven battle tests.
+The release build took 21m 10s; that compilation duration is not runtime performance.
+The arena-enabled native build, Worm13 static review and Seven Regions10 timing
+remain the separately identified `1bf41f2` evidence above; Wisp12 static review
+remains at `cef8c12`. Production behavior is unchanged by the two current-example
+test updates at `25fa64d`.
+
+The final delivery commit updates only this record, the short report, controls
+guide and local manifest. It does not claim fresh pixels or timings at that
+documentation-only head. Markdown links, deprecated UI terms and whitespace are
+checked after the prose update. The code remains on the local experiment branch;
+native controls, motion, balance and the documented movement/performance limitations
+remain for human playtesting. The user explicitly requested a visible Fort/Worm
+launch after these checks completed.

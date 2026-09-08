@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: all seven enemy profiles and spectator battles are implemented with recorded machine calibration. Final Worm comparison is complete (6/8 against Goblins, 0/8 against Shadow with three unresolved Fort timeouts). Wisp static review passes at cef8c12; Worm13 static review and sustained Seven Regions10 native stress pass at 1bf41f2. The combined repository gate is rerunning after a two-field current-example save fingerprint refresh. Human motion and feel remain pending.
+Status: local implementation and automated validation are complete. All seven enemy profiles and spectator battles have recorded machine calibration. Final Worm comparison is 6/8 against Goblins and 0/8 against Shadow with three unresolved Fort timeouts. Wisp static review passes at cef8c12; Worm13 static review and sustained Seven Regions10 native stress pass at 1bf41f2. All 29 combined repository checks pass at 25fa64d. Human motion, feel and balance remain in review.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
@@ -84,7 +84,7 @@ presentation and private gameplay never mutate the map directly.
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "dispatched",
+      "state": "in-review",
       "pr": null
     },
     {
@@ -124,7 +124,7 @@ presentation and private gameplay never mutate the map directly.
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "dispatched",
+      "state": "in-review",
       "pr": null
     },
     {
@@ -165,7 +165,7 @@ presentation and private gameplay never mutate the map directly.
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "dispatched",
+      "state": "in-review",
       "pr": null
     }
   ]
@@ -230,6 +230,8 @@ all authorized work and final evidence/guide are delivered.
 
 - 2026-09-07: user approved spectator/calibration and sequential Golem/Wisp/Worm work;
   clarified seven-hex body belongs to Golem and Goblins must remain player sized.
+- 2026-09-08: user returned and explicitly requested a visible game launch after
+  completion. Launch Fort with Worm selected and stopped at the ready screen.
 
 ## Checkpoints
 
@@ -332,3 +334,11 @@ all authorized work and final evidence/guide are delivered.
   focused evidence is now 266 arena tests, 11 actual-map tests, 80 app tests and
   strict scoped lint. The partial-tail crater regression is red/green; a shared
   target stale-core artifact was invalidated without content changes or cleanup.
+
+- Final local acceptance `25fa64d` passes all 29 combined checks with clean,
+  unchanged source, including strict workspace lint, docs and shipping build.
+  Runtime/capture/performance identities and limitations are recorded in the
+  [validation report](../../../systems/arena-bestiary-validation.md); the
+  [short report](../../../systems/arena-night-report.md) is the user handoff.
+  All three lanes are integrated in the authorized local branch and remain
+  `in-review` for human motion and balance acceptance. No remote delivery is claimed.
