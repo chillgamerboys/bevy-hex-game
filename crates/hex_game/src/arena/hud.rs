@@ -138,8 +138,9 @@ pub(super) fn setup(mut commands: Commands) {
                         ("Shadow",Action::Encounter(ArenaEncounter::Shadow)),
                         (BattlePreset::Golem.label(),Action::PlayerRecipe(BattlePreset::Golem)),
                         (BattlePreset::Wisps4.label(),Action::PlayerRecipe(BattlePreset::Wisps4)),
+                        (BattlePreset::Worm.label(),Action::PlayerRecipe(BattlePreset::Worm)),
                     ];
-                    for group in choices.chunks(3) {
+                    for group in choices.chunks(4) {
                         panel.spawn(Node { height: px(38), column_gap: px(6), ..default() }).with_children(|row| {
                             for &(label, action) in group {
                                 row.spawn((Button, Node { flex_grow:1.0, flex_basis:px(0), min_width:px(0), height:px(38), align_items:AlignItems::Center, justify_content:JustifyContent::Center, border_radius:BorderRadius::all(px(4)), ..default() },BackgroundColor(PANEL),action))

@@ -322,3 +322,12 @@ all authorized work and final evidence/guide are delivered.
   Root next validates actual Duel/Fort composition; presentation integrates the
   13-frame Worm matrix and a scoped Wisp windup cue repair. World conversion remains
   the previously validated `aaecaf3` authority; no direct gameplay map mutation.
+
+
+- User returns in approximately 40 minutes from 14:36 UTC and asks to finish Worm
+  and prepare a short report. Prioritize bounded correctness, native paired Worm
+  comparisons, Worm13/Wisp12 changed-surface captures, final required checks and
+  the concise report. No additional monster or general planner work. Combined
+  focused evidence is now 266 arena tests, 11 actual-map tests, 80 app tests and
+  strict scoped lint. The partial-tail crater regression is red/green; a shared
+  target stale-core artifact was invalidated without content changes or cleanup.

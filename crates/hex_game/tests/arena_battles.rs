@@ -17,6 +17,9 @@ use std::time::Instant;
 #[path = "arena_battles/wisps.rs"]
 mod wisps;
 
+#[path = "arena_battles/worms.rs"]
+mod worms;
+
 fn app(map: ArenaMap, setup: ArenaBattleSetup) -> App {
     configured_app(map, setup, authored_tuning())
 }
@@ -475,6 +478,7 @@ fn calibrate_original_monster_groups() {
                                     "velocity":((actor.feet-actor.previous_feet)*120.0).to_array(),"impulse":actor.impulse_velocity().to_array(),"flying":actor.flying,"grounded":actor.grounded,
                                     "cooldowns":actor.cooldowns,"charge":actor.charge().map(|charge|charge.elapsed),
                                     "attack":actor.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"direction":attack.direction.to_array(),"progress":attack.progress})),
+                                    "worm":actor.worm(),
                                     "prisms":actor.body_hex_prisms().map(|prism|serde_json::json!({"offset":prism.offset.to_array(),"height":prism.height})).collect::<Vec<_>>(),
                                     "beam":actor.beam().map(|beam|serde_json::json!({"origin":beam.origin.to_array(),"direction":beam.direction.to_array(),"end":beam.end.to_array(),"radius":beam.radius,"locked":beam.locked})),
                                     "volume_valid":session.actor_volume_valid(actor.id,terrain,geometry)

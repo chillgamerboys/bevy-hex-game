@@ -11,11 +11,11 @@ Run the local launcher from the repository:
     python3 tools/arena.py launch
 
 Choose a map on the start screen. Fort defaults to a Dragon encounter and also
-offers five Goblins, a Shaman with three Goblins, one Shadow, a Golem, or four Ember Wisps. Seven Regions
+offers five Goblins, a Shaman with three Goblins, one Shadow, a Golem, four Ember Wisps, or a Worm. Seven Regions
 contains three separate parties at the mountain high pass, fort courtyard and
 cave entrance. Combat stays stopped until you press Enter or choose Start.
 The launcher also accepts `--map seven-regions` or `--map duel`; Fort presets use
-`--encounter dragon`, `goblins`, `shaman-party`, `shadow`, `golem` or `wisps-4`.
+`--encounter dragon`, `goblins`, `shaman-party`, `shadow`, `golem`, `wisps-4` or `worm`.
 
 | Input | Action |
 |---|---|
@@ -45,7 +45,7 @@ A two-minute limit reports a timeout rather than declaring a winner.
 
     python3 tools/arena.py launch --spectator --map fort --team-a goblins --team-b shaman-party --seed 1
 
-Team presets accept shadow, dragon, goblins, shaman-party, golem, one goblin,
+Team presets accept shadow, dragon, goblins, shaman-party, golem, worm, one goblin,
 and Wisp groups of 1, 2, 4, 8 or 12. Their launcher names are `goblin`, `wisp`,
 `wisps-2`, `wisps-4`, `wisps-8` and `wisps-12`. The seed
 repeats the initial setup and decisions; changing the map or roster still changes
@@ -110,6 +110,7 @@ and roster, including barriers, cooldowns and party memories.
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 | Golem |320| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
 | Ember Wisp |30| Small glowing flyer with a long-range Ember shot; fragile alone and dangerous in groups. |
+| Worm |140| Four long native hex segments, shallow dirt travel, and an exposed-head Boulder with knockback. |
 
 Goblins match the player body: .8 units tall with a .25-unit radius.
 
@@ -173,3 +174,13 @@ Water remains non-solid with no swimming or drowning; required approaches are dr
 Static authored map objects remain indestructible. Ground enemies use bounded
 local steering, so heavy destruction and unusual traps can defeat their routes.
 Grand V3, multiplayer, progression and persistent saves are deferred.
+
+
+The Worm moves at 2.2 units/second, usually one or two voxel levels below the
+surface. It changes eligible earth to dirt while preserving remaining block HP.
+It must physically raise its head before firing: initial Boulder damage is 50,
+splash radius 2.5, impulse 8, windup .8 seconds and cooldown 3.5 seconds. It cannot
+fire through earth. Opaque ground hides its body; explosions still splash through
+cover. The supported optional six-segment setting may be refused where an authored
+spawn pocket is too small; bodies are never compressed to fit. These remain initial
+balance values until the paired comparison and human playtest.

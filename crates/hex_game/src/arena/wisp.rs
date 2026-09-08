@@ -11,10 +11,15 @@ use hex_arena::{
 #[require(NotShadowCaster)]
 pub(super) struct WispPrism;
 
+#[derive(Component)]
+pub(super) struct WispWindup;
+
 #[derive(Resource)]
 pub(super) struct WispVisualAssets {
     column: Handle<Mesh>,
     sphere: Handle<Mesh>,
+    block: Handle<Mesh>,
+    warning: Handle<StandardMaterial>,
     body: Handle<StandardMaterial>,
     core: Handle<StandardMaterial>,
     glow: Handle<StandardMaterial>,
@@ -40,6 +45,12 @@ pub(super) fn setup(
         body: light(Color::srgba(1.0, 0.37, 0.045, 0.48)),
         core: light(Color::srgba(1.0, 0.96, 0.62, 0.98)),
         glow: light(Color::srgba(1.0, 0.44, 0.05, 0.045)),
+        block: meshes.add(Cuboid::from_size(Vec3::ONE)),
+        warning: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.98, 0.75),
+            unlit: true,
+            ..default()
+        }),
     });
 }
 
@@ -67,6 +78,7 @@ pub(super) fn glow(
     gizmos: &mut Gizmos,
     accent: Color,
 ) {
+    windup(commands, actor, assets);
     let progress = actor
         .attack_state()
         .filter(|attack| {
@@ -98,6 +110,41 @@ pub(super) fn glow(
                 );
             }
         }
+    }
+}
+
+/// A local expanding hex ring makes the short admitted windup distinct from idle.
+/// It stays inside the one-hex body footprint and uses ordinary opaque depth tests.
+pub(super) fn windup(commands: &mut Commands, actor: &Actor, assets: &WispVisualAssets) {
+    if actor.species != Species::Wisp || actor.hp <= 0.0 {
+        return;
+    }
+    let Some(attack) = actor.attack_state().filter(|attack| {
+        attack.kind == CreatureAbility::WispEmber && attack.phase == AttackPhase::Windup
+    }) else {
+        return;
+    };
+    let radius = 0.35 + attack.progress.clamp(0.0, 1.0) * 0.5;
+    let center = actor.eye() + Vec3::Y * 0.16;
+    for corner in 0..6u16 {
+        let angle = f32::from(corner) * std::f32::consts::TAU / 6.0;
+        let next = f32::from(corner + 1) * std::f32::consts::TAU / 6.0;
+        let from = center + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
+        let to = center + Vec3::new(next.sin(), 0.0, next.cos()) * radius;
+        let delta = to - from;
+        commands.spawn((
+            EncounterEffect,
+            WispWindup,
+            Name::new("Wisp admitted Ember windup ring"),
+            Mesh3d(assets.block.clone()),
+            MeshMaterial3d(assets.warning.clone()),
+            Transform::from_translation((from + to) * 0.5)
+                .with_rotation(Quat::from_rotation_arc(
+                    Vec3::X,
+                    delta.normalize_or(Vec3::X),
+                ))
+                .with_scale(Vec3::new(delta.length(), 0.055, 0.045)),
+        ));
     }
 }
 

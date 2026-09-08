@@ -3,7 +3,9 @@
 use super::{ArenaCamera, ViewState};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use hex_arena::{ActorIntent, ArenaSession, ArenaTuning, AttackPhase, CreatureAbility, Spell};
+use hex_arena::{
+    ActorIntent, ArenaSession, ArenaTuning, AttackPhase, CreatureAbility, Species, Spell,
+};
 use hex_core::arena::{ArenaMap, ArenaTerrainView, ArenaVoxelGeometry};
 
 pub(super) fn stress_view(view: &str) -> bool {
@@ -237,7 +239,12 @@ pub(super) fn capture_intent(
     else {
         return ActorIntent::default();
     };
-    let offset = enemy.feet + Vec3::Y * enemy.body_dimensions().y * 0.5 - human.eye();
+    let target = if enemy.species == hex_arena::Species::Worm {
+        enemy.eye()
+    } else {
+        enemy.center()
+    };
+    let offset = target - human.eye();
     let distance = offset.with_y(0.0).length();
     let direction = offset.normalize_or(Vec3::NEG_Z);
     let close = view.contains("swipe") || view.contains("windup") || view.contains("breath");
@@ -328,11 +335,14 @@ pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
     phase_actor(session, view).is_some()
         || super::golem::phase_actor(session, view).is_some()
         || super::wisp::phase_actor(session, view).is_some()
+        || super::worm::phase_actor(session, view).is_some()
 }
 
 pub(super) fn phase_view(view: &str) -> bool {
     super::golem::phase_view(view)
         || super::wisp::phase_view(view)
+        || super::worm::phase_view(view)
+        || super::worm_capture::phase_view(view)
         || matches!(
             view.strip_suffix("-rear").unwrap_or(view),
             "encounter-windup"
@@ -435,7 +445,20 @@ pub(super) fn visible_subjects(session: &ArenaSession, camera: &Transform, view:
             {
                 return false;
             }
-            let point = actor.feet + Vec3::Y * actor.body_dimensions().y * 0.5;
+            let (point, visible_height) = if actor.species == Species::Worm {
+                if !actor.worm().is_some_and(|worm| worm.exposed) {
+                    return false;
+                }
+                (
+                    actor.eye(),
+                    actor
+                        .body_hex_prisms()
+                        .next()
+                        .map_or(0.0, |part| part.height),
+                )
+            } else {
+                (actor.center(), actor.body_dimensions().y)
+            };
             let local = camera.rotation.inverse() * (point - camera.translation);
             let depth = -local.z;
             let tangent = (75.0_f32.to_radians() * 0.5).tan();
@@ -443,7 +466,7 @@ pub(super) fn visible_subjects(session: &ArenaSession, camera: &Transform, view:
                 && depth < 80.0
                 && local.y.abs() < depth * tangent * 0.85
                 && local.x.abs() < depth * tangent * (16.0 / 9.0) * 0.85
-                && actor.body_dimensions().y / depth > 0.02
+                && visible_height / depth > 0.02
                 && session
                     .camera_position(camera.translation, point)
                     .distance(point)
@@ -599,6 +622,7 @@ pub(super) fn effects(
     assets: Res<VisualAssets>,
     golem_assets: Res<super::golem::GolemVisualAssets>,
     wisp_assets: Res<super::wisp::WispVisualAssets>,
+    worm_assets: Res<super::worm::WormVisualAssets>,
     previous: Query<Entity, With<EncounterEffect>>,
     mut gizmos: Gizmos,
 ) {
@@ -650,6 +674,10 @@ pub(super) fn effects(
         }
     }
     for actor in session.actors.iter().filter(|a| a.hp > 0.0) {
+        if actor.species == hex_arena::Species::Worm {
+            super::worm::windup(&mut commands, actor, &worm_assets);
+            continue;
+        }
         if actor.species == hex_arena::Species::Wisp {
             let accent = if super::spectator::active(&session) {
                 super::spectator::team_color(&session, actor.team)

@@ -115,6 +115,10 @@ fn wisp_actor_zero_is_one_visible_fixed_native_prism_without_fake_shadow() {
         .expect("Wisp cached assets");
     fixture
         .world_mut()
+        .run_system_once(worm::setup)
+        .expect("Worm cached visuals");
+    fixture
+        .world_mut()
         .run_system_once(presentation::actors)
         .expect("actual body models");
     let models = fixture
@@ -193,6 +197,10 @@ fn natural_wisp_windup_and_released_ember_drive_capture_and_frozen_visual_size()
         .world_mut()
         .run_system_once(wisp::setup)
         .expect("Wisp assets");
+    fixture
+        .world_mut()
+        .run_system_once(worm::setup)
+        .expect("Worm cached visuals");
     fixture
         .world_mut()
         .run_system_once(presentation::setup_effects)
@@ -401,5 +409,122 @@ fn wisp_stress_records_exact_living_ticks_then_separate_frozen_publication() {
             .capture_wisp_ticks
             .len(),
         1440
+    );
+}
+
+#[test]
+fn wisp_windup_ring_is_local_depth_tested_and_absent_when_idle_or_dead() {
+    fn redraw(
+        mut commands: Commands,
+        session: Res<ArenaSession>,
+        assets: Res<wisp::WispVisualAssets>,
+        old: Query<Entity, With<wisp::WispWindup>>,
+    ) {
+        for entity in &old {
+            commands.entity(entity).despawn();
+        }
+        for actor in &session.actors {
+            wisp::windup(&mut commands, actor, &assets);
+        }
+    }
+    let mut fixture = observer();
+    fixture
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<StandardMaterial>>();
+    fixture
+        .world_mut()
+        .run_system_once(wisp::setup)
+        .expect("cached Wisp assets");
+    fixture
+        .world_mut()
+        .run_system_once(redraw)
+        .expect("idle draw");
+    assert_eq!(
+        fixture
+            .world_mut()
+            .query_filtered::<Entity, With<wisp::WispWindup>>()
+            .iter(fixture.world())
+            .count(),
+        0
+    );
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .bot_enabled = true;
+    let mut reached = false;
+    for _ in 0..600 {
+        tick(&mut fixture);
+        if wisp::phase_actor(
+            fixture.world().resource::<ArenaSession>(),
+            "encounter-wisp-windup",
+        )
+        .is_some()
+        {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "ordinary Wisp reaches a natural windup");
+    let actor = fixture
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .first()
+        .expect("Wisp actor zero");
+    let origin = actor.eye();
+    let expected_radius = 0.35 + actor.attack_state().expect("windup").progress * 0.5;
+    let initial_assets = fixture.world().resource::<Assets<Mesh>>().len();
+    fixture
+        .world_mut()
+        .run_system_once(redraw)
+        .expect("windup draw");
+    let segments = fixture
+        .world_mut()
+        .query_filtered::<(
+            &Transform,
+            &MeshMaterial3d<StandardMaterial>,
+            Has<NotShadowCaster>,
+        ), With<wisp::WispWindup>>()
+        .iter(fixture.world())
+        .map(|(t, m, no_shadow)| (*t, m.0.clone(), no_shadow))
+        .collect::<Vec<_>>();
+    assert_eq!(segments.len(), 6);
+    for (transform, material, no_shadow) in segments {
+        assert!(no_shadow);
+        assert!((transform.translation.y - origin.y - 0.16).abs() < 0.001);
+        assert!((transform.scale.x - expected_radius).abs() < 0.001);
+        assert!(transform.translation.distance(origin) < 1.0);
+        let material = fixture
+            .world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&material)
+            .expect("warning material");
+        assert!(material.unlit);
+        assert_eq!(material.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(material.depth_bias.to_bits(), 0.0_f32.to_bits());
+    }
+    // Render-only lifetime check: a dead source must not keep its old warning.
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .first_mut()
+        .expect("Wisp")
+        .hp = 0.0;
+    fixture
+        .world_mut()
+        .run_system_once(redraw)
+        .expect("dead source draw");
+    assert_eq!(
+        fixture
+            .world_mut()
+            .query_filtered::<Entity, With<wisp::WispWindup>>()
+            .iter(fixture.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        fixture.world().resource::<Assets<Mesh>>().len(),
+        initial_assets
     );
 }

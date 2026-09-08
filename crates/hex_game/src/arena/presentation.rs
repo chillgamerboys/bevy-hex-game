@@ -27,7 +27,7 @@ struct BodyPart {
 }
 
 fn body_parts(species: Species) -> Vec<BodyPart> {
-    if matches!(species, Species::Golem | Species::Wisp) {
+    if matches!(species, Species::Golem | Species::Wisp | Species::Worm) {
         return Vec::new();
     }
     let part = |size, center, material| BodyPart {
@@ -84,6 +84,7 @@ pub(super) fn actors(
     mut materials: ResMut<Assets<StandardMaterial>>,
     golem_assets: Res<super::golem::GolemVisualAssets>,
     wisp_assets: Res<super::wisp::WispVisualAssets>,
+    worm_assets: Res<super::worm::WormVisualAssets>,
 ) {
     for (entity, model, _, _) in &mut models {
         if model.2 != reset.generation
@@ -132,6 +133,7 @@ pub(super) fn actors(
             Species::Shaman => (Color::srgb(0.40, 0.15, 0.54), Color::srgb(0.44, 0.66, 0.26)),
             Species::Golem => (Color::srgb(0.34, 0.36, 0.40), Color::srgb(0.34, 0.36, 0.40)),
             Species::Wisp => (Color::srgb(1.0, 0.45, 0.1), Color::srgb(1.0, 0.85, 0.4)),
+            Species::Worm => (Color::srgb(0.69, 0.43, 0.27), Color::srgb(0.60, 0.36, 0.24)),
         };
         let palette = [
             if super::spectator::active(&session) {
@@ -166,6 +168,15 @@ pub(super) fn actors(
                     }
                     Species::Wisp => {
                         super::wisp::spawn_body(body, actor, &wisp_assets);
+                        return;
+                    }
+                    Species::Worm => {
+                        super::worm::spawn_body(
+                            body,
+                            actor,
+                            &worm_assets,
+                            palette.first().cloned().unwrap_or_default(),
+                        );
                         return;
                     }
                     Species::Human
@@ -239,6 +250,9 @@ pub(super) fn effects(
         Spell::AreaBlast => Color::srgb(0.70, 0.40, 1.0),
     };
     for projectile in &session.projectiles {
+        if projectile.appearance() == hex_arena::ProjectileAppearance::Boulder {
+            continue;
+        }
         if projectile.appearance() == hex_arena::ProjectileAppearance::Ember {
             gizmos.line(
                 projectile.previous_position,
@@ -382,6 +396,7 @@ pub(super) fn solid_effects(
     session: Res<ArenaSession>,
     assets: Res<EffectAssets>,
     wisp_assets: Res<super::wisp::WispVisualAssets>,
+    worm_assets: Res<super::worm::WormVisualAssets>,
     geometry: Res<ArenaVoxelGeometry>,
     previous: Query<Entity, With<TransientEffect>>,
 ) {
@@ -390,6 +405,11 @@ pub(super) fn solid_effects(
         commands.entity(entity).despawn();
     }
     for projectile in &session.projectiles {
+        if projectile.appearance() == hex_arena::ProjectileAppearance::Boulder {
+            super::worm::boulder(&mut commands, projectile, &worm_assets);
+            continue;
+        }
+
         if projectile.appearance() == hex_arena::ProjectileAppearance::Ember {
             super::wisp::ember(&mut commands, projectile, &wisp_assets);
             continue;

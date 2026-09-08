@@ -47,11 +47,11 @@ CHARGE_VIEWS = (
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
 MAPS = ("duel", "fort", "seven-regions")
-ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12")
+ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12", "worm")
 PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 5,
                   "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"], "golem": ["Golem"],
-                  "goblin": ["Goblin"], "wisp": ["Wisp"], **{f"wisps-{n}": ["Wisp"] * n for n in (2, 4, 8, 12)}}
-PLAYER_OVERRIDES = {"golem": "Golem", "goblin": "Goblin", "wisp": "Wisp", "wisps-2": "Wisps2", "wisps-4": "Wisps4", "wisps-8": "Wisps8", "wisps-12": "Wisps12"}
+                  "worm": ["Worm"], "goblin": ["Goblin"], "wisp": ["Wisp"], **{f"wisps-{n}": ["Wisp"] * n for n in (2, 4, 8, 12)}}
+PLAYER_OVERRIDES = {"worm": "Worm", "golem": "Golem", "goblin": "Goblin", "wisp": "Wisp", "wisps-2": "Wisps2", "wisps-4": "Wisps4", "wisps-8": "Wisps8", "wisps-12": "Wisps12"}
 MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions"}
 ENCOUNTER_LABELS = {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "Shaman party", "shadow": "Shadow", "golem": "Golem"}
 SEEDS = {"duel": None, "fort": 640367719, "seven-regions": 703700113}
@@ -141,6 +141,22 @@ WISP_VIEWS = (
 WISP_OBSERVER_RECIPES = {name: ("wisp", "goblin") for name, _, arena_map, _, _ in WISP_VIEWS if arena_map == "duel"}
 WISP_OBSERVER_RECIPES.update({"fort-wisps-observer-start": ("wisps-12", "shaman-party"),
                                "duel-wisps-layers": ("wisps-12", "wisps-12")})
+WORM_VIEWS = (
+    ('fort-worm-start', 'start', 'fort', 'worm', None),
+    ('fort-worm-overview', 'overview', 'fort', 'worm', None),
+    ('fort-worm-first', 'encounter-first', 'fort', 'worm', None),
+    ('fort-worm-third', 'encounter-third', 'fort', 'worm', None),
+    ('duel-worm-body', 'encounter-worm-body', 'duel', 'shadow', None),
+    ('duel-worm-body-rear', 'encounter-worm-body-rear', 'duel', 'shadow', None),
+    ('duel-worm-buried', 'encounter-worm-buried', 'duel', 'shadow', None),
+    ('duel-worm-emerging', 'encounter-worm-emerging', 'duel', 'shadow', None),
+    ('duel-worm-windup', 'encounter-worm-windup', 'duel', 'shadow', None),
+    ('duel-worm-boulder', 'encounter-worm-boulder', 'duel', 'shadow', None),
+    ('duel-worm-boulder-rear', 'encounter-worm-boulder-rear', 'duel', 'shadow', None),
+    ('fort-worm-converted-earth', 'encounter-worm-converted-earth', 'fort', 'worm', None),
+    ('fort-worm-reset', 'encounter-worm-reset', 'fort', 'worm', None),
+)
+WORM_OBSERVER_PRESETS = ("worm", "goblins")
 WISP_PERFORMANCE_VIEWS = tuple(
     (f"{arena_map}-wisps-stress", "observer-wisp-stress", arena_map, "shadow", None)
     for arena_map in ("duel", "fort")
@@ -436,6 +452,8 @@ def validate_wisp_state(state: dict, view: str) -> None:
         if light.get("fixture") != "dim-comparison" or light.get("ambient_brightness") != 6 or light.get("directional_illuminance") != [0]:
             raise RuntimeError("Dark Wisp capture did not use the explicit dim-light comparison.")
     elif phase == "encounter-wisp-windup":
+        if state.get("wisp_windup_segments", 0) < 6:
+            raise RuntimeError("Wisp windup has not produced its local warning ring.")
         if not any((a.get("attack") or {}).get("kind") == "WispEmber" and (a.get("attack") or {}).get("phase") == "Windup" and .3 <= (a.get("attack") or {}).get("progress", -1) <= .7 for a in alive):
             raise RuntimeError("Wisp capture lacks its natural Ember windup.")
     elif phase == "encounter-wisp-ember":
@@ -447,6 +465,106 @@ def validate_wisp_state(state: dict, view: str) -> None:
         teams = {actor.get("team") for actor in alive}
         if len(teams) != 2 or any({a.get("flight_layer") for a in alive if a.get("team") == team} != {0, 1} for team in teams):
             raise RuntimeError("Layered capture requires both published flight layers on each team.")
+
+
+def validate_worm_state(state: dict, view: str) -> None:
+    """Current public shapes, frozen shots and acknowledged edits; never a visual verdict."""
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    def vector(value, size=3):
+        return isinstance(value, list) and len(value) == size and all(number(v) for v in value)
+
+    def near(value, expected):
+        return vector(value, len(expected)) and all(abs(a-b) < .001 for a, b in zip(value, expected))
+
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError("Worm capture: " + message)
+
+    worms = [actor for actor in state.get("actors", []) if actor.get("species") == "Worm"]
+    phase = view.removesuffix("-rear")
+    requested = phase.startswith("encounter-worm-") or state.get("battle_setup", {}).get("player_recipe") == "Worm"
+    require(not requested or worms, "no actual Worm admitted")
+    expected_parts = {}
+    for actor in worms:
+        parts = actor.get("body_hex_prisms", [])
+        require(len(parts) in (4, 6), "body must contain four or six native prisms")
+        require(vector(actor.get("feet")), "invalid physical feet")
+        for index, part in enumerate(parts):
+            require(vector(part.get("offset")) and number(part.get("height")) and abs(part["height"]-.4) < .001,
+                    "invalid one-level physical segment")
+            expected_parts[(actor.get("id"), index)] = ([part["offset"][0], part["offset"][1]+.2, part["offset"][2]], [1, .4, 1])
+        minimum = [min(p["offset"][axis] for p in parts)-extent for axis, extent in enumerate([math.sqrt(3)/2, 0, 1])]
+        maximum = [max(p["offset"][axis] for p in parts)+extent for axis, extent in enumerate([math.sqrt(3)/2, .4, 1])]
+        require(near(actor.get("body_dimensions"), [hi-lo for lo, hi in zip(minimum, maximum)]) and near(actor.get("body_rotation"), [0, 0, 0, 1]), "dynamic bounds or fixed native yaw mismatch")
+        require(near(actor.get("body_center"), [f+(lo+hi)/2 for f, lo, hi in zip(actor["feet"], minimum, maximum)]), "union center mismatch")
+        require(near(actor.get("idle_mouth"), [f+o+y for f, o, y in zip(actor["feet"], parts[0]["offset"], [0, .2, 0])]), "mouth is not current physical head center")
+        worm = actor.get("worm") or {}
+        require(type(worm.get("head_index")) is int and worm["head_index"] == 0 and worm.get("phase") in ("Travel", "Emerging", "Exposed", "Diving") and number(worm.get("head_clearance")) and type(worm.get("exposed")) is bool, "invalid public physical phase snapshot")
+    if worms:
+        rendered = state.get("worm_render_parts", [])
+        keys = [(p.get("actor"), p.get("index")) for p in rendered]
+        require(state.get("worm_render_prisms") == len(expected_parts) and len(keys) == len(set(keys)) and set(keys) == set(expected_parts), "missing, duplicate or stale rendered segments")
+        for part, key in zip(rendered, keys):
+            translation, scale = expected_parts[key]
+            require(near(part.get("translation"), translation) and near(part.get("scale"), scale), "rendered segment does not match current authoritative offset")
+    boulders = [shot for shot in state.get("projectiles", []) if shot.get("appearance") == "Boulder"]
+    for shot in boulders:
+        require(shot.get("source_ability") == "WormBoulder" and number(shot.get("collision_radius")) and 0 < shot["collision_radius"] <= .5, "invalid frozen Boulder payload")
+        require(all(vector(shot.get(key)) for key in ("position", "previous_position", "velocity")) and number(shot.get("age")) and shot["age"] >= 0, "invalid frozen Boulder pose")
+    if worms or boulders:
+        require(state.get("boulder_render_count") == len(boulders), "missing Boulder render meshes")
+    if requested and phase in ("encounter-first", "encounter-third"):
+        require(any(a.get("id") in state.get("visible_subjects", []) and a["worm"]["exposed"] for a in worms), "player composition has no exposed visible head")
+    if not phase.startswith("encounter-worm-"):
+        return
+    reached = state.get("phase_reached_frame")
+    require(type(reached) is int and state.get("frame", 0) >= reached+4, "phase lacks four frozen render frames")
+    alive = [a for a in worms if a.get("hp", 0) > 0]
+    if phase == "encounter-worm-boulder":
+        require(any(shot.get("owner") == actor.get("id") and shot["age"] > 0 and any(abs(p-c) > dimension/2+shot["collision_radius"] for p, c, dimension in zip(shot["position"], actor["body_center"], actor["body_dimensions"])) for actor in worms for shot in boulders), "no real released Boulder fully outside its owner bounds")
+    elif phase == "encounter-worm-buried":
+        require(any(a["worm"]["phase"] == "Travel" and not a["worm"]["exposed"] and a["worm"]["head_clearance"] <= -.4 for a in alive), "no naturally buried travelling head")
+    elif phase == "encounter-worm-emerging":
+        require(any(a["worm"]["phase"] == "Emerging" and .1 <= a["worm"]["head_clearance"] < .35 and a["body_hex_prisms"][0]["offset"][1]-min(p["offset"][1] for p in a["body_hex_prisms"]) > .5 for a in alive), "no natural tapered emergence")
+    elif phase == "encounter-worm-windup":
+        require(any(a["worm"]["exposed"] and (a.get("attack") or {}).get("kind") == "WormBoulder" and (a.get("attack") or {}).get("phase") == "Windup" and .3 <= (a.get("attack") or {}).get("progress", -1) <= .7 for a in alive), "no exposed natural Boulder windup")
+    elif phase == "encounter-worm-body":
+        require(alive, "no living segmented subject")
+    elif phase in ("encounter-worm-converted-earth", "encounter-worm-reset"):
+        evidence = state.get("worm_capture") or {}
+        conversion = evidence.get("conversion") or {}
+        changed = conversion.get("changed", [])
+        current = evidence.get("current_cells", [])
+        require(conversion.get("actor") in {a.get("id") for a in worms} and 0 < len(changed) <= 64 and len(current) == len(changed) and evidence.get("accepted_outcomes", 0) > 0, "missing bounded acknowledged conversion")
+        for key in ("generation", "sequence", "frame", "tick", "revision"):
+            require(type(conversion.get(key)) is int and conversion[key] >= 0, "invalid conversion provenance")
+        require(type(evidence.get("dirt")) is int and evidence["dirt"] > 0, "invalid published dirt material")
+        positions = [json.dumps(c.get("position"), sort_keys=True) for c in changed]
+        require(len(positions) == len(set(positions)), "duplicate converted cells")
+        reset = phase.endswith("reset")
+        for before, now in zip(changed, current):
+            position = before.get("position") or {}
+            coord = position.get("coord") or {}
+            require(set(position) == {"coord", "level"} and set(coord) == {"q", "r"} and all(type(coord.get(axis)) is int for axis in ("q", "r")) and type(position.get("level")) is int, "invalid converted voxel identity")
+            require(type(before.get("before")) is int and before["before"] > 0, "invalid original material")
+            require(before.get("position") == now.get("position") and vector(before.get("center")), "conversion/current cell correspondence mismatch")
+            for key in ("health_before", "health_after"):
+                health = before.get(key)
+                require(isinstance(health, list) and len(health) == 2 and all(type(h) is int for h in health) and 0 < health[0] <= health[1] <= 255, "invalid acknowledged material health")
+            require(before.get("before") != evidence.get("dirt"), "receipt names an unchanged dirt cell as conversion")
+            expected_material = before.get("before") if reset else evidence.get("dirt")
+            expected_health = None if reset or before["health_after"][0] == before["health_after"][1] else before["health_after"]
+            require(now.get("material") == expected_material and now.get("published_health") == expected_health, "published material/health disagrees with conversion or reset")
+        if reset:
+            key = evidence.get("reset_key") or {}
+            require(key.get("key") == "R" and type(key.get("frame")) is int and key["frame"] >= conversion["frame"]+4 and key["frame"] <= reached, "missing ordinary post-conversion R-key reset")
+            require(evidence.get("current_generation") == conversion["generation"]+1 and evidence.get("current_revision") != conversion["revision"] and evidence.get("restored_revision") == evidence.get("current_revision") and state.get("started") is False and state.get("paused") is True, "reset did not restore a new ready round")
+        else:
+            require(evidence.get("current_generation") == conversion["generation"] and evidence.get("current_revision", -1) >= conversion["revision"], "conversion belongs to another generation/publication")
+    else:
+        raise RuntimeError("Unknown Worm phase view: " + phase)
 
 
 def validate_wisp_performance_state(state: dict, view: str) -> dict | None:
@@ -661,6 +779,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
             raise RuntimeError("Synthetic capture lacks valid real app-frame wall intervals.")
     validate_golem_state(state, view)
     validate_wisp_state(state, view)
+    validate_worm_state(state, view)
     wisp_performance = validate_wisp_performance_state(state, view)
     ready_frame = state.get("render_ready_frame")
     if not isinstance(ready_frame, int) or state.get("frame", 0) < ready_frame + 4:
@@ -680,7 +799,7 @@ def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance
-    if (args.golem_review or args.wisp_review or args.wisp_performance) and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
+    if (args.golem_review or args.wisp_review or args.wisp_performance or args.worm_review) and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
         raise RuntimeError("The creature matrix defines its player and observer recipes; use --view to select entries.")
     battle_environment(args, args.map or "fort", matrix=observer_matrix)
     if observer_matrix and (args.map or args.encounter):
@@ -707,6 +826,9 @@ def capture(args: argparse.Namespace) -> int:
     if args.wisp_review:
         entries = list(WISP_VIEWS)
         matrix = "arena-wisp-v1-natural-phases"
+    if args.worm_review:
+        entries = list(WORM_VIEWS)
+        matrix = "arena-worm-v1-natural-phases"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -750,7 +872,7 @@ def capture(args: argparse.Namespace) -> int:
         "scenario_correction": "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
@@ -779,6 +901,10 @@ def capture(args: argparse.Namespace) -> int:
                 row_args = argparse.Namespace(**vars(args))
                 row_args.spectator = True
                 row_args.team_a, row_args.team_b = WISP_OBSERVER_RECIPES[name]
+            if args.worm_review and arena_map == "duel":
+                row_args = argparse.Namespace(**vars(args))
+                row_args.spectator = True
+                row_args.team_a, row_args.team_b = WORM_OBSERVER_PRESETS
             if args.wisp_performance:
                 row_args = argparse.Namespace(**vars(args))
                 row_args.spectator = True
@@ -853,6 +979,7 @@ def main(argv: list[str] | None = None) -> int:
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
     review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
+    review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and R-key reset views.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
     review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel Golem-vs-Dragon observer body, charge, lock, beam and slam views.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")

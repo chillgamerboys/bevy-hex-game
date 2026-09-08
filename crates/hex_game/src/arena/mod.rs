@@ -8,6 +8,8 @@ mod spectator;
 #[cfg(test)]
 mod tests;
 mod wisp;
+mod worm;
+mod worm_capture;
 
 use bevy::camera::RenderTarget;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -38,12 +40,12 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "goblins" => ArenaEncounter::Goblins,
         "shaman-party" => ArenaEncounter::ShamanParty,
         "shadow" => ArenaEncounter::Shadow,
-        "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12"
+        "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12" | "worm"
             if map == ArenaMap::Fort =>
         {
             ArenaEncounter::Dragon
         }
-        "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12" => {
+        "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12" | "worm" => {
             return Err("Creature player overrides require Fort.".into());
         }
         value => return Err(format!("Unknown arena encounter: {value}")),
@@ -327,7 +329,8 @@ pub fn run() -> AppExit {
     } else {
         app.add_plugins(plugins);
     }
-    app.insert_resource(state)
+    app.init_resource::<worm_capture::Evidence>()
+        .insert_resource(state)
         .insert_resource(selection)
         .insert_resource(battle)
         .insert_resource(ClearColor(Color::srgb(0.10, 0.16, 0.22)))
@@ -370,6 +373,7 @@ pub fn run() -> AppExit {
                 encounter::setup,
                 golem::setup,
                 wisp::setup,
+                worm::setup,
                 wisp::configure_capture_lighting,
             )
                 .chain()
@@ -377,20 +381,35 @@ pub fn run() -> AppExit {
         )
         .add_systems(
             Update,
-            (input, hud::buttons, sync_cursor)
+            (
+                worm_capture::inject_reset_key,
+                input,
+                hud::buttons,
+                sync_cursor,
+            )
                 .chain()
                 .in_set(ArenaFrame::Input),
         )
         .add_systems(Update, drive_simulation.in_set(ArenaFrame::Tick))
         .add_systems(
             Update,
+            (worm_capture::observe, worm_capture::progress)
+                .chain()
+                .after(ArenaFrame::Tick)
+                .before(ArenaFrame::Present),
+        )
+        .add_systems(
+            Update,
             (
                 presentation::actors,
+                worm::update_parts,
                 presentation::camera,
                 encounter::camera,
                 spectator::camera,
                 golem::capture_camera,
                 wisp::capture_camera,
+                worm::capture_camera,
+                worm_capture::camera,
                 presentation::effects,
                 presentation::solid_effects,
                 encounter::effects,
@@ -519,6 +538,18 @@ fn aim(state: &ViewState) -> Vec3 {
     Quat::from_euler(EulerRot::YXZ, state.yaw, state.pitch, 0.0) * Vec3::NEG_Z
 }
 
+fn reset_from_input(
+    state: &mut ViewState,
+    session: &mut ArenaSession,
+    intent: &mut ArenaInput,
+    reset: &mut ArenaReset,
+) {
+    session.cancel_charges();
+    intent.human = ActorIntent::default();
+    reset.generation = reset.generation.saturating_add(1);
+    state.prepare_round();
+}
+
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -532,6 +563,12 @@ fn input(
     mut reset: ResMut<ArenaReset>,
 ) {
     if state.capture.is_some() {
+        if state.capture_view == "encounter-worm-reset"
+            && state.started
+            && keys.just_pressed(KeyCode::KeyR)
+        {
+            reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
+        }
         moved.clear();
         wheel.clear();
         return;
@@ -576,10 +613,7 @@ fn input(
         }
     }
     if window.focused && state.started && keys.just_pressed(KeyCode::KeyR) {
-        session.cancel_charges();
-        intent.human = ActorIntent::default();
-        reset.generation = reset.generation.saturating_add(1);
-        state.prepare_round();
+        reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
     }
     if window.focused
         && state.started
@@ -1124,12 +1158,23 @@ fn capture_frame(
     meshes: Res<Assets<Mesh>>,
     objects: Query<&hex_assets::ObjectInstance>,
     chunks: Query<&hex_objects::ObjectRenderChunk>,
-    golem_prisms: Query<&Mesh3d, With<golem::GolemPrism>>,
-    wisp_prisms: Query<&Mesh3d, With<wisp::WispPrism>>,
+    creature_meshes: (
+        Query<&Mesh3d, With<golem::GolemPrism>>,
+        Query<&Mesh3d, With<wisp::WispPrism>>,
+        Query<(&Mesh3d, &worm::WormPart, &Transform), With<worm::WormPrism>>,
+        Query<&Mesh3d, With<worm::BoulderVisual>>,
+        Query<&Mesh3d, With<wisp::WispWindup>>,
+    ),
     cameras: Query<&Transform, With<ArenaCamera>>,
     liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
+    worm_context: (
+        Res<worm_capture::Evidence>,
+        Res<ArenaReset>,
+        Res<hex_core::arena::ArenaMaterials>,
+        Res<hex_core::DamagedVoxels>,
+    ),
 ) {
     let Some(path) = state.capture.clone() else {
         return;
@@ -1137,6 +1182,7 @@ fn capture_frame(
     if state.requested {
         return;
     }
+    let (golem_prisms, wisp_prisms, worm_prisms, boulders, wisp_windups) = creature_meshes;
     let object_count = objects.iter().count();
     let chunk_count = chunks.iter().count();
     let needs_objects = !view.static_spans.is_empty() || object_count > 0;
@@ -1164,9 +1210,46 @@ fn capture_frame(
         .map(|actor| actor.body_hex_prisms().count())
         .sum::<usize>();
     let wisp_prism_count = wisp_prisms.iter().count();
+    let wisp_windup_count = wisp_windups.iter().count();
+    let expected_wisp_windups = session
+        .actors
+        .iter()
+        .filter(|actor| {
+            actor.species == hex_arena::Species::Wisp
+                && actor.hp > 0.0
+                && actor.attack_state().is_some_and(|attack| {
+                    attack.kind == hex_arena::CreatureAbility::WispEmber
+                        && attack.phase == hex_arena::AttackPhase::Windup
+                })
+        })
+        .count()
+        * 6;
     let wisp_assets_ready = expected_wisp_prisms == wisp_prism_count
+        && expected_wisp_windups == wisp_windup_count
+        && wisp_windups
+            .iter()
+            .all(|mesh| meshes.get(&mesh.0).is_some())
         && wisp_prisms.iter().all(|mesh| meshes.get(&mesh.0).is_some());
-    if !authored_assets_ready || !golem_assets_ready || !wisp_assets_ready {
+    let expected_worm_prisms = session
+        .actors
+        .iter()
+        .filter(|actor| actor.species == hex_arena::Species::Worm)
+        .map(|actor| actor.body_hex_prisms().count())
+        .sum::<usize>();
+    let worm_prism_count = worm_prisms.iter().count();
+    let expected_boulders = session
+        .projectiles
+        .iter()
+        .filter(|shot| shot.appearance() == hex_arena::ProjectileAppearance::Boulder)
+        .count();
+    let boulder_count = boulders.iter().count();
+    let worm_assets_ready = expected_worm_prisms == worm_prism_count
+        && worm_prisms
+            .iter()
+            .all(|(mesh, _, _)| meshes.get(&mesh.0).is_some())
+        && expected_boulders == boulder_count
+        && boulders.iter().all(|mesh| meshes.get(&mesh.0).is_some());
+    if !authored_assets_ready || !golem_assets_ready || !wisp_assets_ready || !worm_assets_ready {
         state.capture_ready_frame = None;
         if state.frames >= 1800 {
             error!(
@@ -1337,6 +1420,7 @@ fn capture_frame(
             "id": actor.id, "species": actor.species, "team": actor.team,
             "party": actor.party, "hp": actor.hp, "max_hp": actor.max_hp,
             "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
+            "body_center": actor.center().to_array(), "worm": actor.worm(),
             "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
             "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
             "idle_mouth": actor.eye().to_array(), "beam": beam, "flying": actor.flying, "grounded": actor.grounded,
@@ -1410,6 +1494,11 @@ fn capture_frame(
         ("authored_objects", serde_json::json!(object_count)),
         ("golem_render_prisms", serde_json::json!(golem_prism_count)),
         ("wisp_render_prisms", serde_json::json!(wisp_prism_count)),
+        ("wisp_windup_segments", serde_json::json!(wisp_windup_count)),
+        ("worm_render_prisms", serde_json::json!(worm_prism_count)),
+        ("boulder_render_count", serde_json::json!(boulder_count)),
+        ("worm_render_parts", serde_json::json!(worm_prisms.iter().map(|(_, part, transform)| serde_json::json!({"actor":part.actor_id(),"index":part.segment_index(),"translation":transform.translation.to_array(),"scale":transform.scale.to_array()})).collect::<Vec<_>>())),
+        ("worm_capture", worm_context.0.receipt(&view, &worm_context.1, &worm_context.2, &worm_context.3)),
         ("projectiles", serde_json::json!(projectiles)),
         ("lighting", serde_json::json!({"fixture":if wisp::dim_view(&state.capture_view) {"dim-comparison"}else{"ordinary"}, "ambient_brightness":lighting.0.brightness, "directional_illuminance":lighting.1.iter().map(|light|light.illuminance).collect::<Vec<_>>()})),
         ("object_render_chunks", serde_json::json!(chunk_count)),

@@ -189,6 +189,10 @@ fn observer_actor_zero_is_visible_and_player_hud_is_absent() {
         .expect("Wisp cached visuals");
     fixture
         .world_mut()
+        .run_system_once(worm::setup)
+        .expect("Worm cached visuals");
+    fixture
+        .world_mut()
         .run_system_once(presentation::actors)
         .expect("observer models");
     let visible_zero = fixture

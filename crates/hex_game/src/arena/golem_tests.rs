@@ -174,6 +174,10 @@ fn golem_observer_actor_zero_renders_seven_native_columns_at_authoritative_pose(
         .expect("Wisp cached visuals");
     fixture
         .world_mut()
+        .run_system_once(worm::setup)
+        .expect("Worm cached visuals");
+    fixture
+        .world_mut()
         .run_system_once(presentation::actors)
         .expect("models");
     let columns = fixture

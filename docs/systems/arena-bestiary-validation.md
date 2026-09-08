@@ -540,3 +540,38 @@ All failed compile/test attempts remain in `work/worm-runtime-checks-01`; final
 logs are `tests-04.log` and `clippy-01.log`. Enabled-admission checks are in
 `work/worm-admission-checks-01/receipt.json`. Actual-map fixtures, application/native
 composition, calibration and Worm pixels remain pending at this checkpoint.
+
+
+## Worm combined application checkpoint
+
+The real-world suite passes 11 tests, including complete four-part admission on
+Fort/Duel in both team orders and a Worm mirror, six-part complete placement or
+explicit refusal, dormant Fort conversion, old-request reset, natural exposed
+Boulder damage and HP-preserving correlated dirt publication. All 80 arena
+application tests pass. Strict game all-target/all-feature lint passes separately
+after changing an exact-zero test assertion to compare float bits. Existing layout
+bounds remain checked; the new seventh Fort recipe required updating only the
+expected button count. Worm physical parts now explicitly require Visibility,
+which also makes minimal-fixture updates independent of render-plugin registration.
+
+A partial-tail crater was reproduced before repair: it blocked a safe head rise
+for 600 ticks. Stationary emergence now uses actual head-local support while travel
+retains its full-body shallow band and every candidate retains complete swept
+admission. This passes all 266 arena tests and strict arena lint. The native trace
+now includes Worm phase and physical clearance. Head-support destruction while
+some tail segments remain buried is a separate conservative movement limitation;
+this repair never invents support or permits a buried attack.
+
+One application attempt reused an old review checkout's core metadata from the
+shared target: checkout-relative fingerprints and source mtimes made that variant
+appear fresh. Refreshing only main core lib.rs's timestamp (identical bytes) forced
+the exact feature variant to rebuild. No source workaround or cache deletion was
+used. Subsequent application compilation and tests consume the current contracts.
+
+Evidence: `work/worm-world-composition-01` (stale metadata), `-02` (missing app
+Species import), `-03` (11-test pass), `work/worm-crater-checks-01` (red/green),
+`work/worm-app-integration-01` (retained two failures),
+`work/worm-combined-focus-01` (11 +80 pass; one test float lint),
+`work/worm-combined-clippy-02` (strict pass), and
+`work/worm-cache-recovery-01.json`. Native calibration, captures and final repository
+checks follow this focused milestone.

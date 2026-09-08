@@ -68,6 +68,10 @@ fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
         .world_mut()
         .run_system_once(wisp::setup)
         .expect("Wisp cached visuals");
+    fixture
+        .world_mut()
+        .run_system_once(worm::setup)
+        .expect("Worm cached visuals");
     let camera_entity = fixture
         .world_mut()
         .spawn((ArenaCamera, Transform::default()))
@@ -1584,7 +1588,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             .iter()
             .filter(|(_, phase, _, _)| *phase == "pause")
             .count();
-        assert_eq!(start_actions, 18);
+        assert_eq!(start_actions, 19); // Two modes, three maps, seven recipes, four roster arrows, three actions.
         assert_eq!(
             actions
                 .iter()
@@ -1621,7 +1625,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                 "start",
                 (start_actions
                     - if control == hex_arena::ArenaControl::Spectator {
-                        6
+                        7
                     } else {
                         4
                     })
@@ -1699,14 +1703,13 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                         .total_cmp(&right.min.y)
                         .then(left.min.x.total_cmp(&right.min.x))
                 });
-                assert_eq!(creatures.len(), 6, "six Fort creature choices");
-                for row in creatures.chunks_exact(3) {
-                    let [left, middle, right] = row else {
-                        unreachable!()
-                    };
-                    assert!((left.min.y - middle.min.y).abs() < 0.5);
-                    assert!((left.min.y - right.min.y).abs() < 0.5);
-                    assert!(left.max.x <= middle.min.x && middle.max.x <= right.min.x);
+                assert_eq!(creatures.len(), 7, "seven Fort creature choices");
+                for row in creatures.chunks(4) {
+                    for pair in row.windows(2) {
+                        let [left, right] = pair else { unreachable!() };
+                        assert!((left.min.y - right.min.y).abs() < 0.5);
+                        assert!(left.max.x <= right.min.x);
+                    }
                 }
                 let upper = creatures.first().expect("upper creature row");
                 let lower = creatures.last().expect("lower creature row");
@@ -1940,6 +1943,10 @@ fn actor_models_reconcile_removed_species_and_reset_generations() {
         .world_mut()
         .run_system_once(wisp::setup)
         .expect("Wisp cached visuals");
+    fixture
+        .world_mut()
+        .run_system_once(worm::setup)
+        .expect("Worm cached visuals");
     let render = |fixture: &mut App| {
         fixture
             .world_mut()
@@ -2288,3 +2295,5 @@ mod golem_tests;
 
 #[path = "wisp_tests.rs"]
 mod wisp_tests;
+#[path = "worm_tests.rs"]
+mod worm_tests;
