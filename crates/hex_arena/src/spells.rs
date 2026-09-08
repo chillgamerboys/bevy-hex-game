@@ -40,6 +40,14 @@ pub(crate) struct PendingWall {
     center: Vec3,
 }
 
+impl Projectile {
+    /// Allegiance frozen at release, including after the source dies.
+    #[must_use]
+    pub fn source_team(&self) -> crate::TeamId {
+        self.parameters.team
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Impact {
     point: Vec3,
@@ -456,7 +464,12 @@ impl ArenaSession {
         let mut survivors = Vec::new();
         for mut shot in std::mem::take(&mut self.projectiles) {
             if let Some(impact) = advance_shot(&mut shot, &self.collision, &self.actors, false) {
-                self.combat_cue(shot.owner, impact.point, CombatCueKind::Impact);
+                self.combat_cue_from(
+                    shot.owner,
+                    shot.parameters.team,
+                    impact.point,
+                    CombatCueKind::Impact,
+                );
                 if let Some(id) = impact.barrier {
                     if shot.spell == Spell::Fireball {
                         if let Some(barrier) =
@@ -669,7 +682,11 @@ pub(super) fn preview(
     geometry: ArenaVoxelGeometry,
     tuning: &ArenaTuning,
 ) -> Preview {
-    let Some(actor) = session.actors.iter().find(|a| a.id == 0) else {
+    let Some(actor) = session
+        .actors
+        .iter()
+        .find(|a| Some(a.id) == session.human_actor_id())
+    else {
         return Preview::default();
     };
     preview_actor(

@@ -73,12 +73,36 @@ struct Belief {
     velocity: Vec3,
     visible: bool,
     uncertainty: f32,
+    profile: Option<crate::targeting::ObservedTarget>,
 }
 
 impl Belief {
     fn center(self) -> Vec3 {
-        self.feet + Vec3::Y * (BODY_HEIGHT * 0.5)
+        self.feet
+            + Vec3::Y
+                * (self
+                    .profile
+                    .map_or(BODY_HEIGHT, |target| target.body.dimensions.y)
+                    * 0.5)
     }
+
+    fn distance(self, point: Vec3, time: f32, prediction: f32) -> f32 {
+        self.profile.map_or_else(
+            || capsule_distance(point, self.feet + self.velocity * time.min(prediction)),
+            |mut target| {
+                target.body.feet = self.feet;
+                target.body.velocity = self.velocity;
+                target.distance(point, time)
+            },
+        )
+    }
+}
+
+#[derive(Debug)]
+struct BattlePerception {
+    search: Vec3,
+    seen: Vec<crate::targeting::ObservedTarget>,
+    target: Option<crate::targeting::ObservedTarget>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +161,7 @@ pub(super) struct Bot {
     movement_rollout_ticks: u64,
     safe_expected: Option<(Vec3, Vec3)>,
     safe_run: bool,
+    battle: Option<BattlePerception>,
 }
 
 impl Default for Bot {
@@ -182,11 +207,52 @@ impl Default for Bot {
             movement_rollout_ticks: 0,
             safe_expected: None,
             safe_run: false,
+            battle: None,
         }
     }
 }
 
 impl Bot {
+    pub(crate) fn with_seed(seed: u32) -> Self {
+        Self {
+            seed: seed.max(1),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn intent_battle(
+        &mut self,
+        id: u8,
+        search: Vec3,
+        actors: &[Actor],
+        projectiles: &[Projectile],
+        collision: &CollisionWorld,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        tuning: &ArenaTuning,
+        cues: &[CombatCue],
+        tick: u64,
+    ) -> ActorIntent {
+        self.battle
+            .get_or_insert(BattlePerception {
+                search,
+                seen: Vec::new(),
+                target: None,
+            })
+            .search = search;
+        self.intent_for(
+            id,
+            actors,
+            projectiles,
+            collision,
+            world,
+            geometry,
+            tuning,
+            cues,
+            tick,
+        )
+    }
+
     fn random(&mut self) -> f32 {
         self.seed ^= self.seed << 13;
         self.seed ^= self.seed >> 17;
@@ -278,36 +344,66 @@ impl Bot {
             self.sense_ticks = 12;
             // This facade alone reads live opponents. A failed LOS query copies
             // no position, velocity, aim, charge, or cooldown into the brain.
-            let target = actors
-                .iter()
-                .find(|a| a.id == 0 && a.hp > 0.0)
-                .filter(|a| {
-                    [a.center(), a.eye()]
-                        .into_iter()
-                        .any(|p| visible_from(collision, bot.eye(), p))
+            let mut switched = false;
+            let target = if let Some(battle) = &mut self.battle {
+                battle.seen = crate::targeting::observe(
+                    bot,
+                    actors,
+                    &battle.seen,
+                    collision,
+                    tick,
+                    tuning.bot.prediction_seconds,
+                );
+                let selected = battle.seen.first().copied();
+                if let Some(selected) = selected {
+                    switched = battle
+                        .target
+                        .is_some_and(|old| old.body.id != selected.body.id);
+                    battle.target = Some(selected);
+                }
+                selected.map(|seen| Memory {
+                    feet: seen.body.feet,
+                    velocity: seen.body.velocity,
+                    tick,
                 })
-                .map(|a| {
-                    let velocity = self
-                        .memory
-                        .filter(|m| age(tick, m.tick) <= 0.21 && tick > m.tick)
-                        .map_or(Vec3::ZERO, |m| {
-                            ((a.feet - m.feet) / age(tick, m.tick)).clamp_length_max(9.0)
-                        });
-                    Memory {
-                        feet: a.feet,
-                        velocity,
-                        tick,
-                    }
-                });
+            } else {
+                actors
+                    .iter()
+                    .find(|a| a.id == 0 && a.hp > 0.0)
+                    .filter(|a| {
+                        [a.center(), a.eye()]
+                            .into_iter()
+                            .any(|p| visible_from(collision, bot.eye(), p))
+                    })
+                    .map(|a| {
+                        let velocity = self
+                            .memory
+                            .filter(|m| age(tick, m.tick) <= 0.21 && tick > m.tick)
+                            .map_or(Vec3::ZERO, |m| {
+                                ((a.feet - m.feet) / age(tick, m.tick)).clamp_length_max(9.0)
+                            });
+                        Memory {
+                            feet: a.feet,
+                            velocity,
+                            tick,
+                        }
+                    })
+            };
+            if switched {
+                self.memory = None;
+                self.cue = None;
+                self.loss_tick = None;
+                self.blind_used = false;
+                self.observation.target = None;
+                self.route.clear();
+                self.cancel_charge();
+                self.aim = None;
+                self.think_ticks = 0;
+            }
             let threat = projectiles
                 .iter()
                 .filter(|s| s.owner != bot.id && s.spell == Spell::Fireball)
-                .filter(|s| {
-                    actors
-                        .iter()
-                        .find(|a| a.id == s.owner)
-                        .is_none_or(|owner| owner.team != bot.team)
-                })
+                .filter(|s| s.source_team() != bot.team)
                 .filter(|s| {
                     s.position.distance(bot.center()) < 18.0
                         && visible_from(collision, bot.eye(), s.position)
@@ -332,10 +428,7 @@ impl Bot {
                 }
                 self.last_cue_id = Some(cue.id);
                 if cue.owner != bot.id
-                    && actors
-                        .iter()
-                        .find(|a| a.id == cue.owner)
-                        .is_none_or(|owner| owner.team != bot.team)
+                    && cue.team != bot.team
                     && age(tick, cue.tick) <= 1.0
                     && cue.position.distance(bot.center()) <= tuning.bot.cue_radius
                 {
@@ -359,6 +452,12 @@ impl Bot {
                 self.blind_used = false;
             }
             self.observation = Observation { target, threat };
+            if switched && bot.charge().is_some() {
+                return ActorIntent {
+                    aim: bot.aim,
+                    ..Default::default()
+                };
+            }
             if let Some(threat) = threat {
                 self.ambush_until = 0;
                 let side = threat
@@ -385,8 +484,10 @@ impl Bot {
                         .observation
                         .target
                         .filter(|target| {
-                            capsule_distance(bot.center(), target.feet)
-                                < tuning.blast_radius() * 0.8
+                            self.battle.as_ref().and_then(|b| b.target).map_or_else(
+                                || capsule_distance(bot.center(), target.feet),
+                                |target| target.distance(bot.center(), 0.0),
+                            ) < tuning.blast_radius() * 0.8
                         })
                         .map(|_| aim),
                     Spell::Shield if !needs_threat || self.observation.threat.is_some() => self
@@ -504,6 +605,7 @@ impl Bot {
                 velocity: if visible { m.velocity } else { Vec3::ZERO },
                 visible,
                 uncertainty: if visible { 0.1 } else { 0.4 + elapsed * 1.5 },
+                profile: self.battle.as_ref().and_then(|b| b.target),
             });
         }
         cue.map(|c| {
@@ -515,6 +617,7 @@ impl Bot {
                 velocity: Vec3::ZERO,
                 visible: false,
                 uncertainty: 1.5,
+                profile: None,
             }
         })
     }
@@ -597,6 +700,10 @@ impl Bot {
             self.route.clear();
             self.ambush_until = 0;
             self.cancel_charge();
+            if let Some(battle) = &self.battle {
+                self.travel = (battle.search - bot.feet).with_y(0.0).normalize_or_zero();
+                self.run = true;
+            }
             return ActorIntent::default();
         };
         let toward = (belief.center() - bot.center())
@@ -716,6 +823,7 @@ impl Bot {
                         velocity: Vec3::ZERO,
                         visible: false,
                         uncertainty: 0.4 + elapsed * 1.5,
+                        profile: self.battle.as_ref().and_then(|b| b.target),
                     }
                 })
         };
@@ -804,7 +912,7 @@ impl Bot {
         tuning: &ArenaTuning,
     ) -> Option<Vec3> {
         let speed = tuning.launch_speed(0.0);
-        let observations = belief.map_or_else(Vec::new, |b| forecast_bodies(b, tuning));
+        let observations = belief.map_or_else(Vec::new, |b| self.forecast_bodies(b, tuning));
         for offset in [4.5, 6.0] {
             let landing = bot.feet + direction * offset + Vec3::Y * 0.06;
             let Some((aim, _)) = ballistic_aim(bot.eye(), landing, tuning, speed) else {
@@ -916,10 +1024,16 @@ impl Bot {
         if bot.center().distance(belief.center()) <= tuning.fireball_radius() + 0.8 {
             return None;
         }
-        let observations = forecast_bodies(belief, tuning);
+        let observations = self.forecast_bodies(belief, tuning);
         let (_, lead_time) = ballistic_aim(bot.eye(), belief.center(), tuning, speed)?;
         let lead = belief.velocity * lead_time.min(tuning.bot.prediction_seconds);
-        for vertical in [BODY_HEIGHT * 0.5, 0.06] {
+        for vertical in [
+            belief
+                .profile
+                .map_or(BODY_HEIGHT, |target| target.body.dimensions.y)
+                * 0.5,
+            0.06,
+        ] {
             let uncertainty_error = if belief.visible {
                 Vec3::ZERO
             } else {
@@ -945,9 +1059,8 @@ impl Bot {
             let Some(impact) = forecast.impact else {
                 continue;
             };
-            let future =
-                belief.feet + belief.velocity * impact.time.min(tuning.bot.prediction_seconds);
-            let target_distance = capsule_distance(impact.point, future);
+            let target_distance =
+                belief.distance(impact.point, impact.time, tuning.bot.prediction_seconds);
             if capsule_distance(impact.point, bot.feet) > tuning.fireball_radius() + 0.5
                 && target_distance <= tuning.fireball_radius() * 0.6
                 && (belief.visible || (impact.actor.is_none() && impact.barrier.is_none()))
@@ -956,6 +1069,18 @@ impl Bot {
             }
         }
         None
+    }
+
+    fn forecast_bodies(&self, belief: Belief, tuning: &ArenaTuning) -> Vec<ForecastBody> {
+        if let Some(battle) = &self.battle {
+            if belief.visible {
+                battle.seen.iter().map(|seen| seen.body).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            forecast_bodies(belief, tuning)
+        }
     }
 }
 

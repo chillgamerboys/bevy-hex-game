@@ -64,6 +64,7 @@ impl ArenaSession {
             }
         }
         self.refresh_support_buffs(tuning);
+        let human_id = self.human_actor_id();
         for actor in &mut self.actors {
             if actor.hp <= 0.0 {
                 continue;
@@ -80,7 +81,7 @@ impl ArenaSession {
             {
                 actor.hp = (actor.hp + c.dragon_regen_rate * STEP).min(actor.max_hp);
             }
-            if actor.id == 0
+            if Some(actor.id) == human_id
                 && elapsed(self.tick, actor.last_activity_tick) >= c.human_regen_delay
                 && elapsed(self.tick, self.encounter.human_seen_tick) >= c.human_unseen_delay
             {

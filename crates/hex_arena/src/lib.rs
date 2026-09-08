@@ -28,6 +28,7 @@ mod encounters;
 mod motion;
 mod shapes;
 mod spells;
+mod targeting;
 mod telemetry;
 
 pub use battle::{
@@ -558,6 +559,9 @@ pub struct ArenaSession {
     next_cue: u64,
     combat_stats: [ActorCombatStats; 2],
     encounter: encounters::EncounterState,
+    accepted_battle: ArenaBattleSetup,
+    battle_result: Option<BattleResult>,
+    battle_initial: Vec<BattleTeamSummary>,
     #[cfg(any(test, feature = "test-support"))]
     baseline_bot: Option<bot_baseline::Bot>,
 }
@@ -586,6 +590,9 @@ impl Default for ArenaSession {
             next_cue: 0,
             combat_stats: Default::default(),
             encounter: encounters::EncounterState::default(),
+            accepted_battle: ArenaBattleSetup::default(),
+            battle_result: None,
+            battle_initial: Vec::new(),
             #[cfg(any(test, feature = "test-support"))]
             baseline_bot: None,
         }
@@ -680,6 +687,23 @@ impl ArenaSession {
         self.collision.refresh(world, geometry);
     }
 
+    fn reset_with_setup(
+        &mut self,
+        generation: u64,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        setup: &ArenaBattleSetup,
+    ) {
+        self.reset(generation, world, geometry);
+        self.accepted_battle = setup.clone();
+        if setup.control == ArenaControl::Spectator {
+            self.actors.clear();
+            if let Err(reason) = setup.validate_for(world.selection.map) {
+                self.battle_result = Some(BattleResult::InvalidSetup(reason.to_string()));
+            }
+        }
+    }
+
     fn accept_outcome(&mut self, outcome: &TerrainImpactOutcome) {
         let Some(expected) = self.pending_impacts.remove(&outcome.batch) else {
             self.notice = "Unmatched terrain outcome; reset the arena.".into();
@@ -709,10 +733,12 @@ impl ArenaSession {
             effect.age += STEP;
         }
         self.effects.retain(|effect| effect.age < effect.lifetime);
-        if self.outcome.is_some() {
+        if self.is_finished() {
             return commands;
         }
-        if world.selection.map != hex_core::arena::ArenaMap::Duel {
+        if self.accepted_battle.control == ArenaControl::Spectator
+            || world.selection.map != hex_core::arena::ArenaMap::Duel
+        {
             return self.advance_encounter(human, world, geometry, materials, tuning);
         }
         self.begin_simulation_tick();
@@ -915,6 +941,7 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<ArenaSession>()
         .init_resource::<ArenaInput>()
         .init_resource::<ArenaTuning>()
+        .init_resource::<ArenaBattleSetup>()
         .add_message::<TerrainEdit>()
         .add_message::<TerrainImpact>()
         .add_message::<TerrainImpactOutcome>()
@@ -929,12 +956,13 @@ fn simulate(
     geometry: Res<ArenaVoxelGeometry>,
     materials: Res<ArenaMaterials>,
     reset: Res<ArenaReset>,
+    setup: Res<ArenaBattleSetup>,
     mut outcomes: MessageReader<TerrainImpactOutcome>,
     mut edits: MessageWriter<TerrainEdit>,
     mut impacts: MessageWriter<TerrainImpact>,
 ) {
     if session.generation != Some(reset.generation) {
-        session.reset(reset.generation, &view, *geometry);
+        session.reset_with_setup(reset.generation, &view, *geometry, &setup);
         // Adopt spawn orientation rather than a stale look from the prior round.
         if let Some(actor) = session.actors.first() {
             input.human.aim = actor.aim;

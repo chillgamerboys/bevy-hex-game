@@ -7,6 +7,7 @@ use hex_core::{HexCoord, TilePos};
 use std::collections::BTreeMap;
 
 mod abilities;
+mod battle_runtime;
 mod brain;
 #[cfg(test)]
 mod tests;
@@ -18,6 +19,7 @@ struct Knowledge {
     tick: u64,
     direct: bool,
     cue_kind: Option<CombatCueKind>,
+    observed: Option<targeting::ObservedTarget>,
 }
 
 #[derive(Debug)]
@@ -28,6 +30,7 @@ struct PartyRuntime {
     last_cue_id: Option<u64>,
     leash: f32,
     search: f32,
+    battle_search: Option<Vec3>,
 }
 
 #[derive(Debug, Default)]
@@ -43,6 +46,7 @@ pub(crate) struct EncounterState {
     pub ability_counts: BTreeMap<ActorId, [u32; 7]>,
     next_barrier: u64,
     human_seen_tick: u64,
+    battle_seen: BTreeMap<PartyId, Vec<targeting::ObservedTarget>>,
 }
 
 impl ArenaSession {
@@ -69,7 +73,7 @@ impl ArenaSession {
             living_enemies: self
                 .actors
                 .iter()
-                .filter(|a| a.id != 0 && a.hp > 0.0)
+                .filter(|a| Some(a.id) != self.human_actor_id() && a.hp > 0.0)
                 .count(),
             active_parties: self
                 .encounter
@@ -104,6 +108,10 @@ impl ArenaSession {
         geometry: ArenaVoxelGeometry,
         tuning: &ArenaTuning,
     ) {
+        if self.accepted_battle.control == ArenaControl::Spectator {
+            self.initialize_battle(world, geometry, tuning);
+            return;
+        }
         let c = &tuning.encounters;
         self.encounter = EncounterState {
             initialized: true,
@@ -221,6 +229,7 @@ impl ArenaSession {
                 last_cue_id: None,
                 leash,
                 search,
+                battle_search: None,
             });
         }
         if self.encounter.runtime.is_empty() {
@@ -319,6 +328,7 @@ impl ArenaSession {
                     tick: self.tick,
                     direct: false,
                     cue_kind: None,
+                    observed: None,
                 });
                 p.last_sight = self.tick;
             }
@@ -326,6 +336,10 @@ impl ArenaSession {
     }
 
     fn observe_parties(&mut self, tuning: &ArenaTuning) {
+        if self.accepted_battle.control == ArenaControl::Spectator {
+            self.observe_battle_parties(tuning);
+            return;
+        }
         let Some(human) = self.actors.iter().find(|a| a.id == 0 && a.hp > 0.0) else {
             return;
         };
@@ -362,6 +376,7 @@ impl ArenaSession {
                     tick: self.tick,
                     direct: true,
                     cue_kind: None,
+                    observed: None,
                 });
                 p.last_sight = self.tick;
                 if p.snapshot.phase == PartyPhase::Dormant {
@@ -397,6 +412,7 @@ impl ArenaSession {
                         tick: cue.tick,
                         direct: false,
                         cue_kind: Some(cue.kind),
+                        observed: None,
                     });
                 }
             }
@@ -482,6 +498,7 @@ impl ArenaSession {
             }
         }
         let mut casts = Vec::new();
+        let human_id = self.human_actor_id();
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             actor.previous_yaw = actor.body_yaw;
@@ -490,7 +507,7 @@ impl ArenaSession {
                 actor.cancel_charge();
                 continue;
             }
-            let intent = if actor.id == 0 {
+            let intent = if Some(actor.id) == human_id {
                 human
             } else {
                 intents.get(&actor.id).map_or(
@@ -514,7 +531,7 @@ impl ArenaSession {
                 *cd = (*cd - STEP).max(0.0);
             }
             let forward = actor.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
-            let direction = if actor.id == 0 {
+            let direction = if Some(actor.id) == human_id {
                 forward * intent.movement.y + forward.cross(Vec3::Y) * intent.movement.x
             } else {
                 intents.get(&actor.id).map_or(Vec3::ZERO, |i| i.direction)
@@ -575,13 +592,17 @@ impl ArenaSession {
             .iter()
             .find(|a| a.id != 0 && a.hp > 0.0)
             .map(|a| a.id);
-        self.outcome = match (human_alive, enemy) {
-            (true, None) => Some(ArenaOutcome::Winner(0)),
-            (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
-            (false, None) => Some(ArenaOutcome::Draw),
-            _ => None,
-        };
-        if self.outcome.is_some() {
+        if self.accepted_battle.control == ArenaControl::Spectator {
+            self.finish_battle_tick();
+        } else {
+            self.outcome = match (human_alive, enemy) {
+                (true, None) => Some(ArenaOutcome::Winner(0)),
+                (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
+                (false, None) => Some(ArenaOutcome::Draw),
+                _ => None,
+            };
+        }
+        if self.is_finished() {
             self.cancel_charges();
             self.projectiles.clear();
             self.pending_walls.clear();

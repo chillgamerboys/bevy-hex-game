@@ -2,6 +2,9 @@ use super::*;
 use crate::collision::SKIN;
 use hex_core::{ElementId, SubstanceId};
 
+#[path = "battle_tests.rs"]
+mod battle_tests;
+
 fn fixture(
     encounter: ArenaEncounter,
 ) -> (
@@ -470,6 +473,7 @@ fn hidden_human_changes_do_not_change_creature_intents_after_the_same_observatio
             tick: 1,
             direct: true,
             cue_kind: None,
+            observed: None,
         });
         let mut left = brain::Brain::new(1, Vec3::new(-5.0, 0.0, 0.0));
         let mut right = brain::Brain::new(1, Vec3::new(-5.0, 0.0, 0.0));
@@ -532,6 +536,7 @@ fn search_expires_into_return_and_preserves_damage_when_home_is_reached() {
         tick: session.tick,
         direct: true,
         cue_kind: None,
+        observed: None,
     });
     party.last_sight = session.tick;
     ticks(&mut session, 510, &view, geometry, materials, &tuning);
@@ -912,6 +917,7 @@ fn party_sound_does_not_wake_independent_dormant_or_extend_returning_groups() {
         last_cue_id: None,
         leash: 18.0,
         search: 4.0,
+        battle_search: None,
     });
     session.encounter.runtime.push(PartyRuntime {
         snapshot: PartySnapshot {
@@ -925,6 +931,7 @@ fn party_sound_does_not_wake_independent_dormant_or_extend_returning_groups() {
         last_cue_id: None,
         leash: 18.0,
         search: 4.0,
+        battle_search: None,
     });
     session.combat_cue(0, Vec3::X * 8.0, CombatCueKind::Release);
     ticks(&mut session, 12, &view, geometry, materials, &tuning);

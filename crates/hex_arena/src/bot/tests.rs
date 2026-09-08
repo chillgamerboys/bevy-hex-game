@@ -5,6 +5,9 @@ use crate::{ArenaSession, CommandsOut};
 use hex_core::arena::ArenaMaterials;
 use hex_core::{ElementId, HexCoord, SubstanceId, TerrainEdit, TilePos};
 
+#[path = "battle_tests.rs"]
+mod battle_tests;
+
 struct Fixture {
     session: ArenaSession,
     world: ArenaTerrainView,

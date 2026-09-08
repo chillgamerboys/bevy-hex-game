@@ -31,6 +31,9 @@ pub(super) struct Brain {
     error: Vec3,
     was_visible: bool,
     reaction_since: u64,
+    battle_seen: Vec<targeting::ObservedTarget>,
+    battle_sense_tick: Option<u64>,
+    battle_target: Option<ActorId>,
 }
 
 impl Brain {
@@ -49,7 +52,20 @@ impl Brain {
             error: Vec3::ZERO,
             was_visible: false,
             reaction_since: 0,
+            battle_seen: Vec::new(),
+            battle_sense_tick: None,
+            battle_target: None,
         }
+    }
+    pub fn for_battle(id: ActorId, home: Vec3, seed: u64) -> Self {
+        let mut brain = Self::new(id, home);
+        let mixed =
+            seed ^ seed.rotate_left(29) ^ (u64::from(id) + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        brain.seed = u32::try_from(mixed & u64::from(u32::MAX))
+            .unwrap_or(1)
+            .max(1);
+        brain.shadow = Bot::with_seed(brain.seed);
+        brain
     }
     pub fn cancel_charge(&mut self) {
         self.shadow.cancel_charge();
@@ -86,27 +102,78 @@ impl Brain {
         self.spell_gap = (self.spell_gap - STEP).max(0.0);
         // Live human data is confined to visibility admission. Downstream plans
         // receive this copy or the party's dated observation, never a hidden pose.
-        let sight = actors
-            .iter()
-            .find(|a| a.id == 0 && a.hp > 0.0)
-            .filter(|target| {
-                party.snapshot.phase != PartyPhase::Dormant
-                    && (party.snapshot.phase != PartyPhase::Returning
-                        || target.center().distance(actor.eye()) <= 6.0)
-                    && [target.eye(), target.center()]
-                        .into_iter()
-                        .any(|p| collision.sight_clear(actor.eye(), p))
-            })
-            .map(|target| Knowledge {
-                point: target.feet,
-                velocity: party
-                    .knowledge
-                    .filter(|k| k.direct)
-                    .map_or(Vec3::ZERO, |k| k.velocity),
-                tick,
-                direct: true,
-                cue_kind: None,
-            });
+        let battle = party.battle_search.is_some();
+        let sight = if battle {
+            if self
+                .battle_sense_tick
+                .is_none_or(|previous| tick.saturating_sub(previous) >= 12)
+            {
+                self.battle_seen = targeting::observe(
+                    actor,
+                    actors,
+                    &self.battle_seen,
+                    collision,
+                    tick,
+                    tuning.bot.prediction_seconds,
+                );
+                self.battle_sense_tick = Some(tick);
+            }
+            self.battle_seen
+                .first()
+                .copied()
+                .filter(|target| collision.sight_clear(actor.eye(), target.center()))
+                .map(|target| Knowledge {
+                    point: target.body.feet,
+                    velocity: target.body.velocity,
+                    tick: target.tick,
+                    direct: true,
+                    cue_kind: None,
+                    observed: Some(target),
+                })
+        } else {
+            actors
+                .iter()
+                .find(|a| a.id == 0 && a.hp > 0.0)
+                .filter(|target| {
+                    party.snapshot.phase != PartyPhase::Dormant
+                        && (party.snapshot.phase != PartyPhase::Returning
+                            || target.center().distance(actor.eye()) <= 6.0)
+                        && [target.eye(), target.center()]
+                            .into_iter()
+                            .any(|p| collision.sight_clear(actor.eye(), p))
+                })
+                .map(|target| Knowledge {
+                    point: target.feet,
+                    velocity: party
+                        .knowledge
+                        .filter(|k| k.direct)
+                        .map_or(Vec3::ZERO, |k| k.velocity),
+                    tick,
+                    direct: true,
+                    cue_kind: None,
+                    observed: None,
+                })
+        };
+        let target_id = sight.and_then(|s| s.observed.map(|o| o.body.id));
+        if battle && target_id.is_some() && target_id != self.battle_target {
+            let replacing = self.battle_target.is_some();
+            self.battle_target = target_id;
+            self.reaction_since = tick;
+            self.error = Vec3::ZERO;
+            if replacing && actor.charge().is_some() && actor.species != Species::Shadow {
+                self.cancel_charge();
+                return (
+                    MotionIntent {
+                        input: ActorIntent {
+                            aim: actor.aim,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                );
+            }
+        }
         if sight.is_some() && !self.was_visible {
             self.reaction_since = tick;
         }
@@ -118,10 +185,7 @@ impl Brain {
         });
         let threatened = shots.iter().any(|s| {
             s.spell == Spell::Fireball
-                && actors
-                    .iter()
-                    .find(|a| a.id == s.owner)
-                    .is_some_and(|a| a.team != actor.team)
+                && s.source_team() != actor.team
                 && s.position.distance(actor.center()) < 9.0
                 && (actor.center() - s.position).dot(s.velocity) > 0.0
                 && collision.sight_clear(actor.eye(), s.position)
@@ -130,9 +194,15 @@ impl Brain {
             .last_damage_tick
             .is_some_and(|t| elapsed(tick, t) < 1.0);
         if actor.species == Species::Shadow && party.snapshot.phase == PartyPhase::Active {
-            let input = self.shadow.intent_for(
-                actor.id, actors, shots, collision, world, geometry, tuning, cues, tick,
-            );
+            let input = if let Some(search) = party.battle_search {
+                self.shadow.intent_battle(
+                    actor.id, search, actors, shots, collision, world, geometry, tuning, cues, tick,
+                )
+            } else {
+                self.shadow.intent_for(
+                    actor.id, actors, shots, collision, world, geometry, tuning, cues, tick,
+                )
+            };
             let aim = input.aim.normalize_or(actor.aim);
             let f = aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
             return (
@@ -150,7 +220,10 @@ impl Brain {
         };
         let mut request = None;
         let mut flight = false;
-        let target = known.map(|k| k.point + Vec3::Y * 0.4);
+        let target = known.map(|k| {
+            k.observed
+                .map_or(k.point + Vec3::Y * 0.4, targeting::ObservedTarget::center)
+        });
         if let Some(target) = target {
             input.aim = (target - actor.eye()).normalize_or(actor.aim);
         }
@@ -173,7 +246,7 @@ impl Brain {
                         (f32::from(actor.id) * 1.7).cos(),
                     ) * 1.5
             }
-            _ => target.unwrap_or(self.home),
+            _ => target.unwrap_or(party.battle_search.unwrap_or(self.home)),
         };
         if actor.species == Species::Dragon {
             flight = party.snapshot.phase == PartyPhase::Dormant
@@ -197,7 +270,10 @@ impl Brain {
                     aim: input.aim,
                 });
             } else if !retreat && sight.is_some() {
-                let distance = actor.eye().distance(target.unwrap_or(actor.eye()));
+                let distance = sight.and_then(|seen| seen.observed).map_or_else(
+                    || actor.eye().distance(target.unwrap_or(actor.eye())),
+                    |seen| seen.distance(actor.eye(), 0.0),
+                );
                 let facing = (actor.body_rotation() * Vec3::NEG_Z)
                     .dot(input.aim.with_y(0.0).normalize_or(Vec3::NEG_Z));
                 if distance <= c.bite_range + 0.2
@@ -225,8 +301,12 @@ impl Brain {
             if let Some(target) = target {
                 let toward = (target - actor.center()).with_y(0.0).normalize_or_zero();
                 goal += toward.cross(Vec3::Y) * (f32::from(actor.id % 3) - 1.0) * 0.65;
+                let distance = sight.and_then(|seen| seen.observed).map_or_else(
+                    || actor.eye().distance(target),
+                    |seen| seen.distance(actor.eye(), 0.0),
+                );
                 if sight.is_some()
-                    && actor.eye().distance(target) <= c.swipe_range + 0.2
+                    && distance <= c.swipe_range + 0.2
                     && self.ready(CreatureAbility::Swipe)
                 {
                     request = Some(Request {
@@ -234,7 +314,7 @@ impl Brain {
                         aim: input.aim,
                     });
                 }
-                if actor.eye().distance(target) < c.swipe_range * 0.6 {
+                if distance < c.swipe_range * 0.6 {
                     goal = actor.feet;
                 }
             }
@@ -393,7 +473,10 @@ impl Brain {
         tuning: &ArenaTuning,
     ) -> Option<Vec3> {
         let speed = tuning.launch_speed(actor.charge()?.elapsed);
-        let target = seen.point + Vec3::Y * 0.4;
+        let target = seen.observed.map_or(
+            seen.point + Vec3::Y * 0.4,
+            targeting::ObservedTarget::center,
+        );
         let (_, time) = ballistic_aim(actor.eye(), target, tuning, speed)?;
         let (aim, _) = ballistic_aim(
             actor.eye(),
@@ -404,18 +487,18 @@ impl Brain {
         let mut caster = actor.clone();
         caster.selected = Spell::Fireball;
         caster.aim = (aim + self.error).normalize_or(aim);
-        let forecast = forecast_spell(
-            &caster,
-            &[ForecastBody::human(0, seen.point, seen.velocity, 0.5)],
-            collision,
-            world,
-            geometry,
-            tuning,
-            speed,
-        );
+        let bodies: Vec<_> = if seen.observed.is_some() {
+            self.battle_seen.iter().map(|seen| seen.body).collect()
+        } else {
+            vec![ForecastBody::human(0, seen.point, seen.velocity, 0.5)]
+        };
+        let forecast = forecast_spell(&caster, &bodies, collision, world, geometry, tuning, speed);
         let impact = forecast.impact?;
-        (shapes::distance(impact.point, actor) > tuning.fireball_radius() + 0.2)
-            .then_some(caster.aim)
+        (shapes::distance(impact.point, actor) > tuning.fireball_radius() + 0.2
+            && seen.observed.is_none_or(|target| {
+                target.distance(impact.point, impact.time) <= tuning.fireball_radius() * 0.8
+            }))
+        .then_some(caster.aim)
     }
 }
 

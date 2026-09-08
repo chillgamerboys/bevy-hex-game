@@ -16,6 +16,7 @@ pub(crate) struct CombatCue {
     pub id: u64,
     pub tick: u64,
     pub owner: u8,
+    pub team: crate::TeamId,
     pub position: Vec3,
     pub kind: CombatCueKind,
 }
@@ -87,6 +88,24 @@ impl ArenaSession {
     }
 
     pub(super) fn combat_cue(&mut self, owner: u8, point: Vec3, kind: CombatCueKind) {
+        let Some(team) = self
+            .actors
+            .iter()
+            .find(|actor| actor.id == owner)
+            .map(|actor| actor.team)
+        else {
+            return;
+        };
+        self.combat_cue_from(owner, team, point, kind);
+    }
+
+    pub(super) fn combat_cue_from(
+        &mut self,
+        owner: u8,
+        team: crate::TeamId,
+        point: Vec3,
+        kind: CombatCueKind,
+    ) {
         // Quantization belongs to the knowledge publication, not rendering. No cue
         // contains a hidden actor's live position after the discrete event.
         let position = (point / 2.0).round() * 2.0;
@@ -94,6 +113,7 @@ impl ArenaSession {
             id: self.next_cue,
             tick: self.tick,
             owner,
+            team,
             position,
             kind,
         });
