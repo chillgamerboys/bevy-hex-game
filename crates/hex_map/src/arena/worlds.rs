@@ -165,6 +165,7 @@ pub(super) fn build(
     view.liquids.sort_by_key(|span| span.bottom);
     project_static(&mut view, &presentation, geometry, art)?;
     view.battle_deployment = battle_deployment(&view, geometry)?;
+    view.elongated_deployment = elongated_deployment(&view, geometry)?;
     Ok(WorldRecipe {
         map,
         geometry,
@@ -229,6 +230,91 @@ fn battle_deployment(
     }
     Ok(Some(regions))
 }
+
+/// Finite extra ground facts for the four-segment body. These do not enlarge
+/// ordinary deployment and never create terrain or select a roof as a fallback.
+fn elongated_deployment(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> Result<Option<[ArenaDeploymentRegion; 2]>, String> {
+    let Some(ordinary) = &view.battle_deployment else {
+        return Ok(None);
+    };
+    let regions = ordinary.each_ref().map(|region| {
+        let preferred = region.preferred;
+        let surfaces = preferred
+            .coord
+            .within_radius(2)
+            .into_iter()
+            // Fort's opposing regions stay in their own courtyard half. Radius
+            // two alone would introduce shared ground across the center line.
+            .filter(|coord| {
+                view.selection.map != ArenaMap::Fort
+                    || coord.y().signum() == preferred.coord.y().signum()
+            })
+            .map(|coord| TilePos::new(coord, preferred.level))
+            .filter(|surface| deployment_surface_open(view, geometry, *surface))
+            .collect();
+        ArenaDeploymentRegion {
+            preferred,
+            surfaces,
+        }
+    });
+    if regions.iter().any(|region| {
+        !region.surfaces.contains(&region.preferred) || !contains_straight_run(region, 4)
+    }) {
+        return Err(format!(
+            "Arena {:?} lacks a dry four-segment deployment pocket",
+            view.selection.map
+        ));
+    }
+    Ok(Some(regions))
+}
+
+fn deployment_surface_open(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    surface: TilePos,
+) -> bool {
+    geometry.contains_column(surface.coord)
+        && (geometry.min_level..=geometry.max_level).contains(&surface.level)
+        && view.voxels.contains_key(&surface)
+        && view
+            .columns
+            .get(&surface.coord)
+            .is_some_and(|runs| runs.iter().map(|run| run.top_level).max() == Some(surface.level))
+        && !view
+            .static_spans
+            .iter()
+            .any(|span| span.bottom.coord == surface.coord && span.top_level >= surface.level)
+        && !view
+            .liquids
+            .iter()
+            .any(|span| span.bottom.coord == surface.coord && span.top_level >= surface.level)
+        && !view
+            .edit_protected
+            .get(&surface.coord)
+            .is_some_and(|intervals| intervals.iter().any(|(_, high)| *high >= surface.level))
+}
+
+/// A content diagnostic only: gameplay still checks the actual full body, yaw,
+/// live support and other actors before accepting an initial roster.
+fn contains_straight_run(region: &ArenaDeploymentRegion, count: i32) -> bool {
+    region.surfaces.iter().any(|start| {
+        [(1, 0), (0, 1), (-1, 1)].into_iter().any(|(q, r)| {
+            (0..count).all(|step| {
+                region.surfaces.contains(&TilePos::new(
+                    HexCoord::from_axial(start.coord.x() + q * step, start.coord.y() + r * step),
+                    start.level,
+                ))
+            })
+        })
+    })
+}
+
+#[cfg(test)]
+#[path = "burrow_world_tests.rs"]
+mod burrow_tests;
 
 fn project_static(
     view: &mut ArenaTerrainView,
@@ -330,9 +416,6 @@ fn project_instance(
             ObjectPart::Plant(PlantPart::Root | PlantPart::Trunk | PlantPart::Branch)
         );
         let movement = if tree { woody } else { opaque };
-        if !movement && !opaque {
-            continue;
-        }
         let rotated = instance
             .rotation()
             .rotate_voxel(placement.position, object.origin)
@@ -349,7 +432,11 @@ fn project_instance(
             blocks_projectiles: movement || opaque,
             blocks_sight: opaque,
         });
-        protect(view, coord, level, level);
+        // New transparent occupancy remains non-blocking for ordinary queries
+        // and does not expand their existing direct-edit protection policy.
+        if movement || opaque {
+            protect(view, coord, level, level);
+        }
     }
     Ok(())
 }

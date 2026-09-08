@@ -441,3 +441,26 @@ will cover the numeric-only follow-ups. Retained source-matched task evidence:
 `outputs/arena-wisp-stagger-03`, `outputs/arena-wisp-speed64-04`,
 `outputs/arena-wisp-speed128-05`, `outputs/arena-wisp-hp30-06`,
 `outputs/arena-wisp-fort-07` and their companion summaries.
+
+## Worm guarded foundation and world conversion
+
+The guarded `dccfddb` foundation passes236 arena tests and strict arena lint,
+including six snapshot/profile/admission contracts. Actual Worm setups remain
+refused until body movement and attacks are integrated. The first compile exposed
+a temporary-iterator lifetime in the new body snapshot accessor; the local-count
+repair passes without changing the accepted Duel golden fixture.
+
+The world conversion lane passes24 feature-enabled arena map tests (11 new) and
+strict map/assets all-target/all-feature lint. The real ledger tests retain grass
+1/1→dirt1/2, stone1/4→dirt1/2 and stone3/4→dirt2/2; repeat dirt and air remain
+unchanged. Mixed blocked volumes reject atomically; extreme axial coordinates
+reject using widened bounds arithmetic. Distinct sources may reuse their own
+sequence without duplicate conversion or healing. Paused requests persist and
+reset clears inbox, outcomes, sequences and converted materials. Authored
+Fort/Duel publish finite elongated pockets with four-cell runs; actual Worm body
+deployment and locomotion remain later gameplay/application checks.
+
+Task evidence: `work/worm-foundation-checks-01/receipt.json`,
+`work/worm-world-tests-01.log`, `work/worm-world-clippy-01.log`, and
+`work/worm-world-checks-01.json`. The world checks run independently of active
+changes in gameplay-owned files; they are not the final combined candidate gate.

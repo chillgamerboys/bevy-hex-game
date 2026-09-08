@@ -296,3 +296,10 @@ all authorized work and final evidence/guide are delivered.
   appended identities; setup remains refused until runtime and geometry agree.
   Root will integrate the prepared world lane; geometry, gameplay and presentation
   then use disjoint paths after the foundation commit.
+
+- Guarded Worm foundation `dccfddb` passes236 arena tests/strict lint. World
+  conversion passes24 arena map tests and strict map/assets lint. Root owns world
+  integration; runtime owner implements body phases/acknowledgements/deployment/
+  Boulder, geometry owner exact dynamic queries, and presentation owner indexed
+  physical parts/telegraphs. Setup guards stay until combined admission is safe.
+  Frozen Wisp performance/static review remains serialized with main Cargo checks.

@@ -12,6 +12,7 @@ use hex_assets::{
     TerrainDamageFile, TerrainDamageTable,
 };
 use hex_core::arena::{
+    ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRequest, ArenaBurrowResult,
     ArenaMaterials, ArenaReset, ArenaSelection, ArenaSolidSpan, ArenaSystems, ArenaTerrainView,
     ArenaTick, ArenaVoxelGeometry,
 };
@@ -23,6 +24,9 @@ use hex_core::{
 use crate::terrain_damage::TerrainDamageState;
 use crate::{Column, VoxelMap};
 
+mod burrow;
+#[cfg(test)]
+mod burrow_tests;
 #[cfg(test)]
 mod real_world_tests;
 mod render;
@@ -35,6 +39,7 @@ const GROUND_LEVEL: i32 = 8;
 #[derive(Resource, Default)]
 struct ArenaWorldState {
     generation: u64,
+    burrow_sequences: BTreeMap<u8, u64>,
     changed: BTreeSet<HexCoord>,
     render_dirty: BTreeSet<HexCoord>,
     original: Option<worlds::WorldRecipe>,
@@ -46,6 +51,7 @@ struct ArenaWorldState {
 struct ArenaInbox {
     edits: Vec<TerrainEdit>,
     impacts: Vec<TerrainImpact>,
+    burrows: Vec<ArenaBurrowRequest>,
 }
 
 /// Registers the standalone arena world, production terrain messages, and rendering.
@@ -70,6 +76,9 @@ pub fn plugin(app: &mut App) {
         .init_resource::<TerrainDamageState>()
         .init_resource::<ArenaWorldState>()
         .init_resource::<ArenaInbox>()
+        .init_resource::<ArenaBurrowMaterials>()
+        .add_message::<ArenaBurrowRequest>()
+        .add_message::<ArenaBurrowOutcome>()
         .add_message::<TerrainEdit>()
         .add_message::<TerrainImpact>()
         .add_message::<TerrainImpactOutcome>()
@@ -98,9 +107,11 @@ fn retain_announcements(
     mut inbox: ResMut<ArenaInbox>,
     mut edits: ResMut<Messages<TerrainEdit>>,
     mut impacts: ResMut<Messages<TerrainImpact>>,
+    mut burrows: ResMut<Messages<ArenaBurrowRequest>>,
 ) {
     inbox.edits.extend(edits.drain());
     inbox.impacts.extend(impacts.drain());
+    inbox.burrows.extend(burrows.drain());
 }
 
 struct Content {
@@ -185,6 +196,7 @@ fn initialize(world: &mut World) {
         presentation_dirty: true,
         ..default()
     });
+    world.insert_resource(burrow::materials(&content.substances));
     world.insert_resource(content.substances);
     world.insert_resource(content.elements);
     world.insert_resource(content.damage);
@@ -279,6 +291,7 @@ fn apply_terrain(
     mut impacts: ResMut<Messages<TerrainImpact>>,
     mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
     mut exit: MessageWriter<AppExit>,
+    mut burrows: burrow::Channels,
 ) {
     let ArenaContentRefs {
         substances,
@@ -318,6 +331,10 @@ fn apply_terrain(
         outcomes.clear();
         inbox.edits.clear();
         inbox.impacts.clear();
+        inbox.burrows.clear();
+        burrows.requests.clear();
+        burrows.outcomes.clear();
+        state.burrow_sequences.clear();
         state.changed.extend(map.columns().map(|(coord, _)| coord));
         return;
     }
@@ -387,6 +404,47 @@ fn apply_terrain(
             .changed
             .extend(resolved.destroyed.iter().map(|pos| pos.coord));
         outcomes.write(resolved.outcome);
+    }
+    for request in std::mem::take(&mut inbox.burrows)
+        .into_iter()
+        .chain(burrows.requests.drain())
+    {
+        let ArenaWorldState {
+            generation,
+            original,
+            burrow_sequences,
+            changed,
+            ..
+        } = &mut *state;
+        let Some(original) = original else {
+            continue;
+        };
+        let outcome = burrow::Resolver {
+            generation: *generation,
+            geometry: *geometry,
+            original: &original.view,
+            substances: &substances,
+            policy: &burrows.policy,
+            dirt: materials.dirt,
+        }
+        .resolve(
+            request,
+            burrow_sequences,
+            &mut map,
+            &mut damage,
+            &mut damaged,
+        );
+        if let ArenaBurrowResult::Accepted {
+            changed: conversions,
+        } = &outcome.result
+        {
+            changed.extend(
+                conversions
+                    .iter()
+                    .map(|conversion| conversion.position.coord),
+            );
+        }
+        burrows.outcomes.write(outcome);
     }
     if !state.changed.is_empty() {
         let before = presentation.features().len();

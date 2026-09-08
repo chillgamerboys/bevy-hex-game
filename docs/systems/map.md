@@ -323,6 +323,15 @@ map applies it. Elemental damage uses the separate live `TerrainImpact` announce
 so gameplay publishes exact affected voxels and authored power while the world decides
 how each material responds.
 
+The default-off arena additionally accepts `ArenaBurrowRequest` for bounded Worm
+conversion, as defined in the [arena burrow contract](../planning/waves/arena-bestiary/maps/burrow-seam.md).
+After ordinary edits and impacts, it atomically validates up to64 canonical cells
+and converts admitted non-dirt solids to dirt with remaining HP capped at dirt's
+maximum. Air and existing dirt stay unchanged. Source-correlated outcomes and
+dirty columns publish before gameplay may recheck movement. Protected, liquid and
+all authored-object occupancy reject a proposal. This arena-only path does not
+change ordinary direct-edit or damage behavior.
+
 ### Toughness and destruction — map side live
 
 The gameplay contract announces `TerrainImpact { batch, volume, kind, power }`; it

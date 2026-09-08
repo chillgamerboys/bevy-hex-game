@@ -186,7 +186,12 @@ fn seven_publishes_three_dry_encounter_anchors_and_distinct_static_geometry() {
         .static_spans
         .iter()
         .any(|span| span.blocks_sight && !span.blocks_movement));
-    for span in &recipe.view.static_spans {
+    for span in recipe
+        .view
+        .static_spans
+        .iter()
+        .filter(|span| span.blocks_movement || span.blocks_projectiles || span.blocks_sight)
+    {
         assert!(recipe
             .view
             .edit_protected
@@ -214,6 +219,11 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
         .world()
         .resource::<ArenaTerrainView>()
         .battle_deployment
+        .clone();
+    let original_elongated = app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .elongated_deployment
         .clone();
     let stone = app
         .world()
@@ -256,6 +266,7 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
     let view = app.world().resource::<ArenaTerrainView>();
     assert!(!view.full_rebuild);
     assert_eq!(view.battle_deployment, original_deployment);
+    assert_eq!(view.elongated_deployment, original_elongated);
     assert_eq!(view.dirty_columns, BTreeSet::from([pos.coord]));
     assert!(!view.voxels.contains_key(&pos));
     app.world_mut().write_message(hit.clone());
@@ -265,6 +276,7 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
     let reset = app.world().resource::<ArenaTerrainView>();
     assert_eq!(reset.voxels, original);
     assert_eq!(reset.battle_deployment, original_deployment);
+    assert_eq!(reset.elongated_deployment, original_elongated);
     assert_eq!(reset.selection.encounter, ArenaEncounter::Goblins);
     assert!(reset.full_rebuild);
     assert_eq!(reset.columns.len(), 469);
