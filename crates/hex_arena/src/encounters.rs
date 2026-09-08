@@ -173,6 +173,8 @@ impl ArenaSession {
                 _ => (c.ground_leash, c.ground_search),
             };
             let mut living = 0;
+            let wisp_count = roster.iter().filter(|s| **s == Species::Wisp).count();
+            let mut wisp_slot = 0;
             for species in roster {
                 let Ok(id) = u8::try_from(self.actors.len()) else {
                     break;
@@ -241,9 +243,16 @@ impl ArenaSession {
                     actor.flying = species == Species::Wisp;
                     actor.body.grounded = !actor.flying;
                     actor.grounded = !actor.flying;
-                    self.encounter
-                        .brains
-                        .insert(id, brain::Brain::new(id, feet));
+                    let mut brain = brain::Brain::new(id, feet);
+                    if species == Species::Wisp {
+                        brain.configure_wisp_opening(
+                            wisp_slot,
+                            wisp_count,
+                            c.wisp_initial_volley_spread,
+                        );
+                        wisp_slot += 1;
+                    }
+                    self.encounter.brains.insert(id, brain);
                     self.encounter.stats.insert(id, ActorCombatStats::default());
                     self.actors.push(actor);
                     living += 1;

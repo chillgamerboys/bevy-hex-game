@@ -26,6 +26,8 @@ pub struct EncounterTuning {
     pub wisp_ember_cooldown: f32,
     /// Visible Ember preparation before release.
     pub wisp_ember_windup: f32,
+    /// First-shot phase spread across a party; a single Wisp has no delay.
+    pub wisp_initial_volley_spread: f32,
     /// Ember launch speed.
     pub wisp_ember_speed: f32,
     /// Ember gravity, isolated from ordinary spell tuning.
@@ -218,6 +220,7 @@ impl Default for EncounterTuning {
             wisp_ember_radius: 0.8,
             wisp_ember_cooldown: 2.0,
             wisp_ember_windup: 0.35,
+            wisp_initial_volley_spread: 0.6,
             wisp_ember_speed: 32.0,
             wisp_ember_gravity: 2.0,
             wisp_ember_collision_radius: 0.06,
@@ -415,6 +418,11 @@ impl EncounterTuning {
             .any(|v| !v.is_finite() || v <= 0.0 || v > 180.0)
         {
             return Err("Encounter values must be finite and in (0, 180].".into());
+        }
+        if !self.wisp_initial_volley_spread.is_finite()
+            || !(0.0..=180.0).contains(&self.wisp_initial_volley_spread)
+        {
+            return Err("Wisp initial volley spread must be finite and in [0, 180].".into());
         }
         if !self.wisp_ember_knockback.is_finite()
             || self.wisp_ember_knockback < 0.0

@@ -40,6 +40,8 @@ pub(super) struct Brain {
     battle_sense_tick: Option<u64>,
     battle_target: Option<ActorId>,
     ember_target: Option<Knowledge>,
+    ember_opening_delay: u64,
+    ember_opening_at: Option<u64>,
 }
 
 impl Brain {
@@ -68,6 +70,8 @@ impl Brain {
             battle_sense_tick: None,
             battle_target: None,
             ember_target: None,
+            ember_opening_delay: 0,
+            ember_opening_at: None,
         }
     }
     pub fn for_battle(id: ActorId, home: Vec3, seed: u64) -> Self {
@@ -80,6 +84,31 @@ impl Brain {
         brain.shadow = Bot::with_seed(brain.seed);
         brain
     }
+    /// Opening phases are stable within each party and start at first legal
+    /// sight, so waiting dormant or behind cover cannot erase the spread.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "validated nonnegative spread and at most24 roster members"
+    )]
+    pub(super) fn configure_wisp_opening(&mut self, slot: usize, count: usize, spread: f32) {
+        let slot = f32::from(u8::try_from(slot).unwrap_or(23));
+        let denominator = f32::from(u8::try_from(count.saturating_sub(1)).unwrap_or(23));
+        self.ember_opening_delay = if denominator > 0.0 {
+            (spread * slot / denominator / STEP).round() as u64
+        } else {
+            0
+        };
+        self.ember_opening_at = None;
+    }
+
+    fn ember_opening_ready(&mut self, tick: u64) -> bool {
+        let ready = *self
+            .ember_opening_at
+            .get_or_insert_with(|| tick.saturating_add(self.ember_opening_delay));
+        tick >= ready
+    }
+
     pub fn cancel_charge(&mut self) {
         self.shadow.cancel_charge();
         // One idle input tick clears the actor's post-pause release latch.
@@ -441,7 +470,8 @@ impl Brain {
                         c.wisp_ember_speed,
                     ) {
                         input.aim = aim;
-                        if self.ready(CreatureAbility::WispEmber) {
+                        if self.ready(CreatureAbility::WispEmber) && self.ember_opening_ready(tick)
+                        {
                             request = Some(Request {
                                 kind: CreatureAbility::WispEmber,
                                 aim,

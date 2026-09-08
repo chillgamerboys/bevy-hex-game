@@ -251,6 +251,7 @@ fn deploy(
     let mut parties = Vec::new();
     let mut brains = BTreeMap::new();
     let mut next_id = 0_u8;
+    let mut wisp_slots = BTreeMap::new();
     for (side, roster) in setup.rosters.iter().enumerate() {
         let region = regions.get(side).ok_or("Missing deployment side")?;
         let opposite = regions
@@ -268,6 +269,8 @@ fn deploy(
         for members in &roster.parties {
             let party = u16::try_from(parties.len())
                 .map_err(|error| format!("Too many parties: {error}"))?;
+            let count = members.iter().filter(|s| **s == Species::Wisp).count();
+            let mut slot = 0;
             for species in members {
                 let mut actor =
                     Actor::spawn(next_id, home, (search - home).normalize_or(Vec3::NEG_Z));
@@ -277,6 +280,10 @@ fn deploy(
                 actor.party = Some(party);
                 let c = &tuning.encounters;
                 actor.configure_species(*species, c);
+                if *species == Species::Wisp {
+                    wisp_slots.insert(actor.id, (slot, count));
+                    slot += 1;
+                }
                 pending.push(actor);
             }
             parties.push(PartyRuntime {
@@ -328,10 +335,15 @@ fn deploy(
             actor.flying = actor.species == Species::Wisp;
             actor.grounded = !actor.flying;
             actor.body.grounded = !actor.flying;
-            brains.insert(
-                actor.id,
-                brain::Brain::for_battle(actor.id, feet, setup.seed),
-            );
+            let mut brain = brain::Brain::for_battle(actor.id, feet, setup.seed);
+            if let Some((slot, count)) = wisp_slots.get(&actor.id) {
+                brain.configure_wisp_opening(
+                    *slot,
+                    *count,
+                    tuning.encounters.wisp_initial_volley_spread,
+                );
+            }
+            brains.insert(actor.id, brain);
             actors.push(actor);
         }
     }
