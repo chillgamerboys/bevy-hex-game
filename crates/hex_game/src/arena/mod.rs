@@ -123,6 +123,10 @@ struct ViewState {
     capture_composition_frame: Option<u32>,
     capture_subjects: Vec<u8>,
     capture_observer_inputs: Vec<spectator::CameraSample>,
+    capture_wisp_nominal_hp: Option<f32>,
+    capture_wisp_config_loaded: bool,
+    capture_wisp_ticks: Vec<wisp::StressTick>,
+    capture_wisp_terminal: Option<wisp::TerminalPublication>,
     capture_stress_initialized: bool,
     capture_stress_steps: u32,
     capture_stress_ticks: Vec<encounter::StressTick>,
@@ -169,6 +173,10 @@ impl Default for ViewState {
             capture_composition_frame: None,
             capture_subjects: Vec::new(),
             capture_observer_inputs: Vec::new(),
+            capture_wisp_nominal_hp: None,
+            capture_wisp_config_loaded: false,
+            capture_wisp_ticks: Vec::new(),
+            capture_wisp_terminal: None,
             capture_stress_initialized: false,
             capture_stress_steps: 0,
             capture_stress_ticks: Vec::new(),
@@ -217,6 +225,8 @@ impl ViewState {
         self.capture_stress_initialized = false;
         self.capture_stress_steps = 0;
         self.capture_stress_ticks.clear();
+        self.capture_wisp_ticks.clear();
+        self.capture_wisp_terminal = None;
         self.pause();
     }
 
@@ -284,6 +294,12 @@ pub fn run() -> AppExit {
         selection,
         std::env::var("HEX_ARENA_ENCOUNTER").ok().as_deref(),
     ) {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
+    if let Err(error) =
+        wisp::validate_stress_setup(capture, &state.capture_view, selection.map, &battle)
+    {
         eprintln!("{error}");
         return AppExit::error();
     }
@@ -420,16 +436,27 @@ fn setup(
         player_pieces: [default(), default()],
     });
     let config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/arena.ron");
-    match std::fs::read_to_string(&config)
+    state.capture_wisp_config_loaded = match std::fs::read_to_string(&config)
         .map_err(|error| error.to_string())
         .and_then(|source| ron::from_str::<ArenaTuning>(&source).map_err(|error| error.to_string()))
     {
         Ok(value) => match value.validate() {
-            Ok(()) => *tuning = value,
-            Err(error) => warn!("Arena settings rejected; using defaults: {error}"),
+            Ok(()) => {
+                *tuning = value;
+                true
+            }
+            Err(error) => {
+                warn!("Arena settings rejected; using defaults: {error}");
+                false
+            }
         },
-        Err(error) => warn!("Arena settings unavailable; using defaults: {error}"),
-    }
+        Err(error) => {
+            warn!("Arena settings unavailable; using defaults: {error}");
+            false
+        }
+    };
+    state.capture_wisp_nominal_hp =
+        wisp::configure_stress_tuning(state.capture.is_some(), &state.capture_view, &mut tuning);
     if state.capture.is_some() {
         let size = if state.capture_view.ends_with("-compact") {
             0
@@ -838,6 +865,25 @@ fn drive_simulation(world: &mut World) {
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         let changed = before != world.resource::<ArenaTerrainView>().revision;
         let tick = world.resource::<ArenaSession>().tick;
+        if capture && wisp::stress_view(&view) {
+            let load = wisp::stress_load(world.resource::<ArenaSession>());
+            let damage_outcome =
+                world.resource::<ArenaSession>().terrain_outcomes > outcomes_before;
+            let destroyed_voxels =
+                voxels_before.saturating_sub(world.resource::<ArenaTerrainView>().voxels.len());
+            world
+                .resource_mut::<ViewState>()
+                .capture_wisp_ticks
+                .push(wisp::StressTick {
+                    frame,
+                    tick,
+                    cpu_ms: elapsed,
+                    terrain_publication: changed,
+                    damage_outcome,
+                    destroyed_voxels,
+                    load,
+                });
+        }
         if let Some(stimulus) = stimulus {
             let summary = world.resource::<ArenaSession>().encounter_summary();
             let damage_outcome =
@@ -882,6 +928,7 @@ fn drive_simulation(world: &mut World) {
             let reached = match view.as_str() {
                 "observer-result" => terminal,
                 "observer-performance" => terminal || tick >= 3600,
+                "observer-wisp-stress" => terminal || tick >= wisp::STRESS_TICKS,
                 "observer-orbit" | "observer-orbit-rear" | "observer-free" => frame >= 120,
                 _ => false,
             };
@@ -893,11 +940,17 @@ fn drive_simulation(world: &mut World) {
                     let publication_started = std::time::Instant::now();
                     world.run_schedule(ArenaTick);
                     let changed = world.resource::<ArenaTerrainView>().revision != revision;
-                    world.resource_mut::<ViewState>().tick_times.push((
-                        tick,
-                        changed,
-                        publication_started.elapsed().as_secs_f64() * 1000.0,
-                    ));
+                    let cpu_ms = publication_started.elapsed().as_secs_f64() * 1000.0;
+                    let final_tick = world.resource::<ArenaSession>().tick;
+                    let mut state = world.resource_mut::<ViewState>();
+                    state.tick_times.push((tick, changed, cpu_ms));
+                    if wisp::stress_view(&view) {
+                        state.capture_wisp_terminal = Some(wisp::TerminalPublication {
+                            tick: final_tick,
+                            terrain_publication: changed,
+                            cpu_ms,
+                        });
+                    }
                 }
                 let mut state = world.resource_mut::<ViewState>();
                 state.capture_event_frame = Some(frame);
@@ -1134,6 +1187,7 @@ fn capture_frame(
         state.capture_view.as_str(),
         "observer-result"
             | "observer-performance"
+            | "observer-wisp-stress"
             | "observer-orbit"
             | "observer-orbit-rear"
             | "observer-free"
@@ -1383,6 +1437,14 @@ fn capture_frame(
         ("encounter_stats", serde_json::json!(session.encounter_stats())),
         ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human visits party areas for 144 ticks with current dry supported, body-clear and visible placement; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
         ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
+        ("wisp_stress", serde_json::json!(wisp::stress_view(&state.capture_view).then(|| serde_json::json!({
+            "fixture": "synthetic-wisp-hp-1000", "nominal_hp": state.capture_wisp_nominal_hp,
+            "loaded_from_config": state.capture_wisp_config_loaded,
+            "applied_hp": wisp::STRESS_HP, "warmup_ticks": 120, "requested_ticks": wisp::STRESS_TICKS,
+            "actor_hp_mutation": false, "injected_terrain_impacts": false, "rows": state.capture_wisp_ticks,
+            "terminal_publication": state.capture_wisp_terminal,
+            "note": "Validated Wisp HP1000 before admission; ordinary autonomous brains, movement and projectiles. Zero terrain publications are reported honestly; this is not the separate destruction workload."
+        })))),
         ("capture_inputs", serde_json::json!(capture_inputs)),
         ("fixture_voxels", serde_json::json!(state.capture_fixture_voxels)),
         ("preview", serde_json::json!({"valid": predicted.valid, "wall_voxels": predicted.wall_voxels, "footprint": presentation::shield_footprint(&predicted.wall_voxels)})),
@@ -1400,7 +1462,7 @@ fn capture_frame(
         ("tick_samples", serde_json::json!(tick_samples)),
         ("width", serde_json::json!(WIDTH)),
         ("height", serde_json::json!(HEIGHT)),
-        ("evidence", serde_json::json!(if encounter::stress_view(&state.capture_view) { "SYNTHETIC_PERFORMANCE; normal gameplay, movement, human balance, GPU and vsync are not established" } else { "STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending" })),
+        ("evidence", serde_json::json!(if encounter::stress_view(&state.capture_view) || wisp::stress_view(&state.capture_view) { "SYNTHETIC_PERFORMANCE; normal gameplay, movement, human balance, GPU and vsync are not established" } else { "STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending" })),
     ].into_iter().map(|(key, value)| (key.to_owned(), value)).collect());
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {

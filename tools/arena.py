@@ -141,6 +141,10 @@ WISP_VIEWS = (
 WISP_OBSERVER_RECIPES = {name: ("wisp", "goblin") for name, _, arena_map, _, _ in WISP_VIEWS if arena_map == "duel"}
 WISP_OBSERVER_RECIPES.update({"fort-wisps-observer-start": ("wisps-12", "shaman-party"),
                                "duel-wisps-layers": ("wisps-12", "wisps-12")})
+WISP_PERFORMANCE_VIEWS = tuple(
+    (f"{arena_map}-wisps-stress", "observer-wisp-stress", arena_map, "shadow", None)
+    for arena_map in ("duel", "fort")
+)
 OBSERVER_PERFORMANCE_VIEWS = tuple(
     (f"{arena_map}-observer-performance", "observer-performance", arena_map, "shadow", None)
     for arena_map in ("fort", "duel")
@@ -445,6 +449,112 @@ def validate_wisp_state(state: dict, view: str) -> None:
             raise RuntimeError("Layered capture requires both published flight layers on each team.")
 
 
+def validate_wisp_performance_state(state: dict, view: str) -> dict | None:
+    """Admit a sustained autonomous load and summarize real timings, never FPS/GPU."""
+    if view != "observer-wisp-stress":
+        return None
+
+    def fail(message: str) -> None:
+        raise RuntimeError(f"Wisp performance: {message}")
+
+    def finite(value: object) -> bool:
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+    def distribution(values: list[float]) -> dict:
+        ordered = sorted(values)
+        if not ordered:
+            return {"samples": 0}
+        def percentile(fraction: float) -> float:
+            return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
+        return {"samples": len(ordered), "mean_ms": sum(ordered) / len(ordered),
+                "p50_ms": percentile(.5), "p95_ms": percentile(.95),
+                "p99_ms": percentile(.99), "max_ms": ordered[-1]}
+
+    fixture = state.get("wisp_stress")
+    if not isinstance(fixture, dict) or fixture.get("fixture") != "synthetic-wisp-hp-1000":
+        fail("missing explicit synthetic fixture label")
+    if fixture.get("loaded_from_config") is not True:
+        fail("authored tuning must load and validate before applying synthetic HP")
+    nominal = fixture.get("nominal_hp")
+    if not finite(nominal) or not 0 < nominal <= 1000 or fixture.get("applied_hp") != 1000:
+        fail("missing loaded nominal HP or validated synthetic HP 1000")
+    if fixture.get("actor_hp_mutation") is not False or fixture.get("injected_terrain_impacts") is not False:
+        fail("this fixture must use pre-admission tuning and ordinary attacks")
+    if fixture.get("warmup_ticks") != 120 or fixture.get("requested_ticks") != 1440:
+        fail("requires exactly 1440 ticks with the first 120 excluded")
+    expected_setup = {"control": "Spectator", "player_recipe": None, "seed": 1, "tick_limit": 1440,
+                      "rosters": [{"team": team, "parties": [["Wisp"] * 12]} for team in (1, 2)]}
+    if state.get("battle_setup") != expected_setup or state.get("selection", {}).get("map") not in {"Duel", "Fort"}:
+        fail("accepted setup must be the fixed seed-1 Fort/Duel 12-vs-12 roster")
+    summary = state.get("battle_summary") or {}
+    teams = summary.get("teams", [])
+    if summary.get("seed") != 1 or summary.get("ticks") != 1440 or summary.get("result") != "Timeout" or state.get("tick") != 1440:
+        fail("sustained workload did not reach its actual 1440-tick timeout")
+    if len(teams) != 2 or {team.get("team") for team in teams} != {1, 2}:
+        fail("accepted summary must contain both teams")
+    actors = state.get("actors", [])
+    if len(actors) != 24 or {a.get("id") for a in actors} != set(range(24)) or state.get("human_actor_id") is not None:
+        fail("all 24 actual actors, including actor 0, are required")
+    for team in teams:
+        members = [a for a in actors if a.get("team") == team["team"]]
+        if team.get("initial") != 12 or team.get("living") != 12 or team.get("max_hp") != 12000 or len(members) != 12:
+            fail("admitted team HP/counts disagree with 12 actors at HP 1000")
+        if any(a.get("species") != "Wisp" or a.get("max_hp") != 1000 or not finite(a.get("hp")) or not 0 < a["hp"] <= 1000 or a.get("flying") is not True for a in members):
+            fail("every actor must remain a living flying Wisp with admitted HP 1000")
+        if {a.get("flight_layer") for a in members} != {0, 1}:
+            fail("each team must retain both published flight layers")
+        if not finite(team.get("hp")) or abs(team["hp"] - sum(a["hp"] for a in members)) > .1:
+            fail("summary remaining HP disagrees with its actual actors")
+    rows = fixture.get("rows", [])
+    if not isinstance(rows, list) or len(rows) != 1440 or [r.get("tick") for r in rows] != list(range(1, 1441)):
+        fail("requires contiguous, unrepeated simulation rows 1 through 1440")
+    for row in rows:
+        if type(row.get("frame")) is not int or row["frame"] <= 0 or not finite(row.get("cpu_ms")):
+            fail("invalid containing frame or measured tick CPU interval")
+        if any(type(row.get(key)) is not bool for key in ("terrain_publication", "damage_outcome")) or type(row.get("destroyed_voxels")) is not int or row["destroyed_voxels"] < 0:
+            fail("missing actual publication/damage/destruction measurements")
+    if any(a["frame"] > b["frame"] for a, b in zip(rows, rows[1:])):
+        fail("simulation rows have out-of-order app frames")
+    measured = rows[120:]
+    for row in measured:
+        load = row.get("load", {})
+        if any(load.get(key) != value for key, value in (("living_wisps", 24), ("flying_wisps", 24), ("active_parties", 2), ("unassigned_layers", 0))):
+            fail("measured tick lost part of its 24-Wisp all-active flight load")
+        layers = load.get("team_layers")
+        if not isinstance(layers, list) or len(layers) != 2 or any(not isinstance(team, list) or len(team) != 2 or any(type(n) is not int or n <= 0 for n in team) or sum(team) != 12 for team in layers):
+            fail("measured tick lacks both occupied flight layers on each team")
+        if any(type(load.get(key)) is not int or load[key] < 0 for key in ("projectiles", "windups")):
+            fail("missing projectile/windup load counters")
+    if not any(row["load"]["projectiles"] for row in measured) or not any(row["load"]["windups"] for row in measured):
+        fail("ordinary autonomous attacks did not exercise the measured workload")
+    wall = state.get("app_frame_wall_intervals_ms", [])
+    if not isinstance(wall, list) or not wall or not all(finite(value) for value in wall):
+        fail("missing real Instant app-frame intervals")
+    warmup_frames = {row["frame"] for row in rows[:120]}
+    frames = sorted({row["frame"] for row in measured} - warmup_frames)
+    if not frames or max(frames) > len(wall):
+        fail("missing the interval containing a measured app frame")
+    intervals = [wall[frame - 1] for frame in frames]
+    ticks = [row["cpu_ms"] for row in measured]
+    publication = [row["cpu_ms"] for row in measured if row["terrain_publication"]]
+    destruction = [row["cpu_ms"] for row in measured if row["destroyed_voxels"]]
+    flush = fixture.get("terminal_publication")
+    if not isinstance(flush, dict) or flush.get("tick") != 1440 or not finite(flush.get("cpu_ms")) or type(flush.get("terrain_publication")) is not bool:
+        fail("missing separately measured terminal publication without a living tick")
+    return {"fixture": fixture["fixture"], "nominal_hp": nominal, "applied_hp": 1000,
+            "warmup_ticks_excluded": 120, "measured_ticks": len(measured),
+            "tick_cpu": distribution(ticks), "tick_over_8_333_ms": sum(t > 1000 / 120 for t in ticks),
+            "app_frame_wall_interval": distribution(intervals), "app_intervals_over_16_667_ms": sum(t > 1000 / 60 for t in intervals),
+            "mixed_warmup_frames_excluded": len({r["frame"] for r in measured} & warmup_frames),
+            "publication_ticks": len(publication), "publication_tick_cpu": distribution(publication),
+            "damage_outcome_ticks": sum(r["damage_outcome"] for r in measured),
+            "destroyed_voxels": sum(r["destroyed_voxels"] for r in measured),
+            "destruction_tick_cpu": distribution(destruction), "terminal_publication": flush,
+            "peak_projectiles": max(r["load"]["projectiles"] for r in measured),
+            "peak_windups": max(r["load"]["windups"] for r in measured),
+            "boundary": "Real CPU and Instant app-Update start-to-start intervals; no GPU/vsync/FPS, ordinary balance, movement or static approval claim. Zero publications do not exercise terrain destruction; use the separate all-ten Seven Regions/destruction workloads."}
+
+
 def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
     path = png.with_suffix(".json")
     data = path.read_bytes()
@@ -551,6 +661,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
             raise RuntimeError("Synthetic capture lacks valid real app-frame wall intervals.")
     validate_golem_state(state, view)
     validate_wisp_state(state, view)
+    wisp_performance = validate_wisp_performance_state(state, view)
     ready_frame = state.get("render_ready_frame")
     if not isinstance(ready_frame, int) or state.get("frame", 0) < ready_frame + 4:
         raise RuntimeError(f"{view} did not wait four frames after render assets became ready.")
@@ -561,14 +672,15 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
     if state.get("authored_objects", 0) and not state.get("object_render_chunks", 0):
         raise RuntimeError(f"{view} contains authored instances without render chunks.")
     return {"file": path.name, "sha256": digest(data), "bytes": len(data),
-            "frame": state.get("frame"), "tick": state.get("tick")}
+            "frame": state.get("frame"), "tick": state.get("tick"),
+            **({"wisp_performance": wisp_performance} if wisp_performance is not None else {})}
 
 
 def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance
-    if (args.golem_review or args.wisp_review) and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
+    if (args.golem_review or args.wisp_review or args.wisp_performance) and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
         raise RuntimeError("The creature matrix defines its player and observer recipes; use --view to select entries.")
     battle_environment(args, args.map or "fort", matrix=observer_matrix)
     if observer_matrix and (args.map or args.encounter):
@@ -595,6 +707,9 @@ def capture(args: argparse.Namespace) -> int:
     if args.wisp_review:
         entries = list(WISP_VIEWS)
         matrix = "arena-wisp-v1-natural-phases"
+    if args.wisp_performance:
+        entries = list(WISP_PERFORMANCE_VIEWS)
+        matrix = "arena-wisp-performance-v1-synthetic"
     if args.view:
         requested = set(args.view)
         unknown = requested - {entry[0] for entry in entries}
@@ -635,10 +750,10 @@ def capture(args: argparse.Namespace) -> int:
         "scenario_correction": "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
-        "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if args.performance_review else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
-        "performance_fixture": "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
+        "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
+        "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
         "human_route": "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
@@ -664,11 +779,16 @@ def capture(args: argparse.Namespace) -> int:
                 row_args = argparse.Namespace(**vars(args))
                 row_args.spectator = True
                 row_args.team_a, row_args.team_b = WISP_OBSERVER_RECIPES[name]
+            if args.wisp_performance:
+                row_args = argparse.Namespace(**vars(args))
+                row_args.spectator = True
+                row_args.team_a = row_args.team_b = "wisps-12"
+                row_args.seed, row_args.tick_limit = 1, 1440
             frame_env.update(battle_environment(row_args, arena_map, matrix=observer_matrix, result=view == "observer-result"))
             if focus:
                 frame_env["HEX_ARENA_FOCUS"] = focus
             frame = {
-                "name": name, "view": view, "map": arena_map, "encounter": encounter, "terrain_seed": SEEDS[arena_map], "focus_anchor": focus, "started_at": utc_now(), "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance) else "UNREVIEWED",
+                "name": name, "view": view, "map": arena_map, "encounter": encounter, "terrain_seed": SEEDS[arena_map], "focus_anchor": focus, "started_at": utc_now(), "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED",
                 "command": ["cargo", *CARGO_ARGS], "cwd": str(ROOT),
                 "capabilities": {key: value for key, value in frame_env.items() if key.startswith("HEX_ARENA_")},
                 "log": f"{name}.log", "mechanical_status": "INCOMPLETE",
@@ -707,7 +827,7 @@ def capture(args: argparse.Namespace) -> int:
                 frame["log_sha256"] = digest(log.read_bytes())
             write_json(pack / f"{frame['name']}.receipt.json", frame)
         write_json(pack / "receipt.json", receipt)
-    print("Synthetic performance capture complete. No movement, human balance, GPU, or vsync claim." if args.performance_review else "Capture matrix complete. Static review: UNREVIEWED. Native motion: HUMAN-MOTION-PENDING.")
+    print("Synthetic performance capture complete. No movement, human balance, GPU, or vsync claim." if (args.performance_review or args.wisp_performance) else "Capture matrix complete. Static review: UNREVIEWED. Native motion: HUMAN-MOTION-PENDING.")
     return 0
 
 
@@ -732,6 +852,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
+    review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
     review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel Golem-vs-Dragon observer body, charge, lock, beam and slam views.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")

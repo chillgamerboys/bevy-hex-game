@@ -259,3 +259,147 @@ fn dim_comparison_changes_only_explicit_capture_lighting() {
         );
     }
 }
+
+#[test]
+fn wisp_stress_rejects_live_or_nonexact_setups_and_keeps_nominal_tuning() {
+    let mut setup = ArenaBattleSetup::spectator(BattlePreset::Wisps12, BattlePreset::Wisps12, 1);
+    setup.tick_limit = Some(wisp::STRESS_TICKS);
+    for map in [ArenaMap::Duel, ArenaMap::Fort] {
+        assert!(wisp::validate_stress_setup(true, "observer-wisp-stress", map, &setup).is_ok());
+        assert!(wisp::validate_stress_setup(false, "observer-wisp-stress", map, &setup).is_err());
+    }
+    assert!(wisp::validate_stress_setup(
+        true,
+        "observer-wisp-stress",
+        ArenaMap::SevenRegions,
+        &setup
+    )
+    .is_err());
+    let mut wrong = setup.clone();
+    wrong.seed = 2;
+    assert!(
+        wisp::validate_stress_setup(true, "observer-wisp-stress", ArenaMap::Duel, &wrong).is_err()
+    );
+    wrong = setup.clone();
+    wrong.tick_limit = Some(3600);
+    assert!(
+        wisp::validate_stress_setup(true, "observer-wisp-stress", ArenaMap::Duel, &wrong).is_err()
+    );
+    wrong = ArenaBattleSetup::spectator(BattlePreset::Wisps8, BattlePreset::Wisps12, 1);
+    wrong.tick_limit = Some(wisp::STRESS_TICKS);
+    assert!(
+        wisp::validate_stress_setup(true, "observer-wisp-stress", ArenaMap::Duel, &wrong).is_err()
+    );
+    for nominal in [18.0, 30.0] {
+        for (capture, view, expected) in [
+            (false, "observer-wisp-stress", None),
+            (true, "observer-performance", None),
+            (true, "observer-wisp-stress", Some(nominal)),
+        ] {
+            let mut tuning = ArenaTuning::default();
+            tuning.encounters.wisp_hp = nominal;
+            assert_eq!(
+                wisp::configure_stress_tuning(capture, view, &mut tuning),
+                expected
+            );
+            assert!(tuning.validate().is_ok());
+            let hp = if expected.is_some() {
+                wisp::STRESS_HP
+            } else {
+                nominal
+            };
+            assert!((tuning.encounters.wisp_hp - hp).abs() < f32::EPSILON);
+        }
+    }
+}
+
+#[test]
+fn wisp_stress_records_exact_living_ticks_then_separate_frozen_publication() {
+    let (mut fixture, _) = menu_app();
+    let mut setup = ArenaBattleSetup::spectator(BattlePreset::Wisps12, BattlePreset::Wisps12, 1);
+    setup.tick_limit = Some(wisp::STRESS_TICKS);
+    fixture.insert_resource(setup);
+    let nominal = {
+        let mut tuning = fixture.world_mut().resource_mut::<ArenaTuning>();
+        wisp::configure_stress_tuning(true, "observer-wisp-stress", &mut tuning)
+    };
+    {
+        let mut state = fixture.world_mut().resource_mut::<ViewState>();
+        state.prepare_round();
+        state.capture = Some(PathBuf::from("unused-stress-test.png"));
+        state.capture_view = "observer-wisp-stress".into();
+        state.capture_wisp_nominal_hp = nominal;
+        state.begin_play();
+    }
+    fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    for _ in 0..750 {
+        fixture.update();
+        if fixture
+            .world()
+            .resource::<ViewState>()
+            .capture_event_frame
+            .is_some()
+        {
+            break;
+        }
+    }
+    let before = {
+        let session = fixture.world().resource::<ArenaSession>();
+        let summary = session
+            .battle_summary()
+            .expect("accepted spectator workload");
+        assert_eq!(summary.result, Some(hex_arena::BattleResult::Timeout));
+        assert_eq!(summary.ticks, wisp::STRESS_TICKS);
+        assert_eq!(session.actors.len(), 24);
+        assert!(session.human_actor_id().is_none());
+        assert!(summary.teams.iter().all(|team| team.initial == 12
+            && team.living == 12
+            && (team.max_hp - 12_000.0).abs() < 0.01));
+        session
+            .actors
+            .iter()
+            .map(|a| (a.id, a.hp))
+            .collect::<Vec<_>>()
+    };
+    {
+        let state = fixture.world().resource::<ViewState>();
+        assert_eq!(state.capture_wisp_ticks.len(), 1440);
+        assert!(state
+            .capture_wisp_ticks
+            .iter()
+            .enumerate()
+            .all(|(index, row)| row.tick == index as u64 + 1));
+        let flush = state
+            .capture_wisp_terminal
+            .as_ref()
+            .expect("separate terminal flush");
+        assert_eq!(flush.tick, wisp::STRESS_TICKS);
+        assert!(flush.cpu_ms.is_finite() && flush.cpu_ms >= 0.0);
+        // The final terminal publication is separate from the 1440 living ticks.
+        assert_eq!(
+            state.tick_times.last().expect("flush timing").0,
+            wisp::STRESS_TICKS
+        );
+    }
+    for _ in 0..4 {
+        fixture.update();
+    }
+    let session = fixture.world().resource::<ArenaSession>();
+    assert_eq!(session.tick, wisp::STRESS_TICKS);
+    assert_eq!(
+        before,
+        session
+            .actors
+            .iter()
+            .map(|a| (a.id, a.hp))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fixture
+            .world()
+            .resource::<ViewState>()
+            .capture_wisp_ticks
+            .len(),
+        1440
+    );
+}

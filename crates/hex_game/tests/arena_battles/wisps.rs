@@ -66,14 +66,17 @@ fn wisps_and_single_goblin_admit_on_both_maps_with_twenty_four_body_capacity() {
             let world = fixture.world().resource::<ArenaTerrainView>();
             for actor in session.actors.iter().filter(|actor| actor.hp > 0.0) {
                 assert!(
-                    session.actor_pose_valid(actor.id, world, geometry),
+                    session.actor_volume_valid(actor.id, world, geometry),
                     "{map:?} {left:?}/{right:?} moved actor{} {:?}",
                     actor.id,
                     actor.feet
                 );
                 if actor.species == Species::Wisp {
                     assert!(actor.flying);
+                    assert!(session.actor_pose_valid(actor.id, world, geometry));
                 }
+                // Ground combatants may be airborne after Ember knockback or lost
+                // footing; their occupied volume must still remain clear and dry.
             }
         }
     }

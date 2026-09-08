@@ -185,6 +185,21 @@ pub(super) fn capture_camera(
     if state.capture.is_none() {
         return;
     }
+    if stress_view(&state.capture_view) {
+        let bounds = session.actors.iter().filter(|actor| actor.hp > 0.0).fold(
+            None::<(Vec3, Vec3)>,
+            |bounds, actor| {
+                let half = actor.body_dimensions() * 0.5;
+                let low = actor.center() - half;
+                let high = actor.center() + half;
+                Some(bounds.map_or((low, high), |(a, b)| (a.min(low), b.max(high))))
+            },
+        );
+        if let (Some((low, high)), Ok(mut camera)) = (bounds, cameras.single_mut()) {
+            *camera = super::encounter::frame_bounds(low, high, false);
+        }
+        return;
+    }
     let Some(actor) = phase_actor(&session, &state.capture_view) else {
         return;
     };
@@ -213,4 +228,115 @@ pub(super) fn capture_camera(
         }
     }
     *camera = super::encounter::frame_bounds(low, high, state.capture_view.ends_with("-rear"));
+}
+
+pub(super) const STRESS_HP: f32 = 1000.0;
+pub(super) const STRESS_TICKS: u64 = 1440;
+
+pub(super) fn stress_view(view: &str) -> bool {
+    view == "observer-wisp-stress"
+}
+
+pub(super) fn validate_stress_setup(
+    capture: bool,
+    view: &str,
+    map: hex_core::arena::ArenaMap,
+    setup: &hex_arena::ArenaBattleSetup,
+) -> Result<(), String> {
+    if !stress_view(view) {
+        return Ok(());
+    }
+    let mut expected = hex_arena::ArenaBattleSetup::spectator(
+        hex_arena::BattlePreset::Wisps12,
+        hex_arena::BattlePreset::Wisps12,
+        1,
+    );
+    expected.tick_limit = Some(STRESS_TICKS);
+    if !capture
+        || !matches!(
+            map,
+            hex_core::arena::ArenaMap::Duel | hex_core::arena::ArenaMap::Fort
+        )
+        || setup != &expected
+    {
+        return Err("Wisp stress requires an explicit windowless Fort/Duel 12-vs-12 capture, seed 1 and 1440-tick limit.".into());
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct StressTick {
+    pub frame: u32,
+    pub tick: u64,
+    pub cpu_ms: f64,
+    pub terrain_publication: bool,
+    pub damage_outcome: bool,
+    pub destroyed_voxels: usize,
+    pub load: StressLoad,
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct StressLoad {
+    living_wisps: usize,
+    flying_wisps: usize,
+    active_parties: usize,
+    team_layers: [[usize; 2]; 2],
+    unassigned_layers: usize,
+    projectiles: usize,
+    windups: usize,
+}
+
+pub(super) fn stress_load(session: &ArenaSession) -> StressLoad {
+    let mut result = StressLoad {
+        living_wisps: 0,
+        flying_wisps: 0,
+        active_parties: session.encounter_summary().active_parties,
+        team_layers: [[0; 2]; 2],
+        unassigned_layers: 0,
+        projectiles: session.projectiles.len(),
+        windups: 0,
+    };
+    for actor in session
+        .actors
+        .iter()
+        .filter(|actor| actor.species == Species::Wisp && actor.hp > 0.0)
+    {
+        result.living_wisps += 1;
+        result.flying_wisps += usize::from(actor.flying);
+        result.windups += usize::from(actor.attack_state().is_some_and(|attack| {
+            attack.kind == CreatureAbility::WispEmber && attack.phase == AttackPhase::Windup
+        }));
+        let slot = actor.team.checked_sub(1).map(usize::from);
+        let layer = actor.flight_layer().map(usize::from);
+        if let Some(count) = slot
+            .and_then(|slot| result.team_layers.get_mut(slot))
+            .and_then(|layers| layer.and_then(|layer| layers.get_mut(layer)))
+        {
+            *count += 1;
+        } else {
+            result.unassigned_layers += 1;
+        }
+    }
+    result
+}
+
+/// Applied only before actor admission, keeping accepted team maximum HP truthful.
+pub(super) fn configure_stress_tuning(
+    capture: bool,
+    view: &str,
+    tuning: &mut hex_arena::ArenaTuning,
+) -> Option<f32> {
+    if !capture || !stress_view(view) {
+        return None;
+    }
+    let nominal = tuning.encounters.wisp_hp;
+    tuning.encounters.wisp_hp = STRESS_HP;
+    Some(nominal)
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct TerminalPublication {
+    pub tick: u64,
+    pub terrain_publication: bool,
+    pub cpu_ms: f64,
 }
