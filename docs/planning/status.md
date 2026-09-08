@@ -9,22 +9,22 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-**Spell Combat Arena — local experiment, 2026-09-08.** The user playtested and
-accepted the stronger Shadow opponent at `127d1ce`. The [new encounter wave](waves/arena-encounters/manifest.md)
-adds Dragons, Goblins, Shamans and selected Fort/Seven Regions combat. Shared
-selection/geometry/physical-impact contracts, world, gameplay and presentation
-lanes are committed locally with focused logic, static and performance evidence;
-the final combined workspace gate and human playtesting remain pending. See the [controls guide](../systems/arena-encounters.md).
-The [spectator/bestiary continuation](waves/arena-bestiary/manifest.md) now has
-two autonomous teams, Fort/Duel deployment, observer controls and seeded matchup
-receipts committed. Original groups, Golem and Ember Wisp have paired machine
-calibration records. Golem static review passes. Wisp sustained capacity passed at
-`5f5afec`; refreshed static review follows the windup cue repair. Worm world
-conversion, runtime, geometry and presentation are integrated, with 271 arena
-tests, 11 actual-world tests, 80 application tests and scoped strict lint recorded.
-Native calibration, final captures and the repository gate are underway.
-This work remains local on experiment/spell-combat-arena; no dev merge, tactical
-authority, multiplayer or Grand V3 integration is part of this delivery.
+**Spell Combat Arena — experimental PR candidate, 2026-09-08.** The user playtested
+and accepted the stronger Shadow opponent at `127d1ce`. The
+[encounter wave](waves/arena-encounters/manifest.md) and
+[bestiary continuation](waves/arena-bestiary/manifest.md) now implement all seven
+enemy profiles, Fort/Seven Regions encounters and Fort/Duel spectator battles.
+All 29 combined checks passed at `25fa64d`, including 271 arena gameplay tests,
+82 arena application tests, eleven actual-world battle tests, strict workspace
+lint, documentation and the shipping build. Later changes are documentation only.
+Golem, Wisp and Worm have scoped static reviews; Seven Regions sustained all ten
+enemies with measured terrain destruction. Machine calibration and known movement,
+balance and performance limits are recorded in the
+[validation report](../systems/arena-bestiary-validation.md).
+The user authorized one combined draft PR from `experiment/spell-combat-arena`
+to `dev`; no merge or default-mode integration is claimed. Human motion, controls
+and balance on the final candidate remain pending. See the
+[controls guide](../systems/arena-encounters.md). Multiplayer and Grand V3 are deferred.
 
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)

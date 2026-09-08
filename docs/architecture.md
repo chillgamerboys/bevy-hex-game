@@ -147,8 +147,9 @@ graph; tests and visual review protect the component contract.
 The default-off `arena-prototype` feature and explicit `--arena` argument compose a
 separate native application in `hex_game`. It installs the arena world producer and
 `hex_arena` simulation without tactical gameplay, perception, or networking plugins.
-This is an implemented local experiment on `experiment/spell-combat-arena`, pending
-combined validation and playtesting; it has not landed on `dev`. Its decisions and
+This is an implemented experiment on `experiment/spell-combat-arena`; combined
+automated validation passed at `25fa64d`, while final human playtesting remains
+pending. A draft PR is authorized; it has not landed on `dev`. Its decisions and
 ownership are recorded in the [arena manifest](planning/waves/spell-combat-arena/manifest.md).
 
 World-owned `hex_map::arena` publishes `hex_core::arena` geometry and map selection,

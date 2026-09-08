@@ -1,7 +1,9 @@
 # Authored arena encounter validation
 
-Status: combined implementation under validation. No native playtest or balance
-claim is implied by these records. The accepted reference is local commit
+Status: combined implementation and automated validation are complete. All 29
+combined checks passed at `25fa64d`; final static reviews and native measurements
+are recorded in the [bestiary close-out](arena-bestiary-validation.md). Human
+playtesting remains pending. The accepted reference is local commit
 `127d1ce2058de9ba79da9717b7e37df4b9913502` on
 `experiment/spell-combat-arena`.
 
@@ -11,8 +13,8 @@ The wave manifest is [arena-encounters](../planning/waves/arena-encounters/manif
 The [approved plan](../planning/waves/arena-encounters/plan.md) and
 [controls/tuning guide](arena-encounters.md) define the delivered scope.
 Fort uses seed 640367719; Seven Regions uses seed 703700113. The original Duel
-retains its original deterministic recipe. All changes remain local; no PR or
-merge into dev is part of this delivery.
+retains its original deterministic recipe. The user subsequently authorized a
+combined draft PR to `dev`; merging remains a separate decision.
 
 ## Focused checkpoints
 
@@ -26,7 +28,7 @@ merge into dev is part of this delivery.
 | Presentation `067aa55` | hex_game arena CI library suite | 44 passed, 2 explicit manual/performance fixtures ignored; 326 unrelated tests filtered. |
 | Composition `42ae1d9` | hex_game arena_encounters CI target | 4 passed; 2 explicit timing fixtures ignored during correctness checks. |
 | Travel `42ae1d9` | hex_game arena_routes CI target | 8 passed: four human roundtrips, enemy ground loops, physical damage and wall stop/clear/retry. |
-| Required combined gate | Repository selector from accepted base | Pending. |
+| Required combined gate `25fa64d` | Complete repository selector closure from accepted base | All 29 checks passed; see the bestiary close-out for source identity and evidence. |
 | Native arena build `f12b329` | Cargo dev + arena-prototype, task work/encounter-native-build-03.log | Passed (9m 01s rebuild after shared contract addition). |
 | Windowless visual checkpoints | 27 views at3046779 plus6 affected VFX and2 Duel views atf12b329 | Full-resolution coordinator/independent review; aura defect repaired. Final combined bestiary matrix still pending. |
 

@@ -11,7 +11,7 @@ something reserved for later, or something still being asked for?*
 | Status | Meaning |
 |---|---|
 | **live** | Published and consumed in the shipped build |
-| **experimental** | Implemented in a default-off local experiment; combined validation and playtesting remain pending, and no `dev` delivery is claimed |
+| **experimental** | Implemented in a default-off experiment; its linked manifest records validation and playtest status, and no `dev` delivery is claimed |
 | **partial** | One side is live, while the row names the required producer or consumer still pending |
 | **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
 | **reserved** | Shared vocabulary and/or ordering is defined for later use; no runtime producer or consumer is live |

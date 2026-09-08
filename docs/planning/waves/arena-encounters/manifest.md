@@ -1,7 +1,7 @@
 # Arena enemies and authored encounters — local wave
 
-Status: integrating. Base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Branch: experiment/spell-combat-arena. Coordinator: root. Ticket: null (Linear reauthentication required).
-Outcome: [approved specification](plan.md), grounded in [audited seams](maps/seams.md). World facts, creature authority and presentation form one combined playable outcome. User requires local implementation/commits, excluding remote PR/dev merges. Foundation remains local; contributors edit disjoint authority files in the shared checkout. Root alone commits and serializes builds/captures.
+Status: implemented and automatically validated; final human playtest pending. Base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Branch: experiment/spell-combat-arena. Coordinator: root. Ticket: null (Linear reauthentication required).
+Outcome: [approved specification](plan.md), grounded in [audited seams](maps/seams.md). World facts, creature authority and presentation form one combined playable outcome. The user initially required local commits and authorized a combined draft PR on 2026-09-08. The PR includes the [bestiary continuation](../arena-bestiary/manifest.md); no dev merge is authorized. Contributors edited disjoint authority files in the shared checkout. Root alone commits and serializes builds/captures.
 
 ## Locked decisions
 

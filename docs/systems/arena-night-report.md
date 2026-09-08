@@ -1,6 +1,6 @@
 # Arena update
 
-The **Worm is implemented** alongside Dragon, player-sized Goblins, Shaman, Shadow, Golem and Ember Wisps. Fort has selectable encounters, Seven Regions has three separate parties, and spectator mode lets two monster teams fight. Everything remains on the local experiment branch.
+The **Worm is implemented** alongside Dragon, player-sized Goblins, Shaman, Shadow, Golem and Ember Wisps. Fort has selectable encounters, Seven Regions has three separate parties, and spectator mode lets two monster teams fight. The combined experiment is prepared for draft PR review; human playtesting remains pending.
 
 The Worm has four segments, burrows just below the surface and converts eligible earth to dirt. It must expose its head before firing a damaging, knockback Boulder; its head turns gold while charging. It has **320 HP** and Boulders deal up to **70 damage**. Close shots now work without hurting the Worm, and cratered heads can find their surviving floor and continue attacking. Ordinary Fireball self-damage is preserved.
 

@@ -25,7 +25,7 @@ local branch with disjoint shared-checkout edits and coordinator-only commits.
 4. Finish and roughly calibrate original groups, then add Golem, Ember Wisp and Worm in that order; no Boar.
 5. Golem uses a round seven-hex base and five levels of height, slow movement, spherical short slam and long charged laser with a medium-range gap.
 6. Wisp is one voxel, slow flying, conspicuously glowing and long ranged; Worm burrows, converts eligible earth to dirt, and must expose its head before boulders.
-7. Everything remains local on experiment/spell-combat-arena; no PR, merge, visible launch, multiplayer, adaptive difficulty or unrelated visual work.
+7. Keep the combined candidate on experiment/spell-combat-arena. The user's 2026-09-08 requests authorize a visible launch and one draft PR to dev. No merge, multiplayer, adaptive difficulty or unrelated visual work is authorized.
 
 ## Shared foundation
 
@@ -222,9 +222,10 @@ build and focused arena integration/routes/battles. Record timings and repeatabl
 
 Escalate unresolved ownership contracts, source changes during captures, hidden-info
 leaks, unsafe spawns or failed required checks. Do not label a timeout a win, a frame a
-logic proof, or machine balance a human win rate. Keep local commits and all evidence;
-no cleanup, visible launch or remote publication. Delete overnight heartbeat only when
-all authorized work and final evidence/guide are delivered.
+logic proof, or machine balance a human win rate. Keep commits and all evidence;
+no cleanup or automatic merge. Visible launch and draft PR publication follow the
+user's explicit requests below. The overnight heartbeat was deleted after the
+authorized implementation and final evidence/guide were delivered.
 
 ## Injection log
 
@@ -232,6 +233,11 @@ all authorized work and final evidence/guide are delivered.
   clarified seven-hex body belongs to Golem and Goblins must remain player sized.
 - 2026-09-08: user returned and explicitly requested a visible game launch after
   completion. Launch Fort with Worm selected and stopped at the ready screen.
+- 2026-09-08: user requested a PR. Publish the existing combined branch as one
+  draft PR to dev, with exact validation scopes and human acceptance pending.
+  Fresh GitHub dev is unchanged at 495a73d, the candidate's merge base. The full
+  PR selector selects the same complete concern set as the passing 29-row gate.
+  Linear still requires reauthentication; no unambiguous arena ticket is linked.
 
 ## Checkpoints
 

@@ -769,3 +769,16 @@ checked after the prose update. The code remains on the local experiment branch;
 native controls, motion, balance and the documented movement/performance limitations
 remain for human playtesting. The user explicitly requested a visible Fort/Worm
 launch after these checks completed.
+
+## PR preparation — 2026-09-08
+
+The user subsequently requested publication. Fresh GitHub `dev` remains
+`495a73dcbe7edbab6d993867d91b15979fa6ce81`, exactly this branch's merge base.
+The full PR selector selects the same complete concern set as the passing
+29-row gate. Changes after `25fa64d` are tracked Markdown only; gameplay,
+configuration, tests and launcher source are unchanged. Publication reconciles
+stale status and historical local-only instructions, with links, terminology and
+whitespace checked again. One combined draft PR targets `dev`; cross-platform CI
+and exact-head human acceptance remain separate from the recorded local results.
+Linear could not be inspected because reauthentication is required; no arena
+ticket is unambiguously linked, so no ticket updates are proposed.
