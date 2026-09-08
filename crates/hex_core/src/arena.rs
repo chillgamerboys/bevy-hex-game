@@ -1,5 +1,12 @@
 //! Explicit world/gameplay contracts for the isolated real-time arena experiment.
 
+mod burrow;
+
+pub use burrow::{
+    ArenaBurrowChange, ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRejection,
+    ArenaBurrowRequest, ArenaBurrowResult, MAX_ARENA_BURROW_CELLS,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
@@ -226,6 +233,9 @@ pub struct ArenaTerrainView {
     /// Optional authored spectator sides, in roster order. No gameplay-generated
     /// search may escape these surfaces onto unrelated floors or rooftops.
     pub battle_deployment: Option<[ArenaDeploymentRegion; 2]>,
+    /// Separate finite dry supporting surfaces for elongated bodies. Ordinary
+    /// deployment is unchanged; consumers must validate every physical segment.
+    pub elongated_deployment: Option<[ArenaDeploymentRegion; 2]>,
     /// Compact solid runs, indexed by column for incremental collision refresh.
     pub columns: BTreeMap<HexCoord, Vec<ArenaSolidSpan>>,
     /// Columns changed by this revision. Consumers missing a revision rebuild fully.

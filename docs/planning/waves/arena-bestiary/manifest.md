@@ -277,3 +277,12 @@ all authorized work and final evidence/guide are delivered.
   static reviews follow the clean candidate commit. The detached review checkout
   preserves source identity while neutral Worm contracts are prepared in main.
   No Worm runtime has been dispatched yet.
+
+- Wisp gameplay `4081f08` and presentation `dbf3fc6` are frozen for native paired
+  calibration. The gameplay checkpoint also includes the measured-hot-path Dragon
+  array/basis refactor;227 arena tests and strict lint pass, including bitwise
+  comparison with the old box query. Native timing acceptance remains pending.
+  Root adds inert shared burrow request/outcome/material vocabulary and optional
+  elongated deployment publication before the Worm phase. No messages are emitted
+  or consumed yet, and no Worm is selectable. Formatting passes; compilation of
+  this neutral contract is deferred until the serialized Cargo slot is available.
