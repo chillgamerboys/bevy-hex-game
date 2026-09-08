@@ -113,6 +113,48 @@ Retained task evidence: `outputs/arena-original-native-01/{receipt.json,battles.
 `outputs/arena-self-hit-trace-01/{receipt.json,battles.log}`, and
 `outputs/shaman-self-hit-transitions-01.json`. Traced timing is diagnostic only.
 
+## Attack repairs and repeated native comparison
+
+Gameplay checkpoint `543ceab` repairs start-of-step caster clearance, positional
+Shaman aim spread, exposed finite-cone contacts, and physically aligned defensive
+Dragon breath with visible-target tracking. All 155 focused gameplay tests pass,
+including the unchanged Duel goldens; strict scoped arena lint passes. The first
+run had one incorrect new negative fixture: a 3.55-unit cone could legitimately
+reach an exposed capsule flank. The corrected fixture and its geometric reason
+are retained; no production range was changed to satisfy that test.
+
+Harness checkpoint `9e83d30` adds accepted-session setup checks and separate terminal
+publication timing. Three real-world battle integration tests and strict application
+lint pass. Eleven Python receipt guards pass. The historical 96 outcomes also pass
+the stronger setup/member/result checks; their previously documented final-flush
+timing limitation remains. A Git commit during the integration test changed source
+bookkeeping only; the retained content-provenance receipt verifies unchanged files.
+
+Clean combined `b7c5d60` repeats the same native 96-round comparison at unchanged
+numeric values:
+
+| Pair | First wins | Second wins | Timeouts |
+|---|---:|---:|---:|
+| Shadow / Dragon | 16 | 0 | 0 |
+| Shadow / 5 Goblins | 6 | 8 | 2 |
+| Shadow / Shaman party | 10 | 2 | 4 |
+| Dragon / 5 Goblins | 0 | 16 | 0 |
+| Dragon / Shaman party | 0 | 16 | 0 |
+| 5 Goblins / Shaman party | 3 | 13 | 0 |
+
+Shaman self-damage falls from 554 to **zero** across its 48 rounds, with ordinary
+caster damage rules intact. Maximum living-tick CPU is 5.492 ms; maximum separately
+measured terminal publication is .087 ms. The Dragon remains too weak (93 total
+damage in its 16 Shadow rounds), so this is a repaired baseline, not completed
+calibration. The next bounded trial raises only Dragon HP to 160 and breath range
+to 6, and improves its opportunity to turn toward a nearby attacker. Shaman support
+will begin when allies actually engage and remain within the existing aura range.
+Goblins, human spells and Shadow policy remain unchanged.
+
+Retained task evidence: `outputs/arena-original-native-02/{receipt.json,battles.log}`,
+`outputs/arena-original-native-summary-02.json`, the `work/creature-combat-repair-*`
+logs, and `work/arena-battle-integration-01` / `work/arena-battle-app-clippy-01`.
+
 ## Native smoke measurements
 
 At `90e2e4d`, two windowless ordinary seeded battles ran serially, with no synthetic
