@@ -95,5 +95,15 @@ required-features = ["test-support"]
 name = "spell_resolution"
 path = "tests/spell_resolution.rs"
 
+[[test]]
+name = "arena_encounters"
+path = "tests/arena_encounters.rs"
+required-features = ["arena-prototype", "test-support"]
+
+[[test]]
+name = "arena_routes"
+path = "tests/arena_routes.rs"
+required-features = ["arena-prototype", "test-support"]
+
 [lints]
 workspace = true
