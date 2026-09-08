@@ -834,6 +834,7 @@ pub(crate) struct ForecastBody {
     pub dimensions: Vec3,
     pub yaw: f32,
     pub yaw_velocity: f32,
+    pub prisms: Option<crate::BodyPrismSnapshot>,
 }
 impl ForecastBody {
     pub fn human(id: u8, feet: Vec3, velocity: Vec3, predict_seconds: f32) -> Self {
@@ -847,7 +848,39 @@ impl ForecastBody {
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             yaw: 0.0,
             yaw_velocity: 0.0,
+            prisms: None,
         }
+    }
+
+    pub fn center(self) -> Vec3 {
+        if let Some(prisms) = self.prisms.filter(|_| self.species == crate::Species::Worm) {
+            return self.feet + prisms.center_offset();
+        }
+        // Dynamic facts without geometry are rejected by actor_at/forecast; the
+        // legacy arithmetic remains exact for all previously admitted profiles.
+        self.feet + Vec3::Y * (self.dimensions.y * 0.5)
+    }
+
+    pub fn reconstruct(self) -> Option<Actor> {
+        let mut body = Actor::spawn(self.id, self.feet, Vec3::NEG_Z);
+        body.species = self.species;
+        body.team = self.team;
+        body.dimensions = self.dimensions;
+        body.body_yaw = self.yaw;
+        body.previous_yaw = self.yaw;
+        if self.species == crate::Species::Worm {
+            body.set_observed_prisms(self.prisms?)?;
+        }
+        Some(body)
+    }
+
+    pub fn actor_at(self, seconds: f32) -> Option<Actor> {
+        let mut body = self.reconstruct()?;
+        // Preserve the admitted pre-Worm distance-query arithmetic exactly.
+        let time = seconds.min(self.predict_seconds);
+        body.feet += self.velocity * time;
+        body.body_yaw += self.yaw_velocity * time;
+        Some(body)
     }
 }
 
@@ -912,20 +945,18 @@ fn forecast_projectile(
     geometry: ArenaVoxelGeometry,
     mut shot: Projectile,
 ) -> SpellForecast {
+    if observed
+        .iter()
+        .any(|fact| fact.species == crate::Species::Worm && fact.reconstruct().is_none())
+    {
+        return SpellForecast::default();
+    }
     let mut bodies = vec![caster.clone()];
     bodies.extend(
         observed
             .iter()
             .filter(|body| body.id != caster.id)
-            .map(|fact| {
-                let mut body = Actor::spawn(fact.id, fact.feet, Vec3::NEG_Z);
-                body.species = fact.species;
-                body.team = fact.team;
-                body.dimensions = fact.dimensions;
-                body.body_yaw = fact.yaw;
-                body.previous_yaw = fact.yaw;
-                body
-            }),
+            .filter_map(|fact| fact.reconstruct()),
     );
     if let Some(owner) = bodies.first_mut() {
         owner.previous_feet = owner.feet;

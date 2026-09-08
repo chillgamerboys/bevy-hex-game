@@ -78,6 +78,13 @@ struct Belief {
 
 impl Belief {
     fn center(self) -> Vec3 {
+        if let Some(mut target) = self
+            .profile
+            .filter(|p| p.body.species == crate::Species::Worm)
+        {
+            target.body.feet = self.feet;
+            return target.body.center();
+        }
         self.feet
             + Vec3::Y
                 * (self
@@ -1027,19 +1034,34 @@ impl Bot {
         let observations = self.forecast_bodies(belief, tuning);
         let (_, lead_time) = ballistic_aim(bot.eye(), belief.center(), tuning, speed)?;
         let lead = belief.velocity * lead_time.min(tuning.bot.prediction_seconds);
-        for vertical in [
+        for (sample, vertical) in [
             belief
                 .profile
                 .map_or(BODY_HEIGHT, |target| target.body.dimensions.y)
                 * 0.5,
             0.06,
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let uncertainty_error = if belief.visible {
                 Vec3::ZERO
             } else {
                 self.error.normalize_or_zero() * belief.uncertainty.min(1.0)
             };
-            let target = belief.feet + Vec3::Y * vertical + lead + self.error + uncertainty_error;
+            let target = if let Some(profile) = belief
+                .profile
+                .filter(|p| p.body.species == crate::Species::Worm)
+            {
+                let point = if sample == 0 {
+                    belief.center()
+                } else {
+                    profile.sight_point + (belief.feet - profile.body.feet)
+                };
+                point + lead + self.error + uncertainty_error
+            } else {
+                belief.feet + Vec3::Y * vertical + lead + self.error + uncertainty_error
+            };
             let Some((aim, _)) = ballistic_aim(bot.eye(), target, tuning, speed) else {
                 continue;
             };

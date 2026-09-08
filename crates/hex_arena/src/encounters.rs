@@ -695,7 +695,10 @@ fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> 
     !view.liquids.iter().any(|run| {
         let bottom = geometry.top(run.bottom) - geometry.level_height;
         let top = geometry.top(TilePos::new(run.bottom.coord, run.top_level));
-        if matches!(actor.species, Species::Golem | Species::Wisp) {
+        if matches!(
+            actor.species,
+            Species::Golem | Species::Wisp | Species::Worm
+        ) {
             return shapes::hex_span_overlap(actor, run.bottom.coord, bottom, top);
         }
         actor.feet.y < top - SKIN
@@ -753,8 +756,8 @@ fn safe_spawn(
 }
 
 fn body_overlap(a: &Actor, b: &Actor) -> Option<Vec3> {
-    if matches!(a.species, Species::Golem | Species::Wisp)
-        || matches!(b.species, Species::Golem | Species::Wisp)
+    if matches!(a.species, Species::Golem | Species::Wisp | Species::Worm)
+        || matches!(b.species, Species::Golem | Species::Wisp | Species::Worm)
     {
         return shapes::compound_separation(a, b);
     }

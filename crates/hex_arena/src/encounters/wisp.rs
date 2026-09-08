@@ -52,7 +52,7 @@ pub(super) fn release_aim(
     fact.yaw += fact.yaw_velocity * advance;
     fact.predict_seconds = (fact.predict_seconds - advance).max(0.0);
     let spec = ember_spec(c, materials);
-    let center = fact.feet + Vec3::Y * (fact.dimensions.y * 0.5);
+    let center = fact.center();
     let (_, time) = ballistic_aim_with_gravity(actor.eye(), center, spec.gravity, spec.speed)?;
     let point = center + fact.velocity * time.min(fact.predict_seconds);
     let (aim, _) = ballistic_aim_with_gravity(actor.eye(), point, spec.gravity, spec.speed)?;

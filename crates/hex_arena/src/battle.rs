@@ -44,11 +44,13 @@ pub enum BattlePreset {
     Wisps8,
     /// Twelve flying Wisps, the largest two-team comparison under the actor cap.
     Wisps12,
+    /// One shallow-burrowing four-to-six-segment Worm.
+    Worm,
 }
 
 impl BattlePreset {
     /// Initial selectable recipes, in stable presentation order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Shadow,
         Self::Dragon,
         Self::Goblins,
@@ -60,6 +62,7 @@ impl BattlePreset {
         Self::Wisps4,
         Self::Wisps8,
         Self::Wisps12,
+        Self::Worm,
     ];
 
     /// Frozen count sweep for the Wisp crossover, with no assumed equivalence.
@@ -71,13 +74,14 @@ impl BattlePreset {
         Self::Wisps12,
     ];
     /// One provisional Wisp menu recipe; explicit/observer selection uses ALL.
-    pub const PLAYER: [Self; 6] = [
+    pub const PLAYER: [Self; 7] = [
         Self::Shadow,
         Self::Dragon,
         Self::Goblins,
         Self::ShamanParty,
         Self::Golem,
         Self::Wisps4,
+        Self::Worm,
     ];
 
     /// Frozen original-group comparison corpus; later creatures are calibrated separately.
@@ -98,6 +102,7 @@ impl BattlePreset {
             Self::Wisps4 => "4 Wisps",
             Self::Wisps8 => "8 Wisps",
             Self::Wisps12 => "12 Wisps",
+            Self::Worm => "Worm",
         }
     }
 
@@ -116,6 +121,7 @@ impl BattlePreset {
             Self::Wisps4 => "wisps-4",
             Self::Wisps8 => "wisps-8",
             Self::Wisps12 => "wisps-12",
+            Self::Worm => "worm",
         }
     }
 
@@ -145,6 +151,7 @@ impl BattlePreset {
             Self::Wisps4 => vec![Species::Wisp; 4],
             Self::Wisps8 => vec![Species::Wisp; 8],
             Self::Wisps12 => vec![Species::Wisp; 12],
+            Self::Worm => vec![Species::Worm],
         }
     }
 }
@@ -227,6 +234,9 @@ impl ArenaBattleSetup {
             if self.player_recipe.is_some() && map != ArenaMap::Fort {
                 return Err(BattleSetupError::PlayerRecipeMap);
             }
+            if self.player_recipe == Some(BattlePreset::Worm) {
+                return Err(BattleSetupError::CreatureNotReady);
+            }
             return Ok(());
         }
         if self.player_recipe.is_some() {
@@ -270,6 +280,14 @@ impl ArenaBattleSetup {
         {
             return Err(BattleSetupError::TooManyActors);
         }
+        if self
+            .rosters
+            .iter()
+            .flat_map(|team| team.parties.iter().flatten())
+            .any(|species| *species == Species::Worm)
+        {
+            return Err(BattleSetupError::CreatureNotReady);
+        }
         if self.tick_limit == Some(0) {
             return Err(BattleSetupError::ZeroTickLimit);
         }
@@ -280,6 +298,8 @@ impl ArenaBattleSetup {
 /// Setup refusal; failure to place valid bodies is a separate runtime diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BattleSetupError {
+    /// Worm vocabulary is visible before its world-approved motion is enabled.
+    CreatureNotReady,
     /// Explicit player recipes are currently authored only for Fort.
     PlayerRecipeMap,
     /// Observer rosters cannot also request a player encounter recipe.
@@ -303,6 +323,7 @@ pub enum BattleSetupError {
 impl std::fmt::Display for BattleSetupError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
+            Self::CreatureNotReady => "Worm burrowing and attacks are still being integrated.",
             Self::PlayerRecipeMap => "Player opponent recipes support Fort only.",
             Self::PlayerRecipeInSpectator => {
                 "Spectator battles use team rosters, not a player recipe."

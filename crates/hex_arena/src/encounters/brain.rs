@@ -207,6 +207,7 @@ impl Brain {
                             dimensions: target.dimensions,
                             yaw: target.body_yaw,
                             yaw_velocity: 0.0,
+                            prisms: target.body_prism_snapshot(),
                         },
                         tick,
                         sight_point: if collision.sight_clear(actor.eye(), target.center()) {

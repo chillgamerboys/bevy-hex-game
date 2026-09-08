@@ -51,7 +51,7 @@ fn golem_projection_is_seven_native_prisms_with_fixed_body_orientation() {
     assert_eq!(CreatureAbility::GolemSlam.index(), 7);
     assert_eq!(CreatureAbility::GolemLaser.index(), 8);
     assert_eq!(
-        CreatureAbility::WispEmber.index() + 1,
+        CreatureAbility::WormBoulder.index() + 1,
         CREATURE_ABILITY_COUNT
     );
 }
@@ -122,6 +122,6 @@ fn fort_player_override_is_reset_owned_and_none_restores_the_world_recipe() {
         .expect("old request")
         .player_recipe
         .is_none());
-    assert_eq!(BattlePreset::ALL.len(), 11);
+    assert_eq!(BattlePreset::ALL.len(), 12);
     assert!(!BattlePreset::ORIGINAL.contains(&BattlePreset::Golem));
 }

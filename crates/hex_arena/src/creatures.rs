@@ -11,7 +11,7 @@ pub type TeamId = u8;
 pub type PartyId = u16;
 
 /// Stable creature activation-counter width; existing seven indices are preserved.
-pub const CREATURE_ABILITY_COUNT: usize = 10;
+pub const CREATURE_ABILITY_COUNT: usize = 11;
 
 /// One world-oriented native hex prism in a compound creature body.
 /// Its pointy horizontal hex has circumradius one world unit, matching terrain.
@@ -57,6 +57,8 @@ pub enum Species {
     Golem,
     /// Small, conspicuous one-hex flying ember caster.
     Wisp,
+    /// Four-to-six native segments with an exposed throwing head.
+    Worm,
 }
 
 /// Creature attack or support action; player hotbar slots remain separate.
@@ -82,6 +84,8 @@ pub enum CreatureAbility {
     GolemLaser,
     /// Briefly telegraphed weak ballistic ember.
     WispEmber,
+    /// Physically emerged, telegraphed ballistic rock.
+    WormBoulder,
 }
 
 impl CreatureAbility {
@@ -99,6 +103,7 @@ impl CreatureAbility {
             Self::GolemSlam => 7,
             Self::GolemLaser => 8,
             Self::WispEmber => 9,
+            Self::WormBoulder => 10,
         }
     }
 }
@@ -112,6 +117,8 @@ pub enum ProjectileAppearance {
     Fireball,
     /// Small conspicuous Wisp ember.
     Ember,
+    /// Frozen physical Worm projectile appearance.
+    Boulder,
 }
 
 /// Current authoritative phase of a creature action.
@@ -232,6 +239,14 @@ impl crate::Actor {
     /// Compound hex geometry when this profile uses it; existing capsules and
     /// oriented boxes publish no prisms. The projection never allocates.
     pub fn body_hex_prisms(&self) -> impl Iterator<Item = BodyHexPrism> {
+        self.body_hex_prisms_at(false)
+    }
+
+    pub(crate) fn previous_body_hex_prisms(&self) -> impl Iterator<Item = BodyHexPrism> {
+        self.body_hex_prisms_at(true)
+    }
+
+    fn body_hex_prisms_at(&self, previous: bool) -> impl Iterator<Item = BodyHexPrism> {
         let width = hex_core::config::HEX_SMALL_DIAMETER;
         let offsets = [
             Vec3::ZERO,
@@ -242,21 +257,33 @@ impl crate::Actor {
             Vec3::new(-width * 0.5, 0.0, -1.5),
             Vec3::new(width * 0.5, 0.0, -1.5),
         ];
-        offsets
-            .map(|offset| BodyHexPrism {
-                offset,
-                height: if self.species == Species::Wisp {
-                    0.4
+        let fixed = offsets.map(|offset| BodyHexPrism {
+            offset,
+            height: if self.species == Species::Wisp {
+                0.4
+            } else {
+                2.0
+            },
+        });
+        let (parts, count) = if self.species == Species::Worm {
+            self.worm.as_ref().map_or((fixed, 0), |body| {
+                if previous {
+                    body.previous.packed()
                 } else {
-                    2.0
+                    body.current.packed()
+                }
+            })
+        } else {
+            (
+                fixed,
+                match self.species {
+                    Species::Golem => 7,
+                    Species::Wisp => 1,
+                    _ => 0,
                 },
-            })
-            .into_iter()
-            .take(match self.species {
-                Species::Golem => 7,
-                Species::Wisp => 1,
-                _ => 0,
-            })
+            )
+        };
+        parts.into_iter().take(count)
     }
 
     /// Current authoritative beam, if this actor has admitted one.
@@ -274,7 +301,7 @@ impl crate::Actor {
     /// Collision orientation, independent of the current attack direction.
     #[must_use]
     pub fn body_rotation(&self) -> Quat {
-        if matches!(self.species, Species::Golem | Species::Wisp) {
+        if matches!(self.species, Species::Golem | Species::Wisp | Species::Worm) {
             Quat::IDENTITY
         } else {
             Quat::from_rotation_y(self.body_yaw)
@@ -308,6 +335,14 @@ impl crate::Actor {
                 );
             }
             Species::Shaman => self.max_hp = tuning.shaman_hp,
+            Species::Worm => {
+                self.max_hp = tuning.worm_hp;
+                self.worm =
+                    crate::worm_body::WormBodyState::straight(tuning.worm_segments, self.body_yaw);
+                if let Some(body) = &self.worm {
+                    self.dimensions = body.bounds_max - body.bounds_min;
+                }
+            }
             Species::Wisp => {
                 self.max_hp = tuning.wisp_hp;
                 self.dimensions = Vec3::new(hex_core::config::HEX_SMALL_DIAMETER, 0.4, 2.0);

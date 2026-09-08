@@ -19,6 +19,9 @@ pub(crate) fn tick(
     world: &CollisionWorld,
     tuning: &EncounterTuning,
 ) {
+    if actor.species == Species::Worm {
+        return;
+    }
     if actor.species == Species::Wisp {
         wisp_tick(actor, direction, world, tuning);
         return;

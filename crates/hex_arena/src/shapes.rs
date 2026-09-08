@@ -45,7 +45,7 @@ pub(crate) fn golem_mouth(actor: &Actor, direction: Vec3) -> Vec3 {
 
 fn closest_body_point(point: Vec3, actor: &Actor) -> Vec3 {
     match actor.species {
-        Species::Golem | Species::Wisp => prisms(actor, actor.feet)
+        Species::Golem | Species::Wisp | Species::Worm => prisms(actor, actor.feet)
             .map(|part| part.closest_point(point))
             .min_by(|a, b| {
                 a.distance_squared(point)
@@ -91,7 +91,10 @@ pub(crate) fn exposed_cone_contact(
     if distance(origin, actor) > range + SKIN {
         return None;
     }
-    if matches!(actor.species, Species::Golem | Species::Wisp) {
+    if matches!(
+        actor.species,
+        Species::Golem | Species::Wisp | Species::Worm
+    ) {
         // The body union is nonconvex. Project into one genuine convex prism at
         // a time, never into the union or its bounding box as a convex volume.
         for part in actor.body_hex_prisms() {
@@ -335,8 +338,11 @@ fn box_clear(world: &CollisionWorld, feet: Vec3, size: Vec3, yaw: f32) -> bool {
 }
 
 pub(crate) fn clear(world: &CollisionWorld, actor: &Actor, feet: Vec3, yaw: f32) -> bool {
+    if actor.species == Species::Worm && actor.body_prism_snapshot().is_none() {
+        return false;
+    }
     match actor.species {
-        Species::Golem | Species::Wisp => {
+        Species::Golem | Species::Wisp | Species::Worm => {
             feet.is_finite()
                 && actor.body_hex_prisms().all(|part| {
                     world.clear(
@@ -355,7 +361,7 @@ pub(crate) fn clear(world: &CollisionWorld, actor: &Actor, feet: Vec3, yaw: f32)
 
 pub(crate) fn sweep(world: &CollisionWorld, actor: &Actor, feet: Vec3, delta: Vec3) -> Option<Hit> {
     match actor.species {
-        Species::Golem | Species::Wisp => {
+        Species::Golem | Species::Wisp | Species::Worm => {
             return actor
                 .body_hex_prisms()
                 .filter_map(|part| {
@@ -420,7 +426,10 @@ pub(crate) fn ground(
 /// Test each bounded turn interval with a conservative swept-corner envelope.
 /// This prevents a long body rotating through a face despite clear end poses.
 pub(crate) fn turn(world: &CollisionWorld, actor: &mut Actor, desired: f32, max_delta: f32) {
-    if matches!(actor.species, Species::Golem | Species::Wisp) {
+    if matches!(
+        actor.species,
+        Species::Golem | Species::Wisp | Species::Worm
+    ) {
         actor.body_yaw = 0.0;
         return;
     }
@@ -446,7 +455,7 @@ pub(crate) fn angle_delta(from: f32, to: f32) -> f32 {
 
 pub(crate) fn distance(point: Vec3, actor: &Actor) -> f32 {
     match actor.species {
-        Species::Golem | Species::Wisp => prisms(actor, actor.feet)
+        Species::Golem | Species::Wisp | Species::Worm => prisms(actor, actor.feet)
             .map(|part| part.distance(point))
             .fold(f32::INFINITY, f32::min),
         Species::Dragon => {
@@ -465,7 +474,7 @@ pub(crate) fn distance(point: Vec3, actor: &Actor) -> f32 {
 
 pub(crate) fn voxel_overlap(pos: TilePos, geometry: ArenaVoxelGeometry, actor: &Actor) -> bool {
     match actor.species {
-        Species::Golem | Species::Wisp => {
+        Species::Golem | Species::Wisp | Species::Worm => {
             prisms(actor, actor.feet).any(|part| part.overlaps_voxel(pos, geometry, SKIN))
         }
         Species::Dragon => {
@@ -522,7 +531,7 @@ pub(crate) fn compound_contained(actor: &Actor, geometry: ArenaVoxelGeometry) ->
 
 fn compound_contact_at(actor: &Actor, feet: Vec3, other: &Actor) -> Option<HorizontalContact> {
     prisms(actor, feet).find_map(|part| match other.species {
-        Species::Golem | Species::Wisp => {
+        Species::Golem | Species::Wisp | Species::Worm => {
             prisms(other, other.feet).find_map(|b| part.overlap_prism(b, 0.0))
         }
         Species::Dragon => part.overlap_box(other.feet, other.dimensions, other.body_yaw, 0.0),
@@ -543,8 +552,8 @@ fn compound_contact_at(actor: &Actor, feet: Vec3, other: &Actor) -> Option<Horiz
 /// overlap predicates. No AABB establishes contact, and every final move still
 /// goes through the existing terrain-aware slide.
 pub(crate) fn compound_separation(a: &Actor, b: &Actor) -> Option<Vec3> {
-    if !matches!(a.species, Species::Golem | Species::Wisp) {
-        return (matches!(b.species, Species::Golem | Species::Wisp))
+    if !matches!(a.species, Species::Golem | Species::Wisp | Species::Worm) {
+        return (matches!(b.species, Species::Golem | Species::Wisp | Species::Worm))
             .then(|| compound_separation(b, a).map(|push| -push))
             .flatten();
     }
@@ -583,7 +592,7 @@ pub(crate) fn sweep_actor(
     };
     let body_delta = actor.feet - previous;
     match actor.species {
-        Species::Golem | Species::Wisp => prisms(actor, previous)
+        Species::Golem | Species::Wisp | Species::Worm => prisms(actor, previous)
             .filter_map(|part| part.sweep_sphere(start, delta - body_delta, extra))
             .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
             .map(|hit| Hit {

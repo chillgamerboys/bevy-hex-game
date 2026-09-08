@@ -6,6 +6,41 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EncounterTuning {
+    /// Number of native Worm components, four or six.
+    pub worm_segments: u8,
+    /// Shallow resting depth, one or two voxel levels.
+    pub worm_depth_levels: u8,
+    /// Initial Worm HP.
+    pub worm_hp: f32,
+    /// Voluntary shallow-earth travel speed.
+    pub worm_speed: f32,
+    /// Maximum spine heading change in radians per second.
+    pub worm_turn_speed: f32,
+    /// Physical emergence and dive speed.
+    pub worm_rise_speed: f32,
+    /// Maximum quiet travel interval before surfacing to look.
+    pub worm_surface_interval: f32,
+    /// Exposed observation time when no shot is available.
+    pub worm_exposed_watch: f32,
+    /// Maximum physical boulder splash damage before falloff.
+    pub worm_boulder_damage: f32,
+    /// Small physical boulder explosion radius.
+    pub worm_boulder_radius: f32,
+    /// Actual swept boulder body radius.
+    pub worm_boulder_collision_radius: f32,
+    /// Strong boulder impulse before splash falloff.
+    pub worm_boulder_knockback: f32,
+    /// Time between boulder casts.
+    pub worm_boulder_cooldown: f32,
+    /// Visible emerged preparation before throwing.
+    pub worm_boulder_windup: f32,
+    /// Boulder launch speed.
+    pub worm_boulder_speed: f32,
+    /// Boulder gravity.
+    pub worm_boulder_gravity: f32,
+    /// Physical terrain power per boulder explosion.
+    pub worm_boulder_terrain_power: u8,
+
     /// Starting Wisp HP.
     pub wisp_hp: f32,
     /// Slow voluntary flight speed.
@@ -210,6 +245,23 @@ pub struct EncounterTuning {
 impl Default for EncounterTuning {
     fn default() -> Self {
         Self {
+            worm_segments: 4,
+            worm_depth_levels: 2,
+            worm_hp: 140.0,
+            worm_speed: 2.2,
+            worm_turn_speed: 1.2,
+            worm_rise_speed: 1.2,
+            worm_surface_interval: 1.5,
+            worm_exposed_watch: 0.6,
+            worm_boulder_damage: 50.0,
+            worm_boulder_radius: 2.5,
+            worm_boulder_collision_radius: 0.22,
+            worm_boulder_knockback: 8.0,
+            worm_boulder_cooldown: 3.5,
+            worm_boulder_windup: 0.8,
+            worm_boulder_speed: 18.0,
+            worm_boulder_gravity: 12.0,
+            worm_boulder_terrain_power: 2,
             wisp_hp: 30.0,
             wisp_flight_speed: 1.5,
             wisp_cruise_height: 4.0,
@@ -317,6 +369,7 @@ impl EncounterTuning {
     /// Reject unusable or unbounded authored creature values.
     pub fn validate(&self) -> Result<(), String> {
         if [
+            self.worm_hp,
             self.wisp_hp,
             self.dragon_hp,
             self.goblin_hp,
@@ -329,6 +382,19 @@ impl EncounterTuning {
             return Err("Encounter actor HP must be finite and in (0, 1000].".into());
         }
         let values = [
+            self.worm_speed,
+            self.worm_turn_speed,
+            self.worm_rise_speed,
+            self.worm_surface_interval,
+            self.worm_exposed_watch,
+            self.worm_boulder_damage,
+            self.worm_boulder_radius,
+            self.worm_boulder_collision_radius,
+            self.worm_boulder_knockback,
+            self.worm_boulder_cooldown,
+            self.worm_boulder_windup,
+            self.worm_boulder_speed,
+            self.worm_boulder_gravity,
             self.wisp_flight_speed,
             self.wisp_cruise_height,
             self.wisp_layer_spacing,
@@ -429,6 +495,13 @@ impl EncounterTuning {
             || self.wisp_ember_knockback > 180.0
         {
             return Err("Wisp knockback must be finite and in [0, 180].".into());
+        }
+        if !matches!(self.worm_segments, 4 | 6)
+            || !matches!(self.worm_depth_levels, 1 | 2)
+            || self.worm_boulder_collision_radius > 0.5
+            || !(1..=10).contains(&self.worm_boulder_terrain_power)
+        {
+            return Err("Worm length, depth or boulder geometry/power is invalid.".into());
         }
         if self.wisp_preferred_min > self.wisp_preferred_max
             || self.wisp_layer_spacing <= 0.4

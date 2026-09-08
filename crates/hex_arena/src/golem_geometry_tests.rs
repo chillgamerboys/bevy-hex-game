@@ -153,6 +153,7 @@ fn camera_forecast_and_owner_reentry_use_the_same_union() {
         dimensions: target.dimensions,
         yaw: 1.5,
         yaw_velocity: 3.0,
+        prisms: None,
     };
     let view = ArenaTerrainView::default();
     let forecast = forecast_spell(

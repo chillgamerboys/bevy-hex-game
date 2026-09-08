@@ -79,6 +79,7 @@ fn ember_forecast_matches_actual_sweep_and_does_not_count_as_hotbar_fireball() {
         dimensions: target.dimensions,
         yaw: target.body_yaw,
         yaw_velocity: 0.0,
+        prisms: None,
     };
     let forecast = forecast_creature_projectile(
         &owner,

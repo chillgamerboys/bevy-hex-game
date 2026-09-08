@@ -16,18 +16,13 @@ pub(crate) struct ObservedTarget {
 
 impl ObservedTarget {
     pub fn center(self) -> Vec3 {
-        self.body.feet + Vec3::Y * (self.body.dimensions.y * 0.5)
+        self.body.center()
     }
 
     pub fn distance(self, point: Vec3, seconds: f32) -> f32 {
-        let mut body = Actor::spawn(self.body.id, self.body.feet, Vec3::NEG_Z);
-        body.species = self.body.species;
-        body.dimensions = self.body.dimensions;
-        body.body_yaw = self.body.yaw;
-        let time = seconds.min(self.body.predict_seconds);
-        body.feet += self.body.velocity * time;
-        body.body_yaw += self.body.yaw_velocity * time;
-        shapes::distance(point, &body)
+        self.body
+            .actor_at(seconds)
+            .map_or(f32::INFINITY, |body| shapes::distance(point, &body))
     }
 }
 
@@ -80,6 +75,7 @@ pub(crate) fn observe(
                     dimensions: actor.dimensions,
                     yaw: actor.body_yaw,
                     yaw_velocity,
+                    prisms: actor.body_prism_snapshot(),
                 },
                 tick,
             }

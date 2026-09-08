@@ -229,7 +229,7 @@ impl Steering {
 }
 
 pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
-    if actor.species == Species::Wisp {
+    if matches!(actor.species, Species::Wisp | Species::Worm) {
         let low = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.min_level))
             - geometry.level_height;
         let high = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.max_level));
@@ -237,7 +237,10 @@ pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
             return false;
         }
     }
-    if matches!(actor.species, Species::Golem | Species::Wisp) {
+    if matches!(
+        actor.species,
+        Species::Golem | Species::Wisp | Species::Worm
+    ) {
         return shapes::compound_contained(actor, geometry);
     }
     // The convex hull of resident column centers lies inside the scalloped

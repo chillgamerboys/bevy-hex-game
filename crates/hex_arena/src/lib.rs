@@ -31,6 +31,8 @@ mod shapes;
 mod spells;
 mod targeting;
 mod telemetry;
+mod worm_body;
+pub use worm_body::{BodyPrismSnapshot, WormPhase, WormSnapshot, MAX_BODY_HEX_PRISMS};
 
 pub use battle::{
     ArenaBattleSetup, ArenaControl, BattlePreset, BattleResult, BattleSetupError, BattleSummary,
@@ -356,6 +358,7 @@ pub struct Actor {
     /// Whether this actor is currently using its profile's flight movement.
     pub flying: bool,
     flight_layer: Option<u8>,
+    worm: Option<crate::worm_body::WormBodyState>,
     charge: Option<ChargeState>,
     cast_needs_release: bool,
     body: Body,
@@ -390,6 +393,7 @@ impl Actor {
             grounded: false,
             flying: false,
             flight_layer: None,
+            worm: None,
             charge: None,
             cast_needs_release: false,
             body: Body::default(),
@@ -413,7 +417,11 @@ impl Actor {
     /// Physical eye and launch position, without presentation interpolation.
     #[must_use]
     pub fn eye(&self) -> Vec3 {
-        if self.species == Species::Wisp {
+        if self.species == Species::Worm {
+            self.body_hex_prisms().next().map_or(self.feet, |head| {
+                self.feet + head.offset + Vec3::Y * (head.height * 0.5)
+            })
+        } else if self.species == Species::Wisp {
             self.center()
         } else if self.species == Species::Golem {
             shapes::golem_mouth(self, self.aim)
@@ -429,7 +437,39 @@ impl Actor {
     /// Body center used to describe the player-centered blast.
     #[must_use]
     pub fn center(&self) -> Vec3 {
+        if let Some(body) = self.worm.as_ref().filter(|_| self.species == Species::Worm) {
+            return self.feet + (body.bounds_min * 0.5 + body.bounds_max * 0.5);
+        }
         self.feet + Vec3::Y * (self.dimensions.y * 0.5)
+    }
+
+    /// Dynamic body geometry copied at observation time, without exposing AI state.
+    #[must_use]
+    pub fn body_prism_snapshot(&self) -> Option<BodyPrismSnapshot> {
+        if self.species != Species::Worm {
+            return None;
+        }
+        let current = self.worm.as_ref()?.current;
+        // A malformed geometry-history pair must not escape into an observation.
+        let count = current.iter().len();
+        (count == self.previous_body_hex_prisms().count()).then_some(current)
+    }
+
+    /// Physical Worm phase for presentation/evidence; no target or movement proposal.
+    #[must_use]
+    pub fn worm(&self) -> Option<WormSnapshot> {
+        self.worm.as_ref().map(|body| body.snapshot)
+    }
+
+    /// A forecast body gets only the copied shape, never hidden motion/phase state.
+    pub(crate) fn set_observed_prisms(&mut self, snapshot: BodyPrismSnapshot) -> Option<()> {
+        if self.species != Species::Worm {
+            return None;
+        }
+        let body = crate::worm_body::WormBodyState::observed(snapshot)?;
+        self.dimensions = body.bounds_max - body.bounds_min;
+        self.worm = Some(body);
+        Some(())
     }
 
     /// Current authoritative charge, without allowing input/presentation to set it.
@@ -1022,3 +1062,6 @@ mod tests;
 
 #[cfg(test)]
 mod shape_contract_tests;
+
+#[cfg(test)]
+mod worm_foundation_tests;
