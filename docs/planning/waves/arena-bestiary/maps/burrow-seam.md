@@ -1,10 +1,11 @@
 # Worm terrain conversion seam
 
-Status: **QUEUED — accepted design, not implemented or validated.**
+Status: **World conversion implemented at `aaecaf3`; gameplay composition is under validation.**
 
-The coordinator accepted this narrow seam for the later Worm phase. Original-group
-calibration, Golem, and Ember Wisp must finish their preceding checkpoints before
-Worm production is dispatched. Root owns the shared foundation and commits; the
+Original-group, Golem and Ember Wisp calibration checkpoints precede this phase.
+Shared vocabulary landed at `59eef79`; the guarded body foundation at `dccfddb`
+passes 236 arena tests. World conversion passes 24 arena map tests and strict
+map/assets lint. Root owns the shared foundation and commits; the
 world lane owns mutation and publication, and gameplay owns the body, movement,
 observation, and attack state. See [approved scope](../plan.md) and
 [world order](../orders/L1-world.md).
@@ -25,8 +26,7 @@ the same tick, rather than a gameplay estimate or the requested snapshot's HP.
 
 ## Narrow shared request and outcome
 
-Introduce arena-specific vocabulary in the shared foundation; these names describe
-the queued contract rather than existing APIs:
+The shared foundation publishes this arena-specific vocabulary:
 
 ```rust
 ArenaBurrowRequest {

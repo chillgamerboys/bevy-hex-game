@@ -303,3 +303,13 @@ all authorized work and final evidence/guide are delivered.
   Boulder, geometry owner exact dynamic queries, and presentation owner indexed
   physical parts/telegraphs. Setup guards stay until combined admission is safe.
   Frozen Wisp performance/static review remains serialized with main Cargo checks.
+
+
+- Wisp sustained-load instrumentation `e695873` passes seven actual-world tests,
+  75 application tests and strict game lint at frozen review `5f5afec`. Both map
+  capacity rows use validated pre-admission HP and ordinary autonomous combat;
+  native runs and static review follow. The post-knockback Goblin fixture now
+  checks occupied volume while preserving initial support and Wisp flight checks.
+  Worm runtime/geometry source is ready for focused checks; root delegated actual
+  world composition fixtures to the geometry reviewer and released presentation
+  hot files after the Wisp patch was integrated. No Worm admission is enabled yet.

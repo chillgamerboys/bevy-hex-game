@@ -1,7 +1,7 @@
 # Spectator battles and bestiary validation
 
-Status: original-group calibration is recorded below. Golem integration is active;
-Ember Wisp and Worm remain queued in that order. The [local wave](../planning/waves/arena-bestiary/manifest.md)
+Status: original groups, Golem and Ember Wisp have recorded machine calibration.
+Worm integration is active; final combined validation and human playtesting remain pending. The [local wave](../planning/waves/arena-bestiary/manifest.md)
 and [approved requirements](../planning/waves/arena-bestiary/plan.md) govern this work.
 The accepted human/Shadow reference remains `127d1ce`; no remote merge is authorized.
 The original map/creature milestone has [separate evidence](arena-encounters-validation.md).
@@ -464,3 +464,27 @@ Task evidence: `work/worm-foundation-checks-01/receipt.json`,
 `work/worm-world-tests-01.log`, `work/worm-world-clippy-01.log`, and
 `work/worm-world-checks-01.json`. The world checks run independently of active
 changes in gameplay-owned files; they are not the final combined candidate gate.
+
+
+## Wisp sustained-load instrumentation
+
+Frozen review `5f5afec` (main cherry-pick `e695873`) passes seven actual-world
+battle tests, 75 arena application tests and strict game all-target/all-feature
+lint. Ten Wisp-specific Python launcher guards pass. The previous attempt failed
+because the post-movement deployment fixture required a knocked-back Goblin to
+have immediate ground support. Its initial supported spawn remains checked; after
+ordinary combat, every living body must occupy clear, dry volume and Wisps must
+retain their valid flying pose. The corrected complete retry passes.
+
+The new explicit windowless load uses 12 Wisps per side on Duel and Fort for
+1,440 ticks. Validated configuration raises Wisp HP to 1,000 before admission;
+accepted team maximum HP therefore remains accurate. It records all 24 living,
+flying actors and both assigned layers per team, ordinary windups/projectiles,
+CPU time, publication/damage/destruction and containing application frames.
+The first 120 ticks are warmup; terminal publication is timed separately.
+It injects no damage or terrain mutation. This synthetic workload measures
+sustained capacity, not normal health balance or human motion. Native measurements
+and static Wisp review remain pending at this checkpoint.
+
+Task evidence: `work/wisp-performance-checks-01` (retained failure) and
+`work/wisp-performance-checks-02/receipt.json` (source-stable complete pass).

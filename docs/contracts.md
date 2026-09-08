@@ -216,3 +216,37 @@ oriented bodies, support, dry footing and separation against current geometry an
 admits a whole roster or returns an error. Ordinary adventure spawns are unchanged.
 Observer-only team summaries may disclose aggregate state; ordinary human HUDs do not.
 See the [local bestiary manifest](planning/waves/arena-bestiary/manifest.md).
+
+
+### Local bestiary geometry and burrowing
+
+`BodyPrismSnapshot` is a validated, bounded copy of native hex components owned by
+`hex_arena`. A Golem uses seven fixed prisms, a Wisp one, and a Worm four or six
+head-first components. Live motion retains matching previous/current components;
+forecasts copy only an actually observed snapshot and translate that hypothesis.
+They never recover a hidden body's current segment shape from the live actor list.
+Released creature projectiles retain their admitted source, damage kind, speed,
+gravity and visual identity after their source dies.
+
+World optionally publishes `ArenaTerrainView.elongated_deployment` as finite
+surface pockets for long bodies. This does not authorize compression, extending a
+spawn search into an unlisted roof, or replacing complete body admission. Empty
+or insufficient pockets produce an explicit setup error.
+
+`ArenaBurrowRequest` carries only generation, actor, increasing per-source sequence
+and a canonical bounded voxel volume. World validates the whole volume against
+current material, protected occupancy, liquids, static authored objects and bounds.
+Its published `ArenaBurrowMaterials` admits only world-catalog diggable materials;
+world chooses the accepted dirt identity and never increases remaining voxel HP.
+Air and existing dirt remain unchanged. One blocked cell rejects the whole request.
+World applies conversion with ordinary pending edits/impacts, publishes affected
+columns, and returns a correlated `ArenaBurrowOutcome` before the next movement
+step. A successful outcome releases the request slot; it never authorizes replay
+of an old position. Gameplay recomputes motion against current dirt, bodies and
+intent. Reset clears world and gameplay queues and identities together.
+
+Burrow phasing is a Worm movement rule, not a removal of collision terrain.
+Projectiles and ordinary bodies continue to see solid dirt. A Worm may attack only
+when its physical head is wholly clear and at least one voxel level above its
+explicit local surface. Presentation consumes the physical components and ordinary
+opaque terrain depth; it does not reveal a buried Worm through an indicator.
