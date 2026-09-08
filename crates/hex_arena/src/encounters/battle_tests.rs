@@ -42,8 +42,8 @@ fn battle(
 
 #[test]
 fn all_original_spectator_rosters_admit_real_monster_zero_and_complete_dry_bodies() {
-    for left in BattlePreset::ALL {
-        for right in BattlePreset::ALL {
+    for left in BattlePreset::ORIGINAL {
+        for right in BattlePreset::ORIGINAL {
             let (session, world, geometry, _, _) = battle(left, right);
             assert_eq!(session.human_actor_id(), None);
             assert!(session.outcome.is_none());

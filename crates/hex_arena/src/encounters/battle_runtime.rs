@@ -276,24 +276,7 @@ fn deploy(
                 actor.team = roster.team;
                 actor.party = Some(party);
                 let c = &tuning.encounters;
-                match species {
-                    Species::Dragon => {
-                        actor.max_hp = c.dragon_hp;
-                        actor.dimensions =
-                            Vec3::new(c.dragon_width, c.dragon_height, c.dragon_length);
-                    }
-                    Species::Goblin => {
-                        actor.max_hp = c.goblin_hp;
-                        actor.dimensions = Vec3::new(
-                            c.goblin_radius * 2.0,
-                            c.goblin_height,
-                            c.goblin_radius * 2.0,
-                        );
-                    }
-                    Species::Shaman => actor.max_hp = c.shaman_hp,
-                    _ => {}
-                }
-                actor.hp = actor.max_hp;
+                actor.configure_species(*species, c);
                 pending.push(actor);
             }
             parties.push(PartyRuntime {

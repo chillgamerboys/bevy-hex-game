@@ -18,7 +18,7 @@ pub(super) struct MotionIntent {
 #[derive(Debug)]
 pub(super) struct Brain {
     pub active: Option<super::abilities::Cast>,
-    pub cooldowns: [f32; 7],
+    pub cooldowns: [f32; CREATURE_ABILITY_COUNT],
     shadow: Bot,
     home: Vec3,
     seed: u32,
@@ -45,7 +45,7 @@ impl Brain {
     pub fn new(id: u8, home: Vec3) -> Self {
         Self {
             active: None,
-            cooldowns: [0.0; 7],
+            cooldowns: [0.0; CREATURE_ABILITY_COUNT],
             shadow: Bot::default(),
             home,
             seed: 0x9175_BAFF ^ (u32::from(id) * 1973),

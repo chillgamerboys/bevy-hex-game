@@ -6,6 +6,38 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EncounterTuning {
+    /// Seven-hex Golem starting HP.
+    pub golem_hp: f32,
+    /// Golem grounded speed; it has no running, jumping or flight mode.
+    pub golem_speed: f32,
+    /// Total damage of the Golem's single spherical slam.
+    pub golem_slam_damage: f32,
+    /// Physical sphere radius from the Golem's center.
+    pub golem_slam_range: f32,
+    /// Visible slam preparation duration.
+    pub golem_slam_windup: f32,
+    /// Time between Golem slams.
+    pub golem_slam_cooldown: f32,
+    /// Slam impulse magnitude.
+    pub golem_slam_knockback: f32,
+    /// Physical terrain power per contacted voxel and complete slam.
+    pub golem_slam_terrain_power: u8,
+    /// Maximum actor damage over a complete laser cast.
+    pub golem_laser_damage: f32,
+    /// Minimum laser admission distance, preserving its medium-range gap.
+    pub golem_laser_min_range: f32,
+    /// Full visible laser charge duration.
+    pub golem_laser_charge: f32,
+    /// Final charge interval whose direction is already locked.
+    pub golem_laser_lock_seconds: f32,
+    /// Active beam duration.
+    pub golem_laser_seconds: f32,
+    /// Time between laser casts.
+    pub golem_laser_cooldown: f32,
+    /// Actual swept beam radius.
+    pub golem_laser_radius: f32,
+    /// Fire terrain power paid once per voxel per complete laser cast.
+    pub golem_laser_terrain_power: u8,
     /// Dragon health before damage.
     pub dragon_hp: f32,
     /// Literal physical dragon height.
@@ -145,6 +177,22 @@ pub struct EncounterTuning {
 impl Default for EncounterTuning {
     fn default() -> Self {
         Self {
+            golem_hp: 160.0,
+            golem_speed: 2.0,
+            golem_slam_damage: 35.0,
+            golem_slam_range: hex_core::config::HEX_SMALL_DIAMETER * 4.0,
+            golem_slam_windup: 0.8,
+            golem_slam_cooldown: 5.0,
+            golem_slam_knockback: 5.0,
+            golem_slam_terrain_power: 2,
+            golem_laser_damage: 45.0,
+            golem_laser_min_range: 12.0,
+            golem_laser_charge: 2.0,
+            golem_laser_lock_seconds: 0.35,
+            golem_laser_seconds: 1.0,
+            golem_laser_cooldown: 8.0,
+            golem_laser_radius: 0.08,
+            golem_laser_terrain_power: 2,
             swipe_terrain_power: 1,
             bite_terrain_power: 2,
             breath_terrain_power: 2,
@@ -219,13 +267,31 @@ impl Default for EncounterTuning {
 impl EncounterTuning {
     /// Reject unusable or unbounded authored creature values.
     pub fn validate(&self) -> Result<(), String> {
-        if [self.dragon_hp, self.goblin_hp, self.shaman_hp]
-            .into_iter()
-            .any(|hp| !hp.is_finite() || hp <= 0.0 || hp > 1000.0)
+        if [
+            self.dragon_hp,
+            self.goblin_hp,
+            self.shaman_hp,
+            self.golem_hp,
+        ]
+        .into_iter()
+        .any(|hp| !hp.is_finite() || hp <= 0.0 || hp > 1000.0)
         {
             return Err("Encounter actor HP must be finite and in (0, 1000].".into());
         }
         let values = [
+            self.golem_speed,
+            self.golem_slam_damage,
+            self.golem_slam_range,
+            self.golem_slam_windup,
+            self.golem_slam_cooldown,
+            self.golem_slam_knockback,
+            self.golem_laser_damage,
+            self.golem_laser_min_range,
+            self.golem_laser_charge,
+            self.golem_laser_lock_seconds,
+            self.golem_laser_seconds,
+            self.golem_laser_cooldown,
+            self.golem_laser_radius,
             self.dragon_height,
             self.dragon_length,
             self.dragon_width,
@@ -292,6 +358,9 @@ impl EncounterTuning {
             return Err("Encounter values must be finite and in (0, 180].".into());
         }
         if self.goblin_height < self.goblin_radius * 2.0
+            || self.golem_laser_min_range <= self.golem_slam_range
+            || self.golem_laser_lock_seconds >= self.golem_laser_charge
+            || self.golem_laser_radius > 0.5
             || self.dragon_length < self.dragon_width
             || self.dragon_height > self.dragon_width
             || self.breath_angle > 120.0
@@ -309,6 +378,8 @@ impl EncounterTuning {
             self.swipe_terrain_power,
             self.bite_terrain_power,
             self.breath_terrain_power,
+            self.golem_slam_terrain_power,
+            self.golem_laser_terrain_power,
         ]
         .into_iter()
         .any(|p| p == 0 || p > 10)

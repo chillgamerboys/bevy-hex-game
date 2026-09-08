@@ -17,6 +17,9 @@ mod combat_repair_tests;
 #[path = "tuning_tests.rs"]
 mod tuning_tests;
 
+#[path = "golem_foundation_tests.rs"]
+mod golem_foundation_tests;
+
 fn fixture(
     encounter: ArenaEncounter,
 ) -> (
@@ -197,7 +200,7 @@ fn goblin_swipe_has_real_windup_single_hit_and_physical_terrain_contact() {
         .brains
         .get_mut(&1)
         .expect("brain")
-        .cooldowns = [0.0; 7];
+        .cooldowns = [0.0; CREATURE_ABILITY_COUNT];
     start(&mut session, 1, CreatureAbility::Swipe, Vec3::X, &tuning);
     let impacts = ticks(&mut session, 65, &view, geometry, materials, &tuning);
     assert!(impacts

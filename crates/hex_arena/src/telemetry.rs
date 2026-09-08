@@ -3,7 +3,7 @@
 use bevy_math::Vec3;
 use serde::Serialize;
 
-use crate::{ArenaOutcome, ArenaSession, BotDebugSnapshot, Spell, STEP};
+use crate::{ArenaOutcome, ArenaSession, BotDebugSnapshot, Spell, CREATURE_ABILITY_COUNT, STEP};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CombatCueKind {
@@ -138,7 +138,7 @@ impl ArenaSession {
                     .encounter
                     .ability_counts
                     .entry(owner)
-                    .or_insert([0; 7])
+                    .or_insert([0; CREATURE_ABILITY_COUNT])
                     .get_mut(index)
                 {
                     *count += 1;

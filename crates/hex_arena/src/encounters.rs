@@ -44,7 +44,7 @@ pub(crate) struct EncounterState {
     pub barriers: Vec<BarrierSnapshot>,
     pub auras: Vec<AuraSnapshot>,
     pub stats: BTreeMap<ActorId, ActorCombatStats>,
-    pub ability_counts: BTreeMap<ActorId, [u32; 7]>,
+    pub ability_counts: BTreeMap<ActorId, [u32; CREATURE_ABILITY_COUNT]>,
     next_barrier: u64,
     human_seen_tick: u64,
     battle_seen: BTreeMap<PartyId, Vec<targeting::ObservedTarget>>,
@@ -144,17 +144,21 @@ impl ArenaSession {
             })
             .collect()
         } else {
-            let roster = match world.selection.encounter {
-                ArenaEncounter::Dragon => vec![Species::Dragon],
-                ArenaEncounter::Goblins => vec![Species::Goblin; 5],
-                ArenaEncounter::ShamanParty => vec![
-                    Species::Shaman,
-                    Species::Goblin,
-                    Species::Goblin,
-                    Species::Goblin,
-                ],
-                ArenaEncounter::Shadow => vec![Species::Shadow],
-            };
+            let roster = self
+                .accepted_battle
+                .player_recipe
+                .map(BattlePreset::members)
+                .unwrap_or_else(|| match world.selection.encounter {
+                    ArenaEncounter::Dragon => vec![Species::Dragon],
+                    ArenaEncounter::Goblins => vec![Species::Goblin; 5],
+                    ArenaEncounter::ShamanParty => vec![
+                        Species::Shaman,
+                        Species::Goblin,
+                        Species::Goblin,
+                        Species::Goblin,
+                    ],
+                    ArenaEncounter::Shadow => vec![Species::Shadow],
+                });
             vec![(world.spawns.get(1).copied().unwrap_or(Vec3::ZERO), roster)]
         };
         for (index, (home, roster)) in specs.into_iter().enumerate() {
@@ -176,24 +180,7 @@ impl ArenaSession {
                 let mut actor = Actor::spawn(id, home, (player - home).normalize_or(Vec3::NEG_Z));
                 actor.species = species;
                 actor.party = Some(party);
-                match species {
-                    Species::Dragon => {
-                        actor.max_hp = c.dragon_hp;
-                        actor.dimensions =
-                            Vec3::new(c.dragon_width, c.dragon_height, c.dragon_length);
-                    }
-                    Species::Goblin => {
-                        actor.max_hp = c.goblin_hp;
-                        actor.dimensions = Vec3::new(
-                            c.goblin_radius * 2.0,
-                            c.goblin_height,
-                            c.goblin_radius * 2.0,
-                        );
-                    }
-                    Species::Shaman => actor.max_hp = c.shaman_hp,
-                    _ => {}
-                }
-                actor.hp = actor.max_hp;
+                actor.configure_species(species, c);
                 if let Some(feet) =
                     safe_spawn(&actor, home, &self.actors, &self.collision, world, geometry)
                 {
@@ -756,8 +743,8 @@ pub struct EncounterActorStats {
     pub species: Species,
     /// Exact spell and HP accounting.
     pub combat: ActorCombatStats,
-    /// Fireball, Shield, FireCone, Bite, Swipe, Barrier, Aura ability activations.
-    pub abilities: [u32; 7],
+    /// Ability activations indexed by CreatureAbility::index, preserving the original prefix.
+    pub abilities: [u32; CREATURE_ABILITY_COUNT],
 }
 impl ArenaSession {
     /// Map combat accounting in stable actor order, with no decision-state mutation.
@@ -774,7 +761,7 @@ impl ArenaSession {
                     .ability_counts
                     .get(&a.id)
                     .copied()
-                    .unwrap_or([0; 7]),
+                    .unwrap_or([0; CREATURE_ABILITY_COUNT]),
             })
             .collect()
     }

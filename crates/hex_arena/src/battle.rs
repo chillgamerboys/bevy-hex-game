@@ -30,11 +30,22 @@ pub enum BattlePreset {
     Goblins,
     /// One Shaman and three Goblins in the same support party.
     ShamanParty,
+    /// One seven-hex stone Golem.
+    Golem,
 }
 
 impl BattlePreset {
     /// Initial selectable recipes, in stable presentation order.
-    pub const ALL: [Self; 4] = [Self::Shadow, Self::Dragon, Self::Goblins, Self::ShamanParty];
+    pub const ALL: [Self; 5] = [
+        Self::Shadow,
+        Self::Dragon,
+        Self::Goblins,
+        Self::ShamanParty,
+        Self::Golem,
+    ];
+
+    /// Frozen original-group comparison corpus; later creatures are calibrated separately.
+    pub const ORIGINAL: [Self; 4] = [Self::Shadow, Self::Dragon, Self::Goblins, Self::ShamanParty];
 
     /// Concise presentation label.
     #[must_use]
@@ -44,6 +55,7 @@ impl BattlePreset {
             Self::Dragon => "Dragon",
             Self::Goblins => "5 Goblins",
             Self::ShamanParty => "Shaman + 3 Goblins",
+            Self::Golem => "Golem",
         }
     }
 
@@ -55,6 +67,7 @@ impl BattlePreset {
             Self::Dragon => "dragon",
             Self::Goblins => "goblins",
             Self::ShamanParty => "shaman-party",
+            Self::Golem => "golem",
         }
     }
 
@@ -77,6 +90,7 @@ impl BattlePreset {
                 Species::Goblin,
                 Species::Goblin,
             ],
+            Self::Golem => vec![Species::Golem],
         }
     }
 }
@@ -112,6 +126,9 @@ impl TeamRoster {
 pub struct ArenaBattleSetup {
     /// Ordinary human encounter or autonomous observer match.
     pub control: ArenaControl,
+    /// Optional Fort player opponent recipe, consumed only on reset. None keeps the world recipe.
+    #[serde(default)]
+    pub player_recipe: Option<BattlePreset>,
     /// Exactly two distinct teams are admitted in the initial spectator mode.
     pub rosters: Vec<TeamRoster>,
     /// Replay seed for monster decisions; does not alter the accepted Duel default seed.
@@ -124,6 +141,7 @@ impl Default for ArenaBattleSetup {
     fn default() -> Self {
         Self {
             control: ArenaControl::Player,
+            player_recipe: None,
             rosters: vec![
                 TeamRoster::from_preset(1, BattlePreset::Shadow),
                 TeamRoster::from_preset(2, BattlePreset::Dragon),
@@ -152,7 +170,18 @@ impl ArenaBattleSetup {
     /// Validate the bounded actor/party contract before resolving physical spawn positions.
     pub fn validate_for(&self, map: ArenaMap) -> Result<(), BattleSetupError> {
         if self.control == ArenaControl::Player {
+            if let Some(recipe) = self.player_recipe {
+                if map != ArenaMap::Fort {
+                    return Err(BattleSetupError::PlayerRecipeMap);
+                }
+                if recipe == BattlePreset::Golem {
+                    return Err(BattleSetupError::CreatureNotReady);
+                }
+            }
             return Ok(());
+        }
+        if self.player_recipe.is_some() {
+            return Err(BattleSetupError::PlayerRecipeInSpectator);
         }
         if !matches!(map, ArenaMap::Duel | ArenaMap::Fort) {
             return Err(BattleSetupError::UnsupportedMap);
@@ -195,6 +224,14 @@ impl ArenaBattleSetup {
         if self.tick_limit == Some(0) {
             return Err(BattleSetupError::ZeroTickLimit);
         }
+        if self
+            .rosters
+            .iter()
+            .flat_map(|team| team.parties.iter().flatten())
+            .any(|species| *species == Species::Golem)
+        {
+            return Err(BattleSetupError::CreatureNotReady);
+        }
         Ok(())
     }
 }
@@ -202,6 +239,12 @@ impl ArenaBattleSetup {
 /// Setup refusal; failure to place valid bodies is a separate runtime diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BattleSetupError {
+    /// Explicit player recipes are currently authored only for Fort.
+    PlayerRecipeMap,
+    /// Observer rosters cannot also request a player encounter recipe.
+    PlayerRecipeInSpectator,
+    /// A published creature contract is not yet safe to admit into a runtime match.
+    CreatureNotReady,
     /// This first version admits observer fights on Fort and the original Duel arena.
     UnsupportedMap,
     /// Exactly two teams are required.
@@ -221,6 +264,11 @@ pub enum BattleSetupError {
 impl std::fmt::Display for BattleSetupError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
+            Self::PlayerRecipeMap => "Player opponent recipes support Fort only.",
+            Self::PlayerRecipeInSpectator => {
+                "Spectator battles use team rosters, not a player recipe."
+            }
+            Self::CreatureNotReady => "Golem geometry and attacks are still being integrated.",
             Self::UnsupportedMap => "Spectator battles support Fort and Duel.",
             Self::TeamCount => "Choose exactly two monster teams.",
             Self::DuplicateTeams => "The two teams must have different allegiances.",

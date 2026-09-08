@@ -33,14 +33,14 @@ mod telemetry;
 
 pub use battle::{
     ArenaBattleSetup, ArenaControl, BattlePreset, BattleResult, BattleSetupError, BattleSummary,
-    BattleTeamSummary, MAX_BATTLE_ACTORS, TeamRoster,
+    BattleTeamSummary, TeamRoster, MAX_BATTLE_ACTORS,
 };
 pub use bot::BotDebugSnapshot;
 pub use bot_config::BotTuning;
 pub use creatures::{
     ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, BeamSnapshot,
     BodyHexPrism, CreatureAbility, EncounterSummary, PartyId, PartyPhase, PartySnapshot, Species,
-    TeamId,
+    TeamId, CREATURE_ABILITY_COUNT,
 };
 pub use encounter_config::EncounterTuning;
 pub use encounters::{CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot};
@@ -701,9 +701,11 @@ impl ArenaSession {
         self.accepted_battle = setup.clone();
         if setup.control == ArenaControl::Spectator {
             self.actors.clear();
-            if let Err(reason) = setup.validate_for(world.selection.map) {
-                self.battle_result = Some(BattleResult::InvalidSetup(reason.to_string()));
-            }
+        }
+        if let Err(reason) = setup.validate_for(world.selection.map) {
+            self.actors.clear();
+            self.notice = reason.to_string();
+            self.battle_result = Some(BattleResult::InvalidSetup(reason.to_string()));
         }
     }
 

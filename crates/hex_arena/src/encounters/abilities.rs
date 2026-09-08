@@ -5,15 +5,7 @@ use hex_core::{TerrainDamageKind, TerrainImpact};
 use std::collections::BTreeSet;
 
 pub(super) fn index(kind: CreatureAbility) -> usize {
-    match kind {
-        CreatureAbility::Fireball => 0,
-        CreatureAbility::Shield => 1,
-        CreatureAbility::FireCone => 2,
-        CreatureAbility::Bite => 3,
-        CreatureAbility::Swipe => 4,
-        CreatureAbility::Barrier => 5,
-        CreatureAbility::Aura => 6,
-    }
+    kind.index()
 }
 
 #[derive(Debug)]
@@ -236,7 +228,7 @@ impl ArenaSession {
                         .encounter
                         .ability_counts
                         .entry(*id)
-                        .or_insert([0; 7])
+                        .or_insert([0; CREATURE_ABILITY_COUNT])
                         .get_mut(index(cast.kind))
                     {
                         *count += 1;

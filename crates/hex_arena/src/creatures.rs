@@ -10,6 +10,9 @@ pub type TeamId = u8;
 /// Stable encounter group identity within the selected map.
 pub type PartyId = u16;
 
+/// Stable creature activation-counter width; existing seven indices are preserved.
+pub const CREATURE_ABILITY_COUNT: usize = 9;
+
 /// One world-oriented native hex prism in a compound creature body.
 /// Its pointy horizontal hex has circumradius one world unit, matching terrain.
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +53,8 @@ pub enum Species {
     Goblin,
     /// Ranged support caster.
     Shaman,
+    /// Slow, fixed-orientation seven-hex stone body.
+    Golem,
 }
 
 /// Creature attack or support action; player hotbar slots remain separate.
@@ -69,6 +74,28 @@ pub enum CreatureAbility {
     Barrier,
     /// Timed party healing and damage support.
     Aura,
+    /// One short-range spherical physical shockwave.
+    GolemSlam,
+    /// Long charged, briefly sustained straight fire beam.
+    GolemLaser,
+}
+
+impl CreatureAbility {
+    /// Stable activation-counter index; appended creatures never reorder old counters.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Fireball => 0,
+            Self::Shield => 1,
+            Self::FireCone => 2,
+            Self::Bite => 3,
+            Self::Swipe => 4,
+            Self::Barrier => 5,
+            Self::Aura => 6,
+            Self::GolemSlam => 7,
+            Self::GolemLaser => 8,
+        }
+    }
 }
 
 /// Current authoritative phase of a creature action.
@@ -189,7 +216,23 @@ impl crate::Actor {
     /// Compound hex geometry when this profile uses it; existing capsules and
     /// oriented boxes publish no prisms. The projection never allocates.
     pub fn body_hex_prisms(&self) -> impl Iterator<Item = BodyHexPrism> {
-        std::iter::empty()
+        let width = hex_core::config::HEX_SMALL_DIAMETER;
+        let offsets = [
+            Vec3::ZERO,
+            Vec3::X * width,
+            Vec3::new(width * 0.5, 0.0, 1.5),
+            Vec3::new(-width * 0.5, 0.0, 1.5),
+            Vec3::NEG_X * width,
+            Vec3::new(-width * 0.5, 0.0, -1.5),
+            Vec3::new(width * 0.5, 0.0, -1.5),
+        ];
+        offsets
+            .map(|offset| BodyHexPrism {
+                offset,
+                height: 2.0,
+            })
+            .into_iter()
+            .take(if self.species == Species::Golem { 7 } else { 0 })
     }
 
     /// Current authoritative beam, if this actor has admitted one.
@@ -207,12 +250,47 @@ impl crate::Actor {
     /// Collision orientation, independent of the current attack direction.
     #[must_use]
     pub fn body_rotation(&self) -> Quat {
-        Quat::from_rotation_y(self.body_yaw)
+        if self.species == Species::Golem {
+            Quat::IDENTITY
+        } else {
+            Quat::from_rotation_y(self.body_yaw)
+        }
     }
 
     /// Current creature action phase and geometry, if any.
     #[must_use]
     pub fn attack_state(&self) -> Option<AttackSnapshot> {
         self.attack
+    }
+
+    pub(crate) fn configure_species(&mut self, species: Species, tuning: &crate::EncounterTuning) {
+        self.species = species;
+        match species {
+            Species::Human | Species::Shadow => {}
+            Species::Dragon => {
+                self.max_hp = tuning.dragon_hp;
+                self.dimensions = Vec3::new(
+                    tuning.dragon_width,
+                    tuning.dragon_height,
+                    tuning.dragon_length,
+                );
+            }
+            Species::Goblin => {
+                self.max_hp = tuning.goblin_hp;
+                self.dimensions = Vec3::new(
+                    tuning.goblin_radius * 2.0,
+                    tuning.goblin_height,
+                    tuning.goblin_radius * 2.0,
+                );
+            }
+            Species::Shaman => self.max_hp = tuning.shaman_hp,
+            Species::Golem => {
+                self.max_hp = tuning.golem_hp;
+                self.dimensions = Vec3::new(hex_core::config::HEX_SMALL_DIAMETER * 3.0, 2.0, 5.0);
+                self.body_yaw = 0.0;
+                self.previous_yaw = 0.0;
+            }
+        }
+        self.hp = self.max_hp;
     }
 }
