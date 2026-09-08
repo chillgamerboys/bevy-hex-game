@@ -549,3 +549,87 @@ fn an_airborne_worm_keeps_falling_while_sideways_impulse_pressures_a_wall() {
     assert!(f.worm().feet.y < feet.y - 0.5);
     assert!(f.worm().body.vertical_velocity < -4.0);
 }
+
+// Partial terrain destruction must not veto an otherwise safe stationary rise.
+
+#[test]
+fn a_partial_tail_crater_does_not_prevent_a_safe_stationary_head_rise_and_boulder() {
+    let mut f = fixture();
+    let mut reached_travel = false;
+    for _ in 0..900 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        if f.worm().worm().expect("physical state").phase == WormPhase::Travel {
+            reached_travel = true;
+            break;
+        }
+    }
+    assert!(
+        reached_travel,
+        "normal acknowledged dive reaches shallow travel"
+    );
+    let before = pose(f.worm()).expect("current physical pose");
+    let head_columns = worm_geometry::head_columns(before).expect("head footprint");
+    let tail = before.parts.iter().last().expect("tail");
+    let crater = HexCoord::from_world(before.feet + tail.offset);
+    assert!(
+        !head_columns.contains(&crater),
+        "damage removes tail support only"
+    );
+    // Four missing levels leave a real deeper floor, beyond the old shallow
+    // support window. The head and remaining spine stay in admitted solid dirt.
+    f.view
+        .voxels
+        .retain(|pos, _| pos.coord != crater || pos.level <= 4);
+    f.view.revision += 1;
+    f.view.full_rebuild = true;
+    f.session.collision.refresh(&f.view, f.geometry);
+    f.session.burrow_query.refresh(&f.view);
+    let reference = f.session.encounter.worms.get(&7).expect("control").surface;
+    assert!(head_supports(before, reference, &f.view, f.geometry).is_some());
+    assert!(band(
+        before,
+        reference,
+        &f.view,
+        f.geometry,
+        f.tuning.encounters.worm_depth_levels
+    )
+    .is_none());
+    assert!(
+        !f.session
+            .burrow_query
+            .above_ground_clear(before, &f.view, f.geometry),
+        "other components are still earth-supported; whole-body gravity is inapplicable"
+    );
+    let old_lift = f.session.encounter.worms.get(&7).expect("control").lift;
+    let first_new_projectile = f.session.next_projectile;
+    let mut raised = false;
+    let mut fired = false;
+    for _ in 0..600 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        let state = f.worm().worm().expect("physical head");
+        raised |= state.exposed && state.head_clearance + SKIN >= f.geometry.level_height;
+        fired |= f.session.projectiles.iter().any(|shot| {
+            shot.id >= first_new_projectile
+                && shot.source_ability() == Some(CreatureAbility::WormBoulder)
+        });
+        if raised && fired {
+            break;
+        }
+    }
+    assert!(raised && fired,
+        "head may safely rise/cast despite a mismatched tail band: old lift {old_lift}, current {:?}, control {:?}",
+        f.worm().worm(), f.session.encounter.worms.get(&7));
+    assert!(
+        f.worm().feet.distance(before.feet) < SKIN,
+        "this recovery changes head lift, not position or travel-depth admission"
+    );
+    assert!(
+        f.view
+            .voxels
+            .keys()
+            .all(|pos| pos.coord != crater || pos.level <= 4),
+        "recovery never fabricates the lost supporting terrain"
+    );
+}

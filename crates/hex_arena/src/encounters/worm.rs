@@ -108,6 +108,14 @@ impl Controller {
             self.phase(WormPhase::Emerging);
         }
         if self.phase == WormPhase::Diving
+            && self.blocked >= 0.4
+            && pose(actor)
+                .and_then(|body| band(body, self.surface, world, geometry, c.worm_depth_levels))
+                .is_none()
+        {
+            self.phase(WormPhase::Emerging);
+        }
+        if self.phase == WormPhase::Diving
             && self.lift <= SKIN
             && (actor.feet.y
                 - (self.surface - f32::from(c.worm_depth_levels) * geometry.level_height + SKIN))
@@ -138,6 +146,9 @@ impl Controller {
             && self.phase_time >= c.worm_exposed_watch
             && brain.active.is_none()
             && request.is_none()
+            && pose(actor)
+                .and_then(|body| band(body, self.surface, world, geometry, c.worm_depth_levels))
+                .is_some()
         {
             self.phase(WormPhase::Diving);
         }
@@ -657,16 +668,33 @@ impl ArenaSession {
                 else {
                     continue;
                 };
-                let Some(surface) = band(
-                    PrismPose {
-                        feet: feet + impulse,
-                        parts: proposed_parts,
-                    },
-                    control.surface,
-                    world,
-                    geometry,
-                    c.worm_depth_levels,
-                ) else {
+                let candidate = PrismPose {
+                    feet: feet + impulse,
+                    parts: proposed_parts,
+                };
+                let surface = if matches!(control.phase, WormPhase::Emerging | WormPhase::Exposed) {
+                    // A stationary head rise need not invent a common travel
+                    // band beneath a tail spanning an already existing hole.
+                    // The head still needs actual local support, and the whole
+                    // component sweep still requires current world admission.
+                    head_supports(candidate, control.surface, world, geometry).and_then(
+                        |supports| {
+                            supports
+                                .into_iter()
+                                .map(|p| geometry.top(p))
+                                .max_by(f32::total_cmp)
+                        },
+                    )
+                } else {
+                    band(
+                        candidate,
+                        control.surface,
+                        world,
+                        geometry,
+                        c.worm_depth_levels,
+                    )
+                };
+                let Some(surface) = surface else {
                     continue;
                 };
                 let buried =
