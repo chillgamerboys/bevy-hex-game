@@ -13,3 +13,8 @@ Read [approved scope](../plan.md), [manifest](../manifest.md), and [seams](../ma
 Own only: crates/hex_map/, crates/hex_assets/src/terrain_damage.rs, assets/config/terrain_damage.ron. Root alone stages and commits. No Cargo/capture/timing concurrency; claim the slot first.
 
 Foundation must be committed before production work. Implement original spectator support first; later creature phases are explicitly dispatched after the previous phase is tested and calibrated. Keep focused tests meaningful and report failures, runtime limitations and exact evidence.
+
+The [Worm conversion seam](../maps/burrow-seam.md) is **QUEUED** accepted design,
+not implemented behavior. Its bounded atomic admission, HP-preserving conversion,
+published occupancy facts, and acknowledgement before phasing require a separate
+shared foundation and explicit dispatch after the Golem and Ember Wisp checkpoints.
