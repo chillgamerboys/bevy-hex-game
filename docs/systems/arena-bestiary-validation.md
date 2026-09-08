@@ -155,6 +155,58 @@ Retained task evidence: `outputs/arena-original-native-02/{receipt.json,battles.
 `outputs/arena-original-native-summary-02.json`, the `work/creature-combat-repair-*`
 logs, and `work/arena-battle-integration-01` / `work/arena-battle-app-clippy-01`.
 
+## Original-group calibration checkpoint
+
+Clean `27157af` finishes this bounded tuning pass. Dragon HP is 220, breath damage
+45 and range 6; the remaining Dragon values retain their original hypotheses.
+Goblins remain player-sized with their original HP and attack numbers. Human spells,
+charging and accepted Shadow policy remain unchanged. Shaman timing and statistics
+are unchanged; its aura now waits for eligible engagement and its positioning follows
+its frontline. Ground creatures can take verified ordinary-controller descents into
+craters, and spectator Dragons search a bounded set of public deployment waypoints.
+All 160 focused gameplay tests and strict arena lint pass, including the retained Duel
+fixtures. The new search equivalence test varies a hidden enemy without changing decisions.
+
+The 120-round native comparison uses seeds 1–20, both side/initiative orders and a
+90-second limit. Each pair has 40 rounds:
+
+| Shadow versus | Shadow wins | Creature wins | Timeouts |
+|---|---:|---:|---:|
+| Dragon | 23 | 15 | 2 |
+| 5 Goblins | 14 | 24 | 2 |
+| Shaman + 3 Goblins | 13 | 13 | 14 |
+
+A separate, untuned holdout uses seeds 101–105, ten rounds per pair:
+
+| Shadow versus | Shadow wins | Creature wins | Timeouts |
+|---|---:|---:|---:|
+| Dragon | 7 | 2 | 1 |
+| 5 Goblins | 3 | 7 | 0 |
+| Shaman + 3 Goblins | 5 | 1 | 4 |
+
+This is rough machine calibration, not statistical equivalence or a human win-rate
+claim. Shaman matchups still have substantial stalemates after cover and terrain
+changes; timeouts are never counted as wins. The holdout remains reported rather than
+being folded back into tuning. No original group is tuned further in this pass.
+
+A 36-round Fort spot corpus (three paired seeds for all six pairings) establishes a
+strong map effect: Dragon beats Shadow, Goblins and Shaman party in all six rounds
+per pairing; Goblins beat Shadow 5–1 and Shaman party 6–0; Shaman party beats Shadow
+6–0. The close courtyard starts favor immediate area and melee pressure. These small
+samples include repeated deterministic creature-only trajectories and must not be
+read as independent random trials or a balanced tournament ranking.
+
+Native timing includes ordinary world publication and a separately measured final
+flush. Maximum living tick was 8.799 ms in the 120-round corpus, 7.477 ms in holdout,
+and 5.066 ms in Fort. The first corpus therefore includes an over-budget sample;
+final combined stress testing must check repeatability rather than claiming every
+tick fits 120 Hz. Final native rendering and the expanded bestiary remain pending.
+
+Retained task evidence: `outputs/arena-original-calibration-04`,
+`outputs/arena-original-fort-05`, `outputs/arena-original-holdout-06`, their companion
+summary JSON files, and `work/creature-descent-search-*` logs. All three battle receipts
+are COMPLETE, source-frozen at `27157af`, and consume the authored arena configuration.
+
 ## Native smoke measurements
 
 At `90e2e4d`, two windowless ordinary seeded battles ran serially, with no synthetic

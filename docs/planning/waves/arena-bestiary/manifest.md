@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: spectator integrated; original-group calibration and defect repair in progress.
+Status: spectator and bounded original-group calibration complete; Golem foundation in progress; Wisp and Worm queued.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
@@ -235,3 +235,10 @@ all authorized work and final evidence/guide are delivered.
   checks and native build pass. The initial12-round pilot exposed movement/sighting
   defects before stat tuning. Repairs and closer observer framing are active;
   Golem/Wisp/Worm remain queued. See the [bestiary validation record](../../../systems/arena-bestiary-validation.md).
+
+- Original tuning checkpoint `27157af` passes 160 arena tests and scoped strict lint.
+  Native 120-round calibration, 30-round fresh holdout and 36-round Fort spot corpus
+  are complete with timeouts and map effects retained. Final Dragon hypotheses are
+  HP220 / breath45 / range6. See the validation record for results and remaining
+  Shaman stalemates. Golem body/beam projection vocabulary landed in `d5494a6`;
+  seven-prism geometry and Golem production lanes now follow the committed seam.
