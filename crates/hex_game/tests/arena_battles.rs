@@ -144,6 +144,7 @@ fn calibrate_original_monster_groups() {
                 .collect()
         },
     );
+    let trace = std::env::var("HEX_BATTLE_TRACE").is_ok_and(|value| value == "1");
     for seed_offset in 0..seed_count {
         let seed = first_seed.checked_add(seed_offset).expect("seed bound");
         for &(first, second) in &matchups {
@@ -171,6 +172,26 @@ fn calibrate_original_monster_groups() {
                     timings.push(ms);
                     if fixture.world().resource::<ArenaTerrainView>().revision != revision {
                         publications.push(ms);
+                    }
+                    let session = fixture.world().resource::<ArenaSession>();
+                    if trace && (session.tick.is_multiple_of(60) || session.is_finished()) {
+                        let terrain = fixture.world().resource::<ArenaTerrainView>();
+                        let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+                        println!(
+                            "ARENA_BATTLE_TRACE {}",
+                            serde_json::json!({
+                                "seed":seed,"map":format!("{map:?}"),"left":left.slug(),"right":right.slug(),"tick":session.tick,
+                                "revision":terrain.revision,"knowledge":session.party_knowledge(),
+                                "actors":session.actors.iter().filter(|actor|actor.hp>0.0).map(|actor|serde_json::json!({
+                                    "id":actor.id,"team":actor.team,"species":actor.species,"hp":actor.hp,"feet":actor.feet.to_array(),
+                                    "eye":actor.eye().to_array(),"aim":actor.aim.to_array(),"body_rotation":actor.body_rotation().to_array(),
+                                    "velocity":((actor.feet-actor.previous_feet)*120.0).to_array(),"flying":actor.flying,"grounded":actor.grounded,
+                                    "cooldowns":actor.cooldowns,"charge":actor.charge().map(|charge|charge.elapsed),
+                                    "attack":actor.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"direction":attack.direction.to_array(),"progress":attack.progress})),
+                                    "volume_valid":session.actor_volume_valid(actor.id,terrain,geometry)
+                                })).collect::<Vec<_>>(),"stats":session.encounter_stats()
+                            })
+                        );
                     }
                     assert!(
                         timings.len()
