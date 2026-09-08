@@ -109,7 +109,7 @@ and roster, including barriers, cooldowns and party memories.
 | Goblin |50| Fast swarming with a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 | Golem |320| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
-| Ember Wisp |18| Small glowing flyer with a long-range Ember shot; fragile alone and dangerous in groups. |
+| Ember Wisp |30| Small glowing flyer with a long-range Ember shot; fragile alone and dangerous in groups. |
 
 Goblins match the player body: .8 units tall with a .25-unit radius.
 
@@ -142,9 +142,12 @@ Each Wisp occupies one native hex and one .4-unit level. It flies at 1.5 units/s
 roughly four units above admitted dry ground, with two altitude layers for larger
 swarms. It prefers 20–32 units of separation, but can attack a nearby visible
 opponent below it. Its Ember has a .35-second windup and two-second cooldown,
-dealing up to 8 damage with a .8-unit splash radius. Walls block sight and shots;
+dealing up to 8 damage with a .8-unit splash radius. Embers travel at 128 units/second;
+the opening shots of a group spread across .6 seconds. Walls block sight and shots;
 the body glow does not reveal it through terrain. Four Wisps are the initial Fort
-comparison group, pending paired calibration and human playtesting.
+small-wave comparison group. Larger observer groups become much more dangerous;
+twelve Wisps beat the Shadow in three of four initial Fort trials. Human balance
+still needs playtesting.
 
 Enemy attacks spare allied actors, and enemy projectiles pass through them.
 Barriers still intercept allied attacks. Fireballs can hurt their own caster.

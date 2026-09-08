@@ -405,3 +405,39 @@ separate launch-speed trial will shorten the already observed shot flight.
 
 Retained evidence: `outputs/arena-wisp-calibration-01` and
 `outputs/arena-wisp-trace-02`. Traced timings are diagnostic only.
+
+## Wisp initial calibrated profile
+
+Keep HP30, Ember speed128, initial volley spread.6s; all other initial Wisp
+values remain unchanged. Individual HP remains below Goblin50, damage8 below
+Swipe12, and cooldown2 slower than Swipe1.2. The isolated trials distinguish
+changes: staggering alone improved little; speed64 raised twelve-Wisp damage
+to23.9 per Duel round, speed128 to48.1, and HP30 to57.5. The health trial helps
+against incidental splash while a full35-damage Fireball still kills one Wisp.
+
+The final48-round Duel corpus uses four seeds/both sides at frozen `8fa9640`
+(main tuning `f0ef3fa`). The16-round Fort spot uses two seeds/both sides.
+
+| Wisp group | Duel: Wisp wins / losses / timeouts | Fort: Wisp wins / losses / timeouts |
+| --- | ---: | ---: |
+| One, versus Shadow |0 /8 /0|Not sampled|
+| Two, versus Shadow |0 /8 /0|Not sampled|
+| Four, versus Shadow |0 /7 /1|0 /4 /0|
+| Eight, versus Shadow |0 /8 /0|0 /4 /0|
+| Twelve, versus Shadow |0 /7 /1|3 /1 /0|
+| One, versus one Goblin |8 /0 /0|4 /0 /0|
+
+The accepted Shadow remains a strong AoE/dodging counter in Duel. Fort's large
+swarm results establish the intended scaling across this small machine corpus,
+not a human win-rate estimate or a claim that four Wisps equal a Shadow. Keep
+four as the accessible initial Fort wave and all five sizes in spectator mode.
+Final Duel/Fort measured maxima are4.616/4.115ms with no over-budget combat ticks.
+Larger sustained synthetic load, fresh Wisp pixels and the final workspace gate
+remain separate checks.
+
+All230 arena tests pass after the separate speed and HP trials. Earlier full
+strict arena lint passes with the opening stagger; final strict combined lint
+will cover the numeric-only follow-ups. Retained source-matched task evidence:
+`outputs/arena-wisp-stagger-03`, `outputs/arena-wisp-speed64-04`,
+`outputs/arena-wisp-speed128-05`, `outputs/arena-wisp-hp30-06`,
+`outputs/arena-wisp-fort-07` and their companion summaries.

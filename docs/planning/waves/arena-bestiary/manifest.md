@@ -286,3 +286,13 @@ all authorized work and final evidence/guide are delivered.
   elongated deployment publication before the Worm phase. No messages are emitted
   or consumed yet, and no Worm is selectable. Formatting passes; compilation of
   this neutral contract is deferred until the serialized Cargo slot is available.
+
+- Wisp calibration checkpoint `f0ef3fa` keeps HP30/speed128/opening spread.6.
+  Native48 Duel and16 Fort paired rounds retain the strong Shadow counter and
+  twelve-Wisp Fort3/4 wins; single Wisps beat Goblins on both maps.230 arena
+  tests pass. Wisp static/sustained capacity review proceeds in the frozen
+  detached review checkout. Root applies the guarded Worm foundation now:
+  exact copied current/previous components, body-center offsets, config and
+  appended identities; setup remains refused until runtime and geometry agree.
+  Root will integrate the prepared world lane; geometry, gameplay and presentation
+  then use disjoint paths after the foundation commit.
