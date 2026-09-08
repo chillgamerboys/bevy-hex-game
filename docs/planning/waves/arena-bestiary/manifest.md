@@ -269,3 +269,11 @@ all authorized work and final evidence/guide are delivered.
   projectile metadata. All Wisp setups remain refused; flight, layered deployment,
   Ember payload and brain await the coordinator's foundation commit and dispatch.
   Golem remains HP320 in this main candidate. No Wisp runtime evidence is claimed.
+
+- Wisp runtime integration follows `93a7735`:225 arena tests,7 real-world battle
+  tests,73 application tests, strict scoped lint and23 Python guards pass. Exact
+  one-prism flight bodies, two finite altitude layers, frozen Ember payloads and
+  Fort/observer recipes are admitted. Native Wisp calibration and fresh Wisp/Golem
+  static reviews follow the clean candidate commit. The detached review checkout
+  preserves source identity while neutral Worm contracts are prepared in main.
+  No Worm runtime has been dispatched yet.

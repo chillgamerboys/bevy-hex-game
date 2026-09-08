@@ -30,6 +30,7 @@ pub(super) struct GolemVisualAssets {
     face: Handle<StandardMaterial>,
     core: Handle<StandardMaterial>,
     glow: Handle<StandardMaterial>,
+    laser_core: Handle<StandardMaterial>,
 }
 
 /// Local presentation input, not a proposed second gameplay authority.
@@ -66,6 +67,12 @@ pub(super) fn setup(
     };
     let core = light(Color::srgba(1.0, 0.92, 0.60, 0.96));
     let glow = light(Color::srgba(1.0, 0.40, 0.06, 0.18));
+    let laser_core = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.99, 0.92),
+        unlit: true,
+        cull_mode: None,
+        ..default()
+    });
     commands.insert_resource(GolemVisualAssets {
         column: meshes.add(native_hex_prism()),
         block: meshes.add(Cuboid::from_size(Vec3::ONE)),
@@ -75,6 +82,7 @@ pub(super) fn setup(
         face,
         core,
         glow,
+        laser_core,
     });
 }
 
@@ -241,7 +249,7 @@ fn laser_segments(
     // inner core improves contrast without inventing a wider attack.
     for (radius, material) in [
         (beam.radius, &assets.glow),
-        (beam.radius * 0.32, &assets.core),
+        (beam.radius * 0.72, &assets.laser_core),
     ] {
         if let Some(transform) = segment_pose(beam.origin, beam.end, radius) {
             commands.spawn((
@@ -288,7 +296,7 @@ fn segment_pose(origin: Vec3, end: Vec3, radius: f32) -> Option<Transform> {
     )
 }
 
-fn native_hex_prism() -> Mesh {
+pub(super) fn native_hex_prism() -> Mesh {
     let mut positions = Vec::<[f32; 3]>::with_capacity(72);
     let mut normals = Vec::<[f32; 3]>::with_capacity(72);
     let mut triangle = |a: Vec3, b: Vec3, c: Vec3| {
@@ -466,6 +474,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(segments.len(), 2);
         let materials = app.world().resource::<Assets<StandardMaterial>>();
+        let core = &app.world().resource::<GolemVisualAssets>().laser_core;
+        assert!(segments.iter().any(|(pose, material, _)| {
+            material == core && (pose.scale.x - beam.radius * 0.72).abs() < 0.0001
+        }));
         for (pose, material, no_shadow) in segments {
             assert!(no_shadow);
             assert!(pose
@@ -475,9 +487,16 @@ mod tests {
                 .transform_point(Vec3::Y * 0.5)
                 .abs_diff_eq(beam.end, 0.0001));
             assert!(pose.scale.x <= beam.radius && pose.scale.z <= beam.radius);
+            let is_core = &material == core;
             let material = materials.get(&material).expect("cached beam material");
             assert!(material.unlit && material.cull_mode.is_none());
-            assert_eq!(material.alpha_mode, AlphaMode::Blend);
+            if is_core {
+                assert_eq!(material.alpha_mode, AlphaMode::Opaque);
+                let color = material.base_color.to_srgba();
+                assert!(color.red >= 0.99 && color.green >= 0.98 && color.blue >= 0.9);
+            } else {
+                assert_eq!(material.alpha_mode, AlphaMode::Blend);
+            }
         }
         assert!(segment_pose(beam.origin, beam.origin, beam.radius).is_none());
         assert!(segment_pose(beam.origin, beam.end, f32::NAN).is_none());

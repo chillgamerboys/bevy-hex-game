@@ -325,11 +325,14 @@ fn phase_actor<'a>(session: &'a ArenaSession, view: &str) -> Option<&'a hex_aren
 }
 
 pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
-    phase_actor(session, view).is_some() || super::golem::phase_actor(session, view).is_some()
+    phase_actor(session, view).is_some()
+        || super::golem::phase_actor(session, view).is_some()
+        || super::wisp::phase_actor(session, view).is_some()
 }
 
 pub(super) fn phase_view(view: &str) -> bool {
     super::golem::phase_view(view)
+        || super::wisp::phase_view(view)
         || matches!(
             view.strip_suffix("-rear").unwrap_or(view),
             "encounter-windup"
@@ -595,6 +598,7 @@ pub(super) fn effects(
     tuning: Res<ArenaTuning>,
     assets: Res<VisualAssets>,
     golem_assets: Res<super::golem::GolemVisualAssets>,
+    wisp_assets: Res<super::wisp::WispVisualAssets>,
     previous: Query<Entity, With<EncounterEffect>>,
     mut gizmos: Gizmos,
 ) {
@@ -646,6 +650,15 @@ pub(super) fn effects(
         }
     }
     for actor in session.actors.iter().filter(|a| a.hp > 0.0) {
+        if actor.species == hex_arena::Species::Wisp {
+            let accent = if super::spectator::active(&session) {
+                super::spectator::team_color(&session, actor.team)
+            } else {
+                Color::srgb(1.0, 0.72, 0.25)
+            };
+            super::wisp::glow(&mut commands, actor, &wisp_assets, &mut gizmos, accent);
+            continue;
+        }
         if actor.species == hex_arena::Species::Golem {
             let accent = if super::spectator::active(&session) {
                 super::spectator::team_color(&session, actor.team)

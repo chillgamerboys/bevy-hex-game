@@ -27,7 +27,7 @@ struct BodyPart {
 }
 
 fn body_parts(species: Species) -> Vec<BodyPart> {
-    if species == Species::Golem {
+    if matches!(species, Species::Golem | Species::Wisp) {
         return Vec::new();
     }
     let part = |size, center, material| BodyPart {
@@ -83,6 +83,7 @@ pub(super) fn actors(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     golem_assets: Res<super::golem::GolemVisualAssets>,
+    wisp_assets: Res<super::wisp::WispVisualAssets>,
 ) {
     for (entity, model, _, _) in &mut models {
         if model.2 != reset.generation
@@ -130,6 +131,7 @@ pub(super) fn actors(
             Species::Goblin => (Color::srgb(0.27, 0.22, 0.12), Color::srgb(0.30, 0.57, 0.19)),
             Species::Shaman => (Color::srgb(0.40, 0.15, 0.54), Color::srgb(0.44, 0.66, 0.26)),
             Species::Golem => (Color::srgb(0.34, 0.36, 0.40), Color::srgb(0.34, 0.36, 0.40)),
+            Species::Wisp => (Color::srgb(1.0, 0.45, 0.1), Color::srgb(1.0, 0.85, 0.4)),
         };
         let palette = [
             if super::spectator::active(&session) {
@@ -160,6 +162,10 @@ pub(super) fn actors(
                 match actor.species {
                     Species::Golem => {
                         super::golem::spawn_body(body, actor, &golem_assets);
+                        return;
+                    }
+                    Species::Wisp => {
+                        super::wisp::spawn_body(body, actor, &wisp_assets);
                         return;
                     }
                     Species::Human
@@ -233,6 +239,14 @@ pub(super) fn effects(
         Spell::AreaBlast => Color::srgb(0.70, 0.40, 1.0),
     };
     for projectile in &session.projectiles {
+        if projectile.appearance() == hex_arena::ProjectileAppearance::Ember {
+            gizmos.line(
+                projectile.previous_position,
+                projectile.position,
+                Color::srgb(1.0, 0.78, 0.25),
+            );
+            continue;
+        }
         let c = color(projectile.spell);
         gizmos.sphere(Isometry3d::from_translation(projectile.position), 0.13, c);
         let start = projectile.position - projectile.velocity.normalize_or_zero() * 0.8;
@@ -367,6 +381,7 @@ pub(super) fn solid_effects(
     mut commands: Commands,
     session: Res<ArenaSession>,
     assets: Res<EffectAssets>,
+    wisp_assets: Res<super::wisp::WispVisualAssets>,
     geometry: Res<ArenaVoxelGeometry>,
     previous: Query<Entity, With<TransientEffect>>,
 ) {
@@ -375,6 +390,10 @@ pub(super) fn solid_effects(
         commands.entity(entity).despawn();
     }
     for projectile in &session.projectiles {
+        if projectile.appearance() == hex_arena::ProjectileAppearance::Ember {
+            super::wisp::ember(&mut commands, projectile, &wisp_assets);
+            continue;
+        }
         commands.spawn((
             TransientEffect,
             Mesh3d(assets.sphere.clone()),

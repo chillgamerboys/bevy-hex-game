@@ -7,6 +7,7 @@ mod presentation;
 mod spectator;
 #[cfg(test)]
 mod tests;
+mod wisp;
 
 use bevy::camera::RenderTarget;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -37,8 +38,14 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "goblins" => ArenaEncounter::Goblins,
         "shaman-party" => ArenaEncounter::ShamanParty,
         "shadow" => ArenaEncounter::Shadow,
-        "golem" if map == ArenaMap::Fort => ArenaEncounter::Dragon,
-        "golem" => return Err("Golem player encounters require Fort.".into()),
+        "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12"
+            if map == ArenaMap::Fort =>
+        {
+            ArenaEncounter::Dragon
+        }
+        "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12" => {
+            return Err("Creature player overrides require Fort.".into());
+        }
         value => return Err(format!("Unknown arena encounter: {value}")),
     };
     Ok(ArenaSelection { map, encounter })
@@ -49,11 +56,14 @@ fn apply_player_recipe(
     selection: ArenaSelection,
     encounter: Option<&str>,
 ) -> Result<(), String> {
-    if encounter == Some("golem") {
+    if let Some(recipe) = encounter
+        .and_then(hex_arena::BattlePreset::from_slug)
+        .filter(|recipe| !hex_arena::BattlePreset::ORIGINAL.contains(recipe))
+    {
         if setup.control != hex_arena::ArenaControl::Player {
-            return Err("Spectator Golems use the team roster options.".into());
+            return Err("Spectator creatures use the team roster options.".into());
         }
-        setup.player_recipe = Some(hex_arena::BattlePreset::Golem);
+        setup.player_recipe = Some(recipe);
     }
     setup
         .validate_for(selection.map)
@@ -343,6 +353,8 @@ pub fn run() -> AppExit {
                 presentation::setup_effects,
                 encounter::setup,
                 golem::setup,
+                wisp::setup,
+                wisp::configure_capture_lighting,
             )
                 .chain()
                 .after(ArenaSystems::PublishTerrain),
@@ -362,6 +374,7 @@ pub fn run() -> AppExit {
                 encounter::camera,
                 spectator::camera,
                 golem::capture_camera,
+                wisp::capture_camera,
                 presentation::effects,
                 presentation::solid_effects,
                 encounter::effects,
@@ -1059,9 +1072,11 @@ fn capture_frame(
     objects: Query<&hex_assets::ObjectInstance>,
     chunks: Query<&hex_objects::ObjectRenderChunk>,
     golem_prisms: Query<&Mesh3d, With<golem::GolemPrism>>,
+    wisp_prisms: Query<&Mesh3d, With<wisp::WispPrism>>,
     cameras: Query<&Transform, With<ArenaCamera>>,
     liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
     mut exit: MessageWriter<AppExit>,
+    lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
 ) {
     let Some(path) = state.capture.clone() else {
         return;
@@ -1089,10 +1104,21 @@ fn capture_frame(
         && golem_prisms
             .iter()
             .all(|mesh| meshes.get(&mesh.0).is_some());
-    if !authored_assets_ready || !golem_assets_ready {
+    let expected_wisp_prisms = session
+        .actors
+        .iter()
+        .filter(|actor| actor.species == hex_arena::Species::Wisp)
+        .map(|actor| actor.body_hex_prisms().count())
+        .sum::<usize>();
+    let wisp_prism_count = wisp_prisms.iter().count();
+    let wisp_assets_ready = expected_wisp_prisms == wisp_prism_count
+        && wisp_prisms.iter().all(|mesh| meshes.get(&mesh.0).is_some());
+    if !authored_assets_ready || !golem_assets_ready || !wisp_assets_ready {
         state.capture_ready_frame = None;
         if state.frames >= 1800 {
-            error!("Encounter capture failed: authored objects or creature meshes did not become render-ready");
+            error!(
+                "Encounter capture failed: authored objects or creature meshes did not become render-ready"
+            );
             state.requested = true;
             exit.write(AppExit::error());
         }
@@ -1137,7 +1163,10 @@ fn capture_frame(
                 parties = ?session.parties(),
                 "Encounter capture phase failure state"
             );
-            error!("Encounter capture failed: requested phase {} was not reached before the round ended or the 30-second limit", state.capture_view);
+            error!(
+                "Encounter capture failed: requested phase {} was not reached before the round ended or the 30-second limit",
+                state.capture_view
+            );
             state.requested = true;
             exit.write(AppExit::error());
         }
@@ -1256,9 +1285,16 @@ fn capture_frame(
             "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
             "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
             "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
-            "idle_mouth": actor.eye().to_array(), "beam": beam
+            "idle_mouth": actor.eye().to_array(), "beam": beam, "flying": actor.flying, "grounded": actor.grounded,
+            "flight_layer": actor.flight_layer()
         })
     }).collect::<Vec<_>>();
+    let projectiles = session.projectiles.iter().map(|projectile|serde_json::json!({
+        "id":projectile.id,"owner":projectile.owner,"source_team":projectile.source_team(),
+        "position":projectile.position.to_array(),"previous_position":projectile.previous_position.to_array(),
+        "velocity":projectile.velocity.to_array(),"age":projectile.age,"appearance":projectile.appearance(),
+        "collision_radius":projectile.collision_radius(),"source_ability":projectile.source_ability()
+    })).collect::<Vec<_>>();
     let barriers = session.barriers().iter().map(|barrier| serde_json::json!({
         "id": barrier.id, "owner": barrier.owner, "center": barrier.center.to_array(),
         "normal": barrier.normal.to_array(), "width": barrier.width, "height": barrier.height,
@@ -1319,6 +1355,9 @@ fn capture_frame(
         ("static_spans", serde_json::json!(view.static_spans.len())),
         ("authored_objects", serde_json::json!(object_count)),
         ("golem_render_prisms", serde_json::json!(golem_prism_count)),
+        ("wisp_render_prisms", serde_json::json!(wisp_prism_count)),
+        ("projectiles", serde_json::json!(projectiles)),
+        ("lighting", serde_json::json!({"fixture":if wisp::dim_view(&state.capture_view) {"dim-comparison"}else{"ordinary"}, "ambient_brightness":lighting.0.brightness, "directional_illuminance":lighting.1.iter().map(|light|light.illuminance).collect::<Vec<_>>()})),
         ("object_render_chunks", serde_json::json!(chunk_count)),
         ("focus_anchor", serde_json::json!(state.capture_focus)),
         ("phase_reached_frame", serde_json::json!(state.capture_event_frame)),

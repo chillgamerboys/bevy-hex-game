@@ -185,6 +185,10 @@ fn observer_actor_zero_is_visible_and_player_hud_is_absent() {
         .expect("Golem cached visuals");
     fixture
         .world_mut()
+        .run_system_once(wisp::setup)
+        .expect("Wisp cached visuals");
+    fixture
+        .world_mut()
         .run_system_once(presentation::actors)
         .expect("observer models");
     let visible_zero = fixture
@@ -453,6 +457,26 @@ fn observer_footer_text_is_centered_and_padded_at_supported_sizes() {
             .find(|node| node.name == "Observer footer text")
             .expect("visible observer guidance");
         let glyphs = text.rendered_text_bounds.expect("real footer glyphs");
+        let panel = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Observer footer panel")
+            .expect("visible dark guidance panel");
+        let panel_bounds = Rect::from_center_size(panel.center, panel.size);
+        assert!(panel.fully_visible);
+        assert!(glyphs.min.x >= panel_bounds.min.x + 10.0);
+        assert!(glyphs.max.x <= panel_bounds.max.x - 10.0);
+        assert!(glyphs.min.y >= panel_bounds.min.y + 4.0);
+        assert!(glyphs.max.y <= panel_bounds.max.y - 4.0);
+        let dark_panel = ui
+            .world_mut()
+            .query::<(&Name, &BackgroundColor)>()
+            .iter(ui.world())
+            .find(|(name, _)| name.as_str() == "Observer footer panel")
+            .map(|(_, color)| color.0.to_srgba())
+            .expect("panel owns a real background");
+        assert!(dark_panel.red < 0.1 && dark_panel.green < 0.1 && dark_panel.blue < 0.1);
+        assert!(dark_panel.alpha >= 0.75);
         assert!(text.fully_visible);
         assert!(glyphs.min.x >= 18.0 && glyphs.max.x <= snapshot.metrics.logical_size.x - 18.0);
         assert!((text.center.x - snapshot.metrics.logical_size.x * 0.5).abs() < 1.0);

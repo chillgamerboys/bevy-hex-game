@@ -14,6 +14,9 @@ use hex_core::arena::{
 };
 use std::time::Instant;
 
+#[path = "arena_battles/wisps.rs"]
+mod wisps;
+
 fn app(map: ArenaMap, setup: ArenaBattleSetup) -> App {
     configured_app(map, setup, authored_tuning())
 }

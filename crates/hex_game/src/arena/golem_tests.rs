@@ -170,6 +170,10 @@ fn golem_observer_actor_zero_renders_seven_native_columns_at_authoritative_pose(
         .expect("cached visuals");
     fixture
         .world_mut()
+        .run_system_once(wisp::setup)
+        .expect("Wisp cached visuals");
+    fixture
+        .world_mut()
         .run_system_once(presentation::actors)
         .expect("models");
     let columns = fixture
@@ -181,12 +185,14 @@ fn golem_observer_actor_zero_renders_seven_native_columns_at_authoritative_pose(
     assert_eq!(columns.len(), 7);
     let meshes = fixture.world().resource::<Assets<Mesh>>();
     for (column, mesh, parent) in columns {
-        assert!(prisms.iter().any(|p| column
-            .translation
-            .abs_diff_eq(p.offset + Vec3::Y * p.height * 0.5, 0.0001)
-            && column
-                .scale
-                .abs_diff_eq(Vec3::new(1.0, p.height, 1.0), 0.0001)));
+        assert!(prisms.iter().any(|p| {
+            column
+                .translation
+                .abs_diff_eq(p.offset + Vec3::Y * p.height * 0.5, 0.0001)
+                && column
+                    .scale
+                    .abs_diff_eq(Vec3::new(1.0, p.height, 1.0), 0.0001)
+        }));
         let root = fixture
             .world()
             .get::<Transform>(parent)

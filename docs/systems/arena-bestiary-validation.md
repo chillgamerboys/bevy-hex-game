@@ -333,3 +333,29 @@ the ignored exact-source pack. This closes the original framing gap.
 Human native camera motion, collision feel, creature animation, telegraph readability
 in motion, and 20–30 Fort encounters remain **HUMAN-MOTION-PENDING**. Paired machine
 matchups and future holdout seeds cannot establish human win rates.
+
+## Wisp focused integration checkpoint
+
+The guarded foundation `93a7735` now has a complete one-prism flight body, finite
+two-layer deployment, observed-target Ember windup and frozen creature projectile
+payload. Twelve-per-team real-world fixtures fit both Duel and Fort without
+shrinking bodies or bypassing ceilings. A translated shared-edge precision case
+initially rejected legal adjacent layers; the corrected prism overlap admits
+tangency while retaining real penetration tests.
+
+Gameplay tests pass225 and strict arena lint passes. The source-stable application
+receipt passes7 actual-world battle tests,73 application tests and strict game
+all-target/all-feature lint. Python launcher/capture guards pass23. These are
+focused checks, before the final workspace gate. The first application attempt
+failed to compile a new test's nonexistent `alive()` helper; the corrected test
+uses authoritative positive HP and the complete retry passes. Failure logs remain.
+
+The candidate also gives the observer footer a dark backing and adds a pale inner
+core to the unchanged Golem laser beam. The prior12-frame Golem pack established
+body/framing but exposed those readability defects; fresh static approval remains
+pending. Wisp native paired calibration and its12-frame static matrix are next.
+No subjective motion or balance approval is claimed.
+
+Task evidence: `work/wisp-runtime-tests-02.log`,
+`work/wisp-runtime-clippy-02.log`, `work/wisp-app-integration-02/receipt.json`,
+and `taskwork/wisp-presentation/python-guards-01.json`.

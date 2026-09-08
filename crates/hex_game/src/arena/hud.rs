@@ -106,7 +106,9 @@ pub(super) fn setup(mut commands: Commands) {
             root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 17.0, INK), Label::ObserverTeams));
             root.spawn((Node { position_type: PositionType::Absolute, top: px(14), right: px(18), max_width: px(450), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 17.0, INK), Label::ObserverStatus));
             root.spawn((Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), padding: UiRect::horizontal(px(18)), justify_content: JustifyContent::Center, ..default() }, Name::new("Observer footer container"))).with_children(|footer| {
-                footer.spawn((text("WASD pan / move   Q / E down / up   SHIFT fast   MOUSE look   WHEEL orbit zoom   C orbit / free   ESC / TAB pause   R reset", 12.0, INK), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }, Name::new("Observer footer text")));
+                footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), max_width: percent(100), ..default() }, BackgroundColor(PANEL), Name::new("Observer footer panel"))).with_children(|panel| {
+                    panel.spawn((text("WASD pan / move   Q / E down / up   SHIFT fast   MOUSE look   WHEEL orbit zoom   C orbit / free   ESC / TAB pause   R reset", 12.0, INK), Name::new("Observer footer text")));
+                });
             });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
@@ -129,21 +131,30 @@ pub(super) fn setup(mut commands: Commands) {
                     });
                     panel.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }, ModeContent(ArenaControl::Player))).with_children(|panel| {
                     panel.spawn(text("FORT ENCOUNTER", 12.0, MUTED));
-                    panel.spawn(Node { height: px(38), column_gap: px(6), ..default() }).with_children(|row| {
-                        for encounter in [ArenaEncounter::Dragon, ArenaEncounter::Goblins, ArenaEncounter::ShamanParty, ArenaEncounter::Shadow] {
-                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Encounter(encounter)))
-                                .with_children(|button| { button.spawn(text(super::encounter_name(encounter), 13.0, INK)); });
-                        }
-                        row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::PlayerRecipe(BattlePreset::Golem)))
-                            .with_children(|button| { button.spawn(text("Golem", 13.0, INK)); });
-                    });
+                    let choices = [
+                        ("Dragon",Action::Encounter(ArenaEncounter::Dragon)),
+                        ("Goblins",Action::Encounter(ArenaEncounter::Goblins)),
+                        ("Shaman party",Action::Encounter(ArenaEncounter::ShamanParty)),
+                        ("Shadow",Action::Encounter(ArenaEncounter::Shadow)),
+                        (BattlePreset::Golem.label(),Action::PlayerRecipe(BattlePreset::Golem)),
+                        (BattlePreset::Wisps4.label(),Action::PlayerRecipe(BattlePreset::Wisps4)),
+                    ];
+                    for group in choices.chunks(3) {
+                        panel.spawn(Node { height: px(38), column_gap: px(6), ..default() }).with_children(|row| {
+                            for &(label, action) in group {
+                                row.spawn((Button, Node { flex_grow:1.0, flex_basis:px(0), min_width:px(0), height:px(38), align_items:AlignItems::Center, justify_content:JustifyContent::Center, border_radius:BorderRadius::all(px(4)), ..default() },BackgroundColor(PANEL),action))
+                                    .with_children(|button| {button.spawn(text(label,13.0,INK));});
+                            }
+                        });
+                    }
+
                     });
                     panel.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), display: Display::None, ..default() }, ModeContent(ArenaControl::Spectator))).with_children(|panel| {
                         for slot in 0..2 {
-                            panel.spawn(Node { height: px(34), align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
-                                row.spawn((Node { flex_grow: 1.0, ..default() }, text("", 15.0, if slot == 0 { Color::srgb(0.24,0.82,1.0) } else { Color::srgb(1.0,0.62,0.20) }), Label::Team(slot)));
+                            panel.spawn(Node { min_height: px(38), align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
+                                row.spawn((Node { flex_grow: 1.0, flex_basis:px(0), min_width:px(0), ..default() }, text("", 15.0, if slot == 0 { Color::srgb(0.24,0.82,1.0) } else { Color::srgb(1.0,0.62,0.20) }), Label::Team(slot)));
                                 for (label, step) in [("<", -1), (">", 1)] {
-                                    row.spawn((Button, Node { width: px(46), height: px(34), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Roster(slot, step))).with_children(|button| { button.spawn(text(label, 18.0, INK)); });
+                                    row.spawn((Button, Node { width: px(46), height: px(34), flex_shrink:0.0, align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Roster(slot, step))).with_children(|button| { button.spawn(text(label, 18.0, INK)); });
                                 }
                             });
                         }

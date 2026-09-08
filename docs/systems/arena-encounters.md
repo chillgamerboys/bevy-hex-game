@@ -11,11 +11,11 @@ Run the local launcher from the repository:
     python3 tools/arena.py launch
 
 Choose a map on the start screen. Fort defaults to a Dragon encounter and also
-offers five Goblins, a Shaman with three Goblins, one Shadow, or a Golem. Seven Regions
+offers five Goblins, a Shaman with three Goblins, one Shadow, a Golem, or four Ember Wisps. Seven Regions
 contains three separate parties at the mountain high pass, fort courtyard and
 cave entrance. Combat stays stopped until you press Enter or choose Start.
 The launcher also accepts `--map seven-regions` or `--map duel`; Fort presets use
-`--encounter dragon`, `goblins`, `shaman-party`, `shadow` or `golem`.
+`--encounter dragon`, `goblins`, `shaman-party`, `shadow`, `golem` or `wisps-4`.
 
 | Input | Action |
 |---|---|
@@ -45,7 +45,9 @@ A two-minute limit reports a timeout rather than declaring a winner.
 
     python3 tools/arena.py launch --spectator --map fort --team-a goblins --team-b shaman-party --seed 1
 
-Team presets currently accept shadow, dragon, goblins, shaman-party and golem. The seed
+Team presets accept shadow, dragon, goblins, shaman-party, golem, one goblin,
+and Wisp groups of 1, 2, 4, 8 or 12. Their launcher names are `goblin`, `wisp`,
+`wisps-2`, `wisps-4`, `wisps-8` and `wisps-12`. The seed
 repeats the initial setup and decisions; changing the map or roster still changes
 the match. `--tick-limit 14400` sets the120 Hz simulation limit. Seven Regions
 remains a player encounter map.
@@ -107,6 +109,7 @@ and roster, including barriers, cooldowns and party memories.
 | Goblin |50| Fast swarming with a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 | Golem |320| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
+| Ember Wisp |18| Small glowing flyer with a long-range Ember shot; fragile alone and dangerous in groups. |
 
 Goblins match the player body: .8 units tall with a .25-unit radius.
 
@@ -134,6 +137,14 @@ for the final .35 seconds, then deals up to 45 damage over one second. The beam
 stops at the nearest solid obstacle or target. Stay between its slam reach and
 12-unit laser admission range, or move sideways once its aim locks. Terrain damage
 can remove the Golem's own footing. Initial slam/laser cooldowns are 5/8 seconds.
+
+Each Wisp occupies one native hex and one .4-unit level. It flies at 1.5 units/second,
+roughly four units above admitted dry ground, with two altitude layers for larger
+swarms. It prefers 20–32 units of separation, but can attack a nearby visible
+opponent below it. Its Ember has a .35-second windup and two-second cooldown,
+dealing up to 8 damage with a .8-unit splash radius. Walls block sight and shots;
+the body glow does not reveal it through terrain. Four Wisps are the initial Fort
+comparison group, pending paired calibration and human playtesting.
 
 Enemy attacks spare allied actors, and enemy projectiles pass through them.
 Barriers still intercept allied attacks. Fireballs can hurt their own caster.

@@ -47,9 +47,11 @@ CHARGE_VIEWS = (
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
 MAPS = ("duel", "fort", "seven-regions")
-ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem")
+ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12")
 PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 5,
-                  "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"], "golem": ["Golem"]}
+                  "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"], "golem": ["Golem"],
+                  "goblin": ["Goblin"], "wisp": ["Wisp"], **{f"wisps-{n}": ["Wisp"] * n for n in (2, 4, 8, 12)}}
+PLAYER_OVERRIDES = {"golem": "Golem", "goblin": "Goblin", "wisp": "Wisp", "wisps-2": "Wisps2", "wisps-4": "Wisps4", "wisps-8": "Wisps8", "wisps-12": "Wisps12"}
 MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions"}
 ENCOUNTER_LABELS = {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "Shaman party", "shadow": "Shadow", "golem": "Golem"}
 SEEDS = {"duel": None, "fort": 640367719, "seven-regions": 703700113}
@@ -122,6 +124,23 @@ GOLEM_VIEWS = (
     ("duel-golem-observer-close", "observer-close", "duel", "shadow", None),
     ("duel-golem-observer-close-rear", "observer-close-rear", "duel", "shadow", None),
 )
+WISP_VIEWS = (
+    ("fort-wisps-start", "start", "fort", "wisps-4", None),
+    ("fort-wisps-first", "encounter-first", "fort", "wisps-4", None),
+    ("fort-wisps-third", "encounter-third", "fort", "wisps-4", None),
+    ("duel-wisp-body", "encounter-wisp-body", "duel", "shadow", None),
+    ("duel-wisp-body-rear", "encounter-wisp-body-rear", "duel", "shadow", None),
+    ("duel-wisp-dark", "encounter-wisp-dark", "duel", "shadow", None),
+    ("duel-wisp-dark-rear", "encounter-wisp-dark-rear", "duel", "shadow", None),
+    ("duel-wisp-windup", "encounter-wisp-windup", "duel", "shadow", None),
+    ("duel-wisp-ember", "encounter-wisp-ember", "duel", "shadow", None),
+    ("duel-wisp-ember-rear", "encounter-wisp-ember-rear", "duel", "shadow", None),
+    ("fort-wisps-observer-start", "observer-start", "fort", "shadow", None),
+    ("duel-wisps-layers", "encounter-wisp-layers", "duel", "shadow", None),
+)
+WISP_OBSERVER_RECIPES = {name: ("wisp", "goblin") for name, _, arena_map, _, _ in WISP_VIEWS if arena_map == "duel"}
+WISP_OBSERVER_RECIPES.update({"fort-wisps-observer-start": ("wisps-12", "shaman-party"),
+                               "duel-wisps-layers": ("wisps-12", "wisps-12")})
 OBSERVER_PERFORMANCE_VIEWS = tuple(
     (f"{arena_map}-observer-performance", "observer-performance", arena_map, "shadow", None)
     for arena_map in ("fort", "duel")
@@ -129,8 +148,8 @@ OBSERVER_PERFORMANCE_VIEWS = tuple(
 
 
 def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool = False, result: bool = False) -> dict[str, str]:
-    if args.encounter == "golem" and arena_map != "fort":
-        raise RuntimeError("Golem player encounters require Fort; Duel supports Golem spectator rosters.")
+    if args.encounter in PLAYER_OVERRIDES and arena_map != "fort":
+        raise RuntimeError("Creature player overrides require Fort; Duel supports their spectator rosters.")
     observing = args.spectator or matrix
     if not observing:
         if any(value is not None for value in (args.team_a, args.team_b, args.seed, args.tick_limit)):
@@ -286,7 +305,7 @@ def png_info(path: Path) -> dict:
 def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dict[str, str]) -> None:
     """Check the accepted setup, including the independent Fort player override."""
     expected_selection = {"map": MAP_LABELS[arena_map],
-                          "encounter": ENCOUNTER_LABELS["dragon" if encounter == "golem" else encounter]}
+                          "encounter": ENCOUNTER_LABELS["dragon" if encounter in PLAYER_OVERRIDES else encounter]}
     if state.get("selection") != expected_selection:
         raise RuntimeError("Capture published a different world selection than requested.")
     observing = env.get("HEX_ARENA_CONTROL") == "spectator"
@@ -296,7 +315,7 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
     expected = {"control": "Spectator" if observing else "Player", "rosters": rosters,
                 "seed": int(env.get("HEX_ARENA_BATTLE_SEED", "1")),
                 "tick_limit": int(env.get("HEX_ARENA_BATTLE_TICK_LIMIT", "14400")),
-                "player_recipe": "Golem" if encounter == "golem" and not observing else None}
+                "player_recipe": PLAYER_OVERRIDES.get(encounter) if not observing else None}
     if state.get("battle_setup") != expected:
         raise RuntimeError("Capture accepted a different control, roster, seed, tick limit or player recipe.")
     if observing:
@@ -304,8 +323,8 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
         actual_members = Counter((actor.get("team"), actor.get("species")) for actor in state.get("actors", []))
         if actual_members != expected_members:
             raise RuntimeError("Capture actual bodies differ from the accepted spectator teams.")
-    elif encounter == "golem" and Counter(actor.get("species") for actor in state.get("actors", [])) != Counter(("Human", "Golem")):
-        raise RuntimeError("Fort Golem override did not publish one human and one Golem.")
+    elif encounter in PLAYER_OVERRIDES and Counter(actor.get("species") for actor in state.get("actors", [])) != Counter(["Human", *PRESET_MEMBERS[encounter]]):
+        raise RuntimeError("Fort player override published different actual creature bodies.")
 
 
 def validate_golem_state(state: dict, view: str) -> None:
@@ -371,6 +390,59 @@ def validate_golem_state(state: dict, view: str) -> None:
         if valid:
             return
     raise RuntimeError("Golem capture lacks the requested natural ability phase.")
+
+
+def validate_wisp_state(state: dict, view: str) -> None:
+    def vector(value: object) -> bool:
+        return isinstance(value, list) and len(value) == 3 and all(type(v) in (int, float) and math.isfinite(v) for v in value)
+
+    wisps = [a for a in state.get("actors", []) if a.get("species") == "Wisp"]
+    phase = view.removesuffix("-rear")
+    if phase.startswith("encounter-wisp-") and not wisps:
+        raise RuntimeError("Wisp view did not publish its actual Wisp body.")
+    for actor in wisps:
+        prisms = actor.get("body_hex_prisms", [])
+        dimensions = actor.get("body_dimensions")
+        height = prisms[0].get("height") if len(prisms) == 1 else None
+        if len(prisms) != 1 or not vector(prisms[0].get("offset")) or prisms[0]["offset"] != [0, 0, 0] or type(height) not in (int, float) or not math.isfinite(height) or abs(height - .4) > .001:
+            raise RuntimeError("Wisp must be exactly one native hex prism one level tall.")
+        if not vector(dimensions) or any(abs(a-b) > .001 for a, b in zip(dimensions, [math.sqrt(3), .4, 2])) or actor.get("body_rotation") != [0, 0, 0, 1]:
+            raise RuntimeError("Wisp physical bounds or fixed yaw disagree with its native body.")
+        if not vector(actor.get("idle_mouth")) or not vector(actor.get("feet")) or math.dist(actor["idle_mouth"], [actor["feet"][0], actor["feet"][1] + .2, actor["feet"][2]]) > .001:
+            raise RuntimeError("Wisp receipt lacks its physical glow core.")
+    if wisps and state.get("wisp_render_prisms") != len(wisps):
+        raise RuntimeError("Wisp physical bodies have not all produced render meshes.")
+    embers = [p for p in state.get("projectiles", []) if p.get("appearance") == "Ember"]
+    for projectile in embers:
+        radius = projectile.get("collision_radius")
+        if projectile.get("source_ability") != "WispEmber" or type(radius) not in (int, float) or not 0 < radius <= .25:
+            raise RuntimeError("Ember lacks its frozen creature appearance and physical radius.")
+        if not all(vector(projectile.get(key)) for key in ("position", "previous_position", "velocity")):
+            raise RuntimeError("Ember has invalid physical pose metadata.")
+    if not phase.startswith("encounter-wisp-"):
+        return
+    reached = state.get("phase_reached_frame")
+    if type(reached) is not int or state.get("frame", 0) < reached + 4:
+        raise RuntimeError("Wisp phase lacks four frozen render frames.")
+    alive = [a for a in wisps if a.get("hp", 0) > 0 and a.get("flying") is True]
+    if not alive:
+        raise RuntimeError("Wisp capture requires an actual living flying subject.")
+    if phase == "encounter-wisp-dark":
+        light = state.get("lighting", {})
+        if light.get("fixture") != "dim-comparison" or light.get("ambient_brightness") != 6 or light.get("directional_illuminance") != [0]:
+            raise RuntimeError("Dark Wisp capture did not use the explicit dim-light comparison.")
+    elif phase == "encounter-wisp-windup":
+        if not any((a.get("attack") or {}).get("kind") == "WispEmber" and (a.get("attack") or {}).get("phase") == "Windup" and .3 <= (a.get("attack") or {}).get("progress", -1) <= .7 for a in alive):
+            raise RuntimeError("Wisp capture lacks its natural Ember windup.")
+    elif phase == "encounter-wisp-ember":
+        if not any(p.get("owner") == a.get("id") and p.get("age", 0) > 0 and math.dist(p["position"], a["idle_mouth"]) > 1.2 for a in alive for p in embers):
+            raise RuntimeError("Wisp capture lacks a genuinely released Ember outside its owner body.")
+    elif phase == "encounter-wisp-layers":
+        if len(state.get("actors", [])) != 24 or len(alive) != 24:
+            raise RuntimeError("Layered capture requires all 24 actual living Wisp bodies.")
+        teams = {actor.get("team") for actor in alive}
+        if len(teams) != 2 or any({a.get("flight_layer") for a in alive if a.get("team") == team} != {0, 1} for team in teams):
+            raise RuntimeError("Layered capture requires both published flight layers on each team.")
 
 
 def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
@@ -478,6 +550,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         if not wall or not all(isinstance(value, (int, float)) and 0 <= value < float("inf") for value in wall):
             raise RuntimeError("Synthetic capture lacks valid real app-frame wall intervals.")
     validate_golem_state(state, view)
+    validate_wisp_state(state, view)
     ready_frame = state.get("render_ready_frame")
     if not isinstance(ready_frame, int) or state.get("frame", 0) < ready_frame + 4:
         raise RuntimeError(f"{view} did not wait four frames after render assets became ready.")
@@ -495,8 +568,8 @@ def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance
-    if args.golem_review and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
-        raise RuntimeError("The Golem matrix defines its player and observer recipes; use --view to select entries.")
+    if (args.golem_review or args.wisp_review) and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
+        raise RuntimeError("The creature matrix defines its player and observer recipes; use --view to select entries.")
     battle_environment(args, args.map or "fort", matrix=observer_matrix)
     if observer_matrix and (args.map or args.encounter):
         raise RuntimeError("Spectator matrices define maps and encounters; use --view to select entries.")
@@ -519,6 +592,9 @@ def capture(args: argparse.Namespace) -> int:
     if args.golem_review:
         entries = list(GOLEM_VIEWS)
         matrix = "arena-golem-v2-dragon-phases"
+    if args.wisp_review:
+        entries = list(WISP_VIEWS)
+        matrix = "arena-wisp-v1-natural-phases"
     if args.view:
         requested = set(args.view)
         unknown = requested - {entry[0] for entry in entries}
@@ -559,7 +635,7 @@ def capture(args: argparse.Namespace) -> int:
         "scenario_correction": "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if args.performance_review else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
@@ -584,6 +660,10 @@ def capture(args: argparse.Namespace) -> int:
                 row_args = argparse.Namespace(**vars(args))
                 row_args.spectator = True
                 row_args.team_a, row_args.team_b = GOLEM_OBSERVER_PRESETS
+            if args.wisp_review and name in WISP_OBSERVER_RECIPES:
+                row_args = argparse.Namespace(**vars(args))
+                row_args.spectator = True
+                row_args.team_a, row_args.team_b = WISP_OBSERVER_RECIPES[name]
             frame_env.update(battle_environment(row_args, arena_map, matrix=observer_matrix, result=view == "observer-result"))
             if focus:
                 frame_env["HEX_ARENA_FOCUS"] = focus
@@ -652,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
+    review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
     review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel Golem-vs-Dragon observer body, charge, lock, beam and slam views.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
     review.add_argument("--spectator-performance", action="store_true", help="Fort/Duel ordinary observer frame intervals until 3600 ticks or a terminal result; no synthetic HP or movement.")

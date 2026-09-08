@@ -64,6 +64,10 @@ fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
         .world_mut()
         .run_system_once(golem::setup)
         .expect("Golem cached visuals");
+    fixture
+        .world_mut()
+        .run_system_once(wisp::setup)
+        .expect("Wisp cached visuals");
     let camera_entity = fixture
         .world_mut()
         .spawn((ArenaCamera, Transform::default()))
@@ -413,14 +417,13 @@ fn keyboard_and_menu_reset_restore_the_round_and_return_to_frozen_ready_screen()
         assert!(!state.started && state.paused && state.suppress_click);
         let session = app.world().resource::<ArenaSession>();
         assert_eq!(session.actors.len(), 2);
-        assert!(session
-            .actors
-            .iter()
-            .all(|actor| (actor.hp - 100.0).abs() < 0.001
+        assert!(session.actors.iter().all(|actor| {
+            (actor.hp - 100.0).abs() < 0.001
                 && actor
                     .cooldowns
                     .iter()
-                    .all(|cooldown| cooldown.abs() < 0.001)));
+                    .all(|cooldown| cooldown.abs() < 0.001)
+        }));
         assert!(session.outcome.is_none() && session.projectiles.is_empty());
         assert!(
             app.world()
@@ -833,14 +836,13 @@ fn quick_tap_between_fixed_ticks_retains_both_edges_and_casts_only_on_release() 
         app.update();
     }
     let session = app.world().resource::<ArenaSession>();
-    assert!(session
-        .actors
-        .first()
-        .is_some_and(|actor| actor.charge().is_none()
+    assert!(session.actors.first().is_some_and(|actor| {
+        actor.charge().is_none()
             && actor
                 .cooldowns
                 .get(1)
-                .is_some_and(|cooldown| *cooldown > 1.2)));
+                .is_some_and(|cooldown| *cooldown > 1.2)
+    }));
     let input = &app.world().resource::<ArenaInput>().human;
     assert!(!input.cast_pressed && !input.cast_released && !input.cast_held);
 }
@@ -1005,14 +1007,13 @@ fn held_charge_progress_uses_physics_time_at_all_render_rates() {
             app.update();
         }
         let session = app.world().resource::<ArenaSession>();
-        assert!(session
-            .actors
-            .first()
-            .is_some_and(|actor| actor.charge().is_none()
+        assert!(session.actors.first().is_some_and(|actor| {
+            actor.charge().is_none()
                 && actor
                     .cooldowns
                     .get(1)
-                    .is_some_and(|cooldown| *cooldown > 1.1)));
+                    .is_some_and(|cooldown| *cooldown > 1.1)
+        }));
         assert!(!app.world().resource::<ArenaInput>().human.cast_released);
     }
 }
@@ -1080,10 +1081,12 @@ fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
             session.projectiles.is_empty(),
             "{cancellation} must not release a spell"
         );
-        assert!(session.actors.iter().all(|actor| actor
-            .cooldowns
-            .iter()
-            .all(|cooldown| cooldown.abs() < 0.001)));
+        assert!(session.actors.iter().all(|actor| {
+            actor
+                .cooldowns
+                .iter()
+                .all(|cooldown| cooldown.abs() < 0.001)
+        }));
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .release(MouseButton::Left);
@@ -1483,6 +1486,10 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             })
             .insert_resource(hex_arena::ArenaBattleSetup {
                 control,
+                rosters: vec![
+                    hex_arena::TeamRoster::from_preset(1, hex_arena::BattlePreset::ShamanParty),
+                    hex_arena::TeamRoster::from_preset(2, hex_arena::BattlePreset::Wisps12),
+                ],
                 ..default()
             })
             .init_resource::<ArenaSession>()
@@ -1525,6 +1532,20 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                 .entity_mut(row)
                 .insert(Name::new(format!("Arena pause row {index}")));
         }
+        let team_labels = app
+            .world_mut()
+            .query::<(Entity, &hud::Label)>()
+            .iter(app.world())
+            .filter_map(|(entity, label)| match label {
+                hud::Label::Team(slot) => Some((entity, *slot)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (entity, slot) in team_labels {
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(Name::new(format!("Arena start team {slot}")));
+        }
         let actions = app
             .world_mut()
             .query::<(Entity, &hud::Action, &Children)>()
@@ -1563,7 +1584,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             .iter()
             .filter(|(_, phase, _, _)| *phase == "pause")
             .count();
-        assert_eq!(start_actions, 17);
+        assert_eq!(start_actions, 18);
         assert_eq!(
             actions
                 .iter()
@@ -1600,11 +1621,16 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                 "start",
                 (start_actions
                     - if control == hex_arena::ArenaControl::Spectator {
-                        5
+                        6
                     } else {
                         4
                     })
-                    * 2,
+                    * 2
+                    + if control == hex_arena::ArenaControl::Spectator {
+                        2
+                    } else {
+                        0
+                    },
             ),
             (true, "pause", 24 + pause_actions * 2),
         ] {
@@ -1643,7 +1669,10 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                     "{} must fit at {width}x{height}: {node:?}",
                     node.name
                 );
-                if node.name.contains(" parameter ") || node.name.ends_with(" glyphs") {
+                if node.name.contains(" parameter ")
+                    || node.name.ends_with(" glyphs")
+                    || node.name.contains(" start team ")
+                {
                     let glyphs = node
                         .rendered_text_bounds
                         .expect("real text layout must produce visible glyphs");
@@ -1653,6 +1682,35 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                         node.name
                     );
                 }
+            }
+            if !started && control == hex_arena::ArenaControl::Player {
+                let mut creatures = observed
+                    .iter()
+                    .filter(|node| {
+                        (node.name.starts_with("Arena start action encounter ")
+                            || node.name.starts_with("Arena start action player recipe "))
+                            && !node.name.ends_with(" glyphs")
+                    })
+                    .map(|node| Rect::from_center_size(node.center, node.size))
+                    .collect::<Vec<_>>();
+                creatures.sort_by(|left, right| {
+                    left.min
+                        .y
+                        .total_cmp(&right.min.y)
+                        .then(left.min.x.total_cmp(&right.min.x))
+                });
+                assert_eq!(creatures.len(), 6, "six Fort creature choices");
+                for row in creatures.chunks_exact(3) {
+                    let [left, middle, right] = row else {
+                        unreachable!()
+                    };
+                    assert!((left.min.y - middle.min.y).abs() < 0.5);
+                    assert!((left.min.y - right.min.y).abs() < 0.5);
+                    assert!(left.max.x <= middle.min.x && middle.max.x <= right.min.x);
+                }
+                let upper = creatures.first().expect("upper creature row");
+                let lower = creatures.last().expect("lower creature row");
+                assert!(upper.max.y < lower.min.y, "two distinct creature rows");
             }
             let mut rows = observed
                 .iter()
@@ -1878,6 +1936,10 @@ fn actor_models_reconcile_removed_species_and_reset_generations() {
         .world_mut()
         .run_system_once(golem::setup)
         .expect("Golem cached visuals");
+    fixture
+        .world_mut()
+        .run_system_once(wisp::setup)
+        .expect("Wisp cached visuals");
     let render = |fixture: &mut App| {
         fixture
             .world_mut()
@@ -2223,3 +2285,6 @@ mod spectator_tests;
 
 #[path = "golem_tests.rs"]
 mod golem_tests;
+
+#[path = "wisp_tests.rs"]
+mod wisp_tests;
