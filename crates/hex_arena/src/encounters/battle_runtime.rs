@@ -300,22 +300,34 @@ fn deploy(
         }
         // Reserve the largest real footprints first, while retaining roster IDs.
         pending.sort_by(|a, b| {
-            (b.dimensions.x * b.dimensions.z)
-                .total_cmp(&(a.dimensions.x * a.dimensions.z))
+            (a.species == Species::Wisp)
+                .cmp(&(b.species == Species::Wisp))
+                .then_with(|| {
+                    (b.dimensions.x * b.dimensions.z).total_cmp(&(a.dimensions.x * a.dimensions.z))
+                })
                 .then_with(|| a.id.cmp(&b.id))
         });
         for mut actor in pending {
-            let feet = deployment_pose(&actor, region, &actors, collision, world, geometry)
-                .ok_or_else(|| {
-                    format!(
-                        "No complete dry deployment for team {} {:?} actor {}",
-                        actor.team, actor.species, actor.id
-                    )
-                })?;
+            let feet = if actor.species == Species::Wisp {
+                flying_deployment_pose(&actor, region, &actors, collision, world, geometry, tuning)
+                    .map(|(feet, layer)| {
+                        actor.flight_layer = Some(layer);
+                        feet
+                    })
+            } else {
+                deployment_pose(&actor, region, &actors, collision, world, geometry)
+            }
+            .ok_or_else(|| {
+                format!(
+                    "No complete dry deployment for team {} {:?} actor {}",
+                    actor.team, actor.species, actor.id
+                )
+            })?;
             actor.feet = feet;
             actor.previous_feet = feet;
-            actor.grounded = true;
-            actor.body.grounded = true;
+            actor.flying = actor.species == Species::Wisp;
+            actor.grounded = !actor.flying;
+            actor.body.grounded = !actor.flying;
             brains.insert(
                 actor.id,
                 brain::Brain::for_battle(actor.id, feet, setup.seed),
@@ -360,4 +372,59 @@ pub(super) fn deployment_pose(
         });
         footprint_ok.then_some(feet)
     })
+}
+
+/// Fourteen finite reservations: two flight layers over the seven authored cells.
+/// Bodies reserve their actual union, including mixed ground/flying rosters.
+pub(super) fn flying_deployment_pose(
+    actor: &Actor,
+    region: &ArenaDeploymentRegion,
+    others: &[Actor],
+    collision: &CollisionWorld,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
+) -> Option<(Vec3, u8)> {
+    let mut surfaces: Vec<_> = region.surfaces.iter().copied().collect();
+    surfaces.sort_by_key(|pos| (pos.coord.distance(region.preferred.coord), *pos));
+    for layer in 0_u8..2 {
+        for surface in &surfaces {
+            if !view.voxels.contains_key(surface) {
+                continue;
+            }
+            let ground = surface.coord.to_world(geometry.top(*surface) + SKIN);
+            let mut body = actor.clone();
+            body.feet = ground - Vec3::Y * SKIN * 4.0;
+            if surface.coord.within_radius(2).into_iter().any(|coord| {
+                let support = TilePos::new(coord, surface.level);
+                shapes::voxel_overlap(support, geometry, &body)
+                    && !(region.surfaces.contains(&support) && view.voxels.contains_key(&support))
+            }) {
+                continue;
+            }
+            let rise = tuning.encounters.wisp_cruise_height
+                + f32::from(layer) * tuning.encounters.wisp_layer_spacing;
+            body.feet = ground + Vec3::Y * rise;
+            if !shapes::clear(collision, &body, body.feet, 0.0)
+                || !dry(&body, view, geometry)
+                || !steering::contained(&body, geometry)
+                || others
+                    .iter()
+                    .any(|other| body_overlap(&body, other).is_some())
+            {
+                continue;
+            }
+            // No above-roof placement: the complete prism's vertical corridor
+            // from its admitted surface must be clear of terrain and props.
+            let mut base = body.clone();
+            base.feet = ground;
+            if !shapes::clear(collision, &base, ground, 0.0)
+                || shapes::sweep(collision, &base, ground, Vec3::Y * rise).is_some()
+            {
+                continue;
+            }
+            return Some((body.feet, layer));
+        }
+    }
+    None
 }

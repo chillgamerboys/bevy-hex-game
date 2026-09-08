@@ -12,6 +12,7 @@ mod brain;
 mod steering;
 #[cfg(test)]
 mod tests;
+mod wisp;
 
 #[derive(Debug, Clone, Copy)]
 struct Knowledge {
@@ -181,7 +182,27 @@ impl ArenaSession {
                 actor.species = species;
                 actor.party = Some(party);
                 actor.configure_species(species, c);
-                let feet = if species == Species::Golem {
+                let feet = if species == Species::Wisp {
+                    world
+                        .battle_deployment
+                        .as_ref()
+                        .and_then(|regions| regions.get(1))
+                        .and_then(|region| {
+                            battle_runtime::flying_deployment_pose(
+                                &actor,
+                                region,
+                                &self.actors,
+                                &self.collision,
+                                world,
+                                geometry,
+                                tuning,
+                            )
+                        })
+                        .map(|(feet, layer)| {
+                            actor.flight_layer = Some(layer);
+                            feet
+                        })
+                } else if species == Species::Golem {
                     // Keep the authored approach when this complete body fits.
                     // A low gate or other obstruction admits only the published
                     // courtyard deployment, never an unrestricted rooftop search.
@@ -217,8 +238,9 @@ impl ArenaSession {
                     }
                     actor.feet = feet;
                     actor.previous_feet = feet;
-                    actor.body.grounded = true;
-                    actor.grounded = true;
+                    actor.flying = species == Species::Wisp;
+                    actor.body.grounded = !actor.flying;
+                    actor.grounded = !actor.flying;
                     self.encounter
                         .brains
                         .insert(id, brain::Brain::new(id, feet));
@@ -250,6 +272,18 @@ impl ArenaSession {
                 search,
                 battle_search: None,
             });
+        }
+        if self.encounter.spawn_failed
+            && self
+                .accepted_battle
+                .player_recipe
+                .is_some_and(|recipe| BattlePreset::WISP_SWARMS.contains(&recipe))
+        {
+            self.actors.clear();
+            self.encounter.brains.clear();
+            self.encounter.runtime.clear();
+            self.battle_result = Some(BattleResult::InvalidSetup(self.notice.clone()));
+            return;
         }
         if self.encounter.runtime.is_empty() {
             self.encounter.spawn_failed = true;

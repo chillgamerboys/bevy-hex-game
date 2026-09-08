@@ -22,6 +22,8 @@ mod golem_foundation_tests;
 
 #[path = "wisp_foundation_tests.rs"]
 mod wisp_foundation_tests;
+#[path = "wisp_tests.rs"]
+mod wisp_tests;
 
 fn fixture(
     encounter: ArenaEncounter,

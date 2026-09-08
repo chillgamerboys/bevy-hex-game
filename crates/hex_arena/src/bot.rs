@@ -1160,8 +1160,17 @@ pub(crate) fn ballistic_aim(
     tuning: &ArenaTuning,
     speed: f32,
 ) -> Option<(Vec3, f32)> {
+    ballistic_aim_with_gravity(origin, target, tuning.projectile_gravity, speed)
+}
+
+/// Same low-arc solver for a frozen creature projectile's gravity.
+pub(crate) fn ballistic_aim_with_gravity(
+    origin: Vec3,
+    target: Vec3,
+    gravity: f32,
+    speed: f32,
+) -> Option<(Vec3, f32)> {
     let delta = target - origin;
-    let gravity = tuning.projectile_gravity;
     if !delta.is_finite() || delta.length_squared() < SKIN * SKIN || speed <= 0.0 || gravity <= 0.0
     {
         return None;

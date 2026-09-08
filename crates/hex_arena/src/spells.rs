@@ -28,6 +28,7 @@ pub(crate) struct ShotParameters {
     damage: f32,
     knockback: f32,
     terrain_power: u8,
+    terrain_kind: Option<hex_core::TerrainDamageKind>,
     wall_dimensions: (i32, i32),
     shield_push: f32,
     direction: Vec3,
@@ -107,6 +108,7 @@ fn projectile(
             },
             knockback: tuning.fireball_knockback,
             terrain_power: tuning.terrain_power,
+            terrain_kind: None,
             wall_dimensions: tuning.shield_dimensions(),
             shield_push: tuning.shield_push,
             direction: actor.aim,
@@ -114,6 +116,75 @@ fn projectile(
             min_y: -10.0,
         },
         owner_cleared: false,
+    }
+}
+
+/// Complete launch payload. No living-source lookup or mutable tuning at impact.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CreatureProjectileSpec {
+    pub ability: crate::CreatureAbility,
+    pub appearance: crate::ProjectileAppearance,
+    pub speed: f32,
+    pub gravity: f32,
+    pub collision_radius: f32,
+    pub splash_radius: f32,
+    pub damage: f32,
+    pub knockback: f32,
+    pub terrain_kind: hex_core::TerrainDamageKind,
+    pub terrain_power: u8,
+}
+
+fn creature_projectile(
+    actor: &Actor,
+    direction: Vec3,
+    spec: CreatureProjectileSpec,
+    id: u64,
+    min_y: f32,
+) -> Projectile {
+    Projectile {
+        id,
+        owner: actor.id,
+        position: actor.eye(),
+        previous_position: actor.eye(),
+        velocity: direction * spec.speed,
+        spell: Spell::Fireball,
+        age: 0.0,
+        parameters: ShotParameters {
+            gravity: spec.gravity,
+            collision_radius: spec.collision_radius,
+            appearance: spec.appearance,
+            source_ability: Some(spec.ability),
+            radius: spec.splash_radius,
+            damage: spec.damage,
+            knockback: spec.knockback,
+            terrain_power: spec.terrain_power,
+            terrain_kind: Some(spec.terrain_kind),
+            wall_dimensions: (0, 0),
+            shield_push: 0.0,
+            direction,
+            team: actor.team,
+            min_y,
+        },
+        owner_cleared: false,
+    }
+}
+
+impl ArenaSession {
+    pub(crate) fn release_creature_projectile(
+        &mut self,
+        actor: &Actor,
+        direction: Vec3,
+        spec: CreatureProjectileSpec,
+    ) {
+        let shot = creature_projectile(
+            actor,
+            direction,
+            spec,
+            self.next_projectile,
+            self.collision.min_y.min(-10.0),
+        );
+        self.next_projectile += 1;
+        self.projectiles.push(shot);
     }
 }
 
@@ -434,6 +505,8 @@ impl ArenaSession {
                 tuning.blast_damage * actor.damage_multiplier,
                 tuning.blast_knockback,
                 tuning.terrain_power,
+                None,
+                true,
                 world,
                 geometry,
                 materials,
@@ -537,6 +610,8 @@ impl ArenaSession {
                         shot.parameters.damage,
                         shot.parameters.knockback,
                         shot.parameters.terrain_power,
+                        shot.parameters.terrain_kind,
+                        shot.source_ability().is_none(),
                         world,
                         geometry,
                         materials,
@@ -605,6 +680,8 @@ impl ArenaSession {
         damage: f32,
         knockback: f32,
         power: u8,
+        terrain_kind: Option<hex_core::TerrainDamageKind>,
+        count_fireball: bool,
         world: &ArenaTerrainView,
         geometry: ArenaVoxelGeometry,
         materials: ArenaMaterials,
@@ -644,7 +721,7 @@ impl ArenaSession {
         for (victim, removed) in damage_events {
             self.record_damage(owner, victim, removed);
         }
-        if spell == Spell::Fireball {
+        if spell == Spell::Fireball && count_fireball {
             self.record_fireball_impact(owner, useful_fireball);
         }
         let volume = geometry.sphere(world, center, radius);
@@ -652,7 +729,8 @@ impl ArenaSession {
             let impact = TerrainImpact {
                 batch: TerrainBatchId(self.next_impact),
                 volume,
-                kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
+                kind: terrain_kind
+                    .unwrap_or(hex_core::TerrainDamageKind::Elemental(materials.fire)),
                 power,
             };
             self.next_impact += 1;
@@ -809,6 +887,31 @@ pub(crate) fn forecast_spell(
             ..Default::default()
         };
     }
+    let shot = projectile(caster, caster.selected, tuning, 0, launch_speed);
+    forecast_projectile(caster, observed, collision, world, geometry, shot)
+}
+
+pub(crate) fn forecast_creature_projectile(
+    caster: &Actor,
+    direction: Vec3,
+    spec: CreatureProjectileSpec,
+    observed: &[ForecastBody],
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> SpellForecast {
+    let shot = creature_projectile(caster, direction, spec, 0, collision.min_y.min(-10.0));
+    forecast_projectile(caster, observed, collision, world, geometry, shot)
+}
+
+fn forecast_projectile(
+    caster: &Actor,
+    observed: &[ForecastBody],
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    mut shot: Projectile,
+) -> SpellForecast {
     let mut bodies = vec![caster.clone()];
     bodies.extend(
         observed
@@ -827,7 +930,6 @@ pub(crate) fn forecast_spell(
     if let Some(owner) = bodies.first_mut() {
         owner.previous_feet = owner.feet;
     }
-    let mut shot = projectile(caster, caster.selected, tuning, 0, launch_speed);
     shot.parameters.min_y = collision.min_y.min(-10.0);
     while flight_active(&shot) {
         for body in bodies.iter_mut().skip(1) {
@@ -848,7 +950,7 @@ pub(crate) fn forecast_spell(
                     barrier: hit.barrier,
                     time: shot.age,
                 }),
-                wall_voxels: if caster.selected == Spell::Shield {
+                wall_voxels: if shot.spell == Spell::Shield {
                     wall_volume(
                         hit,
                         shot.parameters.direction,
@@ -1279,3 +1381,7 @@ mod camera_mask_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "wisp_projectile_tests.rs"]
+mod wisp_projectile_tests;

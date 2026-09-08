@@ -278,6 +278,10 @@ impl HexPrism {
 
     /// Minimum horizontal contact between two aligned native hex prisms.
     pub(crate) fn overlap_prism(self, other: Self, skin: f32) -> Option<HorizontalContact> {
+        // Native-adjacent centers computed independently in world space can
+        // differ by a few ulps after translation. Closed shared faces are not
+        // penetration; retain a precision floor smaller than movement skin.
+        let skin = skin.max(FACE_TOLERANCE);
         if !vertical_overlap(self.feet.y, self.height, other.feet.y, other.height, skin) {
             return None;
         }

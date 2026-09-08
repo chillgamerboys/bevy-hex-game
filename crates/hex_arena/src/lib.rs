@@ -355,6 +355,7 @@ pub struct Actor {
     pub grounded: bool,
     /// Whether this actor is currently using its profile's flight movement.
     pub flying: bool,
+    flight_layer: Option<u8>,
     charge: Option<ChargeState>,
     cast_needs_release: bool,
     body: Body,
@@ -388,6 +389,7 @@ impl Actor {
             cooldowns: [0.0; 3],
             grounded: false,
             flying: false,
+            flight_layer: None,
             charge: None,
             cast_needs_release: false,
             body: Body::default(),
@@ -400,6 +402,12 @@ impl Actor {
             last_damage_tick: None,
             last_activity_tick: 0,
         }
+    }
+
+    /// Reserved hover layer for a flying swarm; other profiles return None.
+    #[must_use]
+    pub fn flight_layer(&self) -> Option<u8> {
+        self.flight_layer
     }
 
     /// Physical eye and launch position, without presentation interpolation.

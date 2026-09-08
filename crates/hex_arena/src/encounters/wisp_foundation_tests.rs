@@ -1,4 +1,4 @@
-//! Guarded Wisp schema and exact body projection; no flight or Ember authority yet.
+//! Stable Wisp schema and exact body projection.
 
 use super::*;
 
@@ -42,7 +42,7 @@ fn wisp_is_one_native_prism_with_a_low_core_and_fixed_physical_orientation() {
 }
 
 #[test]
-fn wisp_recipes_preserve_original_groups_and_refuse_unimplemented_runtime_atomically() {
+fn wisp_recipes_preserve_original_groups_and_require_authored_deployment() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
     assert_eq!(
         BattlePreset::ORIGINAL,
@@ -64,15 +64,10 @@ fn wisp_recipes_preserve_original_groups_and_refuse_unimplemented_runtime_atomic
                 ..Default::default()
             },
         ] {
-            assert_eq!(
-                setup.validate_for(ArenaMap::Fort),
-                Err(BattleSetupError::CreatureNotReady)
-            );
+            assert_eq!(setup.validate_for(ArenaMap::Fort), Ok(()));
             session.reset_with_setup(2, &view, geometry, &setup);
-            let tick = session.tick;
             session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
             assert!(session.is_finished() && session.actors.is_empty());
-            assert_eq!(session.tick, tick);
         }
     }
     assert_eq!(

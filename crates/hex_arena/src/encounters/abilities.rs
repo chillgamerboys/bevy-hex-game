@@ -35,6 +35,10 @@ impl Cast {
         self.kind == CreatureAbility::FireCone
     }
 
+    pub(super) fn tracks_ember(&self) -> bool {
+        self.kind == CreatureAbility::WispEmber && self.pulses == 0
+    }
+
     pub(super) fn tracks_laser(&self, tuning: &EncounterTuning) -> bool {
         self.kind == CreatureAbility::GolemLaser
             && self.age < self.windup - tuning.golem_laser_lock_seconds
@@ -132,6 +136,7 @@ impl ArenaSession {
             CreatureAbility::Barrier => (0.0, 0.15, c.barrier_cooldown),
             CreatureAbility::Aura => (c.aura_windup, 0.2, c.aura_cooldown),
             CreatureAbility::GolemSlam => (c.golem_slam_windup, 0.15, c.golem_slam_cooldown),
+            CreatureAbility::WispEmber => (c.wisp_ember_windup, 0.15, c.wisp_ember_cooldown),
             CreatureAbility::GolemLaser => (
                 c.golem_laser_charge,
                 c.golem_laser_seconds,
@@ -183,10 +188,24 @@ impl ArenaSession {
                 continue;
             };
             cast.track_breath(&actor, c.dragon_turn_speed * STEP);
-            if cast.tracks_laser(c) {
+            if cast.tracks_laser(c) || cast.tracks_ember() {
                 cast.direction = actor.aim;
             }
             cast.age += STEP;
+            if cast.tracks_ember() && cast.age + STEP * 0.01 >= cast.windup {
+                let Some(aim) = brain.ember_release_aim(
+                    &actor,
+                    &self.collision,
+                    world,
+                    geometry,
+                    tuning,
+                    materials,
+                    self.tick,
+                ) else {
+                    continue;
+                };
+                cast.direction = aim;
+            }
             let (range, angle) = match cast.kind {
                 CreatureAbility::FireCone => (c.breath_range, c.breath_angle.to_radians() * 0.5),
                 CreatureAbility::Bite => (c.bite_range, c.bite_angle.to_radians() * 0.5),
@@ -194,6 +213,7 @@ impl ArenaSession {
                 CreatureAbility::Aura => (c.aura_radius, std::f32::consts::PI),
                 CreatureAbility::Barrier => (c.barrier_distance, 0.0),
                 CreatureAbility::GolemSlam => (c.golem_slam_range, std::f32::consts::PI),
+                CreatureAbility::WispEmber => (c.wisp_preferred_max, 0.0),
                 _ => (0.0, 0.0),
             };
             let phase = if cast.age < cast.windup {
@@ -298,6 +318,11 @@ impl ArenaSession {
                     }
                     CreatureAbility::GolemSlam => {
                         self.golem_slam(&actor, &mut cast, world, geometry, tuning, out)
+                    }
+                    CreatureAbility::WispEmber => {
+                        let mut spec = wisp::ember_spec(c, materials);
+                        spec.damage *= cast.multiplier;
+                        self.release_creature_projectile(&actor, cast.direction, spec);
                     }
                     _ => {}
                 }

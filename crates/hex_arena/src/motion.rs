@@ -6,6 +6,10 @@ use crate::shapes;
 use crate::{Actor, EncounterTuning, Species, STEP};
 use bevy_math::Vec3;
 
+#[cfg(test)]
+#[path = "wisp_motion_tests.rs"]
+mod wisp_tests;
+
 pub(crate) fn tick(
     actor: &mut Actor,
     direction: Vec3,
@@ -15,9 +19,8 @@ pub(crate) fn tick(
     world: &CollisionWorld,
     tuning: &EncounterTuning,
 ) {
-    // Foundation-only refusal: the setup gate rejects Wisp until flight lands.
-    // Never send this short, wide profile through the legacy capsule controller.
     if actor.species == Species::Wisp {
+        wisp_tick(actor, direction, world, tuning);
         return;
     }
     actor.previous_yaw = actor.body_yaw;
@@ -143,6 +146,31 @@ pub(crate) fn tick(
         actor.body.impulse_velocity *= (-3.0 * STEP).exp();
     }
     actor.grounded = actor.body.grounded;
+}
+
+// The one-level body always hovers, including stationary windup and bootstrap
+// ticks. Voluntary input never changes its physical yaw or absorbs real impulse.
+fn wisp_tick(actor: &mut Actor, direction: Vec3, world: &CollisionWorld, tuning: &EncounterTuning) {
+    actor.body_yaw = 0.0;
+    actor.previous_yaw = 0.0;
+    actor.body.step_rise = 0.0;
+    actor.body.impulse_velocity.y += actor.body.vertical_velocity;
+    actor.body.vertical_velocity = 0.0;
+    actor.flying = true;
+    actor.grounded = false;
+    actor.body.grounded = false;
+    if !shapes::clear(world, actor, actor.feet, 0.0) {
+        return;
+    }
+    let delta = (direction.clamp_length_max(1.0) * tuning.wisp_flight_speed
+        + actor.body.impulse_velocity)
+        * STEP;
+    let (feet, contacts) = shapes::slide(world, actor, actor.feet, delta);
+    actor.feet = feet;
+    for normal in contacts {
+        actor.body.impulse_velocity -= normal * actor.body.impulse_velocity.dot(normal).min(0.0);
+    }
+    actor.body.impulse_velocity *= (-3.0 * STEP).exp();
 }
 
 // Keep the accepted capsule and Dragon paths unchanged. This ground-only path

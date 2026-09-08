@@ -39,6 +39,7 @@ pub(super) struct Brain {
     battle_seen: Vec<targeting::ObservedTarget>,
     battle_sense_tick: Option<u64>,
     battle_target: Option<ActorId>,
+    ember_target: Option<Knowledge>,
 }
 
 impl Brain {
@@ -66,6 +67,7 @@ impl Brain {
             battle_seen: Vec::new(),
             battle_sense_tick: None,
             battle_target: None,
+            ember_target: None,
         }
     }
     pub fn for_battle(id: ActorId, home: Vec3, seed: u64) -> Self {
@@ -162,7 +164,28 @@ impl Brain {
                     tick,
                     direct: true,
                     cue_kind: None,
-                    observed: None,
+                    observed: (actor.species == Species::Wisp).then(|| targeting::ObservedTarget {
+                        body: ForecastBody {
+                            id: target.id,
+                            feet: target.feet,
+                            velocity: party
+                                .knowledge
+                                .filter(|k| k.direct)
+                                .map_or(Vec3::ZERO, |k| k.velocity),
+                            predict_seconds: tuning.bot.prediction_seconds,
+                            species: target.species,
+                            team: target.team,
+                            dimensions: target.dimensions,
+                            yaw: target.body_yaw,
+                            yaw_velocity: 0.0,
+                        },
+                        tick,
+                        sight_point: if collision.sight_clear(actor.eye(), target.center()) {
+                            target.center()
+                        } else {
+                            target.eye()
+                        },
+                    }),
                 })
         };
         let target_id = sight.and_then(|s| s.observed.map(|o| o.body.id));
@@ -385,6 +408,46 @@ impl Brain {
                     && self.flight_recovery.is_none()
                 {
                     goal = actor.feet;
+                }
+            }
+        } else if actor.species == Species::Wisp {
+            flight = true;
+            self.ember_target = sight;
+            if self
+                .active
+                .as_ref()
+                .is_some_and(super::abilities::Cast::tracks_ember)
+                && sight.is_none()
+            {
+                self.active = None;
+            }
+            if party.snapshot.phase == PartyPhase::Returning {
+                goal = self.home;
+            } else if self.patrol_goal.is_none_or(|(_, until)| tick >= until) {
+                goal = wisp::positioning_goal(actor, target, goal, collision, world, geometry, c);
+                self.patrol_goal = Some((goal, tick + 24 + u64::from(actor.id % 6)));
+            } else if let Some((point, _)) = self.patrol_goal {
+                goal = point;
+            }
+            if let Some(seen) = sight {
+                let point = seen
+                    .observed
+                    .map_or(seen.point + Vec3::Y * 0.4, |o| o.sight_point);
+                if actor.eye().distance(point) <= c.wisp_preferred_max {
+                    if let Some((aim, _)) = crate::bot::ballistic_aim_with_gravity(
+                        actor.eye(),
+                        point,
+                        c.wisp_ember_gravity,
+                        c.wisp_ember_speed,
+                    ) {
+                        input.aim = aim;
+                        if self.ready(CreatureAbility::WispEmber) {
+                            request = Some(Request {
+                                kind: CreatureAbility::WispEmber,
+                                aim,
+                            });
+                        }
+                    }
                 }
             }
         } else if actor.species == Species::Goblin {
@@ -630,7 +693,9 @@ impl Brain {
             } else {
                 0.35
             };
-        let desired = if flight {
+        let desired = if actor.species == Species::Wisp {
+            wisp::spaced_direction(actor, actors, desired)
+        } else if flight {
             desired.clamp_length_max(1.0)
         } else if moving {
             desired.with_y(0.0).normalize_or_zero()
@@ -640,7 +705,9 @@ impl Brain {
         if let Some(active) = &self.active {
             // Only admitted own sight can update breath or an unlocked laser.
             // Committed attacks retain their last direction.
-            if !(active.tracks_breath() || active.tracks_laser(c)) || sight.is_none() {
+            if !(active.tracks_breath() || active.tracks_laser(c) || active.tracks_ember())
+                || sight.is_none()
+            {
                 input.aim = active.direction();
             }
         }
@@ -710,6 +777,28 @@ impl Brain {
                 flight,
             },
             request,
+        )
+    }
+
+    pub(super) fn ember_release_aim(
+        &self,
+        actor: &Actor,
+        collision: &CollisionWorld,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        tuning: &ArenaTuning,
+        materials: ArenaMaterials,
+        tick: u64,
+    ) -> Option<Vec3> {
+        wisp::release_aim(
+            actor,
+            self.ember_target?,
+            collision,
+            world,
+            geometry,
+            tuning,
+            materials,
+            tick,
         )
     }
 

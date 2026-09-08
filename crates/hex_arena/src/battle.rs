@@ -227,12 +227,6 @@ impl ArenaBattleSetup {
             if self.player_recipe.is_some() && map != ArenaMap::Fort {
                 return Err(BattleSetupError::PlayerRecipeMap);
             }
-            if self
-                .player_recipe
-                .is_some_and(|recipe| BattlePreset::WISP_SWARMS.contains(&recipe))
-            {
-                return Err(BattleSetupError::CreatureNotReady);
-            }
             return Ok(());
         }
         if self.player_recipe.is_some() {
@@ -276,14 +270,6 @@ impl ArenaBattleSetup {
         {
             return Err(BattleSetupError::TooManyActors);
         }
-        if self
-            .rosters
-            .iter()
-            .flat_map(|team| team.parties.iter().flatten())
-            .any(|species| *species == Species::Wisp)
-        {
-            return Err(BattleSetupError::CreatureNotReady);
-        }
         if self.tick_limit == Some(0) {
             return Err(BattleSetupError::ZeroTickLimit);
         }
@@ -294,8 +280,6 @@ impl ArenaBattleSetup {
 /// Setup refusal; failure to place valid bodies is a separate runtime diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BattleSetupError {
-    /// Wisp schema is visible while its full body, flight and shot authority is integrated.
-    CreatureNotReady,
     /// Explicit player recipes are currently authored only for Fort.
     PlayerRecipeMap,
     /// Observer rosters cannot also request a player encounter recipe.
@@ -319,7 +303,6 @@ pub enum BattleSetupError {
 impl std::fmt::Display for BattleSetupError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::CreatureNotReady => "Wisp flight and attacks are still being integrated.",
             Self::PlayerRecipeMap => "Player opponent recipes support Fort only.",
             Self::PlayerRecipeInSpectator => {
                 "Spectator battles use team rosters, not a player recipe."

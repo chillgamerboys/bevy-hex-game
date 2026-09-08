@@ -229,6 +229,14 @@ impl Steering {
 }
 
 pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
+    if actor.species == Species::Wisp {
+        let low = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.min_level))
+            - geometry.level_height;
+        let high = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.max_level));
+        if actor.feet.y < low || actor.feet.y + actor.dimensions.y > high {
+            return false;
+        }
+    }
     if matches!(actor.species, Species::Golem | Species::Wisp) {
         return shapes::compound_contained(actor, geometry);
     }
@@ -298,6 +306,16 @@ pub(super) fn flight_goal(
 ) -> Option<Vec3> {
     let mut body = actor.clone();
     let floor = shapes::ground(world, &body, desired + Vec3::Y * 8.0, 20.0)?;
+    if actor.species == Species::Wisp {
+        let cruise = tuning.wisp_cruise_height
+            + f32::from(actor.flight_layer.unwrap_or(0)) * tuning.wisp_layer_spacing;
+        // The same layer follows local support. A low ceiling admits a lower
+        // physically clear altitude, without changing collision or melee rules.
+        return (0_u8..5).find_map(|step| {
+            body.feet = floor + Vec3::Y * (cruise - f32::from(step) * 0.8).max(0.4);
+            volume_safe(&body, world, view, geometry).then_some(body.feet)
+        });
+    }
     body.feet = floor + Vec3::Y * tuning.dragon_cruise_height;
     volume_safe(&body, world, view, geometry).then_some(body.feet)
 }

@@ -4,6 +4,14 @@
 #[path = "golem_geometry_tests.rs"]
 mod golem_tests;
 
+#[cfg(test)]
+#[path = "wisp_geometry_tests.rs"]
+mod wisp_tests;
+
+#[cfg(test)]
+#[path = "box_query_tests.rs"]
+mod box_query_tests;
+
 use crate::collision::{CollisionWorld, Hit, Span, SKIN};
 use crate::hex_prisms::{planar_union_exit, HexPrism, HorizontalContact};
 use crate::{Actor, BarrierSnapshot, Species};
@@ -212,29 +220,60 @@ fn hex_support(axis: Vec3) -> f32 {
     .fold(0.0, f32::max)
 }
 
-fn box_span_axes(span: Span, feet: Vec3, size: Vec3, yaw: f32) -> Vec<(Vec3, f32, f32)> {
-    let half = size * 0.5;
-    let [right, _, forward] = axes(yaw);
-    let center = feet + Vec3::Y * half.y;
-    let local = center - span.coord.to_world((span.bottom + span.top) * 0.5);
-    [
-        Vec3::X,
-        Vec3::new(0.5, 0.0, 0.866_025_4),
-        Vec3::new(-0.5, 0.0, 0.866_025_4),
-        right,
-        forward,
-        Vec3::Y,
-    ]
-    .into_iter()
-    .map(|axis| {
-        let extent = if axis.y > 0.5 {
-            (span.top - span.bottom) * 0.5 + half.y
-        } else {
-            hex_support(axis) + half.x * right.dot(axis).abs() + half.z * forward.dot(axis).abs()
-        };
-        (axis, local.dot(axis), extent)
-    })
-    .collect()
+/// One Dragon query's basis and horizontal extents. These depend on pose and
+/// dimensions, not the candidate terrain span; no cache survives this call.
+struct BoxSpanQuery {
+    center: Vec3,
+    half_height: f32,
+    planes: [(Vec3, f32); 6],
+}
+
+impl BoxSpanQuery {
+    fn new(feet: Vec3, size: Vec3, yaw: f32) -> Self {
+        let half = size * 0.5;
+        let [right, _, forward] = axes(yaw);
+        let center = feet + Vec3::Y * half.y;
+        let planes = [
+            Vec3::X,
+            Vec3::new(0.5, 0.0, 0.866_025_4),
+            Vec3::new(-0.5, 0.0, 0.866_025_4),
+            right,
+            forward,
+            Vec3::Y,
+        ]
+        .map(|axis| {
+            let extent = if axis.y > 0.5 {
+                // This axis receives its actual span height in for_span.
+                0.0
+            } else {
+                hex_support(axis)
+                    + half.x * right.dot(axis).abs()
+                    + half.z * forward.dot(axis).abs()
+            };
+            (axis, extent)
+        });
+        Self {
+            center,
+            half_height: half.y,
+            planes,
+        }
+    }
+
+    fn for_span(&self, span: Span) -> [(Vec3, f32, f32); 6] {
+        let local = self.center - span.coord.to_world((span.bottom + span.top) * 0.5);
+        self.planes.map(|(axis, extent)| {
+            let extent = if axis.y > 0.5 {
+                (span.top - span.bottom) * 0.5 + self.half_height
+            } else {
+                extent
+            };
+            (axis, local.dot(axis), extent)
+        })
+    }
+}
+
+fn box_span_axes(span: Span, feet: Vec3, size: Vec3, yaw: f32) -> [(Vec3, f32, f32); 6] {
+    BoxSpanQuery::new(feet, size, yaw).for_span(span)
 }
 
 fn sweep_axes(
@@ -282,15 +321,17 @@ fn sweep_axes(
 }
 
 fn box_clear(world: &CollisionWorld, feet: Vec3, size: Vec3, yaw: f32) -> bool {
-    feet.is_finite()
-        && yaw.is_finite()
-        && !world
+    feet.is_finite() && yaw.is_finite() && {
+        let query = BoxSpanQuery::new(feet, size, yaw);
+        !world
             .candidates(feet, feet, (size.x * size.x + size.z * size.z).sqrt() * 0.5)
             .any(|span| {
-                box_span_axes(span, feet, size, yaw)
+                query
+                    .for_span(span)
                     .into_iter()
                     .all(|(_, p, e)| p.abs() < e - SKIN)
             })
+    }
 }
 
 pub(crate) fn clear(world: &CollisionWorld, actor: &Actor, feet: Vec3, yaw: f32) -> bool {
@@ -335,15 +376,10 @@ pub(crate) fn sweep(world: &CollisionWorld, actor: &Actor, feet: Vec3, delta: Ve
     let radius =
         (actor.dimensions.x * actor.dimensions.x + actor.dimensions.z * actor.dimensions.z).sqrt()
             * 0.5;
+    let query = BoxSpanQuery::new(feet, actor.dimensions, actor.body_yaw);
     world
         .candidates(feet, feet + delta, radius)
-        .filter_map(|span| {
-            sweep_axes(
-                box_span_axes(span, feet, actor.dimensions, actor.body_yaw),
-                delta,
-                false,
-            )
-        })
+        .filter_map(|span| sweep_axes(query.for_span(span), delta, false))
         .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
 }
 
