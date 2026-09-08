@@ -105,5 +105,10 @@ name = "arena_routes"
 path = "tests/arena_routes.rs"
 required-features = ["arena-prototype", "test-support"]
 
+[[test]]
+name = "arena_battles"
+path = "tests/arena_battles.rs"
+required-features = ["arena-prototype", "test-support"]
+
 [lints]
 workspace = true
