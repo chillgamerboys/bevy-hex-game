@@ -64,6 +64,21 @@ remains a player encounter map.
 Cyan and amber clothing distinguish teams while creatures retain their species
 shapes. The normal player HUD continues to hide enemy counts and positions.
 
+For repeatable local calibration, commit a clean candidate and run the same real
+world/simulation harness without rendering:
+
+    python3 tools/arena_battles.py --map duel --seeds 8 --seconds 90 --output /absolute/new/battle-evidence
+
+The default six original matchups run each seed twice with opposing side/actor-order
+assignments. Use `--matchups shadow:dragon,shadow:goblins` for a subset and
+`--first-seed 101` for fresh holdout seeds. Native optimized development settings
+are the default; `--profile ci` is for diagnostic outcomes, and `--trace` adds dated
+decision records. CI or traced timings are not native performance measurements.
+The launcher retains source identity, command, log hashes and every result, refusing
+missing/duplicate rounds, invalid deployment and source changes. Timeouts remain
+timeouts; these machine matches do not establish human win rates. Run one build,
+capture or calibration job at a time.
+
 ## Encounters and recovery
 
 A party wakes when any member sees you within 12 units, or when your attack damages
