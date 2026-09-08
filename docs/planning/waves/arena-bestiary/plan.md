@@ -55,6 +55,11 @@ for1s, damage capped45 per actor per cast, cooldown8s. Beam width and lock delay
 tuning values. Its ray extends to the actual world boundary without an artificial
 combat range cap and stops at the nearest direct-attack obstruction. A narrow
 warning line and increasing glow communicate charge; no enemy-revealing HUD marker.
+The locked firing direction follows the physical mouth if knockback moves the body;
+it is not a detached world-space gun. Laser terrain damage is elemental Fire power2,
+admitted once per voxel per complete cast rather than on every simulation tick.
+The45 actor-damage cap is distributed over the active second. Death cancels the
+remaining beam. These conventions are shared before the Golem phase begins.
 
 Wisp initial HP18, flight speed1.5, one horizontal hex by one level body. Long-range
 engagement20–32 units after normal party activation. Ember shot initial damage8,

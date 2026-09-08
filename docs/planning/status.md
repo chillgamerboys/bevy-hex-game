@@ -14,6 +14,10 @@ accepted the stronger Shadow opponent at `127d1ce`. The [new encounter wave](wav
 adds Dragons, Goblins, Shamans and selected Fort/Seven Regions combat. Shared
 selection/geometry/physical-impact contracts, world, gameplay and presentation
 lanes are committed locally; combined validation and render review are in progress. See the [controls guide](../systems/arena-encounters.md).
+The [spectator/bestiary continuation](waves/arena-bestiary/manifest.md) now has
+two autonomous teams, Fort/Duel deployment, observer controls and seeded matchup
+receipts committed. Original-group calibration is fixing observed movement and
+sighting defects; Golem, Ember Wisp and Worm are still queued sequentially.
 This work remains local on experiment/spell-combat-arena; no dev merge, tactical
 authority, multiplayer or Grand V3 integration is part of this delivery.
 

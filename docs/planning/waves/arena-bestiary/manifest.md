@@ -1,6 +1,7 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: dispatching. Coordinator: root. Branch: experiment/spell-combat-arena.
+Status: spectator integrated; original-group calibration and defect repair in progress.
+Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
 previous Linear read required reauthentication. User approved this continuation and
@@ -229,3 +230,8 @@ all authorized work and final evidence/guide are delivered.
 ## Checkpoints
 
 - Foundation f12b329 committed and independently reviewed;122 gameplay tests and strict arena lint pass. Original focused visual/native performance milestone recorded in [validation](../../../systems/arena-encounters-validation.md). L1/L2/L3 spectator work dispatched; later creature phases remain queued behind original matchup calibration.
+- Spectator candidate90e2e4d combines L1 world deployment56db778, L2 runtime469cac0,
+  L3 observer6881eb2 and the actual battle harness. Focused world/gameplay/application
+  checks and native build pass. The initial12-round pilot exposed movement/sighting
+  defects before stat tuning. Repairs and closer observer framing are active;
+  Golem/Wisp/Worm remain queued. See the [bestiary validation record](../../../systems/arena-bestiary-validation.md).
