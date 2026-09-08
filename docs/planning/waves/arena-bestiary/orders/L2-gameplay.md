@@ -13,3 +13,8 @@ Read [approved scope](../plan.md), [manifest](../manifest.md), and [seams](../ma
 Own only: crates/hex_arena/, assets/config/arena.ron. Root alone stages and commits. No Cargo/capture/timing concurrency; claim the slot first.
 
 Foundation must be committed before production work. Implement original spectator support first; later creature phases are explicitly dispatched after the previous phase is tested and calibrated. Keep focused tests meaningful and report failures, runtime limitations and exact evidence.
+
+The [Golem prism-union cut](../maps/golem-seam.md) is **QUEUED** accepted design.
+Its allocation-free public prism iterator and complete query integration require
+the next shared foundation and explicit dispatch after the original comparison
+checkpoint. Golem production has not started; Wisp and Worm remain later phases.
