@@ -1,7 +1,11 @@
 //! Swept hex-prism math adapted from the accepted M01 exploration controller.
 //! This cache consumes only the arena's world-owned complete voxel projection.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
+
+#[cfg(test)]
+#[path = "collision_candidates_tests.rs"]
+mod candidate_tests;
 
 use bevy_math::Vec3;
 use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
@@ -31,11 +35,13 @@ pub(crate) struct Hit {
 
 #[derive(Default, Debug, Clone)]
 pub(crate) struct CollisionWorld {
-    columns: BTreeMap<HexCoord, Vec<Span>>,
+    // These are lookup caches, never traversal authorities. Query coordinates
+    // remain canonically sorted below, including equal-distance impact ties.
+    columns: HashMap<HexCoord, Vec<Span>>,
     pub revision: Option<u64>,
-    static_movement: BTreeMap<HexCoord, Vec<Span>>,
-    static_sight: BTreeMap<HexCoord, Vec<Span>>,
-    static_attack: BTreeMap<HexCoord, Vec<Span>>,
+    static_movement: HashMap<HexCoord, Vec<Span>>,
+    static_sight: HashMap<HexCoord, Vec<Span>>,
+    static_attack: HashMap<HexCoord, Vec<Span>>,
     barriers: Vec<crate::BarrierSnapshot>,
     pub min_y: f32,
 }
@@ -163,11 +169,13 @@ impl CollisionWorld {
             ring += 1;
             covered += FACE;
         }
-        let coords = HexCoord::from_world(start)
+        let mut coords = HexCoord::from_world(start)
             .line_between(HexCoord::from_world(end))
             .into_iter()
             .flat_map(|coord| coord.within_radius(ring))
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
+        coords.sort_unstable();
+        coords.dedup();
         let extra = match kind {
             QueryKind::Movement => &self.static_movement,
             QueryKind::Sight => &self.static_sight,
