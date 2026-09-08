@@ -40,8 +40,8 @@ pub use bot::BotDebugSnapshot;
 pub use bot_config::BotTuning;
 pub use creatures::{
     ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, BeamSnapshot,
-    BodyHexPrism, CreatureAbility, EncounterSummary, PartyId, PartyPhase, PartySnapshot, Species,
-    TeamId, CREATURE_ABILITY_COUNT,
+    BodyHexPrism, CreatureAbility, EncounterSummary, PartyId, PartyPhase, PartySnapshot,
+    ProjectileAppearance, Species, TeamId, CREATURE_ABILITY_COUNT,
 };
 pub use encounter_config::EncounterTuning;
 pub use encounters::{CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot};
@@ -405,7 +405,9 @@ impl Actor {
     /// Physical eye and launch position, without presentation interpolation.
     #[must_use]
     pub fn eye(&self) -> Vec3 {
-        if self.species == Species::Golem {
+        if self.species == Species::Wisp {
+            self.center()
+        } else if self.species == Species::Golem {
             shapes::golem_mouth(self, self.aim)
         } else if self.species == Species::Dragon {
             self.center() + self.body_rotation() * Vec3::NEG_Z * (self.dimensions.z * 0.5 - 0.05)
@@ -500,7 +502,7 @@ pub struct Projectile {
     pub previous_position: Vec3,
     /// Current world-space velocity.
     pub velocity: Vec3,
-    /// Shield or Fireball.
+    /// Impact response family; creature appearance is projected separately.
     pub spell: Spell,
     /// Seconds since release.
     pub age: f32,

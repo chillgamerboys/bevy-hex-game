@@ -20,6 +20,9 @@ mod tuning_tests;
 #[path = "golem_foundation_tests.rs"]
 mod golem_foundation_tests;
 
+#[path = "wisp_foundation_tests.rs"]
+mod wisp_foundation_tests;
+
 fn fixture(
     encounter: ArenaEncounter,
 ) -> (

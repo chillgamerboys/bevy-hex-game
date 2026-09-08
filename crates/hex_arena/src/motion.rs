@@ -15,6 +15,11 @@ pub(crate) fn tick(
     world: &CollisionWorld,
     tuning: &EncounterTuning,
 ) {
+    // Foundation-only refusal: the setup gate rejects Wisp until flight lands.
+    // Never send this short, wide profile through the legacy capsule controller.
+    if actor.species == Species::Wisp {
+        return;
+    }
     actor.previous_yaw = actor.body_yaw;
     if actor.species == Species::Golem {
         golem_tick(actor, direction, world, tuning);

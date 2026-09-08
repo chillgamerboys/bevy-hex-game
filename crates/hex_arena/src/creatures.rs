@@ -11,7 +11,7 @@ pub type TeamId = u8;
 pub type PartyId = u16;
 
 /// Stable creature activation-counter width; existing seven indices are preserved.
-pub const CREATURE_ABILITY_COUNT: usize = 9;
+pub const CREATURE_ABILITY_COUNT: usize = 10;
 
 /// One world-oriented native hex prism in a compound creature body.
 /// Its pointy horizontal hex has circumradius one world unit, matching terrain.
@@ -55,6 +55,8 @@ pub enum Species {
     Shaman,
     /// Slow, fixed-orientation seven-hex stone body.
     Golem,
+    /// Small, conspicuous one-hex flying ember caster.
+    Wisp,
 }
 
 /// Creature attack or support action; player hotbar slots remain separate.
@@ -78,6 +80,8 @@ pub enum CreatureAbility {
     GolemSlam,
     /// Long charged, briefly sustained straight fire beam.
     GolemLaser,
+    /// Briefly telegraphed weak ballistic ember.
+    WispEmber,
 }
 
 impl CreatureAbility {
@@ -94,8 +98,20 @@ impl CreatureAbility {
             Self::Aura => 6,
             Self::GolemSlam => 7,
             Self::GolemLaser => 8,
+            Self::WispEmber => 9,
         }
     }
+}
+
+/// Frozen projectile appearance, independent of a human hotbar slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ProjectileAppearance {
+    /// Accepted ordinary wall seed.
+    ShieldSeed,
+    /// Accepted ordinary fireball, including Shaman shots.
+    Fireball,
+    /// Small conspicuous Wisp ember.
+    Ember,
 }
 
 /// Current authoritative phase of a creature action.
@@ -229,10 +245,18 @@ impl crate::Actor {
         offsets
             .map(|offset| BodyHexPrism {
                 offset,
-                height: 2.0,
+                height: if self.species == Species::Wisp {
+                    0.4
+                } else {
+                    2.0
+                },
             })
             .into_iter()
-            .take(if self.species == Species::Golem { 7 } else { 0 })
+            .take(match self.species {
+                Species::Golem => 7,
+                Species::Wisp => 1,
+                _ => 0,
+            })
     }
 
     /// Current authoritative beam, if this actor has admitted one.
@@ -250,7 +274,7 @@ impl crate::Actor {
     /// Collision orientation, independent of the current attack direction.
     #[must_use]
     pub fn body_rotation(&self) -> Quat {
-        if self.species == Species::Golem {
+        if matches!(self.species, Species::Golem | Species::Wisp) {
             Quat::IDENTITY
         } else {
             Quat::from_rotation_y(self.body_yaw)
@@ -284,6 +308,12 @@ impl crate::Actor {
                 );
             }
             Species::Shaman => self.max_hp = tuning.shaman_hp,
+            Species::Wisp => {
+                self.max_hp = tuning.wisp_hp;
+                self.dimensions = Vec3::new(hex_core::config::HEX_SMALL_DIAMETER, 0.4, 2.0);
+                self.body_yaw = 0.0;
+                self.previous_yaw = 0.0;
+            }
             Species::Golem => {
                 self.max_hp = tuning.golem_hp;
                 self.dimensions = Vec3::new(hex_core::config::HEX_SMALL_DIAMETER * 3.0, 2.0, 5.0);

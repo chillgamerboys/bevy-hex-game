@@ -6,6 +6,37 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EncounterTuning {
+    /// Starting Wisp HP.
+    pub wisp_hp: f32,
+    /// Slow voluntary flight speed.
+    pub wisp_flight_speed: f32,
+    /// Preferred feet height above dry supporting terrain.
+    pub wisp_cruise_height: f32,
+    /// Vertical separation between the two finite flying layers.
+    pub wisp_layer_spacing: f32,
+    /// Preferred inner stand-off distance, not a minimum firing range.
+    pub wisp_preferred_min: f32,
+    /// Preferred outer distance and maximum shot admission.
+    pub wisp_preferred_max: f32,
+    /// Maximum Ember splash damage before distance falloff.
+    pub wisp_ember_damage: f32,
+    /// Physical small Ember explosion radius.
+    pub wisp_ember_radius: f32,
+    /// Time between Ember casts.
+    pub wisp_ember_cooldown: f32,
+    /// Visible Ember preparation before release.
+    pub wisp_ember_windup: f32,
+    /// Ember launch speed.
+    pub wisp_ember_speed: f32,
+    /// Ember gravity, isolated from ordinary spell tuning.
+    pub wisp_ember_gravity: f32,
+    /// Actual swept Ember radius.
+    pub wisp_ember_collision_radius: f32,
+    /// Small splash impulse, zero allowed for comparisons.
+    pub wisp_ember_knockback: f32,
+    /// Fire terrain durability power per explosion.
+    pub wisp_ember_terrain_power: u8,
+
     /// Seven-hex Golem starting HP.
     pub golem_hp: f32,
     /// Golem grounded speed; it has no running, jumping or flight mode.
@@ -177,6 +208,21 @@ pub struct EncounterTuning {
 impl Default for EncounterTuning {
     fn default() -> Self {
         Self {
+            wisp_hp: 18.0,
+            wisp_flight_speed: 1.5,
+            wisp_cruise_height: 4.0,
+            wisp_layer_spacing: 0.8,
+            wisp_preferred_min: 20.0,
+            wisp_preferred_max: 32.0,
+            wisp_ember_damage: 8.0,
+            wisp_ember_radius: 0.8,
+            wisp_ember_cooldown: 2.0,
+            wisp_ember_windup: 0.35,
+            wisp_ember_speed: 32.0,
+            wisp_ember_gravity: 2.0,
+            wisp_ember_collision_radius: 0.06,
+            wisp_ember_knockback: 1.5,
+            wisp_ember_terrain_power: 1,
             golem_hp: 320.0,
             golem_speed: 2.0,
             golem_slam_damage: 35.0,
@@ -268,6 +314,7 @@ impl EncounterTuning {
     /// Reject unusable or unbounded authored creature values.
     pub fn validate(&self) -> Result<(), String> {
         if [
+            self.wisp_hp,
             self.dragon_hp,
             self.goblin_hp,
             self.shaman_hp,
@@ -279,6 +326,18 @@ impl EncounterTuning {
             return Err("Encounter actor HP must be finite and in (0, 1000].".into());
         }
         let values = [
+            self.wisp_flight_speed,
+            self.wisp_cruise_height,
+            self.wisp_layer_spacing,
+            self.wisp_preferred_min,
+            self.wisp_preferred_max,
+            self.wisp_ember_damage,
+            self.wisp_ember_radius,
+            self.wisp_ember_cooldown,
+            self.wisp_ember_windup,
+            self.wisp_ember_speed,
+            self.wisp_ember_gravity,
+            self.wisp_ember_collision_radius,
             self.golem_speed,
             self.golem_slam_damage,
             self.golem_slam_range,
@@ -357,6 +416,20 @@ impl EncounterTuning {
         {
             return Err("Encounter values must be finite and in (0, 180].".into());
         }
+        if !self.wisp_ember_knockback.is_finite()
+            || self.wisp_ember_knockback < 0.0
+            || self.wisp_ember_knockback > 180.0
+        {
+            return Err("Wisp knockback must be finite and in [0, 180].".into());
+        }
+        if self.wisp_preferred_min > self.wisp_preferred_max
+            || self.wisp_layer_spacing <= 0.4
+            || self.wisp_ember_collision_radius > 0.25
+        {
+            return Err(
+                "Wisp preferred range, flying layers or projectile radius is invalid.".into(),
+            );
+        }
         if self.goblin_height < self.goblin_radius * 2.0
             || self.golem_laser_min_range <= self.golem_slam_range
             || self.golem_laser_lock_seconds >= self.golem_laser_charge
@@ -375,6 +448,7 @@ impl EncounterTuning {
             );
         }
         if [
+            self.wisp_ember_terrain_power,
             self.swipe_terrain_power,
             self.bite_terrain_power,
             self.breath_terrain_power,

@@ -229,7 +229,7 @@ impl Steering {
 }
 
 pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
-    if actor.species == Species::Golem {
+    if matches!(actor.species, Species::Golem | Species::Wisp) {
         return shapes::compound_contained(actor, geometry);
     }
     // The convex hull of resident column centers lies inside the scalloped

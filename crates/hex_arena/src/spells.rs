@@ -21,6 +21,9 @@ pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 #[derive(Debug, Clone)]
 pub(crate) struct ShotParameters {
     gravity: f32,
+    collision_radius: f32,
+    appearance: crate::ProjectileAppearance,
+    source_ability: Option<crate::CreatureAbility>,
     radius: f32,
     damage: f32,
     knockback: f32,
@@ -41,6 +44,22 @@ pub(crate) struct PendingWall {
 }
 
 impl Projectile {
+    /// Frozen rendering identity, never inferred from a living source actor.
+    #[must_use]
+    pub fn appearance(&self) -> crate::ProjectileAppearance {
+        self.parameters.appearance
+    }
+    /// Actual radius used by every terrain, body and owner-clearance sweep.
+    #[must_use]
+    pub fn collision_radius(&self) -> f32 {
+        self.parameters.collision_radius
+    }
+    /// Creature activation source; ordinary hotbar spells return None.
+    #[must_use]
+    pub fn source_ability(&self) -> Option<crate::CreatureAbility> {
+        self.parameters.source_ability
+    }
+
     /// Allegiance frozen at release, including after the source dies.
     #[must_use]
     pub fn source_team(&self) -> crate::TeamId {
@@ -73,6 +92,13 @@ fn projectile(
         age: 0.0,
         parameters: ShotParameters {
             gravity: tuning.projectile_gravity,
+            collision_radius: PROJECTILE_RADIUS,
+            appearance: if spell == Spell::Shield {
+                crate::ProjectileAppearance::ShieldSeed
+            } else {
+                crate::ProjectileAppearance::Fireball
+            },
+            source_ability: None,
             radius: tuning.fireball_radius(),
             damage: if actor.species == crate::Species::Shaman {
                 tuning.encounters.shaman_fireball_damage * actor.damage_multiplier
@@ -218,7 +244,7 @@ fn advance_shot(
     shot.previous_position = shot.position;
     let delta = displacement(shot.velocity, shot.parameters.gravity);
     let mut hit = collision
-        .attack_sweep(shot.position, delta, PROJECTILE_RADIUS)
+        .attack_sweep(shot.position, delta, shot.parameters.collision_radius)
         .map(|(hit, barrier)| (hit.fraction, hit.normal, None, barrier));
     for actor in actors.iter().filter(|a| a.hp > 0.0) {
         if actor.id != shot.owner && actor.team == shot.parameters.team {
@@ -238,15 +264,22 @@ fn advance_shot(
             if !predict {
                 start.body_yaw = actor.previous_yaw;
             }
-            if crate::shapes::distance(shot.position, &start) > PROJECTILE_RADIUS + SKIN {
+            if crate::shapes::distance(shot.position, &start)
+                > shot.parameters.collision_radius + SKIN
+            {
                 shot.owner_cleared = true;
             } else {
                 continue;
             }
         }
         // The camera, direct beam and live projectile share actual body geometry.
-        let body_hit =
-            crate::shapes::sweep_actor(shot.position, delta, actor, predict, PROJECTILE_RADIUS);
+        let body_hit = crate::shapes::sweep_actor(
+            shot.position,
+            delta,
+            actor,
+            predict,
+            shot.parameters.collision_radius,
+        );
         if let Some(body_hit) = body_hit {
             let fraction = body_hit.fraction;
             // Exact ties favor terrain, preserving a closed wall's blocker.

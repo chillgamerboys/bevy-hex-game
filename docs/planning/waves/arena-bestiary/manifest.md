@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: spectator and bounded original-group calibration complete; Golem geometry/combat/presentation dispatched; Wisp and Worm queued.
+Status: original groups complete; Golem HP320 candidate is frozen in a detached native review checkout; main Wisp guarded foundation is applied pending checks and commit. Worm remains queued.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
@@ -194,7 +194,10 @@ this isolated continuation with no dev/remote landing; refresh before any later 
 Original focused milestone → shared foundation → L1/L2/L3 spectator work in disjoint
 lanes → root combined tests and calibration → Golem → Wisp → Worm → final combined
 checks. L1/L2 can implement against committed types together; consumers accept only
-published facts. Native capture and performance runs lock source and serialize Cargo.
+published facts. Native capture and performance runs lock their actual checkout and
+serialize Cargo. A detached review checkout may retain an exact prior candidate
+while the main experiment continues; receipts must identify both checkout and head,
+and no native measurement runs simultaneously with Cargo validation.
 
 ## Combined acceptance
 
@@ -257,3 +260,12 @@ all authorized work and final evidence/guide are delivered.
   Fort recipe admission are enabled. Geometry/combat review repaired translated
   shared-edge, point-blank beam and mouth-parallax cases. App/real-world/native
   integration and first Golem matchup calibration remain pending.
+
+- Golem HP trial `f2f0c87` changes only HP160 to320; capture correction `c1a6cf4`
+  is frozen in the detached `hex-arena-review` checkout for native calibration and
+  captures. Root owns the sole Cargo/native lane. The main checkout now applies
+  the [Wisp guarded foundation](maps/wisp-seam.md): one-prism body and query
+  projection, appended species/ability/recipes, authored config and read-only
+  projectile metadata. All Wisp setups remain refused; flight, layered deployment,
+  Ember payload and brain await the coordinator's foundation commit and dispatch.
+  Golem remains HP320 in this main candidate. No Wisp runtime evidence is claimed.
