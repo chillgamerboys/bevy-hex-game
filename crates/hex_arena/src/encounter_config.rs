@@ -210,7 +210,7 @@ pub struct EncounterTuning {
 impl Default for EncounterTuning {
     fn default() -> Self {
         Self {
-            wisp_hp: 18.0,
+            wisp_hp: 30.0,
             wisp_flight_speed: 1.5,
             wisp_cruise_height: 4.0,
             wisp_layer_spacing: 0.8,
