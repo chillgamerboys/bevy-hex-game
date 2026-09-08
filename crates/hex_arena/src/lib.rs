@@ -25,6 +25,7 @@ mod controller;
 mod creatures;
 mod encounter_config;
 mod encounters;
+mod hex_prisms;
 mod motion;
 mod shapes;
 mod spells;
@@ -404,7 +405,9 @@ impl Actor {
     /// Physical eye and launch position, without presentation interpolation.
     #[must_use]
     pub fn eye(&self) -> Vec3 {
-        if self.species == Species::Dragon {
+        if self.species == Species::Golem {
+            shapes::golem_mouth(self, self.aim)
+        } else if self.species == Species::Dragon {
             self.center() + self.body_rotation() * Vec3::NEG_Z * (self.dimensions.z * 0.5 - 0.05)
         } else if self.species == Species::Goblin {
             self.feet + Vec3::Y * (self.dimensions.y * 0.775)

@@ -1,6 +1,11 @@
 //! Shape-specific continuous queries. Human capsules retain the M01 kernel.
 
+#[cfg(test)]
+#[path = "golem_geometry_tests.rs"]
+mod golem_tests;
+
 use crate::collision::{CollisionWorld, Hit, Span, SKIN};
+use crate::hex_prisms::{planar_union_exit, HexPrism, HorizontalContact};
 use crate::{Actor, BarrierSnapshot, Species};
 use bevy_math::{Quat, Vec3};
 use hex_core::arena::ArenaVoxelGeometry;
@@ -15,22 +20,47 @@ fn box_half(actor: &Actor) -> Vec3 {
     actor.dimensions * 0.5
 }
 
+fn prisms(actor: &Actor, feet: Vec3) -> impl Iterator<Item = HexPrism> + '_ {
+    actor
+        .body_hex_prisms()
+        .filter_map(move |part| HexPrism::new(feet + part.offset, part.height))
+}
+
+/// Actual face origin for the fixed compound, including its exterior recesses.
+/// A locked attack supplies its locked direction independently from live aim.
+pub(crate) fn golem_mouth(actor: &Actor, direction: Vec3) -> Vec3 {
+    let origin = actor.feet + Vec3::Y * 1.4;
+    let direction = direction.with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let exit = planar_union_exit(prisms(actor, actor.feet), origin, direction).unwrap_or(0.0);
+    origin + direction * (exit - SKIN).max(0.0)
+}
+
 fn closest_body_point(point: Vec3, actor: &Actor) -> Vec3 {
-    if actor.species == Species::Dragon {
-        let rotation = actor.body_rotation();
-        let local = rotation.inverse() * (point - actor.center());
-        actor.center() + rotation * local.clamp(-box_half(actor), box_half(actor))
-    } else {
-        let radius = actor.dimensions.x * 0.5;
-        let axis = Vec3::new(
-            actor.feet.x,
-            point.y.clamp(
-                actor.feet.y + radius,
-                actor.feet.y + actor.dimensions.y - radius,
-            ),
-            actor.feet.z,
-        );
-        axis + (point - axis).normalize_or_zero() * radius.min(point.distance(axis))
+    match actor.species {
+        Species::Golem => prisms(actor, actor.feet)
+            .map(|part| part.closest_point(point))
+            .min_by(|a, b| {
+                a.distance_squared(point)
+                    .total_cmp(&b.distance_squared(point))
+            })
+            .unwrap_or(actor.feet),
+        Species::Dragon => {
+            let rotation = actor.body_rotation();
+            let local = rotation.inverse() * (point - actor.center());
+            actor.center() + rotation * local.clamp(-box_half(actor), box_half(actor))
+        }
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => {
+            let radius = actor.dimensions.x * 0.5;
+            let axis = Vec3::new(
+                actor.feet.x,
+                point.y.clamp(
+                    actor.feet.y + radius,
+                    actor.feet.y + actor.dimensions.y - radius,
+                ),
+                actor.feet.z,
+            );
+            axis + (point - axis).normalize_or_zero() * radius.min(point.distance(axis))
+        }
     }
 }
 
@@ -51,6 +81,49 @@ pub(crate) fn exposed_cone_contact(
     mut exposed: impl FnMut(Vec3) -> bool,
 ) -> Option<Vec3> {
     if distance(origin, actor) > range + SKIN {
+        return None;
+    }
+    if actor.species == Species::Golem {
+        // The body union is nonconvex. Project into one genuine convex prism at
+        // a time, never into the union or its bounding box as a convex volume.
+        for part in actor.body_hex_prisms() {
+            let Some(prism) = HexPrism::new(actor.feet + part.offset, part.height) else {
+                continue;
+            };
+            if prism.distance(origin) > range + SKIN {
+                continue;
+            }
+            let center = actor.feet + part.offset + Vec3::Y * (part.height * 0.5);
+            let closest = |point| prism.closest_point(point);
+            if let Some(contact) = volume_cone_contact(origin, direction, range, angle, closest) {
+                if exposed(contact) {
+                    return Some(contact);
+                }
+            }
+            let half = Vec3::new(
+                hex_core::config::HEX_SMALL_DIAMETER * 0.5,
+                part.height * 0.5,
+                1.0,
+            );
+            for x in [-1_i8, 0, 1] {
+                for y in [-1_i8, 0, 1] {
+                    for z in [-1_i8, 0, 1] {
+                        if x == 0 && y == 0 && z == 0 {
+                            continue;
+                        }
+                        let offset = Vec3::new(f32::from(x), f32::from(y), f32::from(z));
+                        let seed = closest(center + offset * half);
+                        if let Some(contact) = volume_cone_contact_from_seed(
+                            origin, direction, range, angle, seed, closest,
+                        ) {
+                            if exposed(contact) {
+                                return Some(contact);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return None;
     }
     let closest = |point| closest_body_point(point, actor);
@@ -221,16 +294,43 @@ fn box_clear(world: &CollisionWorld, feet: Vec3, size: Vec3, yaw: f32) -> bool {
 }
 
 pub(crate) fn clear(world: &CollisionWorld, actor: &Actor, feet: Vec3, yaw: f32) -> bool {
-    if actor.species == Species::Dragon {
-        box_clear(world, feet, actor.dimensions, yaw)
-    } else {
-        world.clear(feet, actor.dimensions.y, actor.dimensions.x * 0.5)
+    match actor.species {
+        Species::Golem => {
+            feet.is_finite()
+                && actor.body_hex_prisms().all(|part| {
+                    world.clear(
+                        feet + part.offset,
+                        part.height,
+                        hex_core::config::HEX_SMALL_DIAMETER * 0.5,
+                    )
+                })
+        }
+        Species::Dragon => box_clear(world, feet, actor.dimensions, yaw),
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => {
+            world.clear(feet, actor.dimensions.y, actor.dimensions.x * 0.5)
+        }
     }
 }
 
 pub(crate) fn sweep(world: &CollisionWorld, actor: &Actor, feet: Vec3, delta: Vec3) -> Option<Hit> {
-    if actor.species != Species::Dragon {
-        return world.sweep(feet, delta, actor.dimensions.y, actor.dimensions.x * 0.5);
+    match actor.species {
+        Species::Golem => {
+            return actor
+                .body_hex_prisms()
+                .filter_map(|part| {
+                    world.sweep(
+                        feet + part.offset,
+                        delta,
+                        part.height,
+                        hex_core::config::HEX_SMALL_DIAMETER * 0.5,
+                    )
+                })
+                .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
+        }
+        Species::Dragon => {}
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => {
+            return world.sweep(feet, delta, actor.dimensions.y, actor.dimensions.x * 0.5);
+        }
     }
     let radius =
         (actor.dimensions.x * actor.dimensions.x + actor.dimensions.z * actor.dimensions.z).sqrt()
@@ -284,6 +384,10 @@ pub(crate) fn ground(
 /// Test each bounded turn interval with a conservative swept-corner envelope.
 /// This prevents a long body rotating through a face despite clear end poses.
 pub(crate) fn turn(world: &CollisionWorld, actor: &mut Actor, desired: f32, max_delta: f32) {
+    if actor.species == Species::Golem {
+        actor.body_yaw = 0.0;
+        return;
+    }
     let delta = angle_delta(actor.body_yaw, desired).clamp(-max_delta, max_delta);
     let step = delta / 4.0;
     let radius =
@@ -305,36 +409,185 @@ pub(crate) fn angle_delta(from: f32, to: f32) -> f32 {
 }
 
 pub(crate) fn distance(point: Vec3, actor: &Actor) -> f32 {
-    if actor.species == Species::Dragon {
-        let local = actor.body_rotation().inverse() * (point - actor.center());
-        (local.abs() - box_half(actor)).max(Vec3::ZERO).length()
-    } else {
-        let radius = actor.dimensions.x * 0.5;
-        let low = actor.feet.y + radius;
-        let high = actor.feet.y + actor.dimensions.y - radius;
-        let axis = Vec3::new(actor.feet.x, point.y.clamp(low, high), actor.feet.z);
-        (point.distance(axis) - radius).max(0.0)
+    match actor.species {
+        Species::Golem => prisms(actor, actor.feet)
+            .map(|part| part.distance(point))
+            .fold(f32::INFINITY, f32::min),
+        Species::Dragon => {
+            let local = actor.body_rotation().inverse() * (point - actor.center());
+            (local.abs() - box_half(actor)).max(Vec3::ZERO).length()
+        }
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => {
+            let radius = actor.dimensions.x * 0.5;
+            let low = actor.feet.y + radius;
+            let high = actor.feet.y + actor.dimensions.y - radius;
+            let axis = Vec3::new(actor.feet.x, point.y.clamp(low, high), actor.feet.z);
+            (point.distance(axis) - radius).max(0.0)
+        }
     }
 }
 
 pub(crate) fn voxel_overlap(pos: TilePos, geometry: ArenaVoxelGeometry, actor: &Actor) -> bool {
-    if actor.species == Species::Dragon {
-        let span = Span {
-            coord: pos.coord,
-            bottom: geometry.top(pos) - geometry.level_height,
-            top: geometry.top(pos),
-        };
-        box_span_axes(span, actor.feet, actor.dimensions, actor.body_yaw)
-            .into_iter()
-            .all(|(_, p, e)| p.abs() < e - SKIN)
+    match actor.species {
+        Species::Golem => {
+            prisms(actor, actor.feet).any(|part| part.overlaps_voxel(pos, geometry, SKIN))
+        }
+        Species::Dragon => {
+            let span = Span {
+                coord: pos.coord,
+                bottom: geometry.top(pos) - geometry.level_height,
+                top: geometry.top(pos),
+            };
+            box_span_axes(span, actor.feet, actor.dimensions, actor.body_yaw)
+                .into_iter()
+                .all(|(_, p, e)| p.abs() < e - SKIN)
+        }
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => {
+            crate::collision::voxel_overlaps_body(
+                pos,
+                geometry,
+                actor.feet,
+                actor.dimensions.y,
+                actor.dimensions.x * 0.5 + SKIN * 4.0,
+            )
+        }
+    }
+}
+
+/// Exact compound overlap with one published vertical hex run, including liquids.
+pub(crate) fn hex_span_overlap(
+    actor: &Actor,
+    coord: hex_core::HexCoord,
+    bottom: f32,
+    top: f32,
+) -> bool {
+    let Some(run) = HexPrism::new(coord.to_world(bottom), top - bottom) else {
+        return false;
+    };
+    prisms(actor, actor.feet).any(|part| part.overlap_prism(run, SKIN).is_some())
+}
+
+/// Complete compound containment in the existing conservative playable hull.
+pub(crate) fn compound_contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
+    let axes = [
+        Vec3::Z,
+        Vec3::new(0.866_025_4, 0.0, 0.5),
+        Vec3::new(0.866_025_4, 0.0, -0.5),
+    ];
+    let limit = f64::from(geometry.radius) * 1.5;
+    actor.feet.is_finite()
+        && prisms(actor, actor.feet).all(|part| {
+            part.horizontal_vertices().all(|point| {
+                axes.into_iter()
+                    .all(|axis| f64::from(point.dot(axis).abs()) <= limit)
+            })
+        })
+}
+
+fn compound_contact_at(actor: &Actor, feet: Vec3, other: &Actor) -> Option<HorizontalContact> {
+    prisms(actor, feet).find_map(|part| match other.species {
+        Species::Golem => prisms(other, other.feet).find_map(|b| part.overlap_prism(b, 0.0)),
+        Species::Dragon => part.overlap_box(other.feet, other.dimensions, other.body_yaw, 0.0),
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => part
+            .overlap_capsule(
+                other.feet,
+                other.dimensions.y,
+                other.dimensions.x * 0.5,
+                0.0,
+            ),
+    })
+}
+
+/// A bounded whole-union separation, expressed as each actor's half translation.
+/// Internal shared faces are not exterior body boundaries: taking one component's
+/// smallest MTV can oscillate forever between neighboring prisms. Bracket a clear
+/// whole-body pose with a broad bound, then refine it using only exact component
+/// overlap predicates. No AABB establishes contact, and every final move still
+/// goes through the existing terrain-aware slide.
+pub(crate) fn compound_separation(a: &Actor, b: &Actor) -> Option<Vec3> {
+    if a.species != Species::Golem {
+        return (b.species == Species::Golem)
+            .then(|| compound_separation(b, a).map(|push| -push))
+            .flatten();
+    }
+    let contact = compound_contact_at(a, a.feet, b)?;
+    let direction = (a.feet - b.feet).with_y(0.0).normalize_or(contact.normal);
+    let mut low = 0.0;
+    let mut high =
+        (a.dimensions.with_y(0.0).length() + b.dimensions.with_y(0.0).length()) * 0.5 + SKIN * 2.0;
+    for _ in 0..18 {
+        let middle = (low + high) * 0.5;
+        if compound_contact_at(a, a.feet + direction * middle, b).is_some() {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    Some(direction * (high * 0.5 + SKIN))
+}
+
+/// Shared actual-body ray/sphere sweep. `predict` freezes the current body pose;
+/// live projectiles instead sweep relative to its full latest translation/yaw.
+pub(crate) fn sweep_actor(
+    start: Vec3,
+    delta: Vec3,
+    actor: &Actor,
+    predict: bool,
+    extra: f32,
+) -> Option<Hit> {
+    if !start.is_finite() || !delta.is_finite() || !extra.is_finite() || extra < 0.0 {
+        return None;
+    }
+    let previous = if predict {
+        actor.feet
     } else {
-        crate::collision::voxel_overlaps_body(
-            pos,
-            geometry,
-            actor.feet,
-            actor.dimensions.y,
-            actor.dimensions.x * 0.5 + SKIN * 4.0,
-        )
+        actor.previous_feet
+    };
+    let body_delta = actor.feet - previous;
+    match actor.species {
+        Species::Golem => prisms(actor, previous)
+            .filter_map(|part| part.sweep_sphere(start, delta - body_delta, extra))
+            .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
+            .map(|hit| Hit {
+                fraction: hit.fraction,
+                normal: hit.normal,
+            }),
+        Species::Dragon => sweep_dragon(start, delta, actor, predict, extra).map(|mut hit| {
+            // Keep the accepted Dragon impact-normal arithmetic unchanged.
+            let point = start + delta * hit.fraction;
+            let center = previous + body_delta * hit.fraction + Vec3::Y * actor.dimensions.y * 0.5;
+            let local = actor.body_rotation().inverse() * (point - center);
+            let nearest =
+                center + actor.body_rotation() * local.clamp(-box_half(actor), box_half(actor));
+            hit.normal = (point - nearest).normalize_or_zero();
+            hit
+        }),
+        Species::Human | Species::Shadow | Species::Goblin | Species::Shaman => {
+            let radius = actor.dimensions.x * 0.5;
+            crate::spells::sweep_capsule_dimensions(
+                start,
+                delta - body_delta,
+                previous,
+                extra,
+                actor.dimensions.y,
+                radius,
+            )
+            .map(|fraction| {
+                let point = start + delta * fraction;
+                let feet = previous + body_delta * fraction;
+                let axis = Vec3::new(
+                    feet.x,
+                    point
+                        .y
+                        .clamp(feet.y + radius, feet.y + actor.dimensions.y - radius),
+                    feet.z,
+                );
+                Hit {
+                    fraction,
+                    normal: (point - axis).normalize_or_zero(),
+                }
+            })
+        }
     }
 }
 

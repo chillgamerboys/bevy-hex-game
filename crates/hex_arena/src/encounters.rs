@@ -161,7 +161,7 @@ impl ArenaSession {
                 });
             vec![(world.spawns.get(1).copied().unwrap_or(Vec3::ZERO), roster)]
         };
-        for (index, (home, roster)) in specs.into_iter().enumerate() {
+        for (index, (mut home, roster)) in specs.into_iter().enumerate() {
             let Ok(party) = u16::try_from(index) else {
                 continue;
             };
@@ -181,9 +181,40 @@ impl ArenaSession {
                 actor.species = species;
                 actor.party = Some(party);
                 actor.configure_species(species, c);
-                if let Some(feet) =
+                let feet = if species == Species::Golem {
+                    // Keep the authored approach when this complete body fits.
+                    // A low gate or other obstruction admits only the published
+                    // courtyard deployment, never an unrestricted rooftop search.
+                    let direct = shapes::clear(&self.collision, &actor, home, 0.0)
+                        && dry(&actor, world, geometry)
+                        && shapes::ground(&self.collision, &actor, home, SKIN * 8.0).is_some()
+                        && self
+                            .actors
+                            .iter()
+                            .all(|a| body_overlap(&actor, a).is_none());
+                    direct.then_some(home).or_else(|| {
+                        world
+                            .battle_deployment
+                            .as_ref()
+                            .and_then(|regions| regions.get(1))
+                            .and_then(|region| {
+                                battle_runtime::deployment_pose(
+                                    &actor,
+                                    region,
+                                    &self.actors,
+                                    &self.collision,
+                                    world,
+                                    geometry,
+                                )
+                            })
+                    })
+                } else {
                     safe_spawn(&actor, home, &self.actors, &self.collision, world, geometry)
-                {
+                };
+                if let Some(feet) = feet {
+                    if species == Species::Golem {
+                        home = feet;
+                    }
                     actor.feet = feet;
                     actor.previous_feet = feet;
                     actor.body.grounded = true;
@@ -490,6 +521,8 @@ impl ArenaSession {
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             actor.previous_yaw = actor.body_yaw;
+            actor.attack = None;
+            actor.beam = None;
             if actor.hp <= 0.0 {
                 actor.attack = None;
                 actor.cancel_charge();
@@ -595,6 +628,13 @@ impl ArenaSession {
             self.projectiles.clear();
             self.pending_walls.clear();
             self.encounter.auras.clear();
+            for actor in &mut self.actors {
+                actor.attack = None;
+                actor.beam = None;
+            }
+            for brain in self.encounter.brains.values_mut() {
+                brain.active = None;
+            }
         }
         out
     }
@@ -612,6 +652,9 @@ fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> 
     !view.liquids.iter().any(|run| {
         let bottom = geometry.top(run.bottom) - geometry.level_height;
         let top = geometry.top(TilePos::new(run.bottom.coord, run.top_level));
+        if actor.species == Species::Golem {
+            return shapes::hex_span_overlap(actor, run.bottom.coord, bottom, top);
+        }
         actor.feet.y < top - SKIN
             && actor.feet.y + actor.dimensions.y > bottom + SKIN
             && run.bottom.coord.to_world(actor.feet.y).distance(actor.feet)
@@ -667,6 +710,9 @@ fn safe_spawn(
 }
 
 fn body_overlap(a: &Actor, b: &Actor) -> Option<Vec3> {
+    if a.species == Species::Golem || b.species == Species::Golem {
+        return shapes::compound_separation(a, b);
+    }
     if a.feet.y >= b.feet.y + b.dimensions.y || b.feet.y >= a.feet.y + a.dimensions.y {
         return None;
     }

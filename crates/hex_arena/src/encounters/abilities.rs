@@ -4,6 +4,9 @@ use super::*;
 use hex_core::{TerrainDamageKind, TerrainImpact};
 use std::collections::BTreeSet;
 
+#[path = "golem.rs"]
+mod golem;
+
 pub(super) fn index(kind: CreatureAbility) -> usize {
     kind.index()
 }
@@ -30,6 +33,11 @@ impl Cast {
 
     pub(super) fn tracks_breath(&self) -> bool {
         self.kind == CreatureAbility::FireCone
+    }
+
+    pub(super) fn tracks_laser(&self, tuning: &EncounterTuning) -> bool {
+        self.kind == CreatureAbility::GolemLaser
+            && self.age < self.windup - tuning.golem_laser_lock_seconds
     }
 
     fn track_breath(&mut self, actor: &Actor, max_turn: f32) {
@@ -123,6 +131,12 @@ impl ArenaSession {
             CreatureAbility::Swipe => (c.swipe_windup, 0.15, c.swipe_cooldown),
             CreatureAbility::Barrier => (0.0, 0.15, c.barrier_cooldown),
             CreatureAbility::Aura => (c.aura_windup, 0.2, c.aura_cooldown),
+            CreatureAbility::GolemSlam => (c.golem_slam_windup, 0.15, c.golem_slam_cooldown),
+            CreatureAbility::GolemLaser => (
+                c.golem_laser_charge,
+                c.golem_laser_seconds,
+                c.golem_laser_cooldown,
+            ),
             _ => return,
         };
         if let Some(cd) = brain.cooldowns.get_mut(index(request.kind)) {
@@ -169,6 +183,9 @@ impl ArenaSession {
                 continue;
             };
             cast.track_breath(&actor, c.dragon_turn_speed * STEP);
+            if cast.tracks_laser(c) {
+                cast.direction = actor.aim;
+            }
             cast.age += STEP;
             let (range, angle) = match cast.kind {
                 CreatureAbility::FireCone => (c.breath_range, c.breath_angle.to_radians() * 0.5),
@@ -176,6 +193,7 @@ impl ArenaSession {
                 CreatureAbility::Swipe => (c.swipe_range, c.swipe_angle.to_radians() * 0.5),
                 CreatureAbility::Aura => (c.aura_radius, std::f32::consts::PI),
                 CreatureAbility::Barrier => (c.barrier_distance, 0.0),
+                CreatureAbility::GolemSlam => (c.golem_slam_range, std::f32::consts::PI),
                 _ => (0.0, 0.0),
             };
             let phase = if cast.age < cast.windup {
@@ -191,11 +209,20 @@ impl ArenaSession {
                 AttackPhase::Recovery => (cast.age - cast.windup - cast.duration) / 0.15,
             }
             .clamp(0.0, 1.0);
+            let beam = (cast.kind == CreatureAbility::GolemLaser)
+                .then(|| self.golem_beam(&actor, &cast, geometry, tuning));
+            let origin = if cast.kind == CreatureAbility::GolemSlam {
+                actor.center()
+            } else {
+                beam.map_or(actor.eye(), |b| b.origin)
+            };
+            let range = beam.map_or(range, |b| b.origin.distance(b.end));
             if let Some(a) = self.actors.iter_mut().find(|a| a.id == *id) {
+                a.beam = beam;
                 a.attack = Some(AttackSnapshot {
                     kind: cast.kind,
                     phase,
-                    origin: actor.eye(),
+                    origin,
                     direction: cast.direction,
                     range,
                     half_angle: angle,
@@ -269,13 +296,39 @@ impl ArenaSession {
                             out,
                         )
                     }
+                    CreatureAbility::GolemSlam => {
+                        self.golem_slam(&actor, &mut cast, world, geometry, tuning, out)
+                    }
                     _ => {}
+                }
+            }
+            if cast.kind == CreatureAbility::GolemLaser {
+                let previous = (cast.age - STEP - cast.windup).clamp(0.0, cast.duration);
+                let current = (cast.age - cast.windup).clamp(0.0, cast.duration);
+                if current > previous {
+                    self.golem_laser_tick(
+                        &actor,
+                        &mut cast,
+                        current - previous,
+                        world,
+                        geometry,
+                        materials,
+                        tuning,
+                        out,
+                    );
                 }
             }
             if cast.age < cast.windup + cast.duration + 0.15 {
                 brain.active = Some(cast);
             } else if let Some(a) = self.actors.iter_mut().find(|a| a.id == *id) {
                 a.attack = None;
+                a.beam = None;
+            }
+        }
+        for actor in &mut self.actors {
+            if actor.hp <= 0.0 {
+                actor.attack = None;
+                actor.beam = None;
             }
         }
         self.encounter

@@ -109,15 +109,17 @@ pub(super) fn capsule_distance(point: Vec3, feet: Vec3) -> f32 {
 
 /// Earliest segment contact with the actor's vertical capsule, expanded by the
 /// projectile radius. Both endcap quadratics and the finite cylinder participate.
+#[cfg(test)]
 fn sweep_actor(start: Vec3, delta: Vec3, feet: Vec3) -> Option<f32> {
     sweep_capsule(start, delta, feet, PROJECTILE_RADIUS)
 }
 
+#[cfg(test)]
 fn sweep_capsule(start: Vec3, delta: Vec3, feet: Vec3, extra_radius: f32) -> Option<f32> {
     sweep_capsule_dimensions(start, delta, feet, extra_radius, BODY_HEIGHT, BODY_RADIUS)
 }
 
-fn sweep_capsule_dimensions(
+pub(crate) fn sweep_capsule_dimensions(
     start: Vec3,
     delta: Vec3,
     feet: Vec3,
@@ -183,19 +185,8 @@ pub(super) fn aim_from_camera(
         .iter()
         .filter(|a| a.id != actor_id && a.hp > 0.0)
     {
-        if let Some(hit) = if target.species == crate::Species::Dragon {
-            crate::shapes::sweep_dragon(origin, delta, target, true, 0.0).map(|h| h.fraction)
-        } else {
-            sweep_capsule_dimensions(
-                origin,
-                delta,
-                target.feet,
-                0.0,
-                target.dimensions.y,
-                target.dimensions.x * 0.5,
-            )
-        } {
-            fraction = fraction.min(hit);
+        if let Some(hit) = crate::shapes::sweep_actor(origin, delta, target, true, 0.0) {
+            fraction = fraction.min(hit.fraction);
         }
     }
     let aim = (origin + delta * fraction - actor.eye()).normalize_or_zero();
@@ -253,53 +244,14 @@ fn advance_shot(
                 continue;
             }
         }
-        // Sweep in the moving body's frame, avoiding missed fast cross-traffic.
-        let relative_delta = delta - (actor.feet - previous_feet);
-        let body_hit = if actor.species == crate::Species::Dragon {
-            crate::shapes::sweep_dragon(shot.position, delta, actor, predict, PROJECTILE_RADIUS)
-                .map(|h| h.fraction)
-        } else if matches!(
-            actor.species,
-            crate::Species::Human | crate::Species::Shadow | crate::Species::Shaman
-        ) {
-            sweep_actor(shot.position, relative_delta, previous_feet)
-        } else {
-            sweep_capsule_dimensions(
-                shot.position,
-                relative_delta,
-                previous_feet,
-                PROJECTILE_RADIUS,
-                actor.dimensions.y,
-                actor.dimensions.x * 0.5,
-            )
-        };
-        if let Some(fraction) = body_hit {
+        // The camera, direct beam and live projectile share actual body geometry.
+        let body_hit =
+            crate::shapes::sweep_actor(shot.position, delta, actor, predict, PROJECTILE_RADIUS);
+        if let Some(body_hit) = body_hit {
+            let fraction = body_hit.fraction;
             // Exact ties favor terrain, preserving a closed wall's blocker.
             if hit.is_none_or(|(old, _, _, _)| fraction < old) {
-                let point = shot.position + delta * fraction;
-                let feet = previous_feet + (actor.feet - previous_feet) * fraction;
-                let radius = actor.dimensions.x * 0.5;
-                let axis = if actor.species == crate::Species::Dragon {
-                    let center = feet + Vec3::Y * actor.dimensions.y * 0.5;
-                    let local = actor.body_rotation().inverse() * (point - center);
-                    center
-                        + actor.body_rotation()
-                            * local.clamp(-actor.dimensions * 0.5, actor.dimensions * 0.5)
-                } else {
-                    Vec3::new(
-                        feet.x,
-                        point
-                            .y
-                            .clamp(feet.y + radius, feet.y + actor.dimensions.y - radius),
-                        feet.z,
-                    )
-                };
-                hit = Some((
-                    fraction,
-                    (point - axis).normalize_or_zero(),
-                    Some(actor.id),
-                    None,
-                ));
+                hit = Some((fraction, body_hit.normal, Some(actor.id), None));
             }
         }
     }

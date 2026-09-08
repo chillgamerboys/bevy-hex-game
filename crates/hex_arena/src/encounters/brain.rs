@@ -408,6 +408,45 @@ impl Brain {
                     goal = actor.feet;
                 }
             }
+        } else if actor.species == Species::Golem {
+            if let Some(seen) = sight {
+                let point = seen
+                    .observed
+                    .map_or(seen.point + Vec3::Y * 0.4, |o| o.sight_point);
+                let distance = seen.observed.map_or_else(
+                    || actor.center().distance(point),
+                    |o| o.distance(actor.center(), 0.0),
+                );
+                // The face may aim independently of the fixed seven-hex body.
+                // Use only this admitted observation, including for the mouth ray.
+                let bearing = point - (actor.feet + Vec3::Y * 1.4);
+                let mouth = shapes::golem_mouth(actor, bearing);
+                input.aim = (point - mouth).normalize_or(actor.aim);
+                if distance <= c.golem_slam_range && self.ready(CreatureAbility::GolemSlam) {
+                    request = Some(Request {
+                        kind: CreatureAbility::GolemSlam,
+                        aim: input.aim,
+                    });
+                } else if distance >= c.golem_laser_min_range
+                    && self.ready(CreatureAbility::GolemLaser)
+                    && collision.sight_clear(shapes::golem_mouth(actor, input.aim), point)
+                {
+                    request = Some(Request {
+                        kind: CreatureAbility::GolemLaser,
+                        aim: input.aim,
+                    });
+                }
+            }
+            if self
+                .active
+                .as_ref()
+                .is_some_and(|cast| cast.tracks_laser(c))
+                && sight.is_none()
+            {
+                // Before the advertised lock, lost sight cancels preparation.
+                // Once locked, the committed line fires without hidden tracking.
+                self.active = None;
+            }
         } else if actor.species == Species::Shaman {
             if tick >= self.next_shot_probe || sight.is_none() {
                 self.shooting_angle = sight.is_some_and(|seen| {
@@ -599,9 +638,9 @@ impl Brain {
             Vec3::ZERO
         };
         if let Some(active) = &self.active {
-            // Only admitted own sight can update a breath. Other attacks and a
-            // breath whose target is hidden retain their last direction.
-            if !active.tracks_breath() || sight.is_none() {
+            // Only admitted own sight can update breath or an unlocked laser.
+            // Committed attacks retain their last direction.
+            if !(active.tracks_breath() || active.tracks_laser(c)) || sight.is_none() {
                 input.aim = active.direction();
             }
         }

@@ -327,7 +327,7 @@ fn deploy(
     Ok((actors, parties, brains))
 }
 
-fn deployment_pose(
+pub(super) fn deployment_pose(
     actor: &Actor,
     region: &ArenaDeploymentRegion,
     others: &[Actor],

@@ -229,6 +229,9 @@ impl Steering {
 }
 
 pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
+    if actor.species == Species::Golem {
+        return shapes::compound_contained(actor, geometry);
+    }
     // The convex hull of resident column centers lies inside the scalloped
     // hex union. Constraining the complete body to this conservative interior
     // also rejects an edge crossing outside between two resident corners.

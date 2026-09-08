@@ -1,4 +1,4 @@
-//! Shared Golem shape/recipe contracts, before runtime geometry is admitted.
+//! Shared Golem shape/recipe contracts and atomic runtime admission.
 
 use super::*;
 
@@ -56,31 +56,32 @@ fn golem_projection_is_seven_native_prisms_with_fixed_body_orientation() {
 }
 
 #[test]
-fn incomplete_golem_has_a_typed_atomic_refusal_in_both_control_modes() {
+fn golem_player_recipe_is_admitted_and_missing_spectator_deployment_fails_atomically() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
-    for control in [ArenaControl::Spectator, ArenaControl::Player] {
-        let setup = if control == ArenaControl::Spectator {
-            ArenaBattleSetup::spectator(BattlePreset::Golem, BattlePreset::Shadow, 1)
-        } else {
-            ArenaBattleSetup {
-                player_recipe: Some(BattlePreset::Golem),
-                ..Default::default()
-            }
-        };
-        assert_eq!(
-            setup.validate_for(ArenaMap::Fort),
-            Err(BattleSetupError::CreatureNotReady)
-        );
-        session.reset_with_setup(2, &view, geometry, &setup);
-        let before = session.tick;
-        session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
-        assert!(session.is_finished() && session.actors.is_empty());
-        assert_eq!(session.tick, before);
-        assert!(matches!(
-            session.battle_result,
-            Some(BattleResult::InvalidSetup(_))
-        ));
-    }
+    let setup = ArenaBattleSetup {
+        player_recipe: Some(BattlePreset::Golem),
+        ..Default::default()
+    };
+    assert!(setup.validate_for(ArenaMap::Fort).is_ok());
+    session.reset_with_setup(2, &view, geometry, &setup);
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    assert!(!session.is_finished());
+    assert_eq!(session.actors.len(), 2);
+    let golem = session.actors.get(1).expect("complete admitted actor");
+    assert_eq!(golem.species, Species::Golem);
+    assert_eq!(golem.body_hex_prisms().count(), 7);
+    assert!(session.actor_pose_valid(golem.id, &view, geometry));
+
+    // A valid roster request still cannot invent supporting deployment surfaces.
+    let setup = ArenaBattleSetup::spectator(BattlePreset::Golem, BattlePreset::Shadow, 1);
+    assert!(setup.validate_for(ArenaMap::Fort).is_ok());
+    session.reset_with_setup(3, &view, geometry, &setup);
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    assert!(session.is_finished() && session.actors.is_empty());
+    assert!(matches!(
+        session.battle_result,
+        Some(BattleResult::InvalidSetup(_))
+    ));
 }
 
 #[test]

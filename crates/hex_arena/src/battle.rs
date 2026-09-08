@@ -170,13 +170,8 @@ impl ArenaBattleSetup {
     /// Validate the bounded actor/party contract before resolving physical spawn positions.
     pub fn validate_for(&self, map: ArenaMap) -> Result<(), BattleSetupError> {
         if self.control == ArenaControl::Player {
-            if let Some(recipe) = self.player_recipe {
-                if map != ArenaMap::Fort {
-                    return Err(BattleSetupError::PlayerRecipeMap);
-                }
-                if recipe == BattlePreset::Golem {
-                    return Err(BattleSetupError::CreatureNotReady);
-                }
+            if self.player_recipe.is_some() && map != ArenaMap::Fort {
+                return Err(BattleSetupError::PlayerRecipeMap);
             }
             return Ok(());
         }
@@ -224,14 +219,6 @@ impl ArenaBattleSetup {
         if self.tick_limit == Some(0) {
             return Err(BattleSetupError::ZeroTickLimit);
         }
-        if self
-            .rosters
-            .iter()
-            .flat_map(|team| team.parties.iter().flatten())
-            .any(|species| *species == Species::Golem)
-        {
-            return Err(BattleSetupError::CreatureNotReady);
-        }
         Ok(())
     }
 }
@@ -243,8 +230,6 @@ pub enum BattleSetupError {
     PlayerRecipeMap,
     /// Observer rosters cannot also request a player encounter recipe.
     PlayerRecipeInSpectator,
-    /// A published creature contract is not yet safe to admit into a runtime match.
-    CreatureNotReady,
     /// This first version admits observer fights on Fort and the original Duel arena.
     UnsupportedMap,
     /// Exactly two teams are required.
@@ -268,7 +253,6 @@ impl std::fmt::Display for BattleSetupError {
             Self::PlayerRecipeInSpectator => {
                 "Spectator battles use team rosters, not a player recipe."
             }
-            Self::CreatureNotReady => "Golem geometry and attacks are still being integrated.",
             Self::UnsupportedMap => "Spectator battles support Fort and Duel.",
             Self::TeamCount => "Choose exactly two monster teams.",
             Self::DuplicateTeams => "The two teams must have different allegiances.",
