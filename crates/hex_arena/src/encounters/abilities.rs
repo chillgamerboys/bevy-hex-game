@@ -35,6 +35,23 @@ impl Cast {
     pub(super) fn direction(&self) -> Vec3 {
         self.direction
     }
+
+    pub(super) fn tracks_breath(&self) -> bool {
+        self.kind == CreatureAbility::FireCone
+    }
+
+    fn track_breath(&mut self, actor: &Actor, max_turn: f32) {
+        if !self.tracks_breath() {
+            return;
+        }
+        // The body has already performed its collision-safe bounded yaw turn.
+        // Pitch follows the observation-limited aim at the same angular limit;
+        // the emitted cone always comes out of the actual forward-facing mouth.
+        let pitch = self.direction.y.clamp(-1.0, 1.0).asin();
+        let desired = actor.aim.y.clamp(-1.0, 1.0).asin();
+        let pitch = pitch + (desired - pitch).clamp(-max_turn, max_turn);
+        self.direction = actor.body_rotation() * Vec3::NEG_Z * pitch.cos() + Vec3::Y * pitch.sin();
+    }
 }
 
 impl EncounterState {
@@ -159,6 +176,7 @@ impl ArenaSession {
             else {
                 continue;
             };
+            cast.track_breath(&actor, c.dragon_turn_speed * STEP);
             cast.age += STEP;
             let (range, angle) = match cast.kind {
                 CreatureAbility::FireCone => (c.breath_range, c.breath_angle.to_radians() * 0.5),
@@ -319,13 +337,13 @@ impl ArenaSession {
             if actor.hp <= 0.0 || actor.id == owner.id || actor.team == cast.team {
                 continue;
             }
-            let Some(point) = body_cone_contact(origin, direction, range, half_angle, actor) else {
-                continue;
-            };
-            if self
-                .collision
-                .attack_sweep(origin, point - origin, 0.0)
-                .is_some_and(|(h, _)| h.fraction < 1.0 - SKIN)
+            if shapes::exposed_cone_contact(actor, origin, direction, range, half_angle, |point| {
+                !self
+                    .collision
+                    .attack_sweep(origin, point - origin, 0.0)
+                    .is_some_and(|(h, _)| h.fraction < 1.0 - SKIN)
+            })
+            .is_none()
             {
                 continue;
             }
@@ -352,7 +370,7 @@ impl ArenaSession {
                 bevy_math::Quat::from_rotation_y((-barrier.normal.x).atan2(-barrier.normal.z));
             let half = Vec3::new(barrier.width * 0.5, barrier.height * 0.5, 0.025);
             let Some(contact) =
-                volume_cone_contact(origin, direction, range, half_angle, |point| {
+                shapes::volume_cone_contact(origin, direction, range, half_angle, |point| {
                     closest_box_point(point, barrier.center, rotation, half)
                 })
             else {
@@ -387,9 +405,11 @@ impl ArenaSession {
             if cast.voxels.contains(&pos) {
                 continue;
             }
-            let Some(point) = volume_cone_contact(origin, direction, range, half_angle, |point| {
-                closest_voxel_point(point, pos, geometry)
-            }) else {
+            let Some(point) =
+                shapes::volume_cone_contact(origin, direction, range, half_angle, |point| {
+                    closest_voxel_point(point, pos, geometry)
+                })
+            else {
                 continue;
             };
             let delta = (point - origin) + (point - origin).normalize_or(direction) * SKIN * 4.0;
@@ -423,70 +443,6 @@ impl ArenaSession {
             .retain(|b| b.hp > 0.0 && b.remaining > 0.0);
         self.collision.sync_barriers(&self.encounter.barriers);
     }
-}
-
-fn closest_body_point(origin: Vec3, actor: &Actor) -> Vec3 {
-    if actor.species == Species::Dragon {
-        let inverse = actor.body_rotation().inverse();
-        let local = inverse * (origin - actor.center());
-        actor.center()
-            + actor.body_rotation() * local.clamp(-actor.dimensions * 0.5, actor.dimensions * 0.5)
-    } else {
-        let radius = actor.dimensions.x * 0.5;
-        let axis = Vec3::new(
-            actor.feet.x,
-            origin.y.clamp(
-                actor.feet.y + radius,
-                actor.feet.y + actor.dimensions.y - radius,
-            ),
-            actor.feet.z,
-        );
-        axis + (origin - axis).normalize_or_zero() * radius.min(origin.distance(axis))
-    }
-}
-
-// Alternating projections between two convex physical volumes handles a flank
-// clipping the cone even when the body's closest point to the mouth is outside.
-fn body_cone_contact(
-    origin: Vec3,
-    direction: Vec3,
-    range: f32,
-    angle: f32,
-    actor: &Actor,
-) -> Option<Vec3> {
-    volume_cone_contact(origin, direction, range, angle, |point| {
-        closest_body_point(point, actor)
-    })
-}
-
-fn volume_cone_contact(
-    origin: Vec3,
-    direction: Vec3,
-    range: f32,
-    angle: f32,
-    closest: impl Fn(Vec3) -> Vec3,
-) -> Option<Vec3> {
-    let mut point = closest(origin);
-    for _ in 0..32 {
-        let delta = point - origin;
-        let distance = delta.length();
-        let axial = delta.dot(direction);
-        let radial = delta - direction * axial;
-        let cone = if distance <= range && (distance < SKIN || axial / distance >= angle.cos()) {
-            point
-        } else if distance > range && axial / distance >= angle.cos() {
-            origin + delta * (range / distance)
-        } else {
-            let edge = direction * angle.cos() + radial.normalize_or(Vec3::X) * angle.sin();
-            origin + edge * delta.dot(edge).clamp(0.0, range)
-        };
-        let body = closest(cone);
-        if body.distance_squared(cone) < SKIN * SKIN {
-            return Some(cone);
-        }
-        point = body;
-    }
-    None
 }
 
 impl ArenaSession {
@@ -572,3 +528,7 @@ fn closest_voxel_point(point: Vec3, pos: TilePos, geometry: ArenaVoxelGeometry) 
         })
         .unwrap_or(center.with_y(y))
 }
+
+#[cfg(test)]
+#[path = "cone_tests.rs"]
+mod cone_tests;

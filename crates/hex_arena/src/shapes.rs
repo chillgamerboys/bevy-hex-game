@@ -15,6 +15,119 @@ fn box_half(actor: &Actor) -> Vec3 {
     actor.dimensions * 0.5
 }
 
+fn closest_body_point(point: Vec3, actor: &Actor) -> Vec3 {
+    if actor.species == Species::Dragon {
+        let rotation = actor.body_rotation();
+        let local = rotation.inverse() * (point - actor.center());
+        actor.center() + rotation * local.clamp(-box_half(actor), box_half(actor))
+    } else {
+        let radius = actor.dimensions.x * 0.5;
+        let axis = Vec3::new(
+            actor.feet.x,
+            point.y.clamp(
+                actor.feet.y + radius,
+                actor.feet.y + actor.dimensions.y - radius,
+            ),
+            actor.feet.z,
+        );
+        axis + (point - axis).normalize_or_zero() * radius.min(point.distance(axis))
+    }
+}
+
+/// Finds an exposed contact inside the actual body and finite attack cone.
+///
+/// Try the nearest intersection first. When cover occludes it, seed the same
+/// bounded convex intersection from the body's 26 face/edge/corner directions.
+/// Capsule samples project onto its rounded surface; a Dragon retains its real
+/// oriented box. Each returned contact still needs its own unobstructed attack
+/// ray. This conservative finite search never promotes sight of one body part
+/// into permission to attack another part through cover.
+pub(crate) fn exposed_cone_contact(
+    actor: &Actor,
+    origin: Vec3,
+    direction: Vec3,
+    range: f32,
+    angle: f32,
+    mut exposed: impl FnMut(Vec3) -> bool,
+) -> Option<Vec3> {
+    if distance(origin, actor) > range + SKIN {
+        return None;
+    }
+    let closest = |point| closest_body_point(point, actor);
+    if let Some(first) = volume_cone_contact(origin, direction, range, angle, closest) {
+        if exposed(first) {
+            return Some(first);
+        }
+    }
+    let rotation = if actor.species == Species::Dragon {
+        actor.body_rotation()
+    } else {
+        Quat::IDENTITY
+    };
+    for x in [-1_i8, 0, 1] {
+        for y in [-1_i8, 0, 1] {
+            for z in [-1_i8, 0, 1] {
+                if x == 0 && y == 0 && z == 0 {
+                    continue;
+                }
+                let offset = Vec3::new(f32::from(x), f32::from(y), f32::from(z));
+                let seed = closest(actor.center() + rotation * (offset * box_half(actor)));
+                if let Some(contact) =
+                    volume_cone_contact_from_seed(origin, direction, range, angle, seed, closest)
+                {
+                    if exposed(contact) {
+                        return Some(contact);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Bounded intersection of a finite cone and a convex volume's closest-point query.
+pub(crate) fn volume_cone_contact(
+    origin: Vec3,
+    direction: Vec3,
+    range: f32,
+    angle: f32,
+    closest: impl Fn(Vec3) -> Vec3,
+) -> Option<Vec3> {
+    volume_cone_contact_from_seed(origin, direction, range, angle, closest(origin), closest)
+}
+
+fn volume_cone_contact_from_seed(
+    origin: Vec3,
+    direction: Vec3,
+    range: f32,
+    angle: f32,
+    mut point: Vec3,
+    closest: impl Fn(Vec3) -> Vec3,
+) -> Option<Vec3> {
+    // Alternating projections preserve the finite cone and actual convex body;
+    // they also find a flank intersection when the nearest point lies outside.
+    for _ in 0..32 {
+        let delta = point - origin;
+        let distance = delta.length();
+        let axial = delta.dot(direction);
+        let radial = delta - direction * axial;
+        let cone = if distance <= range && (distance < SKIN || axial / distance >= angle.cos()) {
+            point
+        } else if distance > range && axial / distance >= angle.cos() {
+            origin + delta * (range / distance)
+        } else {
+            let edge = direction * angle.cos() + radial.normalize_or(Vec3::X) * angle.sin();
+            origin + edge * delta.dot(edge).clamp(0.0, range)
+        };
+        let body = closest(cone);
+        if body.distance_squared(cone) < SKIN * SKIN {
+            return Some(cone);
+        }
+        point = body;
+    }
+    None
+}
+
 fn hex_support(axis: Vec3) -> f32 {
     [
         Vec3::new(0.0, 0.0, 1.0),

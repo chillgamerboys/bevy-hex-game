@@ -233,18 +233,26 @@ fn advance_shot(
         if actor.id != shot.owner && actor.team == shot.parameters.team {
             continue;
         }
-        if actor.id == shot.owner && !shot.owner_cleared {
-            if crate::shapes::distance(shot.position, actor) > PROJECTILE_RADIUS + SKIN {
-                shot.owner_cleared = true;
-            } else {
-                continue;
-            }
-        }
         let previous_feet = if predict {
             actor.feet
         } else {
             actor.previous_feet
         };
+        if actor.id == shot.owner && !shot.owner_cleared {
+            // Clearance and the sweep must use the same start-of-step pose.
+            // A caster walking away can already be clear at the tick endpoint
+            // while the outgoing shot still overlaps its previous capsule.
+            let mut start = actor.clone();
+            start.feet = previous_feet;
+            if !predict {
+                start.body_yaw = actor.previous_yaw;
+            }
+            if crate::shapes::distance(shot.position, &start) > PROJECTILE_RADIUS + SKIN {
+                shot.owner_cleared = true;
+            } else {
+                continue;
+            }
+        }
         // Sweep in the moving body's frame, avoiding missed fast cross-traffic.
         let relative_delta = delta - (actor.feet - previous_feet);
         let body_hit = if actor.species == crate::Species::Dragon {
@@ -944,6 +952,45 @@ mod tests {
         let contact = advance_shot(&mut shot, &CollisionWorld::default(), &[target], false)
             .expect("moving actor crosses the ray");
         assert!(contact.actor == Some(1) && (4.0..5.0).contains(&contact.point.x));
+    }
+
+    #[test]
+    fn withdrawing_caster_does_not_reenter_its_outgoing_shot_but_a_returning_shot_hits() {
+        for species in [
+            crate::Species::Human,
+            crate::Species::Shadow,
+            crate::Species::Shaman,
+        ] {
+            let mut owner = Actor::spawn(7, Vec3::ZERO, Vec3::new(1.0, -0.13, 0.0).normalize());
+            owner.species = species;
+            let mut shot = projectile(&owner, Spell::Fireball, &ArenaTuning::default(), 0, 32.0);
+            let collision = CollisionWorld::default();
+            owner.previous_feet = owner.feet;
+            owner.feet -= Vec3::X * 5.0 * STEP;
+            assert!(
+                advance_shot(&mut shot, &collision, std::slice::from_ref(&owner), false).is_none()
+            );
+            owner.previous_feet = owner.feet;
+            owner.feet -= Vec3::X * 5.0 * STEP;
+            let mut previous = owner.clone();
+            previous.feet = owner.previous_feet;
+            assert!(crate::shapes::distance(shot.position, &previous) < PROJECTILE_RADIUS);
+            assert!(crate::shapes::distance(shot.position, &owner) > PROJECTILE_RADIUS + SKIN);
+            let start = shot.position;
+            assert!(
+                advance_shot(&mut shot, &collision, std::slice::from_ref(&owner), false).is_none()
+            );
+            assert!(shot.position.x > start.x && !shot.owner_cleared);
+            owner.previous_feet = owner.feet;
+            assert!(
+                advance_shot(&mut shot, &collision, std::slice::from_ref(&owner), false).is_none()
+            );
+            assert!(shot.owner_cleared);
+            shot.velocity = (owner.center() - shot.position).normalize() * 1200.0;
+            let contact = advance_shot(&mut shot, &collision, &[owner], false)
+                .expect("returning projectile still hits its actual caster");
+            assert_eq!(contact.actor, Some(7));
+        }
     }
 
     fn shield_impact(contact: Vec3, normal: Vec3) -> Impact {

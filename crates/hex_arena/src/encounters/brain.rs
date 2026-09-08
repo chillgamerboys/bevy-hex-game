@@ -324,14 +324,21 @@ impl Brain {
                     kind: CreatureAbility::Barrier,
                     aim: input.aim,
                 });
-            } else if !retreat && sight.is_some() {
+            } else if sight.is_some() {
                 let distance = sight.and_then(|seen| seen.observed).map_or_else(
                     || actor.eye().distance(target.unwrap_or(actor.eye())),
                     |seen| seen.distance(actor.eye(), 0.0),
                 );
                 let facing = (actor.body_rotation() * Vec3::NEG_Z)
                     .dot(input.aim.with_y(0.0).normalize_or(Vec3::NEG_Z));
-                if distance <= c.bite_range + 0.2
+                // A retreating dragon may stop to turn its physical mouth toward
+                // a visible close attacker. Damage still refreshes the retreat
+                // timer, and the fixed retreat destination survives this defense.
+                if retreat && distance <= c.breath_range && self.ready(CreatureAbility::FireCone) {
+                    goal = actor.feet;
+                }
+                if !retreat
+                    && distance <= c.bite_range + 0.2
                     && facing >= (c.bite_angle.to_radians() * 0.5).cos()
                     && self.ready(CreatureAbility::Bite)
                 {
@@ -348,7 +355,8 @@ impl Brain {
                         aim: input.aim,
                     });
                 }
-                if distance < c.bite_range * 0.7
+                if !retreat
+                    && distance < c.bite_range * 0.7
                     && facing >= (c.bite_angle.to_radians() * 0.5).cos()
                     && self.flight_recovery.is_none()
                 {
@@ -516,7 +524,11 @@ impl Brain {
             Vec3::ZERO
         };
         if let Some(active) = &self.active {
-            input.aim = active.direction();
+            // Only admitted own sight can update a breath. Other attacks and a
+            // breath whose target is hidden retain their last direction.
+            if !active.tracks_breath() || sight.is_none() {
+                input.aim = active.direction();
+            }
         }
         input.run = party.snapshot.phase != PartyPhase::Dormant || self.steering.jumping();
         let (direction, jump) = if actor.species == Species::Shadow {
@@ -626,13 +638,13 @@ impl Brain {
         let (_, time) = ballistic_aim(actor.eye(), target, tuning, speed)?;
         let (aim, _) = ballistic_aim(
             actor.eye(),
-            target + seen.velocity * time.min(0.5),
+            target + seen.velocity * time.min(0.5) + error,
             tuning,
             speed,
         )?;
         let mut caster = actor.clone();
         caster.selected = Spell::Fireball;
-        caster.aim = (aim + error).normalize_or(aim);
+        caster.aim = aim;
         let bodies: Vec<_> = if seen.observed.is_some() {
             self.battle_seen
                 .iter()

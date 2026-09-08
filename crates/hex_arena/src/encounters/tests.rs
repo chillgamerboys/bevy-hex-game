@@ -11,6 +11,9 @@ mod visibility_tests;
 #[path = "recovery_tests.rs"]
 mod recovery_tests;
 
+#[path = "combat_repair_tests.rs"]
+mod combat_repair_tests;
+
 fn fixture(
     encounter: ArenaEncounter,
 ) -> (
