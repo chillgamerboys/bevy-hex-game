@@ -1859,8 +1859,13 @@ fn actor_models_reconcile_removed_species_and_reset_generations() {
     };
     let original = render(&mut fixture);
     assert_eq!(original.len(), 2);
-    fixture.world_mut().resource_mut::<ArenaSession>().actors[1].species =
-        hex_arena::Species::Goblin;
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .get_mut(1)
+        .expect("Duel fixture must contain an enemy actor")
+        .species = hex_arena::Species::Goblin;
     let changed = render(&mut fixture);
     assert_eq!(changed.len(), 2);
     assert_eq!(
@@ -1927,7 +1932,13 @@ fn encounter_hud_reveals_only_whole_party_completion() {
     assert!(initial.contains("0 / 1 parties cleared"));
     // An unseen member can die before the party is cleared. Its live roster size
     // and remaining HP must not become a normal-HUD observation.
-    fixture.world_mut().resource_mut::<ArenaSession>().actors[1].hp = 0.0;
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .get_mut(1)
+        .expect("Fort Goblins fixture must contain an enemy actor")
+        .hp = 0.0;
     tick(&mut fixture);
     assert_eq!(label(&mut fixture), initial);
     for actor in fixture
@@ -1950,7 +1961,11 @@ fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
     state.record_frame_timing(start, 1.0 / 60.0);
     state.record_frame_timing(start + std::time::Duration::from_millis(40), 1.0 / 60.0);
     assert_eq!(state.frame_wall_intervals.len(), 1);
-    assert!((state.frame_wall_intervals[0] - 40.0).abs() < 0.001);
+    let interval = state
+        .frame_wall_intervals
+        .first()
+        .expect("two frame starts must produce one wall interval");
+    assert!((*interval - 40.0).abs() < 0.001);
     assert!(state
         .frame_times
         .iter()
@@ -1964,4 +1979,58 @@ fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
         .last()
         .is_some_and(|dt| dt.abs() < 0.001));
     assert!(paused.frame_times.last().is_some_and(|dt| *dt > 16.0));
+}
+
+#[test]
+fn synthetic_stress_changes_require_explicit_capture_and_retain_tick_activity() {
+    let (mut fixture, _) = menu_app();
+    press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));
+    {
+        let mut state = fixture.world_mut().resource_mut::<ViewState>();
+        state.capture_view = "encounter-stress".into();
+        state.started = true;
+        state.paused = false;
+    }
+    let original = fixture
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .first()
+        .expect("human")
+        .feet;
+    assert!(encounter::prepare_stress_tick(fixture.world_mut()).is_none());
+    assert_eq!(
+        fixture
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .first()
+            .expect("human")
+            .feet,
+        original
+    );
+    assert!(fixture
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .iter()
+        .all(|actor| actor.max_hp < 1000.0));
+    fixture.world_mut().resource_mut::<ViewState>().capture =
+        Some(PathBuf::from("unused-synthetic-stress.png"));
+    for _ in 0..70 {
+        fixture.update();
+    }
+    let state = fixture.world().resource::<ViewState>();
+    assert!(state.capture_stress_initialized && state.capture_stress_steps >= 120);
+    assert_eq!(
+        state.capture_stress_ticks.len(),
+        usize::try_from(state.capture_stress_steps).expect("bounded capture ticks")
+    );
+    assert!(state
+        .capture_stress_ticks
+        .iter()
+        .all(|row| row.frame > 0 && row.tick > 0 && row.cpu_ms >= 0.0));
+    let session = fixture.world().resource::<ArenaSession>();
+    assert!(session.actors.iter().all(|actor| actor.max_hp > 99_999.0));
+    assert!(session.outcome.is_none());
 }

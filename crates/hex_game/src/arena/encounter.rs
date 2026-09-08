@@ -5,6 +5,87 @@ use bevy::prelude::*;
 use hex_arena::{ActorIntent, ArenaSession, ArenaTuning, AttackPhase, CreatureAbility, Spell};
 use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
 
+pub(super) fn stress_view(view: &str) -> bool {
+    view == "encounter-stress"
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct StressStimulus {
+    representative: u8,
+    human_feet: [f32; 3],
+    cast_requested: bool,
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct StressTick {
+    pub frame: u32,
+    pub tick: u64,
+    pub active_parties: usize,
+    pub living_enemies: usize,
+    pub terrain_publication: bool,
+    pub damage_outcome: bool,
+    pub destroyed_voxels: usize,
+    pub cpu_ms: f64,
+    pub stimulus: StressStimulus,
+}
+
+/// Explicit synthetic capture fixture, never used by native play or visual approval.
+pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
+    let state = world.resource::<ViewState>();
+    if state.capture.is_none() || !stress_view(&state.capture_view) {
+        return None;
+    }
+    let step = state.capture_stress_steps;
+    let initialize = !state.capture_stress_initialized;
+    if world.resource::<ArenaSession>().parties().is_empty() {
+        return None;
+    }
+    if initialize {
+        for actor in &mut world.resource_mut::<ArenaSession>().actors {
+            actor.max_hp = 100_000.0;
+            actor.hp = actor.max_hp;
+        }
+        world.resource_mut::<ViewState>().capture_stress_initialized = true;
+    }
+    let (representative, feet, aim) = {
+        let session = world.resource::<ArenaSession>();
+        let representatives = session
+            .parties()
+            .iter()
+            .filter_map(|party| {
+                session
+                    .actors
+                    .iter()
+                    .find(|actor| actor.party == Some(party.id))
+            })
+            .collect::<Vec<_>>();
+        if representatives.is_empty() {
+            return None;
+        }
+        let index = usize::try_from(step / 12).ok()? % representatives.len();
+        let target = *representatives.get(index)?;
+        let offset = target.body_rotation() * Vec3::X * (target.body_dimensions().x * 0.5 + 0.4);
+        (target.id, target.feet + offset, -offset.normalize_or_zero())
+    };
+    if let Some(human) = world.resource_mut::<ArenaSession>().actors.first_mut() {
+        human.feet = feet;
+        human.aim = aim;
+    }
+    let cast_requested = step.is_multiple_of(240);
+    world.resource_mut::<hex_arena::ArenaInput>().human = ActorIntent {
+        aim,
+        selected: Some(Spell::AreaBlast),
+        cast_pressed: cast_requested,
+        cast_released: cast_requested,
+        ..default()
+    };
+    Some(StressStimulus {
+        representative,
+        human_feet: feet.to_array(),
+        cast_requested,
+    })
+}
+
 pub(super) fn capture_intent(frame: u32, session: &ArenaSession, view: &str) -> ActorIntent {
     let Some(human) = session.actors.first() else {
         return ActorIntent::default();
@@ -42,11 +123,11 @@ pub(super) fn capture_intent(frame: u32, session: &ArenaSession, view: &str) -> 
         cast_pressed: attack && cycle == 45,
         cast_held: attack && (45..76).contains(&cycle),
         cast_released: attack && cycle == 76,
-        ..default()
     }
 }
 
 pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
+    let view = view.strip_suffix("-rear").unwrap_or(view);
     if view == "encounter-barrier" {
         return !session.barriers().is_empty();
     }
@@ -82,7 +163,7 @@ pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
 
 pub(super) fn phase_view(view: &str) -> bool {
     matches!(
-        view,
+        view.strip_suffix("-rear").unwrap_or(view),
         "encounter-windup"
             | "encounter-breath"
             | "encounter-swipe"
@@ -90,6 +171,19 @@ pub(super) fn phase_view(view: &str) -> bool {
             | "encounter-aura"
             | "encounter-fireball"
     )
+}
+
+fn close_camera(target: Vec3, rotation: Quat, view: &str) -> Transform {
+    let mut offset = if view.starts_with("encounter-body") {
+        rotation * Vec3::new(3.8, 1.8, -4.5)
+    } else {
+        Vec3::new(5.0, 4.0, 7.0)
+    };
+    if view.ends_with("-rear") {
+        offset.x = -offset.x;
+        offset.z = -offset.z;
+    }
+    Transform::from_translation(target + offset).looking_at(target, Vec3::Y)
 }
 
 pub(super) fn overview(
@@ -179,15 +273,20 @@ pub(super) fn camera(
                 .looking_at(*anchor + Vec3::Y, Vec3::Y);
         }
     } else if state.capture_view.starts_with("encounter-") {
-        let actor = session
-            .actors
-            .iter()
-            .find(|actor| actor.attack_state().is_some())
-            .or_else(|| session.actors.get(1));
+        let actor = if stress_view(&state.capture_view) {
+            session.actors.first()
+        } else if state.capture_view.starts_with("encounter-body") {
+            session.actors.get(1)
+        } else {
+            session
+                .actors
+                .iter()
+                .find(|actor| actor.attack_state().is_some())
+                .or_else(|| session.actors.get(1))
+        };
         if let Some(actor) = actor {
             let target = actor.feet + Vec3::Y * actor.body_dimensions().y * 0.5;
-            *camera = Transform::from_translation(target + Vec3::new(5.0, 4.0, 7.0))
-                .looking_at(target, Vec3::Y);
+            *camera = close_camera(target, actor.body_rotation(), &state.capture_view);
         }
     }
 }
@@ -353,6 +452,27 @@ pub(super) fn effects(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rear_reviews_preserve_phase_waits_and_reverse_only_the_camera_azimuth() {
+        let target = Vec3::new(4.0, 2.0, -5.0);
+        for view in ["encounter-barrier", "encounter-aura", "encounter-body"] {
+            let rear = format!("{view}-rear");
+            assert_eq!(phase_view(view), phase_view(&rear));
+            assert_eq!(phase_view(view), view != "encounter-body");
+            let front_pose = close_camera(target, Quat::from_rotation_y(0.7), view);
+            let rear_pose = close_camera(target, Quat::from_rotation_y(0.7), &rear);
+            let front_offset = front_pose.translation - target;
+            let rear_offset = rear_pose.translation - target;
+            assert!((front_offset.x + rear_offset.x).abs() < 0.001);
+            assert!((front_offset.z + rear_offset.z).abs() < 0.001);
+            assert!((front_offset.y - rear_offset.y).abs() < 0.001);
+            for pose in [front_pose, rear_pose] {
+                assert!(
+                    Vec3::from(pose.forward()).dot((target - pose.translation).normalize()) > 0.999
+                );
+            }
+        }
+    }
     #[test]
     fn bounds_framing_contains_all_corners_at_both_azimuths() {
         for rear in [false, true] {

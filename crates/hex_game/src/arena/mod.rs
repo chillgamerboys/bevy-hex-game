@@ -85,6 +85,9 @@ struct ViewState {
     capture_focus: Option<String>,
     capture_event_frame: Option<u32>,
     capture_ready_frame: Option<u32>,
+    capture_stress_initialized: bool,
+    capture_stress_steps: u32,
+    capture_stress_ticks: Vec<encounter::StressTick>,
 }
 
 impl Default for ViewState {
@@ -121,6 +124,9 @@ impl Default for ViewState {
             capture_focus: std::env::var("HEX_ARENA_FOCUS").ok(),
             capture_event_frame: None,
             capture_ready_frame: None,
+            capture_stress_initialized: false,
+            capture_stress_steps: 0,
+            capture_stress_ticks: Vec::new(),
         }
     }
 }
@@ -157,6 +163,9 @@ impl ViewState {
         self.capture_event_frame = None;
         self.capture_ready_frame = None;
         self.capture_ready_elapsed_ms = None;
+        self.capture_stress_initialized = false;
+        self.capture_stress_steps = 0;
+        self.capture_stress_ticks.clear();
         self.pause();
     }
 
@@ -615,7 +624,9 @@ fn drive_simulation(world: &mut World) {
             .actors
             .first()
             .map_or(Vec3::X, |actor| actor.aim);
-        let sample = if view.starts_with("encounter-") && view != "encounter-landmark" {
+        let sample = if encounter::stress_view(&view) {
+            ActorIntent::default()
+        } else if view.starts_with("encounter-") && view != "encounter-landmark" {
             encounter::capture_intent(frame, world.resource::<ArenaSession>(), &view)
         } else {
             capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction)
@@ -642,12 +653,43 @@ fn drive_simulation(world: &mut World) {
         world.resource_mut::<ArenaSession>().bot_enabled = false;
     }
     for _ in 0..steps {
+        let stimulus = if capture && encounter::stress_view(&view) {
+            encounter::prepare_stress_tick(world)
+        } else {
+            None
+        };
         let before = world.resource::<ArenaTerrainView>().revision;
+        let voxels_before = world.resource::<ArenaTerrainView>().voxels.len();
+        let outcomes_before = world.resource::<ArenaSession>().terrain_outcomes;
         let started = std::time::Instant::now();
         world.run_schedule(ArenaTick);
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         let changed = before != world.resource::<ArenaTerrainView>().revision;
         let tick = world.resource::<ArenaSession>().tick;
+        if let Some(stimulus) = stimulus {
+            let summary = world.resource::<ArenaSession>().encounter_summary();
+            let damage_outcome =
+                world.resource::<ArenaSession>().terrain_outcomes > outcomes_before;
+            let destroyed_voxels =
+                voxels_before.saturating_sub(world.resource::<ArenaTerrainView>().voxels.len());
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_stress_steps += 1;
+            state.capture_stress_ticks.push(encounter::StressTick {
+                frame,
+                tick,
+                active_parties: summary.active_parties,
+                living_enemies: summary.living_enemies,
+                terrain_publication: changed,
+                damage_outcome,
+                destroyed_voxels,
+                cpu_ms: elapsed,
+                stimulus,
+            });
+            if state.capture_stress_steps >= 3600 {
+                state.capture_event_frame = Some(frame);
+                state.accumulator = 0.0;
+            }
+        }
         {
             let mut state = world.resource_mut::<ViewState>();
             if state.tick_times.len() < 36_000 {
@@ -667,6 +709,9 @@ fn drive_simulation(world: &mut World) {
             let mut state = world.resource_mut::<ViewState>();
             state.capture_event_frame = Some(frame);
             state.accumulator = 0.0;
+            break;
+        }
+        if capture && world.resource::<ViewState>().capture_stress_steps >= 3600 {
             break;
         }
     }
@@ -855,6 +900,14 @@ fn capture_frame(
         state.capture_ready_elapsed_ms =
             Some(state.app_started_at.elapsed().as_secs_f64() * 1000.0);
     }
+    if encounter::stress_view(&state.capture_view) && state.capture_event_frame.is_none() {
+        if state.frames > 2000 || session.outcome.is_some() {
+            error!("Synthetic encounter stress capture ended before 3600 active simulation ticks");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
     if encounter::phase_view(&state.capture_view) && state.capture_event_frame.is_none() {
         if state.frames >= 1800 || session.outcome.is_some() {
             error!("Encounter capture failed: requested phase {} was not reached before the round ended or the 30-second limit", state.capture_view);
@@ -901,35 +954,120 @@ fn capture_frame(
     };
     state.requested = true;
     let predicted = hex_arena::preview(&session, &view, &geometry, &tuning);
-    let receipt = serde_json::json!({
-        "view":state.capture_view,"started":state.started,"paused":state.paused,"frame":state.frames,"tick":session.tick,
-        "selection":{"map":map_name(view.selection.map),"encounter":encounter_name(view.selection.encounter)},
-        "terrain_revision":view.revision,"voxels":view.voxels.len(),"static_spans":view.static_spans.len(),
-        "authored_objects":object_count,"object_render_chunks":chunk_count,"focus_anchor":state.capture_focus,
-        "phase_reached_frame":state.capture_event_frame,
-        "render_ready_frame":state.capture_ready_frame,"liquid_phase_seconds":liquid_clock.as_ref().map(|clock|clock.phase_seconds()),
-        "app_construction_to_render_ready_ms":state.capture_ready_elapsed_ms,
-        "camera":cameras.single().ok().map(|camera|serde_json::json!({"position":camera.translation.to_array(),"rotation":camera.rotation.to_array()})),
-        "actors":session.actors.iter().map(|a|serde_json::json!({
-            "id":a.id,"species":a.species,"team":a.team,"party":a.party,"hp":a.hp,"max_hp":a.max_hp,"feet":a.feet.to_array(),
-            "body_dimensions":a.body_dimensions().to_array(),"body_rotation":a.body_rotation().to_array(),"cooldowns":a.cooldowns,
-            "attack":a.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"origin":attack.origin.to_array(),"direction":attack.direction.to_array(),"range":attack.range,"half_angle":attack.half_angle,"progress":attack.progress})),
-            "charge":a.charge().map(|charge|serde_json::json!({"spell":charge.spell,"elapsed":charge.elapsed,"progress":(charge.elapsed/tuning.charge_seconds).clamp(0.0,1.0),"launch_speed":tuning.launch_speed(charge.elapsed)}))
-        })).collect::<Vec<_>>(),
-        "barriers":session.barriers().iter().map(|barrier|serde_json::json!({"id":barrier.id,"owner":barrier.owner,"center":barrier.center.to_array(),"normal":barrier.normal.to_array(),"width":barrier.width,"height":barrier.height,"hp":barrier.hp,"max_hp":barrier.max_hp,"remaining":barrier.remaining,"lifetime":barrier.lifetime})).collect::<Vec<_>>(),
-        "auras":session.auras().iter().map(|aura|serde_json::json!({"owner":aura.owner,"center":aura.center.to_array(),"radius":aura.radius,"remaining":aura.remaining,"lifetime":aura.lifetime})).collect::<Vec<_>>(),
-        "parties":session.parties().iter().map(|party|serde_json::json!({"id":party.id,"phase":party.phase,"home":party.home.to_array(),"living":party.living})).collect::<Vec<_>>(),
-        "encounter_summary":session.encounter_summary(),
-        "encounter_stats":session.encounter_stats(),
-        "capture_inputs":state.capture_inputs.iter().map(|(frame,input)|serde_json::json!({"frame":frame,"selected":input.selected,"movement":input.movement.to_array(),"aim":input.aim.to_array(),"jump":input.jump,"pressed":input.cast_pressed,"released":input.cast_released,"held":input.cast_held})).collect::<Vec<_>>(),
-        "fixture_voxels":state.capture_fixture_voxels,"preview":{"valid":predicted.valid,"wall_voxels":predicted.wall_voxels,"footprint":presentation::shield_footprint(&predicted.wall_voxels)},
-        "bot_debug":session.bot_debug(),"round_summary":session.round_summary(),"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,
-        "effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),
-        "engine_time_delta_ms":state.frame_times,"simulation_frame_dt_ms":state.simulation_frame_times,"app_frame_wall_intervals_ms":state.frame_wall_intervals,
-        "frame_timing_note":"Instant start-to-start of consecutive main app Update frames; includes scheduler and render-submission waits, not GPU execution or vsync timing. Simulation dt is a separate engine clock.",
-        "tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),
-        "width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"
-    });
+    // Keep each macro bounded: a single large object exceeds serde_json's recursive
+    // token parser limit as new capture evidence is added.
+    let actors = session.actors.iter().map(|actor| {
+        let attack = actor.attack_state().map(|attack| serde_json::json!({
+            "kind": attack.kind, "phase": attack.phase, "origin": attack.origin.to_array(),
+            "direction": attack.direction.to_array(), "range": attack.range,
+            "half_angle": attack.half_angle, "progress": attack.progress
+        }));
+        let charge = actor.charge().map(|charge| serde_json::json!({
+            "spell": charge.spell, "elapsed": charge.elapsed,
+            "progress": (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0),
+            "launch_speed": tuning.launch_speed(charge.elapsed)
+        }));
+        serde_json::json!({
+            "id": actor.id, "species": actor.species, "team": actor.team,
+            "party": actor.party, "hp": actor.hp, "max_hp": actor.max_hp,
+            "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
+            "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
+            "attack": attack, "charge": charge
+        })
+    }).collect::<Vec<_>>();
+    let barriers = session.barriers().iter().map(|barrier| serde_json::json!({
+        "id": barrier.id, "owner": barrier.owner, "center": barrier.center.to_array(),
+        "normal": barrier.normal.to_array(), "width": barrier.width, "height": barrier.height,
+        "hp": barrier.hp, "max_hp": barrier.max_hp, "remaining": barrier.remaining,
+        "lifetime": barrier.lifetime
+    })).collect::<Vec<_>>();
+    let auras = session
+        .auras()
+        .iter()
+        .map(|aura| {
+            serde_json::json!({
+                "owner": aura.owner, "center": aura.center.to_array(), "radius": aura.radius,
+                "remaining": aura.remaining, "lifetime": aura.lifetime
+            })
+        })
+        .collect::<Vec<_>>();
+    let parties = session.parties().iter().map(|party| serde_json::json!({
+        "id": party.id, "phase": party.phase, "home": party.home.to_array(), "living": party.living
+    })).collect::<Vec<_>>();
+    let capture_inputs = state
+        .capture_inputs
+        .iter()
+        .map(|(frame, input)| {
+            serde_json::json!({
+                "frame": frame, "selected": input.selected, "movement": input.movement.to_array(),
+                "aim": input.aim.to_array(), "jump": input.jump, "pressed": input.cast_pressed,
+                "released": input.cast_released, "held": input.cast_held
+            })
+        })
+        .collect::<Vec<_>>();
+    let effects = session
+        .effects
+        .iter()
+        .map(|effect| {
+            serde_json::json!({
+                "spell": effect.kind, "radius": effect.radius, "age": effect.age
+            })
+        })
+        .collect::<Vec<_>>();
+    let tick_samples = state
+        .tick_times
+        .iter()
+        .map(|(tick, changed, ms)| {
+            serde_json::json!({
+                "tick": tick, "terrain_changed": changed, "cpu_ms": ms
+            })
+        })
+        .collect::<Vec<_>>();
+    let receipt = serde_json::Value::Object([
+        ("view", serde_json::json!(state.capture_view)),
+        ("started", serde_json::json!(state.started)),
+        ("paused", serde_json::json!(state.paused)),
+        ("frame", serde_json::json!(state.frames)),
+        ("tick", serde_json::json!(session.tick)),
+        ("selection", serde_json::json!({"map": map_name(view.selection.map), "encounter": encounter_name(view.selection.encounter)})),
+        ("terrain_revision", serde_json::json!(view.revision)),
+        ("voxels", serde_json::json!(view.voxels.len())),
+        ("static_spans", serde_json::json!(view.static_spans.len())),
+        ("authored_objects", serde_json::json!(object_count)),
+        ("object_render_chunks", serde_json::json!(chunk_count)),
+        ("focus_anchor", serde_json::json!(state.capture_focus)),
+        ("phase_reached_frame", serde_json::json!(state.capture_event_frame)),
+        ("render_ready_frame", serde_json::json!(state.capture_ready_frame)),
+        ("liquid_phase_seconds", serde_json::json!(liquid_clock.as_ref().map(|clock| clock.phase_seconds()))),
+        ("app_construction_to_render_ready_ms", serde_json::json!(state.capture_ready_elapsed_ms)),
+        ("camera", serde_json::json!(cameras.single().ok().map(|camera| serde_json::json!({"position": camera.translation.to_array(), "rotation": camera.rotation.to_array()})))),
+        ("actors", serde_json::json!(actors)),
+        ("barriers", serde_json::json!(barriers)),
+        ("auras", serde_json::json!(auras)),
+        ("parties", serde_json::json!(parties)),
+        ("encounter_summary", serde_json::json!(session.encounter_summary())),
+        ("encounter_stats", serde_json::json!(session.encounter_stats())),
+        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human pose moves among party representatives every 12 ticks; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
+        ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
+        ("capture_inputs", serde_json::json!(capture_inputs)),
+        ("fixture_voxels", serde_json::json!(state.capture_fixture_voxels)),
+        ("preview", serde_json::json!({"valid": predicted.valid, "wall_voxels": predicted.wall_voxels, "footprint": presentation::shield_footprint(&predicted.wall_voxels)})),
+        ("bot_debug", serde_json::json!(session.bot_debug())),
+        ("round_summary", serde_json::json!(session.round_summary())),
+        ("notice", serde_json::json!(session.notice)),
+        ("shields_raised", serde_json::json!(session.shields_raised)),
+        ("terrain_outcomes", serde_json::json!(session.terrain_outcomes)),
+        ("effects", serde_json::json!(effects)),
+        ("engine_time_delta_ms", serde_json::json!(state.frame_times)),
+        ("simulation_frame_dt_ms", serde_json::json!(state.simulation_frame_times)),
+        ("app_frame_wall_intervals_ms", serde_json::json!(state.frame_wall_intervals)),
+        ("frame_timing_note", serde_json::json!("Instant start-to-start of consecutive main app Update frames; includes scheduler and render-submission waits, not GPU execution or vsync timing. Simulation dt is a separate engine clock.")),
+        ("frame_interval_indexing", serde_json::json!("Wall interval index 0 spans Update starts at frame 1 to 2 and includes frame 1 work; stress tick rows identify their containing app frame.")),
+        ("tick_samples", serde_json::json!(tick_samples)),
+        ("width", serde_json::json!(WIDTH)),
+        ("height", serde_json::json!(HEIGHT)),
+        ("evidence", serde_json::json!(if encounter::stress_view(&state.capture_view) { "SYNTHETIC_PERFORMANCE; normal gameplay, movement, human balance, GPU and vsync are not established" } else { "STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending" })),
+    ].into_iter().map(|(key, value)| (key.to_owned(), value)).collect());
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             let result = (|| -> Result<(), String> {

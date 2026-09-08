@@ -55,14 +55,19 @@ ENCOUNTER_VIEWS = (
     ("fort-dragon-rear", "rear", "fort", "dragon", None),
     ("fort-dragon-first", "encounter-first", "fort", "dragon", None),
     ("fort-dragon-third", "encounter-third", "fort", "dragon", None),
+    ("dragon-body-rear", "encounter-body-rear", "fort", "dragon", None),
     ("dragon-windup", "encounter-windup", "fort", "dragon", None),
     ("dragon-breath", "encounter-breath", "fort", "dragon", None),
     ("dragon-barrier", "encounter-barrier", "fort", "dragon", None),
+    ("dragon-barrier-rear", "encounter-barrier-rear", "fort", "dragon", None),
     ("fort-goblins-third", "encounter-third", "fort", "goblins", None),
+    ("goblin-body-rear", "encounter-body-rear", "fort", "goblins", None),
     ("goblin-swipe", "encounter-swipe", "fort", "goblins", None),
     ("fort-shaman-third", "encounter-third", "fort", "shaman-party", None),
+    ("shaman-body-rear", "encounter-body-rear", "fort", "shaman-party", None),
     ("shaman-fireball", "encounter-fireball", "fort", "shaman-party", None),
     ("shaman-aura", "encounter-aura", "fort", "shaman-party", None),
+    ("shaman-aura-rear", "encounter-aura-rear", "fort", "shaman-party", None),
     ("fort-shadow-first", "encounter-first", "fort", "shadow", None),
     ("seven-start", "start", "seven-regions", "dragon", None),
     ("seven-overview", "overview", "seven-regions", "dragon", None),
@@ -72,6 +77,13 @@ ENCOUNTER_VIEWS = (
     ("seven-mountains", "encounter-landmark", "seven-regions", "dragon", "mountains_high_pass"),
     ("seven-fort", "encounter-landmark", "seven-regions", "dragon", "fort_fort_courtyard"),
     ("seven-caves", "encounter-landmark", "seven-regions", "dragon", "caves_cave_entrance"),
+)
+PERFORMANCE_VIEWS = (
+    ("fort-dragon-stress", "encounter-stress", "fort", "dragon", None),
+    ("fort-goblins-stress", "encounter-stress", "fort", "goblins", None),
+    ("fort-shaman-stress", "encounter-stress", "fort", "shaman-party", None),
+    ("fort-shadow-stress", "encounter-stress", "fort", "shadow", None),
+    ("seven-all-enemies-stress", "encounter-stress", "seven-regions", "dragon", None),
 )
 CANVAS = [1600, 900]
 CARGO_ARGS = ("run", "-p", "hex_game", "--features", "dev,arena-prototype", "--", "--arena")
@@ -248,7 +260,8 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
             if any(voxel in preview["wall_voxels"] for voxel in fixture):
                 raise RuntimeError(f"{view} preview failed to omit its occupied fixture slots.")
     phase_views = {"encounter-windup", "encounter-breath", "encounter-swipe", "encounter-barrier", "encounter-aura", "encounter-fireball"}
-    if view in phase_views:
+    phase_view = view.removesuffix("-rear")
+    if phase_view in phase_views:
         reached = state.get("phase_reached_frame")
         if not isinstance(reached, int) or state.get("frame", 0) < reached + 4:
             raise RuntimeError(f"{view} lacks a frozen authoritative phase and four render frames.")
@@ -261,9 +274,25 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
             "encounter-swipe": any(a.get("kind") == "Swipe" and a.get("phase") == "Windup" for a in attacks),
             "encounter-windup": any(a.get("phase") == "Windup" for a in attacks),
             "encounter-fireball": any(actor.get("id") != 0 and (actor.get("charge") or {}).get("spell") == "Fireball" for actor in actors),
-        }[view]
+        }[phase_view]
         if not valid:
             raise RuntimeError(f"{view} native state does not contain its requested ability phase.")
+    if view == "encounter-stress":
+        rows = state.get("stress_ticks", [])
+        if not state.get("synthetic_fixture") or len(rows) != 3600:
+            raise RuntimeError("Synthetic performance receipt requires its fixture label and 3600 ticks.")
+        seven = state.get("selection", {}).get("map") == "Seven Regions"
+        party_count = 3 if seven else 1
+        enemy_count = 10 if seven else {"Dragon": 1, "Goblins": 5, "Shaman party": 4, "Shadow": 1}.get(state.get("selection", {}).get("encounter"), 0)
+        measured = rows[120:]
+        all_active = [row for row in measured if row.get("active_parties") == party_count and row.get("living_enemies") == enemy_count]
+        if len(all_active) < 2400:
+            raise RuntimeError(f"Synthetic capture has only {len(all_active)} sustained all-enemy-active ticks; need 2400.")
+        if not any(row.get("terrain_publication") for row in measured) or not any(row.get("damage_outcome") for row in measured) or not sum(row.get("destroyed_voxels", 0) for row in measured):
+            raise RuntimeError("Synthetic capture did not retain measured terrain damage and destruction publication pressure.")
+        wall = state.get("app_frame_wall_intervals_ms", [])
+        if not wall or not all(isinstance(value, (int, float)) and 0 <= value < float("inf") for value in wall):
+            raise RuntimeError("Synthetic capture lacks valid real app-frame wall intervals.")
     ready_frame = state.get("render_ready_frame")
     if not isinstance(ready_frame, int) or state.get("frame", 0) < ready_frame + 4:
         raise RuntimeError(f"{view} did not wait four frames after render assets became ready.")
@@ -280,11 +309,13 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
-    if args.encounter_review and (args.map or args.encounter):
-        raise RuntimeError("--encounter-review defines each recipe; use --view to select entries.")
-    entries = list(ENCOUNTER_VIEWS) if args.encounter_review else [(view, view, args.map or "duel", args.encounter or "shadow", None) for view in views]
-    if args.encounter_review:
-        matrix = "arena-encounters-v1"
+    if (args.encounter_review or args.performance_review) and (args.map or args.encounter):
+        raise RuntimeError("Encounter/performance matrices define each recipe; use --view to select entries.")
+    entries = list(PERFORMANCE_VIEWS) if args.performance_review else list(ENCOUNTER_VIEWS) if args.encounter_review else [(view, view, args.map or "duel", args.encounter or "shadow", None) for view in views]
+    if args.performance_review:
+        matrix = "arena-performance-v1-synthetic"
+    elif args.encounter_review:
+        matrix = "arena-encounters-v2-multi-angle"
     if args.view:
         requested = set(args.view)
         unknown = requested - {entry[0] for entry in entries}
@@ -326,7 +357,8 @@ def capture(args: argparse.Namespace) -> int:
         "logical_canvas": CANVAS, "device_scale": 1.0,
         "changed_surfaces": ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
-        "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
+        "static_review": "NOT_AN_APPROVAL_PACK" if args.performance_review else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if args.performance_review else "HUMAN-MOTION-PENDING",
+        "performance_fixture": "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else None,
         "human_route": "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
@@ -346,7 +378,7 @@ def capture(args: argparse.Namespace) -> int:
             if focus:
                 frame_env["HEX_ARENA_FOCUS"] = focus
             frame = {
-                "name": name, "view": view, "map": arena_map, "encounter": encounter, "terrain_seed": SEEDS[arena_map], "focus_anchor": focus, "started_at": utc_now(), "static_review": "UNREVIEWED",
+                "name": name, "view": view, "map": arena_map, "encounter": encounter, "terrain_seed": SEEDS[arena_map], "focus_anchor": focus, "started_at": utc_now(), "static_review": "NOT_AN_APPROVAL_PACK" if args.performance_review else "UNREVIEWED",
                 "command": ["cargo", *CARGO_ARGS], "cwd": str(ROOT),
                 "capabilities": {key: value for key, value in frame_env.items() if key.startswith("HEX_ARENA_")},
                 "log": f"{name}.log", "mechanical_status": "INCOMPLETE",
@@ -387,7 +419,7 @@ def capture(args: argparse.Namespace) -> int:
                 frame["log_sha256"] = digest(log.read_bytes())
             write_json(pack / f"{frame['name']}.receipt.json", frame)
         write_json(pack / "receipt.json", receipt)
-    print("Capture matrix complete. Static review: UNREVIEWED. Native motion: HUMAN-MOTION-PENDING.")
+    print("Synthetic performance capture complete. No movement, human balance, GPU, or vsync claim." if args.performance_review else "Capture matrix complete. Static review: UNREVIEWED. Native motion: HUMAN-MOTION-PENDING.")
     return 0
 
 
@@ -407,7 +439,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
-    review.add_argument("--encounter-review", action="store_true", help="Capture 22 map, creature, attack-phase, and selector views with explicit recipes.")
+    review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all ten Seven Regions enemies.")
+    review.add_argument("--encounter-review", action="store_true", help="Capture 27 map, creature, attack-phase, and selector views, including opposite barrier/aura azimuths.")
     review.add_argument("--menu-review", action="store_true",
                         help="Capture the six ready/menu/HUD review views.")
     review.add_argument("--charge-review", action="store_true",

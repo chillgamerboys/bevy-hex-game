@@ -358,7 +358,9 @@ pub(super) fn update(
             }
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
             Label::Status => {
-                if let Some(outcome) = &session.outcome {
+                if state.capture.is_some() && super::encounter::stress_view(&state.capture_view) {
+                    "SYNTHETIC PERFORMANCE FIXTURE\nExtra HP / scripted party visits".into()
+                } else if let Some(outcome) = &session.outcome {
                     format!(
                         "{}\nR to restart",
                         match outcome {
