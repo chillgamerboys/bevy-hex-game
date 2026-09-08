@@ -88,6 +88,7 @@ fn install_damage_content(app: &mut App) -> (ElementId, ElementId) {
     let earth = elements.id("earth").expect("earth should resolve");
     let fire = elements.id("fire").expect("fire should resolve");
     let file = TerrainDamageFile {
+        physical_substances: Vec::new(),
         damaging_pairs: TOUGH_SUBSTANCES
             .iter()
             .map(|substance| TerrainDamagePair {
@@ -521,6 +522,7 @@ fn rejected_batches_are_atomic_and_first_use_is_consumed() {
     app.insert_resource(TerrainReady);
 
     app.insert_resource(TerrainDamageFile {
+        physical_substances: Vec::new(),
         damaging_pairs: Vec::new(),
     });
     app.world_mut()

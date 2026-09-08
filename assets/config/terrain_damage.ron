@@ -5,6 +5,11 @@
 // toughness-bearing material: 18 elements x 10 substances = 180 unique pairs.
 // Later balance may remove pairs without changing the resolver contract.
 (
+    // Physical bites and weapon swipes use the same material HP ledger.
+    physical_substances: [
+        "basalt", "dirt", "grass", "gravel", "ice", "metal", "sand", "snow",
+        "stone", "worked_stone",
+    ],
     damaging_pairs: [
         (element: "Air", substance: "basalt"),
         (element: "Air", substance: "dirt"),

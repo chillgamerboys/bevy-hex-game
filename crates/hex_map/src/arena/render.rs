@@ -11,12 +11,19 @@ struct RenderCache {
     mesh: Option<Handle<Mesh>>,
     materials: BTreeMap<SubstanceId, Handle<StandardMaterial>>,
     columns: BTreeMap<HexCoord, Entity>,
+    presentations: Vec<Entity>,
+    features: BTreeMap<crate::procedural_v3::FeatureId, Entity>,
+    generation: Option<u64>,
 }
 
 pub(super) fn plugin(app: &mut App) {
+    if app.world().contains_resource::<AssetServer>() {
+        app.add_plugins(crate::liquid_render::arena_plugin);
+    }
     app.init_resource::<RenderCache>().add_systems(
         PostUpdate,
-        refresh
+        (refresh, refresh_presentations)
+            .chain()
             .before(TransformSystems::Propagate)
             .run_if(resource_exists::<VoxelMap>),
     );
@@ -55,6 +62,11 @@ fn refresh(
             let Some(substance) = substances.get(run.substance) else {
                 continue;
             };
+            if !substance.solid {
+                // Authored liquids use the shared cap/flow renderer below. Their
+                // volumes remain nonsolid in the authoritative arena publication.
+                continue;
+            }
             let (red, green, blue) = substance.color;
             let material = cache
                 .materials
@@ -93,6 +105,107 @@ fn refresh(
             .id();
         cache.columns.insert(coord, root);
     }
+}
+
+fn refresh_presentations(
+    mut commands: Commands,
+    mut cache: ResMut<RenderCache>,
+    mut state: ResMut<ArenaWorldState>,
+    map: Res<VoxelMap>,
+    geometry: Res<ArenaVoxelGeometry>,
+    substances: Res<SubstanceTable>,
+    catalog: Res<RuntimeArtCatalog>,
+    projection: Res<crate::procedural_v3::MapPresentationProjection>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    liquid_materials: Option<ResMut<Assets<crate::liquid_render::LiquidMaterial>>>,
+    phase: Option<Res<crate::liquid_render::LiquidVisualTime>>,
+) {
+    if !state.presentation_dirty {
+        return;
+    }
+    if cache.generation == Some(state.generation) {
+        // Only nonblocking decorations can lose support. Keep every unaffected
+        // object and liquid mesh, material, and root stable during a local edit.
+        cache.features.retain(|id, entity| {
+            if projection.features().contains_key(id) {
+                return true;
+            }
+            commands.entity(*entity).despawn();
+            false
+        });
+        state.presentation_dirty = false;
+        return;
+    }
+    let Some(mut meshes) = meshes else {
+        return;
+    };
+    let is_duel = state
+        .original
+        .as_ref()
+        .is_some_and(|recipe| recipe.view.selection.map == hex_core::arena::ArenaMap::Duel);
+    if !is_duel && liquid_materials.is_none() {
+        return;
+    }
+    let prepared = match crate::crystal_render::prepare_presentations(
+        geometry.level_height,
+        Some(&projection),
+        Some(&catalog),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            error!("Arena crystal presentation: {error}");
+            return;
+        }
+    };
+    let mut roots = if let Some(mut materials) = liquid_materials {
+        match crate::liquid_render::spawn_presentations(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &map,
+            &substances,
+            geometry.level_height,
+            phase.as_ref().map_or(0.0, |clock| clock.phase_seconds()),
+            Some(&projection),
+        ) {
+            Ok(roots) => roots,
+            Err(error) => {
+                error!("Arena liquid presentation: {error}");
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let features = match crate::feature_render::spawn_presentations(
+        &mut commands,
+        geometry.level_height,
+        Some(&projection),
+    ) {
+        Ok(features) => features,
+        Err(error) => {
+            error!("Arena feature presentation: {error}");
+            return;
+        }
+    };
+    roots.extend(crate::crystal_render::spawn_prepared(
+        &mut commands,
+        prepared,
+    ));
+    for root in std::mem::replace(&mut cache.presentations, roots) {
+        commands.entity(root).despawn();
+    }
+    for (_, root) in std::mem::take(&mut cache.features) {
+        commands.entity(root).despawn();
+    }
+    cache.features = projection
+        .features()
+        .keys()
+        .copied()
+        .zip(features)
+        .collect();
+    cache.generation = Some(state.generation);
+    state.presentation_dirty = false;
 }
 
 /// Circumradius-one, Y-up pointy hex with exactly the same horizontal half-spaces

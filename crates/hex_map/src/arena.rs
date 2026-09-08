@@ -5,14 +5,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use hex_assets::{
-    ArtPalette, ElementCatalog, ElementFile, SubstanceFile, SubstanceTable, TerrainDamageFile,
-    TerrainDamageTable,
+    ArtPalette, ElementCatalog, ElementFile, RuntimeArtCatalog, SubstanceFile, SubstanceTable,
+    TerrainDamageFile, TerrainDamageTable,
 };
 use hex_core::arena::{
-    ArenaMaterials, ArenaReset, ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
-    ARENA_MAX_LEVEL,
+    ArenaMaterials, ArenaReset, ArenaSelection, ArenaSolidSpan, ArenaSystems, ArenaTerrainView,
+    ArenaTick, ArenaVoxelGeometry,
 };
 use hex_core::{
     DamagedVoxels, HexCoord, SubstanceId, TerrainEdit, TerrainImpact, TerrainImpactOutcome,
@@ -22,9 +23,12 @@ use hex_core::{
 use crate::terrain_damage::TerrainDamageState;
 use crate::{Column, VoxelMap};
 
+#[cfg(test)]
+mod real_world_tests;
 mod render;
 #[cfg(test)]
 mod tests;
+mod worlds;
 
 const GROUND_LEVEL: i32 = 8;
 
@@ -33,6 +37,9 @@ struct ArenaWorldState {
     generation: u64,
     changed: BTreeSet<HexCoord>,
     render_dirty: BTreeSet<HexCoord>,
+    original: Option<worlds::WorldRecipe>,
+    full_rebuild: bool,
+    presentation_dirty: bool,
 }
 
 #[derive(Resource, Default)]
@@ -58,6 +65,7 @@ pub fn plugin(app: &mut App) {
                 .chain(),
         )
         .init_resource::<ArenaReset>()
+        .init_resource::<ArenaSelection>()
         .init_resource::<DamagedVoxels>()
         .init_resource::<TerrainDamageState>()
         .init_resource::<ArenaWorldState>()
@@ -100,6 +108,7 @@ struct Content {
     elements: ElementCatalog,
     damage: TerrainDamageTable,
     materials: ArenaMaterials,
+    art: RuntimeArtCatalog,
 }
 
 /// Embed the accepted source files together so an arena executable never mixes
@@ -141,6 +150,7 @@ fn load_content() -> Result<Content, String> {
         elements,
         damage,
         materials,
+        art: worlds::load_art(&palette)?,
     })
 }
 
@@ -153,29 +163,37 @@ fn initialize(world: &mut World) {
             return;
         }
     };
-    let geometry = ArenaVoxelGeometry::default();
-    let map = build_arena(geometry, content.materials);
-    let mut view = ArenaTerrainView {
-        revision: 1,
-        spawns: spawn_positions(geometry),
-        ..default()..Default::default()
+    let selection = *world.resource::<ArenaSelection>();
+    let recipe = match worlds::build(
+        selection,
+        content.materials,
+        &content.substances,
+        &content.art,
+    ) {
+        Ok(recipe) => recipe,
+        Err(error) => {
+            error!("{error}");
+            world.write_message(AppExit::error());
+            return;
+        }
     };
-    for (coord, column) in map.columns() {
-        publish_column(&mut view.voxels, coord, column, &content.substances);
-    }
     let generation = world.resource::<ArenaReset>().generation;
     world.insert_resource(ArenaWorldState {
         generation,
-        render_dirty: map.columns().map(|(coord, _)| coord).collect(),
+        render_dirty: recipe.map.columns().map(|(coord, _)| coord).collect(),
+        original: Some(recipe.clone()),
+        presentation_dirty: true,
         ..default()
     });
     world.insert_resource(content.substances);
     world.insert_resource(content.elements);
     world.insert_resource(content.damage);
     world.insert_resource(content.materials);
-    world.insert_resource(geometry);
-    world.insert_resource(map);
-    world.insert_resource(view);
+    world.insert_resource(content.art);
+    world.insert_resource(recipe.geometry);
+    world.insert_resource(recipe.map);
+    world.insert_resource(recipe.view);
+    world.insert_resource(recipe.presentation);
 }
 
 fn spawn_positions(geometry: ArenaVoxelGeometry) -> [Vec3; 2] {
@@ -237,25 +255,63 @@ fn fill_above_ground(
     }
 }
 
+#[derive(SystemParam)]
+struct ArenaContentRefs<'w> {
+    substances: Res<'w, SubstanceTable>,
+    elements: Res<'w, ElementCatalog>,
+    damage_table: Res<'w, TerrainDamageTable>,
+    art: Res<'w, RuntimeArtCatalog>,
+}
+
 fn apply_terrain(
     reset: Res<ArenaReset>,
-    geometry: Res<ArenaVoxelGeometry>,
+    selection: Res<ArenaSelection>,
+    mut geometry: ResMut<ArenaVoxelGeometry>,
     materials: Res<ArenaMaterials>,
-    substances: Res<SubstanceTable>,
-    elements: Res<ElementCatalog>,
-    damage_table: Res<TerrainDamageTable>,
+    content: ArenaContentRefs,
     mut map: ResMut<VoxelMap>,
     mut state: ResMut<ArenaWorldState>,
+    mut presentation: ResMut<crate::procedural_v3::MapPresentationProjection>,
     mut inbox: ResMut<ArenaInbox>,
     mut damage: ResMut<TerrainDamageState>,
     mut damaged: ResMut<DamagedVoxels>,
     mut edits: ResMut<Messages<TerrainEdit>>,
     mut impacts: ResMut<Messages<TerrainImpact>>,
     mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
+    let ArenaContentRefs {
+        substances,
+        elements,
+        damage_table,
+        art,
+    } = content;
     if state.generation != reset.generation {
+        let cached = state
+            .original
+            .as_ref()
+            .filter(|recipe| recipe.view.selection.map == selection.map);
+        let mut recipe = match cached
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| worlds::build(*selection, *materials, &substances, &art))
+        {
+            Ok(recipe) => recipe,
+            Err(error) => {
+                error!("{error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        recipe.view.selection = *selection;
+        state.changed.extend(map.columns().map(|(coord, _)| coord));
         state.generation = reset.generation;
-        *map = build_arena(*geometry, *materials);
+        *map = recipe.map.clone();
+        *geometry = recipe.geometry;
+        *presentation = recipe.presentation.clone();
+        state.original = Some(recipe);
+        state.full_rebuild = true;
+        state.presentation_dirty = true;
         damage.reset(&mut damaged);
         edits.clear();
         impacts.clear();
@@ -270,7 +326,10 @@ fn apply_terrain(
         .chain(edits.drain())
     {
         let pos = edit.pos();
-        if !geometry.contains_column(pos.coord) || !(0..=ARENA_MAX_LEVEL).contains(&pos.level) {
+        if !geometry.contains_column(pos.coord)
+            || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
+            || protected(&state, pos)
+        {
             continue;
         }
         let current = map.get(pos);
@@ -318,13 +377,39 @@ fn apply_terrain(
             &substances,
             &damage_table,
             &mut damaged,
-            |pos| !geometry.contains_column(pos.coord),
+            |pos| {
+                !geometry.contains_column(pos.coord)
+                    || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
+                    || protected(&state, pos)
+            },
         );
         state
             .changed
             .extend(resolved.destroyed.iter().map(|pos| pos.coord));
         outcomes.write(resolved.outcome);
     }
+    if !state.changed.is_empty() {
+        let before = presentation.features().len();
+        presentation.retain_features(|feature| {
+            feature.kind == crate::procedural_v3::FeatureKind::Tree
+                || !state.changed.contains(&feature.root.coord)
+                || (substances.is_solid(map.get(feature.root))
+                    && map.get(feature.root.above()).is_air())
+        });
+        state.presentation_dirty |= presentation.features().len() != before;
+    }
+}
+
+fn protected(state: &ArenaWorldState, pos: TilePos) -> bool {
+    state
+        .original
+        .as_ref()
+        .and_then(|recipe| recipe.view.edit_protected.get(&pos.coord))
+        .is_some_and(|intervals| {
+            intervals
+                .iter()
+                .any(|(bottom, top)| (*bottom..=*top).contains(&pos.level))
+        })
 }
 
 fn publish_terrain(
@@ -337,18 +422,37 @@ fn publish_terrain(
         return;
     }
     let changed = std::mem::take(&mut state.changed);
-    view.voxels.retain(|pos, _| !changed.contains(&pos.coord));
-    for coord in &changed {
-        if let Some(column) = map.column(*coord) {
-            publish_column(&mut view.voxels, *coord, column, &substances);
+    let revision = view.revision.saturating_add(1);
+    if std::mem::take(&mut state.full_rebuild) {
+        if let Some(recipe) = &state.original {
+            *view = recipe.view.clone();
+        }
+    } else {
+        view.full_rebuild = false;
+        for coord in &changed {
+            let start = TilePos::new(*coord, i32::MIN);
+            let end = TilePos::new(*coord, i32::MAX);
+            let old: Vec<_> = view
+                .voxels
+                .range(start..=end)
+                .map(|(pos, _)| *pos)
+                .collect();
+            for pos in old {
+                view.voxels.remove(&pos);
+            }
+            view.columns.remove(coord);
+            if let Some(column) = map.column(*coord) {
+                publish_column(&mut view, *coord, column, &substances);
+            }
         }
     }
-    view.revision = view.revision.saturating_add(1);
+    view.revision = revision;
+    view.dirty_columns.clone_from(&changed);
     state.render_dirty.extend(changed);
 }
 
 fn publish_column(
-    voxels: &mut BTreeMap<TilePos, SubstanceId>,
+    view: &mut ArenaTerrainView,
     coord: HexCoord,
     column: &Column,
     substances: &SubstanceTable,
@@ -358,7 +462,19 @@ fn publish_column(
             continue;
         };
         if substances.is_solid(substance) {
-            voxels.insert(TilePos::new(coord, level), substance);
+            view.voxels.insert(TilePos::new(coord, level), substance);
         }
+    }
+    let spans = crate::runs(column)
+        .into_iter()
+        .filter(|run| substances.is_solid(run.substance))
+        .map(|run| ArenaSolidSpan {
+            bottom: TilePos::new(coord, run.bottom),
+            top_level: run.top - 1,
+            substance: run.substance,
+        })
+        .collect::<Vec<_>>();
+    if !spans.is_empty() {
+        view.columns.insert(coord, spans);
     }
 }

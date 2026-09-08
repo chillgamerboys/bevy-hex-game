@@ -99,10 +99,14 @@ impl TerrainDamageState {
                 });
                 let admitted = substances.is_diggable(substance)
                     && maximum.is_some()
-                    && impact
-                        .kind
-                        .element()
-                        .is_some_and(|element| damage_table.damages(element, substance))
+                    && match impact.kind {
+                        hex_core::TerrainDamageKind::Elemental(element) => {
+                            damage_table.damages(element, substance)
+                        }
+                        hex_core::TerrainDamageKind::Physical => {
+                            damage_table.physical_damages(substance)
+                        }
+                    }
                     && !is_protected(position);
 
                 if !admitted {
