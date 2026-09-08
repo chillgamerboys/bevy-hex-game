@@ -25,7 +25,7 @@
     ),
     // Authored map encounters; Duel ignores this section.
     encounters: (
-        golem_hp:160.0,golem_speed:2.0,
+        golem_hp:320.0,golem_speed:2.0,
         golem_slam_damage:35.0,golem_slam_range:6.928_203,golem_slam_windup:0.8,
         golem_slam_cooldown:5.0,golem_slam_knockback:5.0,golem_slam_terrain_power:2,
         golem_laser_damage:45.0,golem_laser_min_range:12.0,golem_laser_charge:2.0,

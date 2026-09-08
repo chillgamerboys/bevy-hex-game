@@ -177,7 +177,7 @@ pub struct EncounterTuning {
 impl Default for EncounterTuning {
     fn default() -> Self {
         Self {
-            golem_hp: 160.0,
+            golem_hp: 320.0,
             golem_speed: 2.0,
             golem_slam_damage: 35.0,
             golem_slam_range: hex_core::config::HEX_SMALL_DIAMETER * 4.0,

@@ -211,7 +211,7 @@ are COMPLETE, source-frozen at `27157af`, and consume the authored arena configu
 
 Runtime `2570dce` adds the fixed seven-hex, five-level body, 2-unit/second grounded
 movement, spherical slam and visibly charged straight laser. Initial hypotheses
-remain HP160; slam35/radius6.928/windup.8s/cooldown5s/impulse5; laser45 total over1s,
+were HP160; slam35/radius6.928/windup.8s/cooldown5s/impulse5; laser45 total over1s,
 minimum admission12, charge2s, final.35s locked, cooldown8s. The deliberate medium
 range gap remains. The sphere can damage its own supporting terrain. Human and
 Shadow values and policy remain unchanged.
@@ -237,6 +237,22 @@ Native checks, static captures and Golem matchup calibration remain pending.
 Task logs: `work/golem-runtime-tests-03.log` and
 `work/golem-runtime-clippy-03.log`, `work/golem-app-integration-01/receipt.json`,
 and `work/golem-presentation-python-01.log`. Earlier failed test/lint logs are retained.
+
+## Golem survival trial
+
+The initial native corpus at `3710941`, with HP160, records no Golem wins in 64 Duel
+rounds: 63 losses and one timeout across Shadow, Dragon, five Goblins and Shaman
+party. The 24-round Fort spot also has no Golem wins, with three Dragon timeouts.
+A first 35-damage slam leaves the Goblins at 15HP each; the observed Duel Goblin
+rounds end around 7.2 seconds before a second slam. Against Shadow, Golem records
+no damage or released lasers, so range and cover remain a separate limitation.
+
+The next isolated hypothesis doubles only Golem starting HP to 320 in the default
+and authored configuration. Slam, laser, cooldowns, speed and the deliberate
+medium-range gap stay unchanged. This tests whether the slow body survives long
+enough for another attack; it does not yet establish better balance. Retain genuine
+timeouts and examine released actions as well as wins. Any route correction is a
+separate change and comparison, so it cannot be credited to this health trial.
 
 ## Native smoke measurements
 
