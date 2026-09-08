@@ -158,7 +158,7 @@ fn initialize(world: &mut World) {
     let mut view = ArenaTerrainView {
         revision: 1,
         spawns: spawn_positions(geometry),
-        ..default()
+        ..default()..Default::default()
     };
     for (coord, column) in map.columns() {
         publish_column(&mut view.voxels, coord, column, &content.substances);
@@ -296,7 +296,11 @@ fn apply_terrain(
             Some(TerrainImpactRejection::ReusedBatch)
         } else if let Some(reason) = impact.structural_rejection() {
             Some(reason)
-        } else if elements.name(impact.element).is_none() {
+        } else if impact
+            .kind
+            .element()
+            .is_some_and(|element| elements.name(element).is_none())
+        {
             Some(TerrainImpactRejection::UnknownElement)
         } else {
             None

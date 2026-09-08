@@ -47,6 +47,26 @@ pub enum TerrainImpactRejection {
     TerrainUnavailable,
 }
 
+/// The source of terrain damage, independent of the material's response policy.
+#[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum TerrainDamageKind {
+    /// A catalog-backed spell element.
+    Elemental(ElementId),
+    /// Physical contact such as a bite or weapon swipe.
+    Physical,
+}
+
+impl TerrainDamageKind {
+    /// Element identity, when this impact is elemental.
+    #[must_use]
+    pub const fn element(self) -> Option<ElementId> {
+        match self {
+            Self::Elemental(element) => Some(element),
+            Self::Physical => None,
+        }
+    }
+}
+
 /// An energetic effect announced over an exact set of voxels.
 ///
 /// The world decides what each material does about it, including resistance. A fully
@@ -57,8 +77,8 @@ pub struct TerrainImpact {
     pub batch: TerrainBatchId,
     /// Every exact voxel the effect reaches, sorted and deduplicated.
     pub volume: Vec<TilePos>,
-    /// Which element arrived. Authored response content uses its stable name.
-    pub element: ElementId,
+    /// Elemental or physical damage, admitted by world-owned material policy.
+    pub kind: TerrainDamageKind,
     /// Health points removed from every admitted voxel, capped at remaining health.
     pub power: u8,
 }
@@ -352,7 +372,7 @@ mod tests {
         TerrainImpact {
             batch: TerrainBatchId(7),
             volume,
-            element: ElementId(2),
+            kind: crate::TerrainDamageKind::Elemental(ElementId(2)),
             power,
         }
     }

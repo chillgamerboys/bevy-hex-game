@@ -14,7 +14,7 @@ fn damage_slots(app: &mut App, batch: u64, slots: &[TilePos]) -> Vec<TerrainVoxe
     app.world_mut().write_message(TerrainImpact {
         batch: TerrainBatchId(batch),
         volume,
-        element,
+        kind: hex_core::TerrainDamageKind::Elemental(element),
         power: 1,
     });
     tick(app);

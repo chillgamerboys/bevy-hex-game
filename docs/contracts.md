@@ -40,7 +40,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `SurfaceFeatureId` / `SurfaceFeatureKind` / `SurfaceFeature` / `SurfaceFeaturePlacementOutcome` / `SurfaceFeatures` — correlated answer and complete stack-safe semantic projection | future world authority | future gameplay consumer | **reserved** — shared types and structural validation only; no live registry, placement, or schedule | [planning/boundary.md](planning/boundary.md) M |
 | `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting, trajectories, and paired seven-ray sight | world | gameplay / perception | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `AuthoredObjectVoxelRuns` → `AuthoredObjectOccupancy` — opt-in exact object voxels compacted into an always-present authoritative projection; blocks standing-body movement and strict-interior sight without terrain's low-cover exemption; casting remains terrain-only | world / shared objects | `hex_units` / perception | **live** | [systems/map.md](systems/map.md), [systems/perception.md](systems/perception.md) |
-| `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
+| `TerrainImpact { batch, volume, kind, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
@@ -159,3 +159,21 @@ part; or make one presentation system the sole owner of `Visibility`.
 
 Both sides: a shared-type change lands in its own commit before either side depends on
 it.
+
+### Authored encounter extension
+
+The local [encounter specification](planning/waves/arena-encounters/plan.md) extends
+the experimental projection with ArenaSelection (Duel/Fort/SevenRegions and Fort
+composition), public anchors, compact per-column solid runs, static-object query
+spans, non-solid liquid spans, edit-protected level intervals and latest-revision
+dirty columns. Full rebuild marks resets; consumers missing a revision rebuild
+rather than assuming the latest delta is complete. World publication commits the
+selection before actor reset. Only the world writes these facts.
+
+ArenaVoxelGeometry publishes vertical_offset and inclusive min/max levels.
+Upper-face height is level*level_height+vertical_offset: accepted Duel uses0,
+authored maps use one level height. TilePos identities remain unchanged.
+TerrainImpact now carries TerrainDamageKind::Elemental(ElementId) or Physical;
+UnknownElement applies only to elemental impacts. World-owned admission determines
+the physical material allow-list; no fake element or second mutation channel is
+introduced. Existing elemental publishers are mechanically migrated.

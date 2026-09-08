@@ -132,7 +132,7 @@ fn impact(batch: u64, volume: Vec<TilePos>, element: ElementId, power: u8) -> Te
     TerrainImpact {
         batch: TerrainBatchId(batch),
         volume,
-        element,
+        kind: hex_core::TerrainDamageKind::Elemental(element),
         power,
     }
 }

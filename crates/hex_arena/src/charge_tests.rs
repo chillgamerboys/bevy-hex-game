@@ -29,6 +29,7 @@ impl Fixture {
                 .map(|coord| (TilePos::new(coord, 0), materials.stone))
                 .collect(),
             spawns: [Vec3::new(-6.0, SKIN, 0.0), Vec3::new(8.0, SKIN, 0.0)],
+            ..Default::default()
         };
         let mut session = ArenaSession {
             bot_enabled: false,

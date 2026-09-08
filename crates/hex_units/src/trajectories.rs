@@ -598,7 +598,7 @@ fn clip_effect_volume_with(
     let contract = TerrainImpact {
         batch: TerrainBatchId(0),
         volume,
-        element: ElementId(0),
+        kind: hex_core::TerrainDamageKind::Elemental(ElementId(0)),
         power: 1,
     };
     if !contract.is_canonical() {

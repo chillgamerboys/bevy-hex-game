@@ -18,7 +18,7 @@ fn impact(app: &mut App, batch: u64, volume: Vec<TilePos>, power: u8) -> Terrain
     app.world_mut().write_message(TerrainImpact {
         batch: TerrainBatchId(batch),
         volume,
-        element,
+        kind: hex_core::TerrainDamageKind::Elemental(element),
         power,
     });
     tick(app);
@@ -192,7 +192,7 @@ fn reset_restores_material_health_and_batch_ledger_and_drops_queued_old_effects(
     app.world_mut().write_message(TerrainImpact {
         batch: TerrainBatchId(2),
         volume: vec![stone],
-        element: materials.fire,
+        kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
         power: 8,
     });
     app.world_mut().resource_mut::<ArenaReset>().generation += 1;
@@ -225,7 +225,7 @@ fn announcements_survive_paused_frames_without_mutating_until_the_next_tick() {
     app.world_mut().write_message(TerrainImpact {
         batch: TerrainBatchId(9),
         volume: vec![pos],
-        element: materials.fire,
+        kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
         power: 2,
     });
     for _ in 0..8 {

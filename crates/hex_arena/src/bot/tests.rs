@@ -34,6 +34,7 @@ impl Fixture {
                 Vec3::new(distance * 0.5, SKIN, 0.0),
                 Vec3::new(-distance * 0.5, SKIN, 0.0),
             ],
+            ..Default::default()
         };
         let mut session = ArenaSession::default();
         session.reset(0, &world, geometry);

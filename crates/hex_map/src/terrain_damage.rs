@@ -99,7 +99,10 @@ impl TerrainDamageState {
                 });
                 let admitted = substances.is_diggable(substance)
                     && maximum.is_some()
-                    && damage_table.damages(impact.element, substance)
+                    && impact
+                        .kind
+                        .element()
+                        .is_some_and(|element| damage_table.damages(element, substance))
                     && !is_protected(position);
 
                 if !admitted {

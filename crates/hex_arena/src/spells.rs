@@ -551,7 +551,7 @@ impl ArenaSession {
             let impact = TerrainImpact {
                 batch: TerrainBatchId(self.next_impact),
                 volume,
-                element: materials.fire,
+                kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
                 power,
             };
             self.next_impact += 1;
@@ -1010,7 +1010,7 @@ mod tests {
         let impact = TerrainImpact {
             batch: TerrainBatchId(9),
             volume: vec![a],
-            element: materials.fire,
+            kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
             power: 2,
         };
         let mut session = ArenaSession {
