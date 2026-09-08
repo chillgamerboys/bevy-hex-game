@@ -209,6 +209,7 @@ mod tests {
             .expect("the stable fixtures should form a valid lattice library");
         let terrain_damage_file = TerrainDamageFile {
             damaging_pairs: Vec::new(),
+            physical_substances: Vec::new(),
         };
         let terrain_damage = TerrainDamageTable::from_file(&terrain_damage_file, &elements, &table)
             .expect("the empty test damage matrix should resolve");

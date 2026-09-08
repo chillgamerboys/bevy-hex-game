@@ -146,7 +146,10 @@ fn damage_content(
     } else {
         Vec::new()
     };
-    let file = TerrainDamageFile { damaging_pairs };
+    let file = TerrainDamageFile {
+        damaging_pairs,
+        physical_substances: Vec::new(),
+    };
     let table = TerrainDamageTable::from_file(&file, elements, substances)
         .expect("the terrain-damage fixture should resolve");
     (file, table)
