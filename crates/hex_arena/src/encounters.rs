@@ -17,6 +17,7 @@ struct Knowledge {
     velocity: Vec3,
     tick: u64,
     direct: bool,
+    cue_kind: Option<CombatCueKind>,
 }
 
 #[derive(Debug)]
@@ -24,6 +25,7 @@ struct PartyRuntime {
     snapshot: PartySnapshot,
     knowledge: Option<Knowledge>,
     last_sight: u64,
+    last_cue_id: Option<u64>,
     leash: f32,
     search: f32,
 }
@@ -216,6 +218,7 @@ impl ArenaSession {
                 },
                 knowledge: None,
                 last_sight: 0,
+                last_cue_id: None,
                 leash,
                 search,
             });
@@ -315,6 +318,7 @@ impl ArenaSession {
                     velocity: Vec3::ZERO,
                     tick: self.tick,
                     direct: false,
+                    cue_kind: None,
                 });
                 p.last_sight = self.tick;
             }
@@ -330,7 +334,7 @@ impl ArenaSession {
                 continue;
             }
             // Stagger groups while retaining the full ten-Hz sensing cadence.
-            if (self.tick + u64::from(p.snapshot.id) * 4) % 12 != 0 {
+            if !(self.tick + u64::from(p.snapshot.id) * 4).is_multiple_of(12) {
                 continue;
             }
             let visible = self
@@ -357,6 +361,7 @@ impl ArenaSession {
                     velocity,
                     tick: self.tick,
                     direct: true,
+                    cue_kind: None,
                 });
                 p.last_sight = self.tick;
                 if p.snapshot.phase == PartyPhase::Dormant {
@@ -364,6 +369,35 @@ impl ArenaSession {
                 }
                 if p.snapshot.phase == PartyPhase::Active {
                     self.encounter.human_seen_tick = self.tick;
+                }
+            }
+            // Consume the finite event stream once per party, even while dormant
+            // or returning. Sound cannot become a delayed activation or refresh
+            // the direct-sight search clock. A same-tick sighting wins over cues.
+            let previous_cue = p.last_cue_id;
+            if let Some(latest) = self.combat_cues.last() {
+                p.last_cue_id = Some(latest.id);
+            }
+            if p.snapshot.phase == PartyPhase::Active {
+                if let Some(cue) = self.combat_cues.iter().rev().find(|cue| {
+                    cue.owner == 0
+                        && previous_cue.is_none_or(|id| cue.id > id)
+                        && self.tick.saturating_sub(cue.tick) <= 120
+                        && p.knowledge
+                            .is_none_or(|k| cue.tick > k.tick || (cue.tick == k.tick && !k.direct))
+                        && self
+                            .actors
+                            .iter()
+                            .filter(|a| a.hp > 0.0 && a.party == Some(p.snapshot.id))
+                            .any(|a| a.center().distance(cue.position) <= tuning.bot.cue_radius)
+                }) {
+                    p.knowledge = Some(Knowledge {
+                        point: cue.position,
+                        velocity: Vec3::ZERO,
+                        tick: cue.tick,
+                        direct: false,
+                        cue_kind: Some(cue.kind),
+                    });
                 }
             }
             if p.snapshot.phase == PartyPhase::Active {
@@ -808,5 +842,45 @@ impl ArenaSession {
         self.actors.iter().find(|a| a.id == id).is_some_and(|a| {
             shapes::clear(&self.collision, a, a.feet, a.body_yaw) && dry(a, view, geometry)
         })
+    }
+}
+
+/// Disclosure-safe party observation trace for local diagnostics, never live
+/// hidden actor state. Gameplay HUDs should not create enemy location indicators.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PartyKnowledgeSnapshot {
+    /// Stable encounter group.
+    pub id: PartyId,
+    /// Last directly observed or quantized event position, if any.
+    pub point: Option<[f32; 3]>,
+    /// Sight, damage, heard-release, heard-impact or none.
+    pub source: &'static str,
+    /// Tick when the discrete observation was made, never refreshed by memory.
+    pub tick: Option<u64>,
+}
+impl ArenaSession {
+    /// Read dated party knowledge without sampling hidden actors or changing AI.
+    #[must_use]
+    pub fn party_knowledge(&self) -> Vec<PartyKnowledgeSnapshot> {
+        self.encounter
+            .runtime
+            .iter()
+            .map(|p| PartyKnowledgeSnapshot {
+                id: p.snapshot.id,
+                point: p.knowledge.map(|k| k.point.to_array()),
+                source: p.knowledge.map_or("none", |k| {
+                    if k.direct {
+                        "sight"
+                    } else {
+                        match k.cue_kind {
+                            Some(CombatCueKind::Release) => "heard-release",
+                            Some(CombatCueKind::Impact) => "heard-impact",
+                            None => "damage",
+                        }
+                    }
+                }),
+                tick: p.knowledge.map(|k| k.tick),
+            })
+            .collect()
     }
 }

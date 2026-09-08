@@ -438,6 +438,7 @@ fn hidden_human_changes_do_not_change_creature_intents_after_the_same_observatio
             velocity: Vec3::ZERO,
             tick: 1,
             direct: true,
+            cue_kind: None,
         });
         let mut left = brain::Brain::new(1, Vec3::new(-5.0, 0.0, 0.0));
         let mut right = brain::Brain::new(1, Vec3::new(-5.0, 0.0, 0.0));
@@ -499,6 +500,7 @@ fn search_expires_into_return_and_preserves_damage_when_home_is_reached() {
         velocity: Vec3::ZERO,
         tick: session.tick,
         direct: true,
+        cue_kind: None,
     });
     party.last_sight = session.tick;
     ticks(&mut session, 510, &view, geometry, materials, &tuning);
@@ -567,7 +569,7 @@ fn shaman_waits_for_reaction_charges_then_cancels_if_cover_closes_before_release
         actor.aim = input.input.aim;
         assert!(actor.casting(input.input, &tuning).is_none());
     }
-    assert!(first_press.is_some_and(|tick| tick >= 42 && tick <= 44));
+    assert!(first_press.is_some_and(|tick| (42..=44).contains(&tick)));
     assert!(!released);
     assert!(session
         .actors
@@ -760,4 +762,299 @@ fn aura_disappearing_during_melee_windup_does_not_buff_the_unreleased_hit() {
         .hp = 0.0;
     ticks(&mut session, 40, &view, geometry, materials, &tuning);
     assert!((session.actors.first().expect("human").hp - 88.0).abs() < 0.001);
+}
+
+#[test]
+fn active_party_shares_quantized_release_and_impact_once_without_hidden_tracking_or_search_refresh()
+{
+    let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Goblins);
+    divider(&mut view, materials.stone);
+    pose(&mut session, 0, Vec3::new(-9.0, 0.0, 0.0), Vec3::X);
+    session
+        .encounter
+        .runtime
+        .first_mut()
+        .expect("party")
+        .snapshot
+        .phase = PartyPhase::Active;
+    let last_sight = session.encounter.runtime.first().expect("party").last_sight;
+    session.combat_cue(0, Vec3::new(7.3, 0.2, 1.1), CombatCueKind::Release);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    let heard = session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .expect("heard release");
+    assert!(!heard.direct && heard.cue_kind == Some(CombatCueKind::Release));
+    assert!(heard.point.distance(Vec3::new(8.0, 0.0, 2.0)) < 0.001);
+    assert!(heard.velocity.length() < 0.001);
+    assert_eq!(
+        session.party_knowledge().first().expect("trace").source,
+        "heard-release"
+    );
+    pose(&mut session, 0, Vec3::new(-14.0, 0.0, -5.0), Vec3::X);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    let unchanged = session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .expect("memory");
+    assert_eq!(heard.tick, unchanged.tick);
+    assert!(unchanged.point.distance(heard.point) < 0.001);
+    // Clearing a hypothesis cannot make the already consumed event audible again.
+    session
+        .encounter
+        .runtime
+        .first_mut()
+        .expect("party")
+        .knowledge = None;
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    assert!(session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .is_none());
+    session.combat_cue(0, Vec3::new(6.3, 0.6, 3.3), CombatCueKind::Impact);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    let impact = session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .expect("heard impact");
+    assert_eq!(impact.cue_kind, Some(CombatCueKind::Impact));
+    assert!(impact.point.distance(Vec3::new(6.0, 0.0, 4.0)) < 0.001);
+    assert_eq!(
+        session.party_knowledge().first().expect("trace").source,
+        "heard-impact"
+    );
+    assert_eq!(
+        session.encounter.runtime.first().expect("party").last_sight,
+        last_sight
+    );
+    session.tick = 500;
+    session.combat_cue(0, Vec3::new(8.0, 0.0, 0.0), CombatCueKind::Release);
+    ticks(&mut session, 4, &view, geometry, materials, &tuning);
+    assert_eq!(
+        session.parties().first().expect("expired search").phase,
+        PartyPhase::Returning
+    );
+}
+
+#[test]
+fn party_sound_does_not_wake_independent_dormant_or_extend_returning_groups() {
+    let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Goblins);
+    divider(&mut view, materials.stone);
+    pose(&mut session, 0, Vec3::new(-9.0, 0.0, 0.0), Vec3::X);
+    session
+        .encounter
+        .runtime
+        .first_mut()
+        .expect("active party")
+        .snapshot
+        .phase = PartyPhase::Active;
+    for actor in session.actors.iter_mut().filter(|a| a.id == 3 || a.id == 4) {
+        actor.party = Some(1);
+    }
+    session
+        .actors
+        .iter_mut()
+        .find(|a| a.id == 5)
+        .expect("returning member")
+        .party = Some(2);
+    session.encounter.runtime.push(PartyRuntime {
+        snapshot: PartySnapshot {
+            id: 1,
+            phase: PartyPhase::Dormant,
+            home: Vec3::X * 8.0,
+            living: 2,
+        },
+        knowledge: None,
+        last_sight: 0,
+        last_cue_id: None,
+        leash: 18.0,
+        search: 4.0,
+    });
+    session.encounter.runtime.push(PartyRuntime {
+        snapshot: PartySnapshot {
+            id: 2,
+            phase: PartyPhase::Returning,
+            home: Vec3::X * 16.0,
+            living: 1,
+        },
+        knowledge: None,
+        last_sight: 0,
+        last_cue_id: None,
+        leash: 18.0,
+        search: 4.0,
+    });
+    session.combat_cue(0, Vec3::X * 8.0, CombatCueKind::Release);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    assert!(session
+        .encounter
+        .runtime
+        .first()
+        .expect("active party")
+        .knowledge
+        .is_some());
+    for p in session.encounter.runtime.iter().skip(1) {
+        assert!(p.knowledge.is_none());
+        assert!(matches!(
+            p.snapshot.phase,
+            PartyPhase::Dormant | PartyPhase::Returning
+        ));
+        assert!(p.last_cue_id.is_some());
+    }
+    // Activation later does not replay a cue heard while dormant.
+    session
+        .encounter
+        .runtime
+        .iter_mut()
+        .find(|p| p.snapshot.id == 1)
+        .expect("second party")
+        .snapshot
+        .phase = PartyPhase::Active;
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    assert!(session
+        .encounter
+        .runtime
+        .iter()
+        .find(|p| p.snapshot.id == 1)
+        .expect("second party")
+        .knowledge
+        .is_none());
+}
+
+#[test]
+fn party_hearing_uses_living_member_range_ignores_allies_and_prefers_actual_sight() {
+    let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Goblins);
+    divider(&mut view, materials.stone);
+    pose(&mut session, 0, Vec3::new(-9.0, 0.0, 0.0), Vec3::X);
+    session
+        .encounter
+        .runtime
+        .first_mut()
+        .expect("party")
+        .snapshot
+        .phase = PartyPhase::Active;
+    session.combat_cue(1, Vec3::X * 8.0, CombatCueKind::Impact);
+    session.combat_cue(0, Vec3::X * -14.0, CombatCueKind::Release);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    assert!(session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .is_none());
+    pose(&mut session, 5, Vec3::X * 26.0, Vec3::X);
+    session
+        .actors
+        .iter_mut()
+        .find(|a| a.id == 5)
+        .expect("dead distant listener")
+        .hp = 0.0;
+    session.combat_cue(0, Vec3::X * 26.0, CombatCueKind::Impact);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    assert!(session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .is_none());
+    pose(&mut session, 0, Vec3::new(13.0, 0.0, 0.0), Vec3::NEG_X);
+    session.combat_cue(0, Vec3::X * 6.0, CombatCueKind::Impact);
+    ticks(&mut session, 12, &view, geometry, materials, &tuning);
+    let sight = session
+        .encounter
+        .runtime
+        .first()
+        .expect("party")
+        .knowledge
+        .expect("visible human");
+    assert!(sight.direct && sight.cue_kind.is_none());
+    assert!(
+        sight
+            .point
+            .distance(session.actors.first().expect("human").feet)
+            < 0.001
+    );
+    assert_eq!(
+        session.party_knowledge().first().expect("trace").source,
+        "sight"
+    );
+}
+
+#[test]
+fn returning_shadow_defends_only_nearby_visible_contact_and_keeps_homeward_motion() {
+    let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Shadow);
+    pose(&mut session, 1, Vec3::ZERO, Vec3::NEG_X);
+    pose(&mut session, 0, Vec3::NEG_X * 1.5, Vec3::X);
+    session
+        .encounter
+        .runtime
+        .first_mut()
+        .expect("party")
+        .snapshot
+        .phase = PartyPhase::Returning;
+    session.bot_enabled = true;
+    ticks(&mut session, 30, &view, geometry, materials, &tuning);
+    assert_eq!(
+        session
+            .encounter
+            .stats
+            .get(&1)
+            .expect("shadow")
+            .casts
+            .get(Spell::AreaBlast.index()),
+        Some(&1)
+    );
+    let shadow = session.actors.iter().find(|a| a.id == 1).expect("shadow");
+    assert!(
+        shadow.feet.x > 0.2,
+        "return movement must follow home rather than pursuing the player"
+    );
+    assert_eq!(
+        session.parties().first().expect("party").phase,
+        PartyPhase::Returning
+    );
+    let released = session.encounter.stats.get(&1).expect("stats").casts;
+    let shadow = session
+        .actors
+        .iter_mut()
+        .find(|a| a.id == 1)
+        .expect("shadow");
+    shadow.selected = Spell::Fireball;
+    assert!(shadow
+        .casting(
+            ActorIntent {
+                cast_pressed: true,
+                cast_held: true,
+                ..Default::default()
+            },
+            &tuning
+        )
+        .is_none());
+    assert!(shadow.charge().is_some());
+    pose(&mut session, 0, Vec3::NEG_X * 10.0, Vec3::X);
+    ticks(&mut session, 1, &view, geometry, materials, &tuning);
+    assert!(session
+        .actors
+        .iter()
+        .find(|a| a.id == 1)
+        .expect("shadow")
+        .charge()
+        .is_none());
+    assert_eq!(
+        session.encounter.stats.get(&1).expect("stats").casts,
+        released
+    );
 }

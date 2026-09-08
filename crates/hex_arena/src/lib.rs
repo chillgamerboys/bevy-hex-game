@@ -36,7 +36,7 @@ pub use creatures::{
     EncounterSummary, PartyId, PartyPhase, PartySnapshot, Species, TeamId,
 };
 pub use encounter_config::EncounterTuning;
-pub use encounters::EncounterActorStats;
+pub use encounters::{EncounterActorStats, PartyKnowledgeSnapshot};
 pub use telemetry::{ActorCombatStats, RoundSummary};
 use telemetry::{CombatCue, CombatCueKind};
 

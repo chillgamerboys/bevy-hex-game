@@ -40,7 +40,7 @@ impl Brain {
             cooldowns: [0.0; 7],
             shadow: Bot::default(),
             home,
-            seed: 0x9175_BAFF ^ u32::from(id) * 1973,
+            seed: 0x9175_BAFF ^ (u32::from(id) * 1973),
             travel: Vec3::ZERO,
             decided: 0,
             revision: None,
@@ -105,6 +105,7 @@ impl Brain {
                     .map_or(Vec3::ZERO, |k| k.velocity),
                 tick,
                 direct: true,
+                cue_kind: None,
             });
         if sight.is_some() && !self.was_visible {
             self.reaction_since = tick;
@@ -328,6 +329,19 @@ impl Brain {
         }
         if party.snapshot.phase == PartyPhase::Returning {
             goal = self.home.with_y(if flight { goal.y } else { self.home.y });
+            if actor.species == Species::Shadow {
+                if sight.is_some() {
+                    input = self.shadow.intent_for(
+                        actor.id, actors, shots, collision, world, geometry, tuning, cues, tick,
+                    );
+                } else {
+                    self.shadow.cancel_charge();
+                    input = ActorIntent {
+                        aim: actor.aim,
+                        ..Default::default()
+                    };
+                }
+            }
         }
         let desired = goal - actor.feet;
         let moving = desired.with_y(0.0).length()
