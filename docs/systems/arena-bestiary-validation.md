@@ -702,3 +702,43 @@ destroyed voxels. Those are logical CI workload results, not native timings.
 Combat AI, visibility, pursuit limits and normal play are unchanged. Strict game
 lint and independent source review pass. Evidence: `outputs/arena-final-seven-stress-01`
 and `work/seven-home-fixture-checks-01`, retaining both failed attempts.
+
+## Final captures and native load at `1bf41f2` — 2026-09-08
+
+All thirteen Worm v4 static criteria pass. The independent reviewer inspected
+every 1600×900 original before the sheet, verified all 39 PNG/state/log hashes and
+found no further blocker. Root directly inspected the corrected clear dirt view,
+verified the other twelve PNGs are byte-identical to the originals reviewed in v3,
+then inspected the final sheet. Review methods are recorded explicitly in both
+review files under `.context/visual-walks/final-worm-04`. The gold head cue is
+readable; the converted top is clear of surface accents. Wisp12 remains the scoped
+passing review at `cef8c12`. Human motion and animation recognition are pending.
+
+The final native Seven Regions fixture records 3,600 consecutive ticks and all ten
+living enemies. After 120 warmup ticks, **2,664 of 3,480 samples** have all three
+parties active, exceeding the unchanged 2,400 threshold. All placements are valid.
+Measured activity includes 44 terrain publication ticks, 49 damage-outcome ticks
+and 227 destroyed voxels (264 including warmup). Tick CPU p95/p99/max is
+**1.931/3.770/6.662ms**, with no sample over 8.333ms; the all-active subset is
+1.977/3.840/6.122ms. Single-sample construction-to-render readiness is 3,286ms.
+Independent audit verifies clean source before/after, commands and artifact hashes.
+This explicit extra-HP, 72-tick party-visit fixture excludes stimulus preparation
+from tick timing and does not establish interactive FPS, GPU time or human balance.
+Evidence: `outputs/arena-final-seven-stress-02`, including independent audit files.
+
+## Combined gate and current-example refresh — 2026-09-08
+
+`outputs/arena-final-combined-gates-01` passes the initial sixteen rows, including
+93 trajectory contracts, application checks and all three exhaustive map partitions
+(109 unit, 440 generation and 94 contract tests). Residual passes 1,415 of 1,416,
+but the current elemental example save has a stale catalog fingerprint. It is
+explicitly refreshed after content changes, unlike historical compatibility files.
+Independent byte replay proves only `terrain_damage.ron` changed among the 53
+hashed inputs: the new physical-material admission list changes the digest from
+`0x5DF9C632EA7D97D3` to `0x5C97F1EBE7750DF9`; restoring those old bytes alone
+reproduces the old digest. The fixture and paired assertion are refreshed; runtime
+hash/migration policy and historical fixtures remain untouched. The existing real
+Party Trial migration/restore test now passes using the canonical workspace feature
+graph. Evidence: `work/save-fixture-refresh-01` and `work/save-fixture-focus-01.log`.
+An unnecessary package-only reproduction began a different feature build and was
+cancelled before tests; it supplies no result. The full corrected gate follows.

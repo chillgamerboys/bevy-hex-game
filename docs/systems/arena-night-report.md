@@ -1,15 +1,13 @@
-# Arena overnight update
+# Arena update
 
-The local prototype now has **Duel, Fort and Seven Regions**, plus spectator battles between two selected teams. Fort offers Dragon, player-sized Goblins, Shaman with Goblins, Shadow, Golem, Ember Wisps and Worm. Seven Regions has three separate encounters. Multiplayer remains deferred.
+The **Worm is implemented** alongside Dragon, player-sized Goblins, Shaman, Shadow, Golem and Ember Wisps. Fort has selectable encounters, Seven Regions has three separate parties, and spectator mode lets two monster teams fight. Everything remains on the local experiment branch.
 
-Launch with `python3 tools/arena.py launch`, then press **Enter**. Play with WASD and mouse, Space to jump, Shift to sprint, 1/2/3 to select spells and left mouse to charge/release. C switches first/close-third person; Esc/Tab pauses; R restores the encounter and terrain. Spectator mode has its own movable camera.
+The Worm has four segments, burrows just below the surface and converts eligible earth to dirt. It must expose its head before firing a damaging, knockback Boulder; its head turns gold while charging. It has **320 HP** and Boulders deal up to **70 damage**. Close shots now work without hurting the Worm, and cratered heads can find their surviving floor and continue attacking. Ordinary Fireball self-damage is preserved.
 
-The **Worm** moves just below the surface, leaves dirt behind, raises its head before attacking, and has **320 HP**; its Boulders deal up to **70 damage**. We fixed close-shot rejection by making Boulders harmless to their caster, and fixed lost head exposure after explosions removed its old supporting floor. Fireball self-damage and shallow burrow limits remain intact.
+In the final sixteen machine battles, Worm beat five Goblins **6/8** times and beat Shadow **0/8**: five losses and three unresolved Fort timeouts. Golem beats Goblin groups but remains weak against Shadow. Twelve Wisps beat Shadow **3/4** times in a small Fort trial. These are rough machine comparisons, not human win rates.
 
-In the final 16 machine battles, Worm beat five Goblins **6/8** times and beat Shadow **0/8**: five losses and three unresolved Fort timeouts. Golem handles Goblin groups but remains weak against Shadow. Twelve Wisps beat Shadow **3/4** times in the initial small Fort trial. These results do not establish human win rates; rare Golem/Dragon simulation spikes remain.
+Fresh Worm/Wisp images and the native build pass. Seven Regions sustained all ten active enemies with real terrain destruction; its slowest measured simulation tick was **6.66 ms**, below the 8.33 ms budget. The combined workspace gate is rerunning after refreshing a stale example-save fingerprint. This synthetic check does not measure interactive FPS.
 
-The final repository checks, fresh Worm/Wisp screenshots and remaining map-load measurement are in progress. These are not yet marked passed.
+To try Worm, run `python3 tools/arena.py launch --map fort --encounter worm` from the repository and press **Enter**. **Esc/Tab** pauses, **R** resets, and the existing movement/charge controls remain.
 
-Human camera/control feel, animation readability and combat balance still need playtesting.
-
-Heavy destruction can still trap the creatures’ simple local movement. See the [controls guide](arena-encounters.md) and [validation record](arena-bestiary-validation.md).
+Human controls, animation readability and balance need playtesting. Heavy destruction can still strand simple local movement; rare Golem/Dragon CPU spikes remain. See the [controls guide](arena-encounters.md) and [detailed validation](arena-bestiary-validation.md).
