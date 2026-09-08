@@ -185,12 +185,12 @@ fn forecast_uses_explicit_moving_observation_and_stops_at_nearest_terrain() {
     let mut caster = session.actors.first().expect("caster").clone();
     caster.feet = Vec3::ZERO;
     caster.aim = Vec3::new(1.0, 0.02, 0.0).normalize();
-    let observed = [ForecastBody {
-        id: 1,
-        feet: Vec3::new(8.0, 0.0, -0.75),
-        velocity: Vec3::Z * 3.0,
-        predict_seconds: 0.5,
-    }];
+    let observed = [ForecastBody::human(
+        1,
+        Vec3::new(8.0, 0.0, -0.75),
+        Vec3::Z * 3.0,
+        0.5,
+    )];
     let clear = forecast_spell(
         &caster,
         &observed,

@@ -3,14 +3,16 @@
 use std::collections::BTreeSet;
 
 use bevy_math::Vec3;
-use hex_core::arena::{ArenaMaterials, ArenaTerrainView, ArenaVoxelGeometry, ARENA_MAX_LEVEL};
+use hex_core::arena::{ArenaMaterials, ArenaTerrainView, ArenaVoxelGeometry};
 use hex_core::{HexCoord, TerrainBatchId, TerrainEdit, TerrainImpact, TilePos};
 
-use crate::collision::{voxel_overlaps_body, CollisionWorld, SKIN};
+use crate::collision::{CollisionWorld, SKIN};
 use crate::{
     Actor, ArenaSession, ArenaTuning, CombatCueKind, CommandsOut, Preview, Projectile, Spell,
     VisualEffect, BODY_HEIGHT, BODY_RADIUS, STEP,
 };
+#[cfg(test)]
+use hex_core::arena::ARENA_MAX_LEVEL;
 
 const PROJECTILE_RADIUS: f32 = 0.06;
 pub(super) const MAX_FLIGHT_SECONDS: f32 = 8.0;
@@ -26,6 +28,8 @@ pub(crate) struct ShotParameters {
     wall_dimensions: (i32, i32),
     shield_push: f32,
     direction: Vec3,
+    team: crate::TeamId,
+    min_y: f32,
 }
 
 #[derive(Debug)]
@@ -41,6 +45,7 @@ struct Impact {
     point: Vec3,
     normal: Vec3,
     actor: Option<u8>,
+    barrier: Option<u64>,
 }
 
 fn projectile(
@@ -61,12 +66,18 @@ fn projectile(
         parameters: ShotParameters {
             gravity: tuning.projectile_gravity,
             radius: tuning.fireball_radius(),
-            damage: tuning.fireball_damage,
+            damage: if actor.species == crate::Species::Shaman {
+                tuning.encounters.shaman_fireball_damage * actor.damage_multiplier
+            } else {
+                tuning.fireball_damage * actor.damage_multiplier
+            },
             knockback: tuning.fireball_knockback,
             terrain_power: tuning.terrain_power,
             wall_dimensions: tuning.shield_dimensions(),
             shield_push: tuning.shield_push,
             direction: actor.aim,
+            team: actor.team,
+            min_y: -10.0,
         },
         owner_cleared: false,
     }
@@ -78,7 +89,7 @@ fn displacement(velocity: Vec3, gravity: f32) -> Vec3 {
 }
 
 fn flight_active(shot: &Projectile) -> bool {
-    shot.age + STEP * 0.01 < MAX_FLIGHT_SECONDS && shot.position.y > -10.0
+    shot.age + STEP * 0.01 < MAX_FLIGHT_SECONDS && shot.position.y > shot.parameters.min_y
 }
 
 pub(super) fn capsule_distance(point: Vec3, feet: Vec3) -> f32 {
@@ -95,9 +106,20 @@ fn sweep_actor(start: Vec3, delta: Vec3, feet: Vec3) -> Option<f32> {
 }
 
 fn sweep_capsule(start: Vec3, delta: Vec3, feet: Vec3, extra_radius: f32) -> Option<f32> {
-    let radius = BODY_RADIUS + extra_radius;
-    let low = feet.y + BODY_RADIUS;
-    let high = feet.y + BODY_HEIGHT - BODY_RADIUS;
+    sweep_capsule_dimensions(start, delta, feet, extra_radius, BODY_HEIGHT, BODY_RADIUS)
+}
+
+fn sweep_capsule_dimensions(
+    start: Vec3,
+    delta: Vec3,
+    feet: Vec3,
+    extra_radius: f32,
+    height: f32,
+    body_radius: f32,
+) -> Option<f32> {
+    let radius = body_radius + extra_radius;
+    let low = feet.y + body_radius;
+    let high = feet.y + height - body_radius;
     let axis_point = Vec3::new(feet.x, start.y.clamp(low, high), feet.z);
     if start.distance_squared(axis_point) <= radius * radius {
         return Some(0.0);
@@ -153,7 +175,18 @@ pub(super) fn aim_from_camera(
         .iter()
         .filter(|a| a.id != actor_id && a.hp > 0.0)
     {
-        if let Some(hit) = sweep_capsule(origin, delta, target.feet, 0.0) {
+        if let Some(hit) = if target.species == crate::Species::Dragon {
+            crate::shapes::sweep_dragon(origin, delta, target, true, 0.0).map(|h| h.fraction)
+        } else {
+            sweep_capsule_dimensions(
+                origin,
+                delta,
+                target.feet,
+                0.0,
+                target.dimensions.y,
+                target.dimensions.x * 0.5,
+            )
+        } {
             fraction = fraction.min(hit);
         }
     }
@@ -186,11 +219,14 @@ fn advance_shot(
     shot.previous_position = shot.position;
     let delta = displacement(shot.velocity, shot.parameters.gravity);
     let mut hit = collision
-        .sweep_sphere(shot.position, delta, PROJECTILE_RADIUS)
-        .map(|hit| (hit.fraction, hit.normal, None));
+        .attack_sweep(shot.position, delta, PROJECTILE_RADIUS)
+        .map(|(hit, barrier)| (hit.fraction, hit.normal, None, barrier));
     for actor in actors.iter().filter(|a| a.hp > 0.0) {
+        if actor.id != shot.owner && actor.team == shot.parameters.team {
+            continue;
+        }
         if actor.id == shot.owner && !shot.owner_cleared {
-            if capsule_distance(shot.position, actor.feet) > PROJECTILE_RADIUS + SKIN {
+            if crate::shapes::distance(shot.position, actor) > PROJECTILE_RADIUS + SKIN {
                 shot.owner_cleared = true;
             } else {
                 continue;
@@ -203,30 +239,63 @@ fn advance_shot(
         };
         // Sweep in the moving body's frame, avoiding missed fast cross-traffic.
         let relative_delta = delta - (actor.feet - previous_feet);
-        if let Some(fraction) = sweep_actor(shot.position, relative_delta, previous_feet) {
+        let body_hit = if actor.species == crate::Species::Dragon {
+            crate::shapes::sweep_dragon(shot.position, delta, actor, predict, PROJECTILE_RADIUS)
+                .map(|h| h.fraction)
+        } else if matches!(
+            actor.species,
+            crate::Species::Human | crate::Species::Shadow | crate::Species::Shaman
+        ) {
+            sweep_actor(shot.position, relative_delta, previous_feet)
+        } else {
+            sweep_capsule_dimensions(
+                shot.position,
+                relative_delta,
+                previous_feet,
+                PROJECTILE_RADIUS,
+                actor.dimensions.y,
+                actor.dimensions.x * 0.5,
+            )
+        };
+        if let Some(fraction) = body_hit {
             // Exact ties favor terrain, preserving a closed wall's blocker.
-            if hit.is_none_or(|(old, _, _)| fraction < old) {
+            if hit.is_none_or(|(old, _, _, _)| fraction < old) {
                 let point = shot.position + delta * fraction;
                 let feet = previous_feet + (actor.feet - previous_feet) * fraction;
-                let axis = Vec3::new(
-                    feet.x,
-                    point
-                        .y
-                        .clamp(feet.y + BODY_RADIUS, feet.y + BODY_HEIGHT - BODY_RADIUS),
-                    feet.z,
-                );
-                hit = Some((fraction, (point - axis).normalize_or_zero(), Some(actor.id)));
+                let radius = actor.dimensions.x * 0.5;
+                let axis = if actor.species == crate::Species::Dragon {
+                    let center = feet + Vec3::Y * actor.dimensions.y * 0.5;
+                    let local = actor.body_rotation().inverse() * (point - center);
+                    center
+                        + actor.body_rotation()
+                            * local.clamp(-actor.dimensions * 0.5, actor.dimensions * 0.5)
+                } else {
+                    Vec3::new(
+                        feet.x,
+                        point
+                            .y
+                            .clamp(feet.y + radius, feet.y + actor.dimensions.y - radius),
+                        feet.z,
+                    )
+                };
+                hit = Some((
+                    fraction,
+                    (point - axis).normalize_or_zero(),
+                    Some(actor.id),
+                    None,
+                ));
             }
         }
     }
     shot.age += STEP;
     shot.velocity -= Vec3::Y * (shot.parameters.gravity * STEP);
-    if let Some((fraction, normal, actor)) = hit {
+    if let Some((fraction, normal, actor, barrier)) = hit {
         shot.position += delta * fraction;
         Some(Impact {
             point: shot.position,
             normal,
             actor,
+            barrier,
         })
     } else {
         shot.position += delta;
@@ -256,7 +325,7 @@ fn wall_candidates(
     {
         return Vec::new();
     }
-    let level = (sample.y / geometry.level_height).ceil();
+    let level = ((sample.y - geometry.vertical_offset) / geometry.level_height).ceil();
     if !(-100_000.0..=100_000.0).contains(&level) {
         return Vec::new();
     }
@@ -297,18 +366,22 @@ fn available_wall_voxels(
         .copied()
         .filter(|pos| {
             geometry.contains_column(pos.coord)
-                && (0..=ARENA_MAX_LEVEL).contains(&pos.level)
+                && (geometry.min_level..=geometry.max_level).contains(&pos.level)
                 && !world.voxels.contains_key(pos)
-                && !reserved.contains(pos)
-                && !actors.iter().filter(|actor| actor.hp > 0.0).any(|actor| {
-                    voxel_overlaps_body(
-                        *pos,
-                        geometry,
-                        actor.feet,
-                        BODY_HEIGHT,
-                        BODY_RADIUS + SKIN * 4.0,
-                    )
+                && !world.edit_protected.get(&pos.coord).is_some_and(|ranges| {
+                    ranges
+                        .iter()
+                        .any(|(low, high)| (*low..=*high).contains(&pos.level))
                 })
+                && !world.static_spans.iter().any(|v| {
+                    v.bottom.coord == pos.coord
+                        && (v.bottom.level..=v.top_level).contains(&pos.level)
+                })
+                && !reserved.contains(pos)
+                && !actors
+                    .iter()
+                    .filter(|actor| actor.hp > 0.0)
+                    .any(|actor| crate::shapes::voxel_overlap(*pos, geometry, actor))
         })
         .collect()
 }
@@ -342,6 +415,9 @@ impl ArenaSession {
         materials: ArenaMaterials,
         out: &mut CommandsOut,
     ) {
+        if self.encounter.initialized {
+            self.refresh_support_buffs(tuning);
+        }
         let Some(actor) = self.actors.iter().find(|a| a.id == owner).cloned() else {
             return;
         };
@@ -351,9 +427,10 @@ impl ArenaSession {
             self.explode(
                 actor.center(),
                 owner,
+                actor.team,
                 spell,
                 tuning.blast_radius(),
-                tuning.blast_damage,
+                tuning.blast_damage * actor.damage_multiplier,
                 tuning.blast_knockback,
                 tuning.terrain_power,
                 world,
@@ -362,7 +439,8 @@ impl ArenaSession {
                 out,
             );
         } else {
-            let shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
+            let mut shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
+            shot.parameters.min_y = self.collision.min_y.min(-10.0);
             self.next_projectile += 1;
             self.projectiles.push(shot);
         }
@@ -379,6 +457,18 @@ impl ArenaSession {
         for mut shot in std::mem::take(&mut self.projectiles) {
             if let Some(impact) = advance_shot(&mut shot, &self.collision, &self.actors, false) {
                 self.combat_cue(shot.owner, impact.point, CombatCueKind::Impact);
+                if let Some(id) = impact.barrier {
+                    if shot.spell == Spell::Fireball {
+                        if let Some(barrier) =
+                            self.encounter.barriers.iter_mut().find(|b| b.id == id)
+                        {
+                            barrier.hp = (barrier.hp - shot.parameters.damage).max(0.0);
+                        }
+                        self.collision.sync_barriers(&self.encounter.barriers);
+                    } else {
+                        continue;
+                    }
+                }
                 if shot.spell == Spell::Shield {
                     if let Some(actor) = impact
                         .actor
@@ -435,6 +525,7 @@ impl ArenaSession {
                     self.explode(
                         impact.point,
                         shot.owner,
+                        shot.parameters.team,
                         shot.spell,
                         shot.parameters.radius,
                         shot.parameters.damage,
@@ -502,6 +593,7 @@ impl ArenaSession {
         &mut self,
         center: Vec3,
         owner: u8,
+        owner_team: crate::TeamId,
         spell: Spell,
         radius: f32,
         damage: f32,
@@ -515,10 +607,13 @@ impl ArenaSession {
         let mut damage_events = Vec::new();
         let mut useful_fireball = false;
         for actor in &mut self.actors {
-            if actor.hp <= 0.0 || (spell == Spell::AreaBlast && actor.id == owner) {
+            if actor.hp <= 0.0
+                || (spell == Spell::AreaBlast && actor.id == owner)
+                || (actor.id != owner && actor.team == owner_team)
+            {
                 continue;
             }
-            let distance = capsule_distance(center, actor.feet);
+            let distance = crate::shapes::distance(center, actor);
             if distance >= radius {
                 continue;
             }
@@ -606,6 +701,7 @@ pub(super) fn preview_actor(
         };
     }
     let mut shot = projectile(actor, actor.selected, tuning, 0, launch_speed);
+    shot.parameters.min_y = collision.min_y.min(-10.0);
     let mut result = Preview {
         points: vec![shot.position],
         ..Default::default()
@@ -645,12 +741,33 @@ pub(crate) struct ForecastBody {
     pub feet: Vec3,
     pub velocity: Vec3,
     pub predict_seconds: f32,
+    pub species: crate::Species,
+    pub team: crate::TeamId,
+    pub dimensions: Vec3,
+    pub yaw: f32,
+    pub yaw_velocity: f32,
+}
+impl ForecastBody {
+    pub fn human(id: u8, feet: Vec3, velocity: Vec3, predict_seconds: f32) -> Self {
+        Self {
+            id,
+            feet,
+            velocity,
+            predict_seconds,
+            species: crate::Species::Human,
+            team: u8::from(id != 0),
+            dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
+            yaw: 0.0,
+            yaw_velocity: 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ForecastImpact {
     pub point: Vec3,
     pub actor: Option<u8>,
+    pub barrier: Option<u64>,
     pub time: f32,
 }
 
@@ -676,6 +793,7 @@ pub(crate) fn forecast_spell(
             impact: Some(ForecastImpact {
                 point: caster.center(),
                 actor: None,
+                barrier: None,
                 time: 0.0,
             }),
             ..Default::default()
@@ -686,16 +804,28 @@ pub(crate) fn forecast_spell(
         observed
             .iter()
             .filter(|body| body.id != caster.id)
-            .map(|body| Actor::spawn(body.id, body.feet, Vec3::NEG_Z)),
+            .map(|fact| {
+                let mut body = Actor::spawn(fact.id, fact.feet, Vec3::NEG_Z);
+                body.species = fact.species;
+                body.team = fact.team;
+                body.dimensions = fact.dimensions;
+                body.body_yaw = fact.yaw;
+                body.previous_yaw = fact.yaw;
+                body
+            }),
     );
     if let Some(owner) = bodies.first_mut() {
         owner.previous_feet = owner.feet;
     }
     let mut shot = projectile(caster, caster.selected, tuning, 0, launch_speed);
+    shot.parameters.min_y = collision.min_y.min(-10.0);
     while flight_active(&shot) {
         for body in bodies.iter_mut().skip(1) {
             if let Some(fact) = observed.iter().find(|fact| fact.id == body.id) {
                 body.previous_feet = body.feet;
+                body.previous_yaw = body.body_yaw;
+                body.body_yaw = fact.yaw
+                    + fact.yaw_velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
                 body.feet = fact.feet
                     + fact.velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
             }
@@ -705,6 +835,7 @@ pub(crate) fn forecast_spell(
                 impact: Some(ForecastImpact {
                     point: hit.point,
                     actor: hit.actor,
+                    barrier: hit.barrier,
                     time: shot.age,
                 }),
                 wall_voxels: if caster.selected == Spell::Shield {
@@ -728,6 +859,7 @@ pub(crate) fn forecast_spell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collision::voxel_overlaps_body;
 
     #[test]
     fn ballistic_step_matches_analytic_parabola_and_downhill_has_more_reach() {
@@ -802,6 +934,7 @@ mod tests {
             point: contact + normal * PROJECTILE_RADIUS,
             normal,
             actor: None,
+            barrier: None,
         }
     }
 
@@ -837,6 +970,7 @@ mod tests {
             let actor_hit = wall_volume(
                 Impact {
                     actor: Some(1),
+                    barrier: None,
                     ..impact
                 },
                 Vec3::X,

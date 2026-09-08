@@ -23,6 +23,25 @@ pub(crate) struct Body {
     jump_buffer: f32,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct GroundProfile {
+    pub height: f32,
+    pub radius: f32,
+    pub walk: f32,
+    pub run: f32,
+}
+
+impl Default for GroundProfile {
+    fn default() -> Self {
+        Self {
+            height: BODY_HEIGHT,
+            radius: BODY_RADIUS,
+            walk: WALK,
+            run: RUN,
+        }
+    }
+}
+
 impl Body {
     pub fn tick(
         &mut self,
@@ -32,10 +51,24 @@ impl Body {
         jump: bool,
         world: &CollisionWorld,
     ) {
+        self.tick_profile(feet, direction, run, jump, world, GroundProfile::default());
+    }
+}
+
+impl Body {
+    pub fn tick_profile(
+        &mut self,
+        feet: &mut Vec3,
+        direction: Vec3,
+        run: bool,
+        jump: bool,
+        world: &CollisionWorld,
+        profile: GroundProfile,
+    ) {
         self.step_rise = 0.0;
         // Creation checks prevent embedding either body. Corrupt external state
         // stops safely without the exploration controller's teleport/noclip.
-        if !world.clear(*feet, BODY_HEIGHT, BODY_RADIUS) {
+        if !world.clear(*feet, profile.height, profile.radius) {
             self.vertical_velocity = 0.0;
             self.impulse_velocity = Vec3::ZERO;
             return;
@@ -45,7 +78,7 @@ impl Body {
             self.jump_buffer = 0.1;
         }
         let floor = (self.vertical_velocity <= 0.0 && self.impulse_velocity.y <= 0.0)
-            .then(|| world.ground(*feet, BODY_HEIGHT, BODY_RADIUS, SKIN * 8.0))
+            .then(|| world.ground(*feet, profile.height, profile.radius, SKIN * 8.0))
             .flatten();
         self.grounded = floor.is_some();
         if let Some(floor) = floor {
@@ -70,8 +103,9 @@ impl Body {
         }
         self.impulse_velocity.y = 0.0;
         let direction = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero();
-        let horizontal =
-            (direction * (if run { RUN } else { WALK }) + self.impulse_velocity) * STEP;
+        let horizontal = (direction * (if run { profile.run } else { profile.walk })
+            + self.impulse_velocity)
+            * STEP;
         let vertical = if !self.grounded || self.vertical_velocity > 0.0 {
             let delta = self.vertical_velocity * STEP - 0.5 * GRAVITY * STEP * STEP;
             self.vertical_velocity -= GRAVITY * STEP;
@@ -85,8 +119,8 @@ impl Body {
             world,
             original,
             horizontal + vertical,
-            BODY_HEIGHT,
-            BODY_RADIUS,
+            profile.height,
+            profile.radius,
         );
         *feet = slid;
         if self.grounded
@@ -95,19 +129,19 @@ impl Body {
         {
             let rise = Vec3::Y * (STEP_HEIGHT + SKIN * 2.0);
             let rise = world
-                .sweep(original, rise, BODY_HEIGHT, BODY_RADIUS)
+                .sweep(original, rise, profile.height, profile.radius)
                 .map_or(rise, |hit| rise * hit.fraction);
             let raised = original + rise;
-            if world.clear(raised, BODY_HEIGHT, BODY_RADIUS) {
+            if world.clear(raised, profile.height, profile.radius) {
                 let (across, across_contacts) =
-                    slide_with_contacts(world, raised, horizontal, BODY_HEIGHT, BODY_RADIUS);
+                    slide_with_contacts(world, raised, horizontal, profile.height, profile.radius);
                 if (across - raised).xz().length_squared()
                     > (slid - original).xz().length_squared() + SKIN * SKIN
                 {
                     if let Some(landing) =
-                        world.ground(across, BODY_HEIGHT, BODY_RADIUS, rise.y + SKIN * 4.0)
+                        world.ground(across, profile.height, profile.radius, rise.y + SKIN * 4.0)
                     {
-                        if world.clear(landing, BODY_HEIGHT, BODY_RADIUS) {
+                        if world.clear(landing, profile.height, profile.radius) {
                             *feet = landing;
                             self.step_rise = (landing.y - original.y).max(0.0);
                             // The lower-wall trial was rejected. Only the
@@ -132,7 +166,7 @@ impl Body {
         self.impulse_velocity *= (-3.0 * STEP).exp();
         if self.grounded
             && world
-                .ground(*feet, BODY_HEIGHT, BODY_RADIUS, SKIN * 8.0)
+                .ground(*feet, profile.height, profile.radius, SKIN * 8.0)
                 .is_none()
         {
             self.grounded = false;

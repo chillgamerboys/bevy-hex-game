@@ -104,6 +104,37 @@ impl ArenaSession {
     }
 
     pub(super) fn record_cast(&mut self, owner: u8, spell: Spell) {
+        if let Some(actor) = self.actors.iter_mut().find(|a| a.id == owner) {
+            actor.last_activity_tick = self.tick;
+        }
+        if self.encounter.initialized {
+            let ability = match spell {
+                Spell::Fireball => Some(0),
+                Spell::Shield => Some(1),
+                Spell::AreaBlast => None,
+            };
+            if let Some(index) = ability {
+                if let Some(count) = self
+                    .encounter
+                    .ability_counts
+                    .entry(owner)
+                    .or_insert([0; 7])
+                    .get_mut(index)
+                {
+                    *count += 1;
+                }
+            }
+            if let Some(count) = self
+                .encounter
+                .stats
+                .entry(owner)
+                .or_default()
+                .casts
+                .get_mut(spell.index())
+            {
+                *count += 1;
+            }
+        }
         if let Some(count) = self
             .combat_stats
             .get_mut(usize::from(owner))
@@ -114,6 +145,27 @@ impl ArenaSession {
     }
 
     pub(super) fn record_damage(&mut self, owner: u8, victim: u8, amount: f32) {
+        if amount > 0.0 {
+            if let Some(actor) = self.actors.iter_mut().find(|a| a.id == victim) {
+                actor.last_damage_tick = Some(self.tick);
+                actor.last_activity_tick = self.tick;
+            }
+            if let Some(actor) = self.actors.iter_mut().find(|a| a.id == owner) {
+                actor.last_activity_tick = self.tick;
+            }
+            self.wake_encounter_damage(owner, victim, amount);
+        }
+        if self.encounter.initialized {
+            let stats = self.encounter.stats.entry(victim).or_default();
+            stats.damage_received += amount;
+            if owner == victim {
+                stats.self_damage += amount;
+            } else if amount > 0.0 {
+                let stats = self.encounter.stats.entry(owner).or_default();
+                stats.damage_dealt += amount;
+                stats.first_damage_tick.get_or_insert(self.tick);
+            }
+        }
         if let Some(stats) = self.combat_stats.get_mut(usize::from(victim)) {
             stats.damage_received += amount;
             if owner == victim {
@@ -129,6 +181,11 @@ impl ArenaSession {
     }
 
     pub(super) fn record_fireball_impact(&mut self, owner: u8, useful: bool) {
+        if self.encounter.initialized {
+            let stats = self.encounter.stats.entry(owner).or_default();
+            stats.fireballs_resolved += 1;
+            stats.useful_fireballs += u32::from(useful);
+        }
         if let Some(stats) = self.combat_stats.get_mut(usize::from(owner)) {
             stats.fireballs_resolved += 1;
             stats.useful_fireballs += u32::from(useful);

@@ -237,7 +237,32 @@ impl Bot {
         cues: &[CombatCue],
         tick: u64,
     ) -> ActorIntent {
-        let Some(bot) = actors.iter().find(|a| a.id == 1 && a.hp > 0.0) else {
+        self.intent_for(
+            1,
+            actors,
+            projectiles,
+            collision,
+            world,
+            geometry,
+            tuning,
+            cues,
+            tick,
+        )
+    }
+
+    pub(crate) fn intent_for(
+        &mut self,
+        id: u8,
+        actors: &[Actor],
+        projectiles: &[Projectile],
+        collision: &CollisionWorld,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        tuning: &ArenaTuning,
+        cues: &[CombatCue],
+        tick: u64,
+    ) -> ActorIntent {
+        let Some(bot) = actors.iter().find(|a| a.id == id && a.hp > 0.0) else {
             self.cancel_charge();
             return ActorIntent::default();
         };
@@ -278,6 +303,12 @@ impl Bot {
                 .iter()
                 .filter(|s| s.owner != bot.id && s.spell == Spell::Fireball)
                 .filter(|s| {
+                    actors
+                        .iter()
+                        .find(|a| a.id == s.owner)
+                        .is_none_or(|owner| owner.team != bot.team)
+                })
+                .filter(|s| {
                     s.position.distance(bot.center()) < 18.0
                         && visible_from(collision, bot.eye(), s.position)
                 })
@@ -301,6 +332,10 @@ impl Bot {
                 }
                 self.last_cue_id = Some(cue.id);
                 if cue.owner != bot.id
+                    && actors
+                        .iter()
+                        .find(|a| a.id == cue.owner)
+                        .is_none_or(|owner| owner.team != bot.team)
                     && age(tick, cue.tick) <= 1.0
                     && cue.position.distance(bot.center()) <= tuning.bot.cue_radius
                 {
@@ -915,7 +950,7 @@ impl Bot {
             let target_distance = capsule_distance(impact.point, future);
             if capsule_distance(impact.point, bot.feet) > tuning.fireball_radius() + 0.5
                 && target_distance <= tuning.fireball_radius() * 0.6
-                && (belief.visible || impact.actor.is_none())
+                && (belief.visible || (impact.actor.is_none() && impact.barrier.is_none()))
             {
                 return Some((aim, impact.time));
             }
@@ -927,12 +962,12 @@ impl Bot {
 fn forecast_bodies(belief: Belief, tuning: &ArenaTuning) -> Vec<ForecastBody> {
     // A memory/cue is an aiming hypothesis, never a phantom collision body.
     if belief.visible {
-        vec![ForecastBody {
-            id: 0,
-            feet: belief.feet,
-            velocity: belief.velocity,
-            predict_seconds: tuning.bot.prediction_seconds,
-        }]
+        vec![ForecastBody::human(
+            0,
+            belief.feet,
+            belief.velocity,
+            tuning.bot.prediction_seconds,
+        )]
     } else {
         Vec::new()
     }
@@ -956,9 +991,7 @@ fn ready(bot: &Actor, spell: Spell) -> bool {
 }
 
 fn visible_from(collision: &CollisionWorld, origin: Vec3, target: Vec3) -> bool {
-    collision
-        .sweep_sphere(origin, target - origin, 0.0)
-        .is_none()
+    collision.sight_clear(origin, target)
 }
 
 fn safe_travel(bot: &Actor, desired: Vec3, collision: &CollisionWorld, run: bool) -> (Vec3, u64) {
@@ -996,7 +1029,7 @@ fn safe_travel(bot: &Actor, desired: Vec3, collision: &CollisionWorld, run: bool
 }
 
 /// Low ballistic arc at the shared launch speed, including vertical targets.
-fn ballistic_aim(
+pub(crate) fn ballistic_aim(
     origin: Vec3,
     target: Vec3,
     tuning: &ArenaTuning,

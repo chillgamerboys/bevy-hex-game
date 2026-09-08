@@ -21,11 +21,22 @@ mod bot_baseline;
 mod bot_config;
 mod collision;
 mod controller;
+mod creatures;
+mod encounter_config;
+mod encounters;
+mod motion;
+mod shapes;
 mod spells;
 mod telemetry;
 
 pub use bot::BotDebugSnapshot;
 pub use bot_config::BotTuning;
+pub use creatures::{
+    ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, CreatureAbility,
+    EncounterSummary, PartyId, PartyPhase, PartySnapshot, Species, TeamId,
+};
+pub use encounter_config::EncounterTuning;
+pub use encounters::EncounterActorStats;
 pub use telemetry::{ActorCombatStats, RoundSummary};
 use telemetry::{CombatCue, CombatCueKind};
 
@@ -133,6 +144,8 @@ pub struct ChargeState {
 #[derive(Resource, Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArenaTuning {
+    /// Authored map creature hypotheses; unused by the accepted Duel.
+    pub encounters: EncounterTuning,
     /// Fixed-strength opponent behavior; no adaptive difficulty or extra spell power.
     pub bot: BotTuning,
     /// Shield width/height preset (0, 1, or 2).
@@ -174,6 +187,7 @@ pub struct ArenaTuning {
 impl Default for ArenaTuning {
     fn default() -> Self {
         Self {
+            encounters: EncounterTuning::default(),
             bot: BotTuning::default(),
             shield_size: 1,
             fireball_size: 1,
@@ -200,6 +214,7 @@ impl ArenaTuning {
     /// Reject nonfinite, out-of-range, or unusable authoring values.
     pub fn validate(&self) -> Result<(), String> {
         self.bot.validate()?;
+        self.encounters.validate()?;
         if [self.shield_size, self.fireball_size, self.blast_size]
             .into_iter()
             .any(|i| i > 2)
@@ -308,6 +323,14 @@ impl ArenaTuning {
 pub struct Actor {
     /// Stable arena identity: human 0, disposable bot 1.
     pub id: u8,
+    /// Physical/behavior profile; human and shadow preserve accepted Duel values.
+    pub species: Species,
+    /// Friendly bodies are skipped by projectiles except the caster itself.
+    pub team: TeamId,
+    /// Encounter group; the human and original Duel have no party.
+    pub party: Option<PartyId>,
+    /// Maximum recoverable life for this species.
+    pub max_hp: f32,
     /// Authoritative feet position; this is not tactical TilePos occupancy.
     pub feet: Vec3,
     /// Feet position at the beginning of the latest simulation tick.
@@ -322,15 +345,32 @@ pub struct Actor {
     pub cooldowns: [f32; 3],
     /// Latest accepted support contact.
     pub grounded: bool,
+    /// Dragon flight mode; all other profiles retain ordinary grounded movement.
+    pub flying: bool,
     charge: Option<ChargeState>,
     cast_needs_release: bool,
     body: Body,
+    dimensions: Vec3,
+    body_yaw: f32,
+    previous_yaw: f32,
+    attack: Option<AttackSnapshot>,
+    damage_multiplier: f32,
+    last_damage_tick: Option<u64>,
+    last_activity_tick: u64,
 }
 
 impl Actor {
     fn spawn(id: u8, feet: Vec3, aim: Vec3) -> Self {
         Self {
             id,
+            species: if id == 0 {
+                Species::Human
+            } else {
+                Species::Shadow
+            },
+            team: u8::from(id != 0),
+            party: None,
+            max_hp: 100.0,
             feet,
             previous_feet: feet,
             aim,
@@ -338,22 +378,36 @@ impl Actor {
             selected: Spell::Fireball,
             cooldowns: [0.0; 3],
             grounded: false,
+            flying: false,
             charge: None,
             cast_needs_release: false,
             body: Body::default(),
+            dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
+            body_yaw: (-aim.x).atan2(-aim.z),
+            previous_yaw: (-aim.x).atan2(-aim.z),
+            attack: None,
+            damage_multiplier: 1.0,
+            last_damage_tick: None,
+            last_activity_tick: 0,
         }
     }
 
     /// Physical eye and launch position, without presentation interpolation.
     #[must_use]
     pub fn eye(&self) -> Vec3 {
-        self.feet + Vec3::Y * EYE_HEIGHT
+        if self.species == Species::Dragon {
+            self.center() + self.body_rotation() * Vec3::NEG_Z * (self.dimensions.z * 0.5 - 0.05)
+        } else if self.species == Species::Goblin {
+            self.feet + Vec3::Y * (self.dimensions.y * 0.775)
+        } else {
+            self.feet + Vec3::Y * EYE_HEIGHT
+        }
     }
 
     /// Body center used to describe the player-centered blast.
     #[must_use]
     pub fn center(&self) -> Vec3 {
-        self.feet + Vec3::Y * (BODY_HEIGHT * 0.5)
+        self.feet + Vec3::Y * (self.dimensions.y * 0.5)
     }
 
     /// Current authoritative charge, without allowing input/presentation to set it.
@@ -460,16 +514,16 @@ pub struct VisualEffect {
 /// Terminal result. The entire session waits for a full reset after KO.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArenaOutcome {
-    /// Exactly one actor survives.
+    /// Winning actor ID; zero also denotes all hostile encounter parties defeated.
     Winner(u8),
-    /// Both actors were knocked out by the same simulation tick.
+    /// No side survived the terminal simulation tick.
     Draw,
 }
 
 /// Readable immutable simulation projection plus privately owned control state.
 #[derive(Resource, Debug)]
 pub struct ArenaSession {
-    /// Two continuous actors, never tactical unit shells.
+    /// Stable continuous actors for the selected duel or encounter roster.
     pub actors: Vec<Actor>,
     /// Live ballistic seeds/fireballs.
     pub projectiles: Vec<Projectile>,
@@ -498,6 +552,7 @@ pub struct ArenaSession {
     combat_cues: Vec<CombatCue>,
     next_cue: u64,
     combat_stats: [ActorCombatStats; 2],
+    encounter: encounters::EncounterState,
     #[cfg(any(test, feature = "test-support"))]
     baseline_bot: Option<bot_baseline::Bot>,
 }
@@ -525,6 +580,7 @@ impl Default for ArenaSession {
             combat_cues: Vec::new(),
             next_cue: 0,
             combat_stats: Default::default(),
+            encounter: encounters::EncounterState::default(),
             #[cfg(any(test, feature = "test-support"))]
             baseline_bot: None,
         }
@@ -544,6 +600,7 @@ impl ArenaSession {
             actor.cancel_charge();
         }
         self.bot.cancel_charge();
+        self.encounter.cancel_charges();
         #[cfg(any(test, feature = "test-support"))]
         if let Some(bot) = &mut self.baseline_bot {
             bot.cancel_charge();
@@ -633,6 +690,9 @@ impl ArenaSession {
         self.effects.retain(|effect| effect.age < effect.lifetime);
         if self.outcome.is_some() {
             return commands;
+        }
+        if world.selection.map != hex_core::arena::ArenaMap::Duel {
+            return self.advance_encounter(human, world, geometry, materials, tuning);
         }
         self.tick += 1;
         self.combat_cues
@@ -903,3 +963,6 @@ mod knowledge_tests;
 mod shield_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod shape_contract_tests;
