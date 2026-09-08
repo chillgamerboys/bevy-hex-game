@@ -168,8 +168,8 @@ pub(super) fn aim_from_camera(
     let delta = direction.normalize() * 80.0;
     let mut fraction = session
         .collision
-        .sweep_sphere(origin, delta, 0.0)
-        .map_or(1.0, |h| h.fraction);
+        .attack_sweep(origin, delta, 0.0)
+        .map_or(1.0, |(h, _)| h.fraction);
     for target in session
         .actors
         .iter()
@@ -1169,5 +1169,64 @@ mod tests {
             vec![a]
         );
         assert!(session.pending_walls.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod camera_mask_tests {
+    use super::*;
+    use hex_core::arena::ArenaStaticSpan;
+
+    #[test]
+    fn third_person_crosshair_targets_attack_only_canopy_without_retracting_the_camera() {
+        let geometry = ArenaVoxelGeometry::default();
+        let view = ArenaTerrainView {
+            static_spans: vec![ArenaStaticSpan {
+                bottom: TilePos::new(HexCoord::from_axial(1, 0), 1),
+                top_level: 3,
+                blocks_movement: false,
+                blocks_projectiles: true,
+                blocks_sight: true,
+            }],
+            ..Default::default()
+        };
+        let caster = Actor::spawn(0, Vec3::ZERO, Vec3::X);
+        let origin = Vec3::new(-1.0, caster.eye().y, 1.0);
+        let direction = (Vec3::new(1.732_050_8, caster.eye().y, 0.0) - origin).normalize();
+        let target = Actor::spawn(1, origin + direction * 8.0 - Vec3::Y * 0.62, -direction);
+        let mut session = ArenaSession {
+            actors: vec![caster.clone(), target],
+            ..Default::default()
+        };
+        session.collision.refresh(&view, geometry);
+        let delta = direction * 80.0;
+        assert!(session.collision.sweep_sphere(origin, delta, 0.0).is_none());
+        let (hit, _) = session
+            .collision
+            .attack_sweep(origin, delta, 0.0)
+            .expect("canopy blocks actual attacks");
+        let expected = (origin + delta * hit.fraction - caster.eye()).normalize();
+        assert!(
+            session
+                .aim_from_camera(0, origin, direction)
+                .distance(expected)
+                < 0.0001
+        );
+        let desired = caster.eye() + Vec3::X * 5.0;
+        assert!(
+            session
+                .camera_position(caster.eye(), desired)
+                .distance(desired)
+                < 0.0001
+        );
+        session.actors.push(Actor::spawn(
+            2,
+            origin + direction * 0.8 - Vec3::Y * 0.62,
+            -direction,
+        ));
+        assert!(
+            session.aim_from_camera(0, origin, direction).x < 0.0,
+            "an actor nearer than the canopy still wins aim arbitration"
+        );
     }
 }

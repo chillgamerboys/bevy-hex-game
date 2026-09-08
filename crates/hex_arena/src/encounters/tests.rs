@@ -1058,3 +1058,79 @@ fn returning_shadow_defends_only_nearby_visible_contact_and_keeps_homeward_motio
         released
     );
 }
+
+#[test]
+fn map_no_room_notice_uses_the_same_two_second_clock_and_preserves_newer_notices() {
+    for map in [ArenaMap::Fort, ArenaMap::SevenRegions] {
+        let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
+        if map == ArenaMap::SevenRegions {
+            view.selection.map = map;
+            view.anchors = BTreeMap::from([
+                ("mountains_high_pass".into(), Vec3::new(8.0, SKIN, 0.0)),
+                ("fort_fort_courtyard".into(), Vec3::new(0.0, SKIN, 14.0)),
+                ("caves_cave_entrance".into(), Vec3::new(0.0, SKIN, -14.0)),
+            ]);
+            session.reset(1, &view, geometry);
+            ticks(&mut session, 1, &view, geometry, materials, &tuning);
+        }
+        assert!(!session.encounter.spawn_failed);
+        session.shield_no_room_notice();
+        ticks(&mut session, 239, &view, geometry, materials, &tuning);
+        assert_eq!(session.notice, "No room for new shield blocks");
+        ticks(&mut session, 1, &view, geometry, materials, &tuning);
+        assert!(session.notice.is_empty());
+        session.shield_no_room_notice();
+        session.notice = "Keep the newer report".into();
+        ticks(&mut session, 240, &view, geometry, materials, &tuning);
+        assert_eq!(session.notice, "Keep the newer report");
+    }
+}
+
+#[test]
+fn breath_damages_a_barrier_edge_outside_the_center_ray_and_cannot_hit_through_it() {
+    let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
+    pose(&mut session, 1, Vec3::NEG_X * 1.7, Vec3::X);
+    pose(&mut session, 0, Vec3::new(3.0, 0.0, 0.7), Vec3::NEG_X);
+    session.encounter.barriers.push(BarrierSnapshot {
+        id: 50,
+        owner: 0,
+        center: Vec3::new(2.0, 0.2, 2.0),
+        normal: Vec3::X,
+        width: tuning.encounters.barrier_width,
+        height: 1.6,
+        hp: 60.0,
+        max_hp: 60.0,
+        remaining: 4.0,
+        lifetime: 4.0,
+    });
+    start(&mut session, 1, CreatureAbility::FireCone, Vec3::X, &tuning);
+    ticks(&mut session, 150, &view, geometry, materials, &tuning);
+    assert!(
+        (session.barriers().first().expect("surviving barrier").hp - 25.0).abs() < 0.01,
+        "three pulses must damage the intersected edge exactly once each"
+    );
+    assert!((session.actors.first().expect("covered human").hp - 100.0).abs() < 0.001);
+}
+
+#[test]
+fn breath_chips_intersected_hex_face_even_when_its_center_is_outside_the_cone() {
+    let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
+    pose(&mut session, 1, Vec3::NEG_X * 1.7, Vec3::X);
+    let edge = TilePos::new(HexCoord::from_axial(1, 1), 1);
+    let outside = TilePos::new(HexCoord::from_axial(0, 2), 1);
+    view.voxels.insert(edge, materials.stone);
+    view.voxels.insert(outside, materials.stone);
+    view.revision += 1;
+    start(&mut session, 1, CreatureAbility::FireCone, Vec3::X, &tuning);
+    let impacts = ticks(&mut session, 150, &view, geometry, materials, &tuning);
+    assert_eq!(
+        impacts.iter().filter(|i| i.volume.contains(&edge)).count(),
+        1,
+        "intersected face receives the complete-cast terrain budget once"
+    );
+    assert!(impacts
+        .iter()
+        .filter(|i| i.volume.contains(&edge))
+        .all(|i| i.power == tuning.encounters.breath_terrain_power));
+    assert!(impacts.iter().all(|i| !i.volume.contains(&outside)));
+}

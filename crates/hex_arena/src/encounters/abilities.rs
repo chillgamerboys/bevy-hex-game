@@ -309,7 +309,7 @@ impl ArenaSession {
             let delta = point - origin;
             delta.length() <= range + SKIN
                 && (delta.length_squared() < SKIN * SKIN
-                    || delta.normalize().dot(direction) >= half_angle.cos())
+                    || delta.normalize().dot(direction) + SKIN >= half_angle.cos())
         };
         // Keep the same obstruction snapshot for the whole pulse: destroying a
         // barrier cannot also hit a body behind that barrier in the same pulse.
@@ -347,18 +347,21 @@ impl ArenaSession {
             self.record_damage(owner.id, victim, damage);
         }
         for barrier in &mut self.encounter.barriers {
-            let distance = (barrier.center - origin).length();
-            let ray = (barrier.center - origin).normalize_or(direction) * range;
-            let Some(hit) = shapes::sweep_barrier(barrier, origin, ray, 0.0) else {
+            let rotation =
+                bevy_math::Quat::from_rotation_y((-barrier.normal.x).atan2(-barrier.normal.z));
+            let half = Vec3::new(barrier.width * 0.5, barrier.height * 0.5, 0.025);
+            let Some(contact) =
+                volume_cone_contact(origin, direction, range, half_angle, |point| {
+                    closest_box_point(point, barrier.center, rotation, half)
+                })
+            else {
                 continue;
             };
-            let contact = origin + ray * hit.fraction;
-            if distance > range + barrier.width || !in_cone(contact) {
-                continue;
-            }
+            let ray =
+                (contact - origin) + ((contact - origin).normalize_or(direction) * SKIN * 4.0);
             if !self
                 .collision
-                .attack_sweep(origin, contact - origin, 0.0)
+                .attack_sweep(origin, ray, 0.0)
                 .is_some_and(|(_, id)| id == Some(barrier.id))
             {
                 continue;
@@ -383,8 +386,12 @@ impl ArenaSession {
             if cast.voxels.contains(&pos) {
                 continue;
             }
-            let center = geometry.center(pos);
-            let delta = center - origin;
+            let Some(point) = volume_cone_contact(origin, direction, range, half_angle, |point| {
+                closest_voxel_point(point, pos, geometry)
+            }) else {
+                continue;
+            };
+            let delta = (point - origin) + (point - origin).normalize_or(direction) * SKIN * 4.0;
             let Some((hit, barrier)) = self.collision.attack_sweep(origin, delta, 0.0) else {
                 continue;
             };
@@ -446,7 +453,19 @@ fn body_cone_contact(
     angle: f32,
     actor: &Actor,
 ) -> Option<Vec3> {
-    let mut point = closest_body_point(origin, actor);
+    volume_cone_contact(origin, direction, range, angle, |point| {
+        closest_body_point(point, actor)
+    })
+}
+
+fn volume_cone_contact(
+    origin: Vec3,
+    direction: Vec3,
+    range: f32,
+    angle: f32,
+    closest: impl Fn(Vec3) -> Vec3,
+) -> Option<Vec3> {
+    let mut point = closest(origin);
     for _ in 0..32 {
         let delta = point - origin;
         let distance = delta.length();
@@ -460,7 +479,7 @@ fn body_cone_contact(
             let edge = direction * angle.cos() + radial.normalize_or(Vec3::X) * angle.sin();
             origin + edge * delta.dot(edge).clamp(0.0, range)
         };
-        let body = closest_body_point(cone, actor);
+        let body = closest(cone);
         if body.distance_squared(cone) < SKIN * SKIN {
             return Some(cone);
         }
@@ -506,4 +525,49 @@ impl ArenaSession {
             };
         }
     }
+}
+
+fn closest_box_point(point: Vec3, center: Vec3, rotation: bevy_math::Quat, half: Vec3) -> Vec3 {
+    center + rotation * (rotation.inverse() * (point - center)).clamp(-half, half)
+}
+
+fn closest_voxel_point(point: Vec3, pos: TilePos, geometry: ArenaVoxelGeometry) -> Vec3 {
+    let center = geometry.center(pos);
+    let local = (point - center).with_y(0.0);
+    let y = point
+        .y
+        .clamp(geometry.top(pos) - geometry.level_height, geometry.top(pos));
+    let normals = [
+        Vec3::X,
+        Vec3::new(0.5, 0.0, 0.866_025_4),
+        Vec3::new(-0.5, 0.0, 0.866_025_4),
+    ];
+    if normals
+        .into_iter()
+        .all(|n| n.dot(local).abs() <= 0.866_025_4)
+    {
+        return (center + local).with_y(y);
+    }
+    let vertices = [
+        Vec3::Z,
+        Vec3::new(0.866_025_4, 0.0, 0.5),
+        Vec3::new(0.866_025_4, 0.0, -0.5),
+        Vec3::NEG_Z,
+        Vec3::new(-0.866_025_4, 0.0, -0.5),
+        Vec3::new(-0.866_025_4, 0.0, 0.5),
+    ];
+    vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .take(6)
+        .map(|(a, b)| {
+            let edge = *b - *a;
+            let t = (local - *a).dot(edge) / edge.length_squared();
+            (center + *a + edge * t.clamp(0.0, 1.0)).with_y(y)
+        })
+        .min_by(|a, b| {
+            a.distance_squared(point)
+                .total_cmp(&b.distance_squared(point))
+        })
+        .unwrap_or(center.with_y(y))
 }

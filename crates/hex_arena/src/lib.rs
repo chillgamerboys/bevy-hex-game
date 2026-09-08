@@ -588,6 +588,22 @@ impl Default for ArenaSession {
 }
 
 impl ArenaSession {
+    /// Advance shared simulation housekeeping after mode initialization succeeds.
+    fn begin_simulation_tick(&mut self) {
+        self.tick += 1;
+        self.combat_cues
+            .retain(|cue| self.tick.saturating_sub(cue.tick) <= 120);
+        if self
+            .shield_notice_until
+            .is_some_and(|until| self.tick >= until)
+        {
+            if self.notice == "No room for new shield blocks" {
+                self.notice.clear();
+            }
+            self.shield_notice_until = None;
+        }
+    }
+
     fn shield_no_room_notice(&mut self) {
         self.notice = "No room for new shield blocks".into();
         self.shield_notice_until = Some(self.tick.saturating_add(240));
@@ -694,18 +710,7 @@ impl ArenaSession {
         if world.selection.map != hex_core::arena::ArenaMap::Duel {
             return self.advance_encounter(human, world, geometry, materials, tuning);
         }
-        self.tick += 1;
-        self.combat_cues
-            .retain(|cue| self.tick.saturating_sub(cue.tick) <= 120);
-        if self
-            .shield_notice_until
-            .is_some_and(|until| self.tick >= until)
-        {
-            if self.notice == "No room for new shield blocks" {
-                self.notice.clear();
-            }
-            self.shield_notice_until = None;
-        }
+        self.begin_simulation_tick();
         let use_current_bot = self.bot_enabled;
         #[cfg(any(test, feature = "test-support"))]
         let use_current_bot = use_current_bot && self.baseline_bot.is_none();

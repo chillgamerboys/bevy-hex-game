@@ -437,10 +437,8 @@ impl ArenaSession {
         if self.encounter.spawn_failed {
             return CommandsOut::default();
         }
-        self.tick += 1;
+        self.begin_simulation_tick();
         let mut out = CommandsOut::default();
-        self.combat_cues
-            .retain(|c| self.tick.saturating_sub(c.tick) <= 120);
         for b in &mut self.encounter.barriers {
             b.remaining -= STEP;
         }
