@@ -89,11 +89,15 @@ OBSERVER_VIEWS = (
     ("fort-observer-start", "observer-start", "fort", "shadow", None),
     ("fort-observer-orbit", "observer-orbit", "fort", "shadow", None),
     ("fort-observer-rear", "observer-orbit-rear", "fort", "shadow", None),
+    ("fort-observer-close", "observer-close", "fort", "shadow", None),
+    ("fort-observer-close-rear", "observer-close-rear", "fort", "shadow", None),
     ("fort-observer-free", "observer-free", "fort", "shadow", None),
     ("fort-observer-paused", "observer-paused", "fort", "shadow", None),
     ("fort-observer-result", "observer-result", "fort", "shadow", None),
     ("duel-observer-start", "observer-start", "duel", "shadow", None),
     ("duel-observer-orbit", "observer-orbit", "duel", "shadow", None),
+    ("duel-observer-close", "observer-close", "duel", "shadow", None),
+    ("duel-observer-close-rear", "observer-close-rear", "duel", "shadow", None),
     ("duel-observer-free", "observer-free", "duel", "shadow", None),
     ("duel-observer-result", "observer-result", "duel", "shadow", None),
 )
@@ -280,9 +284,17 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         if view == "observer-free" and state.get("observer_camera", {}).get("mode") != "Free":
             raise RuntimeError("Observer free-camera capture did not enter Free mode.")
         if view not in {"observer-start", "observer-paused"}:
-            reached = state.get("phase_reached_frame")
+            reached = state.get("composition_reached_frame") if view.startswith("observer-close") else state.get("phase_reached_frame")
             if not isinstance(reached, int) or state.get("frame", 0) < reached + 4:
                 raise RuntimeError(f"{view} lacks its requested simulation boundary and four rendered frames.")
+        if view.startswith("observer-close"):
+            subjects = set(state.get("visible_subjects", []))
+            teams = {actor.get("team") for actor in state.get("actors", []) if actor.get("id") in subjects and actor.get("hp", 0) > 0}
+            if teams != {team.get("team") for team in summary.get("teams", [])}:
+                raise RuntimeError("Close observer capture must admit a useful visible subject from each living team.")
+            samples = state.get("observer_camera_inputs", [])
+            if not any(sample.get("wheel", 0) > 0 for sample in samples) or (view.endswith("-rear") and not any(abs(sample.get("look", [0])[0]) > 0 for sample in samples)):
+                raise RuntimeError("Close observer capture lacks its ordinary wheel/azimuth input history.")
         if view == "observer-performance" and summary.get("ticks", 0) < 3600 and summary.get("result") is None:
             raise RuntimeError("Observer performance must reach 3600 ticks or an actual terminal result.")
     if view in BOT_VIEWS:
@@ -383,7 +395,7 @@ def capture(args: argparse.Namespace) -> int:
         entries = list(OBSERVER_PERFORMANCE_VIEWS if args.spectator_performance else OBSERVER_VIEWS)
         if args.spectator and not observer_matrix and args.map:
             entries = [entry for entry in entries if entry[2] == args.map]
-        matrix = "arena-spectator-performance-v1" if args.spectator_performance else "arena-spectator-v1"
+        matrix = "arena-spectator-performance-v1" if args.spectator_performance else "arena-spectator-v2-close"
     if args.performance_review:
         matrix = "arena-performance-v1-synthetic"
     elif args.encounter_review:
@@ -523,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
-    review.add_argument("--spectator-review", action="store_true", help="Ten Fort/Duel observer menu, orbit/free, two-azimuth and terminal views.")
+    review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
     review.add_argument("--spectator-performance", action="store_true", help="Fort/Duel ordinary observer frame intervals until 3600 ticks or a terminal result; no synthetic HP or movement.")
     review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all ten Seven Regions enemies.")
     review.add_argument("--encounter-review", action="store_true", help="Capture 27 map, creature, attack-phase, and selector views, including opposite barrier/aura azimuths.")

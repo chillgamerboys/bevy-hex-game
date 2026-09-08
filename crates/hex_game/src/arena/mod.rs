@@ -93,6 +93,7 @@ struct ViewState {
     capture_approach_frame: Option<u32>,
     capture_composition_frame: Option<u32>,
     capture_subjects: Vec<u8>,
+    capture_observer_inputs: Vec<spectator::CameraSample>,
     capture_stress_initialized: bool,
     capture_stress_steps: u32,
     capture_stress_ticks: Vec<encounter::StressTick>,
@@ -138,6 +139,7 @@ impl Default for ViewState {
             capture_approach_frame: None,
             capture_composition_frame: None,
             capture_subjects: Vec::new(),
+            capture_observer_inputs: Vec::new(),
             capture_stress_initialized: false,
             capture_stress_steps: 0,
             capture_stress_ticks: Vec::new(),
@@ -181,6 +183,7 @@ impl ViewState {
         self.capture_approach_frame = None;
         self.capture_composition_frame = None;
         self.capture_subjects.clear();
+        self.capture_observer_inputs.clear();
         self.capture_ready_elapsed_ms = None;
         self.capture_stress_initialized = false;
         self.capture_stress_steps = 0;
@@ -1099,6 +1102,23 @@ fn capture_frame(
         }
         return;
     }
+    if spectator::close_view(&state.capture_view) && state.capture_composition_frame.is_none() {
+        let subjects = cameras
+            .single()
+            .ok()
+            .map(|camera| spectator::close_subjects(&session, camera))
+            .unwrap_or_default();
+        if frames >= 110 && spectator::both_teams_visible(&session, &subjects) {
+            state.capture_subjects = subjects;
+            state.capture_composition_frame = Some(frames);
+            state.accumulator = 0.0;
+        } else if frames >= 1800 || session.is_finished() {
+            error!(tick=session.tick, subjects=?subjects, "Observer close capture failed: both living teams were not visible at useful scale");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
     if encounter::composition_view(&state.capture_view, view.selection.map)
         && state.capture_composition_frame.is_none()
     {
@@ -1264,7 +1284,8 @@ fn capture_frame(
         ("battle_setup", serde_json::json!(session.accepted_battle_setup())),
         ("human_actor_id", serde_json::json!(session.human_actor_id())),
         ("battle_summary", serde_json::json!(session.battle_summary())),
-        ("observer_camera", serde_json::json!({"mode":format!("{:?}",state.observer.mode),"position":state.observer.position.to_array(),"target":state.observer.target.to_array(),"distance":state.observer.distance})),
+        ("observer_camera_inputs", serde_json::json!(state.capture_observer_inputs)),
+        ("observer_camera", serde_json::json!({"mode":format!("{:?}",state.observer.mode),"position":state.observer.position.to_array(),"target":state.observer.target.to_array(),"distance":state.observer.distance,"actual_distance":state.observer.position.distance(state.observer.target)})),
         ("actors", serde_json::json!(actors)),
         ("barriers", serde_json::json!(barriers)),
         ("auras", serde_json::json!(auras)),

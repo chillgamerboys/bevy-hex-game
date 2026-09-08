@@ -104,7 +104,9 @@ pub(super) fn setup(mut commands: Commands) {
         .with_children(|root| {
             root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 17.0, INK), Label::ObserverTeams));
             root.spawn((Node { position_type: PositionType::Absolute, top: px(14), right: px(18), max_width: px(450), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 17.0, INK), Label::ObserverStatus));
-            root.spawn((Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), justify_content: JustifyContent::Center, ..default() }, text("WASD pan / move   Q / E down / up   SHIFT fast   MOUSE look   WHEEL orbit zoom   C orbit / free   ESC / TAB pause   R reset", 12.0, INK), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }));
+            root.spawn((Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), padding: UiRect::horizontal(px(18)), justify_content: JustifyContent::Center, ..default() }, Name::new("Observer footer container"))).with_children(|footer| {
+                footer.spawn((text("WASD pan / move   Q / E down / up   SHIFT fast   MOUSE look   WHEEL orbit zoom   C orbit / free   ESC / TAB pause   R reset", 12.0, INK), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }, Name::new("Observer footer text")));
+            });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.78)), GlobalZIndex(20), StartPanel))

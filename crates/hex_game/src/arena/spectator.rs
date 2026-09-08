@@ -233,6 +233,107 @@ pub(super) fn team_color(session: &ArenaSession, team: u8) -> Color {
     }
 }
 
+#[derive(Clone, Copy, serde::Serialize)]
+pub(super) struct CameraSample {
+    pub frame: u32,
+    pub look: [f32; 2],
+    pub movement: [f32; 3],
+    pub wheel: f32,
+}
+
+pub(super) fn close_view(view: &str) -> bool {
+    matches!(view, "observer-close" | "observer-close-rear")
+}
+
+pub(super) fn focus_live(camera: &mut ObserverCamera, session: &ArenaSession) {
+    let previous = camera.position;
+    let wheel = (camera.distance / 18.0).ln() / 0.12;
+    let desired = camera.update_pose(Vec2::ZERO, Vec3::ZERO, false, wheel, 0.0);
+    camera.position = session.camera_position(previous, desired.translation);
+}
+
+/// Public camera/frustum admission only; never treats this as a pixel verdict.
+pub(super) fn close_subjects(session: &ArenaSession, camera: &Transform) -> Vec<u8> {
+    session
+        .actors
+        .iter()
+        .filter(|actor| {
+            let point = actor.center();
+            let local = camera.rotation.inverse() * (point - camera.translation);
+            let depth = -local.z;
+            let tangent = (75.0_f32.to_radians() * 0.5).tan();
+            actor.hp > 0.0
+                && depth > 0.1
+                && local.y.abs() < depth * tangent * 0.85
+                && local.x.abs() < depth * tangent * (16.0 / 9.0) * 0.85
+                && actor.body_dimensions().max_element() / depth > 0.035
+                && session
+                    .camera_position(camera.translation, point)
+                    .distance(point)
+                    < 0.08
+        })
+        .map(|actor| actor.id)
+        .collect()
+}
+
+pub(super) fn both_teams_visible(session: &ArenaSession, subjects: &[u8]) -> bool {
+    session.accepted_battle_setup().rosters.len() == 2
+        && session
+            .accepted_battle_setup()
+            .rosters
+            .iter()
+            .all(|roster| {
+                session
+                    .actors
+                    .iter()
+                    .any(|actor| actor.team == roster.team && subjects.contains(&actor.id))
+            })
+}
+
+pub(super) fn close_controls(
+    camera: &ObserverCamera,
+    session: &ArenaSession,
+    frame: u32,
+    rear: bool,
+) -> CameraSample {
+    let alive = session
+        .actors
+        .iter()
+        .filter(|actor| actor.hp > 0.0)
+        .collect::<Vec<_>>();
+    let target = if alive.is_empty() {
+        camera.target
+    } else {
+        alive.iter().map(|actor| actor.center()).sum::<Vec3>()
+            / f32::from(u16::try_from(alive.len()).unwrap_or(1))
+    };
+    let difference = target - camera.target;
+    let horizontal = camera.direction().with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let movement = Vec3::new(
+        difference.dot(horizontal.cross(Vec3::Y)),
+        difference.y,
+        difference.dot(horizontal),
+    )
+    .clamp_length_max(1.0);
+    let yaw = if rear && (5..65).contains(&frame) {
+        -std::f32::consts::PI / (0.0025 * 60.0)
+    } else {
+        0.0
+    };
+    let pitch = ((camera.pitch + 0.9) / 0.0025).clamp(-8.0, 8.0);
+    let wheel = if (5..41).contains(&frame) {
+        (18.0_f32 / 10.0).ln() / (0.12 * 36.0)
+    } else {
+        0.0
+    };
+    CameraSample {
+        frame,
+        look: [yaw, pitch],
+        movement: movement.to_array(),
+        wheel,
+    }
+}
+
 pub(super) fn camera(
     session: Res<ArenaSession>,
     mut state: ResMut<ViewState>,
@@ -248,8 +349,11 @@ pub(super) fn camera(
         return;
     };
     if state.observer.generation != Some(reset.generation) {
-        let pose =
-            super::encounter::overview(*geometry, &terrain, state.capture_view.ends_with("-rear"));
+        let pose = super::encounter::overview(
+            *geometry,
+            &terrain,
+            state.capture_view == "observer-orbit-rear",
+        );
         let target = if session.actors.is_empty() {
             (terrain.spawns.first().copied().unwrap_or(Vec3::ZERO)
                 + terrain.spawns.get(1).copied().unwrap_or(Vec3::ZERO))
@@ -263,6 +367,14 @@ pub(super) fn camera(
                 / f32::from(u16::try_from(session.actors.len()).unwrap_or(1))
         };
         state.observer.reset(reset.generation, pose, target);
+        if state.capture.is_none()
+            || !matches!(
+                state.capture_view.as_str(),
+                "observer-orbit" | "observer-orbit-rear"
+            )
+        {
+            focus_live(&mut state.observer, &session);
+        }
         if state.capture_view == "observer-free" {
             state.observer.toggle_mode();
         }
@@ -274,12 +386,34 @@ pub(super) fn camera(
         let previous = state.observer.position;
         let desired = state.observer.update_pose(
             Vec2::new(0.8, 0.0),
-            Vec3::new(0.3, 0.0, 1.0),
+            Vec3::new(0.3, -0.6, 1.0),
             false,
             0.0,
             1.0 / 60.0,
         );
         state.observer.position = session.camera_position(previous, desired.translation);
+    }
+    if state.capture.is_some()
+        && close_view(&state.capture_view)
+        && state.frames >= 5
+        && state.capture_composition_frame.is_none()
+    {
+        let sample = close_controls(
+            &state.observer,
+            &session,
+            state.frames,
+            state.capture_view.ends_with("-rear"),
+        );
+        let previous = state.observer.position;
+        let desired = state.observer.update_pose(
+            Vec2::from_array(sample.look),
+            Vec3::from_array(sample.movement),
+            false,
+            sample.wheel,
+            1.0 / 60.0,
+        );
+        state.observer.position = session.camera_position(previous, desired.translation);
+        state.capture_observer_inputs.push(sample);
     }
     *camera = Transform::from_translation(state.observer.position)
         .looking_to(state.observer.direction(), Vec3::Y);
