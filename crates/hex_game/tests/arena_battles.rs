@@ -182,11 +182,24 @@ fn calibrate_original_monster_groups() {
                 let setup_ms = began.elapsed().as_secs_f64() * 1000.0;
                 let mut timings = Vec::new();
                 let mut publications = Vec::new();
+                let mut previous_self_damage = 0.0;
                 loop {
                     if fixture.world().resource::<ArenaSession>().is_finished() {
                         break;
                     }
                     let revision = fixture.world().resource::<ArenaTerrainView>().revision;
+                    let before = trace.then(|| {
+                        let session = fixture.world().resource::<ArenaSession>();
+                        serde_json::json!({
+                            "actors":session.actors.iter().map(|actor|serde_json::json!({
+                                "id":actor.id,"hp":actor.hp,"feet":actor.feet.to_array(),"eye":actor.eye().to_array(),
+                                "aim":actor.aim.to_array(),"impulse":actor.impulse_velocity().to_array()
+                            })).collect::<Vec<_>>(),
+                            "projectiles":session.projectiles.iter().map(|shot|serde_json::json!({
+                                "id":shot.id,"owner":shot.owner,"position":shot.position.to_array(),"velocity":shot.velocity.to_array(),"age":shot.age
+                            })).collect::<Vec<_>>()
+                        })
+                    });
                     let began = Instant::now();
                     fixture.world_mut().run_schedule(ArenaTick);
                     let ms = began.elapsed().as_secs_f64() * 1000.0;
@@ -195,18 +208,38 @@ fn calibrate_original_monster_groups() {
                         publications.push(ms);
                     }
                     let session = fixture.world().resource::<ArenaSession>();
-                    if trace && (session.tick.is_multiple_of(60) || session.is_finished()) {
+                    let self_damage: f32 = if trace {
+                        session
+                            .encounter_stats()
+                            .iter()
+                            .map(|stats| stats.combat.self_damage)
+                            .sum()
+                    } else {
+                        0.0
+                    };
+                    let self_hit = self_damage > previous_self_damage + 0.001;
+                    previous_self_damage = self_damage;
+                    let release = trace && session.projectiles.iter().any(|shot| shot.age < 0.001);
+                    if trace
+                        && (session.tick.is_multiple_of(60)
+                            || session.is_finished()
+                            || self_hit
+                            || release)
+                    {
                         let terrain = fixture.world().resource::<ArenaTerrainView>();
                         let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
                         println!(
                             "ARENA_BATTLE_TRACE {}",
                             serde_json::json!({
                                 "seed":seed,"map":format!("{map:?}"),"left":left.slug(),"right":right.slug(),"tick":session.tick,
+                                "self_hit":self_hit,"release":release,"before":before,
+                                "projectiles":session.projectiles.iter().map(|shot|serde_json::json!({"id":shot.id,"owner":shot.owner,"position":shot.position.to_array(),"velocity":shot.velocity.to_array(),"age":shot.age})).collect::<Vec<_>>(),
+                                "effects":session.effects.iter().filter(|effect|effect.age<0.02).map(|effect|serde_json::json!({"kind":effect.kind,"center":effect.center.to_array(),"radius":effect.radius,"age":effect.age})).collect::<Vec<_>>(),
                             "revision":terrain.revision,"knowledge":session.party_knowledge(),"decisions":session.creature_decisions(),
                                 "actors":session.actors.iter().filter(|actor|actor.hp>0.0).map(|actor|serde_json::json!({
                                     "id":actor.id,"team":actor.team,"species":actor.species,"hp":actor.hp,"feet":actor.feet.to_array(),
                                     "eye":actor.eye().to_array(),"aim":actor.aim.to_array(),"body_rotation":actor.body_rotation().to_array(),
-                                    "velocity":((actor.feet-actor.previous_feet)*120.0).to_array(),"flying":actor.flying,"grounded":actor.grounded,
+                                    "velocity":((actor.feet-actor.previous_feet)*120.0).to_array(),"impulse":actor.impulse_velocity().to_array(),"flying":actor.flying,"grounded":actor.grounded,
                                     "cooldowns":actor.cooldowns,"charge":actor.charge().map(|charge|charge.elapsed),
                                     "attack":actor.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"direction":attack.direction.to_array(),"progress":attack.progress})),
                                     "volume_valid":session.actor_volume_valid(actor.id,terrain,geometry)
