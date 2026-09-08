@@ -143,6 +143,7 @@ fn menu_app_at(frame_hz: u32) -> (App, Entity) {
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
+        .add_message::<MouseWheel>()
         .add_message::<AppExit>()
         .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
         .add_systems(PreUpdate, (input, hud::buttons, sync_cursor).chain())
@@ -663,6 +664,7 @@ fn focus_loss_clears_edges_and_resume_click_cannot_cast() {
     app.init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
+        .add_message::<MouseWheel>()
         .add_systems(PreUpdate, (input, sync_cursor).chain());
     let window = app
         .world_mut()
@@ -1461,13 +1463,22 @@ fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled()
 fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
     use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
 
-    for (width, height) in [(1600, 900), (1280, 720)] {
+    for (width, height, control) in [
+        (1600, 900, hex_arena::ArenaControl::Player),
+        (1280, 720, hex_arena::ArenaControl::Player),
+        (1600, 900, hex_arena::ArenaControl::Spectator),
+        (1280, 720, hex_arena::ArenaControl::Spectator),
+    ] {
         let mut app = App::new();
         app.add_plugins(HeadlessUiPlugin::new(width, height))
             .insert_resource(ViewState {
                 started: false,
                 paused: true,
                 capture: None,
+                ..default()
+            })
+            .insert_resource(hex_arena::ArenaBattleSetup {
+                control,
                 ..default()
             })
             .init_resource::<ArenaSession>()
@@ -1523,6 +1534,8 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                     hud::Action::Fullscreen => "fullscreen".into(),
                     hud::Action::Quit => "quit".into(),
                     hud::Action::Change(index, amount) => format!("change {index} {amount}"),
+                    hud::Action::Control(control) => format!("control {control:?}"),
+                    hud::Action::Roster(slot, step) => format!("roster {slot} {step}"),
                     hud::Action::Map(map) => format!("map {map:?}"),
                     hud::Action::Encounter(encounter) => format!("encounter {encounter:?}"),
                 };
@@ -1545,7 +1558,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             .iter()
             .filter(|(_, phase, _, _)| *phase == "pause")
             .count();
-        assert_eq!(start_actions, 10);
+        assert_eq!(start_actions, 16);
         assert_eq!(
             actions
                 .iter()
@@ -1577,7 +1590,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
         }
 
         for (started, phase, expected) in [
-            (false, "start", start_actions * 2),
+            (false, "start", (start_actions - 4) * 2),
             (true, "pause", 24 + pause_actions * 2),
         ] {
             {
@@ -2185,3 +2198,6 @@ fn fort_capture_scripts_reach_requested_phases_after_the_keep_detour() {
         assert!(encounter::phase_ready(session, view));
     }
 }
+
+#[path = "spectator_tests.rs"]
+mod spectator_tests;

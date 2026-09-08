@@ -644,7 +644,7 @@ pub(super) fn effects(
         }
     }
     for actor in session.actors.iter().filter(|a| a.hp > 0.0) {
-        if actor.id != 0 {
+        if session.human_actor_id() != Some(actor.id) {
             if let Some(charge) = actor.charge() {
                 let progress = (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0);
                 let origin = actor.eye() + actor.aim.normalize_or(Vec3::NEG_Z) * 0.32;

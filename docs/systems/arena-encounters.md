@@ -36,6 +36,34 @@ Pausing, changing spells, focus loss, death and resetting cancel a charge.
 The paused menu contains existing spell tuning, resume/reset, window mode and
 quit. There is no live HUD menu button. Menu clicks never become casts.
 
+## Watching monster battles
+
+Choose **SPECTATE BATTLE** on the ready screen, then Fort or Duel and the two
+team presets. Press Enter to begin. The observer has no character body, HP or spells.
+The screen shows each team's surviving count, total HP, elapsed time and result.
+A two-minute limit reports a timeout rather than declaring a winner.
+
+    python3 tools/arena.py launch --spectator --map fort --team-a goblins --team-b shaman-party --seed 1
+
+Team presets currently accept shadow, dragon, goblins and shaman-party. The seed
+repeats the initial setup and decisions; changing the map or roster still changes
+the match. `--tick-limit 14400` sets the120 Hz simulation limit. Seven Regions
+remains a player encounter map.
+
+| Observer input | Action |
+|---|---|
+| Mouse | Look / orbit |
+| WASD | Pan the orbit center or move the free camera |
+| Q / E | Lower / raise camera |
+| Shift | Faster camera travel |
+| Mouse wheel | Orbit zoom |
+| C | Switch orbit / free camera |
+| Escape / Tab | Pause battle and release cursor |
+| R | Restore the same teams, terrain and seed at the ready screen |
+
+Cyan and amber clothing distinguish teams while creatures retain their species
+shapes. The normal player HUD continues to hide enemy counts and positions.
+
 ## Encounters and recovery
 
 A party wakes when any member sees you within 12 units, or when your attack damages

@@ -3,18 +3,20 @@
 mod encounter;
 mod hud;
 mod presentation;
+mod spectator;
 #[cfg(test)]
 mod tests;
 
 use bevy::camera::RenderTarget;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::{CursorGrabMode, CursorMoved, CursorOptions, PrimaryWindow};
 use bevy::winit::WinitPlugin;
 use hex_arena::{ActorIntent, ArenaInput, ArenaSession, ArenaTuning, Spell};
 use hex_core::arena::{
-    ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection, ArenaSystems, ArenaTerrainView, ArenaTick,
-    ArenaVoxelGeometry,
+    ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection, ArenaSystems, ArenaTerrainView,
+    ArenaTick, ArenaVoxelGeometry,
 };
 use std::path::PathBuf;
 
@@ -61,6 +63,7 @@ struct ViewState {
     started: bool,
     paused: bool,
     third_person: bool,
+    observer: spectator::ObserverCamera,
     yaw: f32,
     pitch: f32,
     initialized: bool,
@@ -99,11 +102,13 @@ impl Default for ViewState {
     fn default() -> Self {
         let capture = std::env::var_os("HEX_ARENA_CAPTURE").map(PathBuf::from);
         let capture_view = std::env::var("HEX_ARENA_VIEW").unwrap_or_else(|_| "first".into());
-        let started = capture.is_some() && capture_view != "start";
+        let started =
+            capture.is_some() && !matches!(capture_view.as_str(), "start" | "observer-start");
         Self {
             started,
             paused: !started,
             third_person: false,
+            observer: spectator::ObserverCamera::default(),
             yaw: 0.0,
             pitch: 0.0,
             initialized: false,
@@ -169,6 +174,7 @@ impl ViewState {
     fn prepare_round(&mut self) {
         self.started = false;
         self.initialized = false;
+        self.observer.generation = None;
         self.capture_event_frame = None;
         self.capture_ready_frame = None;
         self.capture_route_step = 0;
@@ -222,6 +228,25 @@ pub fn run() -> AppExit {
             return AppExit::error();
         }
     };
+    let control = std::env::var("HEX_ARENA_CONTROL").unwrap_or_else(|_| "player".into());
+    if !matches!(control.as_str(), "player" | "spectator") {
+        eprintln!("Unknown arena control: {control}");
+        return AppExit::error();
+    }
+    let battle = match spectator::launch_setup(
+        selection.map,
+        control == "spectator",
+        std::env::var("HEX_ARENA_TEAM_A").ok().as_deref(),
+        std::env::var("HEX_ARENA_TEAM_B").ok().as_deref(),
+        std::env::var("HEX_ARENA_BATTLE_SEED").ok().as_deref(),
+        std::env::var("HEX_ARENA_BATTLE_TICK_LIMIT").ok().as_deref(),
+    ) {
+        Ok(setup) => setup,
+        Err(error) => {
+            eprintln!("{error}");
+            return AppExit::error();
+        }
+    };
     let mut app = App::new();
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -248,6 +273,7 @@ pub fn run() -> AppExit {
     }
     app.insert_resource(state)
         .insert_resource(selection)
+        .insert_resource(battle)
         .insert_resource(ClearColor(Color::srgb(0.10, 0.16, 0.22)))
         .insert_resource(GlobalAmbientLight {
             color: Color::srgb(0.77, 0.85, 1.0),
@@ -303,6 +329,7 @@ pub fn run() -> AppExit {
                 presentation::actors,
                 presentation::camera,
                 encounter::camera,
+                spectator::camera,
                 presentation::effects,
                 presentation::solid_effects,
                 encounter::effects,
@@ -317,9 +344,11 @@ pub fn run() -> AppExit {
 }
 
 fn log_round(session: Res<ArenaSession>, mut logged: Local<bool>) {
-    let finished = session.outcome.is_some();
+    let finished = session.is_finished();
     if finished && !*logged {
-        if session.encounter_summary().enabled {
+        if let Some(battle) = session.battle_summary() {
+            info!(battle=?battle, actors=?session.encounter_stats(), "Arena observer battle complete");
+        } else if session.encounter_summary().enabled {
             info!(round = ?session.round_summary(), encounter = ?session.encounter_summary(), actors = ?session.encounter_stats(), "Arena encounter complete");
         } else {
             info!(summary = ?session.round_summary(), "Arena round complete");
@@ -422,6 +451,8 @@ fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut moved: MessageReader<CursorMoved>,
+    mut wheel: MessageReader<MouseWheel>,
+    time: Res<Time>,
     mut windows: Query<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
     mut state: ResMut<ViewState>,
     mut session: ResMut<ArenaSession>,
@@ -430,17 +461,23 @@ fn input(
 ) {
     if state.capture.is_some() {
         moved.clear();
+        wheel.clear();
         return;
     }
     let Ok((mut window, mut cursor)) = windows.single_mut() else {
         moved.clear();
+        wheel.clear();
         state.pause();
         intent.human = ActorIntent::default();
         session.cancel_charges();
         return;
     };
-    if !state.initialized {
-        if let Some(actor) = session.actors.first() {
+    let observing = spectator::active(&session);
+    if !state.initialized && !observing {
+        if let Some(actor) = session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+        {
             state.yaw = (-actor.aim.x).atan2(-actor.aim.z);
             state.pitch = actor.aim.y.clamp(-1.0, 1.0).asin();
             state.initialized = true;
@@ -472,10 +509,16 @@ fn input(
         reset.generation = reset.generation.saturating_add(1);
         state.prepare_round();
     }
-    if window.focused && state.started && !state.paused && keys.just_pressed(KeyCode::KeyC) {
+    if window.focused
+        && state.started
+        && !state.paused
+        && !observing
+        && keys.just_pressed(KeyCode::KeyC)
+    {
         state.third_person = !state.third_person;
     }
-    let active = window.focused && state.started && !state.paused && session.outcome.is_none();
+    let active =
+        window.focused && state.started && !state.paused && (observing || !session.is_finished());
     cursor.visible = !active;
     // CursorMoved plus recentering preserves the repository's WSLg held-button path.
     // Ignore warp-to-center events, so recentering never contributes camera rotation.
@@ -488,11 +531,55 @@ fn input(
         }
     }
     if active {
-        if !state.suppress_click {
+        if !state.suppress_click && !observing {
             state.yaw -= displacement.x * 0.0025;
             state.pitch = (state.pitch - displacement.y * 0.0025).clamp(-1.48, 1.48);
         }
         window.set_cursor_position(Some(center));
+    }
+    let scroll = wheel
+        .read()
+        .map(|event| match event.unit {
+            MouseScrollUnit::Line => event.y,
+            MouseScrollUnit::Pixel => event.y / 40.0,
+        })
+        .sum::<f32>();
+    if observing {
+        intent.human = ActorIntent::default();
+        if active && state.observer.generation.is_some() {
+            if keys.just_pressed(KeyCode::KeyC) {
+                state.observer.toggle_mode();
+            }
+            let axis = |positive, negative| {
+                f32::from(u8::from(keys.pressed(positive)))
+                    - f32::from(u8::from(keys.pressed(negative)))
+            };
+            let movement = Vec3::new(
+                axis(KeyCode::KeyD, KeyCode::KeyA),
+                axis(KeyCode::KeyE, KeyCode::KeyQ),
+                axis(KeyCode::KeyW, KeyCode::KeyS),
+            );
+            let previous = state.observer.position;
+            let look = if state.suppress_click {
+                Vec2::ZERO
+            } else {
+                displacement
+            };
+            let fast = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+            let desired =
+                state
+                    .observer
+                    .update_pose(look, movement, fast, scroll, time.delta_secs());
+            state.observer.position = session.camera_position(previous, desired.translation);
+        }
+        if !active {
+            state.suppress_click = true;
+            session.cancel_charges();
+        }
+        if !mouse.pressed(MouseButton::Left) && active {
+            state.suppress_click = false;
+        }
+        return;
     }
     if !active {
         state.suppress_click = true;
@@ -581,8 +668,10 @@ fn sync_cursor(
     mut windows: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
     for (window, mut cursor) in &mut windows {
-        cursor.visible =
-            !window.focused || !state.started || state.paused || session.outcome.is_some();
+        cursor.visible = !window.focused
+            || !state.started
+            || state.paused
+            || (!spectator::active(&session) && session.is_finished());
         cursor.grab_mode = CursorGrabMode::None;
     }
 }
@@ -595,7 +684,7 @@ fn drive_simulation(world: &mut World) {
     let generation = world.resource::<ArenaReset>().generation;
     let reset_this_frame = world.resource::<ViewState>().reset_seen != generation;
     let capture = world.resource::<ViewState>().capture.is_some();
-    let needs_initialization = world.resource::<ArenaSession>().actors.is_empty();
+    let needs_initialization = world.resource::<ViewState>().frames == 0;
     let (steps, frame, view) = {
         let mut state = world.resource_mut::<ViewState>();
         state.frames = state.frames.saturating_add(1);
@@ -630,14 +719,16 @@ fn drive_simulation(world: &mut World) {
         }
     };
     if capture {
-        world.resource_mut::<ArenaSession>().bot_enabled = view.starts_with("bot-combat-")
+        let observer = spectator::active(world.resource::<ArenaSession>());
+        world.resource_mut::<ArenaSession>().bot_enabled = observer
+            || view.starts_with("bot-combat-")
             || view.starts_with("encounter-") && view != "encounter-landmark";
         let direction = world
             .resource::<ArenaSession>()
             .actors
             .first()
             .map_or(Vec3::X, |actor| actor.aim);
-        let sample = if encounter::stress_view(&view) {
+        let sample = if observer || encounter::stress_view(&view) {
             ActorIntent::default()
         } else if view.starts_with("encounter-") && view != "encounter-landmark" {
             let mut route_step = world.resource::<ViewState>().capture_route_step;
@@ -675,7 +766,7 @@ fn drive_simulation(world: &mut World) {
         if frame == 80 && view.contains("partial-preview") {
             stage_partial_preview(world);
         }
-        if view == "tuning" && frame == 4 {
+        if matches!(view.as_str(), "tuning" | "observer-paused") && frame == 4 {
             world.resource_mut::<ViewState>().paused = true;
         }
     }
@@ -740,6 +831,34 @@ fn drive_simulation(world: &mut World) {
         if rise > 0.0 {
             let mut state = world.resource_mut::<ViewState>();
             state.step_offset = (state.step_offset - rise).max(-0.8);
+        }
+        if capture && spectator::active(world.resource::<ArenaSession>()) {
+            let terminal = world.resource::<ArenaSession>().is_finished();
+            let reached = match view.as_str() {
+                "observer-result" => terminal,
+                "observer-performance" => terminal || tick >= 3600,
+                "observer-orbit" | "observer-orbit-rear" | "observer-free" => frame >= 120,
+                _ => false,
+            };
+            if reached {
+                if terminal {
+                    // Publish edits queued by the finishing tick. Gameplay's
+                    // terminal guard prevents an extra living simulation tick.
+                    let revision = world.resource::<ArenaTerrainView>().revision;
+                    let publication_started = std::time::Instant::now();
+                    world.run_schedule(ArenaTick);
+                    let changed = world.resource::<ArenaTerrainView>().revision != revision;
+                    world.resource_mut::<ViewState>().tick_times.push((
+                        tick,
+                        changed,
+                        publication_started.elapsed().as_secs_f64() * 1000.0,
+                    ));
+                }
+                let mut state = world.resource_mut::<ViewState>();
+                state.capture_event_frame = Some(frame);
+                state.accumulator = 0.0;
+                break;
+            }
         }
         let approach_ready = world.resource::<ArenaTerrainView>().selection.map != ArenaMap::Fort
             || encounter::fort_approach_complete(world.resource::<ViewState>().capture_route_step);
@@ -941,8 +1060,24 @@ fn capture_frame(
         state.capture_ready_elapsed_ms =
             Some(state.app_started_at.elapsed().as_secs_f64() * 1000.0);
     }
+    if matches!(
+        state.capture_view.as_str(),
+        "observer-result"
+            | "observer-performance"
+            | "observer-orbit"
+            | "observer-orbit-rear"
+            | "observer-free"
+    ) && state.capture_event_frame.is_none()
+    {
+        if frames >= 15_000 {
+            error!("Observer capture failed: terminal/performance boundary was not reached");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
     if encounter::stress_view(&state.capture_view) && state.capture_event_frame.is_none() {
-        if state.frames > 2000 || session.outcome.is_some() {
+        if state.frames > 2000 || session.is_finished() {
             error!("Synthetic encounter stress capture ended before 3600 active simulation ticks");
             state.requested = true;
             exit.write(AppExit::error());
@@ -950,7 +1085,7 @@ fn capture_frame(
         return;
     }
     if encounter::phase_view(&state.capture_view) && state.capture_event_frame.is_none() {
-        if state.frames >= 1800 || session.outcome.is_some() {
+        if state.frames >= 1800 || session.is_finished() {
             error!(
                 tick = session.tick,
                 approach_waypoint = state.capture_route_step,
@@ -980,7 +1115,7 @@ fn capture_frame(
             state.capture_subjects = subjects;
             state.capture_composition_frame = Some(frames);
             state.accumulator = 0.0;
-        } else if frames >= 1800 || session.outcome.is_some() {
+        } else if frames >= 1800 || session.is_finished() {
             error!(tick=session.tick, approach_waypoint=state.capture_route_step,
                 actors=?session.actors.iter().map(|actor| (actor.id, actor.feet, actor.hp)).collect::<Vec<_>>(),
                 "Encounter capture failed: no visible subject after the verified Fort approach");
@@ -994,7 +1129,7 @@ fn capture_frame(
         .or(state.capture_composition_frame)
     {
         frame.saturating_add(4)
-    } else if state.capture_view.starts_with("bot-combat-") && session.outcome.is_some() {
+    } else if state.capture_view.starts_with("bot-combat-") && session.is_finished() {
         state.frames
     } else {
         capture_frame_index(&state.capture_view)
@@ -1029,7 +1164,11 @@ fn capture_frame(
         return;
     };
     state.requested = true;
-    let predicted = hex_arena::preview(&session, &view, &geometry, &tuning);
+    let predicted = if session.human_actor_id().is_some() {
+        hex_arena::preview(&session, &view, &geometry, &tuning)
+    } else {
+        hex_arena::Preview::default()
+    };
     // Keep each macro bounded: a single large object exceeds serde_json's recursive
     // token parser limit as new capture evidence is added.
     let actors = session.actors.iter().map(|actor| {
@@ -1076,7 +1215,7 @@ fn capture_frame(
         .map(|(frame, input)| {
             serde_json::json!({
                 "frame": frame, "selected": input.selected, "movement": input.movement.to_array(),
-                "aim": input.aim.to_array(), "jump": input.jump, "pressed": input.cast_pressed,
+                "aim": input.aim.to_array(), "run": input.run, "jump": input.jump, "pressed": input.cast_pressed,
                 "released": input.cast_released, "held": input.cast_held
             })
         })
@@ -1122,6 +1261,10 @@ fn capture_frame(
         ("composition_reached_frame", serde_json::json!(state.capture_composition_frame)),
         ("visible_subjects", serde_json::json!(state.capture_subjects)),
         ("approach_completed_frame", serde_json::json!(state.capture_approach_frame)),
+        ("battle_setup", serde_json::json!(session.accepted_battle_setup())),
+        ("human_actor_id", serde_json::json!(session.human_actor_id())),
+        ("battle_summary", serde_json::json!(session.battle_summary())),
+        ("observer_camera", serde_json::json!({"mode":format!("{:?}",state.observer.mode),"position":state.observer.position.to_array(),"target":state.observer.target.to_array(),"distance":state.observer.distance})),
         ("actors", serde_json::json!(actors)),
         ("barriers", serde_json::json!(barriers)),
         ("auras", serde_json::json!(auras)),

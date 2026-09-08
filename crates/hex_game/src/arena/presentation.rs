@@ -91,13 +91,13 @@ pub(super) fn actors(
         }
     }
     for actor in &session.actors {
-        let retracted_into_body = actor.id == 0
+        let retracted_into_body = session.human_actor_id() == Some(actor.id)
             && player_camera(&session, &state, actor)
                 .translation
                 .distance(actor.eye())
                 < 0.45;
         let actor_visibility = if actor.hp <= 0.0
-            || (actor.id == 0
+            || (session.human_actor_id() == Some(actor.id)
                 && !state.external_camera()
                 && (!state.third_person || retracted_into_body))
         {
@@ -127,7 +127,11 @@ pub(super) fn actors(
             Species::Shaman => (Color::srgb(0.40, 0.15, 0.54), Color::srgb(0.44, 0.66, 0.26)),
         };
         let palette = [
-            cloth,
+            if super::spectator::active(&session) {
+                super::spectator::team_color(&session, actor.team)
+            } else {
+                cloth
+            },
             Color::srgb(0.055, 0.075, 0.095),
             skin,
             Color::srgb(1.0, 0.62, 0.15),
@@ -164,7 +168,10 @@ pub(super) fn camera(
     state: Res<ViewState>,
     mut cameras: Query<&mut Transform, With<ArenaCamera>>,
 ) {
-    let Some(actor) = session.actors.first() else {
+    let Some(actor) = session
+        .human_actor_id()
+        .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+    else {
         return;
     };
     let Ok(mut transform) = cameras.single_mut() else {
@@ -228,7 +235,10 @@ pub(super) fn effects(
             c,
         );
     }
-    let Some(actor) = session.actors.first() else {
+    let Some(actor) = session
+        .human_actor_id()
+        .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+    else {
         return;
     };
     let enabled = match actor.selected {
