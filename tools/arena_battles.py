@@ -84,6 +84,7 @@ def run(args: argparse.Namespace) -> int:
                "matchups": args.matchups, "profile": args.profile, "trace": args.trace,
                "target_dir": str(args.target_dir), "removed_capabilities": removed,
                "status": "RUNNING", "rounds": [],
+               "configuration_sha256": digest((ROOT / "assets/config/arena.ron").read_bytes()),
                "evidence_boundary": "Actual seeded machine matchups, not human win rates. CI profile or traced timings are diagnostic only; no render, GPU or native-input claim."}
     write_json(args.output / "receipt.json", receipt)
     process = None
@@ -105,6 +106,12 @@ def run(args: argparse.Namespace) -> int:
         if source_state()[0] != initial:
             raise RuntimeError("Source changed during calibration; retained output is stale.")
         receipt["rounds"] = read_rounds(log)
+        configurations = [json.loads(line.split("ARENA_TUNING ", 1)[1])
+                          for line in log.read_text(errors="replace").splitlines()
+                          if "ARENA_TUNING " in line]
+        if len(configurations) != 1:
+            raise RuntimeError("Missing or ambiguous accepted configuration record.")
+        receipt["configuration"] = configurations[0]
         validate_rounds(receipt["rounds"], args)
         receipt["status"] = "COMPLETE"
     except (Exception, KeyboardInterrupt) as error:

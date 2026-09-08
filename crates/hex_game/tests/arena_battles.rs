@@ -5,15 +5,31 @@
 )]
 
 use bevy::prelude::*;
-use hex_arena::{ArenaBattleSetup, ArenaSession, BattlePreset, BattleResult, BattleSummary};
+use hex_arena::{
+    ArenaBattleSetup, ArenaSession, ArenaTuning, BattlePreset, BattleResult, BattleSummary,
+};
 use hex_core::arena::{
     ArenaMap, ArenaReset, ArenaSelection, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
 use std::time::Instant;
 
 fn app(map: ArenaMap, setup: ArenaBattleSetup) -> App {
+    configured_app(map, setup, authored_tuning())
+}
+
+fn authored_tuning() -> ArenaTuning {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/arena.ron");
+    let source = std::fs::read_to_string(path).expect("same arena configuration as the native app");
+    let tuning: ArenaTuning = ron::from_str(&source).expect("valid authored arena configuration");
+    tuning.validate().expect("admitted authored tuning");
+    tuning
+}
+
+fn configured_app(map: ArenaMap, setup: ArenaBattleSetup, tuning: ArenaTuning) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
+        .insert_resource(tuning)
         .insert_resource(ArenaSelection {
             map,
             ..Default::default()
@@ -145,6 +161,11 @@ fn calibrate_original_monster_groups() {
         },
     );
     let trace = std::env::var("HEX_BATTLE_TRACE").is_ok_and(|value| value == "1");
+    let tuning = authored_tuning();
+    println!(
+        "ARENA_TUNING {}",
+        serde_json::json!({"tuning":tuning,"matches_defaults":serde_json::to_value(&tuning).expect("serialize authored tuning") == serde_json::to_value(ArenaTuning::default()).expect("serialize defaults")})
+    );
     for seed_offset in 0..seed_count {
         let seed = first_seed.checked_add(seed_offset).expect("seed bound");
         for &(first, second) in &matchups {
@@ -157,7 +178,7 @@ fn calibrate_original_monster_groups() {
                 let mut setup = ArenaBattleSetup::spectator(left, right, seed);
                 setup.tick_limit = Some(seconds * 120);
                 let began = Instant::now();
-                let mut fixture = app(map, setup.clone());
+                let mut fixture = configured_app(map, setup.clone(), tuning.clone());
                 let setup_ms = began.elapsed().as_secs_f64() * 1000.0;
                 let mut timings = Vec::new();
                 let mut publications = Vec::new();
