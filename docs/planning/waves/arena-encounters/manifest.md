@@ -167,3 +167,5 @@ Typed hooks establish gameplay; fresh windowless captures establish static prese
 
 - Integration checkpoint `42ae1d9`: 4 combined composition checks and 8 fixed-route checks pass. Native-profile stress fixtures remain explicitly ignored until their separate measurement run.
 - Gameplay follow-up `578b3cf`: 111 focused tests pass. Party-only quantized cues never wake dormant groups or refresh search timeouts; Returning Shadow local defense retains homeward movement.
+
+- Original focused milestonef12b329:122 gameplay checks,51 app checks, frozen Duel fixtures, strict scoped lint and native build pass. Fresh aura repair and both-map stress measurements recorded in [validation](../../../systems/arena-encounters-validation.md). Full gate/final combined render matrix remain pending the user-approved [bestiary continuation](../arena-bestiary/manifest.md).

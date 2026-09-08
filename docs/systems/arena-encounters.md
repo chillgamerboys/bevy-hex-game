@@ -64,6 +64,8 @@ and roster, including barriers, cooldowns and party memories.
 | Goblin |50| Fast swarming with a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 
+Goblins match the player body: .8 units tall with a .25-unit radius.
+
 The Dragon is deliberately low and long: .4 units high and about 3.5 long.
 Its breath can deal 35 total damage across three pulses; a close mouth bite deals 50.
 It regenerates 3 HP/second after four seconds undamaged, so chasing a retreating

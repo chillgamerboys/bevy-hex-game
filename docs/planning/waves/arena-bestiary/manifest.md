@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: planning. Coordinator: root. Branch: experiment/spell-combat-arena.
+Status: dispatching. Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
 previous Linear read required reauthentication. User approved this continuation and
@@ -82,7 +82,7 @@ that phase; no world mutation is implemented in presentation or private gameplay
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "queued",
+      "state": "dispatched",
       "pr": null
     },
     {
@@ -122,7 +122,7 @@ that phase; no world mutation is implemented in presentation or private gameplay
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "queued",
+      "state": "dispatched",
       "pr": null
     },
     {
@@ -163,7 +163,7 @@ that phase; no world mutation is implemented in presentation or private gameplay
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "queued",
+      "state": "dispatched",
       "pr": null
     }
   ]
@@ -228,4 +228,4 @@ all authorized work and final evidence/guide are delivered.
 
 ## Checkpoints
 
-- Foundation draft only. Runtime spectator and additional creatures not yet dispatched.
+- Foundation f12b329 committed and independently reviewed;122 gameplay tests and strict arena lint pass. Original focused visual/native performance milestone recorded in [validation](../../../systems/arena-encounters-validation.md). L1/L2/L3 spectator work dispatched; later creature phases remain queued behind original matchup calibration.
