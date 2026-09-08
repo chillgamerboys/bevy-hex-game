@@ -15,6 +15,7 @@ use hex_core::{
 };
 use serde::{Deserialize, Serialize};
 
+mod battle;
 mod bot;
 #[cfg(any(test, feature = "test-support"))]
 mod bot_baseline;
@@ -29,6 +30,10 @@ mod shapes;
 mod spells;
 mod telemetry;
 
+pub use battle::{
+    ArenaBattleSetup, ArenaControl, BattlePreset, BattleResult, BattleSetupError, BattleSummary,
+    BattleTeamSummary, TeamRoster, MAX_BATTLE_ACTORS,
+};
 pub use bot::BotDebugSnapshot;
 pub use bot_config::BotTuning;
 pub use creatures::{

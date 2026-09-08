@@ -197,3 +197,22 @@ The test-support pose and route probes clone actors against the same collision
 world and movement controller. They cannot create a route, teleport an actor or
 change the live session. Bounded dirty-column publication must be consumed before
 the following movement tick, including after simultaneous damage and creation.
+
+
+### Local observer battle foundation
+
+`ArenaBattleSetup` in hex_arena owns requested Player/Spectator control, two team
+rosters with independent party boundaries, replay seed and optional tick limit.
+Only a reset accepts it, using the world-published map selection. A running session
+retains its accepted snapshot. The initial cap is24 actors, not a guarantee any
+roster fits a particular map. No human body is spawned for observers; actor zero
+may be a monster. BattleResult distinguishes surviving team, simultaneous draw,
+timeout and invalid setup independently of ordinary ArenaOutcome semantics.
+
+`ArenaDeploymentRegion` in hex_core names a preferred supporting voxel and a finite
+set of allowed supporting surfaces. ArenaTerrainView optionally publishes two sides
+in roster order. Only world authors these surfaces; gameplay validates complete
+oriented bodies, support, dry footing and separation against current geometry and
+admits a whole roster or returns an error. Ordinary adventure spawns are unchanged.
+Observer-only team summaries may disclose aggregate state; ordinary human HUDs do not.
+See the [local bestiary manifest](planning/waves/arena-bestiary/manifest.md).

@@ -1,7 +1,7 @@
 //! Species identity and bounded read-only creature presentation.
 
 use bevy_math::{Quat, Vec3};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Stable actor identities are allocated once per run and never reused after death.
 pub type ActorId = u8;
@@ -11,7 +11,7 @@ pub type TeamId = u8;
 pub type PartyId = u16;
 
 /// Authored continuous actor profile.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Species {
     /// The local player, with unchanged M01 controls.
     #[default]

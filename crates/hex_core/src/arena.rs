@@ -200,6 +200,16 @@ pub struct ArenaStaticSpan {
     pub blocks_sight: bool,
 }
 
+/// Authored finite supporting surfaces admitted for one spectator deployment side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArenaDeploymentRegion {
+    /// Preferred supporting voxel, always included in `surfaces`.
+    pub preferred: TilePos,
+    /// Candidate supporting voxels, not guaranteed free body poses or reservations.
+    /// Gameplay validates the whole roster against current published geometry.
+    pub surfaces: BTreeSet<TilePos>,
+}
+
 /// Complete immutable-by-convention occupancy projection; only the map producer writes it.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ArenaTerrainView {
@@ -213,6 +223,9 @@ pub struct ArenaTerrainView {
     pub selection: ArenaSelection,
     /// Authored region and encounter sites in the published world coordinate space.
     pub anchors: BTreeMap<String, Vec3>,
+    /// Optional authored spectator sides, in roster order. No gameplay-generated
+    /// search may escape these surfaces onto unrelated floors or rooftops.
+    pub battle_deployment: Option<[ArenaDeploymentRegion; 2]>,
     /// Compact solid runs, indexed by column for incremental collision refresh.
     pub columns: BTreeMap<HexCoord, Vec<ArenaSolidSpan>>,
     /// Columns changed by this revision. Consumers missing a revision rebuild fully.
