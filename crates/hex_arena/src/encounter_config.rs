@@ -78,9 +78,9 @@ pub struct EncounterTuning {
     pub goblin_walk: f32,
     /// Goblin pursuing speed.
     pub goblin_run: f32,
-    /// Goblin physical standing height.
+    /// Goblin physical standing height; defaults to the player's height.
     pub goblin_height: f32,
-    /// Goblin body radius.
+    /// Goblin body radius; defaults to the player's radius.
     pub goblin_radius: f32,
     /// Swipe HP damage.
     pub swipe_damage: f32,
@@ -181,8 +181,8 @@ impl Default for EncounterTuning {
             goblin_hp: 50.0,
             goblin_walk: 3.5,
             goblin_run: 6.0,
-            goblin_height: 0.6,
-            goblin_radius: 0.22,
+            goblin_height: crate::BODY_HEIGHT,
+            goblin_radius: crate::BODY_RADIUS,
             swipe_damage: 12.0,
             swipe_range: 1.732_050_8,
             swipe_angle: 90.0,

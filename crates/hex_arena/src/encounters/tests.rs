@@ -125,6 +125,37 @@ fn authored_rosters_are_stable_dry_and_reset_without_respawning_dead_parties() {
     }
 }
 #[test]
+fn spawned_goblins_match_player_body_and_cannot_fit_below_a_player_height_ceiling() {
+    let (session, mut view, geometry, _, tuning) = fixture(ArenaEncounter::Goblins);
+    let mut human = session.actors.first().expect("human").clone();
+    let goblins = session
+        .actors
+        .iter()
+        .filter(|a| a.species == Species::Goblin)
+        .collect::<Vec<_>>();
+    assert_eq!(goblins.len(), 5);
+    assert!((tuning.encounters.goblin_walk - 3.5).abs() < 0.001);
+    assert!((tuning.encounters.goblin_run - 6.0).abs() < 0.001);
+    for goblin in &goblins {
+        assert!(goblin.body_dimensions().distance(human.body_dimensions()) < SKIN);
+        assert!((goblin.hp - 50.0).abs() < 0.001);
+        assert!((goblin.max_hp - 50.0).abs() < 0.001);
+    }
+
+    // A 0.7-unit gap admitted the former smaller Goblin, but neither current body.
+    view.voxels
+        .insert(TilePos::new(HexCoord::ORIGIN, 3), SubstanceId(1));
+    view.revision += 1;
+    let mut collision = CollisionWorld::default();
+    collision.refresh(&view, geometry);
+    human.feet = Vec3::Y * 0.1;
+    let mut goblin = (**goblins.first().expect("goblin")).clone();
+    goblin.feet = human.feet;
+    assert!(!shapes::clear(&collision, &human, human.feet, 0.0));
+    assert!(!shapes::clear(&collision, &goblin, goblin.feet, 0.0));
+}
+
+#[test]
 fn goblin_swipe_has_real_windup_single_hit_and_physical_terrain_contact() {
     let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Goblins);
     pose(&mut session, 1, Vec3::ZERO, Vec3::X);
