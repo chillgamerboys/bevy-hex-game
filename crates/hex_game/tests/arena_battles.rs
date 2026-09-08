@@ -11,6 +11,7 @@ use hex_arena::{
 use hex_core::arena::{
     ArenaMap, ArenaReset, ArenaSelection, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
+use hex_core::TerrainEdit;
 use std::time::Instant;
 
 fn app(map: ArenaMap, setup: ArenaBattleSetup) -> App {
@@ -46,6 +47,87 @@ fn battle(app: &App) -> BattleSummary {
         .resource::<ArenaSession>()
         .battle_summary()
         .expect("accepted spectator setup")
+}
+
+/// Publish edits from the terminal combat tick without simulating another living tick.
+/// Its full ArenaTick CPU cost is separate from ordinary combat-tick distributions.
+fn flush_terminal_publication(app: &mut App) -> serde_json::Value {
+    let before = app.world().resource::<ArenaSession>();
+    assert!(before.is_finished(), "only terminal battles may be flushed");
+    let tick_before = before.tick;
+    let summary_before = serde_json::to_value(battle(app)).expect("terminal summary");
+    let hp_before: Vec<_> = before
+        .actors
+        .iter()
+        .map(|actor| (actor.id, actor.hp))
+        .collect();
+    let revision_before = app.world().resource::<ArenaTerrainView>().revision;
+    let began = Instant::now();
+    app.world_mut().run_schedule(ArenaTick);
+    let cpu_ms = began.elapsed().as_secs_f64() * 1000.0;
+    let after = app.world().resource::<ArenaSession>();
+    let revision_after = app.world().resource::<ArenaTerrainView>().revision;
+    assert_eq!(
+        after.tick, tick_before,
+        "terminal publication advanced simulation"
+    );
+    assert_eq!(
+        serde_json::to_value(battle(app)).expect("terminal summary"),
+        summary_before
+    );
+    assert_eq!(
+        after
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.hp))
+            .collect::<Vec<_>>(),
+        hp_before
+    );
+    serde_json::json!({
+        "cpu_ms":cpu_ms,"revision_before":revision_before,"revision_after":revision_after,
+        "terrain_published":revision_after!=revision_before,"tick_before":tick_before,
+        "tick_after":after.tick,"battle_state_unchanged":true,
+        "measurement":"One terminal ArenaTick, including any queued terrain publication; excluded from living combat-tick distributions."
+    })
+}
+
+#[test]
+fn terminal_publication_applies_queued_terrain_without_changing_outcome_tick_or_hp() {
+    let mut setup = ArenaBattleSetup::spectator(BattlePreset::Shadow, BattlePreset::Dragon, 3);
+    setup.tick_limit = Some(1);
+    let mut fixture = app(ArenaMap::Duel, setup);
+    assert_eq!(battle(&fixture).result, Some(BattleResult::Timeout));
+    let removable = fixture
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .keys()
+        .find(|voxel| voxel.level > 0)
+        .copied()
+        .expect("destructible Duel terrain");
+    fixture
+        .world_mut()
+        .write_message(TerrainEdit::Clear { pos: removable });
+    let receipt = flush_terminal_publication(&mut fixture);
+    assert_eq!(
+        receipt
+            .get("terrain_published")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert!(!fixture
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&removable));
+    // A second flush has no queued publication and still cannot advance the match.
+    let quiet = flush_terminal_publication(&mut fixture);
+    assert_eq!(
+        quiet
+            .get("terrain_published")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
 }
 
 #[test]
@@ -253,8 +335,16 @@ fn calibrate_original_monster_groups() {
                         "simulation failed to honor bound"
                     );
                 }
+                let terminal_publication = flush_terminal_publication(&mut fixture);
                 let summary = battle(&fixture);
                 let session = fixture.world().resource::<ArenaSession>();
+                assert_eq!(
+                    session.accepted_battle_setup(),
+                    &setup,
+                    "requested setup was not accepted exactly"
+                );
+                let published_map = fixture.world().resource::<ArenaTerrainView>().selection.map;
+                assert_eq!(published_map, map, "requested map was not published");
                 assert!(
                     !matches!(summary.result, Some(BattleResult::InvalidSetup(_))),
                     "deployment failure {map:?}/{left:?}/{right:?}: {:?}",
@@ -262,7 +352,7 @@ fn calibrate_original_monster_groups() {
                 );
                 println!(
                     "ARENA_BATTLE {}",
-                    serde_json::json!({"map":format!("{map:?}"),"first":first.slug(),"second":second.slug(),"side_and_initiative_swapped":swap,"left":left.slug(),"right":right.slug(),"setup":setup,"setup_ms":setup_ms,"summary":summary,"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"team":a.team,"species":a.species,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z]})).collect::<Vec<_>>(),"stats":session.encounter_stats(),"tick_cpu":distribution(&timings),"publication_cpu":distribution(&publications)})
+                    serde_json::json!({"map":format!("{published_map:?}"),"first":first.slug(),"second":second.slug(),"side_and_initiative_swapped":swap,"left":left.slug(),"right":right.slug(),"setup":session.accepted_battle_setup(),"setup_source":"accepted_battle_setup","setup_ms":setup_ms,"summary":summary,"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"team":a.team,"species":a.species,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z]})).collect::<Vec<_>>(),"stats":session.encounter_stats(),"tick_cpu":distribution(&timings),"publication_cpu":distribution(&publications),"terminal_publication":terminal_publication})
                 );
             }
         }

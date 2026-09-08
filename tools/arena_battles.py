@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
+import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +16,12 @@ from arena import DEFAULT_TARGET, ROOT, digest, environment, source_state, stop_
 
 
 DEFAULT_MATCHUPS = "shadow:dragon,shadow:goblins,shadow:shaman-party,dragon:goblins,dragon:shaman-party,goblins:shaman-party"
+PRESET_MEMBERS = {
+    "shadow": ["Shadow"],
+    "dragon": ["Dragon"],
+    "goblins": ["Goblin"] * 5,
+    "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"],
+}
 
 
 def read_rounds(log: Path) -> list[dict]:
@@ -24,22 +32,109 @@ def read_rounds(log: Path) -> list[dict]:
     return rounds
 
 
-def validate_rounds(rounds: list[dict], args: argparse.Namespace) -> None:
+def validate_rounds(rounds: list[dict], args: argparse.Namespace, *,
+                    require_terminal_publication: bool = True) -> None:
+    """Admit complete paired receipts; the opt-out is only for historical timing audits."""
     expected = {(seed, a, b, swap)
                 for seed in range(args.first_seed, args.first_seed + args.seeds)
                 for a, b in (pair.split(":") for pair in args.matchups.split(","))
                 for swap in (False, True)}
     found = set()
-    for row in rounds:
-        key = (row["setup"]["seed"], row["first"], row["second"], row["side_and_initiative_swapped"])
-        if key not in expected or key in found:
-            raise RuntimeError(f"Unexpected or duplicate paired round: {key}")
-        result = row["summary"]["result"]
-        if result is None or (isinstance(result, dict) and "InvalidSetup" in result):
-            raise RuntimeError(f"Incomplete or invalid battle: {key}: {result}")
-        found.add(key)
+    for index, row in enumerate(rounds):
+        try:
+            key = (row["setup"]["seed"], row["first"], row["second"], row["side_and_initiative_swapped"])
+            if key not in expected or key in found:
+                raise RuntimeError(f"Unexpected or duplicate paired round: {key}")
+            _validate_round(row, args, require_terminal_publication)
+            found.add(key)
+        except (KeyError, TypeError, ValueError, AttributeError, RuntimeError) as error:
+            raise RuntimeError(f"Battle receipt row {index}: {error}") from error
     if found != expected:
         raise RuntimeError(f"Missing {len(expected - found)} of {len(expected)} paired rounds.")
+
+
+def _validate_round(row: dict, args: argparse.Namespace, require_flush: bool) -> None:
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            raise RuntimeError(message)
+
+    def integer(value: object) -> bool:
+        return type(value) is int and value >= 0
+
+    def nonnegative(value: object) -> bool:
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+    setup, summary = row["setup"], row["summary"]
+    swap = row["side_and_initiative_swapped"]
+    require(type(swap) is bool and integer(setup["seed"]), "Invalid seed or swap type.")
+    left, right = (row["second"], row["first"]) if swap else (row["first"], row["second"])
+    require((row["left"], row["right"]) == (left, right), "Paired sides were not swapped as requested.")
+    require(row["map"] == {"duel": "Duel", "fort": "Fort"}[args.map], "Wrong published map.")
+    expected_rosters = [{"team": team, "parties": [PRESET_MEMBERS[preset]]}
+                        for team, preset in ((1, left), (2, right))]
+    require(setup == {"control": "Spectator", "rosters": expected_rosters,
+                      "seed": setup["seed"], "tick_limit": args.seconds * 120},
+            "Accepted control, member rosters or tick limit differ from the request.")
+    require(all(type(roster["team"]) is int for roster in setup["rosters"]),
+            "Accepted roster teams must be integer identities.")
+    require(integer(summary["seed"]) and summary["seed"] == setup["seed"], "Summary seed differs from setup.")
+    ticks = summary["ticks"]
+    require(integer(ticks) and 0 < ticks <= setup["tick_limit"], "Invalid completed tick count.")
+    require(nonnegative(summary["seconds"]) and abs(summary["seconds"] - ticks / 120) < 0.0001,
+            "Summary seconds do not match completed 120 Hz ticks.")
+
+    actors = row["actors"]
+    require(isinstance(actors, list), "Missing actual actor roster.")
+    expected_members = Counter((roster["team"], species)
+                               for roster in expected_rosters for species in roster["parties"][0])
+    require(Counter((a["team"], a["species"]) for a in actors) == expected_members,
+            "Actual actor teams/species differ from the accepted roster.")
+    require(all(integer(a["id"]) and a["id"] <= 255 and type(a["team"]) is int
+                and nonnegative(a["hp"]) for a in actors), "Invalid actor identity, team or HP.")
+    require(len({a["id"] for a in actors}) == len(actors), "Duplicate actual actor ID.")
+    require(all(integer(s["id"]) for s in row["stats"])
+            and Counter((s["id"], s["species"]) for s in row["stats"])
+            == Counter((a["id"], a["species"]) for a in actors), "Per-actor statistics omit or duplicate a body.")
+    teams = summary["teams"]
+    require(isinstance(teams, list) and len(teams) == 2
+            and all(type(t["team"]) is int for t in teams)
+            and {t["team"] for t in teams} == {1, 2}, "Summary must contain exactly the two accepted teams.")
+    living_teams = set()
+    for team in teams:
+        members = [a for a in actors if a["team"] == team["team"]]
+        living = sum(a["hp"] > 0 for a in members)
+        require(integer(team["initial"]) and team["initial"] == len(members)
+                and integer(team["living"]) and team["living"] == living,
+                "Summary initial/living counts differ from actual bodies.")
+        require(nonnegative(team["hp"]) and nonnegative(team["max_hp"])
+                and team["max_hp"] > 0 and team["hp"] <= team["max_hp"] + 0.001
+                and abs(team["hp"] - sum(a["hp"] for a in members)) < 0.001,
+                "Summary HP differs from actual bodies or exceeds admitted maximum HP.")
+        if living:
+            living_teams.add(team["team"])
+    result = summary["result"]
+    if isinstance(result, dict) and set(result) == {"TeamWinner"}:
+        winner = result["TeamWinner"]
+        require(type(winner) is int and living_teams == {winner}, "Winner is not the sole living team.")
+    elif result == "Draw":
+        require(not living_teams, "Elimination draw still has a living team.")
+    elif result == "Timeout":
+        require(living_teams == {1, 2} and ticks == setup["tick_limit"], "Timeout did not reach the limit with both teams alive.")
+    else:
+        raise RuntimeError(f"Incomplete, unknown or invalid battle result: {result}")
+
+    if require_flush:
+        require(row["setup_source"] == "accepted_battle_setup", "Setup was not read from the accepted session.")
+        flush = row["terminal_publication"]
+        require(nonnegative(flush["cpu_ms"]) and integer(flush["revision_before"])
+                and integer(flush["revision_after"]) and flush["revision_after"] >= flush["revision_before"],
+                "Invalid terminal publication timing or revision.")
+        require(type(flush["terrain_published"]) is bool
+                and flush["terrain_published"] == (flush["revision_after"] != flush["revision_before"]),
+                "Terminal publication flag differs from the revision change.")
+        require(integer(flush["tick_before"]) and integer(flush["tick_after"])
+                and flush["tick_before"] == flush["tick_after"] == ticks
+                and flush["battle_state_unchanged"] is True, "Terminal publication advanced or changed the frozen battle.")
 
 
 def run(args: argparse.Namespace) -> int:
