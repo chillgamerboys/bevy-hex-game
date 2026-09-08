@@ -1,5 +1,6 @@
 //! Native, default-off composition for the isolated spell-combat experiment.
 
+mod encounter;
 mod hud;
 mod presentation;
 #[cfg(test)]
@@ -11,12 +12,48 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::{CursorGrabMode, CursorMoved, CursorOptions, PrimaryWindow};
 use bevy::winit::WinitPlugin;
 use hex_arena::{ActorIntent, ArenaInput, ArenaSession, ArenaTuning, Spell};
-use hex_core::arena::{ArenaReset, ArenaSystems, ArenaTerrainView, ArenaTick};
+use hex_core::arena::{
+    ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection, ArenaSystems, ArenaTerrainView, ArenaTick,
+};
 use std::path::PathBuf;
 
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 900;
 const FIXED_SECONDS: f64 = 1.0 / 120.0;
+
+fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaSelection, String> {
+    let map = match map.unwrap_or("fort") {
+        "duel" => ArenaMap::Duel,
+        "fort" => ArenaMap::Fort,
+        "seven-regions" => ArenaMap::SevenRegions,
+        value => return Err(format!("Unknown arena map: {value}")),
+    };
+    let encounter = match encounter.unwrap_or("dragon") {
+        "dragon" => ArenaEncounter::Dragon,
+        "goblins" => ArenaEncounter::Goblins,
+        "shaman-party" => ArenaEncounter::ShamanParty,
+        "shadow" => ArenaEncounter::Shadow,
+        value => return Err(format!("Unknown arena encounter: {value}")),
+    };
+    Ok(ArenaSelection { map, encounter })
+}
+
+fn map_name(map: ArenaMap) -> &'static str {
+    match map {
+        ArenaMap::Duel => "Duel",
+        ArenaMap::Fort => "Fort",
+        ArenaMap::SevenRegions => "Seven Regions",
+    }
+}
+
+fn encounter_name(encounter: ArenaEncounter) -> &'static str {
+    match encounter {
+        ArenaEncounter::Dragon => "Dragon",
+        ArenaEncounter::Goblins => "Goblins",
+        ArenaEncounter::ShamanParty => "Shaman party",
+        ArenaEncounter::Shadow => "Shadow",
+    }
+}
 
 #[derive(Resource)]
 struct ViewState {
@@ -36,10 +73,18 @@ struct ViewState {
     accumulator: f64,
     reset_seen: u64,
     frame_times: Vec<f64>,
+    simulation_frame_times: Vec<f64>,
+    app_started_at: std::time::Instant,
+    previous_frame_at: Option<std::time::Instant>,
+    frame_wall_intervals: Vec<f64>,
+    capture_ready_elapsed_ms: Option<f64>,
     step_offset: f32,
     tick_times: Vec<(u64, bool, f64)>,
     capture_inputs: Vec<(u32, ActorIntent)>,
     capture_fixture_voxels: Vec<hex_core::TilePos>,
+    capture_focus: Option<String>,
+    capture_event_frame: Option<u32>,
+    capture_ready_frame: Option<u32>,
 }
 
 impl Default for ViewState {
@@ -64,15 +109,35 @@ impl Default for ViewState {
             accumulator: 0.0,
             reset_seen: 0,
             frame_times: Vec::new(),
+            simulation_frame_times: Vec::new(),
+            app_started_at: std::time::Instant::now(),
+            previous_frame_at: None,
+            frame_wall_intervals: Vec::new(),
+            capture_ready_elapsed_ms: None,
             step_offset: 0.0,
             tick_times: Vec::new(),
             capture_inputs: Vec::new(),
             capture_fixture_voxels: Vec::new(),
+            capture_focus: std::env::var("HEX_ARENA_FOCUS").ok(),
+            capture_event_frame: None,
+            capture_ready_frame: None,
         }
     }
 }
 
 impl ViewState {
+    fn record_frame_timing(&mut self, now: std::time::Instant, engine_delta: f64) {
+        if self.frame_times.len() < 36_000 {
+            self.frame_times.push(engine_delta * 1000.0);
+        }
+        if let Some(previous) = self.previous_frame_at.replace(now) {
+            if self.frame_wall_intervals.len() < 36_000 {
+                self.frame_wall_intervals
+                    .push(now.saturating_duration_since(previous).as_secs_f64() * 1000.0);
+            }
+        }
+    }
+
     fn begin_play(&mut self) {
         self.started = true;
         self.paused = false;
@@ -89,6 +154,9 @@ impl ViewState {
     fn prepare_round(&mut self) {
         self.started = false;
         self.initialized = false;
+        self.capture_event_frame = None;
+        self.capture_ready_frame = None;
+        self.capture_ready_elapsed_ms = None;
         self.pause();
     }
 
@@ -115,9 +183,23 @@ enum ArenaFrame {
 }
 
 /// Builds a separate arena application without installing tactical gameplay plugins.
+#[expect(
+    clippy::print_stderr,
+    reason = "invalid launch capabilities must be reported before Bevy logging or a window is initialized"
+)]
 pub fn run() -> AppExit {
     let state = ViewState::default();
     let capture = state.capture.is_some();
+    let selection = match launch_selection(
+        std::env::var("HEX_ARENA_MAP").ok().as_deref(),
+        std::env::var("HEX_ARENA_ENCOUNTER").ok().as_deref(),
+    ) {
+        Ok(selection) => selection,
+        Err(error) => {
+            eprintln!("{error}");
+            return AppExit::error();
+        }
+    };
     let mut app = App::new();
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -132,6 +214,9 @@ pub fn run() -> AppExit {
         ..default()
     });
     if capture {
+        if let Some(clock) = hex_map::LiquidVisualTime::frozen_at(0.0) {
+            app.insert_resource(clock);
+        }
         app.add_plugins(plugins.disable::<WinitPlugin>())
             .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
                 std::time::Duration::from_secs_f64(1.0 / 60.0),
@@ -140,6 +225,7 @@ pub fn run() -> AppExit {
         app.add_plugins(plugins);
     }
     app.insert_resource(state)
+        .insert_resource(selection)
         .insert_resource(ClearColor(Color::srgb(0.10, 0.16, 0.22)))
         .insert_resource(GlobalAmbientLight {
             color: Color::srgb(0.77, 0.85, 1.0),
@@ -166,10 +252,19 @@ pub fn run() -> AppExit {
             )
                 .chain(),
         )
-        .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
+        .add_plugins((
+            hex_map::arena::plugin,
+            hex_arena::plugin,
+            hex_objects::plugin,
+        ))
         .add_systems(
             Startup,
-            (setup, hud::setup, presentation::setup_effects)
+            (
+                setup,
+                hud::setup,
+                presentation::setup_effects,
+                encounter::setup,
+            )
                 .chain()
                 .after(ArenaSystems::PublishTerrain),
         )
@@ -185,8 +280,10 @@ pub fn run() -> AppExit {
             (
                 presentation::actors,
                 presentation::camera,
+                encounter::camera,
                 presentation::effects,
                 presentation::solid_effects,
+                encounter::effects,
                 hud::update,
                 log_round,
             )
@@ -200,17 +297,32 @@ pub fn run() -> AppExit {
 fn log_round(session: Res<ArenaSession>, mut logged: Local<bool>) {
     let finished = session.outcome.is_some();
     if finished && !*logged {
-        info!(summary = ?session.round_summary(), "Arena round complete");
+        if session.encounter_summary().enabled {
+            info!(round = ?session.round_summary(), encounter = ?session.encounter_summary(), actors = ?session.encounter_stats(), "Arena encounter complete");
+        } else {
+            info!(summary = ?session.round_summary(), "Arena round complete");
+        }
     }
     *logged = finished;
 }
 
 fn setup(
     mut commands: Commands,
+    assets: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     mut state: ResMut<ViewState>,
     mut tuning: ResMut<ArenaTuning>,
 ) {
+    commands.insert_resource(hex_assets::GameAssets {
+        hex_tile: assets.load(
+            bevy::gltf::GltfAssetLabel::Primitive {
+                mesh: 0,
+                primitive: 0,
+            }
+            .from_asset("meshes/hex.glb"),
+        ),
+        player_pieces: [default(), default()],
+    });
     let config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/arena.ron");
     match std::fs::read_to_string(&config)
         .map_err(|error| error.to_string())
@@ -259,7 +371,7 @@ fn setup(
         Projection::Perspective(PerspectiveProjection {
             fov: 75.0_f32.to_radians(),
             near: 0.035,
-            far: 180.0,
+            far: 480.0,
             ..default()
         }),
         Transform::from_xyz(0.0, 6.0, 15.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
@@ -454,17 +566,18 @@ fn sync_cursor(
 }
 
 fn drive_simulation(world: &mut World) {
+    let frame_started = std::time::Instant::now();
+    let tick_before_frame = world.resource::<ArenaSession>().tick;
     let delta = world.resource::<Time>().delta_secs_f64();
     let delta_f32 = world.resource::<Time>().delta_secs();
     let generation = world.resource::<ArenaReset>().generation;
+    let reset_this_frame = world.resource::<ViewState>().reset_seen != generation;
     let capture = world.resource::<ViewState>().capture.is_some();
     let needs_initialization = world.resource::<ArenaSession>().actors.is_empty();
     let (steps, frame, view) = {
         let mut state = world.resource_mut::<ViewState>();
         state.frames = state.frames.saturating_add(1);
-        if state.frame_times.len() < 36_000 {
-            state.frame_times.push(delta * 1000.0);
-        }
+        state.record_frame_timing(frame_started, delta);
         let changed = generation != state.reset_seen;
         state.reset_seen = generation;
         if changed {
@@ -472,7 +585,9 @@ fn drive_simulation(world: &mut World) {
         } else if !state.paused {
             state.step_offset *= (-12.0 * delta_f32.min(0.1)).exp();
         }
-        if state.paused || !state.started {
+        if state.capture_event_frame.is_some() {
+            (0, state.frames, state.capture_view.clone())
+        } else if state.paused || !state.started {
             state.accumulator = 0.0;
             (
                 u32::from(changed || needs_initialization),
@@ -493,13 +608,18 @@ fn drive_simulation(world: &mut World) {
         }
     };
     if capture {
-        world.resource_mut::<ArenaSession>().bot_enabled = view.starts_with("bot-combat-");
+        world.resource_mut::<ArenaSession>().bot_enabled = view.starts_with("bot-combat-")
+            || view.starts_with("encounter-") && view != "encounter-landmark";
         let direction = world
             .resource::<ArenaSession>()
             .actors
             .first()
             .map_or(Vec3::X, |actor| actor.aim);
-        let sample = capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction);
+        let sample = if view.starts_with("encounter-") && view != "encounter-landmark" {
+            encounter::capture_intent(frame, world.resource::<ArenaSession>(), &view)
+        } else {
+            capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction)
+        };
         world.resource_mut::<ArenaInput>().human = sample;
         world
             .resource_mut::<ViewState>()
@@ -543,9 +663,27 @@ fn drive_simulation(world: &mut World) {
             let mut state = world.resource_mut::<ViewState>();
             state.step_offset = (state.step_offset - rise).max(-0.8);
         }
+        if capture && encounter::phase_ready(world.resource::<ArenaSession>(), &view) {
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
     }
     if frozen {
         world.resource_mut::<ArenaSession>().bot_enabled = bot_enabled;
+    }
+    let final_tick = world.resource::<ArenaSession>().tick;
+    let ticks_advanced = if reset_this_frame {
+        final_tick
+    } else {
+        final_tick.saturating_sub(tick_before_frame)
+    };
+    let mut state = world.resource_mut::<ViewState>();
+    if state.simulation_frame_times.len() < 36_000 {
+        state
+            .simulation_frame_times
+            .push(f64::from(u32::try_from(ticks_advanced).unwrap_or(0)) * FIXED_SECONDS * 1000.0);
     }
 }
 
@@ -679,11 +817,55 @@ fn capture_frame(
     view: Res<ArenaTerrainView>,
     tuning: Res<ArenaTuning>,
     geometry: Res<hex_core::arena::ArenaVoxelGeometry>,
+    game_assets: Option<Res<hex_assets::GameAssets>>,
+    meshes: Res<Assets<Mesh>>,
+    objects: Query<&hex_assets::ObjectInstance>,
+    chunks: Query<&hex_objects::ObjectRenderChunk>,
+    cameras: Query<&Transform, With<ArenaCamera>>,
+    liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let Some(path) = state.capture.clone() else {
         return;
     };
-    let frame = if state.capture_view.starts_with("bot-combat-") && session.outcome.is_some() {
+    if state.requested {
+        return;
+    }
+    let object_count = objects.iter().count();
+    let chunk_count = chunks.iter().count();
+    let needs_objects = !view.static_spans.is_empty() || object_count > 0;
+    let assets_ready = !needs_objects
+        || (object_count > 0
+            && chunk_count > 0
+            && game_assets
+                .as_ref()
+                .is_some_and(|assets| meshes.get(&assets.hex_tile).is_some()));
+    if !assets_ready {
+        state.capture_ready_frame = None;
+        if state.frames >= 1800 {
+            error!("Encounter capture failed: authored objects did not become render-ready");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    let frames = state.frames;
+    let ready_frame = *state.capture_ready_frame.get_or_insert(frames);
+    if frames >= ready_frame.saturating_add(4) && state.capture_ready_elapsed_ms.is_none() {
+        state.capture_ready_elapsed_ms =
+            Some(state.app_started_at.elapsed().as_secs_f64() * 1000.0);
+    }
+    if encounter::phase_view(&state.capture_view) && state.capture_event_frame.is_none() {
+        if state.frames >= 1800 || session.outcome.is_some() {
+            error!("Encounter capture failed: requested phase {} was not reached before the round ended or the 30-second limit", state.capture_view);
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    let frame = if let Some(frame) = state.capture_event_frame {
+        frame.saturating_add(4)
+    } else if state.capture_view.starts_with("bot-combat-") && session.outcome.is_some() {
         state.frames
     } else {
         capture_frame_index(&state.capture_view)
@@ -691,12 +873,63 @@ fn capture_frame(
     if state.frames < frame || state.requested {
         return;
     }
+    if state.capture_view == "encounter-landmark"
+        && !state
+            .capture_focus
+            .as_ref()
+            .is_some_and(|name| view.anchors.contains_key(name))
+    {
+        error!("Encounter capture requires a published focus anchor");
+        state.requested = true;
+        exit.write(AppExit::error());
+        return;
+    }
+    if frames < ready_frame.saturating_add(4) {
+        return;
+    }
+    if liquid_clock
+        .as_ref()
+        .is_none_or(|clock| !clock.is_frozen() || clock.phase_seconds().abs() > f32::EPSILON)
+    {
+        error!("Encounter capture requires liquid presentation frozen at phase zero");
+        state.requested = true;
+        exit.write(AppExit::error());
+        return;
+    }
     let Some(target) = state.image.clone() else {
         return;
     };
     state.requested = true;
     let predicted = hex_arena::preview(&session, &view, &geometry, &tuning);
-    let receipt = serde_json::json!({"view":state.capture_view,"started":state.started,"paused":state.paused,"frame":state.frames,"tick":session.tick,"terrain_revision":view.revision,"voxels":view.voxels.len(),"actors":session.actors.iter().map(|a|serde_json::json!({"id":a.id,"hp":a.hp,"feet":[a.feet.x,a.feet.y,a.feet.z],"cooldowns":a.cooldowns,"charge":a.charge().map(|charge|serde_json::json!({"spell":charge.spell,"elapsed":charge.elapsed,"progress":(charge.elapsed/tuning.charge_seconds).clamp(0.0,1.0),"launch_speed":tuning.launch_speed(charge.elapsed)}))})).collect::<Vec<_>>(),"capture_inputs":state.capture_inputs.iter().map(|(frame,input)|serde_json::json!({"frame":frame,"selected":input.selected,"pressed":input.cast_pressed,"released":input.cast_released,"held":input.cast_held})).collect::<Vec<_>>(),"fixture_voxels":state.capture_fixture_voxels,"preview":{"valid":predicted.valid,"wall_voxels":predicted.wall_voxels,"footprint":presentation::shield_footprint(&predicted.wall_voxels)},"bot_debug":session.bot_debug(),"round_summary":session.round_summary(),"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,"effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),"frame_ms":state.frame_times,"tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),"width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"});
+    let receipt = serde_json::json!({
+        "view":state.capture_view,"started":state.started,"paused":state.paused,"frame":state.frames,"tick":session.tick,
+        "selection":{"map":map_name(view.selection.map),"encounter":encounter_name(view.selection.encounter)},
+        "terrain_revision":view.revision,"voxels":view.voxels.len(),"static_spans":view.static_spans.len(),
+        "authored_objects":object_count,"object_render_chunks":chunk_count,"focus_anchor":state.capture_focus,
+        "phase_reached_frame":state.capture_event_frame,
+        "render_ready_frame":state.capture_ready_frame,"liquid_phase_seconds":liquid_clock.as_ref().map(|clock|clock.phase_seconds()),
+        "app_construction_to_render_ready_ms":state.capture_ready_elapsed_ms,
+        "camera":cameras.single().ok().map(|camera|serde_json::json!({"position":camera.translation.to_array(),"rotation":camera.rotation.to_array()})),
+        "actors":session.actors.iter().map(|a|serde_json::json!({
+            "id":a.id,"species":a.species,"team":a.team,"party":a.party,"hp":a.hp,"max_hp":a.max_hp,"feet":a.feet.to_array(),
+            "body_dimensions":a.body_dimensions().to_array(),"body_rotation":a.body_rotation().to_array(),"cooldowns":a.cooldowns,
+            "attack":a.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"origin":attack.origin.to_array(),"direction":attack.direction.to_array(),"range":attack.range,"half_angle":attack.half_angle,"progress":attack.progress})),
+            "charge":a.charge().map(|charge|serde_json::json!({"spell":charge.spell,"elapsed":charge.elapsed,"progress":(charge.elapsed/tuning.charge_seconds).clamp(0.0,1.0),"launch_speed":tuning.launch_speed(charge.elapsed)}))
+        })).collect::<Vec<_>>(),
+        "barriers":session.barriers().iter().map(|barrier|serde_json::json!({"id":barrier.id,"owner":barrier.owner,"center":barrier.center.to_array(),"normal":barrier.normal.to_array(),"width":barrier.width,"height":barrier.height,"hp":barrier.hp,"max_hp":barrier.max_hp,"remaining":barrier.remaining,"lifetime":barrier.lifetime})).collect::<Vec<_>>(),
+        "auras":session.auras().iter().map(|aura|serde_json::json!({"owner":aura.owner,"center":aura.center.to_array(),"radius":aura.radius,"remaining":aura.remaining,"lifetime":aura.lifetime})).collect::<Vec<_>>(),
+        "parties":session.parties().iter().map(|party|serde_json::json!({"id":party.id,"phase":party.phase,"home":party.home.to_array(),"living":party.living})).collect::<Vec<_>>(),
+        "encounter_summary":session.encounter_summary(),
+        "encounter_stats":session.encounter_stats(),
+        "capture_inputs":state.capture_inputs.iter().map(|(frame,input)|serde_json::json!({"frame":frame,"selected":input.selected,"movement":input.movement.to_array(),"aim":input.aim.to_array(),"jump":input.jump,"pressed":input.cast_pressed,"released":input.cast_released,"held":input.cast_held})).collect::<Vec<_>>(),
+        "fixture_voxels":state.capture_fixture_voxels,"preview":{"valid":predicted.valid,"wall_voxels":predicted.wall_voxels,"footprint":presentation::shield_footprint(&predicted.wall_voxels)},
+        "bot_debug":session.bot_debug(),"round_summary":session.round_summary(),"notice":session.notice,"shields_raised":session.shields_raised,"terrain_outcomes":session.terrain_outcomes,
+        "effects":session.effects.iter().map(|e|serde_json::json!({"spell":e.kind,"radius":e.radius,"age":e.age})).collect::<Vec<_>>(),
+        "engine_time_delta_ms":state.frame_times,"simulation_frame_dt_ms":state.simulation_frame_times,"app_frame_wall_intervals_ms":state.frame_wall_intervals,
+        "frame_timing_note":"Instant start-to-start of consecutive main app Update frames; includes scheduler and render-submission waits, not GPU execution or vsync timing. Simulation dt is a separate engine clock.",
+        "tick_samples":state.tick_times.iter().map(|(tick,changed,ms)|serde_json::json!({"tick":tick,"terrain_changed":changed,"cpu_ms":ms})).collect::<Vec<_>>(),
+        "width":WIDTH,"height":HEIGHT,"evidence":"STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending"
+    });
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             let result = (|| -> Result<(), String> {

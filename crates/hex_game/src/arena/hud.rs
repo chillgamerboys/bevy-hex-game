@@ -4,7 +4,7 @@ use super::ViewState;
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
 use hex_arena::{ActorIntent, ArenaInput, ArenaOutcome, ArenaSession, ArenaTuning, Spell};
-use hex_core::arena::ArenaReset;
+use hex_core::arena::{ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection};
 
 const INK: Color = Color::srgb(0.91, 0.94, 0.96);
 const MUTED: Color = Color::srgb(0.57, 0.66, 0.73);
@@ -18,6 +18,8 @@ pub(super) enum Label {
     Parameter(usize),
     WindowMode,
     Charge,
+    Encounter,
+    Selection,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
@@ -41,6 +43,8 @@ pub(super) enum Action {
     Fullscreen,
     Quit,
     Change(usize, f32),
+    Map(ArenaMap),
+    Encounter(ArenaEncounter),
 }
 
 fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, TextColor) {
@@ -60,7 +64,7 @@ pub(super) fn setup(mut commands: Commands) {
             root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|area| {
                     area.spawn(text("SPELL ARENA", 25.0, INK));
-                    area.spawn(text("OFFLINE DUEL  /  COMBAT EXPERIMENT", 11.0, MUTED));
+                    area.spawn((text("", 12.0, MUTED), Label::Encounter));
                     area.spawn((text("100 HP", 32.0, Color::srgb(0.36, 0.90, 0.78)), Label::Health));
                 });
             root.spawn((Node { position_type: PositionType::Absolute, right: px(18), top: px(14), max_width: px(474), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 15.0, INK), Label::Status));
@@ -86,15 +90,30 @@ pub(super) fn setup(mut commands: Commands) {
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.78)), GlobalZIndex(20), StartPanel))
         .with_children(|overlay| {
-            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(28)), flex_direction: FlexDirection::Column, row_gap: px(18), border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
+            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(22)), flex_direction: FlexDirection::Column, row_gap: px(10), border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|panel| {
-                    panel.spawn(text("SPELL ARENA", 36.0, INK));
-                    panel.spawn(text("One player. One opponent. Three spells.", 18.0, INK));
-                    panel.spawn(text("WASD move / mouse look / Space jump / Shift sprint\n1 Shield / 2 Fireball / 3 Area Blast\nHold mouse to charge Shield or Fireball. Release to cast.\nArea Blast casts on release with fixed power.", 15.0, INK));
+                    panel.spawn(text("SPELL ARENA", 30.0, INK));
+                    panel.spawn(text("Choose a battlefield. Defeat every enemy party.", 16.0, INK));
+                    panel.spawn(text("MAP", 12.0, MUTED));
+                    panel.spawn(Node { height: px(38), column_gap: px(8), ..default() }).with_children(|row| {
+                        for map in [ArenaMap::Duel, ArenaMap::Fort, ArenaMap::SevenRegions] {
+                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Map(map)))
+                                .with_children(|button| { button.spawn(text(super::map_name(map), 14.0, INK)); });
+                        }
+                    });
+                    panel.spawn(text("FORT ENCOUNTER", 12.0, MUTED));
+                    panel.spawn(Node { height: px(38), column_gap: px(6), ..default() }).with_children(|row| {
+                        for encounter in [ArenaEncounter::Dragon, ArenaEncounter::Goblins, ArenaEncounter::ShamanParty, ArenaEncounter::Shadow] {
+                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Encounter(encounter)))
+                                .with_children(|button| { button.spawn(text(super::encounter_name(encounter), 13.0, INK)); });
+                        }
+                    });
+                    panel.spawn((text("", 13.0, INK), Label::Selection));
+                    panel.spawn(text("WASD move / mouse look / Space jump / Shift sprint\n1 Shield / 2 Fireball / 3 Area Blast\nHold mouse to charge Shield or Fireball. Release to cast.\nArea Blast casts on release with fixed power.", 14.0, INK));
                     panel.spawn(text("ESC or TAB pauses combat and frees the mouse.\nUse the paused menu for fullscreen, tuning, or quitting.", 16.0, Color::srgb(0.36, 0.90, 0.78)));
                     panel.spawn(text("Combat waits until you start.", 15.0, INK));
                     panel.spawn((Button, Node { width: percent(100), height: px(46), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), Action::Start))
-                        .with_children(|button| { button.spawn(text("START DUEL  /  ENTER", 17.0, INK)); });
+                        .with_children(|button| { button.spawn(text("START  /  ENTER", 17.0, INK)); });
                     panel.spawn(Node { height: px(42), column_gap: px(12), ..default() }).with_children(|row| {
                         for (label, action) in [("FULLSCREEN", Action::Fullscreen), ("QUIT GAME", Action::Quit)] {
                             row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(42), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), action))
@@ -147,6 +166,7 @@ pub(super) fn buttons(
     mut state: ResMut<ViewState>,
     mut tuning: ResMut<ArenaTuning>,
     mut reset: ResMut<ArenaReset>,
+    mut selection: ResMut<ArenaSelection>,
     mut input: ResMut<ArenaInput>,
     mut session: ResMut<ArenaSession>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
@@ -160,6 +180,20 @@ pub(super) fn buttons(
             continue;
         }
         match *action {
+            Action::Map(map) if !state.started && selection.map != map => {
+                selection.map = map;
+                reset.generation = reset.generation.saturating_add(1);
+                state.prepare_round();
+            }
+            Action::Encounter(encounter)
+                if !state.started
+                    && selection.map == ArenaMap::Fort
+                    && selection.encounter != encounter =>
+            {
+                selection.encounter = encounter;
+                reset.generation = reset.generation.saturating_add(1);
+                state.prepare_round();
+            }
             Action::Start if !state.started => state.begin_play(),
             Action::Resume if state.started => state.begin_play(),
             Action::Restart if state.started => {
@@ -221,8 +255,10 @@ pub(super) fn update(
     session: Res<ArenaSession>,
     tuning: Res<ArenaTuning>,
     state: Res<ViewState>,
+    selection: Option<Res<ArenaSelection>>,
     mut labels: Query<(&Label, &mut Text)>,
     mut cards: Query<(&SpellCard, &mut BorderColor)>,
+    mut choices: Query<(&Action, &mut BackgroundColor)>,
     mut panels: Query<
         (
             &mut Node,
@@ -240,6 +276,21 @@ pub(super) fn update(
     >,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let selection = selection.as_deref().copied().unwrap_or_default();
+    for (action, mut color) in &mut choices {
+        let selected = match action {
+            Action::Map(map) => *map == selection.map,
+            Action::Encounter(encounter) => {
+                selection.map == ArenaMap::Fort && *encounter == selection.encounter
+            }
+            _ => continue,
+        };
+        *color = BackgroundColor(if selected {
+            Color::srgb(0.16, 0.40, 0.43)
+        } else {
+            Color::srgb(0.11, 0.16, 0.20)
+        });
+    }
     let actor = session.actors.first();
     let charge = actor.and_then(|actor| actor.charge());
     let progress = charge.map_or(0.0, |charge| {
@@ -277,6 +328,19 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::Selection => match selection.map {
+                ArenaMap::Duel => "Duel: the original Shadow challenge.".into(),
+                ArenaMap::Fort => format!("Fort: {}. Restart keeps this encounter.", super::encounter_name(selection.encounter)),
+                ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nFort encounter buttons apply only to Fort.".into(),
+            },
+            Label::Encounter => {
+                let summary = session.encounter_summary();
+                if selection.map == ArenaMap::Duel {
+                    "DUEL  /  SHADOW CHALLENGE".into()
+                } else {
+                    format!("{}  /  {} / {} parties cleared", super::map_name(selection.map), summary.defeated_parties, session.parties().len())
+                }
+            },
             Label::Charge => match charge {
                 Some(charge) if charge.spell == Spell::AreaBlast => "Release to cast".into(),
                 Some(_) => format!("{:.0}% / Release to cast", progress * 100.0),

@@ -1523,6 +1523,8 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                     hud::Action::Fullscreen => "fullscreen".into(),
                     hud::Action::Quit => "quit".into(),
                     hud::Action::Change(index, amount) => format!("change {index} {amount}"),
+                    hud::Action::Map(map) => format!("map {map:?}"),
+                    hud::Action::Encounter(encounter) => format!("encounter {encounter:?}"),
                 };
                 if phase == "start" {
                     assert!(!matches!(
@@ -1543,7 +1545,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             .iter()
             .filter(|(_, phase, _, _)| *phase == "pause")
             .count();
-        assert_eq!(start_actions, 3);
+        assert_eq!(start_actions, 10);
         assert_eq!(
             actions
                 .iter()
@@ -1763,4 +1765,203 @@ fn bot_combat_is_identical_across_render_batch_rates() {
             reference = Some(snapshot);
         }
     }
+}
+
+#[test]
+fn native_selection_defaults_and_invalid_capabilities_are_explicit() {
+    assert_eq!(
+        launch_selection(None, None).unwrap(),
+        ArenaSelection {
+            map: ArenaMap::Fort,
+            encounter: ArenaEncounter::Dragon
+        }
+    );
+    assert_eq!(
+        launch_selection(Some("duel"), Some("shadow")).unwrap().map,
+        ArenaMap::Duel
+    );
+    assert!(launch_selection(Some("seven-regions"), None).is_ok());
+    assert!(launch_selection(Some("grand"), None).is_err());
+    assert!(launch_selection(None, Some("unknown")).is_err());
+}
+
+#[test]
+fn selector_actions_reset_frozen_input_and_do_not_change_an_active_run() {
+    let (mut fixture, _) = menu_app();
+    let initial_generation = fixture.world().resource::<ArenaReset>().generation;
+    press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));
+    assert_eq!(
+        fixture.world().resource::<ArenaSelection>().map,
+        ArenaMap::Fort
+    );
+    assert_eq!(
+        fixture.world().resource::<ArenaTerrainView>().selection.map,
+        ArenaMap::Fort
+    );
+    assert_eq!(
+        fixture.world().resource::<ArenaReset>().generation,
+        initial_generation + 1
+    );
+    assert!(!fixture.world().resource::<ViewState>().started);
+    press_action(
+        &mut fixture,
+        hud::Action::Encounter(ArenaEncounter::Goblins),
+    );
+    assert_eq!(
+        fixture.world().resource::<ArenaSelection>().encounter,
+        ArenaEncounter::Goblins
+    );
+    let selection = *fixture.world().resource::<ArenaSelection>();
+    press_action(&mut fixture, hud::Action::Start);
+    let input = &fixture.world().resource::<ArenaInput>().human;
+    assert!(!input.cast_pressed && !input.cast_held && !input.cast_released);
+    tap_key(&mut fixture, KeyCode::Escape);
+    press_action(&mut fixture, hud::Action::Map(ArenaMap::SevenRegions));
+    assert_eq!(
+        *fixture.world().resource::<ArenaSelection>(),
+        selection,
+        "map selection belongs to the ready screen"
+    );
+    press_action(&mut fixture, hud::Action::Restart);
+    assert!(!fixture.world().resource::<ViewState>().started);
+    assert_eq!(
+        *fixture.world().resource::<ArenaSelection>(),
+        selection,
+        "restart preserves the recipe"
+    );
+    press_action(&mut fixture, hud::Action::Map(ArenaMap::Duel));
+    press_action(&mut fixture, hud::Action::Encounter(ArenaEncounter::Dragon));
+    assert_eq!(
+        fixture.world().resource::<ArenaSelection>().encounter,
+        ArenaEncounter::Goblins,
+        "Fort-only choice is inert on Duel"
+    );
+    assert_eq!(fixture.world().resource::<ArenaSession>().actors.len(), 2);
+}
+
+#[test]
+fn actor_models_reconcile_removed_species_and_reset_generations() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut fixture = app(60);
+    fixture
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<StandardMaterial>>();
+    let render = |fixture: &mut App| {
+        fixture
+            .world_mut()
+            .run_system_once(presentation::actors)
+            .expect("actor presentation");
+        fixture
+            .world_mut()
+            .query_filtered::<Entity, With<presentation::ActorModel>>()
+            .iter(fixture.world())
+            .collect::<Vec<_>>()
+    };
+    let original = render(&mut fixture);
+    assert_eq!(original.len(), 2);
+    fixture.world_mut().resource_mut::<ArenaSession>().actors[1].species =
+        hex_arena::Species::Goblin;
+    let changed = render(&mut fixture);
+    assert_eq!(changed.len(), 2);
+    assert_eq!(
+        original
+            .iter()
+            .filter(|entity| changed.contains(entity))
+            .count(),
+        1,
+        "changed species needs a new body"
+    );
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .pop();
+    assert_eq!(render(&mut fixture).len(), 1);
+    fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    tick(&mut fixture);
+    let reset = render(&mut fixture);
+    assert_eq!(reset.len(), 2);
+    assert!(
+        reset.iter().all(|entity| !changed.contains(entity)),
+        "reset clears every stale model"
+    );
+    assert_eq!(
+        render(&mut fixture).len(),
+        2,
+        "reconciliation does not duplicate models"
+    );
+}
+
+#[test]
+fn encounter_hud_reveals_only_whole_party_completion() {
+    use bevy::ecs::system::RunSystemOnce;
+    let (mut fixture, _) = menu_app();
+    press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));
+    press_action(
+        &mut fixture,
+        hud::Action::Encounter(ArenaEncounter::Goblins),
+    );
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .bot_enabled = false;
+    fixture
+        .world_mut()
+        .run_system_once(hud::setup)
+        .expect("HUD setup");
+    let label = |fixture: &mut App| {
+        fixture
+            .world_mut()
+            .run_system_once(hud::update)
+            .expect("HUD update");
+        fixture
+            .world_mut()
+            .query::<(&hud::Label, &Text)>()
+            .iter(fixture.world())
+            .find_map(|(label, text)| {
+                matches!(label, hud::Label::Encounter).then(|| text.0.clone())
+            })
+            .expect("encounter label")
+    };
+    let initial = label(&mut fixture);
+    assert!(initial.contains("0 / 1 parties cleared"));
+    // An unseen member can die before the party is cleared. Its live roster size
+    // and remaining HP must not become a normal-HUD observation.
+    fixture.world_mut().resource_mut::<ArenaSession>().actors[1].hp = 0.0;
+    tick(&mut fixture);
+    assert_eq!(label(&mut fixture), initial);
+    for actor in fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .iter_mut()
+        .skip(1)
+    {
+        actor.hp = 0.0;
+    }
+    tick(&mut fixture);
+    assert!(label(&mut fixture).contains("1 / 1 parties cleared"));
+}
+
+#[test]
+fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
+    let mut state = ViewState::default();
+    let start = std::time::Instant::now();
+    state.record_frame_timing(start, 1.0 / 60.0);
+    state.record_frame_timing(start + std::time::Duration::from_millis(40), 1.0 / 60.0);
+    assert_eq!(state.frame_wall_intervals.len(), 1);
+    assert!((state.frame_wall_intervals[0] - 40.0).abs() < 0.001);
+    assert!(state
+        .frame_times
+        .iter()
+        .all(|dt| (*dt - 1000.0 / 60.0).abs() < 0.001));
+    let mut fixture = app(60);
+    fixture.world_mut().resource_mut::<ViewState>().pause();
+    fixture.update();
+    let paused = fixture.world().resource::<ViewState>();
+    assert!(paused
+        .simulation_frame_times
+        .last()
+        .is_some_and(|dt| dt.abs() < 0.001));
+    assert!(paused.frame_times.last().is_some_and(|dt| *dt > 16.0));
 }

@@ -43,6 +43,36 @@ CHARGE_VIEWS = (
     "blast-armed-first", "blast-armed-third",
     "shield-partial-preview-first", "shield-partial-preview-third",
 )
+# Explicit recipes preserve the legacy two-actor regression matrices.
+MAPS = ("duel", "fort", "seven-regions")
+ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow")
+MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions"}
+ENCOUNTER_LABELS = {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "Shaman party", "shadow": "Shadow"}
+SEEDS = {"duel": None, "fort": 640367719, "seven-regions": 703700113}
+ENCOUNTER_VIEWS = (
+    ("fort-dragon-start", "start", "fort", "dragon", None),
+    ("fort-dragon-overview", "overview", "fort", "dragon", None),
+    ("fort-dragon-rear", "rear", "fort", "dragon", None),
+    ("fort-dragon-first", "encounter-first", "fort", "dragon", None),
+    ("fort-dragon-third", "encounter-third", "fort", "dragon", None),
+    ("dragon-windup", "encounter-windup", "fort", "dragon", None),
+    ("dragon-breath", "encounter-breath", "fort", "dragon", None),
+    ("dragon-barrier", "encounter-barrier", "fort", "dragon", None),
+    ("fort-goblins-third", "encounter-third", "fort", "goblins", None),
+    ("goblin-swipe", "encounter-swipe", "fort", "goblins", None),
+    ("fort-shaman-third", "encounter-third", "fort", "shaman-party", None),
+    ("shaman-fireball", "encounter-fireball", "fort", "shaman-party", None),
+    ("shaman-aura", "encounter-aura", "fort", "shaman-party", None),
+    ("fort-shadow-first", "encounter-first", "fort", "shadow", None),
+    ("seven-start", "start", "seven-regions", "dragon", None),
+    ("seven-overview", "overview", "seven-regions", "dragon", None),
+    ("seven-rear", "rear", "seven-regions", "dragon", None),
+    ("seven-first", "first", "seven-regions", "dragon", None),
+    ("seven-third", "third", "seven-regions", "dragon", None),
+    ("seven-mountains", "encounter-landmark", "seven-regions", "dragon", "mountains_high_pass"),
+    ("seven-fort", "encounter-landmark", "seven-regions", "dragon", "fort_fort_courtyard"),
+    ("seven-caves", "encounter-landmark", "seven-regions", "dragon", "caves_cave_entrance"),
+)
 CANVAS = [1600, 900]
 CARGO_ARGS = ("run", "-p", "hex_game", "--features", "dev,arena-prototype", "--", "--arena")
 
@@ -145,9 +175,17 @@ def run_cargo(env: dict[str, str], log_path: Path | None, timeout: float | None)
                     else:
                         sys.stdout.buffer.write(chunk)
                         sys.stdout.buffer.flush()
-                    if b"path not found" in (tail + chunk).lower():
+                    observed = (tail + chunk).lower()
+                    if b"path not found" in observed:
                         raise RuntimeError("Asset path not found; Cargo launch failed. See process output.")
-                    tail = chunk[-64:]
+                    if b"cannot render authored object" in observed or b"cannot render invalid authored object" in observed:
+                        raise RuntimeError("Authored object rendering failed. See retained process output.")
+                    if any(message in observed for message in (
+                        b"arena crystal presentation:", b"arena liquid presentation:",
+                        b"arena feature presentation:",
+                    )):
+                        raise RuntimeError("Arena world presentation failed. See retained process output.")
+                    tail = chunk[-96:]
         return process.wait()
     finally:
         if process is not None:
@@ -209,6 +247,32 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
                 raise RuntimeError(f"{view} is missing its world-published partial shield fixture.")
             if any(voxel in preview["wall_voxels"] for voxel in fixture):
                 raise RuntimeError(f"{view} preview failed to omit its occupied fixture slots.")
+    phase_views = {"encounter-windup", "encounter-breath", "encounter-swipe", "encounter-barrier", "encounter-aura", "encounter-fireball"}
+    if view in phase_views:
+        reached = state.get("phase_reached_frame")
+        if not isinstance(reached, int) or state.get("frame", 0) < reached + 4:
+            raise RuntimeError(f"{view} lacks a frozen authoritative phase and four render frames.")
+        actors = state.get("actors", [])
+        attacks = [actor.get("attack") for actor in actors if actor.get("id") != 0 and actor.get("attack")]
+        valid = {
+            "encounter-barrier": bool(state.get("barriers")),
+            "encounter-aura": bool(state.get("auras")),
+            "encounter-breath": any(a.get("kind") == "FireCone" and a.get("phase") == "Active" for a in attacks),
+            "encounter-swipe": any(a.get("kind") == "Swipe" and a.get("phase") == "Windup" for a in attacks),
+            "encounter-windup": any(a.get("phase") == "Windup" for a in attacks),
+            "encounter-fireball": any(actor.get("id") != 0 and (actor.get("charge") or {}).get("spell") == "Fireball" for actor in actors),
+        }[view]
+        if not valid:
+            raise RuntimeError(f"{view} native state does not contain its requested ability phase.")
+    ready_frame = state.get("render_ready_frame")
+    if not isinstance(ready_frame, int) or state.get("frame", 0) < ready_frame + 4:
+        raise RuntimeError(f"{view} did not wait four frames after render assets became ready.")
+    if state.get("liquid_phase_seconds") != 0.0:
+        raise RuntimeError(f"{view} did not capture liquid presentation frozen at phase zero.")
+    if state.get("static_spans", 0) and not state.get("authored_objects", 0):
+        raise RuntimeError(f"{view} has published static props without authored object instances.")
+    if state.get("authored_objects", 0) and not state.get("object_render_chunks", 0):
+        raise RuntimeError(f"{view} contains authored instances without render chunks.")
     return {"file": path.name, "sha256": digest(data), "bytes": len(data),
             "frame": state.get("frame"), "tick": state.get("tick")}
 
@@ -216,6 +280,18 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
+    if args.encounter_review and (args.map or args.encounter):
+        raise RuntimeError("--encounter-review defines each recipe; use --view to select entries.")
+    entries = list(ENCOUNTER_VIEWS) if args.encounter_review else [(view, view, args.map or "duel", args.encounter or "shadow", None) for view in views]
+    if args.encounter_review:
+        matrix = "arena-encounters-v1"
+    if args.view:
+        requested = set(args.view)
+        unknown = requested - {entry[0] for entry in entries}
+        if unknown:
+            raise RuntimeError(f"Unknown views for this matrix: {sorted(unknown)}")
+        entries = [entry for entry in entries if entry[0] in requested]
+        matrix += "-focused"
     output = args.output
     if not output.is_absolute():
         raise RuntimeError("--output must be an absolute path to a new directory.")
@@ -244,14 +320,14 @@ def capture(args: argparse.Namespace) -> int:
         "schema_version": 1, "matrix": matrix, "pack": str(pack), "repository": str(ROOT),
         "started_at": utc_now(), "source": initial,
         "source_label": "UNAPPROVABLE-DIRTY" if initial["dirty"] else "COMMITTED-CANDIDATE",
-        "scenario": "Spell Combat Arena / authored radius-12 arena",
-        "terrain_seed": None, "terrain_seed_note": "Authored arena; no terrain seed override.",
+        "scenario": "Spell Combat Arena / explicit deterministic recipes",
+        "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
-        "expected_views": list(views), "mechanical_status": "INCOMPLETE",
+        "changed_surfaces": ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
-        "human_route": "Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
+        "human_route": "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
         "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS")},
@@ -261,29 +337,36 @@ def capture(args: argparse.Namespace) -> int:
     print(f"Windowless capture pack: {pack}", flush=True)
     try:
         seen = {}
-        for view in views:
+        for name, view, arena_map, encounter, focus in entries:
             if source_state()[0] != initial:
                 raise RuntimeError("Source changed during capture; this pack is stale.")
-            png = pack / f"{view}.png"
-            frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view)
+            png = pack / f"{name}.png"
+            frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view,
+                             HEX_ARENA_MAP=arena_map, HEX_ARENA_ENCOUNTER=encounter)
+            if focus:
+                frame_env["HEX_ARENA_FOCUS"] = focus
             frame = {
-                "view": view, "started_at": utc_now(), "static_review": "UNREVIEWED",
+                "name": name, "view": view, "map": arena_map, "encounter": encounter, "terrain_seed": SEEDS[arena_map], "focus_anchor": focus, "started_at": utc_now(), "static_review": "UNREVIEWED",
                 "command": ["cargo", *CARGO_ARGS], "cwd": str(ROOT),
-                "capabilities": {"HEX_ARENA_CAPTURE": str(png), "HEX_ARENA_VIEW": view},
-                "log": f"{view}.log", "mechanical_status": "INCOMPLETE",
+                "capabilities": {key: value for key, value in frame_env.items() if key.startswith("HEX_ARENA_")},
+                "log": f"{name}.log", "mechanical_status": "INCOMPLETE",
             }
             receipt["frames"].append(frame)
             write_json(pack / "receipt.json", receipt)
-            print(f"Capturing {view}…", flush=True)
+            print(f"Capturing {name}…", flush=True)
             frame["exit_code"] = run_cargo(frame_env, pack / frame["log"], args.timeout)
             if frame["exit_code"]:
                 raise RuntimeError(f"{view} exited with code {frame['exit_code']}; inspect {frame['log']}.")
             frame.update(png_info(png))
             frame["native_state_receipt"] = native_receipt_info(png, view, frame["physical_pixels"])
+            native_state = json.loads(png.with_suffix(".json").read_text())
+            expected_selection = {"map": MAP_LABELS[arena_map], "encounter": ENCOUNTER_LABELS[encounter]}
+            if native_state.get("selection") != expected_selection:
+                raise RuntimeError(f"{name} published the wrong selection: {native_state.get('selection')}")
             frame.update(logical_canvas=CANVAS, device_scale=1.0)
             if frame["sha256"] in seen:
                 raise RuntimeError(f"Unexpected duplicate frames: {view} and {seen[frame['sha256']]}.")
-            seen[frame["sha256"]] = view
+            seen[frame["sha256"]] = name
             frame.update(mechanical_status="CAPTURED", finished_at=utc_now())
             write_json(pack / "receipt.json", receipt)
         final = source_state()[0]
@@ -302,7 +385,7 @@ def capture(args: argparse.Namespace) -> int:
             log = pack / frame["log"]
             if log.is_file():
                 frame["log_sha256"] = digest(log.read_bytes())
-            write_json(pack / f"{frame['view']}.receipt.json", frame)
+            write_json(pack / f"{frame['name']}.receipt.json", frame)
         write_json(pack / "receipt.json", receipt)
     print("Capture matrix complete. Static review: UNREVIEWED. Native motion: HUMAN-MOTION-PENDING.")
     return 0
@@ -314,13 +397,17 @@ def main(argv: list[str] | None = None) -> int:
     launch = commands.add_parser("launch", help="Explicitly open the native playable arena through Cargo.")
     captures = commands.add_parser("capture", help="Capture all 23 views without a native window.")
     for command in (launch, captures):
+        command.add_argument("--map", choices=MAPS, help="Map recipe (launch: fort; legacy capture: duel).")
+        command.add_argument("--encounter", choices=ENCOUNTERS, help="Fort recipe (launch: dragon; legacy capture: shadow).")
         command.add_argument("--target-dir", type=Path, default=DEFAULT_TARGET,
                              help="Explicit shared Cargo target directory (absolute path).")
     captures.add_argument("--output", type=Path, required=True,
                           help="New absolute parent directory; receives a state-named capture pack.")
     captures.add_argument("--timeout", type=float, default=300,
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
+    captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
+    review.add_argument("--encounter-review", action="store_true", help="Capture 22 map, creature, attack-phase, and selector views with explicit recipes.")
     review.add_argument("--menu-review", action="store_true",
                         help="Capture the six ready/menu/HUD review views.")
     review.add_argument("--charge-review", action="store_true",
@@ -336,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("--timeout must be a finite positive number.")
             return capture(args)
         env, _ = environment(args.target_dir)
+        env.update(HEX_ARENA_MAP=args.map or "fort", HEX_ARENA_ENCOUNTER=args.encounter or "dragon")
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)
         return run_cargo(env, None, None)
     except KeyboardInterrupt:

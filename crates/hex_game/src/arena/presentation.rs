@@ -2,11 +2,11 @@
 
 use super::{ArenaCamera, ViewState};
 use bevy::prelude::*;
-use hex_arena::{preview, ArenaSession, ArenaTuning, Spell};
-use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
+use hex_arena::{preview, ArenaSession, ArenaTuning, Species, Spell};
+use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 
 #[derive(Component)]
-pub(super) struct ActorModel(u8);
+pub(super) struct ActorModel(u8, Species, u64);
 
 fn player_camera(session: &ArenaSession, state: &ViewState, actor: &hex_arena::Actor) -> Transform {
     let direction = if state.capture.is_none() && state.initialized {
@@ -18,87 +18,140 @@ fn player_camera(session: &ArenaSession, state: &ViewState, actor: &hex_arena::A
     Transform::from_translation(position).looking_to(direction, Vec3::Y)
 }
 
+#[derive(Clone, Copy)]
+struct BodyPart {
+    size: Vec3,
+    center: Vec3,
+    material: usize,
+}
+
+fn body_parts(species: Species) -> Vec<BodyPart> {
+    let part = |size, center, material| BodyPart {
+        size: Vec3::from_array(size),
+        center: Vec3::from_array(center),
+        material,
+    };
+    if species == Species::Dragon {
+        let mut parts = vec![
+            part([0.68, 0.60, 0.55], [0.0, 0.47, 0.045], 0),
+            part([0.36, 0.40, 0.18], [0.0, 0.51, -0.30], 0),
+            part([0.42, 0.48, 0.16], [0.0, 0.49, -0.42], 0),
+            part([0.23, 0.22, 0.08], [0.0, 0.40, -0.46], 1),
+            part([0.24, 0.26, 0.18], [0.0, 0.28, 0.40], 0),
+        ];
+        for side in [-1.0, 1.0] {
+            // Decorative folded wings stay within the actual long, low body's footprint.
+            parts.push(part([0.16, 0.24, 0.44], [side * 0.42, 0.74, 0.08], 1));
+            parts.push(part([0.06, 0.10, 0.03], [side * 0.20, 0.63, -0.465], 3));
+            for z in [-0.16, 0.20] {
+                parts.push(part([0.18, 0.24, 0.12], [side * 0.30, 0.12, z], 1));
+            }
+        }
+        return parts;
+    }
+    let mut parts = vec![
+        part([0.62, 0.45, 0.48], [0.0, 0.50, 0.0], 0),
+        part([0.48, 0.29, 0.44], [0.0, 0.85, 0.0], 2),
+        part([0.49, 0.09, 0.08], [0.0, 0.90, -0.24], 1),
+    ];
+    for side in [-1.0, 1.0] {
+        parts.push(part([0.20, 0.35, 0.32], [side * 0.40, 0.47, 0.0], 0));
+        parts.push(part([0.26, 0.28, 0.36], [side * 0.21, 0.14, 0.0], 1));
+    }
+    if species == Species::Shaman {
+        parts.push(part([0.56, 0.10, 0.50], [0.0, 0.94, 0.0], 0));
+        parts.push(part([0.08, 0.76, 0.10], [0.43, 0.40, -0.31], 3));
+    }
+    if species == Species::Goblin {
+        for side in [-1.0, 1.0] {
+            parts.push(part([0.18, 0.12, 0.18], [side * 0.32, 0.87, 0.0], 2));
+        }
+    }
+    parts
+}
+
 pub(super) fn actors(
     mut commands: Commands,
     session: Res<ArenaSession>,
     state: Res<ViewState>,
+    reset: Res<ArenaReset>,
     mut models: Query<(Entity, &ActorModel, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    for (entity, model, _, _) in &mut models {
+        if model.2 != reset.generation
+            || !session
+                .actors
+                .iter()
+                .any(|actor| actor.id == model.0 && actor.species == model.1)
+        {
+            commands.entity(entity).despawn();
+        }
+    }
     for actor in &session.actors {
-        let retracted_into_body = player_camera(&session, &state, actor)
-            .translation
-            .distance(actor.eye())
-            < 0.45;
-        let actor_visibility = if actor.id == 0
-            && !state.external_camera()
-            && (!state.third_person || retracted_into_body)
+        let retracted_into_body = actor.id == 0
+            && player_camera(&session, &state, actor)
+                .translation
+                .distance(actor.eye())
+                < 0.45;
+        let actor_visibility = if actor.hp <= 0.0
+            || (actor.id == 0
+                && !state.external_camera()
+                && (!state.third_person || retracted_into_body))
         {
             Visibility::Hidden
         } else {
             Visibility::Visible
         };
-        if let Some((_, _, mut transform, mut visibility)) = models
-            .iter_mut()
-            .find(|(_, model, _, _)| model.0 == actor.id)
+        let transform =
+            Transform::from_translation(actor.feet).with_rotation(actor.body_rotation());
+        if let Some((_, _, mut existing, mut visibility)) =
+            models.iter_mut().find(|(_, model, _, _)| {
+                model.0 == actor.id && model.1 == actor.species && model.2 == reset.generation
+            })
         {
-            transform.translation = actor.feet;
-            transform.rotation = Quat::from_rotation_y((-actor.aim.x).atan2(-actor.aim.z));
+            *existing = transform;
             *visibility = actor_visibility;
             continue;
         }
-        let color = if actor.id == 0 {
-            Color::srgb(0.12, 0.57, 0.68)
-        } else {
-            Color::srgb(0.83, 0.22, 0.16)
+        let (cloth, skin) = match actor.species {
+            Species::Human => (Color::srgb(0.12, 0.57, 0.68), Color::srgb(0.83, 0.67, 0.48)),
+            Species::Shadow => (Color::srgb(0.83, 0.22, 0.16), Color::srgb(0.83, 0.67, 0.48)),
+            Species::Dragon => (
+                Color::srgb(0.52, 0.12, 0.055),
+                Color::srgb(0.69, 0.27, 0.08),
+            ),
+            Species::Goblin => (Color::srgb(0.27, 0.22, 0.12), Color::srgb(0.30, 0.57, 0.19)),
+            Species::Shaman => (Color::srgb(0.40, 0.15, 0.54), Color::srgb(0.44, 0.66, 0.26)),
         };
-        let cloth = materials.add(StandardMaterial {
-            base_color: color,
-            perceptual_roughness: 0.8,
-            ..default()
+        let palette = [
+            cloth,
+            Color::srgb(0.055, 0.075, 0.095),
+            skin,
+            Color::srgb(1.0, 0.62, 0.15),
+        ]
+        .map(|base_color| {
+            materials.add(StandardMaterial {
+                base_color,
+                perceptual_roughness: 0.8,
+                ..default()
+            })
         });
-        let dark = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.055, 0.075, 0.095),
-            ..default()
-        });
-        let skin = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.83, 0.67, 0.48),
-            ..default()
-        });
+        let dimensions = actor.body_dimensions();
         commands
             .spawn((
-                ActorModel(actor.id),
-                Transform::from_translation(actor.feet),
+                ActorModel(actor.id, actor.species, reset.generation),
+                transform,
                 actor_visibility,
                 Name::new(format!("Arena actor {}", actor.id)),
             ))
             .with_children(|body| {
-                body.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.36, 0.36, 0.24))),
-                    MeshMaterial3d(cloth.clone()),
-                    Transform::from_xyz(0.0, 0.40, 0.0),
-                ));
-                body.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.23, 0.23, 0.22))),
-                    MeshMaterial3d(skin),
-                    Transform::from_xyz(0.0, 0.68, 0.0),
-                ));
-                body.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(0.24, 0.07, 0.04))),
-                    MeshMaterial3d(dark.clone()),
-                    Transform::from_xyz(0.0, 0.72, -0.12),
-                ));
-                for side in [-1.0, 1.0] {
+                for part in body_parts(actor.species) {
                     body.spawn((
-                        Mesh3d(meshes.add(Cuboid::new(0.13, 0.28, 0.16))),
-                        MeshMaterial3d(cloth.clone()),
-                        Transform::from_xyz(side * 0.245, 0.38, 0.0),
-                    ));
-                    body.spawn((
-                        Mesh3d(meshes.add(Cuboid::new(0.13, 0.23, 0.18))),
-                        MeshMaterial3d(dark.clone()),
-                        Transform::from_xyz(side * 0.105, 0.115, 0.0),
+                        Mesh3d(meshes.add(Cuboid::from_size(part.size * dimensions))),
+                        MeshMaterial3d(palette.get(part.material).cloned().unwrap_or_default()),
+                        Transform::from_translation(part.center * dimensions),
                     ));
                 }
             });
@@ -333,5 +386,29 @@ pub(super) fn solid_effects(
             Transform::from_translation(effect.center)
                 .with_scale(Vec3::splat(effect.radius * (0.3 + progress * 0.7))),
         ));
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+    #[test]
+    fn creature_parts_follow_the_physical_body_bounds() {
+        for species in [Species::Dragon, Species::Goblin, Species::Shaman] {
+            let parts = body_parts(species);
+            assert!(!parts.is_empty());
+            for part in parts {
+                let minimum = part.center - part.size * 0.5;
+                let maximum = part.center + part.size * 0.5;
+                assert!(
+                    minimum.cmpge(Vec3::new(-0.501, -0.001, -0.501)).all(),
+                    "{species:?}: {minimum:?}"
+                );
+                assert!(
+                    maximum.cmple(Vec3::new(0.501, 1.001, 0.501)).all(),
+                    "{species:?}: {maximum:?}"
+                );
+            }
+        }
     }
 }
