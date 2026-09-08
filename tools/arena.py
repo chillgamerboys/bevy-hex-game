@@ -153,7 +153,7 @@ WORM_VIEWS = (
     ('duel-worm-windup', 'encounter-worm-windup', 'duel', 'shadow', None),
     ('duel-worm-boulder', 'encounter-worm-boulder', 'duel', 'shadow', None),
     ('duel-worm-boulder-rear', 'encounter-worm-boulder-rear', 'duel', 'shadow', None),
-    ('fort-worm-converted-earth', 'encounter-worm-converted-earth', 'fort', 'worm', None),
+    ('duel-worm-converted-earth', 'encounter-worm-converted-earth', 'duel', 'shadow', None),
     ('fort-worm-reset', 'encounter-worm-reset', 'fort', 'worm', None),
 )
 WORM_OBSERVER_PRESETS = ("worm", "goblins")
@@ -563,6 +563,10 @@ def validate_worm_state(state: dict, view: str) -> None:
             require(evidence.get("current_generation") == conversion["generation"]+1 and evidence.get("current_revision") != conversion["revision"] and evidence.get("restored_revision") == evidence.get("current_revision") and state.get("started") is False and state.get("paused") is True, "reset did not restore a new ready round")
         else:
             require(evidence.get("current_generation") == conversion["generation"] and evidence.get("current_revision", -1) >= conversion["revision"], "conversion belongs to another generation/publication")
+            surface = evidence.get("exposed_surface") or {}
+            require(surface.get("position") in [c.get("position") for c in changed] and vector(surface.get("top_center")) and vector(surface.get("camera")), "missing correlated exposed converted surface")
+            require(surface.get("revision") == evidence.get("current_revision") and surface.get("frame") == reached and surface["frame"] >= conversion["frame"], "stale exposed-surface composition")
+            require(surface["camera"][1] > surface["top_center"][1] and abs(surface["camera"][0]-surface["top_center"][0]) < .001 and abs(surface["camera"][2]-surface["top_center"][2]) < .001, "conversion camera is not over the checked exposed top")
     else:
         raise RuntimeError("Unknown Worm phase view: " + phase)
 
@@ -828,7 +832,7 @@ def capture(args: argparse.Namespace) -> int:
         matrix = "arena-wisp-v1-natural-phases"
     if args.worm_review:
         entries = list(WORM_VIEWS)
-        matrix = "arena-worm-v2-published-earth"
+        matrix = "arena-worm-v3-visible-cues"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -869,7 +873,7 @@ def capture(args: argparse.Namespace) -> int:
         "source_label": "UNAPPROVABLE-DIRTY" if initial["dirty"] else "COMMITTED-CANDIDATE",
         "scenario": "Spell Combat Arena / explicit deterministic recipes",
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
-        "scenario_correction": "Worm buried capture requires actual Travel, unexposed state and published solid material at the physical head center; clearance is zero inside earth, so the previous negative-clearance condition was unreachable." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
+        "scenario_correction": "Worm buried view requires actual Travel plus published head-center earth. Conversion view uses ordinary Duel Worm/Goblins and waits for a correlated exposed dirt top after actor geometry clears it; Fort retains the ordinary reset comparison. Windup uses the exposed physical head warning material." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
         "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],

@@ -201,6 +201,10 @@ fn project_boulders(
 #[test]
 fn worm_admitted_windup_and_owner_independent_boulder_keep_physical_snapshot_poses() {
     let mut app = observer();
+    app.world_mut()
+        .run_system_once(spawn_projection)
+        .expect("head projection");
+    let idle = head_material(&mut app);
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = true;
     let mut windup_seen = false;
     let mut released = false;
@@ -213,6 +217,46 @@ fn worm_admitted_windup_and_owner_independent_boulder_keep_physical_snapshot_pos
             )
             .is_some()
         {
+            app.world_mut()
+                .run_system_once(worm::update_parts)
+                .expect("windup head");
+            let warning = head_material(&mut app);
+            assert_ne!(
+                warning, idle,
+                "real Windup visibly changes the existing head material"
+            );
+            let material = app
+                .world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&warning)
+                .expect("cached warning");
+            assert!(material.unlit);
+            assert_eq!(material.alpha_mode, AlphaMode::Opaque);
+            assert_eq!(material.depth_bias.to_bits(), 0.0_f32.to_bits());
+            // Death during the actual windup must restore the ordinary material.
+            let hp = app
+                .world()
+                .resource::<ArenaSession>()
+                .actors
+                .first()
+                .expect("Worm")
+                .hp;
+            app.world_mut()
+                .resource_mut::<ArenaSession>()
+                .actors
+                .first_mut()
+                .expect("Worm")
+                .hp = 0.0;
+            app.world_mut()
+                .run_system_once(worm::update_parts)
+                .expect("dead head");
+            assert_eq!(head_material(&mut app), idle);
+            app.world_mut()
+                .resource_mut::<ArenaSession>()
+                .actors
+                .first_mut()
+                .expect("Worm")
+                .hp = hp;
             app.world_mut()
                 .run_system_once(project_windup)
                 .expect("real admitted windup projection");
@@ -261,6 +305,14 @@ fn worm_admitted_windup_and_owner_independent_boulder_keep_physical_snapshot_pos
     assert!(
         windup_seen && released,
         "ordinary Worm/Goblins must exercise admitted windup and a released Boulder"
+    );
+    app.world_mut()
+        .run_system_once(worm::update_parts)
+        .expect("released head");
+    assert_eq!(
+        head_material(&mut app),
+        idle,
+        "release restores the ordinary head"
     );
     let shots = app
         .world()
@@ -311,6 +363,92 @@ fn worm_admitted_windup_and_owner_independent_boulder_keep_physical_snapshot_pos
         .resource::<Assets<StandardMaterial>>()
         .get(handle)
         .is_some_and(|m| m.alpha_mode == AlphaMode::Opaque)));
+}
+
+fn head_material(app: &mut App) -> Handle<StandardMaterial> {
+    app.world_mut()
+        .query::<(&worm::WormPart, &MeshMaterial3d<StandardMaterial>)>()
+        .iter(app.world())
+        .find_map(|(part, material)| {
+            (part.segment_index() == Some(0)).then_some(material.0.clone())
+        })
+        .expect("physical head material")
+}
+
+#[test]
+fn conversion_capture_waits_for_a_correlated_exposed_top_without_rewriting_the_world() {
+    let mut fixture = observer();
+    fixture
+        .init_resource::<worm_capture::Evidence>()
+        .add_systems(
+            Update,
+            (worm_capture::observe, worm_capture::progress)
+                .chain()
+                .after(drive_simulation),
+        );
+    {
+        let mut state = fixture.world_mut().resource_mut::<ViewState>();
+        state.capture = Some(PathBuf::from("unused-test.png"));
+        state.capture_view = "encounter-worm-converted-earth".into();
+        state.begin_play();
+    }
+    let mut reached = false;
+    for _ in 0..1800 {
+        fixture.update();
+        if fixture
+            .world()
+            .resource::<ViewState>()
+            .capture_event_frame
+            .is_some()
+        {
+            reached = true;
+            break;
+        }
+    }
+    assert!(
+        reached,
+        "ordinary Duel conversion must expose a real changed dirt top"
+    );
+    let world = fixture.world();
+    let receipt = world.resource::<worm_capture::Evidence>().receipt(
+        world.resource::<ArenaTerrainView>(),
+        world.resource::<ArenaReset>(),
+        world.resource::<hex_core::arena::ArenaMaterials>(),
+        world.resource::<hex_core::DamagedVoxels>(),
+    );
+    let selected = receipt
+        .pointer("/exposed_surface/position")
+        .expect("selected top");
+    let changed = receipt
+        .pointer("/conversion/changed")
+        .and_then(serde_json::Value::as_array)
+        .expect("original correlated changes");
+    assert!(changed
+        .iter()
+        .any(|change| change.get("position") == Some(selected)));
+    assert_eq!(
+        receipt.pointer("/exposed_surface/revision"),
+        receipt.get("current_revision")
+    );
+    let position: hex_core::TilePos =
+        serde_json::from_value(selected.clone()).expect("typed voxel");
+    assert!(!world
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .keys()
+        .any(|p| p.coord == position.coord && p.level > position.level));
+    assert!(
+        receipt
+            .pointer("/exposed_surface/frame")
+            .and_then(serde_json::Value::as_u64)
+            > receipt
+                .pointer("/conversion/frame")
+                .and_then(serde_json::Value::as_u64),
+        "wait past the first conversion while the body still covers its surface"
+    );
+    let frozen = combat_snapshot(&fixture);
+    fixture.update();
+    assert_eq!(combat_snapshot(&fixture), frozen);
 }
 
 #[test]

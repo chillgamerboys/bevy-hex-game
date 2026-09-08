@@ -55,6 +55,7 @@ pub(super) struct WormVisualAssets {
     direction: Handle<Mesh>,
     body: [Handle<StandardMaterial>; 3],
     head: Handle<StandardMaterial>,
+    head_warning: Handle<StandardMaterial>,
     mouth: Handle<StandardMaterial>,
     eye: Handle<StandardMaterial>,
     stone: Handle<StandardMaterial>,
@@ -83,6 +84,11 @@ pub(super) fn setup(
     let mouth = matte(Color::srgb(0.065, 0.040, 0.034));
     let eye = matte(Color::srgb(0.96, 0.84, 0.52));
     let stone = matte(Color::srgb(0.54, 0.51, 0.47));
+    let head_warning = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.86, 0.39),
+        unlit: true,
+        ..default()
+    });
     let warning = materials.add(StandardMaterial {
         base_color: Color::srgb(1.0, 0.77, 0.38),
         unlit: true,
@@ -95,6 +101,7 @@ pub(super) fn setup(
         direction: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(8)),
         body,
         head,
+        head_warning,
         mouth,
         eye,
         stone,
@@ -115,7 +122,7 @@ pub(super) fn spawn_body(
             continue;
         };
         let material = if index == 0 {
-            assets.head.clone()
+            head_material(actor, assets)
         } else {
             assets
                 .body
@@ -216,21 +223,41 @@ fn part_transform(actor: &Actor, kind: PartKind) -> Option<Transform> {
 /// Earth hiding is ordinary depth/opacity; phase never controls body visibility.
 pub(super) fn update_parts(
     session: Res<ArenaSession>,
-    mut parts: Query<(&WormPart, &mut Transform, &mut Visibility)>,
+    assets: Res<WormVisualAssets>,
+    mut parts: Query<(
+        &WormPart,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut MeshMaterial3d<StandardMaterial>>,
+    )>,
 ) {
-    for (part, mut transform, mut visibility) in &mut parts {
-        let current = session
-            .actors
-            .iter()
-            .find(|actor| actor.id == part.actor)
-            .and_then(|actor| part_transform(actor, part.kind));
+    for (part, mut transform, mut visibility, material) in &mut parts {
+        let actor = session.actors.iter().find(|actor| actor.id == part.actor);
+        let current = actor.and_then(|actor| part_transform(actor, part.kind));
         if let Some(current) = current {
             *transform = current;
             *visibility = Visibility::Inherited;
+            if matches!(part.kind, PartKind::Segment(0)) {
+                if let (Some(actor), Some(mut material)) = (actor, material) {
+                    material.0 = head_material(actor, &assets);
+                }
+            }
         } else {
             // Only stale/missing actor parts are hidden while their parent is removed.
             *visibility = Visibility::Hidden;
         }
+    }
+}
+
+fn head_material(actor: &Actor, assets: &WormVisualAssets) -> Handle<StandardMaterial> {
+    if actor.hp > 0.0
+        && actor.attack_state().is_some_and(|attack| {
+            attack.kind == CreatureAbility::WormBoulder && attack.phase == AttackPhase::Windup
+        })
+    {
+        assets.head_warning.clone()
+    } else {
+        assets.head.clone()
     }
 }
 

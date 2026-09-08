@@ -32,7 +32,8 @@ def conversion_specimen(reset=False):
     position = {"coord": {"q": 1, "r": 2}, "level": 5}
     state["worm_capture"] = {
         "accepted_outcomes": 1, "rejected_outcomes": 0, "dirt": 2, "current_generation": 4+int(reset),
-        "current_revision": 12+int(reset), "restored_revision": 13 if reset else None,
+        "current_revision": 12+int(reset),
+        "exposed_surface": None if reset else {"position": position, "top_center": [1, 2.2, 3], "camera": [1, 11.2, 3], "revision": 12, "frame": 20}, "restored_revision": 13 if reset else None,
         "reset_key": {"key": "R", "frame": 19} if reset else None,
         "conversion": {"actor": 0, "generation": 4, "sequence": 2, "frame": 15, "tick": 30, "revision": 12,
                        "changed": [{"position": position, "center": [1, 2, 3], "before": 3,
@@ -48,6 +49,8 @@ class WormCaptureGuards(unittest.TestCase):
         self.assertEqual(len({row[0] for row in WORM_VIEWS}), 13)
         self.assertIn(("fort-worm-overview", "overview", "fort", "worm", None), WORM_VIEWS)
         self.assertEqual(WORM_OBSERVER_PRESETS, ("worm", "goblins"))
+        self.assertIn(("duel-worm-converted-earth", "encounter-worm-converted-earth", "duel", "shadow", None), WORM_VIEWS)
+        self.assertIn(("fort-worm-reset", "encounter-worm-reset", "fort", "worm", None), WORM_VIEWS)
         self.assertEqual((len(GOLEM_VIEWS), len(WISP_VIEWS)), (12, 12))
         args = request("worm:shadow,worm:dragon")
         validate_rounds(paired_rows(args), args)
@@ -118,6 +121,14 @@ class WormCaptureGuards(unittest.TestCase):
                 state = conversion_specimen(reset); mutate(state["worm_capture"])
                 with self.assertRaises(RuntimeError):
                     validate_worm_state(state, view)
+        for mutate in (lambda e: e.update(exposed_surface=None),
+                       lambda e: e["exposed_surface"].update(revision=0),
+                       lambda e: e["exposed_surface"].update(position={}),
+                       lambda e: e["exposed_surface"].update(frame=1),
+                       lambda e: e["exposed_surface"].update(camera=[4, 10, 3])):
+            state = conversion_specimen(); mutate(state["worm_capture"])
+            with self.assertRaises(RuntimeError):
+                validate_worm_state(state, "encounter-worm-converted-earth")
         state = conversion_specimen(True);state["worm_capture"]["reset_key"]["key"] = "Enter"
         with self.assertRaises(RuntimeError):
             validate_worm_state(state, "encounter-worm-reset")

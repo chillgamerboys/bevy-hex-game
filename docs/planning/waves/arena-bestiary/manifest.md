@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: original groups, Golem and Ember Wisp are implemented with recorded machine calibration. Worm world, geometry, gameplay and application are integrated with admission enabled and focused checks passing. Native Worm calibration, refreshed changed-surface captures, final Seven Regions stress and the combined repository gate are in progress. Human motion and feel remain pending.
+Status: all seven enemy profiles and spectator battles are implemented with recorded machine calibration. Final Worm comparison is complete (6/8 against Goblins, 0/8 against Shadow with three unresolved Fort timeouts). Wisp static review passes at cef8c12. Two Worm presentation fixes, final Seven Regions stress and the combined repository gate are in progress. Human motion and feel remain pending.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;

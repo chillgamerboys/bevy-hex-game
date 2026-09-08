@@ -29,6 +29,15 @@ struct Conversion {
     changed: Vec<ChangedCell>,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ExposedSurface {
+    position: TilePos,
+    top_center: [f32; 3],
+    camera: [f32; 3],
+    revision: u64,
+    frame: u32,
+}
+
 #[derive(Default, Resource)]
 pub(super) struct Evidence {
     conversion: Option<Conversion>,
@@ -36,6 +45,7 @@ pub(super) struct Evidence {
     restored_revision: Option<u64>,
     accepted_outcomes: u64,
     rejected_outcomes: u64,
+    exposed_surface: Option<ExposedSurface>,
 }
 
 impl Evidence {
@@ -56,6 +66,7 @@ impl Evidence {
             "accepted_outcomes":self.accepted_outcomes,"rejected_outcomes":self.rejected_outcomes,
             "reset_key":self.reset_key_frame.map(|frame|serde_json::json!({"key":"R","frame":frame})),
             "restored_revision":self.restored_revision,
+            "exposed_surface":self.exposed_surface,
             "boundary":"Capture-only public outcome/material/health observation; no terrain edits, actor poses or enemy HUD indicators are injected."
         })
     }
@@ -162,6 +173,7 @@ pub(super) fn progress(
     reset: Res<ArenaReset>,
     materials: Res<ArenaMaterials>,
     damaged: Res<DamagedVoxels>,
+    geometry: Res<ArenaVoxelGeometry>,
     mut evidence: ResMut<Evidence>,
 ) {
     if state.capture.is_none()
@@ -172,6 +184,18 @@ pub(super) fn progress(
     }
     let Some(conversion) = &evidence.conversion else {
         return;
+    };
+    let surface = if state.capture_view == "encounter-worm-converted-earth" {
+        exposed_surface(
+            conversion,
+            &session,
+            &view,
+            *geometry,
+            &materials,
+            state.frames,
+        )
+    } else {
+        None
     };
     let reached = if state.capture_view == "encounter-worm-reset" {
         evidence.reset_key_frame.is_some()
@@ -188,7 +212,8 @@ pub(super) fn progress(
                     && damaged.get(change.position).is_none()
             })
     } else {
-        reset.generation == conversion.generation
+        surface.is_some()
+            && reset.generation == conversion.generation
             && conversion.changed.iter().all(|change| {
                 let sparse = damaged
                     .get(change.position)
@@ -202,12 +227,90 @@ pub(super) fn progress(
             })
     };
     if reached {
+        evidence.exposed_surface = surface;
         if state.capture_view == "encounter-worm-reset" {
             evidence.restored_revision = Some(view.revision);
         }
         state.capture_event_frame = Some(state.frames);
         state.accumulator = 0.0;
     }
+}
+
+/// A conservative composition query, never a terrain mutation. Preserve the first
+/// correlated outcome and wait until one of its real top faces is unobstructed.
+fn exposed_surface(
+    conversion: &Conversion,
+    session: &ArenaSession,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    materials: &ArenaMaterials,
+    frame: u32,
+) -> Option<ExposedSurface> {
+    conversion.changed.iter().find_map(|change| {
+        if view.voxels.get(&change.position) != Some(&materials.dirt)
+            || view
+                .voxels
+                .keys()
+                .any(|p| p.coord == change.position.coord && p.level > change.position.level)
+            || view.static_spans.iter().any(|span| {
+                span.bottom.coord == change.position.coord
+                    && span.blocks_sight
+                    && span.top_level > change.position.level
+            })
+        {
+            return None;
+        }
+        let top = geometry
+            .center(change.position)
+            .with_y(geometry.top(change.position));
+        let camera = top + Vec3::Y * 9.0;
+        if session
+            .camera_position(top + Vec3::Y * 0.2, camera)
+            .distance(camera)
+            > 0.08
+        {
+            return None;
+        }
+        let obscured = session
+            .actors
+            .iter()
+            .filter(|actor| actor.hp > 0.0)
+            .any(|actor| {
+                let parts = actor.body_hex_prisms().collect::<Vec<_>>();
+                let bounds = if parts.is_empty() {
+                    let half = actor.body_dimensions() * 0.5;
+                    let rotated = actor.body_rotation();
+                    let extent = (rotated * Vec3::X).abs() * half.x
+                        + (rotated * Vec3::Y).abs() * half.y
+                        + (rotated * Vec3::Z).abs() * half.z;
+                    vec![(actor.center() - extent, actor.center() + extent)]
+                } else {
+                    parts
+                        .iter()
+                        .map(|part| {
+                            let bottom = actor.feet + part.offset;
+                            let width = Vec3::new(0.866_025_4, 0.0, 1.0);
+                            (bottom - width, bottom + width + Vec3::Y * part.height)
+                        })
+                        .collect()
+                };
+                bounds.iter().any(|(low, high)| {
+                    high.y > top.y + 0.01
+                        && low.y < camera.y
+                        && low.x < top.x + 0.9
+                        && high.x > top.x - 0.9
+                        && low.z < top.z + 1.05
+                        && high.z > top.z - 1.05
+                })
+            });
+        (!obscured).then_some(ExposedSurface {
+            position: change.position,
+            top_center: top.to_array(),
+            camera: camera.to_array(),
+            revision: view.revision,
+            frame,
+        })
+    })
 }
 
 pub(super) fn camera(
@@ -218,22 +321,11 @@ pub(super) fn camera(
     if state.capture.is_none() || state.capture_view != "encounter-worm-converted-earth" {
         return;
     }
-    let Some(conversion) = &evidence.conversion else {
+    let Some(surface) = &evidence.exposed_surface else {
         return;
     };
-    let bounds = conversion
-        .changed
-        .iter()
-        .fold(None::<(Vec3, Vec3)>, |bounds, change| {
-            let center = Vec3::from_array(change.center);
-            let extent = Vec3::new(1.0, 0.2, 1.0);
-            Some(
-                bounds.map_or((center - extent, center + extent), |(low, high)| {
-                    (low.min(center - extent), high.max(center + extent))
-                }),
-            )
-        });
-    if let (Some((low, high)), Ok(mut camera)) = (bounds, cameras.single_mut()) {
-        *camera = super::encounter::frame_bounds(low, high, false);
+    if let Ok(mut camera) = cameras.single_mut() {
+        *camera = Transform::from_translation(Vec3::from_array(surface.camera))
+            .looking_at(Vec3::from_array(surface.top_center), Vec3::Z);
     }
 }

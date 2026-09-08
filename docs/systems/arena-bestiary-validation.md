@@ -653,3 +653,30 @@ that state without injected actor or terrain changes. Python33 checks, five
 focused Worm application tests and strict game lint pass; the first lint attempt
 caught a float-equality assertion, corrected before the passing rerun. Evidence:
 `work/worm-capture-guard-01`, `-02`, and the retained `final-worm-01` pack.
+
+## Final static review at `cef8c12` — 2026-09-08
+
+Both reviewers inspected all twelve original 1600×900 Wisp captures before the
+contact sheet. The local pale charge ring is visible during early and partial
+windup, grows between those frames, and is absent after release. Menus, low hex
+bodies, the explicit dim-light comparison, projectiles and layered teams pass
+their static scope. Nearby explosion shells fill much of the Fort combat views;
+the intended subjects and HUD remain readable. These are not animation or human
+warning-recognition measurements. Evidence: `final-wisp-01` under the repository's
+`.context/visual-walks`, including independent and coordinator reviews.
+
+The second Worm matrix mechanically captured all thirteen views. Independent
+review inspected every original and the sheet; coordinator review agreed with
+two blocking gaps: the mouth-local windup line is hidden by following segments,
+and the converted-earth camera frames an interior changed cell beneath the body.
+The pack remains `BLOCKED_STATIC_COVERAGE`. A bounded presentation correction
+follows; neither failure changes the passing terrain-conversion or attack tests.
+
+The correction changes only the existing head's cached opaque material during
+living Boulder windup, restoring its ordinary material on release or death. The
+conversion view now uses ordinary Duel Worm/Goblins and selects a genuinely
+converted top with clear overhead terrain and body geometry; Fort reset remains
+separate. Public outcome identity and material/health checks are retained.
+Independent source review found no blockers. Python33, six focused Worm app tests
+and strict game lint pass with stable source in `work/worm-visible-cues-01`.
+Fresh v3 images and the combined gate remain required.

@@ -49,7 +49,7 @@ Team presets accept shadow, dragon, goblins, shaman-party, golem, worm, one gobl
 and Wisp groups of 1, 2, 4, 8 or 12. Their launcher names are `goblin`, `wisp`,
 `wisps-2`, `wisps-4`, `wisps-8` and `wisps-12`. The seed
 repeats the initial setup and decisions; changing the map or roster still changes
-the match. `--tick-limit 14400` sets the120 Hz simulation limit. Seven Regions
+the match. `--tick-limit 14400` sets the 120 Hz simulation limit. Seven Regions
 remains a player encounter map.
 
 | Observer input | Action |
