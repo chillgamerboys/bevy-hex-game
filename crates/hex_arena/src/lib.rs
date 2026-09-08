@@ -8,7 +8,8 @@ use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_math::{Vec2, Vec3};
 use hex_core::arena::{
-    ArenaMaterials, ArenaReset, ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
+    ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRequest, ArenaMaterials, ArenaReset,
+    ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
 use hex_core::{
     TerrainBatchId, TerrainEdit, TerrainImpact, TerrainImpactOutcome, TerrainImpactResult, TilePos,
@@ -32,6 +33,7 @@ mod spells;
 mod targeting;
 mod telemetry;
 mod worm_body;
+mod worm_geometry;
 pub use worm_body::{BodyPrismSnapshot, WormPhase, WormSnapshot, MAX_BODY_HEX_PRISMS};
 
 pub use battle::{
@@ -609,6 +611,10 @@ pub struct ArenaSession {
     next_projectile: u64,
     next_impact: u64,
     pending_impacts: BTreeMap<TerrainBatchId, TerrainImpact>,
+    burrow_policy: ArenaBurrowMaterials,
+    burrow_query: worm_geometry::BurrowQuery,
+    pending_burrows: BTreeMap<ActorId, ArenaBurrowRequest>,
+    next_burrow: BTreeMap<ActorId, u64>,
     pending_walls: Vec<PendingWall>,
     shield_notice_until: Option<u64>,
     combat_cues: Vec<CombatCue>,
@@ -640,6 +646,10 @@ impl Default for ArenaSession {
             next_projectile: 0,
             next_impact: 0,
             pending_impacts: BTreeMap::new(),
+            burrow_policy: ArenaBurrowMaterials::default(),
+            burrow_query: worm_geometry::BurrowQuery::default(),
+            pending_burrows: BTreeMap::new(),
+            next_burrow: BTreeMap::new(),
             pending_walls: Vec::new(),
             shield_notice_until: None,
             combat_cues: Vec::new(),
@@ -945,6 +955,7 @@ impl ArenaSession {
 struct CommandsOut {
     edits: Vec<TerrainEdit>,
     impacts: Vec<TerrainImpact>,
+    burrows: Vec<ArenaBurrowRequest>,
 }
 
 fn separate_actors(actors: &mut [Actor], world: &CollisionWorld) {
@@ -1000,6 +1011,9 @@ pub fn plugin(app: &mut App) {
         .init_resource::<ArenaInput>()
         .init_resource::<ArenaTuning>()
         .init_resource::<ArenaBattleSetup>()
+        .init_resource::<ArenaBurrowMaterials>()
+        .add_message::<ArenaBurrowRequest>()
+        .add_message::<ArenaBurrowOutcome>()
         .add_message::<TerrainEdit>()
         .add_message::<TerrainImpact>()
         .add_message::<TerrainImpactOutcome>()
@@ -1015,6 +1029,9 @@ fn simulate(
     materials: Res<ArenaMaterials>,
     reset: Res<ArenaReset>,
     setup: Res<ArenaBattleSetup>,
+    burrow_policy: Res<ArenaBurrowMaterials>,
+    mut burrow_outcomes: MessageReader<ArenaBurrowOutcome>,
+    mut burrows: MessageWriter<ArenaBurrowRequest>,
     mut outcomes: MessageReader<TerrainImpactOutcome>,
     mut edits: MessageWriter<TerrainEdit>,
     mut impacts: MessageWriter<TerrainImpact>,
@@ -1030,6 +1047,10 @@ fn simulate(
         input.human.cast_held = false;
         input.human.jump = false;
     }
+    session.install_burrow_policy(&burrow_policy);
+    for outcome in burrow_outcomes.read() {
+        session.accept_burrow_outcome(outcome);
+    }
     for outcome in outcomes.read() {
         session.accept_outcome(outcome);
     }
@@ -1043,6 +1064,9 @@ fn simulate(
         return;
     }
     let emitted = session.advance(human, &view, *geometry, *materials, &tuning);
+    for request in emitted.burrows {
+        burrows.write(request);
+    }
     for edit in emitted.edits {
         edits.write(edit);
     }

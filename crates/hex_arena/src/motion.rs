@@ -20,6 +20,8 @@ pub(crate) fn tick(
     tuning: &EncounterTuning,
 ) {
     if actor.species == Species::Worm {
+        // The session performs its world-approved component step after ordinary actors.
+        // A terrain-only controller cannot authorize phaseable earth.
         return;
     }
     if actor.species == Species::Wisp {

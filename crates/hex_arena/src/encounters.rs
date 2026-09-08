@@ -13,6 +13,7 @@ mod steering;
 #[cfg(test)]
 mod tests;
 mod wisp;
+mod worm;
 
 #[derive(Debug, Clone, Copy)]
 struct Knowledge {
@@ -38,6 +39,7 @@ struct PartyRuntime {
 #[derive(Debug, Default)]
 pub(crate) struct EncounterState {
     pub initialized: bool,
+    worms: BTreeMap<ActorId, worm::Controller>,
     spawn_failed: bool,
     pub parties: Vec<PartySnapshot>,
     runtime: Vec<PartyRuntime>,
@@ -184,7 +186,22 @@ impl ArenaSession {
                 actor.species = species;
                 actor.party = Some(party);
                 actor.configure_species(species, c);
-                let feet = if species == Species::Wisp {
+                let feet = if species == Species::Worm {
+                    world
+                        .elongated_deployment
+                        .as_ref()
+                        .and_then(|r| r.get(1))
+                        .and_then(|region| {
+                            worm::deployment_pose(
+                                &mut actor,
+                                region,
+                                &self.actors,
+                                &self.collision,
+                                world,
+                                geometry,
+                            )
+                        })
+                } else if species == Species::Wisp {
                     world
                         .battle_deployment
                         .as_ref()
@@ -235,7 +252,7 @@ impl ArenaSession {
                     safe_spawn(&actor, home, &self.actors, &self.collision, world, geometry)
                 };
                 if let Some(feet) = feet {
-                    if species == Species::Golem {
+                    if matches!(species, Species::Golem | Species::Worm) {
                         home = feet;
                     }
                     actor.feet = feet;
@@ -283,10 +300,9 @@ impl ArenaSession {
             });
         }
         if self.encounter.spawn_failed
-            && self
-                .accepted_battle
-                .player_recipe
-                .is_some_and(|recipe| BattlePreset::WISP_SWARMS.contains(&recipe))
+            && self.accepted_battle.player_recipe.is_some_and(|recipe| {
+                BattlePreset::WISP_SWARMS.contains(&recipe) || recipe == BattlePreset::Worm
+            })
         {
             self.actors.clear();
             self.encounter.brains.clear();
@@ -418,9 +434,10 @@ impl ArenaSession {
                 .iter()
                 .filter(|a| a.party == Some(p.snapshot.id) && a.hp > 0.0)
                 .any(|a| {
-                    (p.snapshot.phase != PartyPhase::Dormant
-                        || a.center().distance(human.center())
-                            <= tuning.encounters.activation_radius)
+                    (a.species != Species::Worm || a.worm().is_some_and(|s| s.exposed))
+                        && (p.snapshot.phase != PartyPhase::Dormant
+                            || a.center().distance(human.center())
+                                <= tuning.encounters.activation_radius)
                         && [human.center(), human.eye()]
                             .into_iter()
                             .any(|target| self.collision.sight_clear(a.eye(), target))
@@ -524,6 +541,7 @@ impl ArenaSession {
             .barriers
             .retain(|b| b.remaining > 0.0 && b.hp > 0.0);
         self.collision.sync_barriers(&self.encounter.barriers);
+        self.prepare_worms(world, geometry);
         self.observe_parties(tuning);
         let mut brains = std::mem::take(&mut self.encounter.brains);
         let mut intents = BTreeMap::new();
@@ -541,6 +559,26 @@ impl ArenaSession {
                 else {
                     continue;
                 };
+                if actor.species == Species::Worm {
+                    if let Some(control) = self.encounter.worms.get_mut(id) {
+                        let (intent, request) = control.intent(
+                            actor,
+                            p,
+                            &self.actors,
+                            brain,
+                            &self.collision,
+                            world,
+                            geometry,
+                            tuning,
+                            self.tick,
+                        );
+                        intents.insert(*id, intent);
+                        if let Some(request) = request {
+                            plans.push((*id, request));
+                        }
+                    }
+                    continue;
+                }
                 let (intent, request) = brain.intent(
                     actor,
                     p,
@@ -564,6 +602,9 @@ impl ArenaSession {
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             actor.previous_yaw = actor.body_yaw;
+            if let Some(body) = &mut actor.worm {
+                body.previous = body.current;
+            }
             actor.attack = None;
             actor.beam = None;
             if actor.hp <= 0.0 {
@@ -621,6 +662,9 @@ impl ArenaSession {
             }
         }
         separate_many(&mut self.actors, &self.collision);
+        self.move_worms(&intents, world, geometry, materials, tuning, &mut out);
+        self.separate_worms(world, geometry, materials, &mut out);
+        self.refresh_worm_heads(world, geometry);
         self.advance_projectiles(world, geometry, materials, &mut out);
         self.advance_support(tuning);
         // Existing incoming damage resolves before simultaneous new releases.
@@ -650,6 +694,13 @@ impl ArenaSession {
         self.encounter.brains = brains;
         self.advance_walls(world, geometry, materials, &mut out);
         self.publish_parties();
+        self.pending_burrows
+            .retain(|id, _| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
+        out.burrows.retain(|request| {
+            self.actors
+                .iter()
+                .any(|actor| actor.id == request.actor && actor.hp > 0.0)
+        });
         let human_alive = self.actors.iter().any(|a| a.id == 0 && a.hp > 0.0);
         let enemy = self
             .actors
@@ -670,6 +721,8 @@ impl ArenaSession {
             self.cancel_charges();
             self.projectiles.clear();
             self.pending_walls.clear();
+            self.pending_burrows.clear();
+            out.burrows.clear();
             self.encounter.auras.clear();
             for actor in &mut self.actors {
                 actor.attack = None;
@@ -812,6 +865,9 @@ fn separate_many(actors: &mut [Actor], world: &CollisionWorld) {
                 continue;
             }
             for b in right.iter_mut().filter(|a| a.hp > 0.0) {
+                if a.species == Species::Worm || b.species == Species::Worm {
+                    continue;
+                }
                 if let Some(push) = body_overlap(a, b) {
                     let fa = shapes::slide(world, a, a.feet, push).0;
                     let fb = shapes::slide(world, b, b.feet, -push).0;

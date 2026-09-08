@@ -493,3 +493,133 @@ fn roots(relative: DVec3, velocity: DVec3, radius: f32) -> [Option<f32>; 2] {
 #[cfg(test)]
 #[path = "hex_prisms_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worm_prism_tests.rs"]
+mod worm_tests;
+
+// Exact positive-volume translation kernels for admitted segmented motion.
+impl HexPrism {
+    /// Whether two fixed-axis prisms have positive overlap at any point of this
+    /// translation. A face tangent for the whole step is not entered volume.
+    pub(crate) fn swept_overlaps_prism(self, delta: Vec3, other: Self, skin: f32) -> bool {
+        let local = self.feet - other.feet;
+        interior_interval(
+            AXES.map(|axis| (axis, local.dot(axis), 2.0 * FACE))
+                .into_iter()
+                .chain([(
+                    Vec3::Y,
+                    local.y + (self.height - other.height) * 0.5,
+                    (self.height + other.height) * 0.5,
+                )]),
+            delta,
+            skin.max(FACE_TOLERANCE),
+        )
+    }
+
+    /// Exact translation against a fixed yawed box, using all hex and box axes.
+    pub(crate) fn swept_overlaps_box(
+        self,
+        delta: Vec3,
+        feet: Vec3,
+        size: Vec3,
+        yaw: f32,
+        skin: f32,
+    ) -> bool {
+        if !feet.is_finite() || !size.is_finite() || size.min_element() <= 0.0 || !yaw.is_finite() {
+            return true;
+        }
+        let local = self.feet - feet;
+        let rotation = Quat::from_rotation_y(yaw);
+        let right = rotation * Vec3::X;
+        let forward = rotation * Vec3::Z;
+        interior_interval(
+            AXES.into_iter()
+                .chain([right, forward])
+                .map(|axis| {
+                    let hex = VERTICES
+                        .into_iter()
+                        .map(|v| v.dot(axis).abs())
+                        .fold(0.0, f32::max);
+                    let rectangle = size.x * 0.5 * right.dot(axis).abs()
+                        + size.z * 0.5 * forward.dot(axis).abs();
+                    (axis, local.dot(axis), hex + rectangle)
+                })
+                .chain([(
+                    Vec3::Y,
+                    local.y + (self.height - size.y) * 0.5,
+                    (self.height + size.y) * 0.5,
+                )]),
+            delta,
+            skin.max(FACE_TOLERANCE),
+        )
+    }
+
+    /// A vertical capsule against a translating prism is a sphere against the
+    /// prism extruded down by the capsule's axis length. Keep the original axis
+    /// length while shrinking its radius by the normal penetration tolerance.
+    /// This reuses the exact rounded sphere kernel, including finite edge/caps.
+    pub(crate) fn swept_overlaps_capsule(
+        self,
+        delta: Vec3,
+        feet: Vec3,
+        height: f32,
+        radius: f32,
+        skin: f32,
+    ) -> bool {
+        if !feet.is_finite()
+            || !height.is_finite()
+            || !radius.is_finite()
+            || radius <= skin.max(FACE_TOLERANCE)
+            || height < radius * 2.0
+            || !delta.is_finite()
+        {
+            return true;
+        }
+        let axis_length = height - radius * 2.0;
+        let expanded = Self {
+            feet: self.feet - Vec3::Y * axis_length,
+            height: self.height + axis_length,
+        };
+        expanded
+            .sweep_sphere(
+                feet + Vec3::Y * radius,
+                -delta,
+                radius - skin.max(FACE_TOLERANCE),
+            )
+            .is_some()
+    }
+}
+
+/// Intersection of the open SAT intervals over closed tick time [0,1].
+/// Endpoint-only contact and a shared face do not count as entered volume;
+/// every positive-volume crossing is retained, including one between clear ends.
+fn interior_interval(
+    axes: impl IntoIterator<Item = (Vec3, f32, f32)>,
+    delta: Vec3,
+    skin: f32,
+) -> bool {
+    if !delta.is_finite() || !skin.is_finite() || skin < 0.0 {
+        return true;
+    }
+    let mut enter = 0.0_f32;
+    let mut exit = 1.0_f32;
+    for (axis, position, extent) in axes {
+        let extent = extent - skin;
+        let speed = delta.dot(axis);
+        if speed.abs() <= f32::MIN_POSITIVE {
+            if position.abs() >= extent {
+                return false;
+            }
+            continue;
+        }
+        let a = (-extent - position) / speed;
+        let b = (extent - position) / speed;
+        enter = enter.max(a.min(b));
+        exit = exit.min(a.max(b));
+        if enter >= exit {
+            return false;
+        }
+    }
+    enter < exit
+}

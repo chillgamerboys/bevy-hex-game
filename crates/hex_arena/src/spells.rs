@@ -334,6 +334,11 @@ fn advance_shot(
             start.feet = previous_feet;
             if !predict {
                 start.body_yaw = actor.previous_yaw;
+                if let Some(body) = &actor.worm {
+                    if start.set_observed_prisms(body.previous).is_none() {
+                        continue;
+                    }
+                }
             }
             if crate::shapes::distance(shot.position, &start)
                 > shot.parameters.collision_radius + SKIN
@@ -960,6 +965,14 @@ fn forecast_projectile(
     );
     if let Some(owner) = bodies.first_mut() {
         owner.previous_feet = owner.feet;
+        if owner.species == crate::Species::Worm {
+            let Some(parts) = owner.body_prism_snapshot() else {
+                return SpellForecast::default();
+            };
+            if owner.set_observed_prisms(parts).is_none() {
+                return SpellForecast::default();
+            }
+        }
     }
     shot.parameters.min_y = collision.min_y.min(-10.0);
     while flight_active(&shot) {

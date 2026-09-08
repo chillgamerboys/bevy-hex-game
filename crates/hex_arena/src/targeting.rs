@@ -36,10 +36,21 @@ pub(crate) fn observe(
     tick: u64,
     prediction: f32,
 ) -> Vec<ObservedTarget> {
+    if observer.species == crate::Species::Worm && !observer.worm().is_some_and(|s| s.exposed) {
+        return Vec::new();
+    }
     let mut visible: Vec<_> = actors
         .iter()
         .filter(|a| a.hp > 0.0 && a.team != observer.team)
         .filter(|a| {
+            if a.species == crate::Species::Worm {
+                return a.body_hex_prisms().any(|p| {
+                    collision.sight_clear(
+                        observer.eye(),
+                        a.feet + p.offset + Vec3::Y * (p.height * 0.5),
+                    )
+                });
+            }
             [a.center(), a.eye()]
                 .into_iter()
                 .any(|point| collision.sight_clear(observer.eye(), point))
@@ -60,7 +71,13 @@ pub(crate) fn observe(
                 (change / seconds).clamp(-6.0, 6.0)
             });
             ObservedTarget {
-                sight_point: if collision.sight_clear(observer.eye(), actor.center()) {
+                sight_point: if actor.species == crate::Species::Worm {
+                    actor
+                        .body_hex_prisms()
+                        .map(|p| actor.feet + p.offset + Vec3::Y * (p.height * 0.5))
+                        .find(|point| collision.sight_clear(observer.eye(), *point))
+                        .unwrap_or(actor.eye())
+                } else if collision.sight_clear(observer.eye(), actor.center()) {
                     actor.center()
                 } else {
                     actor.eye()

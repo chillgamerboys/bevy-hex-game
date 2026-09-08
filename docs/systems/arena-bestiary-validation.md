@@ -488,3 +488,55 @@ and static Wisp review remain pending at this checkpoint.
 
 Task evidence: `work/wisp-performance-checks-01` (retained failure) and
 `work/wisp-performance-checks-02/receipt.json` (source-stable complete pass).
+
+
+## Wisp native capacity and first static review
+
+At clean frozen `5f5afec`, both explicit 24-Wisp capacity rows complete with all
+24 actors alive and flying, both layers occupied per team, and ordinary windups
+and released Embers. Each row measures 1,320 combat ticks after 120 warmup ticks.
+
+| Map | Ready time | Tick p95 / p99 / maximum | Ticks over 8.333 ms |
+| --- | ---: | ---: | ---: |
+| Duel | 519 ms | 4.155 / 4.842 / 5.760 ms | 0 |
+| Fort | 618 ms | 3.758 / 4.784 / 5.700 ms | 0 |
+
+Neither row publishes terrain damage or destruction; their empty publication
+and destruction distributions are explicitly retained. Application Update
+start-to-start p99 intervals are 20.326/20.275 ms; these are not GPU, vsync or
+ordinary interactive FPS measurements. The separate Seven Regions/destruction
+workload remains required. Evidence: `outputs/wisp-native-performance-5f5afec.json`
+and the two native receipts under `wisp-performance-01` in the review checkout.
+
+All 12 Wisp originals at 1600×900 and then their contact sheets received coordinator
+and independent static review. Bodies, dim-light glow, Ember, layers, menus and
+HUD pass. The independent review accepts the partial windup with a motion-review
+limitation; the coordinator records a windup-clarity failure because the charging
+core is too similar to idle at this camera scale. Preserve both reviews. A narrow
+local cue repair and fresh affected captures are required before closing the static
+matrix. Local intake: `outputs/wisp-windup-intake-01`; Linear reauthentication
+remains unavailable and no external issue was filed.
+
+
+## Worm gameplay admission checkpoint
+
+Combined gameplay passes 265 arena tests and strict arena all-target/all-feature
+lint. The readiness guard is removed only after a complete second source-stable
+run with actual schema admission enabled. Empty world fixtures still refuse whole
+rosters rather than creating partial bodies. Retained Duel goldens pass unchanged.
+
+Coverage includes exact moving four/six-part sweeps, copied observation isolation,
+head clearance, shallow current-dirt movement, correlated requests, natural Boulder
+release, physical terrain payload and actual actor damage. Review added complete
+all-mask spawn checks, falling through unsupported air after ground destruction,
+a vertical candidate under sideways wall pressure, and cancellation of outgoing
+burrow requests when incoming damage kills their owner in the same tick. Air
+settling makes one admitted path and emits no conversion. Previous-tick world
+conversion remains world-owned and is not undone on a later death.
+
+The first support-recovery retry exposed contact tolerance at landing; collision
+skin backoff restores a clear supported pose before rebinding the depth band.
+All failed compile/test attempts remain in `work/worm-runtime-checks-01`; final
+logs are `tests-04.log` and `clippy-01.log`. Enabled-admission checks are in
+`work/worm-admission-checks-01/receipt.json`. Actual-map fixtures, application/native
+composition, calibration and Worm pixels remain pending at this checkpoint.

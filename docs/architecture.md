@@ -161,7 +161,11 @@ public projection to build collision queries; it never imports `VoxelMap`. At 12
 applies damage, and publishes correlated `TerrainImpactOutcome` messages before
 simulation consumes them. A world-owned `PreUpdate` inbox retains pending edits and
 impacts while the tick is paused. Reset clears this inbox and outstanding messages
-before both owners adopt the new `ArenaReset` generation.
+before both owners adopt the new `ArenaReset` generation. The local Worm extension
+adds a bounded `ArenaBurrowRequest` in the same publication order. World owns atomic
+material conversion and remaining voxel HP; gameplay waits for correlated outcomes
+and checks the current complete swept body before moving through dirt. Finite
+ordinary, large-body and elongated deployment pockets remain world-published facts.
 
 `hex_arena` owns actor movement, projectile sweeps, HP, cooldowns, explosions, temporary attack barriers, timed support and
 party decisions. The accepted Duel bot stays separate from authored-map party

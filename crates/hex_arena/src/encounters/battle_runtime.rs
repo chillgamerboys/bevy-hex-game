@@ -315,7 +315,17 @@ fn deploy(
                 .then_with(|| a.id.cmp(&b.id))
         });
         for mut actor in pending {
-            let feet = if actor.species == Species::Wisp {
+            let feet = if actor.species == Species::Worm {
+                world
+                    .elongated_deployment
+                    .as_ref()
+                    .and_then(|r| r.get(side))
+                    .and_then(|region| {
+                        worm::deployment_pose(
+                            &mut actor, region, &actors, collision, world, geometry,
+                        )
+                    })
+            } else if actor.species == Species::Wisp {
                 flying_deployment_pose(&actor, region, &actors, collision, world, geometry, tuning)
                     .map(|(feet, layer)| {
                         actor.flight_layer = Some(layer);

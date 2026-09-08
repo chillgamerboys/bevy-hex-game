@@ -1,4 +1,4 @@
-//! Bounded dynamic native-prism projections for the guarded Worm foundation.
+//! Bounded dynamic native-prism projections for the Worm body.
 
 use bevy_math::Vec3;
 use serde::Serialize;
@@ -123,6 +123,35 @@ impl WormBodyState {
         )?)
     }
 
+    pub(crate) fn parts_at(count: u8, heading: f32, lift: f32) -> Option<BodyPrismSnapshot> {
+        if !lift.is_finite() || lift < 0.0 {
+            return None;
+        }
+        let body = Self::straight(count, heading)?;
+        let mut parts: Vec<_> = body.current.iter().collect();
+        let denominator = f32::from(count - 1);
+        for (i, part) in parts.iter_mut().enumerate() {
+            part.offset.y = lift * (1.0 - f32::from(u8::try_from(i).ok()?) / denominator);
+        }
+        BodyPrismSnapshot::try_from_parts(&parts)
+    }
+
+    pub(crate) fn update(&mut self, current: BodyPrismSnapshot) -> Option<()> {
+        if current.iter().len() != self.current.iter().len()
+            || current
+                .iter()
+                .zip(self.current.iter())
+                .any(|(a, b)| a.height.to_bits() != b.height.to_bits())
+        {
+            return None;
+        }
+        let (low, high) = current.bounds();
+        self.current = current;
+        self.bounds_min = low;
+        self.bounds_max = high;
+        Some(())
+    }
+
     pub(crate) fn observed(current: BodyPrismSnapshot) -> Option<Self> {
         if !matches!(current.iter().len(), 4 | 6)
             || current
@@ -196,11 +225,13 @@ mod tests {
         let observed =
             WormBodyState::observed(BodyPrismSnapshot::try_from_parts(&parts).expect("snapshot"))
                 .expect("Worm");
-        assert!(observed
-            .current
-            .iter()
-            .zip(observed.previous.iter())
-            .all(|(a, b)| a.offset == b.offset && a.height.to_bits() == b.height.to_bits()));
+        assert!(
+            observed
+                .current
+                .iter()
+                .zip(observed.previous.iter())
+                .all(|(a, b)| a.offset == b.offset && a.height.to_bits() == b.height.to_bits())
+        );
         let center = observed.current.center_offset();
         assert!(center.z > 2.5 && (center.y - 0.8).abs() < 0.0001);
         assert!(!observed.snapshot.exposed);

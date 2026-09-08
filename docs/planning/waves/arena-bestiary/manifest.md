@@ -313,3 +313,12 @@ all authorized work and final evidence/guide are delivered.
   Worm runtime/geometry source is ready for focused checks; root delegated actual
   world composition fixtures to the geometry reviewer and released presentation
   hot files after the Wisp patch was integrated. No Worm admission is enabled yet.
+
+
+- Combined Worm gameplay passes 265 arena tests and strict lint, including another
+  source-stable run after root removes the readiness guard. Current publication,
+  complete body, exposure and lifecycle checks now control admission. The geometry
+  reviewer independently checked one-path movement and observation snapshots.
+  Root next validates actual Duel/Fort composition; presentation integrates the
+  13-frame Worm matrix and a scoped Wisp windup cue repair. World conversion remains
+  the previously validated `aaecaf3` authority; no direct gameplay map mutation.

@@ -12,6 +12,10 @@ mod wisp_tests;
 #[path = "box_query_tests.rs"]
 mod box_query_tests;
 
+#[cfg(test)]
+#[path = "worm_shape_tests.rs"]
+mod worm_tests;
+
 use crate::collision::{CollisionWorld, Hit, Span, SKIN};
 use crate::hex_prisms::{planar_union_exit, HexPrism, HorizontalContact};
 use crate::{Actor, BarrierSnapshot, Species};
@@ -562,6 +566,23 @@ pub(crate) fn compound_separation(a: &Actor, b: &Actor) -> Option<Vec3> {
     let mut low = 0.0;
     let mut high =
         (a.dimensions.with_y(0.0).length() + b.dimensions.with_y(0.0).length()) * 0.5 + SKIN * 2.0;
+    if a.species == Species::Worm || b.species == Species::Worm {
+        // A Worm's anchor is under its head, not at its union center. Half of
+        // its bounding size need not bracket a clear tail separation. Bound
+        // each shape about its actual anchor, then retain the exact union
+        // contact predicate for every refinement below.
+        let reach = |actor: &Actor| {
+            if actor.species == Species::Worm {
+                actor
+                    .body_hex_prisms()
+                    .map(|part| part.offset.with_y(0.0).length() + 1.0)
+                    .fold(0.0, f32::max)
+            } else {
+                actor.dimensions.with_y(0.0).length() * 0.5
+            }
+        };
+        high = reach(a) + reach(b) + SKIN * 2.0;
+    }
     for _ in 0..18 {
         let middle = (low + high) * 0.5;
         if compound_contact_at(a, a.feet + direction * middle, b).is_some() {
@@ -592,7 +613,8 @@ pub(crate) fn sweep_actor(
     };
     let body_delta = actor.feet - previous;
     match actor.species {
-        Species::Golem | Species::Wisp | Species::Worm => prisms(actor, previous)
+        Species::Worm => sweep_dynamic_compound(start, delta, actor, predict, extra),
+        Species::Golem | Species::Wisp => prisms(actor, previous)
             .filter_map(|part| part.sweep_sphere(start, delta - body_delta, extra))
             .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
             .map(|hit| Hit {
@@ -713,4 +735,63 @@ pub(crate) fn sweep_dragon(
         }
     }
     result
+}
+
+/// Relative projectile sweep includes each segment's latest physical displacement.
+fn sweep_dynamic_compound(
+    start: Vec3,
+    delta: Vec3,
+    actor: &Actor,
+    predict: bool,
+    extra: f32,
+) -> Option<Hit> {
+    if predict {
+        return prisms(actor, actor.feet)
+            .filter_map(|part| part.sweep_sphere(start, delta, extra))
+            .min_by(|a, b| a.fraction.total_cmp(&b.fraction))
+            .map(|hit| Hit {
+                fraction: hit.fraction,
+                normal: hit.normal,
+            });
+    }
+    let count = actor.body_hex_prisms().count();
+    if count == 0 || actor.previous_body_hex_prisms().count() != count {
+        // A malformed dynamic body is not an invisible target or a capsule.
+        // Admitted actors never reach this branch: the snapshot constructor and
+        // atomic pose commit preserve component identity and immutable heights.
+        return Some(Hit {
+            fraction: 0.0,
+            normal: Vec3::ZERO,
+        });
+    }
+    let mut best: Option<Hit> = None;
+    for (before, after) in actor
+        .previous_body_hex_prisms()
+        .zip(actor.body_hex_prisms())
+    {
+        if before.height.to_bits() != after.height.to_bits() {
+            return Some(Hit {
+                fraction: 0.0,
+                normal: Vec3::ZERO,
+            });
+        }
+        let previous = actor.previous_feet + before.offset;
+        let current = actor.feet + after.offset;
+        let Some(prism) = HexPrism::new(previous, before.height) else {
+            return Some(Hit {
+                fraction: 0.0,
+                normal: Vec3::ZERO,
+            });
+        };
+        let Some(contact) = prism.sweep_sphere(start, delta - (current - previous), extra) else {
+            continue;
+        };
+        if best.is_none_or(|hit| contact.fraction < hit.fraction) {
+            best = Some(Hit {
+                fraction: contact.fraction,
+                normal: contact.normal,
+            });
+        }
+    }
+    best
 }
