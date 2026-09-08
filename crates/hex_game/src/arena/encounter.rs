@@ -1,6 +1,7 @@
 //! Bounded presentation and ordinary-input capture adapter for encounter snapshots.
 
 use super::{ArenaCamera, ViewState};
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use hex_arena::{ActorIntent, ArenaSession, ArenaTuning, AttackPhase, CreatureAbility, Spell};
 use hex_core::arena::{ArenaMap, ArenaTerrainView, ArenaVoxelGeometry};
@@ -490,7 +491,9 @@ pub(super) struct VisualAssets {
     aura: Handle<StandardMaterial>,
     breath: Handle<StandardMaterial>,
 }
+// These meshes visualize effects; they must not project opaque geometry shadows.
 #[derive(Component)]
+#[require(NotShadowCaster)]
 pub(super) struct EncounterEffect;
 
 pub(super) fn setup(
@@ -512,7 +515,7 @@ pub(super) fn setup(
         sphere: meshes.add(Sphere::new(1.0).mesh().uv(20, 12)),
         cone: meshes.add(Cone::new(1.0, 1.0)),
         barrier: material(Color::srgba(0.12, 0.78, 1.0, 0.22)),
-        aura: material(Color::srgba(0.30, 0.95, 0.51, 0.055)),
+        aura: material(Color::srgba(0.30, 0.95, 0.51, 0.015)),
         breath: material(Color::srgba(1.0, 0.31, 0.025, 0.19)),
     });
 }
@@ -642,6 +645,49 @@ pub(super) fn effects(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonphysical_spell_meshes_cannot_cast_shadows_and_aura_fill_stays_subtle() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        assert!(
+            world.run_system_once(setup).is_ok(),
+            "encounter visual setup"
+        );
+        for entity in [
+            world.spawn(EncounterEffect).id(),
+            world
+                .spawn(super::super::presentation::TransientEffect)
+                .id(),
+        ] {
+            assert!(
+                world.get::<NotShadowCaster>(entity).is_some(),
+                "effect markers must require non-shadow-casting on every spawned visual"
+            );
+        }
+        let assets = world.resource::<VisualAssets>();
+        let materials = world.resource::<Assets<StandardMaterial>>();
+        for handle in [&assets.barrier, &assets.aura, &assets.breath] {
+            assert!(
+                materials.get(handle).is_some_and(|material| {
+                    material.unlit
+                        && material.cull_mode.is_none()
+                        && material.alpha_mode == AlphaMode::Blend
+                }),
+                "translucent encounter volumes must remain unlit and visible from both sides"
+            );
+        }
+        assert!(
+            materials.get(&assets.aura).is_some_and(|material| {
+                let alpha = material.base_color.alpha();
+                alpha > 0.0 && alpha <= 0.02
+            }),
+            "the radius shell must remain a subtle tint behind the readable ring"
+        );
+    }
+
     #[test]
     fn rear_reviews_preserve_phase_waits_and_reverse_only_the_camera_azimuth() {
         let target = Vec3::new(4.0, 2.0, -5.0);

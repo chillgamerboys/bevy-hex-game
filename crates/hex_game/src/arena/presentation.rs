@@ -1,6 +1,7 @@
 //! Camera and bounded visual projections of authoritative arena state.
 
 use super::{ArenaCamera, ViewState};
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use hex_arena::{preview, ArenaSession, ArenaTuning, Species, Spell};
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
@@ -302,7 +303,9 @@ pub(super) struct EffectAssets {
     blast_wave: Handle<StandardMaterial>,
 }
 
+// These meshes visualize effects; they must not project opaque geometry shadows.
 #[derive(Component)]
+#[require(NotShadowCaster)]
 pub(super) struct TransientEffect;
 
 pub(super) fn setup_effects(
