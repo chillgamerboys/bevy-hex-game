@@ -59,10 +59,78 @@ fn fort_uses_accepted_geometry_and_publishes_exact_solid_runs() {
 }
 
 #[test]
+fn spectator_regions_publish_finite_dry_ground_without_moving_adventure_starts() {
+    for (map, expected_centers, level, starts, expected_y) in [
+        (
+            ArenaMap::Duel,
+            [(-6, 0), (6, 0)],
+            GROUND_LEVEL,
+            [(-8, 0), (8, 0)],
+            3.2,
+        ),
+        (
+            ArenaMap::Fort,
+            [(-4, 2), (-2, -2)],
+            15,
+            [(9, -4), (-2, 0)],
+            6.4,
+        ),
+    ] {
+        let world = recipe(map);
+        let regions = world.view.battle_deployment.as_ref().expect("two sides");
+        for (region, (q, r)) in regions.iter().zip(expected_centers) {
+            assert_eq!(
+                region.preferred,
+                TilePos::new(HexCoord::from_axial(q, r), level)
+            );
+            assert_eq!(region.surfaces.len(), 7);
+            assert!(region.surfaces.contains(&region.preferred));
+            for surface in &region.surfaces {
+                assert!(world.geometry.contains_column(surface.coord));
+                assert!(region.preferred.coord.distance(surface.coord) <= 1);
+                assert_eq!(surface.level, level);
+                assert!(world.view.voxels.contains_key(surface));
+                assert!((world.geometry.top(*surface) - expected_y).abs() < 0.0001);
+                // The deployment patch has open sky, not a lower floor selected
+                // below a roof. Later body-size admission remains gameplay-owned.
+                assert!(!world
+                    .view
+                    .voxels
+                    .keys()
+                    .any(|pos| { pos.coord == surface.coord && pos.level > surface.level }));
+                assert!(!world.view.static_spans.iter().any(|span| {
+                    span.bottom.coord == surface.coord && span.top_level > surface.level
+                }));
+                assert!(!world.view.liquids.iter().any(|span| {
+                    span.bottom.coord == surface.coord && span.top_level > surface.level
+                }));
+                assert!(!world.view.edit_protected.contains_key(&surface.coord));
+            }
+        }
+        let [left, right] = regions;
+        assert!(left.surfaces.is_disjoint(&right.surfaces));
+        let expected_spawns = starts.map(|(q, r)| {
+            let surface = TilePos::new(HexCoord::from_axial(q, r), level);
+            surface.coord.to_world(world.geometry.top(surface))
+        });
+        assert_eq!(world.view.spawns, expected_spawns);
+        assert_eq!(
+            world.view.spawns.first(),
+            world.view.anchors.get("party_start")
+        );
+        assert_eq!(
+            world.view.spawns.get(1),
+            world.view.anchors.get("hostile_start")
+        );
+    }
+}
+
+#[test]
 fn seven_publishes_three_dry_encounter_anchors_and_distinct_static_geometry() {
     let recipe = seven();
     assert_eq!(recipe.map.len(), 3367);
     assert_eq!(recipe.geometry.radius, 33);
+    assert!(recipe.view.battle_deployment.is_none());
     assert!(!recipe.view.liquids.is_empty());
     assert!(!recipe.view.static_spans.is_empty());
     for name in [
@@ -142,6 +210,11 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
     .add_plugins(plugin);
     app.update();
     let original = app.world().resource::<ArenaTerrainView>().voxels.clone();
+    let original_deployment = app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .battle_deployment
+        .clone();
     let stone = app
         .world()
         .resource::<SubstanceTable>()
@@ -182,6 +255,7 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
     app.world_mut().run_schedule(ArenaTick);
     let view = app.world().resource::<ArenaTerrainView>();
     assert!(!view.full_rebuild);
+    assert_eq!(view.battle_deployment, original_deployment);
     assert_eq!(view.dirty_columns, BTreeSet::from([pos.coord]));
     assert!(!view.voxels.contains_key(&pos));
     app.world_mut().write_message(hit.clone());
@@ -190,6 +264,7 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
     app.world_mut().run_schedule(ArenaTick);
     let reset = app.world().resource::<ArenaTerrainView>();
     assert_eq!(reset.voxels, original);
+    assert_eq!(reset.battle_deployment, original_deployment);
     assert_eq!(reset.selection.encounter, ArenaEncounter::Goblins);
     assert!(reset.full_rebuild);
     assert_eq!(reset.columns.len(), 469);
@@ -244,6 +319,12 @@ fn real_map_reset_restores_partial_hp_terrain_selection_and_clears_old_batches()
         app.world().resource::<ArenaTerrainView>().spawns,
         spawn_positions(ArenaVoxelGeometry::default())
     );
+    let duel_deployment = &app.world().resource::<ArenaTerrainView>().battle_deployment;
+    assert_eq!(
+        duel_deployment,
+        &recipe(ArenaMap::Duel).view.battle_deployment
+    );
+    assert_ne!(duel_deployment, &original_deployment);
 }
 
 #[test]

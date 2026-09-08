@@ -4,7 +4,9 @@ use hex_assets::{
     ObjectBlueprint, ObjectCatalogFile, ObjectInstance, ObjectPart, PlantPart, RuntimeArtCatalog,
     VoxelStyleCatalog, VoxelSurfaceMode,
 };
-use hex_core::arena::{ArenaMap, ArenaSelection, ArenaSolidSpan, ArenaStaticSpan};
+use hex_core::arena::{
+    ArenaDeploymentRegion, ArenaMap, ArenaSelection, ArenaSolidSpan, ArenaStaticSpan,
+};
 
 use crate::procedural_v3::{FeatureKind, MapPresentationProjection};
 use crate::settings::{MapSettings, ProceduralSettings, TerrainSettings};
@@ -162,12 +164,70 @@ pub(super) fn build(
     }
     view.liquids.sort_by_key(|span| span.bottom);
     project_static(&mut view, &presentation, geometry, art)?;
+    view.battle_deployment = battle_deployment(&view, geometry)?;
     Ok(WorldRecipe {
         map,
         geometry,
         view,
         presentation,
     })
+}
+
+// These are supporting-voxel identities for the accepted recipes, not actor
+// poses. Keep the adventure starts and authored terrain unchanged. Gameplay
+// resolves complete bodies inside each finite set at the accepted reset.
+fn battle_deployment(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> Result<Option<[ArenaDeploymentRegion; 2]>, String> {
+    let (centers, level) = match view.selection.map {
+        ArenaMap::Duel => ([(-6, 0), (6, 0)], GROUND_LEVEL),
+        // Both sides share the open west courtyard. The adventure starts lie
+        // outside/inside the curtain wall and would require gate/keep routing.
+        ArenaMap::Fort => ([(-4, 2), (-2, -2)], 15),
+        ArenaMap::SevenRegions => return Ok(None),
+    };
+    let regions = centers.map(|(q, r)| {
+        let preferred = TilePos::new(HexCoord::from_axial(q, r), level);
+        ArenaDeploymentRegion {
+            preferred,
+            surfaces: preferred
+                .coord
+                .within_radius(1)
+                .into_iter()
+                .map(|coord| TilePos::new(coord, level))
+                .collect(),
+        }
+    });
+    for surface in regions.iter().flat_map(|region| &region.surfaces) {
+        let exposed_ground = view.voxels.contains_key(surface)
+            && view.columns.get(&surface.coord).is_some_and(|runs| {
+                runs.iter().map(|run| run.top_level).max() == Some(surface.level)
+            });
+        let static_or_liquid =
+            view.static_spans
+                .iter()
+                .any(|span| span.bottom.coord == surface.coord && span.top_level > surface.level)
+                || view.liquids.iter().any(|span| {
+                    span.bottom.coord == surface.coord && span.top_level > surface.level
+                });
+        let protected = view
+            .edit_protected
+            .get(&surface.coord)
+            .is_some_and(|intervals| intervals.iter().any(|(_, top)| *top >= surface.level));
+        if !geometry.contains_column(surface.coord)
+            || !(geometry.min_level..=geometry.max_level).contains(&surface.level)
+            || !exposed_ground
+            || static_or_liquid
+            || protected
+        {
+            return Err(format!(
+                "Arena {:?} deployment surface {surface:?} is not open dry unreserved ground",
+                view.selection.map
+            ));
+        }
+    }
+    Ok(Some(regions))
 }
 
 fn project_static(
