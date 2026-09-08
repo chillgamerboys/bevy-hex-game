@@ -702,3 +702,6 @@ fn interrupted_defense_revalidates_range_and_terrain_before_the_queued_tap() {
 
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+
+#[path = "duel_golden_tests.rs"]
+mod duel_golden_tests;
