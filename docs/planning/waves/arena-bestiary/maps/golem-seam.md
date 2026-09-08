@@ -1,9 +1,9 @@
 # Golem prism-union integration seam
 
-Status: **QUEUED — accepted integration cut, not implemented or validated.**
+Status: **DISPATCHED — shared foundation `ddb060d` passes focused checks; body and attack integration is pending.**
 
-The coordinator accepted this cut for the next creature phase. Production waits
-for the original-group comparison checkpoint and explicit dispatch. Golem is
+The original-group comparison checkpoint is complete and the coordinator has
+dispatched this integration against the guarded shared foundation. Golem is
 followed by Ember Wisp and then Worm. Root owns the shared foundation, integration,
 and commits; gameplay owns shape and ability authority. See
 [approved scope](../plan.md), [gameplay order](../orders/L2-gameplay.md), and the
@@ -159,5 +159,5 @@ gate rejection is physical behavior, not a reason to enlarge the gate or telepor
    and missed-revision fallback remain valid.
 
 Slam/laser timing, source identity, damage budgets, warning presentation, and
-matchup calibration follow [the approved plan](../plan.md). This document admits
-no production implementation, new balancing values, or completed Golem evidence.
+matchup calibration follow [the approved plan](../plan.md). The body and attack acceptance matrix remains pending; the shared foundation
+alone does not establish completed Golem evidence.

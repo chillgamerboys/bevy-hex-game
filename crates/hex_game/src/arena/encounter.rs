@@ -325,19 +325,20 @@ fn phase_actor<'a>(session: &'a ArenaSession, view: &str) -> Option<&'a hex_aren
 }
 
 pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
-    phase_actor(session, view).is_some()
+    phase_actor(session, view).is_some() || super::golem::phase_actor(session, view).is_some()
 }
 
 pub(super) fn phase_view(view: &str) -> bool {
-    matches!(
-        view.strip_suffix("-rear").unwrap_or(view),
-        "encounter-windup"
-            | "encounter-breath"
-            | "encounter-swipe"
-            | "encounter-barrier"
-            | "encounter-aura"
-            | "encounter-fireball"
-    )
+    super::golem::phase_view(view)
+        || matches!(
+            view.strip_suffix("-rear").unwrap_or(view),
+            "encounter-windup"
+                | "encounter-breath"
+                | "encounter-swipe"
+                | "encounter-barrier"
+                | "encounter-aura"
+                | "encounter-fireball"
+        )
 }
 
 fn close_camera(target: Vec3, rotation: Quat, view: &str) -> Transform {
@@ -593,6 +594,7 @@ pub(super) fn effects(
     session: Res<ArenaSession>,
     tuning: Res<ArenaTuning>,
     assets: Res<VisualAssets>,
+    golem_assets: Res<super::golem::GolemVisualAssets>,
     previous: Query<Entity, With<EncounterEffect>>,
     mut gizmos: Gizmos,
 ) {
@@ -644,6 +646,25 @@ pub(super) fn effects(
         }
     }
     for actor in session.actors.iter().filter(|a| a.hp > 0.0) {
+        if actor.species == hex_arena::Species::Golem {
+            let accent = if super::spectator::active(&session) {
+                super::spectator::team_color(&session, actor.team)
+            } else {
+                Color::srgb(1.0, 0.66, 0.24)
+            };
+            super::golem::face_and_laser(
+                &mut commands,
+                actor,
+                super::golem::MouthPose {
+                    origin: actor.eye(),
+                    direction: actor.aim,
+                },
+                &golem_assets,
+                &mut gizmos,
+                accent,
+            );
+            continue;
+        }
         if session.human_actor_id() != Some(actor.id) {
             if let Some(charge) = actor.charge() {
                 let progress = (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0);

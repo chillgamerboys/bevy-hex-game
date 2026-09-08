@@ -30,7 +30,7 @@ def paired_rows(args):
                 rows.append({
                     "map": "Fort", "first": first, "second": second, "left": left, "right": right,
                     "side_and_initiative_swapped": swap,
-                    "setup": {"control": "Spectator", "seed": seed, "tick_limit": args.seconds * 120,
+                    "setup": {"control": "Spectator", "player_recipe": None, "seed": seed, "tick_limit": args.seconds * 120,
                               "rosters": [{"team": team, "parties": [PRESET_MEMBERS[preset]]}
                                           for team, preset in ((1, left), (2, right))]},
                     "setup_source": "accepted_battle_setup", "actors": actors,
@@ -58,10 +58,17 @@ class BattleReceiptGuards(unittest.TestCase):
     def test_complete_paired_original_rosters_are_admitted(self):
         validate_rounds(self.rows, self.args)
 
+    def test_golem_pairs_are_explicit_and_preserve_original_default_matchups(self):
+        self.assertNotIn("golem", DEFAULT_MATCHUPS)
+        args = request("golem:shadow,golem:dragon,golem:goblins,golem:shaman-party")
+        validate_rounds(paired_rows(args), args)
+
     def test_requested_map_control_members_limit_and_seed_are_checked(self):
         mutations = [
             lambda r: r.update(map="Duel"),
             lambda r: r["setup"].update(control="Player"),
+            lambda r: r["setup"].update(player_recipe="Golem"),
+            lambda r: r["setup"].pop("player_recipe"),
             lambda r: r["setup"].update(rosters=[]),
             lambda r: r["setup"].update(tick_limit=1),
             lambda r: r["setup"].update(seed=99),

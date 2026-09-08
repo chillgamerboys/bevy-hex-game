@@ -1,7 +1,7 @@
 # Spectator battles and bestiary validation
 
-Status: original-group calibration in progress. Golem, Ember Wisp and Worm remain
-queued in that order. The [local wave](../planning/waves/arena-bestiary/manifest.md)
+Status: original-group calibration is recorded below. Golem integration is active;
+Ember Wisp and Worm remain queued in that order. The [local wave](../planning/waves/arena-bestiary/manifest.md)
 and [approved requirements](../planning/waves/arena-bestiary/plan.md) govern this work.
 The accepted human/Shadow reference remains `127d1ce`; no remote merge is authorized.
 The original map/creature milestone has [separate evidence](arena-encounters-validation.md).
@@ -206,6 +206,37 @@ Retained task evidence: `outputs/arena-original-calibration-04`,
 `outputs/arena-original-fort-05`, `outputs/arena-original-holdout-06`, their companion
 summary JSON files, and `work/creature-descent-search-*` logs. All three battle receipts
 are COMPLETE, source-frozen at `27157af`, and consume the authored arena configuration.
+
+## Golem gameplay checkpoint
+
+Runtime `2570dce` adds the fixed seven-hex, five-level body, 2-unit/second grounded
+movement, spherical slam and visibly charged straight laser. Initial hypotheses
+remain HP160; slam35/radius6.928/windup.8s/cooldown5s/impulse5; laser45 total over1s,
+minimum admission12, charge2s, final.35s locked, cooldown8s. The deliberate medium
+range gap remains. The sphere can damage its own supporting terrain. Human and
+Shadow values and policy remain unchanged.
+
+The full arena suite passes199/199 and strict scoped lint passes. Coverage includes
+actual compound movement, side-prism hits, concave boundaries, translating bodies,
+forecast agreement, mixed separation, dry bounds, unsupported footing, finite cones,
+windups/caps, allied passage, barrier/terrain ordering, death, and world-boundary
+beam endpoints. The retained Duel fixtures pass. The beam follows its physical
+mouth under knockback while retaining the locked direction.
+
+Independent review repaired a translated shared-edge rounding crack, point-blank
+laser terrain contact, and center-to-mouth elevation parallax; dedicated regressions
+retain those cases. A decorative face mounting correction is being integrated
+separately. The combined working tree then passes five real-world battle tests
+(including Golem deployment on Fort/Duel, Fort's player start outside activation
+range, and reset into Seven Regions), 69 application tests, strict application lint
+and17 Python guards. The source-recording receipt confirms no source changes during
+those checks. Decorative face mounting now uses separate plaques outside the
+published body support with an open mouth corridor, checked across72 yaw directions.
+Native checks, static captures and Golem matchup calibration remain pending.
+
+Task logs: `work/golem-runtime-tests-03.log` and
+`work/golem-runtime-clippy-03.log`, `work/golem-app-integration-01/receipt.json`,
+and `work/golem-presentation-python-01.log`. Earlier failed test/lint logs are retained.
 
 ## Native smoke measurements
 

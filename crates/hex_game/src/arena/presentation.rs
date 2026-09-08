@@ -27,6 +27,9 @@ struct BodyPart {
 }
 
 fn body_parts(species: Species) -> Vec<BodyPart> {
+    if species == Species::Golem {
+        return Vec::new();
+    }
     let part = |size, center, material| BodyPart {
         size: Vec3::from_array(size),
         center: Vec3::from_array(center),
@@ -79,6 +82,7 @@ pub(super) fn actors(
     mut models: Query<(Entity, &ActorModel, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    golem_assets: Res<super::golem::GolemVisualAssets>,
 ) {
     for (entity, model, _, _) in &mut models {
         if model.2 != reset.generation
@@ -125,6 +129,7 @@ pub(super) fn actors(
             ),
             Species::Goblin => (Color::srgb(0.27, 0.22, 0.12), Color::srgb(0.30, 0.57, 0.19)),
             Species::Shaman => (Color::srgb(0.40, 0.15, 0.54), Color::srgb(0.44, 0.66, 0.26)),
+            Species::Golem => (Color::srgb(0.34, 0.36, 0.40), Color::srgb(0.34, 0.36, 0.40)),
         };
         let palette = [
             if super::spectator::active(&session) {
@@ -152,6 +157,17 @@ pub(super) fn actors(
                 Name::new(format!("Arena actor {}", actor.id)),
             ))
             .with_children(|body| {
+                match actor.species {
+                    Species::Golem => {
+                        super::golem::spawn_body(body, actor, &golem_assets);
+                        return;
+                    }
+                    Species::Human
+                    | Species::Shadow
+                    | Species::Dragon
+                    | Species::Goblin
+                    | Species::Shaman => {}
+                }
                 for part in body_parts(actor.species) {
                     body.spawn((
                         Mesh3d(meshes.add(Cuboid::from_size(part.size * dimensions))),

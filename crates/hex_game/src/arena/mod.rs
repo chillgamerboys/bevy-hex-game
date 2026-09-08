@@ -1,6 +1,7 @@
 //! Native, default-off composition for the isolated spell-combat experiment.
 
 mod encounter;
+mod golem;
 mod hud;
 mod presentation;
 mod spectator;
@@ -36,9 +37,27 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "goblins" => ArenaEncounter::Goblins,
         "shaman-party" => ArenaEncounter::ShamanParty,
         "shadow" => ArenaEncounter::Shadow,
+        "golem" if map == ArenaMap::Fort => ArenaEncounter::Dragon,
+        "golem" => return Err("Golem player encounters require Fort.".into()),
         value => return Err(format!("Unknown arena encounter: {value}")),
     };
     Ok(ArenaSelection { map, encounter })
+}
+
+fn apply_player_recipe(
+    setup: &mut hex_arena::ArenaBattleSetup,
+    selection: ArenaSelection,
+    encounter: Option<&str>,
+) -> Result<(), String> {
+    if encounter == Some("golem") {
+        if setup.control != hex_arena::ArenaControl::Player {
+            return Err("Spectator Golems use the team roster options.".into());
+        }
+        setup.player_recipe = Some(hex_arena::BattlePreset::Golem);
+    }
+    setup
+        .validate_for(selection.map)
+        .map_err(|error| error.to_string())
 }
 
 fn map_name(map: ArenaMap) -> &'static str {
@@ -236,7 +255,7 @@ pub fn run() -> AppExit {
         eprintln!("Unknown arena control: {control}");
         return AppExit::error();
     }
-    let battle = match spectator::launch_setup(
+    let mut battle = match spectator::launch_setup(
         selection.map,
         control == "spectator",
         std::env::var("HEX_ARENA_TEAM_A").ok().as_deref(),
@@ -250,6 +269,14 @@ pub fn run() -> AppExit {
             return AppExit::error();
         }
     };
+    if let Err(error) = apply_player_recipe(
+        &mut battle,
+        selection,
+        std::env::var("HEX_ARENA_ENCOUNTER").ok().as_deref(),
+    ) {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
     let mut app = App::new();
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -315,6 +342,7 @@ pub fn run() -> AppExit {
                 hud::setup,
                 presentation::setup_effects,
                 encounter::setup,
+                golem::setup,
             )
                 .chain()
                 .after(ArenaSystems::PublishTerrain),
@@ -333,6 +361,7 @@ pub fn run() -> AppExit {
                 presentation::camera,
                 encounter::camera,
                 spectator::camera,
+                golem::capture_camera,
                 presentation::effects,
                 presentation::solid_effects,
                 encounter::effects,
@@ -1029,6 +1058,7 @@ fn capture_frame(
     meshes: Res<Assets<Mesh>>,
     objects: Query<&hex_assets::ObjectInstance>,
     chunks: Query<&hex_objects::ObjectRenderChunk>,
+    golem_prisms: Query<&Mesh3d, With<golem::GolemPrism>>,
     cameras: Query<&Transform, With<ArenaCamera>>,
     liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
     mut exit: MessageWriter<AppExit>,
@@ -1042,16 +1072,27 @@ fn capture_frame(
     let object_count = objects.iter().count();
     let chunk_count = chunks.iter().count();
     let needs_objects = !view.static_spans.is_empty() || object_count > 0;
-    let assets_ready = !needs_objects
+    let authored_assets_ready = !needs_objects
         || (object_count > 0
             && chunk_count > 0
             && game_assets
                 .as_ref()
                 .is_some_and(|assets| meshes.get(&assets.hex_tile).is_some()));
-    if !assets_ready {
+    let expected_golem_prisms = session
+        .actors
+        .iter()
+        .filter(|actor| actor.species == hex_arena::Species::Golem)
+        .map(|actor| actor.body_hex_prisms().count())
+        .sum::<usize>();
+    let golem_prism_count = golem_prisms.iter().count();
+    let golem_assets_ready = golem_prism_count == expected_golem_prisms
+        && golem_prisms
+            .iter()
+            .all(|mesh| meshes.get(&mesh.0).is_some());
+    if !authored_assets_ready || !golem_assets_ready {
         state.capture_ready_frame = None;
         if state.frames >= 1800 {
-            error!("Encounter capture failed: authored objects did not become render-ready");
+            error!("Encounter capture failed: authored objects or creature meshes did not become render-ready");
             state.requested = true;
             exit.write(AppExit::error());
         }
@@ -1202,12 +1243,20 @@ fn capture_frame(
             "progress": (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0),
             "launch_speed": tuning.launch_speed(charge.elapsed)
         }));
+        let body_hex_prisms = actor.body_hex_prisms().map(|prism| serde_json::json!({
+            "offset": prism.offset.to_array(), "height": prism.height
+        })).collect::<Vec<_>>();
+        let beam = actor.beam().map(|beam| serde_json::json!({
+            "origin": beam.origin.to_array(), "direction": beam.direction.to_array(),
+            "end": beam.end.to_array(), "radius": beam.radius, "locked": beam.locked
+        }));
         serde_json::json!({
             "id": actor.id, "species": actor.species, "team": actor.team,
             "party": actor.party, "hp": actor.hp, "max_hp": actor.max_hp,
             "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
             "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
-            "attack": attack, "charge": charge
+            "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
+            "idle_mouth": actor.eye().to_array(), "beam": beam
         })
     }).collect::<Vec<_>>();
     let barriers = session.barriers().iter().map(|barrier| serde_json::json!({
@@ -1245,7 +1294,7 @@ fn capture_frame(
         .iter()
         .map(|effect| {
             serde_json::json!({
-                "spell": effect.kind, "radius": effect.radius, "age": effect.age
+                "spell": effect.kind, "radius": effect.radius, "age": effect.age, "center": effect.center.to_array()
             })
         })
         .collect::<Vec<_>>();
@@ -1269,6 +1318,7 @@ fn capture_frame(
         ("voxels", serde_json::json!(view.voxels.len())),
         ("static_spans", serde_json::json!(view.static_spans.len())),
         ("authored_objects", serde_json::json!(object_count)),
+        ("golem_render_prisms", serde_json::json!(golem_prism_count)),
         ("object_render_chunks", serde_json::json!(chunk_count)),
         ("focus_anchor", serde_json::json!(state.capture_focus)),
         ("phase_reached_frame", serde_json::json!(state.capture_event_frame)),

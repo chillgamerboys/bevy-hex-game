@@ -181,6 +181,10 @@ fn observer_actor_zero_is_visible_and_player_hud_is_absent() {
         .init_resource::<Assets<StandardMaterial>>();
     fixture
         .world_mut()
+        .run_system_once(golem::setup)
+        .expect("Golem cached visuals");
+    fixture
+        .world_mut()
         .run_system_once(presentation::actors)
         .expect("observer models");
     let visible_zero = fixture

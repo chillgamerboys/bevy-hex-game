@@ -60,6 +60,10 @@ fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
     fixture
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>();
+    fixture
+        .world_mut()
+        .run_system_once(golem::setup)
+        .expect("Golem cached visuals");
     let camera_entity = fixture
         .world_mut()
         .spawn((ArenaCamera, Transform::default()))
@@ -1538,6 +1542,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
                     hud::Action::Roster(slot, step) => format!("roster {slot} {step}"),
                     hud::Action::Map(map) => format!("map {map:?}"),
                     hud::Action::Encounter(encounter) => format!("encounter {encounter:?}"),
+                    hud::Action::PlayerRecipe(recipe) => format!("player recipe {recipe:?}"),
                 };
                 if phase == "start" {
                     assert!(!matches!(
@@ -1558,7 +1563,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             .iter()
             .filter(|(_, phase, _, _)| *phase == "pause")
             .count();
-        assert_eq!(start_actions, 16);
+        assert_eq!(start_actions, 17);
         assert_eq!(
             actions
                 .iter()
@@ -1590,7 +1595,17 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
         }
 
         for (started, phase, expected) in [
-            (false, "start", (start_actions - 4) * 2),
+            (
+                false,
+                "start",
+                (start_actions
+                    - if control == hex_arena::ArenaControl::Spectator {
+                        5
+                    } else {
+                        4
+                    })
+                    * 2,
+            ),
             (true, "pause", 24 + pause_actions * 2),
         ] {
             {
@@ -1859,6 +1874,10 @@ fn actor_models_reconcile_removed_species_and_reset_generations() {
     fixture
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>();
+    fixture
+        .world_mut()
+        .run_system_once(golem::setup)
+        .expect("Golem cached visuals");
     let render = |fixture: &mut App| {
         fixture
             .world_mut()
@@ -2201,3 +2220,6 @@ fn fort_capture_scripts_reach_requested_phases_after_the_keep_detour() {
 
 #[path = "spectator_tests.rs"]
 mod spectator_tests;
+
+#[path = "golem_tests.rs"]
+mod golem_tests;

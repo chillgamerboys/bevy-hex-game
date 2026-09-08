@@ -11,11 +11,11 @@ Run the local launcher from the repository:
     python3 tools/arena.py launch
 
 Choose a map on the start screen. Fort defaults to a Dragon encounter and also
-offers five Goblins, a Shaman with three Goblins, or one Shadow. Seven Regions
+offers five Goblins, a Shaman with three Goblins, one Shadow, or a Golem. Seven Regions
 contains three separate parties at the mountain high pass, fort courtyard and
 cave entrance. Combat stays stopped until you press Enter or choose Start.
 The launcher also accepts `--map seven-regions` or `--map duel`; Fort presets use
-`--encounter dragon`, `goblins`, `shaman-party` or `shadow`.
+`--encounter dragon`, `goblins`, `shaman-party`, `shadow` or `golem`.
 
 | Input | Action |
 |---|---|
@@ -45,7 +45,7 @@ A two-minute limit reports a timeout rather than declaring a winner.
 
     python3 tools/arena.py launch --spectator --map fort --team-a goblins --team-b shaman-party --seed 1
 
-Team presets currently accept shadow, dragon, goblins and shaman-party. The seed
+Team presets currently accept shadow, dragon, goblins, shaman-party and golem. The seed
 repeats the initial setup and decisions; changing the map or roster still changes
 the match. `--tick-limit 14400` sets the120 Hz simulation limit. Seven Regions
 remains a player encounter map.
@@ -100,17 +100,19 @@ and roster, including barriers, cooldowns and party memories.
 
 ## Enemies
 
-| Enemy | Initial HP | What to expect |
+| Enemy | Starting HP | What to expect |
 |---|---:|---|
 | Shadow |100| The accepted charged-shot opponent, unchanged. |
-| Dragon |100| Slow flight, fast ground pursuit, fire breath and a heavy bite; retreats and shields after damage. |
+| Dragon |220| Slow flight, fast ground pursuit, fire breath and a heavy bite; retreats and shields after damage. |
 | Goblin |50| Fast swarming with a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
+| Golem |160| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
 
 Goblins match the player body: .8 units tall with a .25-unit radius.
 
 The Dragon is deliberately low and long: .4 units high and about 3.5 long.
-Its breath can deal 35 total damage across three pulses; a close mouth bite deals 50.
+Its breath reaches six units and can deal 45 total damage across three pulses; a close
+mouth bite deals 50.
 It regenerates 3 HP/second after four seconds undamaged, so chasing a retreating
 Dragon can prevent recovery.
 
@@ -123,6 +125,15 @@ Shaman support lasts five seconds after a visible cast, with a 12-second cooldow
 Visible party allies within six units receive 3 HP/second and 25% extra actor
 damage. It excludes the Shaman; leaving range or sight stops support, and killing
 the Shaman ends the aura. Support does not stack or revive enemies.
+
+The Golem has a seven-hex footprint and is five levels (2 units) tall. It walks at
+2 units/second and cannot jump or pass Fort's low gate. Its .8-second slam windup
+precedes a 35-damage sphere of about four horizontal hexes (6.93 units), with
+knockback and terrain damage. Its laser charges for two seconds, locks its direction
+for the final .35 seconds, then deals up to 45 damage over one second. The beam
+stops at the nearest solid obstacle or target. Stay between its slam reach and
+12-unit laser admission range, or move sideways once its aim locks. Terrain damage
+can remove the Golem's own footing. Initial slam/laser cooldowns are 5/8 seconds.
 
 Enemy attacks spare allied actors, and enemy projectiles pass through them.
 Barriers still intercept allied attacks. Fireballs can hurt their own caster.
@@ -138,7 +149,8 @@ file; R resets the current run using the values already loaded. Paused spell
 tuning applies within the current application.
 
 Initial equivalence targets are one Shadow, one Dragon, five Goblins, or one
-Shaman with three Goblins. These are hypotheses, not measured human win rates.
+Shaman with three Goblins. Machine comparisons roughly calibrate these groups, with substantial map and matchup
+differences; they do not establish human win rates.
 For the first 20–30 Fort encounters, note preset, win/loss, remaining HP and the
 main cause of damage. Compare Dragon pursuit/escape, Goblin crowd pressure and
 how much prioritizing the Shaman changes the fight.

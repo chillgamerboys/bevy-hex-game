@@ -8,10 +8,10 @@ use bevy::prelude::*;
 use hex_arena::{
     ArenaBattleSetup, ArenaSession, ArenaTuning, BattlePreset, BattleResult, BattleSummary,
 };
+use hex_core::TerrainEdit;
 use hex_core::arena::{
     ArenaMap, ArenaReset, ArenaSelection, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
-use hex_core::TerrainEdit;
 use std::time::Instant;
 
 fn app(map: ArenaMap, setup: ArenaBattleSetup) -> App {
@@ -115,11 +115,13 @@ fn terminal_publication_applies_queued_terrain_without_changing_outcome_tick_or_
             .and_then(serde_json::Value::as_bool),
         Some(true)
     );
-    assert!(!fixture
-        .world()
-        .resource::<ArenaTerrainView>()
-        .voxels
-        .contains_key(&removable));
+    assert!(
+        !fixture
+            .world()
+            .resource::<ArenaTerrainView>()
+            .voxels
+            .contains_key(&removable)
+    );
     // A second flush has no queued publication and still cannot advance the match.
     let quiet = flush_terminal_publication(&mut fixture);
     assert_eq!(
@@ -133,8 +135,8 @@ fn terminal_publication_applies_queued_terrain_without_changing_outcome_tick_or_
 #[test]
 fn original_rosters_admit_on_published_deployment_without_a_human_body() {
     for map in [ArenaMap::Duel, ArenaMap::Fort] {
-        for left in BattlePreset::ALL {
-            for right in BattlePreset::ALL {
+        for left in BattlePreset::ORIGINAL {
+            for right in BattlePreset::ORIGINAL {
                 let fixture = app(map, ArenaBattleSetup::spectator(left, right, 5));
                 let session = fixture.world().resource::<ArenaSession>();
                 let world = fixture.world().resource::<ArenaTerrainView>();
@@ -161,6 +163,131 @@ fn original_rosters_admit_on_published_deployment_without_a_human_body() {
             }
         }
     }
+}
+
+#[test]
+fn golem_compound_bodies_admit_on_both_real_deployment_publications() {
+    for map in [ArenaMap::Duel, ArenaMap::Fort] {
+        for (left, right) in [
+            (BattlePreset::Golem, BattlePreset::Shadow),
+            (BattlePreset::Shadow, BattlePreset::Golem),
+            (BattlePreset::Golem, BattlePreset::Golem),
+        ] {
+            let fixture = app(map, ArenaBattleSetup::spectator(left, right, 17));
+            let session = fixture.world().resource::<ArenaSession>();
+            let world = fixture.world().resource::<ArenaTerrainView>();
+            let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+            assert!(
+                battle(&fixture).result.is_none(),
+                "{map:?} {left:?}/{right:?}"
+            );
+            assert_eq!(session.actors.len(), 2);
+            assert_eq!(session.human_actor_id(), None);
+            for actor in &session.actors {
+                assert!(session.actor_pose_valid(actor.id, world, geometry));
+                let prisms: Vec<_> = actor.body_hex_prisms().collect();
+                if actor.species == hex_arena::Species::Golem {
+                    assert_eq!(prisms.len(), 7);
+                    assert!(
+                        prisms
+                            .iter()
+                            .all(|prism| (prism.height - 2.0).abs() < 0.0001)
+                    );
+                    let supporting_cells: std::collections::BTreeSet<_> = prisms
+                        .iter()
+                        .map(|prism| {
+                            geometry
+                                .voxel_at(actor.feet + prism.offset - Vec3::Y * 0.01)
+                                .expect("bounded physical support cell")
+                        })
+                        .collect();
+                    assert_eq!(supporting_cells.len(), 7);
+                    assert!(
+                        world
+                            .battle_deployment
+                            .as_ref()
+                            .expect("deployment")
+                            .iter()
+                            .any(|region| supporting_cells.is_subset(&region.surfaces))
+                    );
+                } else {
+                    assert!(prisms.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fort_player_recipe_is_accepted_at_reset_and_cleared_for_seven_regions() {
+    let setup = ArenaBattleSetup {
+        player_recipe: Some(BattlePreset::Golem),
+        ..Default::default()
+    };
+    let mut fixture = app(ArenaMap::Fort, setup.clone());
+    let session = fixture.world().resource::<ArenaSession>();
+    assert_eq!(session.accepted_battle_setup(), &setup);
+    assert_eq!(session.human_actor_id(), Some(0));
+    assert!(!session.is_finished());
+    assert_eq!(session.actors.len(), 2);
+    assert_eq!(
+        session
+            .actors
+            .iter()
+            .filter(|actor| actor.species == hex_arena::Species::Golem)
+            .count(),
+        1
+    );
+    let world = fixture.world().resource::<ArenaTerrainView>();
+    let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+    for actor in &session.actors {
+        assert!(session.actor_pose_valid(actor.id, world, geometry));
+    }
+    let human = session
+        .actors
+        .iter()
+        .find(|actor| actor.id == 0)
+        .expect("human start");
+    let golem = session
+        .actors
+        .iter()
+        .find(|actor| actor.species == hex_arena::Species::Golem)
+        .expect("golem start");
+    assert!(
+        human.eye().distance(golem.eye())
+            > fixture
+                .world()
+                .resource::<ArenaTuning>()
+                .encounters
+                .activation_radius,
+        "the authored player start must remain outside the party activation distance"
+    );
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaBattleSetup>()
+        .player_recipe = None;
+    fixture.world_mut().run_schedule(ArenaTick);
+    assert_eq!(
+        fixture
+            .world()
+            .resource::<ArenaSession>()
+            .accepted_battle_setup()
+            .player_recipe,
+        Some(BattlePreset::Golem)
+    );
+    fixture.world_mut().resource_mut::<ArenaSelection>().map = ArenaMap::SevenRegions;
+    fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    fixture.world_mut().run_schedule(ArenaTick);
+    let session = fixture.world().resource::<ArenaSession>();
+    assert_eq!(session.human_actor_id(), Some(0));
+    assert!(!session.is_finished());
+    assert_eq!(session.actors.len(), 11);
+    assert!(
+        session
+            .actors
+            .iter()
+            .all(|actor| actor.species != hex_arena::Species::Golem)
+    );
 }
 
 #[test]
@@ -265,6 +392,7 @@ fn calibrate_original_monster_groups() {
                 let mut timings = Vec::new();
                 let mut publications = Vec::new();
                 let mut previous_self_damage = 0.0;
+                let mut previous_abilities = Vec::new();
                 loop {
                     if fixture.world().resource::<ArenaSession>().is_finished() {
                         break;
@@ -302,11 +430,31 @@ fn calibrate_original_monster_groups() {
                     let self_hit = self_damage > previous_self_damage + 0.001;
                     previous_self_damage = self_damage;
                     let release = trace && session.projectiles.iter().any(|shot| shot.age < 0.001);
+                    let abilities = if trace {
+                        session
+                            .actors
+                            .iter()
+                            .map(|actor| {
+                                (
+                                    actor.id,
+                                    actor
+                                        .attack_state()
+                                        .map(|attack| (attack.kind, attack.phase)),
+                                    actor.beam().map(|beam| beam.locked),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
+                    let ability_transition = trace && abilities != previous_abilities;
+                    previous_abilities = abilities;
                     if trace
                         && (session.tick.is_multiple_of(60)
                             || session.is_finished()
                             || self_hit
-                            || release)
+                            || release
+                            || ability_transition)
                     {
                         let terrain = fixture.world().resource::<ArenaTerrainView>();
                         let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
@@ -314,7 +462,7 @@ fn calibrate_original_monster_groups() {
                             "ARENA_BATTLE_TRACE {}",
                             serde_json::json!({
                                 "seed":seed,"map":format!("{map:?}"),"left":left.slug(),"right":right.slug(),"tick":session.tick,
-                                "self_hit":self_hit,"release":release,"before":before,
+                                "self_hit":self_hit,"release":release,"ability_transition":ability_transition,"before":before,
                                 "projectiles":session.projectiles.iter().map(|shot|serde_json::json!({"id":shot.id,"owner":shot.owner,"position":shot.position.to_array(),"velocity":shot.velocity.to_array(),"age":shot.age})).collect::<Vec<_>>(),
                                 "effects":session.effects.iter().filter(|effect|effect.age<0.02).map(|effect|serde_json::json!({"kind":effect.kind,"center":effect.center.to_array(),"radius":effect.radius,"age":effect.age})).collect::<Vec<_>>(),
                             "revision":terrain.revision,"knowledge":session.party_knowledge(),"decisions":session.creature_decisions(),
@@ -324,6 +472,8 @@ fn calibrate_original_monster_groups() {
                                     "velocity":((actor.feet-actor.previous_feet)*120.0).to_array(),"impulse":actor.impulse_velocity().to_array(),"flying":actor.flying,"grounded":actor.grounded,
                                     "cooldowns":actor.cooldowns,"charge":actor.charge().map(|charge|charge.elapsed),
                                     "attack":actor.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"direction":attack.direction.to_array(),"progress":attack.progress})),
+                                    "prisms":actor.body_hex_prisms().map(|prism|serde_json::json!({"offset":prism.offset.to_array(),"height":prism.height})).collect::<Vec<_>>(),
+                                    "beam":actor.beam().map(|beam|serde_json::json!({"origin":beam.origin.to_array(),"direction":beam.direction.to_array(),"end":beam.end.to_array(),"radius":beam.radius,"locked":beam.locked})),
                                     "volume_valid":session.actor_volume_valid(actor.id,terrain,geometry)
                                 })).collect::<Vec<_>>(),"stats":session.encounter_stats()
                             })

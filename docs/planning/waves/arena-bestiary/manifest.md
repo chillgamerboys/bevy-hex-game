@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: spectator and bounded original-group calibration complete; Golem foundation in progress; Wisp and Worm queued.
+Status: spectator and bounded original-group calibration complete; Golem geometry/combat/presentation dispatched; Wisp and Worm queued.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
@@ -242,3 +242,18 @@ all authorized work and final evidence/guide are delivered.
   HP220 / breath45 / range6. See the validation record for results and remaining
   Shaman stalemates. Golem body/beam projection vocabulary landed in `d5494a6`;
   seven-prism geometry and Golem production lanes now follow the committed seam.
+
+- Guarded Golem foundation `ddb060d` passes 163 gameplay tests and strict scoped
+  lint. Species/ability indices, fixed seven-prism projection, tuning and reset-owned
+  Fort player recipes are shared. Golem admission stays refused until combined body
+  and attack authority is safe. L2 temporarily delegates exact shape kernels,
+  projectile body dispatch, separation and mouth geometry to the geometry worker
+  within gameplay authority; L2 retains brain/abilities/motion. L3 integrates
+  presentation/selector/launcher and capture recipes. Root owns real-world battle
+  deployment/reset tests and combined commits. No world API changes in this phase.
+
+- Golem runtime `2570dce` passes 199 gameplay tests and strict scoped lint. Exact
+  compound body/mouth queries, slow motion, spherical slam, locked long laser and
+  Fort recipe admission are enabled. Geometry/combat review repaired translated
+  shared-edge, point-blank beam and mouth-parallax cases. App/real-world/native
+  integration and first Golem matchup calibration remain pending.

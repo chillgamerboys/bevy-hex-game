@@ -58,6 +58,7 @@ pub(super) enum Action {
     Control(ArenaControl),
     Roster(usize, i8),
     Encounter(ArenaEncounter),
+    PlayerRecipe(BattlePreset),
 }
 
 fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, TextColor) {
@@ -133,6 +134,8 @@ pub(super) fn setup(mut commands: Commands) {
                             row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Encounter(encounter)))
                                 .with_children(|button| { button.spawn(text(super::encounter_name(encounter), 13.0, INK)); });
                         }
+                        row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::PlayerRecipe(BattlePreset::Golem)))
+                            .with_children(|button| { button.spawn(text("Golem", 13.0, INK)); });
                     });
                     });
                     panel.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), display: Display::None, ..default() }, ModeContent(ArenaControl::Spectator))).with_children(|panel| {
@@ -225,11 +228,17 @@ pub(super) fn buttons(
                         && map == ArenaMap::SevenRegions) =>
             {
                 selection.map = map;
+                if map != ArenaMap::Fort {
+                    battle.player_recipe = None;
+                }
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
             Action::Control(control) if !state.started && battle.control != control => {
                 battle.control = control;
+                if control == ArenaControl::Spectator {
+                    battle.player_recipe = None;
+                }
                 if control == ArenaControl::Spectator && selection.map == ArenaMap::SevenRegions {
                     selection.map = ArenaMap::Fort;
                 }
@@ -263,9 +272,20 @@ pub(super) fn buttons(
                 if !state.started
                     && battle.control == ArenaControl::Player
                     && selection.map == ArenaMap::Fort
-                    && selection.encounter != encounter =>
+                    && (selection.encounter != encounter || battle.player_recipe.is_some()) =>
             {
                 selection.encounter = encounter;
+                battle.player_recipe = None;
+                reset.generation = reset.generation.saturating_add(1);
+                state.prepare_round();
+            }
+            Action::PlayerRecipe(recipe)
+                if !state.started
+                    && battle.control == ArenaControl::Player
+                    && selection.map == ArenaMap::Fort
+                    && battle.player_recipe != Some(recipe) =>
+            {
+                battle.player_recipe = Some(recipe);
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
@@ -373,7 +393,12 @@ pub(super) fn update(
             Action::Control(control) => *control == battle.control,
             Action::Map(map) => *map == selection.map,
             Action::Encounter(encounter) => {
-                selection.map == ArenaMap::Fort && *encounter == selection.encounter
+                selection.map == ArenaMap::Fort
+                    && battle.player_recipe.is_none()
+                    && *encounter == selection.encounter
+            }
+            Action::PlayerRecipe(recipe) => {
+                selection.map == ArenaMap::Fort && battle.player_recipe == Some(*recipe)
             }
             _ => continue,
         };
@@ -437,7 +462,7 @@ Area Blast casts on release with fixed power.".into(),
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection => match selection.map {
                 ArenaMap::Duel => "Duel: the original Shadow challenge.".into(),
-                ArenaMap::Fort => format!("Fort: {}. Restart keeps this encounter.", super::encounter_name(selection.encounter)),
+                ArenaMap::Fort => format!("Fort: {}. Restart keeps this encounter.", battle.player_recipe.map_or(super::encounter_name(selection.encounter), BattlePreset::label)),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nFort encounter buttons apply only to Fort.".into(),
             },
             Label::Encounter => {

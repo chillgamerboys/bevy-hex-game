@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import selectors
@@ -45,9 +47,11 @@ CHARGE_VIEWS = (
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
 MAPS = ("duel", "fort", "seven-regions")
-ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow")
+ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem")
+PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 5,
+                  "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"], "golem": ["Golem"]}
 MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions"}
-ENCOUNTER_LABELS = {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "Shaman party", "shadow": "Shadow"}
+ENCOUNTER_LABELS = {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "Shaman party", "shadow": "Shadow", "golem": "Golem"}
 SEEDS = {"duel": None, "fort": 640367719, "seven-regions": 703700113}
 ENCOUNTER_VIEWS = (
     ("fort-dragon-start", "start", "fort", "dragon", None),
@@ -101,6 +105,21 @@ OBSERVER_VIEWS = (
     ("duel-observer-free", "observer-free", "duel", "shadow", None),
     ("duel-observer-result", "observer-result", "duel", "shadow", None),
 )
+# Fort player override plus neutral Duel observer laser phases; no actor injection.
+GOLEM_VIEWS = (
+    ("fort-golem-start", "start", "fort", "golem", None),
+    ("fort-golem-first", "encounter-first", "fort", "golem", None),
+    ("fort-golem-third", "encounter-third", "fort", "golem", None),
+    ("fort-golem-body-rear", "encounter-body-rear", "fort", "golem", None),
+    ("fort-golem-slam-windup", "encounter-golem-slam-windup", "fort", "golem", None),
+    ("fort-golem-slam", "encounter-golem-slam", "fort", "golem", None),
+    ("duel-golem-charge", "encounter-golem-charge", "duel", "shadow", None),
+    ("duel-golem-locked", "encounter-golem-locked", "duel", "shadow", None),
+    ("duel-golem-beam", "encounter-golem-beam", "duel", "shadow", None),
+    ("duel-golem-beam-rear", "encounter-golem-beam-rear", "duel", "shadow", None),
+    ("duel-golem-observer-close", "observer-close", "duel", "shadow", None),
+    ("duel-golem-observer-close-rear", "observer-close-rear", "duel", "shadow", None),
+)
 OBSERVER_PERFORMANCE_VIEWS = tuple(
     (f"{arena_map}-observer-performance", "observer-performance", arena_map, "shadow", None)
     for arena_map in ("fort", "duel")
@@ -108,6 +127,8 @@ OBSERVER_PERFORMANCE_VIEWS = tuple(
 
 
 def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool = False, result: bool = False) -> dict[str, str]:
+    if args.encounter == "golem" and arena_map != "fort":
+        raise RuntimeError("Golem player encounters require Fort; Duel supports Golem spectator rosters.")
     observing = args.spectator or matrix
     if not observing:
         if any(value is not None for value in (args.team_a, args.team_b, args.seed, args.tick_limit)):
@@ -260,6 +281,96 @@ def png_info(path: Path) -> dict:
             "physical_pixels": [width, height]}
 
 
+def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dict[str, str]) -> None:
+    """Check the accepted setup, including the independent Fort player override."""
+    expected_selection = {"map": MAP_LABELS[arena_map],
+                          "encounter": ENCOUNTER_LABELS["dragon" if encounter == "golem" else encounter]}
+    if state.get("selection") != expected_selection:
+        raise RuntimeError("Capture published a different world selection than requested.")
+    observing = env.get("HEX_ARENA_CONTROL") == "spectator"
+    rosters = [{"team": team, "parties": [PRESET_MEMBERS[env[key]]]} for team, key in
+               ((1, "HEX_ARENA_TEAM_A"), (2, "HEX_ARENA_TEAM_B"))] if observing else [
+                   {"team": 1, "parties": [["Shadow"]]}, {"team": 2, "parties": [["Dragon"]]}]
+    expected = {"control": "Spectator" if observing else "Player", "rosters": rosters,
+                "seed": int(env.get("HEX_ARENA_BATTLE_SEED", "1")),
+                "tick_limit": int(env.get("HEX_ARENA_BATTLE_TICK_LIMIT", "14400")),
+                "player_recipe": "Golem" if encounter == "golem" and not observing else None}
+    if state.get("battle_setup") != expected:
+        raise RuntimeError("Capture accepted a different control, roster, seed, tick limit or player recipe.")
+    if observing:
+        expected_members = Counter((roster["team"], species) for roster in rosters for party in roster["parties"] for species in party)
+        actual_members = Counter((actor.get("team"), actor.get("species")) for actor in state.get("actors", []))
+        if actual_members != expected_members:
+            raise RuntimeError("Capture actual bodies differ from the accepted spectator teams.")
+    elif encounter == "golem" and Counter(actor.get("species") for actor in state.get("actors", [])) != Counter(("Human", "Golem")):
+        raise RuntimeError("Fort Golem override did not publish one human and one Golem.")
+
+
+def validate_golem_state(state: dict, view: str) -> None:
+    """Typed geometry/action evidence; visual correctness still requires raw-image review."""
+    def vector(value: object, size: int = 3) -> bool:
+        return isinstance(value, list) and len(value) == size and all(
+            type(v) in (int, float) and math.isfinite(v) for v in value)
+
+    def near(actual: object, expected: list[float]) -> bool:
+        return vector(actual, len(expected)) and all(abs(a - b) < 0.001 for a, b in zip(actual, expected))
+
+    golems = [actor for actor in state.get("actors", []) if actor.get("species") == "Golem"]
+    phase = view.removesuffix("-rear")
+    needs_golem = phase.startswith("encounter-golem-") or state.get("battle_setup", {}).get("player_recipe") == "Golem"
+    if needs_golem and not golems:
+        raise RuntimeError("Golem capture did not initialize its actual Golem body.")
+    expected_offsets = [[0, 0, 0], [math.sqrt(3), 0, 0], [math.sqrt(3) / 2, 0, 1.5],
+                        [-math.sqrt(3) / 2, 0, 1.5], [-math.sqrt(3), 0, 0],
+                        [-math.sqrt(3) / 2, 0, -1.5], [math.sqrt(3) / 2, 0, -1.5]]
+    for actor in golems:
+        prisms = actor.get("body_hex_prisms", [])
+        if len(prisms) != 7 or not all(type(p.get("height")) in (int, float) and abs(p["height"] - 2) < 0.001 for p in prisms):
+            raise RuntimeError("Golem body is not seven full-height physical prisms.")
+        if not all(sum(near(p.get("offset"), offset) for p in prisms) == 1 for offset in expected_offsets):
+            raise RuntimeError("Golem physical prism footprint differs from the native seven-hex union.")
+        if not near(actor.get("body_dimensions"), [3 * math.sqrt(3), 2, 5]) or not near(actor.get("body_rotation"), [0, 0, 0, 1]):
+            raise RuntimeError("Golem body bounds/yaw differ from its fixed world-oriented geometry.")
+        if not vector(actor.get("idle_mouth")):
+            raise RuntimeError("Golem receipt lacks its authoritative mouth.")
+        beam = actor.get("beam")
+        if beam is not None:
+            if not isinstance(beam, dict) or not all(vector(beam.get(key)) for key in ("origin", "direction", "end")) or type(beam.get("locked")) is not bool:
+                raise RuntimeError("Golem beam snapshot contains invalid vectors/lock state.")
+            radius = beam.get("radius")
+            direction, delta = beam["direction"], [b - a for a, b in zip(beam["origin"], beam["end"])]
+            length = sum(a * b for a, b in zip(delta, direction))
+            if type(radius) not in (int, float) or not math.isfinite(radius) or radius <= 0 or abs(sum(d*d for d in direction) - 1) > 0.001 or length < 0 or any(abs(a - length*b) > 0.01 for a, b in zip(delta, direction)):
+                raise RuntimeError("Golem beam is not a finite forward ray with its physical radius.")
+    if golems and state.get("golem_render_prisms") != 7 * len(golems):
+        raise RuntimeError("Golem physical columns have not all produced render meshes.")
+    if not phase.startswith("encounter-golem-"):
+        return
+    reached = state.get("phase_reached_frame")
+    if type(reached) is not int or state.get("frame", 0) < reached + 4:
+        raise RuntimeError("Golem phase capture lacks four completed frozen render frames.")
+    for actor in golems:
+        if actor.get("hp", 0) <= 0:
+            continue
+        attack, beam = actor.get("attack") or {}, actor.get("beam") or {}
+        kind, stage, progress = attack.get("kind"), attack.get("phase"), attack.get("progress", -1)
+        laser = kind == "GolemLaser"
+        valid = {
+            "encounter-golem-charge": laser and stage == "Windup" and 0.25 <= progress <= 0.55 and beam.get("locked") is False,
+            "encounter-golem-locked": laser and stage == "Windup" and beam.get("locked") is True,
+            "encounter-golem-beam": laser and stage == "Active" and beam.get("locked") is True,
+            "encounter-golem-slam-windup": kind == "GolemSlam" and stage == "Windup" and progress >= 0.25,
+            "encounter-golem-slam": kind == "GolemSlam" and stage == "Active" and any(
+                e.get("spell") == "AreaBlast" and 0 < e.get("age", -1) <= 0.10
+                and abs(e.get("radius", -1) - attack.get("range", -10)) < 0.01
+                and vector(e.get("center")) and vector(attack.get("origin"))
+                and math.dist(e["center"], attack["origin"]) < 0.5 for e in state.get("effects", [])),
+        }.get(phase, False)
+        if valid:
+            return
+    raise RuntimeError("Golem capture lacks the requested natural ability phase.")
+
+
 def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
     path = png.with_suffix(".json")
     data = path.read_bytes()
@@ -271,7 +382,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         raise RuntimeError(f"Native state receipt does not identify view {view}: {path}")
     if [state.get("width"), state.get("height")] != pixels or pixels != CANVAS:
         raise RuntimeError(f"Native receipt/PNG dimensions disagree with the {CANVAS} capture canvas.")
-    if view.startswith("observer-"):
+    if view.startswith("observer-") or state.get("battle_setup", {}).get("control") == "Spectator":
         setup, summary = state.get("battle_setup", {}), state.get("battle_summary")
         if setup.get("control") != "Spectator" or state.get("human_actor_id") is not None or not isinstance(summary, dict):
             raise RuntimeError(f"{view} lacks an accepted observer battle with no human actor.")
@@ -283,7 +394,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
             raise RuntimeError("Observer result capture has no actual terminal result.")
         if view == "observer-free" and state.get("observer_camera", {}).get("mode") != "Free":
             raise RuntimeError("Observer free-camera capture did not enter Free mode.")
-        if view not in {"observer-start", "observer-paused"}:
+        if view.startswith("observer-") and view not in {"observer-start", "observer-paused"}:
             reached = state.get("composition_reached_frame") if view.startswith("observer-close") else state.get("phase_reached_frame")
             if not isinstance(reached, int) or state.get("frame", 0) < reached + 4:
                 raise RuntimeError(f"{view} lacks its requested simulation boundary and four rendered frames.")
@@ -364,6 +475,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         wall = state.get("app_frame_wall_intervals_ms", [])
         if not wall or not all(isinstance(value, (int, float)) and 0 <= value < float("inf") for value in wall):
             raise RuntimeError("Synthetic capture lacks valid real app-frame wall intervals.")
+    validate_golem_state(state, view)
     ready_frame = state.get("render_ready_frame")
     if not isinstance(ready_frame, int) or state.get("frame", 0) < ready_frame + 4:
         raise RuntimeError(f"{view} did not wait four frames after render assets became ready.")
@@ -381,6 +493,8 @@ def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance
+    if args.golem_review and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
+        raise RuntimeError("The Golem matrix defines its player and observer recipes; use --view to select entries.")
     battle_environment(args, args.map or "fort", matrix=observer_matrix)
     if observer_matrix and (args.map or args.encounter):
         raise RuntimeError("Spectator matrices define maps and encounters; use --view to select entries.")
@@ -400,6 +514,9 @@ def capture(args: argparse.Namespace) -> int:
         matrix = "arena-performance-v1-synthetic"
     elif args.encounter_review:
         matrix = "arena-encounters-v2-multi-angle"
+    if args.golem_review:
+        entries = list(GOLEM_VIEWS)
+        matrix = "arena-golem-v1-natural-phases"
     if args.view:
         requested = set(args.view)
         unknown = requested - {entry[0] for entry in entries}
@@ -439,7 +556,7 @@ def capture(args: argparse.Namespace) -> int:
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if args.performance_review else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
@@ -459,7 +576,11 @@ def capture(args: argparse.Namespace) -> int:
             png = pack / f"{name}.png"
             frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view,
                              HEX_ARENA_MAP=arena_map, HEX_ARENA_ENCOUNTER=encounter)
-            frame_env.update(battle_environment(args, arena_map, matrix=observer_matrix, result=view == "observer-result"))
+            row_args = args
+            if args.golem_review and arena_map == "duel":
+                row_args = argparse.Namespace(**vars(args))
+                row_args.spectator, row_args.team_a, row_args.team_b = True, "golem", "shadow"
+            frame_env.update(battle_environment(row_args, arena_map, matrix=observer_matrix, result=view == "observer-result"))
             if focus:
                 frame_env["HEX_ARENA_FOCUS"] = focus
             frame = {
@@ -477,15 +598,7 @@ def capture(args: argparse.Namespace) -> int:
             frame.update(png_info(png))
             frame["native_state_receipt"] = native_receipt_info(png, view, frame["physical_pixels"])
             native_state = json.loads(png.with_suffix(".json").read_text())
-            expected_selection = {"map": MAP_LABELS[arena_map], "encounter": ENCOUNTER_LABELS[encounter]}
-            if native_state.get("selection") != expected_selection:
-                raise RuntimeError(f"{name} published the wrong selection: {native_state.get('selection')}")
-            if view.startswith("observer-"):
-                setup = native_state.get("battle_setup", {})
-                expected_members = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 5, "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"]}
-                expected_rosters = [{"team": team, "parties": [expected_members[frame_env[key]]]} for team, key in ((1, "HEX_ARENA_TEAM_A"), (2, "HEX_ARENA_TEAM_B"))]
-                if setup.get("seed") != int(frame_env["HEX_ARENA_BATTLE_SEED"]) or setup.get("tick_limit") != int(frame_env["HEX_ARENA_BATTLE_TICK_LIMIT"]) or setup.get("rosters") != expected_rosters:
-                    raise RuntimeError(f"{name} accepted a different battle setup than requested.")
+            validate_capture_setup(native_state, arena_map, encounter, frame_env)
             frame.update(logical_canvas=CANVAS, device_scale=1.0)
             if frame["sha256"] in seen:
                 raise RuntimeError(f"Unexpected duplicate frames: {view} and {seen[frame['sha256']]}.")
@@ -535,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
+    review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel-observer Golem body, charge, lock, beam and slam views.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
     review.add_argument("--spectator-performance", action="store_true", help="Fort/Duel ordinary observer frame intervals until 3600 ticks or a terminal result; no synthetic HP or movement.")
     review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all ten Seven Regions enemies.")

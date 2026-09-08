@@ -12,17 +12,10 @@ import shutil
 import subprocess
 import time
 
-from arena import DEFAULT_TARGET, ROOT, digest, environment, source_state, stop_process, utc_now, write_json
+from arena import DEFAULT_TARGET, PRESET_MEMBERS, ROOT, digest, environment, source_state, stop_process, utc_now, write_json
 
 
 DEFAULT_MATCHUPS = "shadow:dragon,shadow:goblins,shadow:shaman-party,dragon:goblins,dragon:shaman-party,goblins:shaman-party"
-PRESET_MEMBERS = {
-    "shadow": ["Shadow"],
-    "dragon": ["Dragon"],
-    "goblins": ["Goblin"] * 5,
-    "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"],
-}
-
 
 def read_rounds(log: Path) -> list[dict]:
     rounds = []
@@ -73,7 +66,7 @@ def _validate_round(row: dict, args: argparse.Namespace, require_flush: bool) ->
     expected_rosters = [{"team": team, "parties": [PRESET_MEMBERS[preset]]}
                         for team, preset in ((1, left), (2, right))]
     require(setup == {"control": "Spectator", "rosters": expected_rosters,
-                      "seed": setup["seed"], "tick_limit": args.seconds * 120},
+                      "seed": setup["seed"], "tick_limit": args.seconds * 120, "player_recipe": None},
             "Accepted control, member rosters or tick limit differ from the request.")
     require(all(type(roster["team"]) is int for roster in setup["rosters"]),
             "Accepted roster teams must be integer identities.")
@@ -152,7 +145,7 @@ def run(args: argparse.Namespace) -> int:
     if not 0 <= args.first_seed <= 2**64 - args.seeds:
         raise RuntimeError("The complete seed range must fit unsigned 64 bits.")
     pairs = [pair.split(":") for pair in args.matchups.split(",")]
-    if any(len(pair) != 2 or not all(pair) for pair in pairs) or len({tuple(p) for p in pairs}) != len(pairs):
+    if any(len(pair) != 2 or any(preset not in PRESET_MEMBERS for preset in pair) for pair in pairs) or len({tuple(p) for p in pairs}) != len(pairs):
         raise RuntimeError("Use distinct comma-separated left:right roster pairs.")
     if not 0 < args.timeout < float("inf"):
         raise RuntimeError("--timeout must be finite and positive.")
