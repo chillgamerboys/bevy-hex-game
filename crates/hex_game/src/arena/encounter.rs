@@ -15,6 +15,19 @@ pub(super) struct StressStimulus {
     representative: u8,
     human_feet: [f32; 3],
     cast_requested: bool,
+    visit: u32,
+    visit_anchor: Option<[f32; 3]>,
+    pose_valid: bool,
+    terrain_revision: u64,
+    parties_before_tick: Vec<StressParty>,
+}
+
+#[derive(serde::Serialize)]
+struct StressParty {
+    id: u16,
+    phase: String,
+    knowledge_source: String,
+    knowledge_tick: Option<u64>,
 }
 
 #[derive(serde::Serialize)]
@@ -38,6 +51,13 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
     }
     let step = state.capture_stress_steps;
     let initialize = !state.capture_stress_initialized;
+    let visit = step / 144;
+    let previous_anchor = state.capture_stress_ticks.last().and_then(|row| {
+        (row.stimulus.visit == visit)
+            .then_some(row.stimulus.visit_anchor)
+            .flatten()
+            .map(Vec3::from_array)
+    });
     if world.resource::<ArenaSession>().parties().is_empty() {
         return None;
     }
@@ -48,8 +68,18 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         }
         world.resource_mut::<ViewState>().capture_stress_initialized = true;
     }
-    let (representative, feet, aim) = {
+    let (
+        representative,
+        feet,
+        aim,
+        visit_anchor,
+        pose_valid,
+        terrain_revision,
+        parties_before_tick,
+    ) = {
         let session = world.resource::<ArenaSession>();
+        let terrain = world.resource::<ArenaTerrainView>();
+        let geometry = *world.resource::<ArenaVoxelGeometry>();
         let representatives = session
             .parties()
             .iter()
@@ -63,10 +93,43 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         if representatives.is_empty() {
             return None;
         }
-        let index = usize::try_from(step / 12).ok()? % representatives.len();
+        let index = usize::try_from(visit).ok()? % representatives.len();
         let target = *representatives.get(index)?;
-        let offset = target.body_rotation() * Vec3::X * (target.body_dimensions().x * 0.5 + 0.4);
-        (target.id, target.feet + offset, -offset.normalize_or_zero())
+        let human = session.actors.first()?;
+        // Hold a fixed target area for the whole visit; following the creature's
+        // rotating forward axis every tick makes it chase a receding stimulus.
+        let placement = session.synthetic_combat_target_pose(
+            human.id,
+            target.id,
+            previous_anchor,
+            terrain,
+            geometry,
+        );
+        let feet = placement.unwrap_or(human.feet);
+        let aim = (target.center() - (feet + human.eye() - human.feet)).normalize_or(Vec3::NEG_Z);
+        let knowledge = session.party_knowledge();
+        let parties = session
+            .parties()
+            .iter()
+            .map(|party| {
+                let observed = knowledge.iter().find(|known| known.id == party.id);
+                StressParty {
+                    id: party.id,
+                    phase: format!("{:?}", party.phase),
+                    knowledge_source: observed.map_or("none", |known| known.source).into(),
+                    knowledge_tick: observed.and_then(|known| known.tick),
+                }
+            })
+            .collect();
+        (
+            target.id,
+            feet,
+            aim,
+            placement.or(previous_anchor),
+            placement.is_some(),
+            terrain.revision,
+            parties,
+        )
     };
     if let Some(human) = world.resource_mut::<ArenaSession>().actors.first_mut() {
         human.feet = feet;
@@ -84,6 +147,11 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         representative,
         human_feet: feet.to_array(),
         cast_requested,
+        visit,
+        visit_anchor: visit_anchor.map(|point| point.to_array()),
+        pose_valid,
+        terrain_revision,
+        parties_before_tick,
     })
 }
 

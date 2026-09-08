@@ -340,19 +340,48 @@ fn profile_combat(selection: ArenaSelection) {
     let mut peak_active = 0;
     let mut peak_projectiles = 0;
     let mut peak_barriers = 0;
+    let mut previous_visit = None;
+    let mut visit_anchor = None;
+    let mut invalid_placements = 0;
+    let mut visits = Vec::new();
     for step in 0..3600 {
-        let index = (step / 12) % representatives.len();
-        let (feet, aim) = {
+        let visit = step / 144;
+        let index = visit % representatives.len();
+        let (feet, aim, pose_valid) = {
             let session = fixture.world().resource::<ArenaSession>();
             let target = session
                 .actors
                 .iter()
                 .find(|actor| actor.id == *representatives.get(index).expect("bounded party index"))
                 .expect("representative remains present");
-            let offset =
-                target.body_rotation() * Vec3::X * (target.body_dimensions().x * 0.5 + 0.4);
-            (target.feet + offset, -offset.normalize_or_zero())
+            let human = session.actors.first().expect("human");
+            if previous_visit != Some(visit) {
+                visit_anchor = None;
+            }
+            let placement = session.synthetic_combat_target_pose(
+                human.id,
+                target.id,
+                visit_anchor,
+                fixture.world().resource::<ArenaTerrainView>(),
+                *fixture.world().resource::<ArenaVoxelGeometry>(),
+            );
+            visit_anchor = placement.or(visit_anchor);
+            let feet = placement.unwrap_or(human.feet);
+            let aim =
+                (target.center() - (feet + human.eye() - human.feet)).normalize_or(Vec3::NEG_Z);
+            if previous_visit != Some(visit) {
+                visits.push(serde_json::json!({
+                    "step": step, "tick": session.tick, "representative": target.id,
+                    "anchor": visit_anchor.map(|point| point.to_array()), "feet": feet.to_array(),
+                    "pose_valid": placement.is_some(),
+                    "parties": session.parties().iter().map(|p| (p.id, format!("{:?}", p.phase))).collect::<Vec<_>>(),
+                    "knowledge": session.party_knowledge(),
+                }));
+            }
+            (feet, aim, placement.is_some())
         };
+        previous_visit = Some(visit);
+        invalid_placements += usize::from(!pose_valid);
         {
             let mut session = fixture.world_mut().resource_mut::<ArenaSession>();
             let human = session.actors.first_mut().expect("human");
@@ -432,6 +461,11 @@ fn profile_combat(selection: ArenaSelection) {
         "peak_barriers": peak_barriers,
         "living_enemies": session.encounter_summary().living_enemies,
         "terrain_outcomes": session.terrain_outcomes,
+        "stimulus": "144-tick fixed-area visits; forward range Dragon2.5, Goblin1.1, Shaman/Shadow8; current dry supported full-body/LOS placement; normal cooldowns",
+        "invalid_placement_ticks": invalid_placements,
+        "visits": visits,
+        "final_parties": session.parties().iter().map(|p| (p.id, format!("{:?}", p.phase))).collect::<Vec<_>>(),
+        "encounter_stats": session.encounter_stats(),
     });
     #[expect(
         clippy::print_stdout,
@@ -450,4 +484,66 @@ fn profile_combat(selection: ArenaSelection) {
         "require measured damage and destruction publication pressure"
     );
     assert_eq!(session.encounter_summary().living_enemies, enemy_count);
+}
+
+#[test]
+fn diagnostic_target_placement_uses_current_dry_support_and_avoids_living_bodies() {
+    let mut fixture = app(ArenaSelection {
+        map: ArenaMap::SevenRegions,
+        ..Default::default()
+    });
+    let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+    let representatives = {
+        let session = fixture.world().resource::<ArenaSession>();
+        session
+            .parties()
+            .iter()
+            .map(|party| {
+                session
+                    .actors
+                    .iter()
+                    .find(|actor| actor.party == Some(party.id))
+                    .expect("representative")
+                    .id
+            })
+            .collect::<Vec<_>>()
+    };
+    for representative in representatives {
+        let feet = {
+            let session = fixture.world().resource::<ArenaSession>();
+            let target = session
+                .actors
+                .iter()
+                .find(|a| a.id == representative)
+                .expect("target");
+            session
+                .visible_supported_actor_pose(
+                    0,
+                    representative,
+                    target.feet,
+                    fixture.world().resource::<ArenaTerrainView>(),
+                    geometry,
+                )
+                .expect("nearby supported and visible pose, outside the occupied target body")
+        };
+        fixture
+            .world_mut()
+            .resource_mut::<ArenaSession>()
+            .actors
+            .first_mut()
+            .expect("human")
+            .feet = feet;
+        let session = fixture.world().resource::<ArenaSession>();
+        assert!(session.actor_pose_valid(
+            0,
+            fixture.world().resource::<ArenaTerrainView>(),
+            geometry
+        ));
+        let target = session
+            .actors
+            .iter()
+            .find(|a| a.id == representative)
+            .expect("target");
+        assert!(feet.distance(target.feet) > 0.5);
+    }
 }

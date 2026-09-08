@@ -1128,7 +1128,7 @@ fn capture_frame(
         ("parties", serde_json::json!(parties)),
         ("encounter_summary", serde_json::json!(session.encounter_summary())),
         ("encounter_stats", serde_json::json!(session.encounter_stats())),
-        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human pose moves among party representatives every 12 ticks; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
+        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human visits party areas for 144 ticks with current dry supported, body-clear and visible placement; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
         ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
         ("capture_inputs", serde_json::json!(capture_inputs)),
         ("fixture_voxels", serde_json::json!(state.capture_fixture_voxels)),

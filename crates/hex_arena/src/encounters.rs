@@ -827,6 +827,114 @@ impl ArenaSession {
 }
 
 impl ArenaSession {
+    /// Find a synthetic combat target area without changing combat or AI state.
+    /// Reuses an existing visible area during a visit; otherwise tries sixteen
+    /// role-appropriate directions/ranges through the authoritative pose query.
+    /// Ordinary play never calls this explicit performance-fixture helper.
+    #[must_use]
+    pub fn synthetic_combat_target_pose(
+        &self,
+        actor: ActorId,
+        representative: ActorId,
+        previous: Option<Vec3>,
+        view: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> Option<Vec3> {
+        if let Some(point) = previous {
+            if let Some(feet) =
+                self.visible_supported_actor_pose(actor, representative, point, view, geometry)
+            {
+                return Some(feet);
+            }
+        }
+        let human = self.actors.iter().find(|a| a.id == actor)?;
+        let target = self.actors.iter().find(|a| a.id == representative)?;
+        let distances = match target.species {
+            Species::Dragon => [2.5, 1.5],
+            Species::Goblin => [1.1, 2.2],
+            _ => [8.0, 5.0],
+        };
+        for distance in distances {
+            for turn in [0.0, 0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0] {
+                let forward = bevy_math::Quat::from_rotation_y(turn * std::f32::consts::PI)
+                    * target.body_rotation()
+                    * Vec3::NEG_Z;
+                let desired =
+                    target.eye() + forward * distance - Vec3::Y * (human.body_dimensions().y * 0.5);
+                if let Some(feet) = self.visible_supported_actor_pose(
+                    actor,
+                    representative,
+                    desired,
+                    view,
+                    geometry,
+                ) {
+                    return Some(feet);
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve a diagnostic placement near a requested point onto current dry
+    /// support, with full body clearance and sight from a living observer.
+    /// This read-only query changes no actor or AI state. It checks at most 64
+    /// nearby published surfaces and is used by explicit synthetic load fixtures.
+    #[must_use]
+    pub fn visible_supported_actor_pose(
+        &self,
+        id: ActorId,
+        observer: ActorId,
+        desired: Vec3,
+        view: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> Option<Vec3> {
+        if !desired.is_finite() {
+            return None;
+        }
+        let mut actor = self
+            .actors
+            .iter()
+            .find(|a| a.id == id && a.hp > 0.0)?
+            .clone();
+        let observer = self
+            .actors
+            .iter()
+            .find(|a| a.id == observer && a.hp > 0.0)?;
+        let desired_coord = HexCoord::from_world(desired);
+        let mut candidates = Vec::new();
+        for coord in desired_coord.within_radius(2) {
+            if let Some(runs) = view.columns.get(&coord) {
+                for run in runs {
+                    let height = geometry.top(TilePos::new(coord, run.top_level)) + SKIN;
+                    if (height - desired.y).abs() <= 4.0 {
+                        if coord == desired_coord {
+                            candidates.push(desired.with_y(height));
+                        }
+                        candidates.push(coord.to_world(height));
+                    }
+                }
+            }
+        }
+        candidates.sort_by(|a, b| {
+            a.distance_squared(desired)
+                .total_cmp(&b.distance_squared(desired))
+        });
+        candidates.into_iter().take(64).find(|feet| {
+            actor.feet = *feet;
+            shapes::clear(&self.collision, &actor, *feet, actor.body_yaw)
+                && dry(&actor, view, geometry)
+                && shapes::ground(&self.collision, &actor, *feet, SKIN * 8.0).is_some()
+                && self
+                    .actors
+                    .iter()
+                    .filter(|a| a.id != id && a.hp > 0.0)
+                    .all(|other| body_overlap(&actor, other).is_none())
+                && [actor.center(), actor.eye()]
+                    .into_iter()
+                    .any(|point| self.collision.sight_clear(observer.eye(), point))
+        })
+    }
+
     /// Full body and dry-volume check, allowing an ordinary descending step to be
     /// airborne. Route consumers separately bound support distance and landing.
     #[cfg(any(test, feature = "test-support"))]
