@@ -126,25 +126,35 @@ pub(super) fn capture_intent(frame: u32, session: &ArenaSession, view: &str) -> 
     }
 }
 
-pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
+// Use the same snapshot match for readiness and framing. An unrelated enemy
+// attack must not steal the camera from the effect the capture is reviewing.
+fn phase_owner(
+    view: &str,
+    actors: impl IntoIterator<
+        Item = (
+            u8,
+            Option<hex_arena::ChargeState>,
+            Option<hex_arena::AttackSnapshot>,
+        ),
+    >,
+    barriers: &[hex_arena::BarrierSnapshot],
+    auras: &[hex_arena::AuraSnapshot],
+) -> Option<u8> {
     let view = view.strip_suffix("-rear").unwrap_or(view);
     if view == "encounter-barrier" {
-        return !session.barriers().is_empty();
+        return barriers.first().map(|barrier| barrier.owner);
     }
     if view == "encounter-aura" {
-        return !session.auras().is_empty();
+        return auras.first().map(|aura| aura.owner);
     }
-    session
-        .actors
-        .iter()
-        .filter(|actor| actor.id != 0 && actor.hp > 0.0)
-        .any(|actor| {
-            if view == "encounter-fireball" {
-                return actor.charge().is_some_and(|charge| {
-                    charge.spell == Spell::Fireball && charge.elapsed >= 0.25
-                });
-            }
-            actor.attack_state().is_some_and(|attack| match view {
+    actors.into_iter().find_map(|(id, charge, attack)| {
+        if id == 0 {
+            return None;
+        }
+        let matches = if view == "encounter-fireball" {
+            charge.is_some_and(|charge| charge.spell == Spell::Fireball && charge.elapsed >= 0.25)
+        } else {
+            attack.is_some_and(|attack| match view {
                 "encounter-windup" => {
                     attack.phase == AttackPhase::Windup && attack.progress >= 0.25
                 }
@@ -158,7 +168,27 @@ pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
                 }
                 _ => false,
             })
-        })
+        };
+        matches.then_some(id)
+    })
+}
+
+fn phase_actor<'a>(session: &'a ArenaSession, view: &str) -> Option<&'a hex_arena::Actor> {
+    let owner = phase_owner(
+        view,
+        session
+            .actors
+            .iter()
+            .filter(|actor| actor.hp > 0.0)
+            .map(|actor| (actor.id, actor.charge(), actor.attack_state())),
+        session.barriers(),
+        session.auras(),
+    )?;
+    session.actors.iter().find(|actor| actor.id == owner)
+}
+
+pub(super) fn phase_ready(session: &ArenaSession, view: &str) -> bool {
+    phase_actor(session, view).is_some()
 }
 
 pub(super) fn phase_view(view: &str) -> bool {
@@ -278,11 +308,7 @@ pub(super) fn camera(
         } else if state.capture_view.starts_with("encounter-body") {
             session.actors.get(1)
         } else {
-            session
-                .actors
-                .iter()
-                .find(|actor| actor.attack_state().is_some())
-                .or_else(|| session.actors.get(1))
+            phase_actor(&session, &state.capture_view).or_else(|| session.actors.get(1))
         };
         if let Some(actor) = actor {
             let target = actor.feet + Vec3::Y * actor.body_dimensions().y * 0.5;
@@ -473,6 +499,73 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn phase_camera_follows_the_requested_owner_despite_an_unrelated_swipe() {
+        use hex_arena::{AttackSnapshot, AuraSnapshot, BarrierSnapshot, ChargeState};
+        let actors = [
+            (
+                2,
+                None,
+                Some(AttackSnapshot {
+                    kind: CreatureAbility::Swipe,
+                    phase: AttackPhase::Windup,
+                    origin: Vec3::ZERO,
+                    direction: Vec3::X,
+                    range: 1.7,
+                    half_angle: 0.7,
+                    progress: 0.5,
+                }),
+            ),
+            (
+                1,
+                Some(ChargeState {
+                    spell: Spell::Fireball,
+                    elapsed: 0.3,
+                }),
+                None,
+            ),
+            (3, None, None),
+        ];
+        let barriers = [BarrierSnapshot {
+            id: 1,
+            owner: 3,
+            center: Vec3::Z,
+            normal: Vec3::X,
+            width: 3.5,
+            height: 1.6,
+            hp: 60.0,
+            max_hp: 60.0,
+            remaining: 4.0,
+            lifetime: 4.0,
+        }];
+        let auras = [AuraSnapshot {
+            owner: 1,
+            center: Vec3::ZERO,
+            radius: 6.0,
+            remaining: 5.0,
+            lifetime: 5.0,
+        }];
+        for suffix in ["", "-rear"] {
+            for (view, expected) in [
+                ("encounter-fireball", 1),
+                ("encounter-aura", 1),
+                ("encounter-barrier", 3),
+                ("encounter-swipe", 2),
+            ] {
+                assert_eq!(
+                    phase_owner(&format!("{view}{suffix}"), actors, &barriers, &auras),
+                    Some(expected)
+                );
+            }
+        }
+        assert_eq!(
+            phase_owner("encounter-breath", actors, &barriers, &auras),
+            None
+        );
+        assert_eq!(phase_owner("encounter-aura", actors, &barriers, &[]), None);
+        assert_eq!(phase_owner("encounter-barrier", actors, &[], &auras), None);
+    }
+
     #[test]
     fn bounds_framing_contains_all_corners_at_both_azimuths() {
         for rear in [false, true] {
