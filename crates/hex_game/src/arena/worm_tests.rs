@@ -437,6 +437,22 @@ fn conversion_capture_waits_for_a_correlated_exposed_top_without_rewriting_the_w
         .voxels
         .keys()
         .any(|p| p.coord == position.coord && p.level > position.level));
+    let geometry = *world.resource::<ArenaVoxelGeometry>();
+    let surface = geometry.center(position).with_y(geometry.top(position));
+    for actor in &world.resource::<ArenaSession>().actors {
+        for part in actor.body_hex_prisms() {
+            let bottom = actor.feet + part.offset;
+            if (bottom.x - surface.x).abs() < 1.8 && (bottom.z - surface.z).abs() < 2.05 {
+                // Actual child stripe: center0.525, height0.045 in the native
+                // unit prism, then scaled by the physical segment height.
+                let stripe_top = bottom.y + part.height * (0.5 + 0.525 + 0.045 * 0.5);
+                assert!(
+                    stripe_top < surface.y,
+                    "capture must wait until the actual surface accent clears the converted top"
+                );
+            }
+        }
+    }
     assert!(
         receipt
             .pointer("/exposed_surface/frame")

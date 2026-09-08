@@ -832,7 +832,7 @@ def capture(args: argparse.Namespace) -> int:
         matrix = "arena-wisp-v1-natural-phases"
     if args.worm_review:
         entries = list(WORM_VIEWS)
-        matrix = "arena-worm-v3-visible-cues"
+        matrix = "arena-worm-v4-clear-earth"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -873,7 +873,7 @@ def capture(args: argparse.Namespace) -> int:
         "source_label": "UNAPPROVABLE-DIRTY" if initial["dirty"] else "COMMITTED-CANDIDATE",
         "scenario": "Spell Combat Arena / explicit deterministic recipes",
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
-        "scenario_correction": "Worm buried view requires actual Travel plus published head-center earth. Conversion view uses ordinary Duel Worm/Goblins and waits for a correlated exposed dirt top after actor geometry clears it; Fort retains the ordinary reset comparison. Windup uses the exposed physical head warning material." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
+        "scenario_correction": "Worm buried view requires actual Travel plus published head-center earth. Conversion view uses ordinary Duel Worm/Goblins and waits for a correlated exposed dirt top after actor body and surface decoration clear it; Fort retains the ordinary reset comparison. Windup uses the exposed physical head warning material." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
         "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],

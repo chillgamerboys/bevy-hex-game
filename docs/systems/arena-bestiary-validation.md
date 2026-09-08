@@ -680,3 +680,25 @@ separate. Public outcome identity and material/health checks are retained.
 Independent source review found no blockers. Python33, six focused Worm app tests
 and strict game lint pass with stable source in `work/worm-visible-cues-01`.
 Fresh v3 images and the combined gate remain required.
+
+At `8f2431d`, both reviewers inspected all thirteen v3 originals and the sheet.
+Twelve pass, including the gold head warning. The converted dirt top is real and
+visible, but small cyan surface accents still protrude during shallow Diving.
+Its fully clear-surface criterion remains blocked. The v4 capture-only margin now
+includes the existing 0.019-unit accent extension; no live model changes. A test
+checks actual stripe geometry, and all six Worm app tests plus strict game lint
+pass in `work/worm-visible-cues-02`.
+
+The first final Seven Regions native stress row at `8f2431d` correctly fails its
+workload guard: only 880 of 3,480 measured ticks had all ten enemies active. Every
+placement was valid and every enemy lived, but renewed forward targets gradually
+led parties beyond their home leashes. The fixture now reuses party anchors,
+revalidates current dry/body/LOS conditions, bounds replacement positions to ten
+units from home, and skips casts if no valid position exists. A 144-tick revisit
+trial improved activity to 2,242 ticks but still failed because remote sightings
+started long chases. Shared 72-tick visits pass the unchanged 2,400-tick guard with
+**2,986 all-active ticks**, 54 publication ticks, 63 damage-outcome ticks and 342
+destroyed voxels. Those are logical CI workload results, not native timings.
+Combat AI, visibility, pursuit limits and normal play are unchanged. Strict game
+lint and independent source review pass. Evidence: `outputs/arena-final-seven-stress-01`
+and `work/seven-home-fixture-checks-01`, retaining both failed attempts.

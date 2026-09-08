@@ -295,7 +295,9 @@ fn exposed_surface(
                         .collect()
                 };
                 bounds.iter().any(|(low, high)| {
-                    high.y > top.y + 0.01
+                    // Native surface accents extend 0.019 above the physical prism.
+                    // Wait for decorative geometry too; do not alter live models.
+                    high.y + 0.03 > top.y + 0.01
                         && low.y < camera.y
                         && low.x < top.x + 0.9
                         && high.x > top.x - 0.9

@@ -8,6 +8,9 @@ use hex_arena::{
 };
 use hex_core::arena::{ArenaMap, ArenaTerrainView, ArenaVoxelGeometry};
 
+/// Synthetic visit duration; a complete three-party loop takes 1.8 seconds.
+pub const STRESS_VISIT_TICKS: u32 = 72;
+
 pub(super) fn stress_view(view: &str) -> bool {
     view == "encounter-stress"
 }
@@ -53,13 +56,7 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
     }
     let step = state.capture_stress_steps;
     let initialize = !state.capture_stress_initialized;
-    let visit = step / 144;
-    let previous_anchor = state.capture_stress_ticks.last().and_then(|row| {
-        (row.stimulus.visit == visit)
-            .then_some(row.stimulus.visit_anchor)
-            .flatten()
-            .map(Vec3::from_array)
-    });
+    let visit = step / STRESS_VISIT_TICKS;
     if world.resource::<ArenaSession>().parties().is_empty() {
         return None;
     }
@@ -98,12 +95,27 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         let index = usize::try_from(visit).ok()? % representatives.len();
         let target = *representatives.get(index)?;
         let human = session.actors.first()?;
-        // Hold a fixed target area for the whole visit; following the creature's
-        // rotating forward axis every tick makes it chase a receding stimulus.
-        let placement = session.synthetic_combat_target_pose(
+        let home = session
+            .parties()
+            .iter()
+            .find(|party| Some(party.id) == target.party)?
+            .home;
+        // Reuse this party's area across visits too: rebuilding a forward area
+        // around its pursuing representative slowly drags the group off leash.
+        let previous_anchor = world
+            .resource::<ViewState>()
+            .capture_stress_ticks
+            .iter()
+            .rev()
+            .find(|row| row.stimulus.representative == target.id)
+            .and_then(|row| row.stimulus.visit_anchor)
+            .map(Vec3::from_array);
+        let placement = stress_target_pose(
+            session,
             human.id,
             target.id,
             previous_anchor,
+            home,
             terrain,
             geometry,
         );
@@ -137,7 +149,7 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         human.feet = feet;
         human.aim = aim;
     }
-    let cast_requested = step.is_multiple_of(240);
+    let cast_requested = pose_valid && step.is_multiple_of(240);
     world.resource_mut::<hex_arena::ArenaInput>().human = ActorIntent {
         aim,
         selected: Some(Spell::AreaBlast),
@@ -155,6 +167,44 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         terrain_revision,
         parties_before_tick,
     })
+}
+
+/// Revalidate a synthetic visit anchor against current geometry without pulling
+/// its party progressively away from home. This never changes combat state.
+#[must_use]
+pub fn stress_target_pose(
+    session: &ArenaSession,
+    actor: u8,
+    representative: u8,
+    previous: Option<Vec3>,
+    home: Vec3,
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> Option<Vec3> {
+    let near_home = |feet: &Vec3| feet.distance(home) <= 10.0;
+    if let Some(feet) = session
+        .synthetic_combat_target_pose(actor, representative, previous, terrain, geometry)
+        .filter(near_home)
+    {
+        return Some(feet);
+    }
+    // A destroyed/occluded anchor may need another small home-area placement.
+    // Each query already bounds surfaces and admits complete dry body + sight.
+    for offset in [
+        Vec3::ZERO,
+        Vec3::X * 4.0,
+        Vec3::NEG_X * 4.0,
+        Vec3::Z * 4.0,
+        Vec3::NEG_Z * 4.0,
+    ] {
+        if let Some(feet) = session
+            .visible_supported_actor_pose(actor, representative, home + offset, terrain, geometry)
+            .filter(near_home)
+        {
+            return Some(feet);
+        }
+    }
+    None
 }
 
 const FORT_APPROACH: [(i32, i32); 7] = [

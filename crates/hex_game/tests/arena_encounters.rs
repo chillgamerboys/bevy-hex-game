@@ -321,12 +321,15 @@ fn profile_combat(selection: ArenaSelection) {
             .parties()
             .iter()
             .map(|party| {
-                session
-                    .actors
-                    .iter()
-                    .find(|actor| actor.party == Some(party.id))
-                    .expect("party representative")
-                    .id
+                (
+                    session
+                        .actors
+                        .iter()
+                        .find(|actor| actor.party == Some(party.id))
+                        .expect("party representative")
+                        .id,
+                    party.home,
+                )
             })
             .collect::<Vec<_>>()
     };
@@ -341,31 +344,40 @@ fn profile_combat(selection: ArenaSelection) {
     let mut peak_projectiles = 0;
     let mut peak_barriers = 0;
     let mut previous_visit = None;
-    let mut visit_anchor = None;
+    let mut party_anchors = std::collections::BTreeMap::new();
     let mut invalid_placements = 0;
     let mut visits = Vec::new();
     for step in 0..3600 {
-        let visit = step / 144;
+        let visit = step
+            / usize::try_from(hex_game::arena::STRESS_VISIT_TICKS).expect("bounded visit duration");
         let index = visit % representatives.len();
         let (feet, aim, pose_valid) = {
             let session = fixture.world().resource::<ArenaSession>();
+            let (representative, home) = *representatives.get(index).expect("bounded party index");
             let target = session
                 .actors
                 .iter()
-                .find(|actor| actor.id == *representatives.get(index).expect("bounded party index"))
+                .find(|actor| actor.id == representative)
                 .expect("representative remains present");
             let human = session.actors.first().expect("human");
-            if previous_visit != Some(visit) {
-                visit_anchor = None;
-            }
-            let placement = session.synthetic_combat_target_pose(
+            let previous_anchor = party_anchors.get(&representative).copied();
+            let placement = hex_game::arena::stress_target_pose(
+                session,
                 human.id,
                 target.id,
-                visit_anchor,
+                previous_anchor,
+                home,
                 fixture.world().resource::<ArenaTerrainView>(),
                 *fixture.world().resource::<ArenaVoxelGeometry>(),
             );
-            visit_anchor = placement.or(visit_anchor);
+            if let Some(feet) = placement {
+                assert!(
+                    feet.distance(home) <= 10.0,
+                    "revisits must not drag the party outside its home area"
+                );
+                party_anchors.insert(representative, feet);
+            }
+            let visit_anchor = placement.or(previous_anchor);
             let feet = placement.unwrap_or(human.feet);
             let aim =
                 (target.center() - (feet + human.eye() - human.feet)).normalize_or(Vec3::NEG_Z);
@@ -392,8 +404,8 @@ fn profile_combat(selection: ArenaSelection) {
             let mut input = fixture.world_mut().resource_mut::<ArenaInput>();
             input.human.aim = aim;
             input.human.selected = Some(Spell::AreaBlast);
-            input.human.cast_pressed = step % 240 == 0;
-            input.human.cast_released = step % 240 == 0;
+            input.human.cast_pressed = pose_valid && step % 240 == 0;
+            input.human.cast_released = pose_valid && step % 240 == 0;
         }
         let revision_before = fixture.world().resource::<ArenaTerrainView>().revision;
         let voxels_before = fixture.world().resource::<ArenaTerrainView>().voxels.len();
@@ -461,7 +473,7 @@ fn profile_combat(selection: ArenaSelection) {
         "peak_barriers": peak_barriers,
         "living_enemies": session.encounter_summary().living_enemies,
         "terrain_outcomes": session.terrain_outcomes,
-        "stimulus": "144-tick fixed-area visits; forward range Dragon2.5, Goblin1.1, Shaman/Shadow8; current dry supported full-body/LOS placement; normal cooldowns",
+        "stimulus": "72-tick visits reuse each party anchor within 10 units of home; forward range Dragon2.5, Goblin1.1, Shaman/Shadow8; current dry supported full-body/LOS placement; normal cooldowns",
         "invalid_placement_ticks": invalid_placements,
         "visits": visits,
         "final_parties": session.parties().iter().map(|p| (p.id, format!("{:?}", p.phase))).collect::<Vec<_>>(),
@@ -546,4 +558,12 @@ fn diagnostic_target_placement_uses_current_dry_support_and_avoids_living_bodies
             .expect("target");
         assert!(feet.distance(target.feet) > 0.5);
     }
+}
+
+#[test]
+fn home_bounded_revisits_keep_all_ten_enemies_engaged_under_real_destruction() {
+    profile_combat(ArenaSelection {
+        map: ArenaMap::SevenRegions,
+        ..Default::default()
+    });
 }

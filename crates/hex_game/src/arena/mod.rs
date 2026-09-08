@@ -1,6 +1,8 @@
 //! Native, default-off composition for the isolated spell-combat experiment.
 
 mod encounter;
+#[cfg(feature = "test-support")]
+pub use encounter::{stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
 mod hud;
 mod presentation;
@@ -1531,7 +1533,7 @@ fn capture_frame(
         ("parties", serde_json::json!(parties)),
         ("encounter_summary", serde_json::json!(session.encounter_summary())),
         ("encounter_stats", serde_json::json!(session.encounter_stats())),
-        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human visits party areas for 144 ticks with current dry supported, body-clear and visible placement; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
+        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
         ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
         ("wisp_stress", serde_json::json!(wisp::stress_view(&state.capture_view).then(|| serde_json::json!({
             "fixture": "synthetic-wisp-hp-1000", "nominal_hp": state.capture_wisp_nominal_hp,
