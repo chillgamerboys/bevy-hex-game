@@ -105,7 +105,7 @@ fn seven_publishes_three_dry_encounter_anchors_and_distinct_static_geometry() {
             .is_some_and(|intervals| {
                 intervals
                     .iter()
-                    .any(|(bottom, top)| *bottom <= span.bottom.level && *top >= span.top_level + 1)
+                    .any(|(bottom, top)| *bottom <= span.bottom.level && *top > span.top_level)
             }));
     }
     assert!(recipe

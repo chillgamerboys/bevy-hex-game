@@ -1,9 +1,8 @@
-//! World-owned elemental admission for voxel damage.
+//! World-owned elemental and physical admission for voxel damage.
 //!
 //! `assets/config/terrain_damage.ron` is intentionally a Boolean allow-list. Spell
-//! content announces an element and power; this table answers only whether that
-//! element may damage that material. Toughness and all mutation policy remain with
-//! the world.
+//! content announces a damage kind and power; this table answers whether that kind
+//! may damage the material. Toughness and all mutation policy remain with the world.
 
 use std::collections::BTreeSet;
 
@@ -91,7 +90,7 @@ impl TerrainDamageFile {
         let mut pairs: Vec<_> = self.damaging_pairs.iter().collect();
         pairs.sort();
 
-        let mut encoder = FingerprintEncoder::new(b"hex-terrain-damage-file-v1");
+        let mut encoder = FingerprintEncoder::new(b"hex-terrain-damage-file-v2");
         encoder.usize(pairs.len());
         for pair in pairs {
             encoder.string(&pair.element);
@@ -555,7 +554,21 @@ mod tests {
         assert!(!after.damages(elements.id("Fire").expect("Fire"), stone));
         assert_ne!(before.source_revision(), after.source_revision());
         physical.physical_substances.push("water".to_owned());
-        assert!(TerrainDamageTable::build(&physical, &elements, &substances).is_err());
+        assert_eq!(
+            TerrainDamageTable::build(&physical, &elements, &substances)
+                .expect_err("water has no HP"),
+            vec![TerrainDamageError::IndestructibleSubstance {
+                substance: "water".to_owned()
+            }]
+        );
+        physical.physical_substances = vec!["missing-material".to_owned()];
+        assert_eq!(
+            TerrainDamageTable::build(&physical, &elements, &substances)
+                .expect_err("unknown physical material"),
+            vec![TerrainDamageError::UnknownSubstance {
+                substance: "missing-material".to_owned()
+            }]
+        );
         let duplicate = ron::from_str::<TerrainDamageFile>(
             r#"(damaging_pairs: [], physical_substances: ["stone", "stone"])"#,
         );
