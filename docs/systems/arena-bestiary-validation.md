@@ -359,3 +359,49 @@ No subjective motion or balance approval is claimed.
 Task evidence: `work/wisp-runtime-tests-02.log`,
 `work/wisp-runtime-clippy-02.log`, `work/wisp-app-integration-02/receipt.json`,
 and `taskwork/wisp-presentation/python-guards-01.json`.
+
+## Golem static repairs and query optimization follow-up
+
+The fresh `dbf3fc6...-arena-golem-v2-dragon-phases` matrix passes independent and
+coordinator static review: all12 original1600×900 frames first, then the contact
+sheet. The backed observer footer reads over pale ground and the pale active core
+remains distinct within Dragon breath from both directions. This closes the two
+prior static readability findings. It does not establish animation or native feel.
+
+The collision cache candidate `1ae71e9` reduced the old eight-round Dragon/Golem
+corpus from201 over-budget ticks to4, maximum11.054→9.570ms. The later combined
+array/basis query refactor in `4081f08` passes227 arena tests, including bitwise
+old-query oracles. Eight unprofiled native rounds at `dbf3fc6` preserve actor poses,
+HP, setup, outcomes and original statistics exactly (the appended Wisp counter
+is zero), but still record5 over-budget ticks and maximum9.373ms. Do not claim
+that this second change fixed the remaining spikes. The first profiler capture
+identified collision queries under steering; it does not justify a new geometry
+or behavior rewrite without fresh attribution.
+
+Task evidence: `work/dragon-box-query-checks-01/receipt.json`,
+`outputs/arena-golem-performance-07`, `outputs/arena-golem-performance-08`,
+`outputs/arena-golem-cache-comparison-07.json` and
+`outputs/arena-golem-box-comparison-08.json`.
+
+## Wisp opening-volley investigation
+
+The first native48-round Duel corpus at `dbf3fc6` uses four seeds and both sides.
+A single Wisp beats a single Goblin8/8 without receiving damage. Against Shadow,
+Wisp groups1/2/4/12 lose all8 matches; eight Wisps lose7 with1 timeout. Twelve
+Wisps release172 Embers across their8 rounds but deal only8.54 total damage.
+This establishes a weak opening profile, not successful swarm calibration.
+
+The two seed1 traces show all12 Wisps releasing at tick42 toward a then-stationary
+observed Shadow. Their18.3–21.9-unit shots take about.57–.68 seconds. The Shadow
+resumes strafing and moves about four units sideways before those impacts. The
+shared trajectory is consistent with the admitted observation; these traces do
+not show a collision or hidden-information defect.
+
+The next isolated trial spreads each party's initial Wisp admissions over.6s,
+starting only at its first eligible own sight. One Wisp keeps zero delay; later
+cooldowns remain relative to each actual release. HP18, damage8, cooldown2,
+windup.35, speed32 and splash.8 stay unchanged. If delivery remains weak, a
+separate launch-speed trial will shorten the already observed shot flight.
+
+Retained evidence: `outputs/arena-wisp-calibration-01` and
+`outputs/arena-wisp-trace-02`. Traced timings are diagnostic only.
