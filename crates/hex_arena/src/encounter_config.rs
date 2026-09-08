@@ -221,7 +221,7 @@ impl Default for EncounterTuning {
             wisp_ember_cooldown: 2.0,
             wisp_ember_windup: 0.35,
             wisp_initial_volley_spread: 0.6,
-            wisp_ember_speed: 32.0,
+            wisp_ember_speed: 64.0,
             wisp_ember_gravity: 2.0,
             wisp_ember_collision_radius: 0.06,
             wisp_ember_knockback: 1.5,
