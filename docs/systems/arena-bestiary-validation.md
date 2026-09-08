@@ -232,7 +232,8 @@ range, and reset into Seven Regions), 69 application tests, strict application l
 and17 Python guards. The source-recording receipt confirms no source changes during
 those checks. Decorative face mounting now uses separate plaques outside the
 published body support with an open mouth corridor, checked across72 yaw directions.
-Native checks, static captures and Golem matchup calibration remain pending.
+This checkpoint precedes native matchup calibration below; Golem static review
+remains pending.
 
 Task logs: `work/golem-runtime-tests-03.log` and
 `work/golem-runtime-clippy-03.log`, `work/golem-app-integration-01/receipt.json`,
@@ -247,12 +248,49 @@ A first 35-damage slam leaves the Goblins at 15HP each; the observed Duel Goblin
 rounds end around 7.2 seconds before a second slam. Against Shadow, Golem records
 no damage or released lasers, so range and cover remain a separate limitation.
 
-The next isolated hypothesis doubles only Golem starting HP to 320 in the default
+The isolated hypothesis doubles only Golem starting HP to 320 in the default
 and authored configuration. Slam, laser, cooldowns, speed and the deliberate
 medium-range gap stay unchanged. This tests whether the slow body survives long
-enough for another attack; it does not yet establish better balance. Retain genuine
-timeouts and examine released actions as well as wins. Any route correction is a
-separate change and comparison, so it cannot be credited to this health trial.
+enough for another attack. No route correction accompanies this health trial.
+
+At clean `c1a6cf4`, the 32-round Duel comparison and 16-round Fort spot use identical
+attacks and two side/initiative orders. The Golem now reliably reaches its second
+slam against Goblins, while ranged movement and cover remain strong counters.
+Keep HP320 as the initial playable hypothesis; do not remove the requested medium
+range gap to force parity against the Shadow.
+
+| Opponent | Duel: Golem wins / losses / timeouts | Fort: Golem wins / losses / timeouts |
+| --- | ---: | ---: |
+| Shadow | 0 / 8 / 0 | 0 / 4 / 0 |
+| Dragon | 0 / 8 / 0 | 0 / 0 / 4 |
+| Five Goblins | 8 / 0 / 0 | 4 / 0 / 0 |
+| Shaman + three Goblins | 3 / 4 / 1 | 2 / 2 / 0 |
+
+These are matchup-dependent machine results, not a claim that the Golem already
+matches the Shadow's human challenge. Creature-only seeds often repeat an identical
+trajectory. Fort's Dragon/Golem timeouts remain unfinished fights, not draws or wins.
+
+A retained seed1 trace of both HP160 side orders establishes the initial Shadow
+counter: both Golems start charging at tick1, then actual authored cover blocks
+sight at109/121 before the198-tick lock. The admitted8-second cooldown prevents
+another laser before death. Most subsequent poses are clear and supported;
+Fireball impulses repeatedly oppose the2-unit/second approach. The late self-slam
+removes footing but the body lands and resumes movement. Those traces do not
+establish a collision bug as the cause of the initial losses.
+
+Native timing exposes repeatable Dragon/Golem spikes, typically18–30 ticks above
+8.333ms per Duel round, with maxima around11ms and a few terrain-publication spikes.
+The Fort maximum is12.022ms. These are an open performance defect under investigation,
+not a passed120Hz capacity claim. Sampling-profiler rounds are diagnostic and must
+not replace uninstrumented timing evidence.
+
+Retained task evidence: `outputs/arena-golem-calibration-01`,
+`outputs/arena-golem-fort-02`, `outputs/arena-golem-trace-03` and its independent
+diagnosis, `outputs/arena-golem-calibration-04`, `outputs/arena-golem-fort-05`, and
+their summary JSON files. The latter two are source-frozen in the small detached
+review checkout, allowing unrelated Wisp work to proceed on the local experiment
+branch. Arena tests pass199 after the HP-only change; capture guards pass17 after
+the natural laser review opponent changes from Shadow to Dragon.
 
 ## Native smoke measurements
 

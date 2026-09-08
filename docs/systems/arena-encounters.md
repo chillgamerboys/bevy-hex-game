@@ -106,7 +106,7 @@ and roster, including barriers, cooldowns and party memories.
 | Dragon |220| Slow flight, fast ground pursuit, fire breath and a heavy bite; retreats and shields after damage. |
 | Goblin |50| Fast swarming with a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
-| Golem |160| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
+| Golem |320| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
 
 Goblins match the player body: .8 units tall with a .25-unit radius.
 
