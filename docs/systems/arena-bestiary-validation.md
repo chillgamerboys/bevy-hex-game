@@ -25,6 +25,13 @@ and the real-world battle harness. Results at this checkpoint:
 The complete repository-selected gate, final bestiary native build, expanded
 capacity timing and final presentation matrix remain pending.
 
+The next integrated checkpoint `41e860e` contains bounded dry/support-aware creature
+steering and crater recovery, fixed Dragon retreat destinations, and admitted
+eye/center visibility (`002dc6b`). It preserves the accepted Shadow policy and all
+initial creature numbers. Focused gameplay checks pass 146/146; the closer observer
+camera/footer candidate passes 64 application checks with two explicit capture
+tests ignored. Scoped strict gameplay and application lint pass.
+
 ## Actual matchup pilot
 
 The first pilot uses ordinary actors, abilities, health and terrain publication at
@@ -58,6 +65,54 @@ Retained task evidence: `outputs/spectator-matchup-smoke-ci-01.json`,
 `work/spectator-battle-diagnostic-ci-01.log`, and
 `taskwork/spectator-timeout-diagnosis-initial.md`.
 
+## Optimized comparison before numeric calibration
+
+Clean `41e860e19c79c968190412a5dab0469f4bacd6d5` ran 96 actual Duel battles: eight
+seeds, six pairings, both side/actor-order assignments and a 90-second limit. The
+optimized native test harness reads the same `assets/config/arena.ron` as the app;
+the receipt confirms it matches the unchanged defaults. Invalid/incomplete rounds
+are not admitted. These are simulation measurements without a renderer.
+
+| Pair | First wins | Second wins | Timeouts |
+|---|---:|---:|---:|
+| Shadow / Dragon | 14 | 0 | 2 |
+| Shadow / 5 Goblins | 6 | 8 | 2 |
+| Shadow / Shaman party | 13 | 1 | 2 |
+| Dragon / 5 Goblins | 8 | 8 | 0 |
+| Dragon / Shaman party | 0 | 16 | 0 |
+| 5 Goblins / Shaman party | 9 | 6 | 1 |
+
+The maximum measured tick was 5.943 ms, with none above 8.333 ms. Final winning-tick
+terrain requests were not separately flushed/measured by this harness version;
+terminal publication timing remains an explicit evidence gap being repaired.
+The 96-row receipt's setup/result fields were produced by the real harness; a
+review found the Python validator should cross-check more of those fields rather
+than only pair coverage. No incorrect actual setup was established by that review.
+
+These are still defect-finding results. The Dragon delivered only 35 total damage
+over its 16 Shadow rounds. Shaman self-damage totals 554 across its 48 rounds.
+Five Goblins are close enough for the initial rough target; their stats stay fixed.
+Dragon/Goblin decisions do not consume random values, so their eight seeds repeat
+the same two side-dependent trajectories. Their apparent 50% is not eight
+independent balance samples. Fort comparisons supply a separate terrain layout.
+
+Test-only `9dbabf5` adds exact release/self-hit transitions. In the retained seed-8
+Shaman-left/Goblins-right trace, a Fireball released at tick 295 detonates at its
+previous position at tick 297 while its caster moves away. Owner-clearance admission
+tests the current caster pose, but the subsequent sweep tests the previous pose;
+the just-admitted shot still overlaps that previous capsule. This identifies a
+false self-hit at the start of the sweep. Repair must preserve legitimate returning
+projectile hits and splash self-damage. Separately, Shaman spread is mistakenly
+added to a normalized direction while the accepted Shadow uses a positional error;
+the configured two-times multiplier should retain the same units. An independent
+geometric fixture also exposes cone attacks rejecting an exposed body flank after
+one nearer contact is obstructed. Repairs and repeated comparisons are pending.
+
+Retained task evidence: `outputs/arena-original-native-01/{receipt.json,battles.log}`,
+`outputs/arena-original-native-summary-01.json`,
+`outputs/arena-self-hit-trace-01/{receipt.json,battles.log}`, and
+`outputs/shaman-self-hit-transitions-01.json`. Traced timing is diagnostic only.
+
 ## Native smoke measurements
 
 At `90e2e4d`, two windowless ordinary seeded battles ran serially, with no synthetic
@@ -85,6 +140,16 @@ versus winner text, whole-map framing and the ordinary human HUD are readable.
 Whole-map camera distances make creature/team detail too small for that criterion;
 closer views and useful initial observer framing are being added. Do not treat the
 original overview pack as complete model-detail approval.
+
+The fresh `41e860e...-spectator-close-02` pack contains fourteen 1600 by 900 raw
+views, including close Fort/Duel pairs at opposite azimuths. The coordinator and
+independent reviewer inspected every original before the contact sheet: scoped
+static PASS. Close views distinguish both team colors and show the player-sized
+Goblins, Shaman, Shadow and long low Dragon. The footer is centered and padded.
+Menus, HP labels, opaque terrain and transparent panels are readable. Rendered
+result labels match the typed receipts: Fort Team 2 at tick 505, Duel Team 1 at
+tick 619. Raw images, original receipts, contact sheet and both reviews remain in
+the ignored exact-source pack. This closes the original framing gap.
 
 Human native camera motion, collision feel, creature animation, telegraph readability
 in motion, and 20–30 Fort encounters remain **HUMAN-MOTION-PENDING**. Paired machine
