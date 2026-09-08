@@ -1,6 +1,12 @@
 //! Frozen dry routes through the real world producer and continuous controller.
 //! These are travel contracts, not evidence of autonomous pursuit decisions.
 
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "missing deterministic fixtures and stalled route segments must fail these tests"
+)]
+
 use bevy::prelude::*;
 use hex_arena::{ActorIntent, ArenaInput, ArenaSession, ArenaTuning, Species};
 use hex_core::arena::{

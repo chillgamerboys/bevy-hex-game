@@ -123,13 +123,11 @@ fn selecting_and_restarting_restores_world_and_roster_without_old_actor_ids() {
         .world_mut()
         .write_message(TerrainEdit::Clear { pos: removable });
     tick(&mut fixture);
-    assert!(
-        !fixture
-            .world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&removable)
-    );
+    assert!(!fixture
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&removable));
     fixture
         .world_mut()
         .resource_mut::<ArenaSession>()
@@ -435,7 +433,13 @@ fn profile_combat(selection: ArenaSelection) {
         "living_enemies": session.encounter_summary().living_enemies,
         "terrain_outcomes": session.terrain_outcomes,
     });
-    println!("ENCOUNTER_PERFORMANCE {receipt}");
+    #[expect(
+        clippy::print_stdout,
+        reason = "explicit ignored benchmark emits its machine-readable receipt"
+    )]
+    {
+        println!("ENCOUNTER_PERFORMANCE {receipt}");
+    }
     assert_eq!(peak_active, party_count, "measure all parties concurrently");
     assert!(
         all_active_ticks >= 2400,
