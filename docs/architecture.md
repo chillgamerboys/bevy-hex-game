@@ -151,8 +151,10 @@ This is an implemented local experiment on `experiment/spell-combat-arena`, pend
 combined validation and playtesting; it has not landed on `dev`. Its decisions and
 ownership are recorded in the [arena manifest](planning/waves/spell-combat-arena/manifest.md).
 
-World-owned `hex_map::arena` publishes `hex_core::arena` geometry, complete solid-voxel
-occupancy, material identities, revision, and spawn positions. Gameplay consumes this
+World-owned `hex_map::arena` publishes `hex_core::arena` geometry and map selection,
+complete solid-voxel occupancy, compact column runs and dirty-column revisions,
+anchors, static-object query masks, liquids, edit protection, material identities
+and spawn positions. Gameplay consumes this
 public projection to build collision queries; it never imports `VoxelMap`. At 120 Hz,
 `ArenaTick` orders `ApplyTerrain → PublishTerrain → Simulate`. Gameplay emits existing
 `TerrainEdit` and `TerrainImpact` messages for the next tick; the world admits edits,
@@ -161,8 +163,9 @@ simulation consumes them. A world-owned `PreUpdate` inbox retains pending edits 
 impacts while the tick is paused. Reset clears this inbox and outstanding messages
 before both owners adopt the new `ArenaReset` generation.
 
-`hex_arena` owns actor movement, projectile sweeps, HP, cooldowns, explosions, and bot
-decisions. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
+`hex_arena` owns actor movement, projectile sweeps, HP, cooldowns, explosions, temporary attack barriers, timed support and
+party decisions. The accepted Duel bot stays separate from authored-map party
+activation and creature policies. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
 the terrain projection. `ActorIntent` is the intended ingress seam for a future
 network adapter, not an implemented wire protocol or authorization layer. Captures
 and camera transforms carry no gameplay authority.

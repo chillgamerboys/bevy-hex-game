@@ -30,6 +30,12 @@ cargo run --release -p hex_game --features map-review
 *The current Procedural Hills build. The same terrain supports exploration,
 positioning, and combat.*
 
+## Local spell-combat experiment
+
+The local arena branch also contains a separate first-person combat prototype with
+charged spells, destructible terrain, creature encounters and authored maps. See
+the [arena controls and tuning guide](docs/systems/arena-encounters.md).
+
 ## Magic is geometry
 
 Every character and enemy is defined by a **lattice**: a finite grid of hexagonal

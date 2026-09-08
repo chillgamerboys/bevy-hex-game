@@ -9,19 +9,13 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-**Spell Combat Arena — local experiment, 2026-09-06.** The default-off
-`arena-prototype` feature and explicit `--arena` launch now implement a separate
-native duel against one disposable bot on `experiment/spell-combat-arena`.
-`hex_arena` owns continuous movement, HP, cooldowns, ballistic Shield/Fireball,
-Area Blast, and knockback; world-owned arena terrain retains the existing damage
-and edit authority. First-person/close-third-person input, paused tuning, reset,
-and windowless capture tooling are implemented. The original local candidate
-`6c89d48` passed all 19 combined checks and static inspection of 22 windowless
-captures. A subsequent bot follow-up adds gravity-aware aim with modest movement
-lead, close-range Area Blast, defensive Shield, and local strafing/obstacle probes;
-its focused validation is recorded separately. Native playtesting remains pending. This work has not landed
-on `dev`, does not install tactical gameplay or networking, and does not deliver
-multiplayer. See the [arena manifest](waves/spell-combat-arena/manifest.md).
+**Spell Combat Arena — local experiment, 2026-09-07.** The user playtested and
+accepted the stronger Shadow opponent at `127d1ce`. The [new encounter wave](waves/arena-encounters/manifest.md)
+adds Dragons, Goblins, Shamans and selected Fort/Seven Regions combat. Shared
+selection/geometry/physical-impact contracts, world, gameplay and presentation
+lanes are committed locally; combined validation and render review are in progress. See the [controls guide](../systems/arena-encounters.md).
+This work remains local on experiment/spell-combat-arena; no dev merge, tactical
+authority, multiplayer or Grand V3 integration is part of this delivery.
 
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)

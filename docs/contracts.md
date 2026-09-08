@@ -171,9 +171,29 @@ rather than assuming the latest delta is complete. World publication commits the
 selection before actor reset. Only the world writes these facts.
 
 ArenaVoxelGeometry publishes vertical_offset and inclusive min/max levels.
-Upper-face height is level*level_height+vertical_offset: accepted Duel uses0,
+Upper-face height is level*level_height+vertical_offset: accepted Duel uses 0,
 authored maps use one level height. TilePos identities remain unchanged.
 TerrainImpact now carries TerrainDamageKind::Elemental(ElementId) or Physical;
 UnknownElement applies only to elemental impacts. World-owned admission determines
 the physical material allow-list; no fake element or second mutation channel is
 introduced. Existing elemental publishers are mechanically migrated.
+
+
+Gameplay owns stable actor/species/team/party identities, maximum HP, physical body
+profiles and previous/current body orientation. Projectile sweeps and forecasts
+consume those body profiles; a forecast receives only admitted observations.
+Allied bodies are ignored by enemy projectile queries, while the caster remains
+eligible for its own Fireball splash. Released shots retain source identity,
+team and admitted actor-damage multiplier after source death.
+
+`BarrierSnapshot` describes a temporary gameplay rectangle with independent HP
+and lifetime. Direct-attack queries include barriers from either side; sight,
+body movement and camera queries omit them. Expiring a barrier never emits a
+terrain mutation. `AuraSnapshot`, `AttackSnapshot` and `PartySnapshot` publish
+actual simulation state for presentation and typed validation. Normal HUDs show
+only player status and cleared-party progress, not hidden actors or party activity.
+
+The test-support pose and route probes clone actors against the same collision
+world and movement controller. They cannot create a route, teleport an actor or
+change the live session. Bounded dirty-column publication must be consumed before
+the following movement tick, including after simultaneous damage and creation.

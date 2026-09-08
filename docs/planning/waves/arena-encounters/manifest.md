@@ -1,6 +1,6 @@
 # Arena enemies and authored encounters — local wave
 
-Status: foundation validated; lanes ready. Base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Branch: experiment/spell-combat-arena. Coordinator: root. Ticket: null (Linear reauthentication required).
+Status: integrating. Base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Branch: experiment/spell-combat-arena. Coordinator: root. Ticket: null (Linear reauthentication required).
 Outcome: [approved specification](plan.md), grounded in [audited seams](maps/seams.md). World facts, creature authority and presentation form one combined playable outcome. User requires local implementation/commits, excluding remote PR/dev merges. Foundation remains local; contributors edit disjoint authority files in the shared checkout. Root alone commits and serializes builds/captures.
 
 ## Locked decisions
@@ -68,7 +68,7 @@ Typed hooks establish gameplay; fresh windowless captures establish static prese
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "queued",
+      "state": "merged-to-wave",
       "pr": null
     },
     {
@@ -104,7 +104,7 @@ Typed hooks establish gameplay; fresh windowless captures establish static prese
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "queued",
+      "state": "merged-to-wave",
       "pr": null
     },
     {
@@ -142,7 +142,7 @@ Typed hooks establish gameplay; fresh windowless captures establish static prese
         "model": "inherited",
         "effort": "inherited"
       },
-      "state": "queued",
+      "state": "merged-to-wave",
       "pr": null
     }
   ]
@@ -152,3 +152,18 @@ Typed hooks establish gameplay; fresh windowless captures establish static prese
 ## Checkpoints
 
 - Foundation: existing hex_arena suite and126 core tests passed; bounded sphere and authored vertical-offset regression included. Receipt: task work/encounter-foundation-tests.log. No changes to accepted bot behavior.
+
+- Foundation committed ad70deb; 82 arena and126 core tests passed. Core strict all-feature/all-target Clippy passed. Three ownership lanes dispatched. Root owns independent hex_game/tests/arena_encounters.rs and its Cargo target.
+
+- World milestone:12 arena world tests passed (8.14s test runtime), including Fort/Seven geometry, physical partial HP, dirty columns, protected static/liquid projections and full reset. Receipt task work/encounter-world-tests-02.log. Static presentation remains unreviewed.
+
+- World follow-up `0c1b104`: physical-admission fingerprint v2, explicit schema edge tests and strict world/assets lint pass.
+- Gameplay draft: 100 focused tests pass (82 accepted Duel checks plus 18 encounter/body tests); broader behavior regressions and combined application checks are underway.
+- Additional bounded validation ownership: world contributor authored `hex_arena/src/shape_contract_tests.rs` and is preparing `hex_game/tests/arena_routes.rs`; this is test-only delegation, with no production authority expansion. Root owns the explicit test targets and integration report.
+- Capture review requires frozen liquid phase, authored-object readiness, four completed render frames and fatal handling of world presentation errors. Real wall-time intervals are recorded separately from engine and simulation time.
+
+- Local gameplay checkpoint `7d27157`: 107 tests pass, including all 82 accepted checks. The added regression exposed and fixed disabled NPC input overwriting its aim; no assertion was weakened. Final combined gate also covers a telemetry-only follow-up included in the checkpoint.
+- Local presentation checkpoint `067aa55`: 44 arena application tests pass (2 explicit ignored fixtures; unrelated tests filtered). Shared damage-fixture migration is separately identifiable at `da4bdd2`.
+
+- Integration checkpoint `42ae1d9`: 4 combined composition checks and 8 fixed-route checks pass. Native-profile stress fixtures remain explicitly ignored until their separate measurement run.
+- Gameplay follow-up `578b3cf`: 111 focused tests pass. Party-only quantized cues never wake dormant groups or refresh search timeouts; Returning Shadow local defense retains homeward movement.

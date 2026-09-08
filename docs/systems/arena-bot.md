@@ -1,6 +1,7 @@
 # Arena opponent
 
-The local `arena-prototype` experiment uses one fixed-strength opponent. Both
+The original Duel in the local `arena-prototype` experiment uses one fixed-strength
+Shadow Player. Other [encounters](arena-encounters.md) have separate profiles. Both
 actors share movement, charge, release, cooldown, damage, and terrain rules.
 Maximum charge takes **0.75 seconds**. Tap and full launch speeds remain about
 18.5 and 36.5 world units/second at the default reference speed of 32.
