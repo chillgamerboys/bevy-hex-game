@@ -259,6 +259,10 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
                 raise RuntimeError(f"{view} is missing its world-published partial shield fixture.")
             if any(voxel in preview["wall_voxels"] for voxel in fixture):
                 raise RuntimeError(f"{view} preview failed to omit its occupied fixture slots.")
+    if state.get("selection", {}).get("map") == "Fort" and (view in {"encounter-first", "encounter-third"} or view.startswith("encounter-body")):
+        reached = state.get("composition_reached_frame")
+        if not state.get("approach_complete") or not state.get("visible_subjects") or not isinstance(reached, int) or state.get("frame", 0) < reached + 4:
+            raise RuntimeError(f"{view} requires a completed Fort approach, visible subject, and four stable composition frames.")
     phase_views = {"encounter-windup", "encounter-breath", "encounter-swipe", "encounter-barrier", "encounter-aura", "encounter-fireball"}
     phase_view = view.removesuffix("-rear")
     if phase_view in phase_views:

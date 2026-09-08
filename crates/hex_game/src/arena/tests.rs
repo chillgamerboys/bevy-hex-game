@@ -2034,3 +2034,154 @@ fn synthetic_stress_changes_require_explicit_capture_and_retain_tick_activity() 
     assert!(session.actors.iter().all(|actor| actor.max_hp > 99_999.0));
     assert!(session.outcome.is_none());
 }
+
+#[test]
+fn goblin_swipe_capture_walks_the_fort_detour_and_reaches_a_real_windup() {
+    let mut fixture = app(60);
+    *fixture.world_mut().resource_mut::<ArenaSelection>() = ArenaSelection {
+        map: ArenaMap::Fort,
+        encounter: ArenaEncounter::Goblins,
+    };
+    fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    {
+        let mut state = fixture.world_mut().resource_mut::<ViewState>();
+        state.capture = Some("capture-adapter-test-no-screenshot-system.png".into());
+        state.capture_view = "encounter-swipe".into();
+    }
+    for _ in 0..1800 {
+        fixture.update();
+        if fixture
+            .world()
+            .resource::<ViewState>()
+            .capture_event_frame
+            .is_some()
+        {
+            break;
+        }
+    }
+    let state = fixture.world().resource::<ViewState>();
+    let session = fixture.world().resource::<ArenaSession>();
+    assert!(
+        state.capture_route_step > 0,
+        "capture must take the gate/keep detour"
+    );
+    assert!(
+        state.capture_event_frame.is_some(),
+        "swipe capture stalled at waypoint {}: {:?}",
+        state.capture_route_step,
+        session
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.feet, actor.hp))
+            .collect::<Vec<_>>()
+    );
+    assert!(encounter::phase_ready(session, "encounter-swipe"));
+    assert!(session.actors.first().is_some_and(|actor| actor.hp > 0.0));
+}
+
+#[test]
+fn fort_dragon_actor_camera_scripts_reach_a_visible_subject_after_the_keep_detour() {
+    use bevy::ecs::system::RunSystemOnce;
+    for (view, third_person) in [("encounter-first", false), ("encounter-third", true)] {
+        let mut fixture = app(60);
+        *fixture.world_mut().resource_mut::<ArenaSelection>() = ArenaSelection {
+            map: ArenaMap::Fort,
+            encounter: ArenaEncounter::Dragon,
+        };
+        fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
+        {
+            let mut state = fixture.world_mut().resource_mut::<ViewState>();
+            state.capture = Some("camera-adapter-test-no-screenshot-system.png".into());
+            state.capture_view = view.into();
+            state.third_person = third_person;
+        }
+        let camera = fixture
+            .world_mut()
+            .spawn((ArenaCamera, Transform::default()))
+            .id();
+        let mut subjects = Vec::new();
+        for _ in 0..1800 {
+            fixture.update();
+            fixture
+                .world_mut()
+                .run_system_once(presentation::camera)
+                .expect("actor camera projection");
+            if encounter::fort_approach_complete(
+                fixture.world().resource::<ViewState>().capture_route_step,
+            ) {
+                subjects = encounter::visible_subjects(
+                    fixture.world().resource::<ArenaSession>(),
+                    fixture
+                        .world()
+                        .get::<Transform>(camera)
+                        .expect("camera pose"),
+                    view,
+                );
+            }
+            if !subjects.is_empty() || fixture.world().resource::<ArenaSession>().outcome.is_some()
+            {
+                break;
+            }
+        }
+        assert!(
+            !subjects.is_empty(),
+            "{view} never composed a visible Dragon after the Fort approach; actors {:?}",
+            fixture
+                .world()
+                .resource::<ArenaSession>()
+                .actors
+                .iter()
+                .map(|actor| (actor.id, actor.feet, actor.hp))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn fort_capture_scripts_reach_requested_phases_after_the_keep_detour() {
+    for (encounter, view) in [
+        (ArenaEncounter::Dragon, "encounter-windup"),
+        (ArenaEncounter::Dragon, "encounter-breath"),
+        (ArenaEncounter::Dragon, "encounter-barrier"),
+        (ArenaEncounter::ShamanParty, "encounter-fireball"),
+        (ArenaEncounter::ShamanParty, "encounter-aura"),
+    ] {
+        let mut fixture = app(60);
+        *fixture.world_mut().resource_mut::<ArenaSelection>() = ArenaSelection {
+            map: ArenaMap::Fort,
+            encounter,
+        };
+        fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
+        {
+            let mut state = fixture.world_mut().resource_mut::<ViewState>();
+            state.capture = Some("phase-adapter-test-no-screenshot-system.png".into());
+            state.capture_view = view.into();
+        }
+        for _ in 0..1800 {
+            fixture.update();
+            if fixture
+                .world()
+                .resource::<ViewState>()
+                .capture_event_frame
+                .is_some()
+                || fixture.world().resource::<ArenaSession>().outcome.is_some()
+            {
+                break;
+            }
+        }
+        let state = fixture.world().resource::<ViewState>();
+        let session = fixture.world().resource::<ArenaSession>();
+        assert!(
+            state.capture_event_frame.is_some(),
+            "{view} failed at approach waypoint{}; actors {:?}",
+            state.capture_route_step,
+            session
+                .actors
+                .iter()
+                .map(|actor| (actor.id, actor.feet, actor.hp))
+                .collect::<Vec<_>>()
+        );
+        assert!(encounter::fort_approach_complete(state.capture_route_step));
+        assert!(encounter::phase_ready(session, view));
+    }
+}

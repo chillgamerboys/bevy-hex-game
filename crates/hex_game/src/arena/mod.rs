@@ -14,6 +14,7 @@ use bevy::winit::WinitPlugin;
 use hex_arena::{ActorIntent, ArenaInput, ArenaSession, ArenaTuning, Spell};
 use hex_core::arena::{
     ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection, ArenaSystems, ArenaTerrainView, ArenaTick,
+    ArenaVoxelGeometry,
 };
 use std::path::PathBuf;
 
@@ -85,6 +86,10 @@ struct ViewState {
     capture_focus: Option<String>,
     capture_event_frame: Option<u32>,
     capture_ready_frame: Option<u32>,
+    capture_route_step: usize,
+    capture_approach_frame: Option<u32>,
+    capture_composition_frame: Option<u32>,
+    capture_subjects: Vec<u8>,
     capture_stress_initialized: bool,
     capture_stress_steps: u32,
     capture_stress_ticks: Vec<encounter::StressTick>,
@@ -124,6 +129,10 @@ impl Default for ViewState {
             capture_focus: std::env::var("HEX_ARENA_FOCUS").ok(),
             capture_event_frame: None,
             capture_ready_frame: None,
+            capture_route_step: 0,
+            capture_approach_frame: None,
+            capture_composition_frame: None,
+            capture_subjects: Vec::new(),
             capture_stress_initialized: false,
             capture_stress_steps: 0,
             capture_stress_ticks: Vec::new(),
@@ -162,6 +171,10 @@ impl ViewState {
         self.initialized = false;
         self.capture_event_frame = None;
         self.capture_ready_frame = None;
+        self.capture_route_step = 0;
+        self.capture_approach_frame = None;
+        self.capture_composition_frame = None;
+        self.capture_subjects.clear();
         self.capture_ready_elapsed_ms = None;
         self.capture_stress_initialized = false;
         self.capture_stress_steps = 0;
@@ -594,7 +607,7 @@ fn drive_simulation(world: &mut World) {
         } else if !state.paused {
             state.step_offset *= (-12.0 * delta_f32.min(0.1)).exp();
         }
-        if state.capture_event_frame.is_some() {
+        if state.capture_event_frame.is_some() || state.capture_composition_frame.is_some() {
             (0, state.frames, state.capture_view.clone())
         } else if state.paused || !state.started {
             state.accumulator = 0.0;
@@ -627,7 +640,30 @@ fn drive_simulation(world: &mut World) {
         let sample = if encounter::stress_view(&view) {
             ActorIntent::default()
         } else if view.starts_with("encounter-") && view != "encounter-landmark" {
-            encounter::capture_intent(frame, world.resource::<ArenaSession>(), &view)
+            let mut route_step = world.resource::<ViewState>().capture_route_step;
+            let waypoint = encounter::fort_capture_waypoint(
+                &view,
+                world.resource::<ArenaTerrainView>(),
+                *world.resource::<ArenaVoxelGeometry>(),
+                world.resource::<ArenaSession>(),
+                &mut route_step,
+            );
+            let action_frame = {
+                let mut state = world.resource_mut::<ViewState>();
+                state.capture_route_step = route_step;
+                if encounter::fort_approach_complete(route_step) {
+                    let start = *state.capture_approach_frame.get_or_insert(frame);
+                    frame.saturating_sub(start).saturating_add(1)
+                } else {
+                    frame
+                }
+            };
+            encounter::capture_intent(
+                action_frame,
+                world.resource::<ArenaSession>(),
+                &view,
+                waypoint,
+            )
         } else {
             capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction)
         };
@@ -705,7 +741,12 @@ fn drive_simulation(world: &mut World) {
             let mut state = world.resource_mut::<ViewState>();
             state.step_offset = (state.step_offset - rise).max(-0.8);
         }
-        if capture && encounter::phase_ready(world.resource::<ArenaSession>(), &view) {
+        let approach_ready = world.resource::<ArenaTerrainView>().selection.map != ArenaMap::Fort
+            || encounter::fort_approach_complete(world.resource::<ViewState>().capture_route_step);
+        if capture
+            && approach_ready
+            && encounter::phase_ready(world.resource::<ArenaSession>(), &view)
+        {
             let mut state = world.resource_mut::<ViewState>();
             state.capture_event_frame = Some(frame);
             state.accumulator = 0.0;
@@ -910,13 +951,48 @@ fn capture_frame(
     }
     if encounter::phase_view(&state.capture_view) && state.capture_event_frame.is_none() {
         if state.frames >= 1800 || session.outcome.is_some() {
+            error!(
+                tick = session.tick,
+                approach_waypoint = state.capture_route_step,
+                actors = ?session.actors.iter().map(|actor| (actor.id, actor.feet, actor.hp, actor.attack_state())).collect::<Vec<_>>(),
+                parties = ?session.parties(),
+                "Encounter capture phase failure state"
+            );
             error!("Encounter capture failed: requested phase {} was not reached before the round ended or the 30-second limit", state.capture_view);
             state.requested = true;
             exit.write(AppExit::error());
         }
         return;
     }
-    let frame = if let Some(frame) = state.capture_event_frame {
+    if encounter::composition_view(&state.capture_view, view.selection.map)
+        && state.capture_composition_frame.is_none()
+    {
+        let subjects = if encounter::fort_approach_complete(state.capture_route_step) {
+            cameras
+                .single()
+                .ok()
+                .map(|camera| encounter::visible_subjects(&session, camera, &state.capture_view))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if !subjects.is_empty() {
+            state.capture_subjects = subjects;
+            state.capture_composition_frame = Some(frames);
+            state.accumulator = 0.0;
+        } else if frames >= 1800 || session.outcome.is_some() {
+            error!(tick=session.tick, approach_waypoint=state.capture_route_step,
+                actors=?session.actors.iter().map(|actor| (actor.id, actor.feet, actor.hp)).collect::<Vec<_>>(),
+                "Encounter capture failed: no visible subject after the verified Fort approach");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    let frame = if let Some(frame) = state
+        .capture_event_frame
+        .or(state.capture_composition_frame)
+    {
         frame.saturating_add(4)
     } else if state.capture_view.starts_with("bot-combat-") && session.outcome.is_some() {
         state.frames
@@ -1041,6 +1117,11 @@ fn capture_frame(
         ("liquid_phase_seconds", serde_json::json!(liquid_clock.as_ref().map(|clock| clock.phase_seconds()))),
         ("app_construction_to_render_ready_ms", serde_json::json!(state.capture_ready_elapsed_ms)),
         ("camera", serde_json::json!(cameras.single().ok().map(|camera| serde_json::json!({"position": camera.translation.to_array(), "rotation": camera.rotation.to_array()})))),
+        ("approach_waypoint_index", serde_json::json!(state.capture_route_step)),
+        ("approach_complete", serde_json::json!(encounter::fort_approach_complete(state.capture_route_step))),
+        ("composition_reached_frame", serde_json::json!(state.capture_composition_frame)),
+        ("visible_subjects", serde_json::json!(state.capture_subjects)),
+        ("approach_completed_frame", serde_json::json!(state.capture_approach_frame)),
         ("actors", serde_json::json!(actors)),
         ("barriers", serde_json::json!(barriers)),
         ("auras", serde_json::json!(auras)),

@@ -3,7 +3,7 @@
 use super::{ArenaCamera, ViewState};
 use bevy::prelude::*;
 use hex_arena::{ActorIntent, ArenaSession, ArenaTuning, AttackPhase, CreatureAbility, Spell};
-use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
+use hex_core::arena::{ArenaMap, ArenaTerrainView, ArenaVoxelGeometry};
 
 pub(super) fn stress_view(view: &str) -> bool {
     view == "encounter-stress"
@@ -86,10 +86,76 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
     })
 }
 
-pub(super) fn capture_intent(frame: u32, session: &ArenaSession, view: &str) -> ActorIntent {
+const FORT_APPROACH: [(i32, i32); 7] = [
+    (9, -4),
+    (8, -3),
+    (7, -3),
+    (6, -3),
+    (5, -3),
+    (4, -3),
+    (3, -3),
+];
+
+pub(super) fn fort_approach_complete(step: usize) -> bool {
+    step >= FORT_APPROACH.len()
+}
+
+pub(super) fn composition_view(view: &str, map: ArenaMap) -> bool {
+    map == ArenaMap::Fort
+        && (matches!(view, "encounter-first" | "encounter-third")
+            || view.starts_with("encounter-body"))
+}
+
+/// Replay the accepted Fort gate/keep detour with ordinary movement. Directly
+/// chasing a creature cuts through the keep at this fixed seed.
+/// Cell centers match the frozen FORT contract in tests/arena_routes.rs.
+pub(super) fn fort_capture_waypoint(
+    view: &str,
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    session: &ArenaSession,
+    step: &mut usize,
+) -> Option<Vec3> {
+    if terrain.selection.map != ArenaMap::Fort
+        || !view.starts_with("encounter-")
+        || view == "encounter-landmark"
+        || stress_view(view)
+    {
+        return None;
+    }
+    let human = session.actors.first()?;
+    while let Some(&(q, r)) = FORT_APPROACH.get(*step) {
+        let pos = hex_core::TilePos::new(hex_core::HexCoord::from_axial(q, r), 15);
+        let waypoint = pos.coord.to_world(geometry.top(pos));
+        if human.feet.with_y(0.0).distance(waypoint.with_y(0.0)) >= 0.16
+            || (human.feet.y - waypoint.y).abs() >= 0.1
+        {
+            return Some(waypoint);
+        }
+        *step += 1;
+    }
+    None
+}
+
+pub(super) fn capture_intent(
+    frame: u32,
+    session: &ArenaSession,
+    view: &str,
+    waypoint: Option<Vec3>,
+) -> ActorIntent {
     let Some(human) = session.actors.first() else {
         return ActorIntent::default();
     };
+    if let Some(waypoint) = waypoint {
+        return ActorIntent {
+            aim: (waypoint - human.feet)
+                .with_y(0.0)
+                .normalize_or(Vec3::NEG_Z),
+            movement: Vec2::Y,
+            run: true,
+            ..default()
+        };
+    }
     let Some(enemy) = session
         .actors
         .iter()
@@ -112,8 +178,10 @@ pub(super) fn capture_intent(frame: u32, session: &ArenaSession, view: &str) -> 
     } else {
         Vec2::ZERO
     };
-    let attack = view.contains("barrier") || view.contains("aura") || view.contains("fireball");
-    let cycle = frame % 150;
+    // Only Barrier needs projectile pressure. Firing at the Shaman instead
+    // encourages defensive Shield and can obstruct the Fireball/Aura proof.
+    let attack = view.contains("barrier");
+    let cycle = frame.saturating_add(44) % 150;
     ActorIntent {
         movement,
         aim: direction,
@@ -278,6 +346,100 @@ pub(super) fn frame_bounds(minimum: Vec3, maximum: Vec3, rear: bool) -> Transfor
         .looking_to(forward, Vec3::Y)
 }
 
+/// Conservative composition admission: a living subject must occupy a useful
+/// part of the real camera frustum and have an unobstructed terrain ray.
+pub(super) fn visible_subjects(session: &ArenaSession, camera: &Transform, view: &str) -> Vec<u8> {
+    let Some(human) = session.actors.first() else {
+        return Vec::new();
+    };
+    session
+        .actors
+        .iter()
+        .filter(|actor| {
+            if actor.team == human.team
+                || actor.hp <= 0.0
+                || (view.starts_with("encounter-body") && actor.id != 1)
+            {
+                return false;
+            }
+            let point = actor.feet + Vec3::Y * actor.body_dimensions().y * 0.5;
+            let local = camera.rotation.inverse() * (point - camera.translation);
+            let depth = -local.z;
+            let tangent = (75.0_f32.to_radians() * 0.5).tan();
+            depth > 0.1
+                && depth < 80.0
+                && local.y.abs() < depth * tangent * 0.85
+                && local.x.abs() < depth * tangent * (16.0 / 9.0) * 0.85
+                && actor.body_dimensions().y / depth > 0.02
+                && session
+                    .camera_position(camera.translation, point)
+                    .distance(point)
+                    < 0.08
+        })
+        .map(|actor| actor.id)
+        .collect()
+}
+
+fn phase_camera(session: &ArenaSession, view: &str) -> Option<Transform> {
+    if view.strip_suffix("-rear").unwrap_or(view) == "encounter-barrier" {
+        let barrier = session.barriers().first()?;
+        let normal = barrier.normal.with_y(0.0).normalize_or(Vec3::Z);
+        let side = normal.cross(Vec3::Y);
+        let horizontal =
+            (normal * 7.0 + side * 2.5) * if view.ends_with("-rear") { -1.0 } else { 1.0 };
+        return Some(
+            Transform::from_translation(barrier.center + horizontal + Vec3::Y * 4.0)
+                .looking_at(barrier.center, Vec3::Y),
+        );
+    }
+    let actor = phase_actor(session, view)?;
+    if let Some(attack) = actor.attack_state().filter(|attack| {
+        matches!(
+            attack.kind,
+            CreatureAbility::FireCone | CreatureAbility::Bite | CreatureAbility::Swipe
+        )
+    }) {
+        let direction = attack.direction.normalize_or(Vec3::NEG_Z);
+        let target = attack.origin + direction * attack.range * 0.4;
+        let side = direction
+            .with_y(0.0)
+            .normalize_or(Vec3::NEG_Z)
+            .cross(Vec3::Y);
+        let points = [
+            attack.origin,
+            target,
+            attack.origin + direction * attack.range * 0.8,
+        ];
+        // Pick an opaque-world-visible review side of the actual attack lane;
+        // this changes only the external review camera, never bodies or effects.
+        return [-1.0, 1.0]
+            .into_iter()
+            .map(|sign| {
+                Transform::from_translation(
+                    target + side * sign * 7.0 + Vec3::Y * 5.0 - direction * 2.0,
+                )
+                .looking_at(target, Vec3::Y)
+            })
+            .max_by_key(|camera| {
+                points
+                    .iter()
+                    .filter(|point| {
+                        session
+                            .camera_position(camera.translation, **point)
+                            .distance(**point)
+                            < 0.08
+                    })
+                    .count()
+            });
+    }
+    let target = if view.strip_suffix("-rear").unwrap_or(view) == "encounter-aura" {
+        session.auras().first()?.center
+    } else {
+        actor.feet + Vec3::Y * actor.body_dimensions().y * 0.5
+    };
+    Some(close_camera(target, actor.body_rotation(), view))
+}
+
 pub(super) fn camera(
     session: Res<ArenaSession>,
     state: Res<ViewState>,
@@ -302,6 +464,8 @@ pub(super) fn camera(
             *camera = Transform::from_translation(*anchor + Vec3::new(12.0, 15.0, 16.0))
                 .looking_at(*anchor + Vec3::Y, Vec3::Y);
         }
+    } else if let Some(pose) = phase_camera(&session, &state.capture_view) {
+        *camera = pose;
     } else if state.capture_view.starts_with("encounter-") {
         let actor = if stress_view(&state.capture_view) {
             session.actors.first()
