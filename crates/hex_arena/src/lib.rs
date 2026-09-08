@@ -33,13 +33,14 @@ mod telemetry;
 
 pub use battle::{
     ArenaBattleSetup, ArenaControl, BattlePreset, BattleResult, BattleSetupError, BattleSummary,
-    BattleTeamSummary, TeamRoster, MAX_BATTLE_ACTORS,
+    BattleTeamSummary, MAX_BATTLE_ACTORS, TeamRoster,
 };
 pub use bot::BotDebugSnapshot;
 pub use bot_config::BotTuning;
 pub use creatures::{
-    ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, CreatureAbility,
-    EncounterSummary, PartyId, PartyPhase, PartySnapshot, Species, TeamId,
+    ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, BeamSnapshot,
+    BodyHexPrism, CreatureAbility, EncounterSummary, PartyId, PartyPhase, PartySnapshot, Species,
+    TeamId,
 };
 pub use encounter_config::EncounterTuning;
 pub use encounters::{CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot};
@@ -327,7 +328,7 @@ impl ArenaTuning {
 /// One authoritative continuous actor. Presentation reads these fields only.
 #[derive(Debug, Clone)]
 pub struct Actor {
-    /// Stable arena identity: human 0, disposable bot 1.
+    /// Stable actor identity allocated once per run, never reused after death.
     pub id: u8,
     /// Physical/behavior profile; human and shadow preserve accepted Duel values.
     pub species: Species,
@@ -343,7 +344,7 @@ pub struct Actor {
     pub previous_feet: Vec3,
     /// Unit world-space look direction.
     pub aim: Vec3,
-    /// Remaining HP, clamped to 0–100.
+    /// Remaining HP, clamped between zero and this actor's maximum.
     pub hp: f32,
     /// Selected spell for the next release.
     pub selected: Spell,
@@ -351,7 +352,7 @@ pub struct Actor {
     pub cooldowns: [f32; 3],
     /// Latest accepted support contact.
     pub grounded: bool,
-    /// Dragon flight mode; all other profiles retain ordinary grounded movement.
+    /// Whether this actor is currently using its profile's flight movement.
     pub flying: bool,
     charge: Option<ChargeState>,
     cast_needs_release: bool,
@@ -360,6 +361,7 @@ pub struct Actor {
     body_yaw: f32,
     previous_yaw: f32,
     attack: Option<AttackSnapshot>,
+    beam: Option<BeamSnapshot>,
     damage_multiplier: f32,
     last_damage_tick: Option<u64>,
     last_activity_tick: u64,
@@ -392,6 +394,7 @@ impl Actor {
             body_yaw: (-aim.x).atan2(-aim.z),
             previous_yaw: (-aim.x).atan2(-aim.z),
             attack: None,
+            beam: None,
             damage_multiplier: 1.0,
             last_damage_tick: None,
             last_activity_tick: 0,

@@ -10,6 +10,32 @@ pub type TeamId = u8;
 /// Stable encounter group identity within the selected map.
 pub type PartyId = u16;
 
+/// One world-oriented native hex prism in a compound creature body.
+/// Its pointy horizontal hex has circumradius one world unit, matching terrain.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyHexPrism {
+    /// Prism base offset from the actor's feet, expressed in world axes.
+    pub offset: Vec3,
+    /// Full vertical height in world units.
+    pub height: f32,
+}
+
+/// Authoritative finite projection of a charged or active direct beam.
+/// Presentation does not extend this segment or query hidden targets.
+#[derive(Debug, Clone, Copy)]
+pub struct BeamSnapshot {
+    /// Physical mouth at the current actor pose.
+    pub origin: Vec3,
+    /// Unit direction, fixed after the attack locks its aim.
+    pub direction: Vec3,
+    /// Current nearest impact or actual world-boundary endpoint.
+    pub end: Vec3,
+    /// Physical beam radius in world units.
+    pub radius: f32,
+    /// Whether the action has committed its direction.
+    pub locked: bool,
+}
+
 /// Authored continuous actor profile.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Species {
@@ -160,6 +186,19 @@ pub struct EncounterSummary {
 }
 
 impl crate::Actor {
+    /// Compound hex geometry when this profile uses it; existing capsules and
+    /// oriented boxes publish no prisms. The projection never allocates.
+    #[must_use]
+    pub fn body_hex_prisms(&self) -> impl Iterator<Item = BodyHexPrism> {
+        std::iter::empty()
+    }
+
+    /// Current authoritative beam, if this actor has admitted one.
+    #[must_use]
+    pub fn beam(&self) -> Option<BeamSnapshot> {
+        self.beam
+    }
+
     /// Full physical width, height and length; wings are decorative.
     #[must_use]
     pub fn body_dimensions(&self) -> Vec3 {
