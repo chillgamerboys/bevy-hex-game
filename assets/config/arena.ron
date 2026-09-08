@@ -27,7 +27,7 @@
     encounters: (
         swipe_terrain_power:1,bite_terrain_power:2,breath_terrain_power:2,
         breath_windup:0.15,bite_angle:70.0,shaman_fireball_damage:35.0,
-            dragon_hp: 100.0,
+            dragon_hp: 160.0,
             dragon_height: 0.4,
             dragon_length: 3.5,
             dragon_width: 1.732_050_8,
@@ -37,7 +37,7 @@
             dragon_turn_speed: 2.0,
             breath_damage: 35.0,
             breath_seconds: 0.75,
-            breath_range: 4.0,
+            breath_range: 6.0,
             breath_angle: 50.0,
             breath_cooldown: 3.0,
             bite_damage: 50.0,

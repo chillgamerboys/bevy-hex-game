@@ -14,6 +14,9 @@ mod recovery_tests;
 #[path = "combat_repair_tests.rs"]
 mod combat_repair_tests;
 
+#[path = "tuning_tests.rs"]
+mod tuning_tests;
+
 fn fixture(
     encounter: ArenaEncounter,
 ) -> (

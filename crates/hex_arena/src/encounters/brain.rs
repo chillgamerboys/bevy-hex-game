@@ -334,7 +334,15 @@ impl Brain {
                 // A retreating dragon may stop to turn its physical mouth toward
                 // a visible close attacker. Damage still refreshes the retreat
                 // timer, and the fixed retreat destination survives this defense.
-                if retreat && distance <= c.breath_range && self.ready(CreatureAbility::FireCone) {
+                let turn_distance = sight.and_then(|seen| seen.observed).map_or_else(
+                    || actor.center().distance(target.unwrap_or(actor.center())),
+                    |seen| seen.distance(actor.center(), 0.0),
+                );
+                let mouth_offset = actor.eye().distance(actor.center());
+                if retreat
+                    && turn_distance <= c.breath_range + mouth_offset
+                    && self.ready(CreatureAbility::FireCone)
+                {
                     goal = actor.feet;
                 }
                 if !retreat
@@ -405,8 +413,24 @@ impl Brain {
                 // Memory supplies a search destination, not proof of a firing lane.
                 // An obstructed shot seeks a new angle instead of parking at 8u.
                 if self.shooting_angle && sight.is_some() {
-                    goal =
-                        target + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 8.0;
+                    let away = (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z);
+                    goal = target + away * 8.0;
+                    let frontline: Vec<_> = actors
+                        .iter()
+                        .filter(|ally| {
+                            ally.id != actor.id
+                                && ally.hp > 0.0
+                                && ally.party == actor.party
+                                && matches!(ally.species, Species::Goblin | Species::Dragon)
+                        })
+                        .collect();
+                    if !frontline.is_empty() {
+                        let count = f32::from(u8::try_from(frontline.len()).unwrap_or(24));
+                        let center = frontline.iter().map(|ally| ally.feet).sum::<Vec3>() / count;
+                        // Stay behind the fighters, leaving room inside the
+                        // existing aura for their lateral melee movement.
+                        goal = center + away * (c.aura_radius * 0.75);
+                    }
                 } else if sight.is_some() && actor.center().distance(target) < 5.0 {
                     goal = actor.feet
                         + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 4.0;
@@ -425,7 +449,42 @@ impl Brain {
             if actor.charge().is_none()
                 && self.ready(CreatureAbility::Aura)
                 && (eligible.iter().any(|a| a.hp < a.max_hp - 0.1)
-                    || (party.snapshot.phase == PartyPhase::Active && eligible.len() >= 2))
+                    || (party.snapshot.phase == PartyPhase::Active
+                        && eligible
+                            .iter()
+                            .filter(|ally| {
+                                let attacking = ally.attack_state().is_some_and(|attack| {
+                                    matches!(
+                                        attack.kind,
+                                        CreatureAbility::Swipe
+                                            | CreatureAbility::Bite
+                                            | CreatureAbility::FireCone
+                                    )
+                                }) || shots.iter().any(|shot| {
+                                    shot.owner == ally.id
+                                        && shot.spell == Spell::Fireball
+                                        && shot.age < 1.0
+                                });
+                                let reach = match ally.species {
+                                    Species::Goblin => c.swipe_range + 0.2,
+                                    Species::Dragon => c.breath_range,
+                                    _ => 0.0,
+                                };
+                                let engaged = sight.is_some_and(|seen| {
+                                    let point = seen
+                                        .observed
+                                        .map_or(seen.point + Vec3::Y * 0.4, |o| o.sight_point);
+                                    let distance = seen.observed.map_or_else(
+                                        || ally.eye().distance(point),
+                                        |o| o.distance(ally.eye(), 0.0),
+                                    );
+                                    distance <= reach && collision.sight_clear(ally.eye(), point)
+                                });
+                                attacking || engaged
+                            })
+                            .take(2)
+                            .count()
+                            >= 2))
             {
                 request = Some(Request {
                     kind: CreatureAbility::Aura,
