@@ -92,7 +92,10 @@ class WormCaptureGuards(unittest.TestCase):
         for phase in ("buried", "emerging"):
             with self.assertRaises(RuntimeError):
                 validate_worm_state(state, "encounter-worm-"+phase)
-        state["actors"][0]["worm"].update(phase="Travel", exposed=False, head_clearance=-.6)
+        state["actors"][0]["worm"].update(phase="Travel", exposed=False, head_clearance=0)
+        with self.assertRaises(RuntimeError):
+            validate_worm_state(state, "encounter-worm-buried")
+        state["actors"][0]["head_earth"] = {"position": {"coord": {"q": 0, "r": 0}, "level": 5}, "substance": 2}
         validate_worm_state(state, "encounter-worm-buried")
         state["actors"][0]["worm"].update(phase="Emerging", head_clearance=.2)
         validate_worm_state(state, "encounter-worm-emerging")

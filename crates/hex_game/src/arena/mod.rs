@@ -997,6 +997,12 @@ fn drive_simulation(world: &mut World) {
         if capture
             && approach_ready
             && encounter::phase_ready(world.resource::<ArenaSession>(), &view)
+            && worm::terrain_phase_ready(
+                world.resource::<ArenaSession>(),
+                &view,
+                world.resource::<ArenaTerrainView>(),
+                *world.resource::<ArenaVoxelGeometry>(),
+            )
         {
             let mut state = world.resource_mut::<ViewState>();
             state.capture_event_frame = Some(frame);
@@ -1296,7 +1302,7 @@ fn capture_frame(
             error!(
                 tick = session.tick,
                 approach_waypoint = state.capture_route_step,
-                actors = ?session.actors.iter().map(|actor| (actor.id, actor.feet, actor.hp, actor.attack_state())).collect::<Vec<_>>(),
+                actors = ?session.actors.iter().map(|actor| (actor.id, actor.feet, actor.hp, actor.attack_state(), actor.worm())).collect::<Vec<_>>(),
                 parties = ?session.parties(),
                 "Encounter capture phase failure state"
             );
@@ -1421,6 +1427,7 @@ fn capture_frame(
             "party": actor.party, "hp": actor.hp, "max_hp": actor.max_hp,
             "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
             "body_center": actor.center().to_array(), "worm": actor.worm(),
+            "head_earth": worm::head_earth(actor, &view, *geometry),
             "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
             "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
             "idle_mouth": actor.eye().to_array(), "beam": beam, "flying": actor.flying, "grounded": actor.grounded,

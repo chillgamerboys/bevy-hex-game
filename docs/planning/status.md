@@ -20,7 +20,7 @@ two autonomous teams, Fort/Duel deployment, observer controls and seeded matchup
 receipts committed. Original groups, Golem and Ember Wisp have paired machine
 calibration records. Golem static review passes. Wisp sustained capacity passed at
 `5f5afec`; refreshed static review follows the windup cue repair. Worm world
-conversion, runtime, geometry and presentation are integrated, with 266 arena
+conversion, runtime, geometry and presentation are integrated, with 271 arena
 tests, 11 actual-world tests, 80 application tests and scoped strict lint recorded.
 Native calibration, final captures and the repository gate are underway.
 This work remains local on experiment/spell-combat-arena; no dev merge, tactical

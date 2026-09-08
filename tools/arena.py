@@ -525,7 +525,7 @@ def validate_worm_state(state: dict, view: str) -> None:
     if phase == "encounter-worm-boulder":
         require(any(shot.get("owner") == actor.get("id") and shot["age"] > 0 and any(abs(p-c) > dimension/2+shot["collision_radius"] for p, c, dimension in zip(shot["position"], actor["body_center"], actor["body_dimensions"])) for actor in worms for shot in boulders), "no real released Boulder fully outside its owner bounds")
     elif phase == "encounter-worm-buried":
-        require(any(a["worm"]["phase"] == "Travel" and not a["worm"]["exposed"] and a["worm"]["head_clearance"] <= -.4 for a in alive), "no naturally buried travelling head")
+        require(any(a["worm"]["phase"] == "Travel" and not a["worm"]["exposed"] and isinstance(a.get("head_earth"), dict) and type(a["head_earth"].get("substance")) is int and a["head_earth"]["substance"] > 0 and isinstance(a["head_earth"].get("position"), dict) for a in alive), "no naturally buried travelling head")
     elif phase == "encounter-worm-emerging":
         require(any(a["worm"]["phase"] == "Emerging" and .1 <= a["worm"]["head_clearance"] < .35 and a["body_hex_prisms"][0]["offset"][1]-min(p["offset"][1] for p in a["body_hex_prisms"]) > .5 for a in alive), "no natural tapered emergence")
     elif phase == "encounter-worm-windup":
@@ -828,7 +828,7 @@ def capture(args: argparse.Namespace) -> int:
         matrix = "arena-wisp-v1-natural-phases"
     if args.worm_review:
         entries = list(WORM_VIEWS)
-        matrix = "arena-worm-v1-natural-phases"
+        matrix = "arena-worm-v2-published-earth"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -869,7 +869,7 @@ def capture(args: argparse.Namespace) -> int:
         "source_label": "UNAPPROVABLE-DIRTY" if initial["dirty"] else "COMMITTED-CANDIDATE",
         "scenario": "Spell Combat Arena / explicit deterministic recipes",
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
-        "scenario_correction": "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
+        "scenario_correction": "Worm buried capture requires actual Travel, unexposed state and published solid material at the physical head center; clearance is zero inside earth, so the previous negative-clearance condition was unreachable." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
         "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],

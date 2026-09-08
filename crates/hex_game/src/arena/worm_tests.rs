@@ -444,3 +444,57 @@ fn worm_capture_observes_real_conversion_then_uses_r_to_restore_a_frozen_ready_r
         "capture completion keeps ready combat frozen"
     );
 }
+
+#[test]
+fn natural_worm_travel_capture_requires_published_earth_at_its_actual_head() {
+    let mut fixture = observer();
+    fixture
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .bot_enabled = true;
+    let mut reached = false;
+    for _ in 0..1800 {
+        tick(&mut fixture);
+        let session = fixture.world().resource::<ArenaSession>();
+        let terrain = fixture.world().resource::<ArenaTerrainView>();
+        let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+        if worm::terrain_phase_ready(session, "encounter-worm-buried", terrain, geometry) {
+            let actor = worm::phase_actor(session, "encounter-worm-buried")
+                .expect("actual travelling Worm");
+            assert!(!actor.worm().expect("physical state").exposed);
+            assert_eq!(
+                actor
+                    .worm()
+                    .expect("physical state")
+                    .head_clearance
+                    .to_bits(),
+                0.0_f32.to_bits(),
+            );
+            let head_cell = geometry.voxel_at(actor.eye()).expect("physical head voxel");
+            assert!(terrain
+                .voxels
+                .get(&head_cell)
+                .is_some_and(|material| !material.is_air()));
+            let mut missing_earth = terrain.clone();
+            missing_earth.voxels.remove(&head_cell);
+            assert!(
+                !worm::terrain_phase_ready(
+                    session,
+                    "encounter-worm-buried",
+                    &missing_earth,
+                    geometry
+                ),
+                "Travel alone cannot authorize the buried capture"
+            );
+            reached = true;
+            break;
+        }
+        if session.is_finished() {
+            break;
+        }
+    }
+    assert!(
+        reached,
+        "ordinary Worm/Goblins round reaches real buried travel before ending"
+    );
+}

@@ -327,9 +327,7 @@ pub(super) fn phase_actor<'a>(session: &'a ArenaSession, view: &str) -> Option<&
         };
         match view {
             "encounter-worm-body" => matches!(actor.body_hex_prisms().count(), 4 | 6),
-            "encounter-worm-buried" => {
-                worm.phase == WormPhase::Travel && !worm.exposed && worm.head_clearance <= -0.4
-            }
+            "encounter-worm-buried" => worm.phase == WormPhase::Travel && !worm.exposed,
             "encounter-worm-emerging" => {
                 let mut parts = actor.body_hex_prisms();
                 let head_y = parts.next().map_or(0.0, |part| part.offset.y);
@@ -349,6 +347,41 @@ pub(super) fn phase_actor<'a>(session: &'a ArenaSession, view: &str) -> Option<&
             _ => false,
         }
     })
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct HeadEarth {
+    position: hex_core::TilePos,
+    substance: hex_core::SubstanceId,
+}
+
+/// Capture evidence uses published material at the actual head center. Clearance
+/// is deliberately zero, not negative, when gameplay finds the head in earth.
+pub(super) fn head_earth(
+    actor: &Actor,
+    view: &hex_core::arena::ArenaTerrainView,
+    geometry: hex_core::arena::ArenaVoxelGeometry,
+) -> Option<HeadEarth> {
+    if actor.species != Species::Worm {
+        return None;
+    }
+    let position = geometry.voxel_at(actor.eye())?;
+    let substance = *view.voxels.get(&position)?;
+    (!substance.is_air()).then_some(HeadEarth {
+        position,
+        substance,
+    })
+}
+
+pub(super) fn terrain_phase_ready(
+    session: &ArenaSession,
+    name: &str,
+    view: &hex_core::arena::ArenaTerrainView,
+    geometry: hex_core::arena::ArenaVoxelGeometry,
+) -> bool {
+    name.strip_suffix("-rear").unwrap_or(name) != "encounter-worm-buried"
+        || phase_actor(session, name)
+            .is_some_and(|actor| head_earth(actor, view, geometry).is_some())
 }
 
 pub(super) fn capture_camera(

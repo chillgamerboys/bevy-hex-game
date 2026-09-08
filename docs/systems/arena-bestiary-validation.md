@@ -618,4 +618,38 @@ four levels of head support disappear, the anchored tail stays in place, actual
 head clearance updates and another normal Boulder releases. HP320/Boulder70 are
 now mirrored in validated defaults. **271 arena tests and strict arena lint pass**
 (`work/worm-head-support-checks-01`); a stale HP140 foundation assertion failed once
-and was corrected to the adopted320. Final native comparisons and captures follow.
+and was corrected to the adopted 320. Final native comparisons and captures follow.
+
+## Final Worm comparison at `9ce1453` — 2026-09-08
+
+Sixteen ordinary native rounds used two seeds, both deployment/initiative orders,
+and matching authored/default HP320/Boulder70. No further numeric changes followed.
+
+| Map / opponent | Worm wins | Losses | Timeouts | Boulder releases |
+|---|---:|---:|---:|---:|
+| Duel / five Goblins |4|0|0|12|
+| Fort / five Goblins |2|2|0|10|
+| Duel / Shadow |0|4|0|6|
+| Fort / Shadow |0|1|3|4|
+
+The Worm can now wipe Goblin groups and remains vulnerable to the Shadow. The
+three 60-second Fort timeouts are unresolved encounters, never wins; the final
+rows alone do not establish their cause. Uneven heavily damaged terrain can still
+defeat bounded local movement. The maximum measured tick was **6.285ms** on Duel
+and **2.865ms** on Fort, with no over-budget samples in these 16 rounds. This is a
+small machine comparison, not a human win-rate, GPU-frame or broad performance claim.
+
+Evidence: `outputs/arena-worm-final-duel-10` and `outputs/arena-worm-final-fort-11`,
+with companion `-summary.json` files at the task output root. Fresh rendering and
+the complete repository gate remain separate checks.
+
+The first final Worm capture pack at `9ce1453` stopped after six frames: its
+buried guard incorrectly required negative clearance, although gameplay reports
+zero clearance and `exposed=false` inside earth. Both reviewers inspected the six
+originals without finding a blocking static defect; the incomplete pack remains
+blocked. The v2 capture contract requires natural Travel, an unexposed head and
+published solid terrain at its actual center. The ordinary Duel recipe reaches
+that state without injected actor or terrain changes. Python33 checks, five
+focused Worm application tests and strict game lint pass; the first lint attempt
+caught a float-equality assertion, corrected before the passing rerun. Evidence:
+`work/worm-capture-guard-01`, `-02`, and the retained `final-worm-01` pack.
