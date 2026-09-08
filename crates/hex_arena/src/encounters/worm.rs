@@ -264,9 +264,7 @@ fn release_aim(
         body: fact,
         ..observed
     };
-    (hit.barrier.is_none()
-        && shapes::distance(hit.point, actor) > spec.splash_radius + 0.1
-        && target.distance(hit.point, hit.time) <= spec.splash_radius * 0.6)
+    (hit.barrier.is_none() && target.distance(hit.point, hit.time) <= spec.splash_radius * 0.6)
         .then_some(aim)
 }
 

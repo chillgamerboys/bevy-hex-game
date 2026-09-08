@@ -1,6 +1,6 @@
 # Worm terrain conversion seam
 
-Status: **World conversion implemented at `aaecaf3`; gameplay composition is under validation.**
+Status: **World conversion implemented at `aaecaf3`; Worm gameplay and application admission are enabled with focused composition checks passing.**
 
 Original-group, Golem and Ember Wisp calibration checkpoints precede this phase.
 Shared vocabulary landed at `59eef79`; the guarded body foundation at `dccfddb`
@@ -157,6 +157,12 @@ again before release. Terrain arriving during windup can therefore cancel releas
 No underground movement or HP indicators are added to human play. Released shots
 retain their source identity under the existing projectile policy.
 
+A Boulder excludes its frozen caster ID from radial damage and knockback, allowing
+useful close shots against clustered melee enemies. Its ordinary swept body,
+terrain, and barrier contacts still determine the impact, and shot admission still
+requires an observed target and useful damage. This exception is specific to the
+frozen WormBoulder source ability; Fireball and Wisp Ember retain caster damage.
+
 ## Focused validation required at dispatch
 
 1. Exercise every HP transition above through the real ledger, followed by ordinary
@@ -178,5 +184,8 @@ retain their source identity under the existing projectile policy.
 
 Typed tests establish mutation and movement legality. Fresh raw renders establish
 opaque hiding, exposed-head presentation, and persistent dirt appearance; motion
-and control feel remain separate human or video evidence. No test or render gate
-for this queued phase has run yet.
+and control feel remain separate human or video evidence. Focused world, geometry,
+gameplay and actual-world application tests have run; exact counts and source
+identities are recorded in
+[bestiary validation](../../../../systems/arena-bestiary-validation.md).
+Native Worm captures and final candidate checks remain in progress.

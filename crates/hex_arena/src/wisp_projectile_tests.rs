@@ -186,6 +186,7 @@ fn ember_passes_allied_prism_and_splash_cannot_hurt_or_push_it() {
         spec.terrain_power,
         Some(spec.terrain_kind),
         false,
+        false,
         &view,
         geometry,
         materials,

@@ -1,18 +1,17 @@
 # Golem prism-union integration seam
 
-Status: **DISPATCHED — shared foundation `ddb060d` passes focused checks; body and attack integration is pending.**
+Status: **Implemented — body and attacks landed at `2570dce`; subsequent calibration and static review are recorded in bestiary validation. The complete final-candidate gate remains separate.**
 
-The original-group comparison checkpoint is complete and the coordinator has
-dispatched this integration against the guarded shared foundation. Golem is
-followed by Ember Wisp and then Worm. Root owns the shared foundation, integration,
+The original-group comparison checkpoint preceded this integration against the
+guarded shared foundation. Ember Wisp and then Worm followed Golem. Root owns the shared foundation, integration,
 and commits; gameplay owns shape and ability authority. See
 [approved scope](../plan.md), [gameplay order](../orders/L2-gameplay.md), and the
-separate queued [Worm world seam](burrow-seam.md).
+separate implemented [Worm world seam](burrow-seam.md).
 
 ## Minimal shared body projection
 
-Add the following gameplay-owned public value and actor projection. These are
-queued API names, not claims about the current implementation:
+The following accepted Golem projection and geometry contract is implemented;
+later species extend the same projection without changing the fixed Golem body.
 
 ```rust
 #[derive(Debug, Clone, Copy)]
@@ -158,6 +157,7 @@ gate rejection is physical behavior, not a reason to enlarge the gate or telepor
 7. Existing Human/Shadow goldens, Dragon geometry, world reset, dirty-column refresh,
    and missed-revision fallback remain valid.
 
-Slam/laser timing, source identity, damage budgets, warning presentation, and
-matchup calibration follow [the approved plan](../plan.md). The body and attack acceptance matrix remains pending; the shared foundation
-alone does not establish completed Golem evidence.
+Slam/laser timing, source identity, damage budgets, warnings and machine
+calibration have recorded focused evidence. See [the approved plan](../plan.md)
+and [bestiary validation](../../../../systems/arena-bestiary-validation.md) for
+exact checkpoints and remaining final/human checks.

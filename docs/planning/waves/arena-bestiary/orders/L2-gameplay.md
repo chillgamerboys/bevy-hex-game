@@ -14,7 +14,9 @@ Own only: crates/hex_arena/, assets/config/arena.ron. Root alone stages and comm
 
 Foundation must be committed before production work. Implement original spectator support first; later creature phases are explicitly dispatched after the previous phase is tested and calibrated. Keep focused tests meaningful and report failures, runtime limitations and exact evidence.
 
-The [Golem prism-union cut](../maps/golem-seam.md) is **QUEUED** accepted design.
-Its allocation-free public prism iterator and complete query integration require
-the next shared foundation and explicit dispatch after the original comparison
-checkpoint. Golem production has not started; Wisp and Worm remain later phases.
+The [Golem prism-union cut](../maps/golem-seam.md), Ember Wisp flight and
+attacks, and Worm dynamic body/admission/Boulder behavior are implemented.
+Original-group, Golem and Wisp calibration checkpoints preceded Worm as
+required. The current Worm candidate has focused gameplay and actual-world
+evidence; native calibration, presentation and the combined gate complete
+delivery.

@@ -152,6 +152,7 @@ still needs playtesting.
 
 Enemy attacks spare allied actors, and enemy projectiles pass through them.
 Barriers still intercept allied attacks. Fireballs can hurt their own caster.
+Boulders spare the Worm that launched them, allowing close shots at swarming enemies.
 Bites, swipes and breath damage the terrain they contact; cover stops their direct
 reach. Existing explosion damage and knockback ignore cover.
 
@@ -180,7 +181,7 @@ The Worm moves at 2.2 units/second, usually one or two voxel levels below the
 surface. It changes eligible earth to dirt while preserving remaining block HP.
 It must physically raise its head before firing: initial Boulder damage is 50,
 splash radius 2.5, impulse 8, windup .8 seconds and cooldown 3.5 seconds. It cannot
-fire through earth. Opaque ground hides its body; explosions still splash through
+fire through earth. Its own Boulder causes it no damage or knockback. Opaque ground hides its body; explosions still splash through
 cover. The supported optional six-segment setting may be refused where an authored
 spawn pocket is too small; bodies are never compressed to fit. These remain initial
 balance values until the paired comparison and human playtest.

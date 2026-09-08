@@ -1,6 +1,6 @@
 # Wisp body, projectile and flight seam
 
-Status: **GUARDED FOUNDATION APPLIED — coordinator commit and focused checks pending.**
+Status: **Implemented — flight, layered deployment, Ember behavior and machine calibration are integrated. Native capacity was measured at `5f5afec`; a windup-clarity repair awaits refreshed static review on the current candidate.**
 The main experiment checkout starts this phase from `c1a6cf4`, preserving Golem
 HP320. A separate detached `hex-arena-review` checkout retains that exact Golem
 candidate for native calibration and captures. Receipts identify the actual checkout
@@ -195,18 +195,16 @@ new navigation framework is required.
    with both sides/seeds and genuine loss/timeout accounting. One-Wisp-v-one-Goblin
    is a correctness/control fixture. No Wisp equivalence is promised before data.
 
-No Wisp test pass, build, calibration, or screenshot evidence is claimed yet.
+Wisp test, build, calibration and static-review checkpoints are recorded in
+[bestiary validation](../../../../systems/arena-bestiary-validation.md).
 
-## Foundation integration boundary
+## Historical guarded foundation boundary
 
-The guarded foundation updates hex_arena species, counters, recipes, config/defaults,
-read-only projectile metadata, safe prism-query dispatch, and the two existing
-Golem assertions whose global count grows. It deliberately retains a typed
-CreatureNotReady refusal for every Wisp roster and a no-step Wisp motion branch.
-No flight, layered spawn, Ember constructor, Ember action, or brain is implemented.
-The application owner's exhaustive Species/BattlePreset matches must be updated
-with the new labels/geometry before an all-workspace compile. Focused arena compile,
-Clippy and body/schema/refusal tests are still required once dispatch is authorized.
+The initial guarded foundation added species, counters, recipes, schema and
+safe prism-query dispatch while temporarily refusing Wisp setup. That was
+a deliberate integration boundary, not current behavior. Flight, layered
+spawning, Ember actions, brain and application projections were integrated
+and validated in the subsequent recorded checkpoints.
 
 Ballistics should use an explicit-gravity helper behind the existing
 `ballistic_aim(origin,target,tuning,speed)` wrapper. The wrapper supplies its current

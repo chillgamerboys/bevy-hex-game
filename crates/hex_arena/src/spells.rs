@@ -511,6 +511,7 @@ impl ArenaSession {
                 tuning.blast_knockback,
                 tuning.terrain_power,
                 None,
+                false,
                 true,
                 world,
                 geometry,
@@ -616,6 +617,7 @@ impl ArenaSession {
                         shot.parameters.knockback,
                         shot.parameters.terrain_power,
                         shot.parameters.terrain_kind,
+                        shot.source_ability() == Some(crate::CreatureAbility::WormBoulder),
                         shot.source_ability().is_none(),
                         world,
                         geometry,
@@ -686,6 +688,7 @@ impl ArenaSession {
         knockback: f32,
         power: u8,
         terrain_kind: Option<hex_core::TerrainDamageKind>,
+        owner_immune: bool,
         count_fireball: bool,
         world: &ArenaTerrainView,
         geometry: ArenaVoxelGeometry,
@@ -696,7 +699,7 @@ impl ArenaSession {
         let mut useful_fireball = false;
         for actor in &mut self.actors {
             if actor.hp <= 0.0
-                || (spell == Spell::AreaBlast && actor.id == owner)
+                || ((spell == Spell::AreaBlast || owner_immune) && actor.id == owner)
                 || (actor.id != owner && actor.team == owner_team)
             {
                 continue;
@@ -1429,3 +1432,7 @@ mod camera_mask_tests {
 #[cfg(test)]
 #[path = "wisp_projectile_tests.rs"]
 mod wisp_projectile_tests;
+
+#[cfg(test)]
+#[path = "boulder_projectile_tests.rs"]
+mod boulder_projectile_tests;

@@ -1,6 +1,6 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
-Status: original groups complete; Golem HP320 candidate is frozen in a detached native review checkout; main Wisp guarded foundation is applied pending checks and commit. Worm remains queued.
+Status: original groups, Golem and Ember Wisp are implemented with recorded machine calibration. Worm world, geometry, gameplay and application are integrated with admission enabled and focused checks passing. Native Worm calibration, refreshed changed-surface captures, final Seven Regions stress and the combined repository gate are in progress. Human motion and feel remain pending.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
 checkpoint: 30467790c6ae0c6ac5839b57f70bef3d209d5620. Epic/tickets: null;
@@ -39,8 +39,9 @@ Root adds world-published ArenaDeploymentRegion in hex_core and an optional two-
 projection in ArenaTerrainView. Surfaces identify supporting voxels, never guaranteed
 spawn poses. World lane publishes Duel/Fort sets without changing adventure spawns;
 gameplay validates oriented bodies and fails atomically if a roster cannot fit.
-Worm mutation vocabulary will receive a separate behavior-neutral foundation before
-that phase; no world mutation is implemented in presentation or private gameplay.
+Worm mutation vocabulary landed at `59eef79`, its guarded body foundation at
+`dccfddb`, and world conversion at `aaecaf3`. Gameplay requests conversion;
+presentation and private gameplay never mutate the map directly.
 
 ## Dispatch queue
 

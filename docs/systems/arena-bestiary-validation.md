@@ -575,3 +575,24 @@ Species import), `-03` (11-test pass), `work/worm-crater-checks-01` (red/green),
 `work/worm-combined-clippy-02` (strict pass), and
 `work/worm-cache-recovery-01.json`. Native calibration, captures and final repository
 checks follow this focused milestone.
+
+## Worm close-range correction — 2026-09-08
+
+The first native trial at `ea727d1` retained eight paired rounds each on Duel and
+Fort, against Goblins and Shadow. The Worm lost all sixteen; Fort had no Boulder
+releases. Traced Fort Goblins were visible beside a physically exposed head, but
+inside the self-splash exclusion around the elongated body. Shadow traces instead
+showed incoming knockback lowering the head and correctly cancelling windups.
+
+Boulders now exclude their frozen caster identity from HP damage and knockback,
+and Worm shot admission no longer rejects close self-splash. Recent direct sight,
+observed-target usefulness, barriers, real body collision and ally protection are
+unchanged. Fireball and Ember self-harm remain unchanged. No numeric tuning changed.
+Four regressions cover close actual release/damage, caster movement and shape/team
+changes after release, ordinary Fireball self-harm and Ember self-harm. All **270
+arena tests and strict arena lint pass** in `work/worm-boulder-checks-01`.
+
+Initial native evidence: `outputs/arena-worm-calibration-01`,
+`outputs/arena-worm-fort-02`, `outputs/arena-worm-fort-trace-03` and
+`outputs/arena-worm-shadow-trace-04`. The trace timings are diagnostic only;
+the corrected candidate's native comparison remains pending.

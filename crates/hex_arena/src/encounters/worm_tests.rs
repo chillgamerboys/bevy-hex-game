@@ -633,3 +633,36 @@ fn a_partial_tail_crater_does_not_prevent_a_safe_stationary_head_rise_and_boulde
         "recovery never fabricates the lost supporting terrain"
     );
 }
+
+#[test]
+fn exposed_worm_releases_a_useful_boulder_at_a_close_goblin_beside_its_body() {
+    let mut f = fixture();
+    let goblin = f.session.actors.first_mut().expect("stationary opponent");
+    goblin.configure_species(Species::Goblin, &f.tuning.encounters);
+    goblin.feet = Vec3::new(-6.0, 3.2 + SKIN, 2.0);
+    goblin.previous_feet = goblin.feet;
+    goblin.hp = 1000.0;
+    goblin.max_hp = 1000.0;
+    let initial_hp = f.worm().hp;
+    let mut released = false;
+    for _ in 0..360 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        released |= f.session.projectiles.iter().any(|shot| {
+            shot.owner == 7 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
+        });
+        if f.session.actors.first().expect("opponent").hp < 1000.0 {
+            break;
+        }
+    }
+    assert!(released, "close useful shots must pass admission");
+    let opponent = f.session.actors.first().expect("opponent");
+    assert!(
+        opponent.hp <= 980.0,
+        "real swept shot must deal useful damage"
+    );
+    let effect = f.session.effects.last().expect("Boulder impact");
+    assert!(shapes::distance(effect.center, f.worm()) < f.tuning.encounters.worm_boulder_radius);
+    assert_eq!(f.worm().hp.to_bits(), initial_hp.to_bits());
+    assert!(f.worm().body.impulse_velocity.length() < SKIN);
+}
