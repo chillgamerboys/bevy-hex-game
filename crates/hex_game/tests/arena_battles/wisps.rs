@@ -128,10 +128,8 @@ fn fort_player_wisp_party_resets_back_to_the_accepted_duel() {
     assert!(session.battle_summary().is_none());
     assert!(!session.is_finished());
     assert_eq!(session.actors.len(), 2);
-    assert!(
-        session
-            .actors
-            .iter()
-            .all(|actor| matches!(actor.species, Species::Human | Species::Shadow))
-    );
+    assert!(session
+        .actors
+        .iter()
+        .all(|actor| matches!(actor.species, Species::Human | Species::Shadow)));
 }

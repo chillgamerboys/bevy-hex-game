@@ -8,10 +8,10 @@ use bevy::prelude::*;
 use hex_arena::{
     ArenaBattleSetup, ArenaSession, ArenaTuning, BattlePreset, BattleResult, BattleSummary,
 };
-use hex_core::TerrainEdit;
 use hex_core::arena::{
     ArenaMap, ArenaReset, ArenaSelection, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
+use hex_core::TerrainEdit;
 use std::time::Instant;
 
 #[path = "arena_battles/wisps.rs"]
@@ -121,13 +121,11 @@ fn terminal_publication_applies_queued_terrain_without_changing_outcome_tick_or_
             .and_then(serde_json::Value::as_bool),
         Some(true)
     );
-    assert!(
-        !fixture
-            .world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&removable)
-    );
+    assert!(!fixture
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&removable));
     // A second flush has no queued publication and still cannot advance the match.
     let quiet = flush_terminal_publication(&mut fixture);
     assert_eq!(
@@ -194,11 +192,9 @@ fn golem_compound_bodies_admit_on_both_real_deployment_publications() {
                 let prisms: Vec<_> = actor.body_hex_prisms().collect();
                 if actor.species == hex_arena::Species::Golem {
                     assert_eq!(prisms.len(), 7);
-                    assert!(
-                        prisms
-                            .iter()
-                            .all(|prism| (prism.height - 2.0).abs() < 0.0001)
-                    );
+                    assert!(prisms
+                        .iter()
+                        .all(|prism| (prism.height - 2.0).abs() < 0.0001));
                     let supporting_cells: std::collections::BTreeSet<_> = prisms
                         .iter()
                         .map(|prism| {
@@ -208,14 +204,12 @@ fn golem_compound_bodies_admit_on_both_real_deployment_publications() {
                         })
                         .collect();
                     assert_eq!(supporting_cells.len(), 7);
-                    assert!(
-                        world
-                            .battle_deployment
-                            .as_ref()
-                            .expect("deployment")
-                            .iter()
-                            .any(|region| supporting_cells.is_subset(&region.surfaces))
-                    );
+                    assert!(world
+                        .battle_deployment
+                        .as_ref()
+                        .expect("deployment")
+                        .iter()
+                        .any(|region| supporting_cells.is_subset(&region.surfaces)));
                 } else {
                     assert!(prisms.is_empty());
                 }
@@ -288,12 +282,10 @@ fn fort_player_recipe_is_accepted_at_reset_and_cleared_for_seven_regions() {
     assert_eq!(session.human_actor_id(), Some(0));
     assert!(!session.is_finished());
     assert_eq!(session.actors.len(), 11);
-    assert!(
-        session
-            .actors
-            .iter()
-            .all(|actor| actor.species != hex_arena::Species::Golem)
-    );
+    assert!(session
+        .actors
+        .iter()
+        .all(|actor| actor.species != hex_arena::Species::Golem));
 }
 
 #[test]

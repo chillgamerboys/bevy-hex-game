@@ -225,13 +225,11 @@ mod tests {
         let observed =
             WormBodyState::observed(BodyPrismSnapshot::try_from_parts(&parts).expect("snapshot"))
                 .expect("Worm");
-        assert!(
-            observed
-                .current
-                .iter()
-                .zip(observed.previous.iter())
-                .all(|(a, b)| a.offset == b.offset && a.height.to_bits() == b.height.to_bits())
-        );
+        assert!(observed
+            .current
+            .iter()
+            .zip(observed.previous.iter())
+            .all(|(a, b)| a.offset == b.offset && a.height.to_bits() == b.height.to_bits()));
         let center = observed.current.center_offset();
         assert!(center.z > 2.5 && (center.y - 0.8).abs() < 0.0001);
         assert!(!observed.snapshot.exposed);

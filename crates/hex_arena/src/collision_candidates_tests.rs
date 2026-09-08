@@ -1,8 +1,8 @@
 //! Preserve the accepted query order while replacing private lookup/tree allocation.
 
 use super::*;
-use hex_core::SubstanceId;
 use hex_core::arena::{ArenaSolidSpan, ArenaStaticSpan};
+use hex_core::SubstanceId;
 
 fn identities(spans: impl Iterator<Item = Span>) -> Vec<(HexCoord, u32, u32)> {
     spans

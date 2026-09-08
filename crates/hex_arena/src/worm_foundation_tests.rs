@@ -51,12 +51,10 @@ fn worm_profiles_preserve_head_order_and_publish_the_offset_union_center() {
                 .len(),
             parts.len()
         );
-        assert!(
-            actor
-                .previous_body_hex_prisms()
-                .zip(parts)
-                .all(|(a, b)| a.offset == b.offset)
-        );
+        assert!(actor
+            .previous_body_hex_prisms()
+            .zip(parts)
+            .all(|(a, b)| a.offset == b.offset));
         assert!(!actor.worm().expect("phase projection").exposed);
         assert!((actor.hp - 140.0).abs() < SKIN);
     }
@@ -102,18 +100,14 @@ fn copied_emerged_geometry_drives_center_and_distance_without_live_worm_lookup()
     assert!(observed.distance(tail, 0.0) < SKIN);
     let forecast = fact.actor_at(0.5).expect("copied forecast body");
     assert!(forecast.center().distance(fact.center() + Vec3::X) < SKIN);
-    assert!(
-        forecast
-            .body_hex_prisms()
-            .zip(copied.iter())
-            .all(|(a, b)| a.offset == b.offset)
-    );
-    assert!(
-        forecast
-            .previous_body_hex_prisms()
-            .zip(copied.iter())
-            .all(|(a, b)| a.offset == b.offset)
-    );
+    assert!(forecast
+        .body_hex_prisms()
+        .zip(copied.iter())
+        .all(|(a, b)| a.offset == b.offset));
+    assert!(forecast
+        .previous_body_hex_prisms()
+        .zip(copied.iter())
+        .all(|(a, b)| a.offset == b.offset));
 
     // A later unobserved shape change must not alter either copied endpoint.
     live.feet += Vec3::splat(40.0);
@@ -131,14 +125,12 @@ fn copied_emerged_geometry_drives_center_and_distance_without_live_worm_lookup()
             .distance(observed.center())
             < SKIN
     );
-    assert!(
-        ForecastBody {
-            prisms: None,
-            ..fact
-        }
-        .reconstruct()
-        .is_none()
-    );
+    assert!(ForecastBody {
+        prisms: None,
+        ..fact
+    }
+    .reconstruct()
+    .is_none());
     let bad_height = BodyPrismSnapshot::try_from_parts(
         &[BodyHexPrism {
             offset: Vec3::ZERO,
@@ -146,14 +138,12 @@ fn copied_emerged_geometry_drives_center_and_distance_without_live_worm_lookup()
         }; 4],
     )
     .expect("generic finite snapshot");
-    assert!(
-        ForecastBody {
-            prisms: Some(bad_height),
-            ..fact
-        }
-        .reconstruct()
-        .is_none()
-    );
+    assert!(ForecastBody {
+        prisms: Some(bad_height),
+        ..fact
+    }
+    .reconstruct()
+    .is_none());
 }
 
 #[test]
@@ -165,11 +155,9 @@ fn worm_setup_is_typed_and_atomically_refused_until_runtime_admission_exists() {
     assert_eq!(BattlePreset::ORIGINAL.len(), 4);
     assert_eq!(BattlePreset::WISP_SWARMS.len(), 5);
     for preset in BattlePreset::ALL {
-        assert!(
-            ArenaBattleSetup::spectator(preset, BattlePreset::Shadow, 2)
-                .validate_for(ArenaMap::Fort)
-                .is_ok()
-        );
+        assert!(ArenaBattleSetup::spectator(preset, BattlePreset::Shadow, 2)
+            .validate_for(ArenaMap::Fort)
+            .is_ok());
     }
     let view = ArenaTerrainView {
         selection: ArenaSelection {
@@ -217,14 +205,12 @@ fn worm_setup_is_typed_and_atomically_refused_until_runtime_admission_exists() {
 fn worm_configuration_rejects_unsupported_length_depth_and_nonfinite_boulders() {
     let valid = EncounterTuning::default();
     assert!(valid.validate().is_ok());
-    assert!(
-        EncounterTuning {
-            worm_segments: 6,
-            ..valid.clone()
-        }
-        .validate()
-        .is_ok()
-    );
+    assert!(EncounterTuning {
+        worm_segments: 6,
+        ..valid.clone()
+    }
+    .validate()
+    .is_ok());
     for invalid in [
         EncounterTuning {
             worm_segments: 5,
