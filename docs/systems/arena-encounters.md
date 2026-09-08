@@ -110,7 +110,7 @@ and roster, including barriers, cooldowns and party memories.
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 | Golem |320| Slow seven-hex stone body, broad nearby slam and a visibly charged long-distance laser. |
 | Ember Wisp |30| Small glowing flyer with a long-range Ember shot; fragile alone and dangerous in groups. |
-| Worm |140| Four long native hex segments, shallow dirt travel, and an exposed-head Boulder with knockback. |
+| Worm |320| Four long native hex segments, shallow dirt travel, and an exposed-head Boulder with knockback. |
 
 Goblins match the player body: .8 units tall with a .25-unit radius.
 
@@ -179,7 +179,7 @@ Grand V3, multiplayer, progression and persistent saves are deferred.
 
 The Worm moves at 2.2 units/second, usually one or two voxel levels below the
 surface. It changes eligible earth to dirt while preserving remaining block HP.
-It must physically raise its head before firing: initial Boulder damage is 50,
+It must physically raise its head before firing: current Boulder damage is 70,
 splash radius 2.5, impulse 8, windup .8 seconds and cooldown 3.5 seconds. It cannot
 fire through earth. Its own Boulder causes it no damage or knockback. Opaque ground hides its body; explosions still splash through
 cover. The supported optional six-segment setting may be refused where an authored

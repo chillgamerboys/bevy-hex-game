@@ -302,9 +302,29 @@ fn head_supports(
     view: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
 ) -> Option<Vec<TilePos>> {
+    let head_base = body.feet.y + body.parts.iter().next()?.offset.y;
+    let ceiling = reference.max(head_base) + SKIN;
     worm_geometry::head_columns(body)?
         .into_iter()
-        .map(|coord| surface_at(view, coord, reference, geometry))
+        .map(|coord| {
+            // Exposure may remain valid above a newly deep crater even when
+            // the anchored tail prevents whole-body settling. Search only this
+            // actual head column and the finite resident levels. Never select
+            // an unrelated upper roof above both the old band and current head.
+            view.voxels
+                .range(
+                    TilePos::new(coord, geometry.min_level)
+                        ..=TilePos::new(coord, geometry.max_level),
+                )
+                .rev()
+                .find_map(|(pos, _)| {
+                    (geometry.top(*pos) <= ceiling
+                        && !view
+                            .voxels
+                            .contains_key(&TilePos::new(coord, pos.level + 1)))
+                    .then_some(*pos)
+                })
+        })
         .collect()
 }
 

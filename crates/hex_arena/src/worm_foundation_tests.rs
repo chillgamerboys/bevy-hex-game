@@ -56,7 +56,7 @@ fn worm_profiles_preserve_head_order_and_publish_the_offset_union_center() {
             .zip(parts)
             .all(|(a, b)| a.offset == b.offset));
         assert!(!actor.worm().expect("phase projection").exposed);
-        assert!((actor.hp - 140.0).abs() < SKIN);
+        assert!((actor.hp - 320.0).abs() < SKIN);
     }
     let ordinary = Actor::spawn(3, Vec3::new(-0.0, 1.2, 2.3), Vec3::X);
     let expected = ordinary.feet + Vec3::Y * (BODY_HEIGHT * 0.5);

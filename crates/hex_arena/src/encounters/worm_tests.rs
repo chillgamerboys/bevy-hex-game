@@ -666,3 +666,70 @@ fn exposed_worm_releases_a_useful_boulder_at_a_close_goblin_beside_its_body() {
     assert_eq!(f.worm().hp.to_bits(), initial_hp.to_bits());
     assert!(f.worm().body.impulse_velocity.length() < SKIN);
 }
+
+#[test]
+fn a_deep_head_crater_retains_actual_exposure_and_allows_the_next_boulder() {
+    let mut f = fixture();
+    for _ in 0..600 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        if f.session.projectiles.iter().any(|shot| {
+            shot.owner == 7 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
+        }) {
+            break;
+        }
+    }
+    assert!(f.worm().worm().expect("head").exposed);
+    assert!(f.session.projectiles.iter().any(|shot| shot.owner == 7));
+    let before = pose(f.worm()).expect("physical body");
+    let columns = worm_geometry::head_columns(before).expect("head columns");
+    let reference = f
+        .session
+        .encounter
+        .worms
+        .get(&7)
+        .expect("controller")
+        .surface;
+    let next_projectile = f.session.next_projectile;
+    // Publish a complete four-level crater beneath the head, leaving a real
+    // floor and the remaining supported spine. The old +/-2 lookup loses it.
+    f.view
+        .voxels
+        .retain(|pos, _| !columns.contains(&pos.coord) || pos.level <= 4);
+    f.view.revision += 1;
+    f.view.full_rebuild = true;
+    assert!(columns
+        .iter()
+        .all(|coord| surface_at(&f.view, *coord, reference, f.geometry).is_none()));
+    f.advance();
+    let head = f.worm().worm().expect("physical head");
+    assert!(
+        head.exposed && head.head_clearance > 1.5,
+        "current lower floor must replace stale support height: {head:?}"
+    );
+    let mut fired_again = false;
+    for _ in 0..800 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        fired_again |= f.session.projectiles.iter().any(|shot| {
+            shot.id >= next_projectile
+                && shot.source_ability() == Some(CreatureAbility::WormBoulder)
+        });
+        if fired_again {
+            break;
+        }
+    }
+    assert!(
+        fired_again,
+        "actual exposure must permit another normal attack cycle"
+    );
+    assert!(
+        f.worm().feet.distance(before.feet) < SKIN,
+        "no teleport or deeper travel"
+    );
+    assert!(f
+        .view
+        .voxels
+        .keys()
+        .all(|pos| !columns.contains(&pos.coord) || pos.level <= 4));
+}

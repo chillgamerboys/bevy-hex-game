@@ -596,3 +596,26 @@ Initial native evidence: `outputs/arena-worm-calibration-01`,
 `outputs/arena-worm-fort-02`, `outputs/arena-worm-fort-trace-03` and
 `outputs/arena-worm-shadow-trace-04`. The trace timings are diagnostic only;
 the corrected candidate's native comparison remains pending.
+
+## Worm head-floor recovery and numeric trial — 2026-09-08
+
+The close-shot-only native trial (`1af3341`, outputs `arena-worm-close-05` and
+`arena-worm-close-fort-06`) released two Boulders per Goblin round on Duel and one
+on Fort, but still lost every round. The authored HP320/Boulder70 trial at `60e0837`
+won two of four Duel Goblin rounds; Fort remained four losses. The RON trial's
+`matches_defaults=false` is explicit in its tuning receipt; runtime used the
+authored values. Shadow remained unbeaten, including three Fort timeouts.
+
+The longer `arena-worm-trial-trace-09` then exposed a real support bug: cratered
+heads lost their old nearby floor and remained motionless with `exposed=false`
+despite a surviving lower floor. The head-only lookup now searches bounded current
+published cells down to the world minimum, with its ceiling limited to the current
+head or known support height. It does not alter shallow travel, pick unrelated
+upper roofs, recreate earth or bypass complete body admission.
+
+The new full attack-cycle regression fails before the fix and passes afterward:
+four levels of head support disappear, the anchored tail stays in place, actual
+head clearance updates and another normal Boulder releases. HP320/Boulder70 are
+now mirrored in validated defaults. **271 arena tests and strict arena lint pass**
+(`work/worm-head-support-checks-01`); a stale HP140 foundation assertion failed once
+and was corrected to the adopted320. Final native comparisons and captures follow.
