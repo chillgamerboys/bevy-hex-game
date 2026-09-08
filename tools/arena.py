@@ -106,6 +106,8 @@ OBSERVER_VIEWS = (
     ("duel-observer-result", "observer-result", "duel", "shadow", None),
 )
 # Fort player override plus neutral Duel observer laser phases; no actor injection.
+# Duel tuples keep the legacy world recipe; the actual teams are explicit below.
+GOLEM_OBSERVER_PRESETS = ("golem", "dragon")
 GOLEM_VIEWS = (
     ("fort-golem-start", "start", "fort", "golem", None),
     ("fort-golem-first", "encounter-first", "fort", "golem", None),
@@ -516,7 +518,7 @@ def capture(args: argparse.Namespace) -> int:
         matrix = "arena-encounters-v2-multi-angle"
     if args.golem_review:
         entries = list(GOLEM_VIEWS)
-        matrix = "arena-golem-v1-natural-phases"
+        matrix = "arena-golem-v2-dragon-phases"
     if args.view:
         requested = set(args.view)
         unknown = requested - {entry[0] for entry in entries}
@@ -554,6 +556,7 @@ def capture(args: argparse.Namespace) -> int:
         "source_label": "UNAPPROVABLE-DIRTY" if initial["dirty"] else "COMMITTED-CANDIDATE",
         "scenario": "Spell Combat Arena / explicit deterministic recipes",
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
+        "scenario_correction": "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "logical_canvas": CANVAS, "device_scale": 1.0,
         "changed_surfaces": ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
@@ -579,7 +582,8 @@ def capture(args: argparse.Namespace) -> int:
             row_args = args
             if args.golem_review and arena_map == "duel":
                 row_args = argparse.Namespace(**vars(args))
-                row_args.spectator, row_args.team_a, row_args.team_b = True, "golem", "shadow"
+                row_args.spectator = True
+                row_args.team_a, row_args.team_b = GOLEM_OBSERVER_PRESETS
             frame_env.update(battle_environment(row_args, arena_map, matrix=observer_matrix, result=view == "observer-result"))
             if focus:
                 frame_env["HEX_ARENA_FOCUS"] = focus
@@ -648,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
-    review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel-observer Golem body, charge, lock, beam and slam views.")
+    review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel Golem-vs-Dragon observer body, charge, lock, beam and slam views.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
     review.add_argument("--spectator-performance", action="store_true", help="Fort/Duel ordinary observer frame intervals until 3600 ticks or a terminal result; no synthetic HP or movement.")
     review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all ten Seven Regions enemies.")

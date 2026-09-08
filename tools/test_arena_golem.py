@@ -4,7 +4,7 @@ from copy import deepcopy
 import math
 import unittest
 
-from arena import GOLEM_VIEWS, battle_environment, validate_capture_setup, validate_golem_state
+from arena import GOLEM_OBSERVER_PRESETS, GOLEM_VIEWS, battle_environment, validate_capture_setup, validate_golem_state
 
 
 def specimen():
@@ -24,6 +24,7 @@ def specimen():
 
 class GolemCaptureGuards(unittest.TestCase):
     def test_matrix_has_twelve_unique_scoped_recipes(self):
+        self.assertEqual(GOLEM_OBSERVER_PRESETS, ("golem", "dragon"))
         self.assertEqual(len(GOLEM_VIEWS), 12)
         self.assertEqual(len({row[0] for row in GOLEM_VIEWS}), 12)
         self.assertEqual(sum(row[2] == "fort" and row[3] == "golem" for row in GOLEM_VIEWS), 6)
@@ -82,11 +83,11 @@ class GolemCaptureGuards(unittest.TestCase):
         state["battle_setup"]["player_recipe"] = None
         with self.assertRaises(RuntimeError):
             validate_capture_setup(state, "fort", "golem", {})
-        args = argparse.Namespace(spectator=True, encounter=None, team_a="golem", team_b="shadow", seed=7, tick_limit=900)
+        args = argparse.Namespace(spectator=True, encounter=None, team_a="golem", team_b="dragon", seed=7, tick_limit=900)
         env = battle_environment(args, "duel")
-        state = {"actors": [{"species": "Golem", "team": 1}, {"species": "Shadow", "team": 2}], "selection": {"map": "Duel", "encounter": "Shadow"}, "battle_setup": {
+        state = {"actors": [{"species": "Golem", "team": 1}, {"species": "Dragon", "team": 2}], "selection": {"map": "Duel", "encounter": "Shadow"}, "battle_setup": {
             "control": "Spectator", "player_recipe": None, "seed": 7, "tick_limit": 900,
-            "rosters": [{"team": 1, "parties": [["Golem"]]}, {"team": 2, "parties": [["Shadow"]]}]}}
+            "rosters": [{"team": 1, "parties": [["Golem"]]}, {"team": 2, "parties": [["Dragon"]]}]}}
         validate_capture_setup(state, "duel", "shadow", env)
         missing = deepcopy(state)
         missing["actors"].pop(0)
