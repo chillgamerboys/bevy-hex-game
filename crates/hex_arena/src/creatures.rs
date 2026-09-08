@@ -188,7 +188,6 @@ pub struct EncounterSummary {
 impl crate::Actor {
     /// Compound hex geometry when this profile uses it; existing capsules and
     /// oriented boxes publish no prisms. The projection never allocates.
-    #[must_use]
     pub fn body_hex_prisms(&self) -> impl Iterator<Item = BodyHexPrism> {
         std::iter::empty()
     }

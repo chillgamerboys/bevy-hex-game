@@ -151,7 +151,7 @@ impl Default for EncounterTuning {
             breath_windup: 0.15,
             bite_angle: 70.0,
             shaman_fireball_damage: 35.0,
-            dragon_hp: 160.0,
+            dragon_hp: 220.0,
             dragon_height: 0.4,
             dragon_length: 3.5,
             dragon_width: 1.732_050_8,
@@ -159,7 +159,7 @@ impl Default for EncounterTuning {
             dragon_flight_speed: 3.0,
             dragon_cruise_height: 2.0,
             dragon_turn_speed: 2.0,
-            breath_damage: 35.0,
+            breath_damage: 45.0,
             breath_seconds: 0.75,
             breath_range: 6.0,
             breath_angle: 50.0,
@@ -219,8 +219,13 @@ impl Default for EncounterTuning {
 impl EncounterTuning {
     /// Reject unusable or unbounded authored creature values.
     pub fn validate(&self) -> Result<(), String> {
+        if [self.dragon_hp, self.goblin_hp, self.shaman_hp]
+            .into_iter()
+            .any(|hp| !hp.is_finite() || hp <= 0.0 || hp > 1000.0)
+        {
+            return Err("Encounter actor HP must be finite and in (0, 1000].".into());
+        }
         let values = [
-            self.dragon_hp,
             self.dragon_height,
             self.dragon_length,
             self.dragon_width,
@@ -247,7 +252,6 @@ impl EncounterTuning {
             self.barrier_hp,
             self.barrier_seconds,
             self.barrier_cooldown,
-            self.goblin_hp,
             self.goblin_walk,
             self.goblin_run,
             self.goblin_height,
@@ -257,7 +261,6 @@ impl EncounterTuning {
             self.swipe_angle,
             self.swipe_windup,
             self.swipe_cooldown,
-            self.shaman_hp,
             self.shaman_walk,
             self.shaman_run,
             self.shaman_fireball_cooldown,

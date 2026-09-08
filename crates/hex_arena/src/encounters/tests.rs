@@ -219,7 +219,11 @@ fn breath_three_pulses_cap_damage_and_dead_windup_never_releases() {
         &tuning,
     );
     ticks(&mut session, 150, &view, geometry, materials, &tuning);
-    assert!((session.actors.first().expect("human").hp - 65.0).abs() < 0.01);
+    assert!(
+        (session.actors.first().expect("human").hp - (100.0 - tuning.encounters.breath_damage))
+            .abs()
+            < 0.01
+    );
     assert_eq!(
         session
             .encounter
@@ -1156,7 +1160,10 @@ fn breath_damages_a_barrier_edge_outside_the_center_ray_and_cannot_hit_through_i
     start(&mut session, 1, CreatureAbility::FireCone, Vec3::X, &tuning);
     ticks(&mut session, 150, &view, geometry, materials, &tuning);
     assert!(
-        (session.barriers().first().expect("surviving barrier").hp - 25.0).abs() < 0.01,
+        (session.barriers().first().expect("surviving barrier").hp
+            - (60.0 - tuning.encounters.breath_damage))
+            .abs()
+            < 0.01,
         "three pulses must damage the intersected edge exactly once each"
     );
     assert!((session.actors.first().expect("covered human").hp - 100.0).abs() < 0.001);

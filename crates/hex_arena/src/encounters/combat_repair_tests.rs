@@ -94,7 +94,11 @@ fn retreating_dragon_can_breathe_at_visible_attacker_without_resetting_its_retre
     ticks(&mut session, 60, &view, geometry, materials, &tuning);
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
     assert!(dragon.flying && (dragon.hp - 70.0).abs() < 0.001);
-    assert!(session.actors.first().expect("attacker").hp <= 65.01);
+    assert!(
+        (session.actors.first().expect("attacker").hp - (100.0 - tuning.encounters.breath_damage))
+            .abs()
+            < 0.01
+    );
     assert!(
         session
             .creature_decisions()

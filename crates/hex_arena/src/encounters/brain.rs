@@ -27,6 +27,8 @@ pub(super) struct Brain {
     retreat_goal: Option<Vec3>,
     retreat_reconsider: u64,
     flight_recovery: Option<(Vec3, u64)>,
+    patrol_goal: Option<(Vec3, u64)>,
+    patrol_step: usize,
     shooting_angle: bool,
     next_shot_probe: u64,
     pub decision: Option<CreatureDecisionSnapshot>,
@@ -52,6 +54,8 @@ impl Brain {
             retreat_goal: None,
             retreat_reconsider: 0,
             flight_recovery: None,
+            patrol_goal: None,
+            patrol_step: usize::from(id % 6),
             shooting_angle: false,
             next_shot_probe: 0,
             decision: None,
@@ -312,6 +316,18 @@ impl Brain {
                     flight = true;
                     goal = point;
                 } else if flight {
+                    if battle && known.is_none() {
+                        if let Some(far) = party.battle_search.filter(|far| {
+                            self.battle_target.is_some()
+                                || actor.feet.with_y(0.0).distance(far.with_y(0.0)) < 1.0
+                        }) {
+                            goal = self
+                                .patrol(actor, far, collision, world, geometry, tuning, tick)
+                                .unwrap_or(goal);
+                        }
+                    } else {
+                        self.patrol_goal = None;
+                    }
                     goal = steering::flight_goal(actor, goal, collision, world, geometry, c)
                         .or_else(|| {
                             steering::flight_goal(actor, self.home, collision, world, geometry, c)
@@ -677,6 +693,66 @@ impl Brain {
             tuning.launch_speed(actor.charge()?.elapsed),
             self.error,
         )
+    }
+
+    fn patrol(
+        &mut self,
+        actor: &Actor,
+        far: Vec3,
+        collision: &CollisionWorld,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        tuning: &ArenaTuning,
+        tick: u64,
+    ) -> Option<Vec3> {
+        if self.patrol_goal.is_some_and(|(point, until)| {
+            tick < until
+                && actor.feet.distance(point) > 0.75
+                && steering::flight_goal(
+                    actor,
+                    point,
+                    collision,
+                    world,
+                    geometry,
+                    &tuning.encounters,
+                )
+                .is_some()
+        }) {
+            return self.patrol_goal.map(|(point, _)| point);
+        }
+        // Public deployment geometry supplies a small deterministic search loop;
+        // neither its destinations nor its clock reads an unseen opponent pose.
+        let side = (far - self.home)
+            .with_y(0.0)
+            .normalize_or(Vec3::X)
+            .cross(Vec3::Y)
+            * 4.0;
+        let middle = (far + self.home) * 0.5;
+        let points = [
+            far + side,
+            middle + side,
+            self.home + side,
+            self.home - side,
+            middle - side,
+            far - side,
+        ];
+        self.patrol_goal = None;
+        for _ in 0..points.len() {
+            let desired = points.get(self.patrol_step % points.len()).copied()?;
+            self.patrol_step = (self.patrol_step + 1) % points.len();
+            if let Some(point) = steering::flight_goal(
+                actor,
+                desired,
+                collision,
+                world,
+                geometry,
+                &tuning.encounters,
+            ) {
+                self.patrol_goal = Some((point, tick + 600));
+                break;
+            }
+        }
+        self.patrol_goal.map(|(point, _)| point)
     }
 
     fn shot_aim_at_speed(

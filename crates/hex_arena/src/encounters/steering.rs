@@ -82,6 +82,7 @@ struct JumpRoute {
     expected: Actor,
     remaining: u16,
     revision: Option<u64>,
+    airborne: bool,
 }
 
 #[derive(Debug, Default)]
@@ -147,7 +148,7 @@ impl Steering {
                     < 0.2
                 && (actor.body.vertical_velocity - route.expected.body.vertical_velocity).abs()
                     < 0.2;
-            if matches && !actor.grounded && route.remaining > 0 {
+            if matches && (!route.airborne || !actor.grounded) && route.remaining > 0 {
                 let mut next = actor.clone();
                 motion::tick(
                     &mut next,
@@ -159,6 +160,7 @@ impl Steering {
                     tuning,
                 );
                 if volume_safe(&next, world, view, geometry) {
+                    route.airborne |= !next.grounded;
                     route.expected = next;
                     route.remaining -= 1;
                     let direction = route.direction;
@@ -185,18 +187,25 @@ impl Steering {
             && tick >= self.next_recovery
         {
             self.next_recovery = tick + 60 + u64::from(actor.id % 5);
-            if let Some((direction, duration)) =
-                jump_route(actor, desired, world, view, geometry, tuning)
-            {
+            let descent = descent_route(actor, desired, world, view, geometry, tuning);
+            let route = descent
+                .map(|(direction, duration)| (direction, duration, false))
+                .or_else(|| {
+                    jump_route(actor, desired, world, view, geometry, tuning)
+                        .map(|(direction, duration)| (direction, duration, true))
+                });
+            if let Some((direction, duration, jump)) = route {
                 let mut next = actor.clone();
-                motion::tick(&mut next, direction, true, true, false, world, tuning);
+                motion::tick(&mut next, direction, true, jump, false, world, tuning);
+                let airborne = !next.grounded;
                 self.jump = Some(JumpRoute {
                     direction,
                     expected: next,
                     remaining: duration.saturating_sub(1),
                     revision: world.revision,
+                    airborne,
                 });
-                return (direction, true);
+                return (direction, jump);
             }
             // A supported sideways/backward excursion can reveal the next
             // reachable intermediate ledge. It never teleports or alters terrain.
@@ -374,6 +383,42 @@ fn walk_route(
         }
     }
     Some(body)
+}
+
+fn descent_route(
+    actor: &Actor,
+    desired: Vec3,
+    world: &CollisionWorld,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &EncounterTuning,
+) -> Option<(Vec3, u16)> {
+    let forward = desired.with_y(0.0).normalize_or_zero();
+    // A downward ledge needs a proved landing, not an upward jump. Three
+    // directions share the existing staggered recovery deadline and 120-tick cap.
+    for angle in [0.0, 0.65, -0.65] {
+        let direction = Quat::from_rotation_y(angle) * forward;
+        let mut body = actor.clone();
+        let mut airborne = false;
+        for tick in 0_u16..120 {
+            motion::tick(&mut body, direction, true, false, false, world, tuning);
+            if !volume_safe(&body, world, view, geometry) {
+                break;
+            }
+            airborne |= !body.grounded;
+            if airborne && body.grounded {
+                let moved = body.feet - actor.feet;
+                if moved.y < -0.4 - SKIN * 8.0
+                    && moved.dot(forward) > 0.35
+                    && supported(&body, world)
+                {
+                    return Some((direction, tick + 1));
+                }
+                break;
+            }
+        }
+    }
+    None
 }
 
 fn jump_route(

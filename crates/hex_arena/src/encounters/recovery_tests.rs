@@ -429,3 +429,135 @@ fn blocked_visible_dragon_uses_a_clear_flight_approach() {
         at_goal.body_yaw
     ));
 }
+
+#[test]
+fn goblin_and_shaman_descend_a_deep_dry_crater_without_an_unnecessary_jump() {
+    let (view, geometry, collision, tuning) = lip(8);
+    for species in [Species::Goblin, Species::Shaman] {
+        let mut actor = walker(species, Vec3::new(3.0, 3.2, 0.0));
+        let mut steering = steering::Steering::default();
+        let mut airborne = false;
+        for tick in 1..=600 {
+            let (direction, jump) = steering.travel(
+                &actor,
+                Vec3::NEG_X,
+                false,
+                true,
+                &collision,
+                &view,
+                geometry,
+                &tuning,
+                tick,
+            );
+            assert!(!jump, "a proved downward landing should not launch upward");
+            motion::tick(
+                &mut actor, direction, true, jump, false, &collision, &tuning,
+            );
+            airborne |= !actor.grounded;
+            assert!(shapes::clear(
+                &collision,
+                &actor,
+                actor.feet,
+                actor.body_yaw
+            ));
+            assert!(dry(&actor, &view, geometry) && steering::contained(&actor, geometry));
+            if airborne && actor.grounded && actor.feet.y < 0.01 {
+                break;
+            }
+        }
+        assert!(
+            airborne && actor.grounded && actor.feet.y < 0.01,
+            "{species:?} must actually reach the3.2u lower floor: {:?}",
+            actor.feet
+        );
+        assert!(shapes::ground(&collision, &actor, actor.feet, 0.001).is_some());
+    }
+}
+
+#[test]
+fn spectator_dragon_searches_after_lost_sight_without_following_hidden_truth() {
+    let mut paths = Vec::new();
+    for hidden_z in [-5.0, 5.0] {
+        let (mut actor, mut target, party, mut view, geometry, mut collision, tuning) =
+            visible_pair(Species::Dragon);
+        let mut brain = brain::Brain::for_battle(actor.id, actor.feet, 1);
+        brain.intent(
+            &actor,
+            &party,
+            &[actor.clone(), target.clone()],
+            &[],
+            &[],
+            &collision,
+            &view,
+            geometry,
+            &tuning,
+            1,
+        );
+        actor.feet = party.battle_search.expect("public opposing deployment") + Vec3::Y * 2.0;
+        actor.previous_feet = actor.feet;
+        actor.flying = true;
+        actor.grounded = false;
+        actor.body.grounded = false;
+        target.feet = Vec3::new(-10.0, SKIN, hidden_z);
+        target.previous_feet = target.feet;
+        divider(&mut view, SubstanceId(1));
+        collision.refresh(&view, geometry);
+        let start = actor.feet;
+        let mut path = Vec::new();
+        for tick in 13..=193 {
+            assert!(!collision.sight_clear(actor.eye(), target.eye()));
+            let (motion, request) = brain.intent(
+                &actor,
+                &party,
+                &[actor.clone(), target.clone()],
+                &[],
+                &[],
+                &collision,
+                &view,
+                geometry,
+                &tuning,
+                tick,
+            );
+            assert!(
+                request.is_none(),
+                "a search waypoint is not an observed enemy"
+            );
+            actor.aim = motion.input.aim;
+            motion::tick(
+                &mut actor,
+                motion.direction,
+                motion.input.run,
+                motion.input.jump,
+                motion.flight,
+                &collision,
+                &tuning.encounters,
+            );
+            assert!(shapes::clear(
+                &collision,
+                &actor,
+                actor.feet,
+                actor.body_yaw
+            ));
+            assert!(steering::contained(&actor, geometry));
+            path.push((
+                actor.feet.to_array().map(f32::to_bits),
+                brain
+                    .decision
+                    .as_ref()
+                    .expect("decision")
+                    .goal
+                    .map(f32::to_bits),
+            ));
+        }
+        assert!(
+            actor.feet.distance(start) > 2.0,
+            "expired memory cannot leave a hovering statue"
+        );
+        paths.push(path);
+    }
+    assert_eq!(
+        paths.first(),
+        paths.get(1),
+        "silent hidden changes must not steer the patrol"
+    );
+}
