@@ -56,3 +56,22 @@ rosters, verify attacks, reset, independent parties and bounded all-active work.
 Run the repository-selected combined gate and strict workspace lint. Capture
 changed ability and menu presentation windowlessly at a clean committed revision;
 native feel, animation and balance remain human playtest judgments.
+
+
+## World deployment prerequisite
+
+The ten-Goblin recipe requires more supporting cells than the original seven-cell
+battle pockets. The bounded world lane owns `hex_map/src/arena/worlds.rs` and its
+world tests for this prerequisite. Ordinary Duel and Fort deployment now publishes
+only existing open, dry, unreserved ground within radius two of the same preferred
+supporting voxel. Every pocket must retain its original seven cells and contain
+10–19 surfaces. Fort uses the elongated pocket's signed axial-r half rule, so the
+two teams' surface sets remain disjoint.
+
+Terrain generation, adventure anchors, world spawns, vertical mapping and the
+separate elongated-body fit check are unchanged. Gameplay still admits full live
+bodies atomically; the larger surface publication alone is not roster-admission
+evidence. Wisp formation remains on the nearest seven surfaces and its existing
+two flight layers. World tests cover bounds, dry/unreserved surface identity,
+deterministic publication, preservation of the original cells and refusal of an
+insufficient pocket. Root runs the actual-map roster composition checks.

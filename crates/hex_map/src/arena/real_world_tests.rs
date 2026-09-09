@@ -27,6 +27,7 @@ fn fort_uses_accepted_geometry_and_publishes_exact_solid_runs() {
     let second = recipe(ArenaMap::Fort);
     assert_eq!(first.map.len(), 469);
     assert_eq!(first.view.voxels, second.view.voxels);
+    assert_eq!(first.view.battle_deployment, second.view.battle_deployment);
     assert!(first.view.liquids.is_empty());
     assert!(first.view.static_spans.is_empty());
     assert!(first.view.edit_protected.is_empty());
@@ -83,12 +84,21 @@ fn spectator_regions_publish_finite_dry_ground_without_moving_adventure_starts()
                 region.preferred,
                 TilePos::new(HexCoord::from_axial(q, r), level)
             );
-            assert_eq!(region.surfaces.len(), 7);
+            assert!((10..=19).contains(&region.surfaces.len()));
+            for coord in region.preferred.coord.within_radius(1) {
+                assert!(region.surfaces.contains(&TilePos::new(coord, level)));
+            }
             assert!(region.surfaces.contains(&region.preferred));
             for surface in &region.surfaces {
                 assert!(world.geometry.contains_column(surface.coord));
-                assert!(region.preferred.coord.distance(surface.coord) <= 1);
+                assert!(region.preferred.coord.distance(surface.coord) <= 2);
                 assert_eq!(surface.level, level);
+                if map == ArenaMap::Fort {
+                    assert_eq!(
+                        surface.coord.y().signum(),
+                        region.preferred.coord.y().signum()
+                    );
+                }
                 assert!(world.view.voxels.contains_key(surface));
                 assert!((world.geometry.top(*surface) - expected_y).abs() < 0.0001);
                 // The deployment patch has open sky, not a lower floor selected

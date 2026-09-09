@@ -25,7 +25,7 @@ fn elongated_pockets_keep_adventure_and_ordinary_deployment_and_fit_four_cells()
             ]
         );
         for (normal, long) in normal.iter().zip(elongated) {
-            assert_eq!(normal.surfaces.len(), 7);
+            assert!((10..=19).contains(&normal.surfaces.len()));
             assert_eq!(normal.preferred, long.preferred);
             assert!(long.surfaces.len() <= 19);
             assert!(contains_straight_run(long, 4));
@@ -81,4 +81,71 @@ fn every_authored_crystal_cell_is_published_without_changing_query_masks() {
                 }));
         }
     }
+}
+
+#[test]
+fn ordinary_pocket_filters_reserved_outer_cells_and_rejects_insufficient_or_changed_core() {
+    let content = load_content().expect("accepted content");
+    let recipe = build(
+        ArenaSelection {
+            map: ArenaMap::Duel,
+            ..default()
+        },
+        content.materials,
+        &content.substances,
+        &content.art,
+    )
+    .expect("accepted Duel deployment");
+    let region = recipe
+        .view
+        .battle_deployment
+        .as_ref()
+        .expect("two sides")
+        .first()
+        .expect("first side");
+    let outer: Vec<_> = region
+        .surfaces
+        .iter()
+        .copied()
+        .filter(|surface| surface.coord.distance(region.preferred.coord) == 2)
+        .collect();
+    let blocked = *outer.first().expect("radius-two extension");
+    let mut reserved = recipe.view.clone();
+    reserved
+        .edit_protected
+        .insert(blocked.coord, vec![(blocked.level, blocked.level)]);
+    let filtered = battle_deployment(&reserved, recipe.geometry)
+        .expect("one reserved outer cell leaves sufficient open ground")
+        .expect("Duel pockets");
+    assert!(!filtered
+        .first()
+        .expect("first side")
+        .surfaces
+        .contains(&blocked));
+    assert_eq!(
+        filtered.first().expect("first side").surfaces.len(),
+        region.surfaces.len() - 1
+    );
+
+    // Seven original cells plus two outer cells cannot admit ten ground actors.
+    let mut insufficient = recipe.view.clone();
+    for surface in outer.iter().skip(2) {
+        insufficient.voxels.remove(surface);
+    }
+    assert!(battle_deployment(&insufficient, recipe.geometry).is_err());
+    let mut missing_preferred = recipe.view.clone();
+    missing_preferred.voxels.remove(&region.preferred);
+    assert!(battle_deployment(&missing_preferred, recipe.geometry).is_err());
+    let mut changed_core = recipe.view.clone();
+    let neighbor = region
+        .preferred
+        .coord
+        .within_radius(1)
+        .into_iter()
+        .find(|coord| *coord != region.preferred.coord)
+        .expect("old neighboring cell");
+    changed_core
+        .voxels
+        .remove(&TilePos::new(neighbor, region.preferred.level));
+    assert!(battle_deployment(&changed_core, recipe.geometry).is_err());
 }

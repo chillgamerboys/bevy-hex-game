@@ -194,36 +194,37 @@ fn battle_deployment(
             preferred,
             surfaces: preferred
                 .coord
-                .within_radius(1)
+                .within_radius(2)
                 .into_iter()
+                // Match the elongated pocket's disjoint Fort courtyard halves.
+                // This publishes existing ground; it does not extend the world.
+                .filter(|coord| {
+                    view.selection.map != ArenaMap::Fort
+                        || coord.y().signum() == preferred.coord.y().signum()
+                })
                 .map(|coord| TilePos::new(coord, level))
+                .filter(|surface| deployment_surface_open(view, geometry, *surface))
                 .collect(),
         }
     });
-    for surface in regions.iter().flat_map(|region| &region.surfaces) {
-        let exposed_ground = view.voxels.contains_key(surface)
-            && view.columns.get(&surface.coord).is_some_and(|runs| {
-                runs.iter().map(|run| run.top_level).max() == Some(surface.level)
-            });
-        let static_or_liquid =
-            view.static_spans
-                .iter()
-                .any(|span| span.bottom.coord == surface.coord && span.top_level > surface.level)
-                || view.liquids.iter().any(|span| {
-                    span.bottom.coord == surface.coord && span.top_level > surface.level
+    for region in &regions {
+        let original_ring_preserved =
+            region
+                .preferred
+                .coord
+                .within_radius(1)
+                .into_iter()
+                .all(|coord| {
+                    region
+                        .surfaces
+                        .contains(&TilePos::new(coord, region.preferred.level))
                 });
-        let protected = view
-            .edit_protected
-            .get(&surface.coord)
-            .is_some_and(|intervals| intervals.iter().any(|(_, top)| *top >= surface.level));
-        if !geometry.contains_column(surface.coord)
-            || !(geometry.min_level..=geometry.max_level).contains(&surface.level)
-            || !exposed_ground
-            || static_or_liquid
-            || protected
+        if region.surfaces.len() < 10
+            || !region.surfaces.contains(&region.preferred)
+            || !original_ring_preserved
         {
             return Err(format!(
-                "Arena {:?} deployment surface {surface:?} is not open dry unreserved ground",
+                "Arena {:?} deployment requires ten open dry unreserved surfaces and its original seven-cell pocket",
                 view.selection.map
             ));
         }
@@ -231,8 +232,8 @@ fn battle_deployment(
     Ok(Some(regions))
 }
 
-/// Finite extra ground facts for the four-segment body. These do not enlarge
-/// ordinary deployment and never create terrain or select a roof as a fallback.
+/// Finite ground facts with a separate four-segment fit diagnostic. These never
+/// create terrain or select a roof as a fallback; actor admission stays in gameplay.
 fn elongated_deployment(
     view: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
