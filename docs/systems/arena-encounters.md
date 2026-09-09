@@ -117,7 +117,9 @@ You can trigger more than one party by moving carelessly. An activated Worm has
 a separate underground sensing rule described below; it never shares that
 information with other parties.
 
-Goblins and Shamans search for four seconds and pursue up to 18 units from home;
+Goblins and Shamans search for four seconds and normally return beyond 18 units
+from home. A party with living Goblins keeps chasing while it sees the player,
+including when sight returns during the trip home;
 Shadows use six seconds/24 units and Dragons eight seconds/32 units. Survivors
 return without respawning or instantly healing. Activated Worms retain their own
 pursuit through lost sight and ordinary party leash expiry. Destroyed terrain and cleared
@@ -146,8 +148,9 @@ Goblins match the player body: .8 units tall with a .25-unit radius. Groups appr
 from wider angles and keep space between bodies. While pursuing, they attempt
 2.8-unit jumps at intervals of two to three seconds only when a swept route and
 landing are admitted. Ground recovery can also use a checked descent or jump out
-of a hole. Goblin escorts stay near their Shaman instead of chasing independently
-across the map.
+of a hole. Goblin escorts chase a visible or remembered target even beyond their
+Shaman's aura; they regroup near the Shaman when they have no target. Losing sight
+still uses the party's existing search and return rules.
 
 The Dragon is deliberately low and long: .4 units high and about 3.5 long.
 Its breath reaches six units and can deal 45 total damage across three pulses; a close
@@ -251,3 +254,11 @@ Water remains non-solid with no swimming or drowning; required approaches are dr
 Static authored map objects remain indestructible. Ground enemies use bounded
 local steering, so heavy destruction and unusual traps can defeat their routes.
 Grand V3, multiplayer, progression and persistent saves are deferred.
+
+## Deferred playtest issues — 2026-09-08
+
+The player reports that Worms do not attack back and Golems fail to destroy
+obstacles to continue chasing. Both are known unresolved issues, explicitly deferred
+for this delivery. The final follow-up changes only Goblin pursuit; the described
+Worm/Golem abilities above express their implemented intent, not successful playtest
+acceptance.

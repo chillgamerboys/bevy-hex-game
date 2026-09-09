@@ -37,9 +37,14 @@ Shamans have five escorts, and Seven Regions has 17 enemies. Terminal outcomes
 open the combat menu automatically. Local tests, strict lint and native captures
 are complete; scoped static limits and pending final CI are recorded in the
 [pressure validation record](waves/arena-bestiary/creature-pressure-validation.md).
-[Draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) carries the
-combined `experiment/spell-combat-arena` candidate to `dev`; it has not merged.
-Human motion, controls and balance on the final candidate remain pending. See the
+[PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) carries the
+combined `experiment/spell-combat-arena` implementation to `dev`. The user authorized
+immediate merge after a small Goblin pursuit fix and basic testing.
+The latest playtest reports Worm nonresponse and Golems failing to clear chase
+obstacles; both remain unresolved and explicitly deferred. Goblins now pursue
+spotted targets beyond the Shaman tether and keep chasing visible targets beyond
+home range. The final small change has focused test coverage; broader repeat
+validation and final-head human playtest are waived by the user for this delivery. See the
 [controls guide](../systems/arena-encounters.md). Multiplayer and Grand V3 are deferred.
 
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)

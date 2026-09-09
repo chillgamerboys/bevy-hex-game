@@ -1,20 +1,23 @@
 # Creature pressure follow-up — validation
 
 Implementation, local checks, native captures and scoped static review are complete.
-Remote CI and human playtest remain separate pending gates. This record covers the
+Remote CI and human playtest are separate evidence; the final limited-validation
+waiver is recorded below. This record covers the
 2026-09-08 creature-pressure follow-up, not a fresh calibration of earlier bestiary
-results. Delivery stays on draft PR #221; no merge is authorized.
+results. The original delivery was draft; the later explicit merge authorization and
+limited follow-up validation below supersede that delivery status.
 
 ## Source and verification
 
 The combined library run used `01c431b259c5e04776b343067701450e32a165ef`.
 The verified native/capture candidate is `217102c5202a9ba8b924a1d5d64bc21c56a9846d`.
 The expanded-route/workload checkpoint is `71dc0f8544af9436c89c4479171315d821de3d57`.
-The final source checkpoint is `9aa3e0c40f67444d759e4dfe1f49e61d0ee3af9d`;
+The pre-playtest source checkpoint is `9aa3e0c40f67444d759e4dfe1f49e61d0ee3af9d`;
 its sole difference from `217102c` is the Stone Swipe review-camera framing.
 Strict workspace lint and the native Swipe build/capture pass at that final source.
 All other cited capture surfaces and runtime behavior are unchanged by this camera
-branch. This delivery commit changes documentation only.
+branch. The documentation-only checkpoint `a92d414` preceded the small Goblin
+follow-up recorded below.
 
 Local evidence lives under `.context/creature-pressure-checks/`. The final SHA-256
 ledger `final-log-hashes.json` records current logs; earlier checkpoint ledgers are
@@ -194,3 +197,26 @@ timeouts remain unresolved, and static pixels do not establish motion or input f
 
 Local receipt ledger SHA-256: `02c21641b5c9d8a0fbabf44067d3077dbb125f8d769950d2b7a5e1041a8e6920`.
 Capture index SHA-256: `1ffecede4a0fbc5a8c1285168731363cd0bbf4db73e00d1b779b89ee4470a4e2`.
+
+## Final playtest follow-up and authorized merge
+
+The user playtested `a92d414` and reports two unresolved defects: the Worm does not
+attack back, and the Golem does not destroy obstacles to chase. Both are noted and
+explicitly deferred; no further fixes or acceptance claims are made for them.
+
+The only final behavior change is Goblin pursuit: known targets take priority over
+the Shaman escort tether, and a party with living Goblins keeps chasing a visible
+player beyond the home leash, resuming when it reacquires sight while returning.
+Dormant activation range, hidden-target information, ordinary lost-sight search,
+health, damage, attacks and movement remain unchanged.
+
+At the user's request, validation is limited to focused Goblin tests plus existing
+hidden-information and lost-sight return regressions, and formatting/diff checks.
+Receipts are `.context/creature-pressure-checks/goblin-chase.log`,
+`goblin-hidden-history.log` and `goblin-search-return.log`: 11 Goblin-filtered
+tests and both regressions passed (13 total). Formatting and diff checks passed.
+The PR body records
+the final source identity and explicit maintainer waiver of another full validation
+and native playtest cycle. This waiver is not a claim that the final change was
+human-playtested or that all remote CI completed. The user authorized merging now
+without another approval step.

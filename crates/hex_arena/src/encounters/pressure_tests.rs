@@ -360,8 +360,8 @@ fn dragon_lunge_uses_swept_speed_and_never_crosses_solid_cover() {
 }
 
 #[test]
-fn goblin_slots_are_distinct_and_escorts_and_shaman_keep_support_range() {
-    let (mut shaman, target, party, view, geometry, collision, tuning) = scene(Species::Shaman);
+fn goblin_slots_pursue_spotted_targets_beyond_shaman_support_range() {
+    let (mut shaman, target, mut party, view, geometry, collision, tuning) = scene(Species::Shaman);
     shaman.feet.x = -5.0;
     let mut allies = vec![target.clone(), shaman.clone()];
     for id in 8..18 {
@@ -404,8 +404,29 @@ fn goblin_slots_are_distinct_and_escorts_and_shaman_keep_support_range() {
             &tuning,
             1,
         );
-        let goal = Vec3::from_array(brain.decision.expect("escort").goal);
-        assert!(goal.distance(shaman.feet) <= tuning.encounters.aura_radius * 0.8 + 0.01);
+        let goal = Vec3::from_array(brain.decision.as_ref().expect("escort").goal);
+        assert!(goal.distance(shaman.feet) > tuning.encounters.aura_radius * 0.8);
+        assert!(goal.distance(target.center()) < 3.0);
+        assert!(
+            goal.x > goblin.feet.x,
+            "escort must pursue the spotted player"
+        );
+        party.snapshot.phase = PartyPhase::Dormant;
+        brain.intent(
+            goblin,
+            &party,
+            &allies,
+            &[],
+            &[],
+            &collision,
+            &view,
+            geometry,
+            &tuning,
+            2,
+        );
+        let idle = Vec3::from_array(brain.decision.expect("idle escort").goal);
+        assert!(idle.distance(shaman.feet) <= tuning.encounters.aura_radius * 0.8 + 0.01);
+        party.snapshot.phase = PartyPhase::Active;
     }
     let mut brain = Brain::new(shaman.id, shaman.feet);
     brain.intent(

@@ -541,6 +541,29 @@ fn hidden_human_changes_do_not_change_creature_intents_after_the_same_observatio
 }
 
 #[test]
+fn goblin_parties_keep_chasing_visible_targets_beyond_home_and_resume_on_sighting() {
+    for encounter in [ArenaEncounter::Goblins, ArenaEncounter::ShamanParty] {
+        let (mut session, view, geometry, materials, tuning) = fixture(encounter);
+        pose(&mut session, 0, Vec3::new(10.0, 0.0, 0.0), Vec3::NEG_X);
+        let party = session.encounter.runtime.first_mut().expect("party");
+        party.snapshot.home = Vec3::new(-20.0, SKIN, 0.0);
+        ticks(&mut session, 12, &view, geometry, materials, &tuning);
+        assert_eq!(
+            session.parties().first().expect("spotted").phase,
+            PartyPhase::Active
+        );
+        let party = session.encounter.runtime.first_mut().expect("party");
+        assert!(party.knowledge.is_some_and(|seen| seen.direct));
+        party.snapshot.phase = PartyPhase::Returning;
+        ticks(&mut session, 12, &view, geometry, materials, &tuning);
+        assert_eq!(
+            session.parties().first().expect("reacquired").phase,
+            PartyPhase::Active
+        );
+    }
+}
+
+#[test]
 fn search_expires_into_return_and_preserves_damage_when_home_is_reached() {
     let (mut session, mut view, geometry, materials, tuning) = fixture(ArenaEncounter::Goblins);
     divider(&mut view, materials.stone);

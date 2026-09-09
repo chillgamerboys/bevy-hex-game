@@ -612,7 +612,10 @@ impl Brain {
                 }
             }
             if let Some(shaman) = actors.iter().find(|ally| {
-                ally.hp > 0.0 && ally.party == actor.party && ally.species == Species::Shaman
+                target.is_none()
+                    && ally.hp > 0.0
+                    && ally.party == actor.party
+                    && ally.species == Species::Shaman
             }) {
                 let offset = (goal - shaman.feet).with_y(0.0);
                 goal = shaman.feet + offset.clamp_length_max(c.aura_radius * 0.8);

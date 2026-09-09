@@ -421,3 +421,13 @@ checks, strict workspace lint and native builds pass. All 10,440 post-warmup nat
 workload ticks fit the simulation budget, with separate headless/bootstrap spikes
 retained in the report. Static review records scoped passes and close-view limits.
 Final remote CI and human motion/balance remain pending; the PR stays draft.
+
+### Final authorized Goblin follow-up
+
+The user reported Worm nonresponse and Golem failure to clear pursuit obstacles and
+explicitly deferred both. The final small fix removes the Shaman tether while a
+Goblin has a known target and preserves visible Goblin-party pursuit beyond home
+range. Focused Goblin, hidden-history and search-return checks replace another
+broad validation cycle at the user's request. The user explicitly authorized final
+PR publication and immediate merge without further approval; earlier draft/no-merge
+status above is historical. The PR records the exact-head validation waiver.

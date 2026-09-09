@@ -526,6 +526,9 @@ impl ArenaSession {
                             .into_iter()
                             .any(|target| self.collision.sight_clear(a.eye(), target))
                 });
+            // A disclosed target takes priority over home/escort formation for
+            // Goblin parties. Lost contact still uses the ordinary search rules.
+            let goblin_pursuit = visible && members.iter().any(|a| a.species == Species::Goblin);
             if visible {
                 let velocity = p
                     .knowledge
@@ -542,7 +545,7 @@ impl ArenaSession {
                     observed: None,
                 });
                 p.last_sight = self.tick;
-                if p.snapshot.phase == PartyPhase::Dormant {
+                if p.snapshot.phase == PartyPhase::Dormant || goblin_pursuit {
                     p.snapshot.phase = PartyPhase::Active;
                 }
                 if p.snapshot.phase == PartyPhase::Active {
@@ -585,7 +588,10 @@ impl ArenaSession {
                     .iter()
                     .filter(|a| a.party == Some(p.snapshot.id) && a.hp > 0.0)
                     .any(|a| a.feet.distance(p.snapshot.home) > p.leash);
-                if !worm_pursuit && (exceeded || elapsed(self.tick, p.last_sight) > p.search) {
+                if !worm_pursuit
+                    && !goblin_pursuit
+                    && (exceeded || elapsed(self.tick, p.last_sight) > p.search)
+                {
                     p.snapshot.phase = PartyPhase::Returning;
                 }
             } else if p.snapshot.phase == PartyPhase::Returning {
