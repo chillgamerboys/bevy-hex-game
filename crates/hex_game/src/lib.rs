@@ -293,11 +293,14 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((
-            hex_dev::plugin,
-            content_debug::plugin,
-            dev_time_controls::plugin,
-        ));
+        {
+            // The native inspector owns an egui window surface, not the walk's
+            // image target. Review the game's UI without that developer window.
+            if !headless_walk {
+                app.add_plugins(hex_dev::plugin);
+            }
+            app.add_plugins((content_debug::plugin, dev_time_controls::plugin));
+        }
     }
 }
 

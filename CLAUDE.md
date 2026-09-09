@@ -113,7 +113,7 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Set `HEX_WALK_HEADLESS=1` for automated review: it disables the native Winit
-window and runs the same image-target capture pipeline. The flag is honored only
+window and native inspector and runs the same image-target capture pipeline. The flag is honored only
 by `visual-walk` builds. `walks/battle_entry.ron` reviews the Main Menu at three
 canvas/scale combinations without opening Battle Mode.
 
