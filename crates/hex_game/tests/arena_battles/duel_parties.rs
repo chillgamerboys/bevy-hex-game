@@ -253,13 +253,29 @@ fn custom_duel_parties_take_real_offensive_actions_after_observing_the_player() 
             fixture.world_mut().run_schedule(ArenaTick);
             let session = fixture.world().resource::<ArenaSession>();
             for decision in session.creature_decisions() {
-                if decision.target == Some(0)
-                    && decision.own_sight
+                // Player-mode own sight is specifically the living human. The
+                // optional target ID is populated only for copied-body forecasts;
+                // ordinary Dragon/Goblin/Shaman/Golem observations omit that ID.
+                if decision.own_sight
+                    && decision.target.is_none_or(|id| id == 0)
                     && decision
                         .observation_tick
                         .is_some_and(|tick| tick <= session.tick)
                 {
                     observed.insert(decision.id);
+                }
+            }
+            if preset == BattlePreset::Worm {
+                // This preset has exactly one member (asserted above), so its
+                // party's direct sight can only come from this exposed Worm.
+                // Worm uses its own controller rather than creature_decisions.
+                let worm = session.actors.get(1).expect("the single Worm");
+                if session.party_knowledge().iter().any(|knowledge| {
+                    Some(knowledge.id) == worm.party
+                        && knowledge.source == "sight"
+                        && knowledge.tick.is_some_and(|tick| tick <= session.tick)
+                }) {
+                    observed.insert(worm.id);
                 }
             }
             acted = session.encounter_stats().iter().any(|actor| {
@@ -277,8 +293,16 @@ fn custom_duel_parties_take_real_offensive_actions_after_observing_the_player() 
         }
         assert!(
             acted,
-            "{preset:?} must observe actor0 and perform a real offensive activation; notice={}",
-            fixture.world().resource::<ArenaSession>().notice
+            "{preset:?} must observe the player and perform a real offensive activation: {}",
+            serde_json::json!({
+                "approach":feet.to_array(),"observed_actor_ids":observed,
+                "actors":actor_snapshot(&fixture),
+                "tick":fixture.world().resource::<ArenaSession>().tick,
+                "notice":fixture.world().resource::<ArenaSession>().notice,
+                "decisions":fixture.world().resource::<ArenaSession>().creature_decisions(),
+                "knowledge":fixture.world().resource::<ArenaSession>().party_knowledge(),
+                "stats":fixture.world().resource::<ArenaSession>().encounter_stats()
+            })
         );
     }
 }
