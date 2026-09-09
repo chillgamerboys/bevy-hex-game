@@ -267,7 +267,7 @@ fn observer_timeout_opens_terminal_menu_without_a_dummy_human_or_resumable_camer
     assert!(session.human_actor_id().is_none());
     assert_eq!(
         session.battle_summary().expect("observer result").result,
-        hex_arena::BattleResult::Timeout
+        Some(hex_arena::BattleResult::Timeout)
     );
     assert_terminal_menu(&mut app, window, "BATTLE COMPLETE");
     let mode = app.world().resource::<ViewState>().observer.mode;

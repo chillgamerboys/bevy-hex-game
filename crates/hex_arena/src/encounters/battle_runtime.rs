@@ -396,7 +396,7 @@ pub(super) fn deployment_pose(
     })
 }
 
-/// Fourteen finite reservations: two flight layers over the seven authored cells.
+/// Fourteen finite reservations: two layers over the nearest seven published cells.
 /// Bodies reserve their actual union, including mixed ground/flying rosters.
 pub(super) fn flying_deployment_pose(
     actor: &Actor,
@@ -409,6 +409,8 @@ pub(super) fn flying_deployment_pose(
 ) -> Option<(Vec3, u8)> {
     let mut surfaces: Vec<_> = region.surfaces.iter().copied().collect();
     surfaces.sort_by_key(|pos| (pos.coord.distance(region.preferred.coord), *pos));
+    // Ground-party expansion must not collapse the accepted two-layer Wisp formation.
+    surfaces.truncate(7);
     for layer in 0_u8..2 {
         for surface in &surfaces {
             if !view.voxels.contains_key(surface) {
