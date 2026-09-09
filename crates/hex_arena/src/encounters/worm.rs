@@ -156,6 +156,19 @@ impl Controller {
             self.phase(WormPhase::Travel);
             self.next_sense = tick;
         }
+        if self.phase == WormPhase::Diving
+            && self.pursuit_active
+            && !buried
+            && self.lift <= SKIN
+            && self.phase_time >= c.worm_surface_interval
+        {
+            // Destruction can remove the common shallow travel band. After
+            // retracting, retry a stationary exposure instead of staying in an
+            // unfinishable dive forever. Full-body rise admission and real sight
+            // still gate the attack; this grants no above-ground travel.
+            self.phase(WormPhase::Emerging);
+            self.next_sense = tick;
+        }
         let exposed = actor.worm().is_some_and(|s| s.exposed);
         let can_see = exposed && matches!(self.phase, WormPhase::Emerging | WormPhase::Exposed);
         if buried && self.phase == WormPhase::Travel && self.pursuit_active {

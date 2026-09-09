@@ -553,10 +553,10 @@ fn an_airborne_worm_keeps_falling_while_sideways_impulse_pressures_a_wall() {
     assert!(f.worm().body.vertical_velocity < -4.0);
 }
 
-// The new burrow/attack cycle supersedes stationary repeated-fire recovery.
+// Lost travel support must not leave a living Worm permanently unable to retaliate.
 
 #[test]
-fn a_partial_tail_crater_cannot_veto_stationary_head_retraction() {
+fn a_partial_tail_crater_allows_retraction_then_stationary_counterfire() {
     let mut f = fixture();
     let mut reached_travel = false;
     for _ in 0..900 {
@@ -622,21 +622,26 @@ fn a_partial_tail_crater_cannot_veto_stationary_head_retraction() {
     let first_new_projectile = f.session.next_projectile;
     f.session.record_damage(0, 7, 1.0);
     assert!(old_lift > 0.0);
-    for _ in 0..240 {
+    let mut retracted = false;
+    let mut counterfire = false;
+    for _ in 0..900 {
         let out = f.advance();
         f.apply(&out.burrows);
-        assert!(!f.session.projectiles.iter().any(|shot| {
+        let control = f.session.encounter.worms.get(&7).expect("control");
+        retracted |= control.phase == WormPhase::Diving && control.lift <= SKIN;
+        counterfire |= f.session.projectiles.iter().any(|shot| {
             shot.id >= first_new_projectile
                 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
-        }));
+        });
+        if counterfire {
+            break;
+        }
     }
-    let control = f.session.encounter.worms.get(&7).expect("control");
     assert!(
-        control.lift <= SKIN,
-        "partial tail band must not prevent lowering: {control:?}"
+        retracted && counterfire,
+        "retract, then retaliate without a travel band"
     );
-    assert_eq!(control.phase, WormPhase::Diving);
-    assert!(!f.worm().worm().expect("head").exposed);
+    assert!(f.worm().worm().expect("head").exposed);
     assert!(
         f.worm().feet.distance(before.feet) < SKIN,
         "this recovery changes head lift, not position or travel-depth admission"
@@ -724,18 +729,29 @@ fn a_deep_head_crater_retains_true_clearance_but_cannot_create_an_exposed_firing
         "current lower floor must replace stale support height: {head:?}"
     );
     let initial_lift = f.session.encounter.worms.get(&7).expect("controller").lift;
-    for _ in 0..300 {
+    let mut retracted = false;
+    let mut counterfire = false;
+    for _ in 0..900 {
         let out = f.advance();
         f.apply(&out.burrows);
-        assert!(!f.session.projectiles.iter().any(|shot| {
+        let control = f.session.encounter.worms.get(&7).expect("controller");
+        retracted |= control.phase == WormPhase::Diving
+            && control.lift < initial_lift
+            && control.lift <= SKIN;
+        counterfire |= f.session.projectiles.iter().any(|shot| {
             shot.id >= next_projectile
                 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
-        }));
+        });
+        if counterfire {
+            break;
+        }
     }
     let control = f.session.encounter.worms.get(&7).expect("controller");
-    assert_eq!(control.phase, WormPhase::Diving);
-    assert!(control.lift < initial_lift && control.lift <= SKIN);
-    assert!(control.burrow_target.is_none() && f.worm().attack_state().is_none());
+    assert!(
+        retracted && counterfire,
+        "deeper head crater must not suppress all later shots"
+    );
+    assert!(control.burrow_target.is_none());
     assert!(
         f.worm().feet.distance(before.feet) < SKIN,
         "no teleport or deeper travel"

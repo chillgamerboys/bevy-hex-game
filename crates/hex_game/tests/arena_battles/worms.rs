@@ -362,3 +362,75 @@ fn actual_duel_worms_naturally_convert_earth_expose_the_head_and_deal_boulder_da
     );
     assert!(damaged, "the actual released boulder removes hostile HP");
 }
+
+#[test]
+fn player_worm_answers_a_nearby_visible_human_on_each_real_map() {
+    for map in [ArenaMap::Fort, ArenaMap::Duel] {
+        let setup = ArenaBattleSetup {
+            player_recipe: Some(BattlePreset::Worm),
+            ..Default::default()
+        };
+        let mut fixture = app(map, setup);
+        for _ in 0..120 {
+            fixture.world_mut().run_schedule(ArenaTick);
+            if fixture
+                .world()
+                .resource::<ArenaSession>()
+                .actors
+                .iter()
+                .any(|a| a.species == Species::Worm && a.worm().is_some_and(|s| s.exposed))
+            {
+                break;
+            }
+        }
+        let session = fixture.world().resource::<ArenaSession>();
+        let worm = session
+            .actors
+            .iter()
+            .find(|a| a.species == Species::Worm)
+            .expect("Worm");
+        let view = fixture.world().resource::<ArenaTerrainView>();
+        let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+        let point = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z]
+            .into_iter()
+            .find_map(|direction| {
+                session.visible_supported_actor_pose(
+                    0,
+                    worm.id,
+                    worm.feet + direction * 8.0,
+                    view,
+                    geometry,
+                )
+            })
+            .expect("dry visible approach");
+        let mut session = fixture.world_mut().resource_mut::<ArenaSession>();
+        let human = session
+            .actors
+            .iter_mut()
+            .find(|a| a.id == 0)
+            .expect("human");
+        human.feet = point;
+        human.previous_feet = point;
+        human.hp = 1000.0;
+        human.max_hp = 1000.0;
+        let mut fired = false;
+        for _ in 0..1800 {
+            fixture.world_mut().run_schedule(ArenaTick);
+            let session = fixture.world().resource::<ArenaSession>();
+            fired |= session
+                .projectiles
+                .iter()
+                .any(|p| p.source_ability() == Some(CreatureAbility::WormBoulder));
+            if fired {
+                break;
+            }
+        }
+        let session = fixture.world().resource::<ArenaSession>();
+        assert!(
+            fired,
+            "{map:?}: no boulder; parties={:?}; actors={:?}",
+            session.parties(),
+            session.actors
+        );
+    }
+}

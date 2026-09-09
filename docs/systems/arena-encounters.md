@@ -262,3 +262,14 @@ obstacles to continue chasing. Both are known unresolved issues, explicitly defe
 for this delivery. The final follow-up changes only Goblin pursuit; the described
 Worm/Golem abilities above express their implemented intent, not successful playtest
 acceptance.
+
+### Response repair candidate — 2026-09-09
+
+On `fix/arena-golem-worm-response`, Golems check locally obstructing destructible
+terrain on the existing 10 Hz cadence without waiting for a complete movement
+stall. Swiping still respects its cooldown, world damage admission and protected
+terrain. Worms unable to finish diving after ground destruction retract and retry
+stationary exposure after the existing surface interval, allowing sight-checked
+counterfire. No above-ground movement or replacement terrain is granted. Travel
+can still fail where no valid shallow band exists. These address specific causes
+of the reported nonresponse; native playtest confirmation remains pending.

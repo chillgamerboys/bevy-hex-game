@@ -431,3 +431,21 @@ range. Focused Goblin, hidden-history and search-return checks replace another
 broad validation cycle at the user's request. The user explicitly authorized final
 PR publication and immediate merge without further approval; earlier draft/no-merge
 status above is historical. The PR records the exact-head validation waiver.
+
+### Golem/Worm response repair — 2026-09-09
+
+Following the merged PR #221 playtest, the user requested focused repairs and a
+hard stop below 20% remaining Codex usage. Work is isolated on
+`fix/arena-golem-worm-response` from verified `github/dev`. Root owns Worm state,
+application regression coverage and the single Cargo lane; the bounded Golem lane
+owns only `golem_brain.rs` and `golem_tests.rs`. No new world mutation or tuning API.
+
+The Golem lane removes the full-stall timer requirement when its existing local
+body sweep confirms destructible obstruction. The Worm lane retries stationary
+exposure after retraction cannot reach a valid shallow travel band, preserving
+full-body admission and observed-only attacks. Focused tests precede local commit;
+no new broad capture or balance campaign is part of this repair.
+
+The response candidate passes 45 Worm and 32 Golem library tests, strict arena
+Clippy, and the actual-map stationary-human Worm release check on Fort and Duel.
+See [response-repair.md](response-repair.md) for scope and remaining limitations.

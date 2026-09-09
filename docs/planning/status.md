@@ -41,7 +41,9 @@ are complete; scoped static limits and pending final CI are recorded in the
 combined `experiment/spell-combat-arena` implementation to `dev`. The user authorized
 immediate merge after a small Goblin pursuit fix and basic testing.
 The latest playtest reports Worm nonresponse and Golems failing to clear chase
-obstacles; both remain unresolved and explicitly deferred. Goblins now pursue
+obstacles. A local `fix/arena-golem-worm-response` candidate repairs a permanent
+Worm dive state after ground damage and a Golem swipe trigger starved by recent
+movement; final native confirmation remains pending. Goblins now pursue
 spotted targets beyond the Shaman tether and keep chasing visible targets beyond
 home range. The final small change has focused test coverage; broader repeat
 validation and final-head human playtest are waived by the user for this delivery. See the

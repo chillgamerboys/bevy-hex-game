@@ -826,6 +826,33 @@ fn stone_swipe_clears_front_stone_but_preserves_floor_protection_and_cover_order
 }
 
 #[test]
+fn blocked_golem_swipes_while_recent_chase_progress_is_still_fresh() {
+    let mut f = Fixture::new();
+    f.owner_mut().feet.x = -0.4;
+    f.session.actors.first_mut().expect("covered target").feet.x = 10.0;
+    let front = HexCoord::from_axial(2, 0);
+    for level in 1..=5 {
+        f.view
+            .voxels
+            .insert(TilePos::new(front, level), f.materials.stone);
+    }
+    f.refresh();
+    let start = f.owner().feet;
+    for _ in 0..24 {
+        f.observed_tick();
+        if f.owner()
+            .attack_state()
+            .is_some_and(|attack| attack.kind == CreatureAbility::GolemSwipe)
+        {
+            assert!(f.owner().feet.x > start.x + 0.02, "real chase movement");
+            assert!(f.session.tick < 48, "swipe must not wait for a full stall");
+            return;
+        }
+    }
+    panic!("confirmed local cover should admit a swipe despite recent progress");
+}
+
+#[test]
 fn blocked_golem_uses_swipe_then_follows_the_published_opening_without_teleport() {
     let mut f = Fixture::new();
     f.tuning = ArenaTuning::default();
