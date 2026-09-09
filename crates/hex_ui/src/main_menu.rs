@@ -473,10 +473,6 @@ fn emit_intents(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "menu fixtures require the controls they render"
-)]
 mod tests {
     use super::*;
 
