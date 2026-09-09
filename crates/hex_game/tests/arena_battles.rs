@@ -441,7 +441,7 @@ fn calibrate_original_monster_groups() {
                                     actor
                                         .attack_state()
                                         .map(|attack| (attack.kind, attack.phase)),
-                                    actor.beam().map(|beam| beam.locked),
+                                    actor.beam().map(|beam| beam.tracking),
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -475,7 +475,7 @@ fn calibrate_original_monster_groups() {
                                     "attack":actor.attack_state().map(|attack|serde_json::json!({"kind":attack.kind,"phase":attack.phase,"direction":attack.direction.to_array(),"progress":attack.progress})),
                                     "worm":actor.worm(),
                                     "prisms":actor.body_hex_prisms().map(|prism|serde_json::json!({"offset":prism.offset.to_array(),"height":prism.height})).collect::<Vec<_>>(),
-                                    "beam":actor.beam().map(|beam|serde_json::json!({"origin":beam.origin.to_array(),"direction":beam.direction.to_array(),"end":beam.end.to_array(),"radius":beam.radius,"locked":beam.locked})),
+                                    "beam":actor.beam().map(|beam|serde_json::json!({"origin":beam.origin.to_array(),"direction":beam.direction.to_array(),"end":beam.end.to_array(),"radius":beam.radius,"tracking":beam.tracking})),
                                     "volume_valid":session.actor_volume_valid(actor.id,terrain,geometry)
                                 })).collect::<Vec<_>>(),"stats":session.encounter_stats()
                             })
