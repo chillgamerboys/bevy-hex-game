@@ -50,8 +50,10 @@ fn golem_projection_is_seven_native_prisms_with_fixed_body_orientation() {
     assert_eq!(CreatureAbility::Aura.index(), 6);
     assert_eq!(CreatureAbility::GolemSlam.index(), 7);
     assert_eq!(CreatureAbility::GolemLaser.index(), 8);
+    assert_eq!(CreatureAbility::WormBoulder.index(), 10);
+    assert_eq!(CreatureAbility::GolemSwipe.index(), 11);
     assert_eq!(
-        CreatureAbility::WormBoulder.index() + 1,
+        CreatureAbility::GolemSwipe.index() + 1,
         CREATURE_ABILITY_COUNT
     );
 }
@@ -98,7 +100,7 @@ fn fort_player_override_is_reset_owned_and_none_restores_the_world_recipe() {
     );
     session.reset_with_setup(2, &view, geometry, &setup);
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
-    assert_eq!(session.actors.len(), 6);
+    assert_eq!(session.actors.len(), 11);
     assert!(session
         .actors
         .iter()

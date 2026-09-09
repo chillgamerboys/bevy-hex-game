@@ -151,7 +151,7 @@ continuation, ownership and unmerged PR status.
 | Existing `TerrainEdit`, `TerrainImpact`, `TerrainImpactOutcome` in the arena — world-owned mutation and damage admission; a `PreUpdate` inbox retains pending edits/impacts across pauses | gameplay requests; world outcomes | world / `hex_arena` | **experimental** arena composition of existing live message types |
 | `ArenaReset` generation — clear queued world messages/inbox and damage state, restore authored terrain, then reset actors and gameplay ledgers before advancing the new round | shared input adapter | world / `hex_arena` | **experimental** |
 | `ActorIntent` / `ArenaInput` and read-only `ArenaSession` projection — held movement/aim/cast state plus consumed jump, cast-press/release, and selection edges; actor-owned charge advances at 120 Hz and a session cancellation method clears charges while paused; human and bot use the same simulation path | native input / gameplay bot | gameplay authority / presentation | **experimental**; future network ingress seam only, with no current wire or admission contract |
-| Arena bot observations and combat cues — gameplay filters sight and publishes coarse discrete release/impact locations; decision forecasts consume observed bodies or explicit memory hypotheses, never hidden live actor bodies | gameplay | private arena bot; read-only debug and round summaries for local validation | **experimental**; no tactical perception dependency or normal HUD disclosure |
+| Arena bot observations and combat cues — gameplay filters sight and publishes coarse discrete release/impact locations; the active, physically buried Worm has a private position-only sensing exception for underground pursuit; decision forecasts consume observed bodies or explicit memory hypotheses, never hidden live actor bodies | gameplay | private arena bot; read-only debug and round summaries for local validation | **experimental**; no tactical perception dependency or normal HUD disclosure |
 
 ## What each side commits to
 
@@ -260,3 +260,10 @@ Projectiles and ordinary bodies continue to see solid dirt. A Worm may attack on
 when its physical head is wholly clear and at least one voxel level above its
 explicit local surface. Presentation consumes the physical components and ordinary
 opaque terrain depth; it does not reveal a buried Worm through an indicator.
+
+An activated Worm may sense live hostile positions while fully buried in shallow
+Travel. This private movement hint is cleared on emergence and never enters
+party observations or attack forecasts. Above ground it uses only line of sight,
+retracts without voluntary horizontal travel, then moves through admitted dirt to
+reposition. Death, draw and observer timeout freeze the round, flush pending world
+publication and open the combat menu with the cursor released.

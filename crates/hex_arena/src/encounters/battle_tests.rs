@@ -20,7 +20,7 @@ fn battle(
             preferred,
             surfaces: preferred
                 .coord
-                .within_radius(1)
+                .within_radius(2)
                 .into_iter()
                 .map(|coord| TilePos::new(coord, 0))
                 .collect(),
@@ -168,7 +168,7 @@ fn team_result_waits_for_all_members_and_distinguishes_draw_from_timeout() {
         .get(1)
         .expect("team")
         .max_hp;
-    assert!((initial - 250.0).abs() < 0.001);
+    assert!((initial - 500.0).abs() < 0.001);
     let setup = session.accepted_battle_setup().clone();
     session.reset_with_setup(3, &world, geometry, &setup);
     ticks(&mut session, 1, &world, geometry, materials, &tuning);

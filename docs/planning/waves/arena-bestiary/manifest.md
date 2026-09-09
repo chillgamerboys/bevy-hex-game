@@ -365,7 +365,7 @@ The user requested an easy Main Menu entry, discoverable launch instructions for
 other agents and inclusion in the existing combined PR. This follow-up remains on
 `experiment/spell-combat-arena` in
 [draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221), targeting
-`dev`; it is not merged. Implementation and focused validation are in progress.
+`dev`; it is not merged. The button is implemented and focused validation passed.
 The earlier `25fa64d` full-gate receipt remains evidence for that exact checkpoint.
 
 - Root owns default feature selection in `hex_game/Cargo.toml`, process supervision
@@ -394,3 +394,23 @@ The earlier `25fa64d` full-gate receipt remains evidence for that exact checkpoi
   capability on/off, menu dispatch and supervised child success/failure/exit,
   inherited assets and default selection, plus the changed menu presentation.
   Human input and window behavior remain separate from static frame review.
+
+- Main Menu checkpoint `216b969cca27eb8b0609270db8338c9c0c49688f` passed
+  eight game and four UI tests, 36 launcher checks, strict workspace Clippy and
+  the feature-opt-out launch refusal (exit 1 with the intended diagnostic).
+  A clean windowless three-frame pack at `.context/visual-walks/216b969cca27eb8b0609270db8338c9c0c49688f-battle-entry-v1`
+  covers 1920×1080 Auto, 1280×720 Auto and 1280×720 at 200% UI scale.
+  Root and an independent reviewer inspected all raw frames and the contact
+  sheet; static layout passed. Native button/window interaction awaits playtest.
+  The earlier failed inspector/image-format capture is retained as invalid,
+  followed by this successful clean capture with the native-only inspector omitted.
+
+## Creature pressure and terminal menu follow-up
+
+The user requested stronger species behaviors, ten Goblins, five Shaman escorts,
+and automatic combat-menu entry after victory or defeat. The ownership and
+implementation sequence are in [creature-pressure.md](creature-pressure.md).
+All lanes are integrated additively into this same candidate; no new PR or world
+mutation API was introduced. See the [current validation record](creature-pressure-validation.md)
+for exact evidence and remaining playtest limitations. Historical balance scores
+and ten-enemy load receipts do not describe the expanded 17-enemy roster.

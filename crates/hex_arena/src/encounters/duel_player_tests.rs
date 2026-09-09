@@ -17,7 +17,7 @@ fn duel_fixture() -> (
             preferred,
             surfaces: preferred
                 .coord
-                .within_radius(1)
+                .within_radius(2)
                 .into_iter()
                 .map(|coord| TilePos::new(coord, 0))
                 .collect(),
@@ -123,7 +123,7 @@ fn duel_party_deployment_refuses_missing_player_support_or_partial_enemy_roster_
             .expect("side");
         region.surfaces.clear();
         if bad_side == 1 {
-            // Exactly one valid body can be placed, but the requested five may
+            // Exactly one valid body can be placed, but the requested ten may
             // never become a partially playable roster.
             region.surfaces.insert(region.preferred);
         }
@@ -162,7 +162,7 @@ fn custom_duel_has_no_safe_human_regeneration_and_preserves_full_party_victory_r
     session.reset_with_setup(2, &world, geometry, &setup);
     session.advance(ActorIntent::default(), &world, geometry, materials, &tuning);
     assert!(session.encounter_summary().enabled && !session.is_finished());
-    assert_eq!(session.actors.len(), 6);
+    assert_eq!(session.actors.len(), 11);
     session.actors.first_mut().expect("human").hp = 50.0;
     ticks(&mut session, 1200, &world, geometry, materials, &tuning);
     assert_eq!(
@@ -182,7 +182,7 @@ fn custom_duel_has_no_safe_human_regeneration_and_preserves_full_party_victory_r
         &tuning,
     );
     assert!(session.actors.first().expect("human").charge().is_some());
-    for actor in session.actors.iter_mut().filter(|a| a.id > 0 && a.id < 5) {
+    for actor in session.actors.iter_mut().filter(|a| a.id > 0 && a.id < 10) {
         actor.hp = 0.0;
     }
     session.advance(ActorIntent::default(), &world, geometry, materials, &tuning);
@@ -196,7 +196,7 @@ fn custom_duel_has_no_safe_human_regeneration_and_preserves_full_party_victory_r
     assert!(session.actors.iter().all(|a| a.charge().is_none()));
     session.reset_with_setup(3, &world, geometry, &setup);
     session.advance(ActorIntent::default(), &world, geometry, materials, &tuning);
-    assert_eq!(session.actors.len(), 6);
+    assert_eq!(session.actors.len(), 11);
     assert!(session
         .actors
         .iter()

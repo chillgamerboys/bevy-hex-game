@@ -158,6 +158,32 @@ fn shaman_firing_position_remains_behind_and_in_aura_range_of_its_frontline() {
         session
             .actors
             .iter()
+            .find(|actor| actor.id == 1)
+            .expect("shaman")
+            .attack_state()
+            .is_some_and(|attack| attack.kind == CreatureAbility::Aura),
+        "the larger support field immediately covers these engaged allies"
+    );
+    // The support windup is intentionally stationary. Check actual approach
+    // after its ordinary active/recovery phases, without suppressing the aura.
+    for _ in 0..150 {
+        ticks(&mut session, 1, &view, geometry, materials, &tuning);
+        if session
+            .actors
+            .iter()
+            .find(|actor| actor.id == 1)
+            .expect("shaman")
+            .feet
+            .x
+            > -7.9
+        {
+            break;
+        }
+    }
+    assert!(
+        session
+            .actors
+            .iter()
             .find(|a| a.id == 1)
             .expect("shaman")
             .feet

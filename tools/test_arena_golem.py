@@ -4,7 +4,7 @@ from copy import deepcopy
 import math
 import unittest
 
-from arena import GOLEM_OBSERVER_PRESETS, GOLEM_VIEWS, battle_environment, validate_capture_setup, validate_golem_state
+from arena import GOLEM_OBSERVER_PRESETS, GOLEM_VIEWS, MENU_VIEWS, battle_environment, validate_capture_setup, validate_golem_state, validate_terminal_menu_state
 
 
 def specimen():
@@ -23,11 +23,11 @@ def specimen():
 
 
 class GolemCaptureGuards(unittest.TestCase):
-    def test_matrix_has_twelve_unique_scoped_recipes(self):
+    def test_matrix_has_fourteen_unique_scoped_recipes(self):
         self.assertEqual(GOLEM_OBSERVER_PRESETS, ("golem", "dragon"))
-        self.assertEqual(len(GOLEM_VIEWS), 12)
-        self.assertEqual(len({row[0] for row in GOLEM_VIEWS}), 12)
-        self.assertEqual(sum(row[2] == "fort" and row[3] == "golem" for row in GOLEM_VIEWS), 6)
+        self.assertEqual(len(GOLEM_VIEWS), 14)
+        self.assertEqual(len({row[0] for row in GOLEM_VIEWS}), 14)
+        self.assertEqual(sum(row[2] == "fort" and row[3] == "golem" for row in GOLEM_VIEWS), 8)
         self.assertTrue(all(row[3] == "shadow" for row in GOLEM_VIEWS if row[2] == "duel"))
 
     def test_partial_charge_accepts_golem_actor_zero_and_independent_moving_mouth(self):
@@ -74,6 +74,34 @@ class GolemCaptureGuards(unittest.TestCase):
             variant["effects"][0].update(change)
             with self.assertRaises(RuntimeError):
                 validate_golem_state(variant, "encounter-golem-slam")
+
+    def test_stone_swipe_requires_its_own_phase_after_normal_pulse_publication(self):
+        state = specimen()
+        actor = state["actors"][0]
+        actor.update(beam=None, attack={"kind": "GolemSwipe", "phase": "Windup", "progress": .5})
+        validate_golem_state(state, "encounter-golem-swipe-windup")
+        with self.assertRaises(RuntimeError):
+            validate_golem_state(state, "encounter-golem-swipe")
+        actor["attack"].update(phase="Active", progress=.2)
+        validate_golem_state(state, "encounter-golem-swipe")
+        validate_golem_state(state, "encounter-golem-swipe-rear")
+        for change in ({"kind": "Swipe"}, {"kind": "GolemSlam"}, {"phase": "Recovery"}, {"progress": 0}):
+            variant = deepcopy(state)
+            variant["actors"][0]["attack"].update(change)
+            with self.assertRaises(RuntimeError):
+                validate_golem_state(variant, "encounter-golem-swipe")
+
+    def test_terminal_menu_requires_explicit_fixture_outcome_and_paused_transition(self):
+        for view, outcome in (("terminal-win", "win"), ("terminal-defeat", "defeat")):
+            self.assertIn(view, MENU_VIEWS)
+            state = {"started": True, "paused": True, "terminal_menu_outcome": outcome,
+                     "terminal_menu_fixture": "synthetic-knockout-for-menu-presentation",
+                     "phase_reached_frame": 20, "frame": 24}
+            validate_terminal_menu_state(state, view)
+            for change in ({"started": False}, {"paused": False}, {"terminal_menu_outcome": "draw"},
+                           {"terminal_menu_fixture": None}, {"phase_reached_frame": None}, {"frame": 23}):
+                with self.assertRaises(RuntimeError):
+                    validate_terminal_menu_state({**state, **change}, view)
 
     def test_fort_player_override_and_spectator_rosters_are_distinct_accepted_setups(self):
         state = {"actors": [{"species": "Human"}, {"species": "Golem"}], "selection": {"map": "Fort", "encounter": "Dragon"}, "battle_setup": {

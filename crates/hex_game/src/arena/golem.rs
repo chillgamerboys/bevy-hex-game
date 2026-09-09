@@ -214,8 +214,11 @@ pub(super) fn face_and_laser(
             Color::srgb(1.0, 0.55, 0.12)
         };
         for offset in [-0.3, 0.0, 0.3] {
-            gizmos.line(tip + side * (offset - 0.3) + Vec3::Y * 0.3,
-                tip + side * (offset + 0.3) - Vec3::Y * 0.3, color);
+            gizmos.line(
+                tip + side * (offset - 0.3) + Vec3::Y * 0.3,
+                tip + side * (offset + 0.3) - Vec3::Y * 0.3,
+                color,
+            );
         }
     }
 
@@ -347,6 +350,8 @@ pub(super) fn phase_view(view: &str) -> bool {
             | "encounter-golem-beam"
             | "encounter-golem-slam-windup"
             | "encounter-golem-slam"
+            | "encounter-golem-swipe-windup"
+            | "encounter-golem-swipe"
     )
 }
 
@@ -383,6 +388,18 @@ fn phase_matches(
         }
         "encounter-golem-slam" => {
             attack.kind == CreatureAbility::GolemSlam && attack.phase == AttackPhase::Active
+        }
+        "encounter-golem-swipe-windup" => {
+            attack.kind == CreatureAbility::GolemSwipe
+                && attack.phase == AttackPhase::Windup
+                && attack.progress >= 0.25
+        }
+        "encounter-golem-swipe" => {
+            // The pulse publishes on the following authoritative tick. Waiting
+            // into this finite active phase includes that normal publication.
+            attack.kind == CreatureAbility::GolemSwipe
+                && attack.phase == AttackPhase::Active
+                && attack.progress >= 0.1
         }
         _ => false,
     }
@@ -447,6 +464,13 @@ pub(super) fn capture_camera(
         if let Some(attack) = actor.attack_state() {
             low = low.min(attack.origin - Vec3::splat(attack.range));
             high = high.max(attack.origin + Vec3::splat(attack.range));
+        }
+    }
+    if state.capture_view.contains("golem-swipe") {
+        if let Some(attack) = actor.attack_state() {
+            let delta = attack.direction.with_y(0.0).normalize_or_zero() * attack.range;
+            low = low.min(actor.center() - half + delta);
+            high = high.max(actor.center() + half + delta);
         }
     }
     *camera = super::encounter::frame_bounds(low, high, state.capture_view.ends_with("-rear"));
@@ -576,5 +600,33 @@ mod tests {
         assert!(phase_matches("encounter-golem-slam", Some(attack), None));
         attack.phase = AttackPhase::Recovery;
         assert!(!phase_matches("encounter-golem-slam", Some(attack), None));
+        attack.kind = CreatureAbility::GolemSwipe;
+        assert!(!phase_matches("encounter-golem-swipe", Some(attack), None));
+        attack.phase = AttackPhase::Windup;
+        attack.progress = 0.1;
+        assert!(!phase_matches(
+            "encounter-golem-swipe-windup",
+            Some(attack),
+            None
+        ));
+        attack.progress = 0.5;
+        assert!(phase_matches(
+            "encounter-golem-swipe-windup",
+            Some(attack),
+            None
+        ));
+        assert!(!phase_matches("encounter-golem-swipe", Some(attack), None));
+        attack.phase = AttackPhase::Active;
+        attack.progress = 0.0;
+        assert!(!phase_matches("encounter-golem-swipe", Some(attack), None));
+        attack.progress = 0.2;
+        for view in ["encounter-golem-swipe", "encounter-golem-swipe-rear"] {
+            assert!(phase_view(view));
+            assert!(phase_matches(view, Some(attack), None));
+        }
+        for kind in [CreatureAbility::Swipe, CreatureAbility::GolemSlam] {
+            attack.kind = kind;
+            assert!(!phase_matches("encounter-golem-swipe", Some(attack), None));
+        }
     }
 }

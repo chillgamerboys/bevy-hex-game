@@ -924,6 +924,17 @@ fn drive_simulation(world: &mut World) {
             .resource_mut::<ViewState>()
             .capture_inputs
             .push((frame, sample));
+        // Explicit synthetic presentation fixtures: the normal simulation owns
+        // knockout and terminal transition; these frames are not match evidence.
+        if frame == 20 && matches!(view.as_str(), "terminal-win" | "terminal-defeat") {
+            let mut session = world.resource_mut::<ArenaSession>();
+            let human = session.human_actor_id();
+            for actor in &mut session.actors {
+                if (Some(actor.id) == human) == (view == "terminal-defeat") {
+                    actor.hp = 0.0;
+                }
+            }
+        }
         if frame == 80 && view.contains("partial-preview") {
             stage_partial_preview(world);
         }
@@ -1094,7 +1105,18 @@ fn show_terminal_menu(world: &mut World) {
     // Settle terrain queued by the last impact before freezing the round. The
     // terminal gameplay guard prevents another living movement/ability tick.
     world.run_schedule(ArenaTick);
-    world.resource_mut::<ViewState>().pause();
+    {
+        let mut state = world.resource_mut::<ViewState>();
+        state.pause();
+        if state.capture.is_some()
+            && matches!(
+                state.capture_view.as_str(),
+                "terminal-win" | "terminal-defeat"
+            )
+        {
+            state.capture_event_frame = Some(state.frames);
+        }
+    }
     world.resource_mut::<ArenaSession>().cancel_charges();
     world.resource_mut::<ArenaInput>().human = ActorIntent::default();
     let mut cursors = world.query_filtered::<&mut CursorOptions, With<PrimaryWindow>>();
@@ -1566,6 +1588,12 @@ fn capture_frame(
         ("view", serde_json::json!(state.capture_view)),
         ("started", serde_json::json!(state.started)),
         ("paused", serde_json::json!(state.paused)),
+        ("terminal_menu_fixture", serde_json::json!(matches!(state.capture_view.as_str(), "terminal-win" | "terminal-defeat").then_some("synthetic-knockout-for-menu-presentation"))),
+        ("terminal_menu_outcome", serde_json::json!(session.outcome.map(|outcome| match outcome {
+            hex_arena::ArenaOutcome::Winner(id) if Some(id) == session.human_actor_id() => "win",
+            hex_arena::ArenaOutcome::Winner(_) => "defeat",
+            hex_arena::ArenaOutcome::Draw => "draw",
+        }))),
         ("frame", serde_json::json!(state.frames)),
         ("tick", serde_json::json!(session.tick)),
         ("selection", serde_json::json!({"map": map_name(view.selection.map), "encounter": encounter_name(view.selection.encounter)})),

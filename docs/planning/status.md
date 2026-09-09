@@ -29,7 +29,13 @@ child and restores the menu on exit. macOS and Windows hide the parent while it
 runs; Linux retains the visible parent with menu actions disabled. Both the button
 and `cargo battle` start at the Fort/Dragon ready screen, with Play/Spectate, map and
 party selection. These launch changes preserve tactical and arena authority boundaries.
-Their final checks are tracked in the bestiary manifest.
+The button passed focused checks and a three-frame independent static review at
+`216b969`; native window interaction awaits playtest. The current follow-up also
+strengthens Wisp cover pressure, Dragon approaches, Goblin swarms, Shaman support,
+Golem tracking fire and buried Worm pursuit. Goblin parties now contain ten,
+Shamans have five escorts, and Seven Regions has 17 enemies. Terminal outcomes
+open the combat menu automatically. Combined checks are tracked in the
+[pressure validation record](waves/arena-bestiary/creature-pressure-validation.md).
 [Draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) carries the
 combined `experiment/spell-combat-arena` candidate to `dev`; it has not merged.
 Human motion, controls and balance on the final candidate remain pending. See the

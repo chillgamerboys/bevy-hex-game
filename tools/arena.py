@@ -46,7 +46,7 @@ VIEWS = (
     "blast-first", "blast-third", "shield-preview-first", "shield-preview-third", "start",
 )
 MATRIX = "arena-v5-release-casting"
-MENU_VIEWS = ("start", "tuning", "first", "third", "overview", "rear")
+MENU_VIEWS = ("start", "tuning", "first", "third", "overview", "rear", "terminal-win", "terminal-defeat")
 BOT_VIEWS = ("bot-combat-first", "bot-combat-third")
 CHARGE_VIEWS = (
     "start", "tuning", "first", "third",
@@ -129,6 +129,8 @@ GOLEM_VIEWS = (
     ("fort-golem-body-rear", "encounter-body-rear", "fort", "golem", None),
     ("fort-golem-slam-windup", "encounter-golem-slam-windup", "fort", "golem", None),
     ("fort-golem-slam", "encounter-golem-slam", "fort", "golem", None),
+    ("fort-golem-swipe-windup", "encounter-golem-swipe-windup", "fort", "golem", None),
+    ("fort-golem-swipe", "encounter-golem-swipe", "fort", "golem", None),
     ("duel-golem-charge", "encounter-golem-charge", "duel", "shadow", None),
     ("duel-golem-charge-late", "encounter-golem-charge-late", "duel", "shadow", None),
     ("duel-golem-beam", "encounter-golem-beam", "duel", "shadow", None),
@@ -415,6 +417,8 @@ def validate_golem_state(state: dict, view: str) -> None:
             "encounter-golem-charge-late": laser and stage == "Windup" and progress >= 0.75 and bool(beam),
             "encounter-golem-beam": laser and stage == "Active" and bool(beam),
             "encounter-golem-slam-windup": kind == "GolemSlam" and stage == "Windup" and progress >= 0.25,
+            "encounter-golem-swipe-windup": kind == "GolemSwipe" and stage == "Windup" and progress >= 0.25,
+            "encounter-golem-swipe": kind == "GolemSwipe" and stage == "Active" and progress >= 0.1,
             "encounter-golem-slam": kind == "GolemSlam" and stage == "Active" and any(
                 e.get("spell") == "AreaBlast" and 0 < e.get("age", -1) <= 0.10
                 and abs(e.get("radius", -1) - attack.get("range", -10)) < 0.01
@@ -691,6 +695,20 @@ def validate_wisp_performance_state(state: dict, view: str) -> dict | None:
             "boundary": "Real CPU and Instant app-Update start-to-start intervals; no GPU/vsync/FPS, ordinary balance, movement or static approval claim. Zero publications do not exercise terrain destruction; use the separate all-ten Seven Regions/destruction workloads."}
 
 
+def validate_terminal_menu_state(state: dict, view: str) -> None:
+    """Explicit knockout fixtures prove result-menu presentation, not combat outcomes."""
+    expected = {"terminal-win": "win", "terminal-defeat": "defeat"}.get(view)
+    if expected is None:
+        return
+    if (state.get("started") is not True or state.get("paused") is not True
+            or state.get("terminal_menu_outcome") != expected
+            or state.get("terminal_menu_fixture") != "synthetic-knockout-for-menu-presentation"):
+        raise RuntimeError(f"{view} lacks its completed synthetic knockout and automatic paused menu.")
+    reached = state.get("phase_reached_frame")
+    if type(reached) is not int or state.get("frame", 0) < reached + 4:
+        raise RuntimeError(f"{view} lacks four rendered frames after the actual terminal transition.")
+
+
 def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
     path = png.with_suffix(".json")
     data = path.read_bytes()
@@ -795,6 +813,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         wall = state.get("app_frame_wall_intervals_ms", [])
         if not wall or not all(isinstance(value, (int, float)) and 0 <= value < float("inf") for value in wall):
             raise RuntimeError("Synthetic capture lacks valid real app-frame wall intervals.")
+    validate_terminal_menu_state(state, view)
     validate_golem_state(state, view)
     validate_wisp_state(state, view)
     validate_worm_state(state, view)
@@ -815,7 +834,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 
 def capture(args: argparse.Namespace) -> int:
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
-    matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v2" if args.menu_review else MATRIX
+    matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v3-terminal" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance
     if (args.golem_review or args.wisp_review or args.wisp_performance or args.worm_review) and any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
         raise RuntimeError("The creature matrix defines its player and observer recipes; use --view to select entries.")
@@ -840,7 +859,7 @@ def capture(args: argparse.Namespace) -> int:
         matrix = "arena-encounters-v2-multi-angle"
     if args.golem_review:
         entries = list(GOLEM_VIEWS)
-        matrix = "arena-golem-v2-dragon-phases"
+        matrix = "arena-golem-v3-pressure-phases"
     if args.wisp_review:
         entries = list(WISP_VIEWS)
         matrix = "arena-wisp-v1-natural-phases"
@@ -889,8 +908,9 @@ def capture(args: argparse.Namespace) -> int:
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
         "scenario_correction": "Worm buried view requires actual Travel plus published head-center earth. Conversion view uses ordinary Duel Worm/Goblins and waits for a correlated exposed dirt top after actor body and surface decoration clear it; Fort retains the ordinary reset comparison. Windup uses the exposed physical head warning material." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
+        "terminal_menu_note": "terminal-win/terminal-defeat explicitly set fixture HP to zero; normal authority computes the result and opens the menu. These rows establish presentation only, not naturally won/lost combat." if any(row[1].startswith("terminal-") for row in entries) else None,
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/lock/beam", "spherical slam warning", "Fort fifth selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
@@ -999,13 +1019,13 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
     review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and R-key reset views.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
-    review.add_argument("--golem-review", action="store_true", help="Twelve natural Fort-player and Duel Golem-vs-Dragon observer body, charge, lock, beam and slam views.")
+    review.add_argument("--golem-review", action="store_true", help="Fourteen natural Fort-player and Duel Golem-vs-Dragon observer body, charge, beam, slam and Stone Swipe views; missing natural phase admission fails.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
     review.add_argument("--spectator-performance", action="store_true", help="Fort/Duel ordinary observer frame intervals until 3600 ticks or a terminal result; no synthetic HP or movement.")
-    review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all ten Seven Regions enemies.")
+    review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all seventeen Seven Regions enemies.")
     review.add_argument("--encounter-review", action="store_true", help="Capture 27 map, creature, attack-phase, and selector views, including opposite barrier/aura azimuths.")
     review.add_argument("--menu-review", action="store_true",
-                        help="Capture the six ready/menu/HUD review views.")
+                        help="Capture eight ready/menu/HUD views, including explicitly synthetic win/defeat menu fixtures.")
     review.add_argument("--charge-review", action="store_true",
                         help="Capture 16 charge/release, clipped shield, ready/menu, and actor-camera views.")
     review.add_argument("--bot-review", action="store_true",

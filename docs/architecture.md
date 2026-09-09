@@ -183,7 +183,10 @@ ordinary, large-body and elongated deployment pockets remain world-published fac
 `hex_arena` owns actor movement, projectile sweeps, HP, cooldowns, explosions, temporary attack barriers, timed support and
 party decisions. Duel's Shadow selection retains the accepted bot; other Duel
 parties and authored-map encounters use the existing creature policies and
-activation rules. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
+activation rules. Active Worms additionally sense hostile positions map-wide only
+while physically buried. This private movement hint is cleared before emergence;
+above-ground aiming still requires observed contact. Other species retain their
+observation-limited policies. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
 the terrain projection. `ActorIntent` is the intended ingress seam for a future
 network adapter, not an implemented wire protocol or authorization layer. Captures
 and camera transforms carry no gameplay authority.

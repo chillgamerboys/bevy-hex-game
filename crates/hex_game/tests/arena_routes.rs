@@ -303,18 +303,41 @@ fn all_three_seven_region_parties_have_supported_local_ground_excursions() {
     let session = fixture.world().resource::<ArenaSession>();
     assert_eq!(session.parties().len(), 3);
     assert_eq!(session.actors.len(), 18);
-    for (id, species, q, r) in [
-        (1, Species::Dragon, -2, 0),
-        (2, Species::Shaman, -2, 0),
-        (3, Species::Goblin, -2, 0),
-        (4, Species::Goblin, -2, 0),
-        (5, Species::Goblin, -2, 0),
-        (6, Species::Goblin, -2, 2),
-        (7, Species::Goblin, -2, 2),
-        (8, Species::Goblin, -2, 1),
-        (9, Species::Goblin, -1, -1),
-        (10, Species::Goblin, -2, 0),
-    ] {
+    // Party-local ordinal preserves the original five cave excursions after
+    // adding two courtyard escorts. Every new actor has an explicit replay row.
+    let routes = [
+        (1, Species::Dragon, 0, -2, 0),
+        (2, Species::Shaman, 1, -2, 0),
+        (3, Species::Goblin, 1, -2, 0),
+        (4, Species::Goblin, 1, -2, 0),
+        (5, Species::Goblin, 1, -2, 0),
+        (6, Species::Goblin, 1, -2, 0),
+        (7, Species::Goblin, 1, -2, 0),
+        (8, Species::Goblin, 2, -2, 2),
+        (9, Species::Goblin, 2, -2, 2),
+        (10, Species::Goblin, 2, -2, 1),
+        (11, Species::Goblin, 2, -1, -1),
+        (12, Species::Goblin, 2, -2, 0),
+        (13, Species::Goblin, 2, -2, 0),
+        (14, Species::Goblin, 2, -2, 0),
+        (15, Species::Goblin, 2, -2, 0),
+        (16, Species::Goblin, 2, -2, 0),
+        (17, Species::Goblin, 2, -2, 0),
+    ];
+    assert_eq!(
+        routes
+            .iter()
+            .map(|(id, _, _, _, _)| *id)
+            .collect::<Vec<_>>(),
+        session
+            .actors
+            .iter()
+            .filter(|actor| actor.id != 0)
+            .map(|actor| actor.id)
+            .collect::<Vec<_>>(),
+        "every admitted enemy needs exactly one explicit local route"
+    );
+    for (id, species, party, q, r) in routes {
         assert_eq!(
             session
                 .actors
@@ -323,6 +346,15 @@ fn all_three_seven_region_parties_have_supported_local_ground_excursions() {
                 .expect("stable roster")
                 .species,
             species
+        );
+        assert_eq!(
+            session
+                .actors
+                .iter()
+                .find(|actor| actor.id == id)
+                .expect("stable party member")
+                .party,
+            Some(party)
         );
         assert_local_roundtrip(&fixture, id, HexCoord::from_axial(q, r));
     }

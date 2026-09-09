@@ -421,7 +421,11 @@ pub(super) fn update(
     }
     for (action, mut color) in &mut choices {
         if matches!(action, Action::Resume) {
-            *color = BackgroundColor(if session.is_finished() { Color::srgb(0.12, 0.15, 0.18) } else { Color::srgb(0.16, 0.37, 0.41) });
+            *color = BackgroundColor(if session.is_finished() {
+                Color::srgb(0.12, 0.15, 0.18)
+            } else {
+                Color::srgb(0.16, 0.37, 0.41)
+            });
             continue;
         }
         let selected = match action {

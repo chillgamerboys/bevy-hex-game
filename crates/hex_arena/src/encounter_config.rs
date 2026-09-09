@@ -446,7 +446,6 @@ impl EncounterTuning {
             self.golem_swipe_range,
             self.golem_swipe_windup,
             self.golem_swipe_cooldown,
-
             self.worm_speed,
             self.worm_turn_speed,
             self.worm_rise_speed,
@@ -623,5 +622,110 @@ impl EncounterTuning {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod pressure_tests {
+    use super::EncounterTuning;
+
+    #[test]
+    fn pressure_floats_reject_nonfinite_nonpositive_and_unbounded_values() {
+        macro_rules! check {
+            ($($field:ident),+ $(,)?) => {
+                $(for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, 180.01] {
+                    let tuning = EncounterTuning {
+                        $field: value,
+                        ..Default::default()
+                    };
+                    assert!(tuning.validate().is_err(), "{} accepted {value}", stringify!($field));
+                })+
+            };
+        }
+        check!(
+            wisp_memory_seconds,
+            dragon_lunge_health_fraction,
+            dragon_lunge_min_range,
+            dragon_lunge_speed,
+            dragon_lunge_seconds,
+            dragon_lunge_cooldown,
+            goblin_jump_height,
+            goblin_jump_interval_min,
+            goblin_jump_interval_max,
+            goblin_spacing,
+            golem_laser_turn_speed,
+            golem_swipe_damage,
+            golem_swipe_range,
+            golem_swipe_windup,
+            golem_swipe_cooldown,
+            golem_laser_damage,
+            golem_laser_seconds,
+        );
+    }
+
+    #[test]
+    fn pressure_specific_limits_admit_boundaries_and_reject_values_beyond_them() {
+        for (cover_shots, terrain_power) in [(1, 1), (4, 10)] {
+            let tuning = EncounterTuning {
+                wisp_cover_shots: cover_shots,
+                golem_swipe_terrain_power: terrain_power,
+                dragon_lunge_health_fraction: 1.0,
+                goblin_jump_height: 4.0,
+                goblin_jump_interval_min: 2.0,
+                goblin_jump_interval_max: 2.0,
+                golem_laser_turn_speed: 12.0,
+                ..Default::default()
+            };
+            assert!(tuning.validate().is_ok(), "inclusive pressure limits");
+        }
+        for tuning in [
+            EncounterTuning {
+                wisp_cover_shots: 0,
+                ..Default::default()
+            },
+            EncounterTuning {
+                wisp_cover_shots: 5,
+                ..Default::default()
+            },
+            EncounterTuning {
+                golem_swipe_terrain_power: 0,
+                ..Default::default()
+            },
+            EncounterTuning {
+                golem_swipe_terrain_power: 11,
+                ..Default::default()
+            },
+            EncounterTuning {
+                dragon_lunge_health_fraction: 1.01,
+                ..Default::default()
+            },
+            EncounterTuning {
+                goblin_jump_height: 4.01,
+                ..Default::default()
+            },
+            EncounterTuning {
+                goblin_jump_interval_min: 3.01,
+                goblin_jump_interval_max: 3.0,
+                ..Default::default()
+            },
+            EncounterTuning {
+                golem_laser_turn_speed: 12.01,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                tuning.validate().is_err(),
+                "invalid pressure bounds: {tuning:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_fixed_laser_lock_cannot_silently_override_the_tracking_contract() {
+        assert!(ron::from_str::<EncounterTuning>("(golem_laser_lock_seconds: 0.35)").is_err());
+        assert!(
+            ron::from_str::<EncounterTuning>("(golem_laser_turn_speed: 1.2)")
+                .is_ok_and(|tuning| tuning.validate().is_ok())
+        );
     }
 }

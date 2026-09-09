@@ -185,6 +185,7 @@ fn ember_passes_allied_prism_and_splash_cannot_hurt_or_push_it() {
         spec.knockback,
         spec.terrain_power,
         Some(spec.terrain_kind),
+        None,
         false,
         false,
         &view,
@@ -213,5 +214,99 @@ fn ember_terrain_admission_uses_the_release_element_even_if_material_mapping_cha
     assert!(out
         .impacts
         .iter()
-        .all(|i| i.kind == spec.terrain_kind && i.power == spec.terrain_power));
+        .all(|i| i.is_canonical() && i.kind == spec.terrain_kind && i.power == spec.terrain_power));
+}
+
+#[test]
+fn full_speed_small_ember_chips_its_actual_thin_wall_face_without_widening_actor_splash() {
+    let (mut session, mut view, geometry, materials, _) = fixture();
+    let tuning = ArenaTuning::default().encounters;
+    let spec = CreatureProjectileSpec {
+        ability: CreatureAbility::WispEmber,
+        appearance: ProjectileAppearance::Ember,
+        speed: tuning.wisp_ember_speed,
+        gravity: tuning.wisp_ember_gravity,
+        collision_radius: tuning.wisp_ember_collision_radius,
+        splash_radius: tuning.wisp_ember_radius,
+        damage: tuning.wisp_ember_damage,
+        knockback: tuning.wisp_ember_knockback,
+        terrain_kind: TerrainDamageKind::Elemental(materials.fire),
+        terrain_power: tuning.wisp_ember_terrain_power,
+    };
+    assert!((spec.splash_radius - 0.8).abs() < f32::EPSILON);
+    let pos = TilePos::new(HexCoord::ORIGIN, 11);
+    view.voxels.insert(pos, materials.stone);
+    view.revision += 1;
+    session.collision.refresh(&view, geometry);
+    let owner = session.actors.first().expect("Wisp").clone();
+    let forecast = forecast_creature_projectile(
+        &owner,
+        Vec3::X,
+        spec,
+        &[],
+        &session.collision,
+        &view,
+        geometry,
+    );
+    let impact = forecast.impact.expect("actual thin wall first contact");
+    assert!(
+        geometry
+            .sphere(&view, impact.point, spec.splash_radius)
+            .is_empty(),
+        "this face contact must reproduce the old empty-center-volume gap"
+    );
+    let target_hp = session.actors.get(1).expect("opponent behind wall").hp;
+    session.release_creature_projectile(&owner, Vec3::X, spec);
+    let mut out = CommandsOut::default();
+    for _ in 0..20 {
+        session.advance_projectiles(&view, geometry, materials, &mut out);
+    }
+    assert!(session.projectiles.is_empty());
+    assert_eq!(out.impacts.len(), 1);
+    let terrain = out
+        .impacts
+        .first()
+        .expect("one world-owned terrain request");
+    assert_eq!(terrain.volume, vec![pos]);
+    assert!(terrain.is_canonical());
+    assert_eq!(terrain.kind, spec.terrain_kind);
+    assert_eq!(terrain.power, spec.terrain_power);
+    assert_eq!(
+        session.actors.get(1).expect("covered opponent").hp,
+        target_hp
+    );
+}
+
+#[test]
+fn ember_contact_admission_rejects_actor_barrier_empty_space_and_other_projectiles() {
+    let (session, mut view, geometry, _, spec) = fixture();
+    let owner = session.actors.first().expect("Wisp");
+    let shot = creature_projectile(owner, Vec3::NEG_Y, spec, 0, -10.0);
+    let pos = TilePos::new(HexCoord::ORIGIN, 0);
+    let impact = Impact {
+        point: Vec3::Y * spec.collision_radius,
+        normal: Vec3::Y,
+        actor: None,
+        barrier: None,
+    };
+    assert_eq!(
+        ember_contact_voxel(&shot, impact, &view, geometry),
+        Some(pos)
+    );
+    for hit in [
+        Impact {
+            actor: Some(9),
+            ..impact
+        },
+        Impact {
+            barrier: Some(5),
+            ..impact
+        },
+    ] {
+        assert!(ember_contact_voxel(&shot, hit, &view, geometry).is_none());
+    }
+    let ordinary = projectile(owner, Spell::Fireball, &ArenaTuning::default(), 0, 32.0);
+    assert!(ember_contact_voxel(&ordinary, impact, &view, geometry).is_none());
+    view.voxels.clear();
+    assert!(ember_contact_voxel(&shot, impact, &view, geometry).is_none());
 }

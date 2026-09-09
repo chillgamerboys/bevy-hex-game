@@ -76,6 +76,27 @@ struct Impact {
     barrier: Option<u64>,
 }
 
+// Small Embers can hit a hex face without reaching its voxel center. Only
+// their actual first terrain contact adds this one cell to the radial request;
+// world still owns material damage/protection and actor splash stays unchanged.
+fn ember_contact_voxel(
+    shot: &Projectile,
+    impact: Impact,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> Option<TilePos> {
+    if shot.source_ability() != Some(crate::CreatureAbility::WispEmber)
+        || impact.actor.is_some()
+        || impact.barrier.is_some()
+    {
+        return None;
+    }
+    let inside = impact.point - impact.normal * (shot.collision_radius() + SKIN * 4.0);
+    geometry
+        .voxel_at(inside)
+        .filter(|pos| world.voxels.contains_key(pos))
+}
+
 fn projectile(
     actor: &Actor,
     spell: Spell,
@@ -511,6 +532,7 @@ impl ArenaSession {
                 tuning.blast_knockback,
                 tuning.terrain_power,
                 None,
+                None,
                 false,
                 true,
                 world,
@@ -617,6 +639,7 @@ impl ArenaSession {
                         shot.parameters.knockback,
                         shot.parameters.terrain_power,
                         shot.parameters.terrain_kind,
+                        ember_contact_voxel(&shot, impact, world, geometry),
                         shot.source_ability() == Some(crate::CreatureAbility::WormBoulder),
                         shot.source_ability().is_none(),
                         world,
@@ -688,6 +711,7 @@ impl ArenaSession {
         knockback: f32,
         power: u8,
         terrain_kind: Option<hex_core::TerrainDamageKind>,
+        direct_terrain: Option<TilePos>,
         owner_immune: bool,
         count_fireball: bool,
         world: &ArenaTerrainView,
@@ -732,7 +756,12 @@ impl ArenaSession {
         if spell == Spell::Fireball && count_fireball {
             self.record_fireball_impact(owner, useful_fireball);
         }
-        let volume = geometry.sphere(world, center, radius);
+        let mut volume = geometry.sphere(world, center, radius);
+        if let Some(pos) = direct_terrain {
+            volume.push(pos);
+            volume.sort_unstable();
+            volume.dedup();
+        }
         if !volume.is_empty() {
             let impact = TerrainImpact {
                 batch: TerrainBatchId(self.next_impact),

@@ -51,7 +51,7 @@ class WormCaptureGuards(unittest.TestCase):
         self.assertEqual(WORM_OBSERVER_PRESETS, ("worm", "goblins"))
         self.assertIn(("duel-worm-converted-earth", "encounter-worm-converted-earth", "duel", "shadow", None), WORM_VIEWS)
         self.assertIn(("fort-worm-reset", "encounter-worm-reset", "fort", "worm", None), WORM_VIEWS)
-        self.assertEqual((len(GOLEM_VIEWS), len(WISP_VIEWS)), (12, 12))
+        self.assertEqual((len(GOLEM_VIEWS), len(WISP_VIEWS)), (14, 12))
         args = request("worm:shadow,worm:dragon")
         validate_rounds(paired_rows(args), args)
 
