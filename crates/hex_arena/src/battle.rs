@@ -26,9 +26,9 @@ pub enum BattlePreset {
     Shadow,
     /// One low flying Dragon.
     Dragon,
-    /// Five melee Goblins.
+    /// Ten melee Goblins.
     Goblins,
-    /// One Shaman and three Goblins in the same support party.
+    /// One Shaman and five Goblins in the same support party.
     ShamanParty,
     /// One seven-hex stone Golem.
     Golem,
@@ -93,8 +93,8 @@ impl BattlePreset {
         match self {
             Self::Shadow => "Shadow",
             Self::Dragon => "Dragon",
-            Self::Goblins => "5 Goblins",
-            Self::ShamanParty => "Shaman + 3 Goblins",
+            Self::Goblins => "10 Goblins",
+            Self::ShamanParty => "Shaman + 5 Goblins",
             Self::Golem => "Golem",
             Self::Goblin => "Goblin",
             Self::Wisp => "Wisp",
@@ -137,9 +137,11 @@ impl BattlePreset {
         match self {
             Self::Shadow => vec![Species::Shadow],
             Self::Dragon => vec![Species::Dragon],
-            Self::Goblins => vec![Species::Goblin; 5],
+            Self::Goblins => vec![Species::Goblin; 10],
             Self::ShamanParty => vec![
                 Species::Shaman,
+                Species::Goblin,
+                Species::Goblin,
                 Species::Goblin,
                 Species::Goblin,
                 Species::Goblin,

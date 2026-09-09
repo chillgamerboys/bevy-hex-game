@@ -157,14 +157,9 @@ impl ArenaSession {
                 ("mountains_high_pass", vec![Species::Dragon]),
                 (
                     "fort_fort_courtyard",
-                    vec![
-                        Species::Shaman,
-                        Species::Goblin,
-                        Species::Goblin,
-                        Species::Goblin,
-                    ],
+                    BattlePreset::ShamanParty.members(),
                 ),
-                ("caves_cave_entrance", vec![Species::Goblin; 5]),
+                ("caves_cave_entrance", BattlePreset::Goblins.members()),
             ]
             .into_iter()
             .filter_map(|(name, roster)| {
@@ -178,13 +173,8 @@ impl ArenaSession {
                 .map(BattlePreset::members)
                 .unwrap_or_else(|| match world.selection.encounter {
                     ArenaEncounter::Dragon => vec![Species::Dragon],
-                    ArenaEncounter::Goblins => vec![Species::Goblin; 5],
-                    ArenaEncounter::ShamanParty => vec![
-                        Species::Shaman,
-                        Species::Goblin,
-                        Species::Goblin,
-                        Species::Goblin,
-                    ],
+                    ArenaEncounter::Goblins => BattlePreset::Goblins.members(),
+                    ArenaEncounter::ShamanParty => BattlePreset::ShamanParty.members(),
                     ArenaEncounter::Shadow => vec![Species::Shadow],
                 });
             vec![(world.spawns.get(1).copied().unwrap_or(Vec3::ZERO), roster)]
