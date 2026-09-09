@@ -50,6 +50,14 @@ struct ParentWindowPolicy {
     hide_while_running: bool,
 }
 
+// Linux's false happens to match bool::default; macOS/Windows must default true.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    expect(
+        clippy::derivable_impls,
+        reason = "The false default on this target must remain true on macOS and Windows."
+    )
+)]
 impl Default for ParentWindowPolicy {
     fn default() -> Self {
         Self {

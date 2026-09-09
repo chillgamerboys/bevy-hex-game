@@ -303,6 +303,9 @@ pub(super) fn capture_intent(
     session: &ArenaSession,
     view: &str,
     waypoint: Option<Vec3>,
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
 ) -> ActorIntent {
     let Some(human) = session.actors.first() else {
         return ActorIntent::default();
@@ -329,6 +332,14 @@ pub(super) fn capture_intent(
     else {
         return ActorIntent::default();
     };
+    if view
+        .strip_suffix("-rear")
+        .unwrap_or(view)
+        .starts_with("encounter-golem-swipe")
+        && enemy.species == Species::Golem
+    {
+        return golem_swipe_input(session, human, enemy, terrain, geometry, tuning);
+    }
     let target = if enemy.species == hex_arena::Species::Worm {
         enemy.eye()
     } else {
@@ -359,6 +370,97 @@ pub(super) fn capture_intent(
         cast_released: attack && cycle == 76,
     }
 }
+
+// This review script supplies only ordinary player inputs. A real Shield creates
+// the obstruction; Golem's unchanged movement/attack policy must choose its swipe.
+fn golem_swipe_input(
+    session: &ArenaSession,
+    human: &hex_arena::Actor,
+    golem: &hex_arena::Actor,
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
+) -> ActorIntent {
+    let away = (human.feet - golem.feet).with_y(0.0).normalize_or(Vec3::X);
+    let distance = human.feet.with_y(0.0).distance(golem.feet.with_y(0.0));
+    let front = golem.body_dimensions().x.max(golem.body_dimensions().z) * 0.5;
+    // Leave enough room for seed flight and normal .18s emergence before the
+    // advancing body reaches the wall. Current preview clips all actual bodies.
+    let ground = golem.feet + away * (front + 2.0);
+    let offset = ground - human.eye();
+    let horizontal = offset.with_y(0.0).length();
+    let speed = tuning.launch_speed(0.0);
+    let gravity = tuning.projectile_gravity;
+    let square = speed * speed;
+    let discriminant =
+        square * square - gravity * (gravity * horizontal * horizontal + 2.0 * offset.y * square);
+    let aim = if horizontal > 0.1 && discriminant >= 0.0 {
+        let tangent = (square - discriminant.sqrt()) / (gravity * horizontal);
+        (offset.with_y(0.0).normalize_or(-away) + Vec3::Y * tangent).normalize_or(-away)
+    } else {
+        -away
+    };
+    let mut input = ActorIntent {
+        aim,
+        selected: Some(Spell::Shield),
+        ..default()
+    };
+    let ready = human
+        .cooldowns
+        .first()
+        .is_some_and(|cooldown| *cooldown <= 0.0);
+    if ready && human.selected == Spell::Shield && human.charge().is_none() {
+        // Selection/aim is installed by a previous normal input tick. This
+        // forecast uses that exact existing aim, never a fabricated collision map.
+        let preview = hex_arena::preview(session, terrain, &geometry, tuning);
+        let side = away.cross(Vec3::Y);
+        let blocks_lane = preview.wall_voxels.iter().any(|surface| {
+            let point = geometry.center(*surface);
+            let relative = (point - golem.feet).with_y(0.0);
+            let forward = relative.dot(away);
+            forward > front + 0.5
+                && forward < front + 3.5
+                && relative.dot(side).abs() < 1.0
+                && point.y > golem.feet.y + 0.4
+                && point.y < golem.feet.y + golem.body_dimensions().y
+        });
+        if preview.valid && blocks_lane {
+            input.aim = human.aim;
+            input.cast_pressed = true;
+            input.cast_released = true;
+            return input;
+        }
+    }
+    // Stay outside Slam and below long-beam range. The public pose query only
+    // admits a nearby dry, clear step destination; actual displacement still runs
+    // through the ordinary WASD controller and collision sweep.
+    let travel = if distance < 9.0 {
+        away
+    } else if distance > 10.0 {
+        -away
+    } else {
+        Vec3::ZERO
+    };
+    if travel.length_squared() > 0.0 {
+        let desired = human.feet + travel * 0.6;
+        let safe = session
+            .visible_supported_actor_pose(human.id, golem.id, desired, terrain, geometry)
+            .is_some_and(|pose| {
+                pose.with_y(0.0).distance(desired.with_y(0.0)) < 0.9
+                    && (pose.y - human.feet.y).abs() < 0.1
+            });
+        if safe {
+            let forward = input.aim.with_y(0.0).normalize_or(-away);
+            input.movement = Vec2::new(travel.dot(forward.cross(Vec3::Y)), travel.dot(forward));
+            input.run = true;
+        }
+    }
+    input
+}
+
+#[cfg(all(test, feature = "test-support"))]
+#[path = "golem_swipe_capture_tests.rs"]
+mod golem_swipe_capture_tests;
 
 // Use the same snapshot match for readiness and framing. An unrelated enemy
 // attack must not steal the camera from the effect the capture is reviewing.

@@ -289,7 +289,7 @@ impl ViewState {
         self.capture.is_some()
             && !matches!(
                 self.capture_view.as_str(),
-                "first" | "third" | "tuning" | "start"
+                "first" | "third" | "tuning" | "start" | "terminal-win" | "terminal-defeat"
             )
             && !self.capture_view.ends_with("-first")
             && !self.capture_view.ends_with("-third")
@@ -925,6 +925,9 @@ fn drive_simulation(world: &mut World) {
                 world.resource::<ArenaSession>(),
                 &view,
                 waypoint,
+                world.resource::<ArenaTerrainView>(),
+                *world.resource::<ArenaVoxelGeometry>(),
+                world.resource::<ArenaTuning>(),
             )
         } else {
             capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction)

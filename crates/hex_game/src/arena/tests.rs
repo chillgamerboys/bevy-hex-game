@@ -80,17 +80,21 @@ fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
     // Actor aim looks away from the wall, retracting the camera into the body.
     // The deliberately stale view aim points along the wall into open space.
     // Check first model spawn, existing models, and the initialized live policy.
-    for (capture, initialized, retracted) in [
-        (false, false, true),
-        (true, true, true),
-        (false, true, false),
+    // Result captures also keep their real first-person policy: a living human
+    // must not appear around the camera merely because the capture view is new.
+    for (capture, initialized, retracted, third_person, view) in [
+        (false, false, true, true, "bot-combat-third"),
+        (true, true, true, true, "bot-combat-third"),
+        (false, true, false, true, "bot-combat-third"),
+        (true, true, true, false, "terminal-win"),
+        (true, true, true, false, "terminal-defeat"),
     ] {
         {
             let mut state = fixture.world_mut().resource_mut::<ViewState>();
-            state.third_person = true;
+            state.third_person = third_person;
             state.initialized = initialized;
             state.capture = capture.then(|| PathBuf::from("unused-test-capture.png"));
-            state.capture_view = "bot-combat-third".into();
+            state.capture_view = view.into();
             state.yaw = 0.0;
             state.pitch = 0.0;
         }
