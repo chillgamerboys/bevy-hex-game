@@ -69,6 +69,14 @@ pub(crate) struct PreparedCrystal {
     occupancy: Option<hex_core::AuthoredObjectVoxelRuns>,
 }
 
+#[cfg(feature = "arena-prototype")]
+impl PreparedCrystal {
+    /// Exact authored instance shared by arena query publication and rendering.
+    pub(crate) fn instance(&self) -> &ObjectInstance {
+        &self.instance
+    }
+}
+
 /// Failure to publish one authored crystal presentation.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CrystalPresentationError {

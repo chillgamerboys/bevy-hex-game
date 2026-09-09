@@ -3783,6 +3783,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_arena"
+version = "0.4.0"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_math",
+ "hex_core",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "hex_assets"
 version = "0.4.0"
 dependencies = [
@@ -3888,6 +3900,7 @@ dependencies = [
  "bevy_replicon",
  "hex_ai",
  "hex_anim",
+ "hex_arena",
  "hex_assets",
  "hex_combat",
  "hex_core",
@@ -3899,6 +3912,7 @@ dependencies = [
  "hex_objects",
  "hex_online",
  "hex_perception",
+ "hex_test_app",
  "hex_test_support",
  "hex_ui",
  "hex_units",

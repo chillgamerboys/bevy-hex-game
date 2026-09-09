@@ -389,7 +389,7 @@ mod tests {
         TerrainImpact {
             batch: TerrainBatchId(batch),
             volume: vec![TilePos::ORIGIN],
-            element: ElementId(0),
+            kind: hex_core::TerrainDamageKind::Elemental(ElementId(0)),
             power: 2,
         }
     }

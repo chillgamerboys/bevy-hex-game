@@ -50,7 +50,7 @@ fn assert_canonical(volume: &[TilePos], what: &str) {
     let impact = TerrainImpact {
         batch: TerrainBatchId(0),
         volume: volume.to_vec(),
-        element: ElementId(0),
+        kind: hex_core::TerrainDamageKind::Elemental(ElementId(0)),
         power: 1,
     };
     assert!(impact.is_canonical(), "{what} is not canonical: {volume:?}");

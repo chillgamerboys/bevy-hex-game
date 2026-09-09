@@ -152,7 +152,7 @@ impl Column {
 /// [`HexSpan`](hex_core::HexSpan), [`SubstanceId`] and
 /// [`Headroom`], so storage can be replaced without exposing it
 /// outside this crate.
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug, Default, Clone)]
 pub struct VoxelMap {
     columns: HashMap<HexCoord, Column>,
 }

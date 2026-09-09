@@ -13,6 +13,8 @@ BEVY_ASSET_ROOT = { value = ".", relative = true }
 # The inspector is behind the `dev` feature and off by default, so release builds
 # never link egui. This is the everyday run command.
 dev = "run -p hex_game --features dev"
+# Open the isolated real-time Battle Mode directly at its ready screen.
+battle = "run -p hex_game --features arena-prototype -- --arena"
 # Standalone art authoring. It is intentionally not a screen inside `hex_game`.
 editor = "run -p hex_editor"
 # Runtime acceptance scene for Workshop-authored objects. It is an example rather

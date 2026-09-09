@@ -1381,6 +1381,12 @@ pub struct MainMenuView {
     pub route: MainMenuRoute,
     /// Setup failure carried back from gameplay, if one exists.
     pub setup_failure: Option<String>,
+    /// Whether this build can open the separate Battle Mode window.
+    pub battle_mode_available: bool,
+    /// Whether Battle Mode currently owns the player's active game window.
+    pub battle_running: bool,
+    /// Player-facing launch or exit failure supplied by the application.
+    pub battle_launch_error: Option<String>,
     /// Exactly three Campaign slots in stable order.
     pub campaign_slots: Vec<CampaignSlotView>,
 }
@@ -1658,6 +1664,9 @@ impl Default for MainMenuView {
         Self {
             route: MainMenuRoute::Root,
             setup_failure: None,
+            battle_mode_available: false,
+            battle_running: false,
+            battle_launch_error: None,
             campaign_slots: CampaignSlotId::ALL
                 .into_iter()
                 .map(|slot| CampaignSlotView {
@@ -1674,6 +1683,8 @@ impl Default for MainMenuView {
 pub enum MainMenuIntent {
     /// Open the three Campaign slots.
     OpenCampaign,
+    /// Open the available Battle Mode application.
+    OpenBattleMode,
     /// Open client-hosted multiplayer.
     OpenMultiplayer,
     /// Enter the persistent Sandbox draft.

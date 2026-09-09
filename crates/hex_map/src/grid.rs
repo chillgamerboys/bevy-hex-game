@@ -1375,10 +1375,12 @@ fn collect_terrain_impacts(
             Some(TerrainImpactRejection::ReusedBatch)
         } else if let Some(reason) = impact.structural_rejection() {
             Some(reason)
-        } else if elements
-            .as_deref()
-            .is_some_and(|catalog| catalog.name(impact.element).is_none())
-        {
+        } else if elements.as_deref().is_some_and(|catalog| {
+            impact
+                .kind
+                .element()
+                .is_some_and(|element| catalog.name(element).is_none())
+        }) {
             Some(TerrainImpactRejection::UnknownElement)
         } else if !terrain_available {
             Some(TerrainImpactRejection::TerrainUnavailable)

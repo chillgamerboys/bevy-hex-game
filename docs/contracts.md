@@ -11,6 +11,7 @@ something reserved for later, or something still being asked for?*
 | Status | Meaning |
 |---|---|
 | **live** | Published and consumed in the shipped build |
+| **experimental** | Implemented in a scoped experiment; its linked manifest records feature defaults, validation, playtest and delivery status. This label alone makes no `dev`-delivery claim |
 | **partial** | One side is live, while the row names the required producer or consumer still pending |
 | **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
 | **reserved** | Shared vocabulary and/or ordering is defined for later use; no runtime producer or consumer is live |
@@ -39,7 +40,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `SurfaceFeatureId` / `SurfaceFeatureKind` / `SurfaceFeature` / `SurfaceFeaturePlacementOutcome` / `SurfaceFeatures` — correlated answer and complete stack-safe semantic projection | future world authority | future gameplay consumer | **reserved** — shared types and structural validation only; no live registry, placement, or schedule | [planning/boundary.md](planning/boundary.md) M |
 | `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting, trajectories, and paired seven-ray sight | world | gameplay / perception | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `AuthoredObjectVoxelRuns` → `AuthoredObjectOccupancy` — opt-in exact object voxels compacted into an always-present authoritative projection; blocks standing-body movement and strict-interior sight without terrain's low-cover exemption; casting remains terrain-only | world / shared objects | `hex_units` / perception | **live** | [systems/map.md](systems/map.md), [systems/perception.md](systems/perception.md) |
-| `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
+| `TerrainImpact { batch, volume, kind, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
@@ -126,6 +127,32 @@ direct catalog, and all derived tables match one published
 `AcceptedContentRevision`; resource presence and Bevy change ticks are not readiness
 signals.
 
+## Isolated spell arena
+
+These contracts apply only to the isolated `--arena` application. Its
+`arena-prototype` feature is enabled by default in `hex_game`, with
+`--no-default-features` as the opt-out. Main Menu **Battle Mode** supervises a
+`current_exe --arena` child with the inherited asset root. On macOS and Windows it
+hides the parent window and suspends its cameras until child exit; Linux retains
+the visible parent with menu actions disabled. Child exit restores the menu. The launch
+defaults to Fort/Dragon at the ready screen; `cargo battle` enters the same
+application directly. Compiling or launching this capability installs no tactical
+authority or networking plugins inside the arena. The button and process
+lifecycle are integration concerns and change no world or gameplay contracts.
+See the [arena manifest](planning/waves/spell-combat-arena/manifest.md) for the
+original locked behavior and the
+[bestiary manifest](planning/waves/arena-bestiary/manifest.md) for the current
+continuation, ownership and unmerged PR status.
+
+| Contract | Publisher | Consumer | Status |
+|---|---|---|---|
+| `ArenaVoxelGeometry`, `ArenaTerrainView`, `ArenaMaterials` — physical geometry methods, complete solid occupancy keyed by `TilePos`, revision, spawns, and accepted catalog identities; only world writes these facts | world | `hex_arena` collision/spells and arena presentation | **experimental** |
+| `ArenaTick` / `ArenaSystems` — 120 Hz `ApplyTerrain → PublishTerrain → Simulate`; gameplay's edits/impacts settle on the next tick, then matching outcomes are consumed in that tick's simulation | core ordering; world and gameplay implementations | both | **experimental** |
+| Existing `TerrainEdit`, `TerrainImpact`, `TerrainImpactOutcome` in the arena — world-owned mutation and damage admission; a `PreUpdate` inbox retains pending edits/impacts across pauses | gameplay requests; world outcomes | world / `hex_arena` | **experimental** arena composition of existing live message types |
+| `ArenaReset` generation — clear queued world messages/inbox and damage state, restore authored terrain, then reset actors and gameplay ledgers before advancing the new round | shared input adapter | world / `hex_arena` | **experimental** |
+| `ActorIntent` / `ArenaInput` and read-only `ArenaSession` projection — held movement/aim/cast state plus consumed jump, cast-press/release, and selection edges; actor-owned charge advances at 120 Hz and a session cancellation method clears charges while paused; human and bot use the same simulation path | native input / gameplay bot | gameplay authority / presentation | **experimental**; future network ingress seam only, with no current wire or admission contract |
+| Arena bot observations and combat cues — gameplay filters sight and publishes coarse discrete release/impact locations; the active, physically buried Worm has a private position-only sensing exception for underground pursuit; decision forecasts consume observed bodies or explicit memory hypotheses, never hidden live actor bodies | gameplay | private arena bot; read-only debug and round summaries for local validation | **experimental**; no tactical perception dependency or normal HUD disclosure |
+
 ## What each side commits to
 
 Contracts are only half of it. The rest is what we each promise *not* to do.
@@ -142,3 +169,101 @@ part; or make one presentation system the sole owner of `Visibility`.
 
 Both sides: a shared-type change lands in its own commit before either side depends on
 it.
+
+### Authored encounter extension
+
+The local [encounter specification](planning/waves/arena-encounters/plan.md) extends
+the experimental projection with ArenaSelection (Duel/Fort/SevenRegions and Fort
+composition), public anchors, compact per-column solid runs, static-object query
+spans, non-solid liquid spans, edit-protected level intervals and latest-revision
+dirty columns. Full rebuild marks resets; consumers missing a revision rebuild
+rather than assuming the latest delta is complete. World publication commits the
+selection before actor reset. Only the world writes these facts.
+
+ArenaVoxelGeometry publishes vertical_offset and inclusive min/max levels.
+Upper-face height is level*level_height+vertical_offset: accepted Duel uses 0,
+authored maps use one level height. TilePos identities remain unchanged.
+TerrainImpact now carries TerrainDamageKind::Elemental(ElementId) or Physical;
+UnknownElement applies only to elemental impacts. World-owned admission determines
+the physical material allow-list; no fake element or second mutation channel is
+introduced. Existing elemental publishers are mechanically migrated.
+
+
+Gameplay owns stable actor/species/team/party identities, maximum HP, physical body
+profiles and previous/current body orientation. Projectile sweeps and forecasts
+consume those body profiles; a forecast receives only admitted observations.
+Allied bodies are ignored by enemy projectile queries, while the caster remains
+eligible for its own Fireball splash. Released shots retain source identity,
+team and admitted actor-damage multiplier after source death.
+
+`BarrierSnapshot` describes a temporary gameplay rectangle with independent HP
+and lifetime. Direct-attack queries include barriers from either side; sight,
+body movement and camera queries omit them. Expiring a barrier never emits a
+terrain mutation. `AuraSnapshot`, `AttackSnapshot` and `PartySnapshot` publish
+actual simulation state for presentation and typed validation. Normal HUDs show
+only player status and cleared-party progress, not hidden actors or party activity.
+
+The test-support pose and route probes clone actors against the same collision
+world and movement controller. They cannot create a route, teleport an actor or
+change the live session. Bounded dirty-column publication must be consumed before
+the following movement tick, including after simultaneous damage and creation.
+
+
+### Local observer battle foundation
+
+`ArenaBattleSetup` in hex_arena owns requested Player/Spectator control, two team
+rosters with independent party boundaries, replay seed and optional tick limit.
+Only a reset accepts it, using the world-published map selection. A running session
+retains its accepted snapshot. The initial cap is24 actors, not a guarantee any
+roster fits a particular map. No human body is spawned for observers; actor zero
+may be a monster. BattleResult distinguishes surviving team, simultaneous draw,
+timeout and invalid setup independently of ordinary ArenaOutcome semantics.
+
+`ArenaDeploymentRegion` in hex_core names a preferred supporting voxel and a finite
+set of allowed supporting surfaces. ArenaTerrainView optionally publishes two sides
+in roster order. Only world authors these surfaces; gameplay validates complete
+oriented bodies, support, dry footing and separation against current geometry and
+admits a whole roster or returns an error. Ordinary adventure spawns are unchanged.
+Observer-only team summaries may disclose aggregate state; ordinary human HUDs do not.
+See the [local bestiary manifest](planning/waves/arena-bestiary/manifest.md).
+
+
+### Local bestiary geometry and burrowing
+
+`BodyPrismSnapshot` is a validated, bounded copy of native hex components owned by
+`hex_arena`. A Golem uses seven fixed prisms, a Wisp one, and a Worm four or six
+head-first components. Live motion retains matching previous/current components;
+forecasts copy only an actually observed snapshot and translate that hypothesis.
+They never recover a hidden body's current segment shape from the live actor list.
+Released creature projectiles retain their admitted source, damage kind, speed,
+gravity and visual identity after their source dies.
+
+World optionally publishes `ArenaTerrainView.elongated_deployment` as finite
+surface pockets for long bodies. This does not authorize compression, extending a
+spawn search into an unlisted roof, or replacing complete body admission. Empty
+or insufficient pockets produce an explicit setup error.
+
+`ArenaBurrowRequest` carries only generation, actor, increasing per-source sequence
+and a canonical bounded voxel volume. World validates the whole volume against
+current material, protected occupancy, liquids, static authored objects and bounds.
+Its published `ArenaBurrowMaterials` admits only world-catalog diggable materials;
+world chooses the accepted dirt identity and never increases remaining voxel HP.
+Air and existing dirt remain unchanged. One blocked cell rejects the whole request.
+World applies conversion with ordinary pending edits/impacts, publishes affected
+columns, and returns a correlated `ArenaBurrowOutcome` before the next movement
+step. A successful outcome releases the request slot; it never authorizes replay
+of an old position. Gameplay recomputes motion against current dirt, bodies and
+intent. Reset clears world and gameplay queues and identities together.
+
+Burrow phasing is a Worm movement rule, not a removal of collision terrain.
+Projectiles and ordinary bodies continue to see solid dirt. A Worm may attack only
+when its physical head is wholly clear and at least one voxel level above its
+explicit local surface. Presentation consumes the physical components and ordinary
+opaque terrain depth; it does not reveal a buried Worm through an indicator.
+
+An activated Worm may sense live hostile positions while fully buried in shallow
+Travel. This private movement hint is cleared on emergence and never enters
+party observations or attack forecasts. Above ground it uses only line of sight,
+retracts without voluntary horizontal travel, then moves through admitted dirt to
+reposition. Death, draw and observer timeout freeze the round, flush pending world
+publication and open the combat menu with the cursor released.

@@ -22,6 +22,10 @@ use hex_core::{
     PerceptionSystems, Screen,
 };
 
+#[cfg(feature = "arena-prototype")]
+pub mod arena;
+#[cfg(feature = "arena-prototype")]
+mod battle_launcher;
 pub mod campaign_authority;
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
@@ -107,6 +111,10 @@ fn initial_window_mode() -> WindowMode {
     }
 }
 
+fn headless_visual_walk_requested(value: Option<&std::ffi::OsStr>) -> bool {
+    cfg!(feature = "visual-walk") && value == Some(std::ffi::OsStr::new("1"))
+}
+
 /// The root plugin. Everything the game does hangs off this one place, so the
 /// composition of the app is readable end to end without chasing plugin groups.
 pub struct AppPlugin;
@@ -122,30 +130,43 @@ impl Plugin for AppPlugin {
         // of falling back to llvmpipe software rendering. Without the flag, wgpu
         // filters Dozen out and renders on CPU: single-digit FPS even on a discrete
         // NVIDIA card. Don't remove it; it costs nothing on other platforms.
-        app.add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: storage::APP_NAME.to_owned(),
-                        mode: initial_window_mode(),
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .set(RenderPlugin {
-                    render_creation: WgpuSettings {
-                        instance_flags: InstanceFlags::default()
-                            | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
-                        ..default()
-                    }
-                    .into(),
-                    ..default()
-                })
-                .set(LogPlugin {
-                    custom_layer: file_log_layer,
+        let headless_walk =
+            headless_visual_walk_requested(std::env::var_os("HEX_WALK_HEADLESS").as_deref());
+        let plugins = DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: storage::APP_NAME.to_owned(),
+                    mode: initial_window_mode(),
+                    visible: !headless_walk,
+                    focused: !headless_walk,
                     ..default()
                 }),
-        );
+                ..default()
+            })
+            .set(RenderPlugin {
+                render_creation: WgpuSettings {
+                    instance_flags: InstanceFlags::default()
+                        | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
+                    ..default()
+                }
+                .into(),
+                ..default()
+            })
+            .set(LogPlugin {
+                custom_layer: file_log_layer,
+                ..default()
+            });
+        if headless_walk {
+            // Retain the logical Window component for UI metrics, but never
+            // construct a native window or Winit event loop. The walk's image
+            // target and Screenshot::image own every reviewed pixel.
+            app.add_plugins(plugins.disable::<bevy::winit::WinitPlugin>())
+                .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+                    std::time::Duration::from_secs_f64(1.0 / 60.0),
+                ));
+        } else {
+            app.add_plugins(plugins);
+        }
 
         app.add_plugins(MeshPickingPlugin);
         app.add_plugins(bevy_hanabi::HanabiPlugin);
@@ -259,6 +280,9 @@ impl Plugin for AppPlugin {
         app.add_plugins(spell_vfx::plugin);
         app.add_plugins((fog::plugin, terrain_health_bars::plugin));
 
+        #[cfg(feature = "arena-prototype")]
+        app.add_plugins(battle_launcher::plugin);
+
         #[cfg(feature = "test-support")]
         app.add_plugins(test_support::plugin);
 
@@ -269,11 +293,14 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((
-            hex_dev::plugin,
-            content_debug::plugin,
-            dev_time_controls::plugin,
-        ));
+        {
+            // The native inspector owns an egui window surface, not the walk's
+            // image target. Review the game's UI without that developer window.
+            if !headless_walk {
+                app.add_plugins(hex_dev::plugin);
+            }
+            app.add_plugins((content_debug::plugin, dev_time_controls::plugin));
+        }
     }
 }
 
@@ -284,6 +311,19 @@ fn log_app_identity() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windowless_capture_requires_visual_walk_and_an_explicit_exact_flag() {
+        for flag in [None, Some(""), Some("0"), Some("true")] {
+            assert!(!headless_visual_walk_requested(
+                flag.map(std::ffi::OsStr::new)
+            ));
+        }
+        assert_eq!(
+            headless_visual_walk_requested(Some(std::ffi::OsStr::new("1"))),
+            cfg!(feature = "visual-walk")
+        );
+    }
 
     #[test]
     fn initial_window_mode_matches_the_build_shape() {

@@ -1,0 +1,822 @@
+# Spectator battles and bestiary validation
+
+Status: all seven enemy profiles have recorded machine calibration. Worm
+implementation, scoped static review and the final combined gate are complete;
+human playtesting remains pending. The [local wave](../planning/waves/arena-bestiary/manifest.md)
+and [approved requirements](../planning/waves/arena-bestiary/plan.md) govern this work.
+The accepted human/Shadow reference remains `127d1ce`; no remote merge is authorized.
+The original map/creature milestone has [separate evidence](arena-encounters-validation.md).
+
+## Spectator checkpoint
+
+Combined source `90e2e4d9a6196dc28c25246b593981111047e02f` includes world deployment
+`56db778`, gameplay teams/observations `469cac0`, observer presentation `6881eb2`,
+and the real-world battle harness. Results at this checkpoint:
+
+- 13 world arena tests and scoped strict world lint passed.
+- 136 gameplay tests and strict arena lint passed, including three frozen Duel
+  fixtures, arbitrary teams, hidden-history isolation, source identity after death,
+  whole-team results, timeout admission, and monster actor zero.
+- 60 application arena tests passed, with two explicit capture/performance tests
+  ignored. Strict application lint and eight launcher argument guards passed.
+- Two battle integration tests passed: all 32 original map/roster deployment
+  combinations, reset-time setup changes, and return to ordinary Duel.
+- Native `dev,arena-prototype` build passed in 4m 30s.
+
+The complete repository-selected gate, final bestiary native build, expanded
+capacity timing and final presentation matrix remain pending.
+
+The next integrated checkpoint `41e860e` contains bounded dry/support-aware creature
+steering and crater recovery, fixed Dragon retreat destinations, and admitted
+eye/center visibility (`002dc6b`). It preserves the accepted Shadow policy and all
+initial creature numbers. Focused gameplay checks pass 146/146; the closer observer
+camera/footer candidate passes 64 application checks with two explicit capture
+tests ignored. Scoped strict gameplay and application lint pass.
+
+## Actual matchup pilot
+
+The first pilot uses ordinary actors, abilities, health and terrain publication at
+120 Hz. One seed, six distinct roster pairings and both side/actor-order assignments
+produce 12 rounds on Duel, with a 60-second bound. It ran under the CI profile;
+its CPU numbers are diagnostic, not native performance evidence.
+
+| Pair | First wins | Second wins | Timeouts |
+|---|---:|---:|---:|
+| Shadow / Dragon | 2 | 0 | 0 |
+| Shadow / 5 Goblins | 1 | 1 | 0 |
+| Shadow / Shaman party | 0 | 0 | 2 |
+| Dragon / 5 Goblins | 1 | 0 | 1 |
+| Dragon / Shaman party | 0 | 0 | 2 |
+| 5 Goblins / Shaman party | 1 | 1 | 0 |
+
+This is a defect-finding pilot, not a balance result. Dragons dealt no damage in
+the two Shadow rounds. The five timeouts and traces exposed runaway retreat goals,
+unsafe edge pursuit, crater-lip recovery gaps, covered Shaman standoff, and an
+eye-versus-center visibility mismatch. Fixing those precedes numeric calibration;
+the original enemy HP, damage and cooldown hypotheses are still unchanged.
+
+Test-only checkpoint `4af96a4` adds optional half-second `ARENA_BATTLE_TRACE` records
+of physical actors, valid volume, dated party knowledge, attacks, charging and
+statistics. Eight 30-second diagnostic rounds passed their completion bound. These
+traces are local diagnostics; they are never supplied to creature decision code or
+the ordinary human HUD.
+
+Retained task evidence: `outputs/spectator-matchup-smoke-ci-01.json`,
+`work/spectator-matchup-smoke-ci-01.log`,
+`work/spectator-battle-diagnostic-ci-01.log`, and
+`taskwork/spectator-timeout-diagnosis-initial.md`.
+
+## Optimized comparison before numeric calibration
+
+Clean `41e860e19c79c968190412a5dab0469f4bacd6d5` ran 96 actual Duel battles: eight
+seeds, six pairings, both side/actor-order assignments and a 90-second limit. The
+optimized native test harness reads the same `assets/config/arena.ron` as the app;
+the receipt confirms it matches the unchanged defaults. Invalid/incomplete rounds
+are not admitted. These are simulation measurements without a renderer.
+
+| Pair | First wins | Second wins | Timeouts |
+|---|---:|---:|---:|
+| Shadow / Dragon | 14 | 0 | 2 |
+| Shadow / 5 Goblins | 6 | 8 | 2 |
+| Shadow / Shaman party | 13 | 1 | 2 |
+| Dragon / 5 Goblins | 8 | 8 | 0 |
+| Dragon / Shaman party | 0 | 16 | 0 |
+| 5 Goblins / Shaman party | 9 | 6 | 1 |
+
+The maximum measured tick was 5.943 ms, with none above 8.333 ms. Final winning-tick
+terrain requests were not separately flushed/measured by this harness version;
+terminal publication timing remains an explicit evidence gap being repaired.
+The 96-row receipt's setup/result fields were produced by the real harness; a
+review found the Python validator should cross-check more of those fields rather
+than only pair coverage. No incorrect actual setup was established by that review.
+
+These are still defect-finding results. The Dragon delivered only 35 total damage
+over its 16 Shadow rounds. Shaman self-damage totals 554 across its 48 rounds.
+Five Goblins are close enough for the initial rough target; their stats stay fixed.
+Dragon/Goblin decisions do not consume random values, so their eight seeds repeat
+the same two side-dependent trajectories. Their apparent 50% is not eight
+independent balance samples. Fort comparisons supply a separate terrain layout.
+
+Test-only `9dbabf5` adds exact release/self-hit transitions. In the retained seed-8
+Shaman-left/Goblins-right trace, a Fireball released at tick 295 detonates at its
+previous position at tick 297 while its caster moves away. Owner-clearance admission
+tests the current caster pose, but the subsequent sweep tests the previous pose;
+the just-admitted shot still overlaps that previous capsule. This identifies a
+false self-hit at the start of the sweep. Repair must preserve legitimate returning
+projectile hits and splash self-damage. Separately, Shaman spread is mistakenly
+added to a normalized direction while the accepted Shadow uses a positional error;
+the configured two-times multiplier should retain the same units. An independent
+geometric fixture also exposes cone attacks rejecting an exposed body flank after
+one nearer contact is obstructed. Repairs and repeated comparisons are pending.
+
+Retained task evidence: `outputs/arena-original-native-01/{receipt.json,battles.log}`,
+`outputs/arena-original-native-summary-01.json`,
+`outputs/arena-self-hit-trace-01/{receipt.json,battles.log}`, and
+`outputs/shaman-self-hit-transitions-01.json`. Traced timing is diagnostic only.
+
+## Attack repairs and repeated native comparison
+
+Gameplay checkpoint `543ceab` repairs start-of-step caster clearance, positional
+Shaman aim spread, exposed finite-cone contacts, and physically aligned defensive
+Dragon breath with visible-target tracking. All 155 focused gameplay tests pass,
+including the unchanged Duel goldens; strict scoped arena lint passes. The first
+run had one incorrect new negative fixture: a 3.55-unit cone could legitimately
+reach an exposed capsule flank. The corrected fixture and its geometric reason
+are retained; no production range was changed to satisfy that test.
+
+Harness checkpoint `9e83d30` adds accepted-session setup checks and separate terminal
+publication timing. Three real-world battle integration tests and strict application
+lint pass. Eleven Python receipt guards pass. The historical 96 outcomes also pass
+the stronger setup/member/result checks; their previously documented final-flush
+timing limitation remains. A Git commit during the integration test changed source
+bookkeeping only; the retained content-provenance receipt verifies unchanged files.
+
+Clean combined `b7c5d60` repeats the same native 96-round comparison at unchanged
+numeric values:
+
+| Pair | First wins | Second wins | Timeouts |
+|---|---:|---:|---:|
+| Shadow / Dragon | 16 | 0 | 0 |
+| Shadow / 5 Goblins | 6 | 8 | 2 |
+| Shadow / Shaman party | 10 | 2 | 4 |
+| Dragon / 5 Goblins | 0 | 16 | 0 |
+| Dragon / Shaman party | 0 | 16 | 0 |
+| 5 Goblins / Shaman party | 3 | 13 | 0 |
+
+Shaman self-damage falls from 554 to **zero** across its 48 rounds, with ordinary
+caster damage rules intact. Maximum living-tick CPU is 5.492 ms; maximum separately
+measured terminal publication is .087 ms. The Dragon remains too weak (93 total
+damage in its 16 Shadow rounds), so this is a repaired baseline, not completed
+calibration. The next bounded trial raises only Dragon HP to 160 and breath range
+to 6, and improves its opportunity to turn toward a nearby attacker. Shaman support
+will begin when allies actually engage and remain within the existing aura range.
+Goblins, human spells and Shadow policy remain unchanged.
+
+Retained task evidence: `outputs/arena-original-native-02/{receipt.json,battles.log}`,
+`outputs/arena-original-native-summary-02.json`, the `work/creature-combat-repair-*`
+logs, and `work/arena-battle-integration-01` / `work/arena-battle-app-clippy-01`.
+
+## Original-group calibration checkpoint
+
+Clean `27157af` finishes this bounded tuning pass. Dragon HP is 220, breath damage
+45 and range 6; the remaining Dragon values retain their original hypotheses.
+Goblins remain player-sized with their original HP and attack numbers. Human spells,
+charging and accepted Shadow policy remain unchanged. Shaman timing and statistics
+are unchanged; its aura now waits for eligible engagement and its positioning follows
+its frontline. Ground creatures can take verified ordinary-controller descents into
+craters, and spectator Dragons search a bounded set of public deployment waypoints.
+All 160 focused gameplay tests and strict arena lint pass, including the retained Duel
+fixtures. The new search equivalence test varies a hidden enemy without changing decisions.
+
+The 120-round native comparison uses seeds 1–20, both side/initiative orders and a
+90-second limit. Each pair has 40 rounds:
+
+| Shadow versus | Shadow wins | Creature wins | Timeouts |
+|---|---:|---:|---:|
+| Dragon | 23 | 15 | 2 |
+| 5 Goblins | 14 | 24 | 2 |
+| Shaman + 3 Goblins | 13 | 13 | 14 |
+
+A separate, untuned holdout uses seeds 101–105, ten rounds per pair:
+
+| Shadow versus | Shadow wins | Creature wins | Timeouts |
+|---|---:|---:|---:|
+| Dragon | 7 | 2 | 1 |
+| 5 Goblins | 3 | 7 | 0 |
+| Shaman + 3 Goblins | 5 | 1 | 4 |
+
+This is rough machine calibration, not statistical equivalence or a human win-rate
+claim. Shaman matchups still have substantial stalemates after cover and terrain
+changes; timeouts are never counted as wins. The holdout remains reported rather than
+being folded back into tuning. No original group is tuned further in this pass.
+
+A 36-round Fort spot corpus (three paired seeds for all six pairings) establishes a
+strong map effect: Dragon beats Shadow, Goblins and Shaman party in all six rounds
+per pairing; Goblins beat Shadow 5–1 and Shaman party 6–0; Shaman party beats Shadow
+6–0. The close courtyard starts favor immediate area and melee pressure. These small
+samples include repeated deterministic creature-only trajectories and must not be
+read as independent random trials or a balanced tournament ranking.
+
+Native timing includes ordinary world publication and a separately measured final
+flush. Maximum living tick was 8.799 ms in the 120-round corpus, 7.477 ms in holdout,
+and 5.066 ms in Fort. The first corpus therefore includes an over-budget sample;
+final combined stress testing must check repeatability rather than claiming every
+tick fits 120 Hz. Final native rendering and the expanded bestiary remain pending.
+
+Retained task evidence: `outputs/arena-original-calibration-04`,
+`outputs/arena-original-fort-05`, `outputs/arena-original-holdout-06`, their companion
+summary JSON files, and `work/creature-descent-search-*` logs. All three battle receipts
+are COMPLETE, source-frozen at `27157af`, and consume the authored arena configuration.
+
+## Golem gameplay checkpoint
+
+Runtime `2570dce` adds the fixed seven-hex, five-level body, 2-unit/second grounded
+movement, spherical slam and visibly charged straight laser. Initial hypotheses
+were HP160; slam35/radius6.928/windup.8s/cooldown5s/impulse5; laser45 total over1s,
+minimum admission12, charge2s, final.35s locked, cooldown8s. The deliberate medium
+range gap remains. The sphere can damage its own supporting terrain. Human and
+Shadow values and policy remain unchanged.
+
+The full arena suite passes199/199 and strict scoped lint passes. Coverage includes
+actual compound movement, side-prism hits, concave boundaries, translating bodies,
+forecast agreement, mixed separation, dry bounds, unsupported footing, finite cones,
+windups/caps, allied passage, barrier/terrain ordering, death, and world-boundary
+beam endpoints. The retained Duel fixtures pass. The beam follows its physical
+mouth under knockback while retaining the locked direction.
+
+Independent review repaired a translated shared-edge rounding crack, point-blank
+laser terrain contact, and center-to-mouth elevation parallax; dedicated regressions
+retain those cases. A decorative face mounting correction is being integrated
+separately. The combined working tree then passes five real-world battle tests
+(including Golem deployment on Fort/Duel, Fort's player start outside activation
+range, and reset into Seven Regions), 69 application tests, strict application lint
+and17 Python guards. The source-recording receipt confirms no source changes during
+those checks. Decorative face mounting now uses separate plaques outside the
+published body support with an open mouth corridor, checked across72 yaw directions.
+This checkpoint precedes native matchup calibration below; Golem static review
+remains pending.
+
+Task logs: `work/golem-runtime-tests-03.log` and
+`work/golem-runtime-clippy-03.log`, `work/golem-app-integration-01/receipt.json`,
+and `work/golem-presentation-python-01.log`. Earlier failed test/lint logs are retained.
+
+## Golem survival trial
+
+The initial native corpus at `3710941`, with HP160, records no Golem wins in 64 Duel
+rounds: 63 losses and one timeout across Shadow, Dragon, five Goblins and Shaman
+party. The 24-round Fort spot also has no Golem wins, with three Dragon timeouts.
+A first 35-damage slam leaves the Goblins at 15HP each; the observed Duel Goblin
+rounds end around 7.2 seconds before a second slam. Against Shadow, Golem records
+no damage or released lasers, so range and cover remain a separate limitation.
+
+The isolated hypothesis doubles only Golem starting HP to 320 in the default
+and authored configuration. Slam, laser, cooldowns, speed and the deliberate
+medium-range gap stay unchanged. This tests whether the slow body survives long
+enough for another attack. No route correction accompanies this health trial.
+
+At clean `c1a6cf4`, the 32-round Duel comparison and 16-round Fort spot use identical
+attacks and two side/initiative orders. The Golem now reliably reaches its second
+slam against Goblins, while ranged movement and cover remain strong counters.
+Keep HP320 as the initial playable hypothesis; do not remove the requested medium
+range gap to force parity against the Shadow.
+
+| Opponent | Duel: Golem wins / losses / timeouts | Fort: Golem wins / losses / timeouts |
+| --- | ---: | ---: |
+| Shadow | 0 / 8 / 0 | 0 / 4 / 0 |
+| Dragon | 0 / 8 / 0 | 0 / 0 / 4 |
+| Five Goblins | 8 / 0 / 0 | 4 / 0 / 0 |
+| Shaman + three Goblins | 3 / 4 / 1 | 2 / 2 / 0 |
+
+These are matchup-dependent machine results, not a claim that the Golem already
+matches the Shadow's human challenge. Creature-only seeds often repeat an identical
+trajectory. Fort's Dragon/Golem timeouts remain unfinished fights, not draws or wins.
+
+A retained seed1 trace of both HP160 side orders establishes the initial Shadow
+counter: both Golems start charging at tick1, then actual authored cover blocks
+sight at109/121 before the198-tick lock. The admitted8-second cooldown prevents
+another laser before death. Most subsequent poses are clear and supported;
+Fireball impulses repeatedly oppose the2-unit/second approach. The late self-slam
+removes footing but the body lands and resumes movement. Those traces do not
+establish a collision bug as the cause of the initial losses.
+
+Native timing exposes repeatable Dragon/Golem spikes, typically18–30 ticks above
+8.333ms per Duel round, with maxima around11ms and a few terrain-publication spikes.
+The Fort maximum is12.022ms. These are an open performance defect under investigation,
+not a passed120Hz capacity claim. Sampling-profiler rounds are diagnostic and must
+not replace uninstrumented timing evidence.
+
+Retained task evidence: `outputs/arena-golem-calibration-01`,
+`outputs/arena-golem-fort-02`, `outputs/arena-golem-trace-03` and its independent
+diagnosis, `outputs/arena-golem-calibration-04`, `outputs/arena-golem-fort-05`, and
+their summary JSON files. The latter two are source-frozen in the small detached
+review checkout, allowing unrelated Wisp work to proceed on the local experiment
+branch. Arena tests pass199 after the HP-only change; capture guards pass17 after
+the natural laser review opponent changes from Shadow to Dragon.
+
+## Native smoke measurements
+
+At `90e2e4d`, two windowless ordinary seeded battles ran serially, with no synthetic
+health or input and no concurrent build. Both ended naturally before 30 seconds.
+First 120 samples are excluded. These short rounds do not establish worst-case
+capacity or replace the all-ten-enemy Seven Regions stress measurement.
+
+| Map / roster | Samples | Tick p95 / p99 / max (ms) | Publication max (ms) | Render ready (ms) |
+|---|---:|---:|---:|---:|
+| Duel, Shadow / Dragon | 502 | .420 / 3.201 / 3.519 | 3.215 | 490.8 |
+| Fort, Goblins / Shaman party | 603 | .484 / .850 / 1.467 | 1.467 | 638.1 |
+
+No sampled simulation tick exceeded 8.333 ms. Main application frame interval p99
+was 20.743 ms on Duel and 20.661 ms on Fort. Those start-to-start wall intervals
+include render-submission waits; they are not GPU duration or vsync FPS.
+Full receipts and setup identities are in the ignored exact-head
+`90e2e4d...-spectator-performance-01` pack and task
+`outputs/spectator-native-performance-90e2e4d.json`.
+
+## Static review and remaining experience checks
+
+The clean `90e2e4d` matrix contains ten observer views plus three ordinary player
+controls, all at 1600 by 900. Menus, team accounting, camera mode labels, timeout
+versus winner text, whole-map framing and the ordinary human HUD are readable.
+Whole-map camera distances make creature/team detail too small for that criterion;
+closer views and useful initial observer framing are being added. Do not treat the
+original overview pack as complete model-detail approval.
+
+The fresh `41e860e...-spectator-close-02` pack contains fourteen 1600 by 900 raw
+views, including close Fort/Duel pairs at opposite azimuths. The coordinator and
+independent reviewer inspected every original before the contact sheet: scoped
+static PASS. Close views distinguish both team colors and show the player-sized
+Goblins, Shaman, Shadow and long low Dragon. The footer is centered and padded.
+Menus, HP labels, opaque terrain and transparent panels are readable. Rendered
+result labels match the typed receipts: Fort Team 2 at tick 505, Duel Team 1 at
+tick 619. Raw images, original receipts, contact sheet and both reviews remain in
+the ignored exact-source pack. This closes the original framing gap.
+
+Human native camera motion, collision feel, creature animation, telegraph readability
+in motion, and 20–30 Fort encounters remain **HUMAN-MOTION-PENDING**. Paired machine
+matchups and future holdout seeds cannot establish human win rates.
+
+## Wisp focused integration checkpoint
+
+The guarded foundation `93a7735` now has a complete one-prism flight body, finite
+two-layer deployment, observed-target Ember windup and frozen creature projectile
+payload. Twelve-per-team real-world fixtures fit both Duel and Fort without
+shrinking bodies or bypassing ceilings. A translated shared-edge precision case
+initially rejected legal adjacent layers; the corrected prism overlap admits
+tangency while retaining real penetration tests.
+
+Gameplay tests pass225 and strict arena lint passes. The source-stable application
+receipt passes7 actual-world battle tests,73 application tests and strict game
+all-target/all-feature lint. Python launcher/capture guards pass23. These are
+focused checks, before the final workspace gate. The first application attempt
+failed to compile a new test's nonexistent `alive()` helper; the corrected test
+uses authoritative positive HP and the complete retry passes. Failure logs remain.
+
+The candidate also gives the observer footer a dark backing and adds a pale inner
+core to the unchanged Golem laser beam. The prior12-frame Golem pack established
+body/framing but exposed those readability defects; fresh static approval remains
+pending. Wisp native paired calibration and its12-frame static matrix are next.
+No subjective motion or balance approval is claimed.
+
+Task evidence: `work/wisp-runtime-tests-02.log`,
+`work/wisp-runtime-clippy-02.log`, `work/wisp-app-integration-02/receipt.json`,
+and `taskwork/wisp-presentation/python-guards-01.json`.
+
+## Golem static repairs and query optimization follow-up
+
+The fresh `dbf3fc6...-arena-golem-v2-dragon-phases` matrix passes independent and
+coordinator static review: all12 original1600×900 frames first, then the contact
+sheet. The backed observer footer reads over pale ground and the pale active core
+remains distinct within Dragon breath from both directions. This closes the two
+prior static readability findings. It does not establish animation or native feel.
+
+The collision cache candidate `1ae71e9` reduced the old eight-round Dragon/Golem
+corpus from201 over-budget ticks to4, maximum11.054→9.570ms. The later combined
+array/basis query refactor in `4081f08` passes227 arena tests, including bitwise
+old-query oracles. Eight unprofiled native rounds at `dbf3fc6` preserve actor poses,
+HP, setup, outcomes and original statistics exactly (the appended Wisp counter
+is zero), but still record5 over-budget ticks and maximum9.373ms. Do not claim
+that this second change fixed the remaining spikes. The first profiler capture
+identified collision queries under steering; it does not justify a new geometry
+or behavior rewrite without fresh attribution.
+
+Task evidence: `work/dragon-box-query-checks-01/receipt.json`,
+`outputs/arena-golem-performance-07`, `outputs/arena-golem-performance-08`,
+`outputs/arena-golem-cache-comparison-07.json` and
+`outputs/arena-golem-box-comparison-08.json`.
+
+## Wisp opening-volley investigation
+
+The first native48-round Duel corpus at `dbf3fc6` uses four seeds and both sides.
+A single Wisp beats a single Goblin8/8 without receiving damage. Against Shadow,
+Wisp groups1/2/4/12 lose all8 matches; eight Wisps lose7 with1 timeout. Twelve
+Wisps release172 Embers across their8 rounds but deal only8.54 total damage.
+This establishes a weak opening profile, not successful swarm calibration.
+
+The two seed1 traces show all12 Wisps releasing at tick42 toward a then-stationary
+observed Shadow. Their18.3–21.9-unit shots take about.57–.68 seconds. The Shadow
+resumes strafing and moves about four units sideways before those impacts. The
+shared trajectory is consistent with the admitted observation; these traces do
+not show a collision or hidden-information defect.
+
+The next isolated trial spreads each party's initial Wisp admissions over.6s,
+starting only at its first eligible own sight. One Wisp keeps zero delay; later
+cooldowns remain relative to each actual release. HP18, damage8, cooldown2,
+windup.35, speed32 and splash.8 stay unchanged. If delivery remains weak, a
+separate launch-speed trial will shorten the already observed shot flight.
+
+Retained evidence: `outputs/arena-wisp-calibration-01` and
+`outputs/arena-wisp-trace-02`. Traced timings are diagnostic only.
+
+## Wisp initial calibrated profile
+
+Keep HP30, Ember speed128, initial volley spread.6s; all other initial Wisp
+values remain unchanged. Individual HP remains below Goblin50, damage8 below
+Swipe12, and cooldown2 slower than Swipe1.2. The isolated trials distinguish
+changes: staggering alone improved little; speed64 raised twelve-Wisp damage
+to23.9 per Duel round, speed128 to48.1, and HP30 to57.5. The health trial helps
+against incidental splash while a full35-damage Fireball still kills one Wisp.
+
+The final48-round Duel corpus uses four seeds/both sides at frozen `8fa9640`
+(main tuning `f0ef3fa`). The16-round Fort spot uses two seeds/both sides.
+
+| Wisp group | Duel: Wisp wins / losses / timeouts | Fort: Wisp wins / losses / timeouts |
+| --- | ---: | ---: |
+| One, versus Shadow |0 /8 /0|Not sampled|
+| Two, versus Shadow |0 /8 /0|Not sampled|
+| Four, versus Shadow |0 /7 /1|0 /4 /0|
+| Eight, versus Shadow |0 /8 /0|0 /4 /0|
+| Twelve, versus Shadow |0 /7 /1|3 /1 /0|
+| One, versus one Goblin |8 /0 /0|4 /0 /0|
+
+The accepted Shadow remains a strong AoE/dodging counter in Duel. Fort's large
+swarm results establish the intended scaling across this small machine corpus,
+not a human win-rate estimate or a claim that four Wisps equal a Shadow. Keep
+four as the accessible initial Fort wave and all five sizes in spectator mode.
+Final Duel/Fort measured maxima are4.616/4.115ms with no over-budget combat ticks.
+Larger sustained synthetic load, fresh Wisp pixels and the final workspace gate
+remain separate checks.
+
+All230 arena tests pass after the separate speed and HP trials. Earlier full
+strict arena lint passes with the opening stagger; final strict combined lint
+will cover the numeric-only follow-ups. Retained source-matched task evidence:
+`outputs/arena-wisp-stagger-03`, `outputs/arena-wisp-speed64-04`,
+`outputs/arena-wisp-speed128-05`, `outputs/arena-wisp-hp30-06`,
+`outputs/arena-wisp-fort-07` and their companion summaries.
+
+## Worm guarded foundation and world conversion
+
+The guarded `dccfddb` foundation passes236 arena tests and strict arena lint,
+including six snapshot/profile/admission contracts. Actual Worm setups remain
+refused until body movement and attacks are integrated. The first compile exposed
+a temporary-iterator lifetime in the new body snapshot accessor; the local-count
+repair passes without changing the accepted Duel golden fixture.
+
+The world conversion lane passes24 feature-enabled arena map tests (11 new) and
+strict map/assets all-target/all-feature lint. The real ledger tests retain grass
+1/1→dirt1/2, stone1/4→dirt1/2 and stone3/4→dirt2/2; repeat dirt and air remain
+unchanged. Mixed blocked volumes reject atomically; extreme axial coordinates
+reject using widened bounds arithmetic. Distinct sources may reuse their own
+sequence without duplicate conversion or healing. Paused requests persist and
+reset clears inbox, outcomes, sequences and converted materials. Authored
+Fort/Duel publish finite elongated pockets with four-cell runs; actual Worm body
+deployment and locomotion remain later gameplay/application checks.
+
+Task evidence: `work/worm-foundation-checks-01/receipt.json`,
+`work/worm-world-tests-01.log`, `work/worm-world-clippy-01.log`, and
+`work/worm-world-checks-01.json`. The world checks run independently of active
+changes in gameplay-owned files; they are not the final combined candidate gate.
+
+
+## Wisp sustained-load instrumentation
+
+Frozen review `5f5afec` (main cherry-pick `e695873`) passes seven actual-world
+battle tests, 75 arena application tests and strict game all-target/all-feature
+lint. Ten Wisp-specific Python launcher guards pass. The previous attempt failed
+because the post-movement deployment fixture required a knocked-back Goblin to
+have immediate ground support. Its initial supported spawn remains checked; after
+ordinary combat, every living body must occupy clear, dry volume and Wisps must
+retain their valid flying pose. The corrected complete retry passes.
+
+The new explicit windowless load uses 12 Wisps per side on Duel and Fort for
+1,440 ticks. Validated configuration raises Wisp HP to 1,000 before admission;
+accepted team maximum HP therefore remains accurate. It records all 24 living,
+flying actors and both assigned layers per team, ordinary windups/projectiles,
+CPU time, publication/damage/destruction and containing application frames.
+The first 120 ticks are warmup; terminal publication is timed separately.
+It injects no damage or terrain mutation. This synthetic workload measures
+sustained capacity, not normal health balance or human motion. Native measurements
+and static Wisp review remain pending at this checkpoint.
+
+Task evidence: `work/wisp-performance-checks-01` (retained failure) and
+`work/wisp-performance-checks-02/receipt.json` (source-stable complete pass).
+
+
+## Wisp native capacity and first static review
+
+At clean frozen `5f5afec`, both explicit 24-Wisp capacity rows complete with all
+24 actors alive and flying, both layers occupied per team, and ordinary windups
+and released Embers. Each row measures 1,320 combat ticks after 120 warmup ticks.
+
+| Map | Ready time | Tick p95 / p99 / maximum | Ticks over 8.333 ms |
+| --- | ---: | ---: | ---: |
+| Duel | 519 ms | 4.155 / 4.842 / 5.760 ms | 0 |
+| Fort | 618 ms | 3.758 / 4.784 / 5.700 ms | 0 |
+
+Neither row publishes terrain damage or destruction; their empty publication
+and destruction distributions are explicitly retained. Application Update
+start-to-start p99 intervals are 20.326/20.275 ms; these are not GPU, vsync or
+ordinary interactive FPS measurements. The separate Seven Regions/destruction
+workload remains required. Evidence: `outputs/wisp-native-performance-5f5afec.json`
+and the two native receipts under `wisp-performance-01` in the review checkout.
+
+All 12 Wisp originals at 1600×900 and then their contact sheets received coordinator
+and independent static review. Bodies, dim-light glow, Ember, layers, menus and
+HUD pass. The independent review accepts the partial windup with a motion-review
+limitation; the coordinator records a windup-clarity failure because the charging
+core is too similar to idle at this camera scale. Preserve both reviews. A narrow
+local cue repair and fresh affected captures are required before closing the static
+matrix. Local intake: `outputs/wisp-windup-intake-01`; Linear reauthentication
+remains unavailable and no external issue was filed.
+
+
+## Worm gameplay admission checkpoint
+
+Combined gameplay passes 265 arena tests and strict arena all-target/all-feature
+lint. The readiness guard is removed only after a complete second source-stable
+run with actual schema admission enabled. Empty world fixtures still refuse whole
+rosters rather than creating partial bodies. Retained Duel goldens pass unchanged.
+
+Coverage includes exact moving four/six-part sweeps, copied observation isolation,
+head clearance, shallow current-dirt movement, correlated requests, natural Boulder
+release, physical terrain payload and actual actor damage. Review added complete
+all-mask spawn checks, falling through unsupported air after ground destruction,
+a vertical candidate under sideways wall pressure, and cancellation of outgoing
+burrow requests when incoming damage kills their owner in the same tick. Air
+settling makes one admitted path and emits no conversion. Previous-tick world
+conversion remains world-owned and is not undone on a later death.
+
+The first support-recovery retry exposed contact tolerance at landing; collision
+skin backoff restores a clear supported pose before rebinding the depth band.
+All failed compile/test attempts remain in `work/worm-runtime-checks-01`; final
+logs are `tests-04.log` and `clippy-01.log`. Enabled-admission checks are in
+`work/worm-admission-checks-01/receipt.json`. Actual-map fixtures, application/native
+composition, calibration and Worm pixels remain pending at this checkpoint.
+
+
+## Worm combined application checkpoint
+
+The real-world suite passes 11 tests, including complete four-part admission on
+Fort/Duel in both team orders and a Worm mirror, six-part complete placement or
+explicit refusal, dormant Fort conversion, old-request reset, natural exposed
+Boulder damage and HP-preserving correlated dirt publication. All 80 arena
+application tests pass. Strict game all-target/all-feature lint passes separately
+after changing an exact-zero test assertion to compare float bits. Existing layout
+bounds remain checked; the new seventh Fort recipe required updating only the
+expected button count. Worm physical parts now explicitly require Visibility,
+which also makes minimal-fixture updates independent of render-plugin registration.
+
+A partial-tail crater was reproduced before repair: it blocked a safe head rise
+for 600 ticks. Stationary emergence now uses actual head-local support while travel
+retains its full-body shallow band and every candidate retains complete swept
+admission. This passes all 266 arena tests and strict arena lint. The native trace
+now includes Worm phase and physical clearance. Head-support destruction while
+some tail segments remain buried is a separate conservative movement limitation;
+this repair never invents support or permits a buried attack.
+
+One application attempt reused an old review checkout's core metadata from the
+shared target: checkout-relative fingerprints and source mtimes made that variant
+appear fresh. Refreshing only main core lib.rs's timestamp (identical bytes) forced
+the exact feature variant to rebuild. No source workaround or cache deletion was
+used. Subsequent application compilation and tests consume the current contracts.
+
+Evidence: `work/worm-world-composition-01` (stale metadata), `-02` (missing app
+Species import), `-03` (11-test pass), `work/worm-crater-checks-01` (red/green),
+`work/worm-app-integration-01` (retained two failures),
+`work/worm-combined-focus-01` (11 +80 pass; one test float lint),
+`work/worm-combined-clippy-02` (strict pass), and
+`work/worm-cache-recovery-01.json`. Native calibration, captures and final repository
+checks follow this focused milestone.
+
+## Worm close-range correction — 2026-09-08
+
+The first native trial at `ea727d1` retained eight paired rounds each on Duel and
+Fort, against Goblins and Shadow. The Worm lost all sixteen; Fort had no Boulder
+releases. Traced Fort Goblins were visible beside a physically exposed head, but
+inside the self-splash exclusion around the elongated body. Shadow traces instead
+showed incoming knockback lowering the head and correctly cancelling windups.
+
+Boulders now exclude their frozen caster identity from HP damage and knockback,
+and Worm shot admission no longer rejects close self-splash. Recent direct sight,
+observed-target usefulness, barriers, real body collision and ally protection are
+unchanged. Fireball and Ember self-harm remain unchanged. No numeric tuning changed.
+Four regressions cover close actual release/damage, caster movement and shape/team
+changes after release, ordinary Fireball self-harm and Ember self-harm. All **270
+arena tests and strict arena lint pass** in `work/worm-boulder-checks-01`.
+
+Initial native evidence: `outputs/arena-worm-calibration-01`,
+`outputs/arena-worm-fort-02`, `outputs/arena-worm-fort-trace-03` and
+`outputs/arena-worm-shadow-trace-04`. The trace timings are diagnostic only;
+the corrected candidate's native comparison remains pending.
+
+## Worm head-floor recovery and numeric trial — 2026-09-08
+
+The close-shot-only native trial (`1af3341`, outputs `arena-worm-close-05` and
+`arena-worm-close-fort-06`) released two Boulders per Goblin round on Duel and one
+on Fort, but still lost every round. The authored HP320/Boulder70 trial at `60e0837`
+won two of four Duel Goblin rounds; Fort remained four losses. The RON trial's
+`matches_defaults=false` is explicit in its tuning receipt; runtime used the
+authored values. Shadow remained unbeaten, including three Fort timeouts.
+
+The longer `arena-worm-trial-trace-09` then exposed a real support bug: cratered
+heads lost their old nearby floor and remained motionless with `exposed=false`
+despite a surviving lower floor. The head-only lookup now searches bounded current
+published cells down to the world minimum, with its ceiling limited to the current
+head or known support height. It does not alter shallow travel, pick unrelated
+upper roofs, recreate earth or bypass complete body admission.
+
+The new full attack-cycle regression fails before the fix and passes afterward:
+four levels of head support disappear, the anchored tail stays in place, actual
+head clearance updates and another normal Boulder releases. HP320/Boulder70 are
+now mirrored in validated defaults. **271 arena tests and strict arena lint pass**
+(`work/worm-head-support-checks-01`); a stale HP140 foundation assertion failed once
+and was corrected to the adopted 320. Final native comparisons and captures follow.
+
+## Final Worm comparison at `9ce1453` — 2026-09-08
+
+Sixteen ordinary native rounds used two seeds, both deployment/initiative orders,
+and matching authored/default HP320/Boulder70. No further numeric changes followed.
+
+| Map / opponent | Worm wins | Losses | Timeouts | Boulder releases |
+|---|---:|---:|---:|---:|
+| Duel / five Goblins |4|0|0|12|
+| Fort / five Goblins |2|2|0|10|
+| Duel / Shadow |0|4|0|6|
+| Fort / Shadow |0|1|3|4|
+
+The Worm can now wipe Goblin groups and remains vulnerable to the Shadow. The
+three 60-second Fort timeouts are unresolved encounters, never wins; the final
+rows alone do not establish their cause. Uneven heavily damaged terrain can still
+defeat bounded local movement. The maximum measured tick was **6.285ms** on Duel
+and **2.865ms** on Fort, with no over-budget samples in these 16 rounds. This is a
+small machine comparison, not a human win-rate, GPU-frame or broad performance claim.
+
+Evidence: `outputs/arena-worm-final-duel-10` and `outputs/arena-worm-final-fort-11`,
+with companion `-summary.json` files at the task output root. Fresh rendering and
+the complete repository gate remain separate checks.
+
+The first final Worm capture pack at `9ce1453` stopped after six frames: its
+buried guard incorrectly required negative clearance, although gameplay reports
+zero clearance and `exposed=false` inside earth. Both reviewers inspected the six
+originals without finding a blocking static defect; the incomplete pack remains
+blocked. The v2 capture contract requires natural Travel, an unexposed head and
+published solid terrain at its actual center. The ordinary Duel recipe reaches
+that state without injected actor or terrain changes. Python33 checks, five
+focused Worm application tests and strict game lint pass; the first lint attempt
+caught a float-equality assertion, corrected before the passing rerun. Evidence:
+`work/worm-capture-guard-01`, `-02`, and the retained `final-worm-01` pack.
+
+## Final static review at `cef8c12` — 2026-09-08
+
+Both reviewers inspected all twelve original 1600×900 Wisp captures before the
+contact sheet. The local pale charge ring is visible during early and partial
+windup, grows between those frames, and is absent after release. Menus, low hex
+bodies, the explicit dim-light comparison, projectiles and layered teams pass
+their static scope. Nearby explosion shells fill much of the Fort combat views;
+the intended subjects and HUD remain readable. These are not animation or human
+warning-recognition measurements. Evidence: `final-wisp-01` under the repository's
+`.context/visual-walks`, including independent and coordinator reviews.
+
+The second Worm matrix mechanically captured all thirteen views. Independent
+review inspected every original and the sheet; coordinator review agreed with
+two blocking gaps: the mouth-local windup line is hidden by following segments,
+and the converted-earth camera frames an interior changed cell beneath the body.
+The pack remains `BLOCKED_STATIC_COVERAGE`. A bounded presentation correction
+follows; neither failure changes the passing terrain-conversion or attack tests.
+
+The correction changes only the existing head's cached opaque material during
+living Boulder windup, restoring its ordinary material on release or death. The
+conversion view now uses ordinary Duel Worm/Goblins and selects a genuinely
+converted top with clear overhead terrain and body geometry; Fort reset remains
+separate. Public outcome identity and material/health checks are retained.
+Independent source review found no blockers. Python33, six focused Worm app tests
+and strict game lint pass with stable source in `work/worm-visible-cues-01`.
+Fresh v3 images and the combined gate remain required.
+
+At `8f2431d`, both reviewers inspected all thirteen v3 originals and the sheet.
+Twelve pass, including the gold head warning. The converted dirt top is real and
+visible, but small cyan surface accents still protrude during shallow Diving.
+Its fully clear-surface criterion remains blocked. The v4 capture-only margin now
+includes the existing 0.019-unit accent extension; no live model changes. A test
+checks actual stripe geometry, and all six Worm app tests plus strict game lint
+pass in `work/worm-visible-cues-02`.
+
+The first final Seven Regions native stress row at `8f2431d` correctly fails its
+workload guard: only 880 of 3,480 measured ticks had all ten enemies active. Every
+placement was valid and every enemy lived, but renewed forward targets gradually
+led parties beyond their home leashes. The fixture now reuses party anchors,
+revalidates current dry/body/LOS conditions, bounds replacement positions to ten
+units from home, and skips casts if no valid position exists. A 144-tick revisit
+trial improved activity to 2,242 ticks but still failed because remote sightings
+started long chases. Shared 72-tick visits pass the unchanged 2,400-tick guard with
+**2,986 all-active ticks**, 54 publication ticks, 63 damage-outcome ticks and 342
+destroyed voxels. Those are logical CI workload results, not native timings.
+Combat AI, visibility, pursuit limits and normal play are unchanged. Strict game
+lint and independent source review pass. Evidence: `outputs/arena-final-seven-stress-01`
+and `work/seven-home-fixture-checks-01`, retaining both failed attempts.
+
+## Final captures and native load at `1bf41f2` — 2026-09-08
+
+All thirteen Worm v4 static criteria pass. The independent reviewer inspected
+every 1600×900 original before the sheet, verified all 39 PNG/state/log hashes and
+found no further blocker. Root directly inspected the corrected clear dirt view,
+verified the other twelve PNGs are byte-identical to the originals reviewed in v3,
+then inspected the final sheet. Review methods are recorded explicitly in both
+review files under `.context/visual-walks/final-worm-04`. The gold head cue is
+readable; the converted top is clear of surface accents. Wisp12 remains the scoped
+passing review at `cef8c12`. Human motion and animation recognition are pending.
+
+The final native Seven Regions fixture records 3,600 consecutive ticks and all ten
+living enemies. After 120 warmup ticks, **2,664 of 3,480 samples** have all three
+parties active, exceeding the unchanged 2,400 threshold. All placements are valid.
+Measured activity includes 44 terrain publication ticks, 49 damage-outcome ticks
+and 227 destroyed voxels (264 including warmup). Tick CPU p95/p99/max is
+**1.931/3.770/6.662ms**, with no sample over 8.333ms; the all-active subset is
+1.977/3.840/6.122ms. Single-sample construction-to-render readiness is 3,286ms.
+Independent audit verifies clean source before/after, commands and artifact hashes.
+This explicit extra-HP, 72-tick party-visit fixture excludes stimulus preparation
+from tick timing and does not establish interactive FPS, GPU time or human balance.
+Evidence: `outputs/arena-final-seven-stress-02`, including independent audit files.
+
+## Combined gate and current-example refresh — 2026-09-08
+
+`outputs/arena-final-combined-gates-01` passes the initial seventeen rows, including
+93 trajectory contracts, application checks and all three exhaustive map partitions
+(109 unit, 440 generation and 94 contract tests). Residual passes 1,415 of 1,416,
+but the current elemental example save has a stale catalog fingerprint. It is
+explicitly refreshed after content changes, unlike historical compatibility files.
+Independent byte replay proves only `terrain_damage.ron` changed among the 53
+hashed inputs: the new physical-material admission list changes the digest from
+`0x5DF9C632EA7D97D3` to `0x5C97F1EBE7750DF9`; restoring those old bytes alone
+reproduces the old digest. The fixture and paired assertion are refreshed; runtime
+hash/migration policy and historical fixtures remain untouched. The existing real
+Party Trial migration/restore test now passes using the canonical workspace feature
+graph. Evidence: `work/save-fixture-refresh-01` and `work/save-fixture-focus-01.log`.
+An unnecessary package-only reproduction began a different feature build and was
+cancelled before tests; it supplies no result. The full corrected gate follows.
+
+## Final local acceptance at `25fa64d` — 2026-09-08
+
+`outputs/arena-final-combined-gates-02` records **ALL-CHECKS-PASSED: 29/29 rows**
+from 18:46 to 19:26 UTC, with identical clean source before and after. This is the
+complete selector-selected closure against accepted base `127d1ce`, including
+rules, trajectory contracts, contracts, simulation, application, exhaustive map
+partitions, residual tests, doctests, dependency isolation, links, formatting,
+strict workspace Clippy, warnings-denied docs and the default-feature release
+build. Residual passes all **1,416 tests**, including the refreshed current example.
+
+Additional arena rows pass 33 Python checks, 24 world tests, 82 application tests,
+271 gameplay tests, six encounter tests, eight route tests and eleven battle tests.
+The release build took 21m 10s; that compilation duration is not runtime performance.
+The arena-enabled native build, Worm13 static review and Seven Regions10 timing
+remain the separately identified `1bf41f2` evidence above; Wisp12 static review
+remains at `cef8c12`. Production behavior is unchanged by the two current-example
+test updates at `25fa64d`.
+
+The final delivery commit updates only this record, the short report, controls
+guide and local manifest. It does not claim fresh pixels or timings at that
+documentation-only head. Markdown links, deprecated UI terms and whitespace are
+checked after the prose update. The code remains on the local experiment branch;
+native controls, motion, balance and the documented movement/performance limitations
+remain for human playtesting. The user explicitly requested a visible Fort/Worm
+launch after these checks completed.
+
+## PR preparation — 2026-09-08
+
+The user subsequently requested publication. Fresh GitHub `dev` remains
+`495a73dcbe7edbab6d993867d91b15979fa6ce81`, exactly this branch's merge base.
+The full PR selector selects the same complete concern set as the passing
+29-row gate. Changes after `25fa64d` are tracked Markdown only; gameplay,
+configuration, tests and launcher source are unchanged. Publication reconciles
+stale status and historical local-only instructions, with links, terminology and
+whitespace checked again. One combined draft PR targets `dev`; cross-platform CI
+and exact-head human acceptance remain separate from the recorded local results.
+Linear could not be inspected because reauthentication is required; no arena
+ticket is unambiguously linked, so no ticket updates are proposed.
+
+## Selectable player parties on Duel — 2026-09-08
+
+Implementation `d2b654c`, with test-observation corrections at
+`dc24bce4cb6676fa9fba046ad59d46b9c3b975f6`, adds the seven Fort choices to Duel.
+The original Shadow loop remains the default, including its no-regeneration rule;
+all custom Duel parties also disable human regeneration. Fort/Duel switches and
+restart preserve the selected party. Seven Regions retains its fixed encounters.
+No creature tuning, movement, world generation or attack behavior changed.
+
+Focused verification passes **275 gameplay tests**, **84 arena application tests**
+(two optional evaluations ignored), **14 actual-world battle tests** (one local
+calibration ignored), and **34 Python tool tests**. This includes all seven actual
+rosters, full-body spawn admission, observed offensive actions, partial-party
+victory, terminal freeze, terrain/body reset, selection guards and the original
+Shadow fixtures. Test oracles use ordinary creature sight snapshots and the lone
+Worm's party sight record; optional debug target IDs are not assumed mandatory.
+
+Strict Clippy passes for `hex_arena` and `hex_game`, all targets with
+`dev,arena-prototype,test-support`, with warnings denied; the corrected integration
+test also passes a fresh strict check. Formatting, tracked Markdown links and
+terminology checks pass. The native `dev,arena-prototype` build passes. Logs are
+under task output `outputs/duel-party-selection-2026-09-08/`. The earlier full
+workspace 29-check result remains evidence at `25fa64d`; this bounded follow-up
+does not claim a new full workspace or release gate.
+
+Seven fresh, clean-source 1600×900 windowless captures at `dc24bce` cover Shaman
+party start/first/third/whole-map views, Shadow and Worm selection, and Seven
+Regions' fixed-party explanation. The full-resolution frames, hashes, receipts,
+contact sheet and coordinator review are retained under
+`.context/visual-walks/duel-party-selection-2026-09-08/`. Coordinator inspection
+passes the changed menu/HUD surfaces, opaque cover and whole-map framing.
+Independent full-resolution and contact-sheet review also passes all seven
+frames, verifying 21 PNG/state/log hashes and four unchanged source packs;
+its notes are in the same task-output directory as the focused test logs.
+Stills do not establish native motion, input feel or balance. The requested native
+Duel launch reaches the ready screen through Cargo with no initial asset errors;
+human playtesting remains the control-feel check.

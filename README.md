@@ -30,6 +30,20 @@ cargo run --release -p hex_game --features map-review
 *The current Procedural Hills build. The same terrain supports exploration,
 positioning, and combat.*
 
+## Battle Mode
+
+Choose **Battle Mode** from the Main Menu for continuous first-person or close
+third-person combat with charged spells, destructible terrain and creature parties.
+It opens a separate window; the Main Menu remains available after you exit.
+The ready screen starts with Fort versus Dragon and lets you choose Play or
+Spectate, a map and the parties before starting.
+
+From a source checkout, `cargo battle` opens that ready screen directly.
+Use `python3 tools/arena.py launch --map duel` for the original Shadow opponent.
+See the [arena controls and tuning guide](docs/systems/arena-encounters.md) for
+observer launch commands, enemy presets and controls. The tactical game described
+below retains its own rules and controls.
+
 ## Magic is geometry
 
 Every character and enemy is defined by a **lattice**: a finite grid of hexagonal
@@ -128,7 +142,8 @@ much of the larger design remain ahead. The exact boundary is recorded in the
 
 ### Play the current build
 
-The Main Menu exposes exactly **Campaign**, **Sandbox**, **Multiplayer**, **Tools**, and **Settings**.
+The Main Menu exposes **Campaign**, **Sandbox**, **Battle Mode**, **Multiplayer**,
+**Tools**, and **Settings**.
 Campaign contains exactly three indexed cards. An empty card starts the canonical
 Party Trial and binds that session to the selected slot; the card becomes occupied
 only after the first ordinary manual save. An occupied card shows its party and

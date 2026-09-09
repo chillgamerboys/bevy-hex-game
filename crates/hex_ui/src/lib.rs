@@ -256,6 +256,9 @@ mod structural_tests {
         MainMenuView {
             route,
             setup_failure: None,
+            battle_mode_available: false,
+            battle_running: false,
+            battle_launch_error: None,
             campaign_slots: vec![
                 CampaignSlotView {
                     slot: CampaignSlotId::One,
@@ -1085,6 +1088,9 @@ mod structural_tests {
                     world.insert_resource(MainMenuView {
                         route: MainMenuRoute::Campaign,
                         setup_failure: None,
+                        battle_mode_available: false,
+                        battle_running: false,
+                        battle_launch_error: None,
                         campaign_slots: CampaignSlotId::ALL
                             .into_iter()
                             .map(|slot| CampaignSlotView {

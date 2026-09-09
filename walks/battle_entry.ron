@@ -1,0 +1,19 @@
+// Static Main Menu evidence only: never click Battle Mode or launch a child.
+// Run with visual-walk + HEX_WALK_HEADLESS=1 for Bevy image-target captures.
+[
+    AwaitScreen("Title"),
+    AwaitButton("Battle Mode"),
+    SetViewport(width: 1920, height: 1080, device_scale: 1.0),
+    SetUiScale(Auto),
+    Settle(8),
+    ReviewCapture(name: "battle-entry-standard", task: MainMenu),
+
+    SetViewport(width: 1280, height: 720, device_scale: 1.0),
+    SetUiScale(Auto),
+    Settle(8),
+    ReviewCapture(name: "battle-entry-compact-auto", task: MainMenu),
+
+    SetUiScale(Percent200),
+    Settle(8),
+    ReviewCapture(name: "battle-entry-compact-200", task: MainMenu),
+]

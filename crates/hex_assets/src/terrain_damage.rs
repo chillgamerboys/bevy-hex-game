@@ -1,9 +1,8 @@
-//! World-owned elemental admission for voxel damage.
+//! World-owned elemental and physical admission for voxel damage.
 //!
 //! `assets/config/terrain_damage.ron` is intentionally a Boolean allow-list. Spell
-//! content announces an element and power; this table answers only whether that
-//! element may damage that material. Toughness and all mutation policy remain with
-//! the world.
+//! content announces a damage kind and power; this table answers whether that kind
+//! may damage the material. Toughness and all mutation policy remain with the world.
 
 use std::collections::BTreeSet;
 
@@ -38,12 +37,16 @@ pub struct TerrainDamagePair {
 pub struct TerrainDamageFile {
     /// Pairs that permit damage. Every absent pair resists.
     pub damaging_pairs: Vec<TerrainDamagePair>,
+    /// Materials that admit physical contact damage. Missing materials resist.
+    pub physical_substances: Vec<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnvalidatedTerrainDamageFile {
     damaging_pairs: Vec<TerrainDamagePair>,
+    #[serde(default)]
+    physical_substances: Vec<String>,
 }
 
 impl<'de> Deserialize<'de> for TerrainDamageFile {
@@ -54,6 +57,7 @@ impl<'de> Deserialize<'de> for TerrainDamageFile {
         let raw = UnvalidatedTerrainDamageFile::deserialize(deserializer)?;
         let file = Self {
             damaging_pairs: raw.damaging_pairs,
+            physical_substances: raw.physical_substances,
         };
         file.validate_duplicates().map_err(D::Error::custom)?;
         Ok(file)
@@ -71,6 +75,14 @@ impl TerrainDamageFile {
                 });
             }
         }
+        let mut physical = BTreeSet::new();
+        for substance in &self.physical_substances {
+            if !physical.insert(substance) {
+                return Err(TerrainDamageError::DuplicatePhysicalSubstance {
+                    substance: substance.clone(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -78,11 +90,16 @@ impl TerrainDamageFile {
         let mut pairs: Vec<_> = self.damaging_pairs.iter().collect();
         pairs.sort();
 
-        let mut encoder = FingerprintEncoder::new(b"hex-terrain-damage-file-v1");
+        let mut encoder = FingerprintEncoder::new(b"hex-terrain-damage-file-v2");
         encoder.usize(pairs.len());
         for pair in pairs {
             encoder.string(&pair.element);
             encoder.string(&pair.substance);
+        }
+        let physical: BTreeSet<_> = self.physical_substances.iter().collect();
+        encoder.usize(physical.len());
+        for substance in physical {
+            encoder.string(substance);
         }
         encoder.finish()
     }
@@ -91,6 +108,12 @@ impl TerrainDamageFile {
 /// Why a terrain-damage allow-list could not be resolved.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum TerrainDamageError {
+    /// Physical damage admission repeated the same material.
+    #[error("terrain damage lists physical substance '{substance}' more than once")]
+    DuplicatePhysicalSubstance {
+        /// Repeated material name.
+        substance: String,
+    },
     /// The raw allow-list repeated an exact stable-name pair.
     #[error(
         "terrain damage lists element '{element}' against substance '{substance}' more than once"
@@ -127,6 +150,8 @@ pub enum TerrainDamageError {
 pub struct TerrainDamageTable {
     #[reflect(ignore)]
     damaging_pairs: BTreeSet<(ElementId, SubstanceId)>,
+    #[reflect(ignore)]
+    physical_substances: BTreeSet<SubstanceId>,
     #[reflect(ignore)]
     source_file: Option<TerrainDamageFile>,
     source_file_fingerprint: u64,
@@ -176,9 +201,26 @@ impl TerrainDamageTable {
             }
         }
 
+        let mut physical_substances = BTreeSet::new();
+        for name in &file.physical_substances {
+            match substances.id(name) {
+                None => errors.push(TerrainDamageError::UnknownSubstance {
+                    substance: name.clone(),
+                }),
+                Some(substance) if substances.toughness(substance).is_none() => {
+                    errors.push(TerrainDamageError::IndestructibleSubstance {
+                        substance: name.clone(),
+                    });
+                }
+                Some(substance) => {
+                    physical_substances.insert(substance);
+                }
+            }
+        }
         if errors.is_empty() {
             Ok(Self {
                 damaging_pairs,
+                physical_substances,
                 source_file: Some(file.clone()),
                 source_file_fingerprint: file.semantic_fingerprint(),
                 source_elements: elements.source_fingerprint(),
@@ -204,6 +246,12 @@ impl TerrainDamageTable {
     #[must_use]
     pub fn damages(&self, element: ElementId, substance: SubstanceId) -> bool {
         self.damaging_pairs.contains(&(element, substance))
+    }
+
+    /// Whether this material admits physical contact damage.
+    #[must_use]
+    pub fn physical_damages(&self, substance: SubstanceId) -> bool {
+        self.physical_substances.contains(&substance)
     }
 
     /// Number of admitted element/material pairs.
@@ -405,6 +453,7 @@ mod tests {
 
     fn file(pairs: Vec<TerrainDamagePair>) -> TerrainDamageFile {
         TerrainDamageFile {
+            physical_substances: Vec::new(),
             damaging_pairs: pairs,
         }
     }
@@ -489,6 +538,50 @@ mod tests {
     }
 
     #[test]
+    fn physical_admission_is_explicit_validated_and_part_of_content_revision() {
+        let elements = elements();
+        let substances = substances();
+        let base = file(Vec::new());
+        let before =
+            TerrainDamageTable::build(&base, &elements, &substances).expect("empty policy");
+        let mut physical = base;
+        physical.physical_substances.push("stone".to_owned());
+        let after =
+            TerrainDamageTable::build(&physical, &elements, &substances).expect("physical policy");
+        let stone = substances.id("stone").expect("stone");
+        assert!(!before.physical_damages(stone));
+        assert!(after.physical_damages(stone));
+        assert!(!after.damages(elements.id("Fire").expect("Fire"), stone));
+        assert_ne!(before.source_revision(), after.source_revision());
+        physical.physical_substances.push("water".to_owned());
+        assert_eq!(
+            TerrainDamageTable::build(&physical, &elements, &substances)
+                .expect_err("water has no HP"),
+            vec![TerrainDamageError::IndestructibleSubstance {
+                substance: "water".to_owned()
+            }]
+        );
+        physical.physical_substances = vec!["missing-material".to_owned()];
+        assert_eq!(
+            TerrainDamageTable::build(&physical, &elements, &substances)
+                .expect_err("unknown physical material"),
+            vec![TerrainDamageError::UnknownSubstance {
+                substance: "missing-material".to_owned()
+            }]
+        );
+        let duplicate = ron::from_str::<TerrainDamageFile>(
+            r#"(damaging_pairs: [], physical_substances: ["stone", "stone"])"#,
+        );
+        assert!(duplicate
+            .expect_err("duplicate physical admission")
+            .to_string()
+            .contains("more than once"));
+        let legacy: TerrainDamageFile =
+            ron::from_str("(damaging_pairs: [])").expect("older elemental content");
+        assert!(legacy.physical_substances.is_empty());
+    }
+
+    #[test]
     fn unknown_and_indestructible_references_are_rejected() {
         let errors = TerrainDamageTable::build(
             &file(vec![
@@ -565,8 +658,10 @@ mod tests {
                 if substances.toughness(substance).is_some() {
                     expected += 1;
                     assert!(table.damages(element, substance));
+                    assert!(table.physical_damages(substance));
                 } else {
                     assert!(!table.damages(element, substance));
+                    assert!(!table.physical_damages(substance));
                 }
             }
         }

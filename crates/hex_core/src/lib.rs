@@ -10,6 +10,7 @@
 //! their common language belongs.
 
 pub mod app;
+pub mod arena;
 pub mod authored_occupancy;
 pub mod commands;
 pub mod config;
@@ -86,9 +87,9 @@ pub use terrain::{
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
 };
 pub use terrain_impact::{
-    is_terrain_toughness, DamagedVoxels, TerrainBatchId, TerrainImpact, TerrainImpactDisposition,
-    TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainSystems,
-    TerrainVoxelHealth, TerrainVoxelOutcome, MAX_TERRAIN_TOUGHNESS,
+    is_terrain_toughness, DamagedVoxels, TerrainBatchId, TerrainDamageKind, TerrainImpact,
+    TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult,
+    TerrainSystems, TerrainVoxelHealth, TerrainVoxelOutcome, MAX_TERRAIN_TOUGHNESS,
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};

@@ -62,6 +62,49 @@ impl TerrainDamageState {
         }
     }
 
+    /// Converts a pre-admitted bounded volume without increasing remaining HP.
+    /// All health transitions are staged before the first material write.
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn convert_to_dirt(
+        &mut self,
+        positions: &[TilePos],
+        map: &mut VoxelMap,
+        substances: &SubstanceTable,
+        dirt: hex_core::SubstanceId,
+        damaged: &mut DamagedVoxels,
+    ) -> Option<Vec<hex_core::arena::ArenaBurrowChange>> {
+        let dirt_maximum = substances.toughness(dirt)?;
+        let mut changes = Vec::new();
+        for &position in positions {
+            let before = map.get(position);
+            if before.is_air() || before == dirt {
+                continue;
+            }
+            let maximum = substances.toughness(before)?;
+            let remaining = self.remaining.get(&position).copied().unwrap_or(maximum);
+            let health_before = TerrainVoxelHealth::new(remaining.min(maximum), maximum)?;
+            let health_after =
+                TerrainVoxelHealth::new(health_before.remaining.min(dirt_maximum), dirt_maximum)?;
+            changes.push(hex_core::arena::ArenaBurrowChange {
+                position,
+                before,
+                health_before,
+                health_after,
+            });
+        }
+        for change in &changes {
+            map.set(change.position, dirt);
+            if change.health_after.is_damaged() {
+                self.remaining
+                    .insert(change.position, change.health_after.remaining);
+                damaged.publish(change.position, change.health_after);
+            } else {
+                self.forget_voxel(change.position, damaged);
+            }
+        }
+        Some(changes)
+    }
+
     /// Applies one already-admitted impact in its exact announced order.
     pub(crate) fn apply(
         &mut self,
@@ -99,7 +142,14 @@ impl TerrainDamageState {
                 });
                 let admitted = substances.is_diggable(substance)
                     && maximum.is_some()
-                    && damage_table.damages(impact.element, substance)
+                    && match impact.kind {
+                        hex_core::TerrainDamageKind::Elemental(element) => {
+                            damage_table.damages(element, substance)
+                        }
+                        hex_core::TerrainDamageKind::Physical => {
+                            damage_table.physical_damages(substance)
+                        }
+                    }
                     && !is_protected(position);
 
                 if !admitted {

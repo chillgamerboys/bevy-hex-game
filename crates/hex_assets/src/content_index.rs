@@ -793,11 +793,13 @@ mod tests {
         let elements = elements();
         let substances = substances();
         let empty_file = TerrainDamageFile {
+            physical_substances: Vec::new(),
             damaging_pairs: Vec::new(),
         };
         let empty = TerrainDamageTable::from_file(&empty_file, &elements, &substances)
             .expect("the empty matrix should resolve");
         let changed_file = TerrainDamageFile {
+            physical_substances: Vec::new(),
             damaging_pairs: vec![TerrainDamagePair {
                 element: "Fire".to_owned(),
                 substance: "stone".to_owned(),

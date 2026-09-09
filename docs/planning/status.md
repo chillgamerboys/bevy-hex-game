@@ -9,6 +9,44 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Spell Combat Arena — experimental PR candidate, 2026-09-08.** The user playtested
+and accepted the stronger Shadow opponent at `127d1ce`. The
+[encounter wave](waves/arena-encounters/manifest.md) and
+[bestiary continuation](waves/arena-bestiary/manifest.md) now implement all seven
+enemy profiles, Fort/Seven Regions encounters and Fort/Duel spectator battles.
+All 29 combined checks passed at `25fa64d`, including 271 arena gameplay tests,
+82 arena application tests, eleven actual-world battle tests, strict workspace
+lint, documentation and the shipping build. That checkpoint predates the subsequent
+Duel-party selection and Main Menu follow-ups; it is not validation of those changes.
+Golem, Wisp and Worm have scoped static reviews; Seven Regions sustained all ten
+enemies with measured terrain destruction. Machine calibration and known movement,
+balance and performance limits are recorded in the
+[validation report](../systems/arena-bestiary-validation.md).
+The current branch adds all seven player enemy-party choices on Duel and a
+**Battle Mode** Main Menu entry. `arena-prototype` is enabled by default in
+`hex_game`; `--no-default-features` opts out. The menu supervises an isolated native
+child and restores the menu on exit. macOS and Windows hide the parent while it
+runs; Linux retains the visible parent with menu actions disabled. Both the button
+and `cargo battle` start at the Fort/Dragon ready screen, with Play/Spectate, map and
+party selection. These launch changes preserve tactical and arena authority boundaries.
+The button passed focused checks and a three-frame independent static review at
+`216b969`; native window interaction awaits playtest. The current follow-up also
+strengthens Wisp cover pressure, Dragon approaches, Goblin swarms, Shaman support,
+Golem tracking fire and buried Worm pursuit. Goblin parties now contain ten,
+Shamans have five escorts, and Seven Regions has 17 enemies. Terminal outcomes
+open the combat menu automatically. Local tests, strict lint and native captures
+are complete; scoped static limits and pending final CI are recorded in the
+[pressure validation record](waves/arena-bestiary/creature-pressure-validation.md).
+[PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) carries the
+combined `experiment/spell-combat-arena` implementation to `dev`. The user authorized
+immediate merge after a small Goblin pursuit fix and basic testing.
+The latest playtest reports Worm nonresponse and Golems failing to clear chase
+obstacles; both remain unresolved and explicitly deferred. Goblins now pursue
+spotted targets beyond the Shaman tether and keep chasing visible targets beyond
+home range. The final small change has focused test coverage; broader repeat
+validation and final-head human playtest are waived by the user for this delivery. See the
+[controls guide](../systems/arena-encounters.md). Multiplayer and Grand V3 are deferred.
+
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)
 established the biome delivery ledger, [PR #216](https://github.com/chillgamerboys/bevy-hex-game/pull/216)
 restored the locked dependency graph and 45-minute macOS shipping budget,

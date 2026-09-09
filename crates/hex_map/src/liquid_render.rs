@@ -170,6 +170,15 @@ pub(crate) fn plugin(app: &mut App) {
         );
 }
 
+/// Standalone arena presentation has no tactical `Screen::Gameplay` lifecycle.
+#[cfg(feature = "arena-prototype")]
+pub(crate) fn arena_plugin(app: &mut App) {
+    app.add_plugins(MaterialPlugin::<LiquidMaterial>::default())
+        .init_resource::<LiquidVisualTime>()
+        .register_type::<LiquidVisualTime>()
+        .add_systems(Update, advance_liquid_visual_time);
+}
+
 /// Removes presentation material ownership during map teardown.
 pub(crate) fn clear_material_cache(commands: &mut Commands) {
     commands.remove_resource::<LiquidMaterialHandles>();

@@ -7,7 +7,7 @@ use std::fmt;
 /// Renderer-free route within the Main Menu screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MainMenuRoute {
-    /// Five-action Main Menu root.
+    /// Main Menu root; runtime capabilities determine the available actions.
     #[default]
     Root,
     /// Exactly three Campaign slots.

@@ -323,13 +323,25 @@ map applies it. Elemental damage uses the separate live `TerrainImpact` announce
 so gameplay publishes exact affected voxels and authored power while the world decides
 how each material responds.
 
+The isolated arena additionally accepts `ArenaBurrowRequest` for bounded Worm
+conversion, as defined in the [arena burrow contract](../planning/waves/arena-bestiary/maps/burrow-seam.md).
+After ordinary edits and impacts, it atomically validates up to64 canonical cells
+and converts admitted non-dirt solids to dirt with remaining HP capped at dirt's
+maximum. Air and existing dirt stay unchanged. Source-correlated outcomes and
+dirty columns publish before gameplay may recheck movement. Protected, liquid and
+all authored-object occupancy reject a proposal. This arena-only path does not
+change ordinary direct-edit or damage behavior.
+
 ### Toughness and destruction — map side live
 
-The gameplay contract announces `TerrainImpact { batch, volume, element, power }`; it
+The gameplay contract announces `TerrainImpact { batch, volume, kind, power }`; it
 never sends a material outcome. Its runtime publisher is live. The exact volume is
 nonempty, sorted, and deduplicated. The map resolves each voxel against the world-owned
 Boolean allow-list in
-`terrain_damage.ron`, subtracts `power` directly from remaining health, and returns an
+`terrain_damage.ron`: `Elemental(ElementId)` uses `damaging_pairs`, while `Physical`
+uses the explicit `physical_substances` list. Older files omit that list and therefore
+admit no physical damage. Physical contact is not an extra magic element. The resolver
+subtracts `power` directly from remaining health and returns an
 applied or rejected `TerrainImpactOutcome` as specified by
 [boundary G/H](../planning/boundary.md).
 
@@ -338,7 +350,7 @@ Initial maximum health is deliberately coarse:
 | HP | Materials |
 |---:|---|
 | 1 | grass, snow |
-| 2 | dirt, gravel, ice |
+| 2 | dirt, gravel, ice, sand |
 | 4 | stone, basalt |
 | 8 | worked stone, metal |
 | none | air, water, lava, bedrock |
@@ -429,3 +441,34 @@ pending cast; those deterministic policies belong to gameplay and are pinned in
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.
+
+
+### Isolated arena world adapter
+
+The isolated `arena-prototype` adapter, enabled by default through `hex_game`, uses
+the accepted Duel recipe, Fort seed
+`640367719`, and Seven Regions seed `703700113`. Real maps run the same validated V3
+builders as the ordinary scenario pipeline. They keep their original `TilePos` storage
+identities: the arena geometry's vertical offset is one level for these maps, so their
+upper voxel face is `(level + 1) * level_height`. Duel retains its accepted zero offset.
+
+World publication commits `ArenaSelection`, exact world-space anchors, solid material
+runs, static authored-object query spans, nonsolid liquid volumes, and inclusive edit
+protection intervals. `ArenaTerrainView` is complete after `ApplyTerrain` and before
+`Simulate`; its dirty column set describes that revision, and `full_rebuild` marks map
+switches and resets. Solid publication replaces only changed column ranges. Reset
+restores the selected pristine map snapshot and clears all partial HP and batch ledgers.
+
+Trees use woody cells for body collision, and opaque/cutout cells for projectile and
+sight obstruction. Opaque crystal cells also collide. Grass and moss remain nonblocking
+presentation. These exact static facts are published independently of renderer entities;
+the authored `ObjectInstance` producers and accepted art catalog supply their visuals.
+Objects remain indestructible, with conservative tree support, source-light column,
+and exact occupied-cell edit protection. Authored liquid topology retains its ordinary
+protected edit columns because live flow regeneration is not implemented.
+
+Water remains nonsolid and has no terrain health. Actors may walk on submerged solid
+beds; there is no swimming, drowning, or water recovery teleport. Encounter placement
+and required routes use dry ground. Liquid cap/flow meshes use the ordinary map-owned
+renderer through standalone arena registration. Local destruction removes unsupported
+nonblocking decorations without recreating unaffected object or liquid presentations.

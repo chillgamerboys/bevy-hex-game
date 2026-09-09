@@ -422,7 +422,7 @@ pub(super) fn apply(
         impacts.push(TerrainImpact {
             batch,
             volume: effect_volume.clone(),
-            element,
+            kind: hex_core::TerrainDamageKind::Elemental(element),
             power: *power,
         });
     }
