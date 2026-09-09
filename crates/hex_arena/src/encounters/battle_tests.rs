@@ -148,7 +148,12 @@ fn accepted_setup_and_observer_input_do_not_control_monster_zero() {
 fn team_result_waits_for_all_members_and_distinguishes_draw_from_timeout() {
     let (mut session, world, geometry, materials, tuning) =
         battle(BattlePreset::Shadow, BattlePreset::Goblins);
-    for actor in session.actors.iter_mut().filter(|a| a.team == 42).take(4) {
+    for actor in session
+        .actors
+        .iter_mut()
+        .filter(|a| a.team == 42)
+        .take(BattlePreset::Goblins.members().len() - 1)
+    {
         actor.hp = 0.0;
     }
     ticks(&mut session, 1, &world, geometry, materials, &tuning);
@@ -238,13 +243,24 @@ fn accepted_seed_replays_brains_and_reset_removes_previous_battle_effects() {
 fn released_projectile_and_impact_cue_keep_source_team_after_owner_removal() {
     let (mut session, world, geometry, materials, tuning) =
         battle(BattlePreset::Goblins, BattlePreset::Shadow);
+    let hostile_id = session
+        .actors
+        .iter()
+        .find(|actor| actor.team == 42)
+        .expect("hostile team")
+        .id;
     for actor in &mut session.actors {
         actor.feet.z += 14.0;
         actor.previous_feet = actor.feet;
     }
     pose(&mut session, 0, Vec3::new(-5.0, 0.0, 0.0), Vec3::X);
     pose(&mut session, 1, Vec3::new(-2.0, 0.0, 0.0), Vec3::X);
-    pose(&mut session, 5, Vec3::new(2.0, 0.0, 0.0), Vec3::NEG_X);
+    pose(
+        &mut session,
+        hostile_id,
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::NEG_X,
+    );
     let mut out = CommandsOut::default();
     session.release(
         0,
@@ -269,7 +285,7 @@ fn released_projectile_and_impact_cue_keep_source_team_after_owner_removal() {
         session
             .actors
             .iter()
-            .find(|a| a.id == 5)
+            .find(|a| a.id == hostile_id)
             .expect("hostile")
             .hp
             < 100.0
@@ -439,8 +455,14 @@ fn battle_cues_are_frozen_hostile_events_shared_only_with_the_hearing_party() {
 fn goblin_attacks_the_reachable_front_of_a_long_dragon_body() {
     let (mut session, world, geometry, materials, tuning) =
         battle(BattlePreset::Goblins, BattlePreset::Dragon);
+    let hostile_id = session
+        .actors
+        .iter()
+        .find(|actor| actor.team == 42)
+        .expect("hostile team")
+        .id;
     pose(&mut session, 0, Vec3::new(-2.1, 0.0, 0.0), Vec3::X);
-    pose(&mut session, 5, Vec3::ZERO, Vec3::NEG_X);
+    pose(&mut session, hostile_id, Vec3::ZERO, Vec3::NEG_X);
     session.encounter.brains.retain(|id, _| *id == 0);
     let goblin = session.actors.first().expect("goblin");
     let party = session.encounter.runtime.first().expect("party");
@@ -468,7 +490,7 @@ fn goblin_attacks_the_reachable_front_of_a_long_dragon_body() {
         session
             .actors
             .iter()
-            .find(|a| a.id == 5)
+            .find(|a| a.id == hostile_id)
             .expect("long target")
             .hp
             < tuning.encounters.dragon_hp
