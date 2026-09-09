@@ -782,3 +782,41 @@ whitespace checked again. One combined draft PR targets `dev`; cross-platform CI
 and exact-head human acceptance remain separate from the recorded local results.
 Linear could not be inspected because reauthentication is required; no arena
 ticket is unambiguously linked, so no ticket updates are proposed.
+
+## Selectable player parties on Duel — 2026-09-08
+
+Implementation `d2b654c`, with test-observation corrections at
+`dc24bce4cb6676fa9fba046ad59d46b9c3b975f6`, adds the seven Fort choices to Duel.
+The original Shadow loop remains the default, including its no-regeneration rule;
+all custom Duel parties also disable human regeneration. Fort/Duel switches and
+restart preserve the selected party. Seven Regions retains its fixed encounters.
+No creature tuning, movement, world generation or attack behavior changed.
+
+Focused verification passes **275 gameplay tests**, **84 arena application tests**
+(two optional evaluations ignored), **14 actual-world battle tests** (one local
+calibration ignored), and **34 Python tool tests**. This includes all seven actual
+rosters, full-body spawn admission, observed offensive actions, partial-party
+victory, terminal freeze, terrain/body reset, selection guards and the original
+Shadow fixtures. Test oracles use ordinary creature sight snapshots and the lone
+Worm's party sight record; optional debug target IDs are not assumed mandatory.
+
+Strict Clippy passes for `hex_arena` and `hex_game`, all targets with
+`dev,arena-prototype,test-support`, with warnings denied; the corrected integration
+test also passes a fresh strict check. Formatting, tracked Markdown links and
+terminology checks pass. The native `dev,arena-prototype` build passes. Logs are
+under task output `outputs/duel-party-selection-2026-09-08/`. The earlier full
+workspace 29-check result remains evidence at `25fa64d`; this bounded follow-up
+does not claim a new full workspace or release gate.
+
+Seven fresh, clean-source 1600×900 windowless captures at `dc24bce` cover Shaman
+party start/first/third/whole-map views, Shadow and Worm selection, and Seven
+Regions' fixed-party explanation. The full-resolution frames, hashes, receipts,
+contact sheet and coordinator review are retained under
+`.context/visual-walks/duel-party-selection-2026-09-08/`. Coordinator inspection
+passes the changed menu/HUD surfaces, opaque cover and whole-map framing.
+Independent full-resolution and contact-sheet review also passes all seven
+frames, verifying 21 PNG/state/log hashes and four unchanged source packs;
+its notes are in the same task-output directory as the focused test logs.
+Stills do not establish native motion, input feel or balance. The requested native
+Duel launch reaches the ready screen through Cargo with no initial asset errors;
+human playtesting remains the control-feel check.
