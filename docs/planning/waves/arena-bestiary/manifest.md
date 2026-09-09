@@ -414,3 +414,10 @@ All lanes are integrated additively into this same candidate; no new PR or world
 mutation API was introduced. See the [current validation record](creature-pressure-validation.md)
 for exact evidence and remaining playtest limitations. Historical balance scores
 and ten-enemy load receipts do not describe the expanded 17-enemy roster.
+
+The delivery source checkpoint `9aa3e0c` includes the final Swipe capture-camera
+repair; ordinary gameplay is unchanged from `217102c`. Local libraries, actual-map
+checks, strict workspace lint and native builds pass. All 10,440 post-warmup native
+workload ticks fit the simulation budget, with separate headless/bootstrap spikes
+retained in the report. Static review records scoped passes and close-view limits.
+Final remote CI and human motion/balance remain pending; the PR stays draft.

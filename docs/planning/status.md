@@ -34,7 +34,8 @@ The button passed focused checks and a three-frame independent static review at
 strengthens Wisp cover pressure, Dragon approaches, Goblin swarms, Shaman support,
 Golem tracking fire and buried Worm pursuit. Goblin parties now contain ten,
 Shamans have five escorts, and Seven Regions has 17 enemies. Terminal outcomes
-open the combat menu automatically. Combined checks are tracked in the
+open the combat menu automatically. Local tests, strict lint and native captures
+are complete; scoped static limits and pending final CI are recorded in the
 [pressure validation record](waves/arena-bestiary/creature-pressure-validation.md).
 [Draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) carries the
 combined `experiment/spell-combat-arena` candidate to `dev`; it has not merged.
