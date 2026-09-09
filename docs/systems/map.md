@@ -323,7 +323,7 @@ map applies it. Elemental damage uses the separate live `TerrainImpact` announce
 so gameplay publishes exact affected voxels and authored power while the world decides
 how each material responds.
 
-The default-off arena additionally accepts `ArenaBurrowRequest` for bounded Worm
+The isolated arena additionally accepts `ArenaBurrowRequest` for bounded Worm
 conversion, as defined in the [arena burrow contract](../planning/waves/arena-bestiary/maps/burrow-seam.md).
 After ordinary edits and impacts, it atomically validates up to64 canonical cells
 and converts admitted non-dirt solids to dirt with remaining HP capped at dirt's
@@ -445,7 +445,8 @@ pending cast; those deterministic policies belong to gameplay and are pinned in
 
 ### Isolated arena world adapter
 
-The default-off `arena-prototype` adapter uses the accepted Duel recipe, Fort seed
+The isolated `arena-prototype` adapter, enabled by default through `hex_game`, uses
+the accepted Duel recipe, Fort seed
 `640367719`, and Seven Regions seed `703700113`. Real maps run the same validated V3
 builders as the ordinary scenario pipeline. They keep their original `TilePos` storage
 identities: the arena geometry's vertical offset is one level for these maps, so their

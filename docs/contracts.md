@@ -11,7 +11,7 @@ something reserved for later, or something still being asked for?*
 | Status | Meaning |
 |---|---|
 | **live** | Published and consumed in the shipped build |
-| **experimental** | Implemented in a default-off experiment; its linked manifest records validation and playtest status, and no `dev` delivery is claimed |
+| **experimental** | Implemented in a scoped experiment; its linked manifest records feature defaults, validation, playtest and delivery status. This label alone makes no `dev`-delivery claim |
 | **partial** | One side is live, while the row names the required producer or consumer still pending |
 | **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
 | **reserved** | Shared vocabulary and/or ordering is defined for later use; no runtime producer or consumer is live |
@@ -129,10 +129,20 @@ signals.
 
 ## Isolated spell arena
 
-These contracts apply only to the local `arena-prototype` / `--arena` application.
-It installs no tactical authority or networking plugins. See the
-[arena manifest](planning/waves/spell-combat-arena/manifest.md) for the experiment's
-locked behavior and ownership.
+These contracts apply only to the isolated `--arena` application. Its
+`arena-prototype` feature is enabled by default in `hex_game`, with
+`--no-default-features` as the opt-out. Main Menu **Battle Mode** supervises a
+`current_exe --arena` child with the inherited asset root. On macOS and Windows it
+hides the parent window and suspends its cameras until child exit; Linux retains
+the visible parent with menu actions disabled. Child exit restores the menu. The launch
+defaults to Fort/Dragon at the ready screen; `cargo battle` enters the same
+application directly. Compiling or launching this capability installs no tactical
+authority or networking plugins inside the arena. The button and process
+lifecycle are integration concerns and change no world or gameplay contracts.
+See the [arena manifest](planning/waves/spell-combat-arena/manifest.md) for the
+original locked behavior and the
+[bestiary manifest](planning/waves/arena-bestiary/manifest.md) for the current
+continuation, ownership and unmerged PR status.
 
 | Contract | Publisher | Consumer | Status |
 |---|---|---|---|

@@ -1,14 +1,33 @@
 # Arena encounters: controls and tuning
 
-This local experiment puts continuous spell combat on Fort and Seven Regions.
+Battle Mode puts continuous spell combat on Fort and Seven Regions.
 Duel also offers selectable enemy parties; choosing Shadow retains the reference
 fight against the accepted bot. It does not use tactical turns, lattices or multiplayer.
 
 ## Start and controls
 
-Run the local launcher from the repository:
+Choose **Battle Mode** on the ordinary Main Menu. It opens an isolated native
+arena window, leaving the Main Menu available after you exit. On macOS and Windows
+the Main Menu hides while the battle window is open; on Linux it remains visible
+with its actions disabled. The ready screen offers **PLAY** and **SPECTATE BATTLE**,
+map selection and party selection.
+
+From a source checkout, open the same Fort-versus-Dragon ready screen directly:
+
+    cargo battle
+
+The configurable launcher has the same default:
 
     python3 tools/arena.py launch
+
+For the original Shadow duel:
+
+    python3 tools/arena.py launch --map duel
+
+Run source builds through Cargo or this helper so the repository asset root is
+applied. Check initial output for asset errors before calling a launch successful;
+`Path not found` means the launch failed. The helper honors `CARGO_TARGET_DIR` and
+also accepts an absolute `--target-dir` when a particular build cache is needed.
 
 Choose a map on the start screen. Fort defaults to a Dragon encounter and also
 offers five Goblins, a Shaman with three Goblins, one Shadow, a Golem, four Ember Wisps, or a Worm.

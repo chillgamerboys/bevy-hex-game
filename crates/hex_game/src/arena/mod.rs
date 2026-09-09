@@ -1,4 +1,4 @@
-//! Native, default-off composition for the isolated spell-combat experiment.
+//! Native composition for isolated Battle Mode, launched through the menu or `--arena`.
 
 mod encounter;
 #[cfg(feature = "test-support")]
@@ -507,7 +507,9 @@ fn setup(
         ),
         player_pieces: [default(), default()],
     });
-    let config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/arena.ron");
+    // Use the same runtime asset root as meshes and fonts, including packaged games.
+    let config =
+        bevy::asset::io::file::FileAssetReader::get_base_path().join("assets/config/arena.ron");
     state.capture_wisp_config_loaded = match std::fs::read_to_string(&config)
         .map_err(|error| error.to_string())
         .and_then(|source| ron::from_str::<ArenaTuning>(&source).map_err(|error| error.to_string()))

@@ -34,12 +34,22 @@ fn publish_view(
     lattices: Option<Res<LatticeLibrary>>,
     elements: Option<Res<ElementCatalog>>,
     failure: Option<Res<GameplaySetupFailure>>,
+    #[cfg(feature = "arena-prototype")] battle: Option<Res<crate::battle_launcher::BattleLauncher>>,
     mut view: ResMut<MainMenuView>,
 ) {
+    #[cfg(feature = "arena-prototype")]
+    let (battle_running, battle_launch_error) = battle.as_deref().map_or((false, None), |battle| {
+        (battle.running(), battle.error().map(str::to_owned))
+    });
+    #[cfg(not(feature = "arena-prototype"))]
+    let (battle_running, battle_launch_error) = (false, None);
     let next = MainMenuView {
         route: model.route,
         setup_failure: failure.as_deref().map(|failure| failure.reason.clone()),
         campaign_slots: campaigns.slot_views(lattices.as_deref(), elements.as_deref()),
+        battle_mode_available: cfg!(feature = "arena-prototype"),
+        battle_running,
+        battle_launch_error,
     };
     if *view != next {
         *view = next;
@@ -51,12 +61,27 @@ fn handle_intents(
     mut model: ResMut<MainMenuModel>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
+    #[cfg(feature = "arena-prototype")] battle: Option<Res<crate::battle_launcher::BattleLauncher>>,
 ) {
+    #[cfg(feature = "arena-prototype")]
+    if battle.as_deref().is_some_and(|battle| battle.running()) {
+        intents.clear();
+        return;
+    }
     for intent in intents.read() {
         let UiIntent::MainMenu(intent) = intent else {
             continue;
         };
         match intent {
+            MainMenuIntent::OpenBattleMode => {
+                #[cfg(feature = "arena-prototype")]
+                if model.route == MainMenuRoute::Root && battle.is_some() {
+                    commands.insert_resource(crate::battle_launcher::BattleLaunchRequest);
+                    // A failed spawn must not replay another queued menu click.
+                    intents.clear();
+                    break;
+                }
+            }
             MainMenuIntent::OpenCampaign => model.show(MainMenuRoute::Campaign),
             MainMenuIntent::OpenMultiplayer => {
                 model.show(MainMenuRoute::Multiplayer);
@@ -99,7 +124,12 @@ fn handle_input(
     bindings: Res<InputBindings>,
     mut model: ResMut<MainMenuModel>,
     mut exit: MessageWriter<AppExit>,
+    #[cfg(feature = "arena-prototype")] battle: Option<Res<crate::battle_launcher::BattleLauncher>>,
 ) {
+    #[cfg(feature = "arena-prototype")]
+    if battle.as_deref().is_some_and(|battle| battle.running()) {
+        return;
+    }
     if !bindings.just_pressed(&keys, InputAction::Cancel) {
         return;
     }
@@ -117,18 +147,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn root_has_exactly_the_five_product_routes() {
-        let routes = [
-            MainMenuIntent::OpenCampaign,
-            MainMenuIntent::OpenSandbox,
-            MainMenuIntent::OpenMultiplayer,
-            MainMenuIntent::OpenTools,
-            MainMenuIntent::OpenSettings,
-        ];
-        assert_eq!(routes.len(), 5);
-    }
-
     fn navigation_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
@@ -137,6 +155,64 @@ mod tests {
             .add_message::<UiIntent>()
             .add_systems(Update, handle_intents);
         app
+    }
+
+    #[cfg(feature = "arena-prototype")]
+    #[test]
+    fn battle_request_is_root_only_and_keeps_the_parent_at_title() {
+        let mut app = navigation_app();
+        app.init_resource::<crate::battle_launcher::BattleLauncher>();
+        app.world_mut()
+            .resource_mut::<MainMenuModel>()
+            .show(MainMenuRoute::Tools);
+        app.world_mut()
+            .write_message(UiIntent::MainMenu(MainMenuIntent::OpenBattleMode));
+        app.update();
+        assert!(!app
+            .world()
+            .contains_resource::<crate::battle_launcher::BattleLaunchRequest>());
+
+        app.world_mut()
+            .resource_mut::<MainMenuModel>()
+            .show(MainMenuRoute::Root);
+        app.world_mut()
+            .write_message(UiIntent::MainMenu(MainMenuIntent::OpenBattleMode));
+        app.world_mut()
+            .write_message(UiIntent::MainMenu(MainMenuIntent::OpenSandbox));
+        app.update();
+        app.update();
+        assert!(app
+            .world()
+            .contains_resource::<crate::battle_launcher::BattleLaunchRequest>());
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Root
+        );
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+    }
+
+    #[test]
+    fn unavailable_battle_request_does_not_navigate() {
+        let mut app = navigation_app();
+        app.world_mut()
+            .write_message(UiIntent::MainMenu(MainMenuIntent::OpenBattleMode));
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Root
+        );
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        #[cfg(feature = "arena-prototype")]
+        assert!(!app
+            .world()
+            .contains_resource::<crate::battle_launcher::BattleLaunchRequest>());
     }
 
     #[test]
@@ -169,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn multiplayer_route_uses_the_fifth_root_action_and_its_own_screen() {
+    fn multiplayer_route_uses_its_own_screen() {
         let mut app = navigation_app();
         app.world_mut()
             .write_message(UiIntent::MainMenu(MainMenuIntent::OpenMultiplayer));

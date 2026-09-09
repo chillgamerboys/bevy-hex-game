@@ -12,7 +12,7 @@ hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, contro
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
 {bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
 {Bevy, hex_core, hex_assets, hex_gameplay_model} → hex_ui → hex_game  (runtime presentation)
-hex_core → hex_arena → hex_game  (default-off local arena experiment)
+hex_core → hex_arena → hex_game  (isolated Battle Mode, compiled by default)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -39,7 +39,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
-| `hex_arena` | Continuous actors, HP, cooldowns, ballistic spells, collision queries, and disposable bot for the isolated arena experiment | `hex_core`, Bevy app/ECS/math sub-crates, serialization support; no renderer or private map implementation | gameplay |
+| `hex_arena` | Continuous actors, HP, cooldowns, ballistic spells, collision queries, observed-target bots, creature parties and spectator battles | `hex_core`, Bevy app/ECS/math sub-crates, serialization support; no renderer or private map implementation | gameplay |
 | `hex_gameplay_model` | Pure Main Menu, Campaign, Sandbox, Multiplayer, and Creator routes; bounded slot/seat identities; draft edits; launch blockers; and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
 | `hex_ui` | Runtime UI rendering, immutable presentation models, typed UI intentions, responsive scale, semantic styling, focus/accessibility, and presentation-only observations | Bevy, `hex_core`, `hex_assets`, `hex_gameplay_model`; never gameplay/world implementations | shared presentation |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
@@ -144,13 +144,25 @@ graph; tests and visual review protect the component contract.
 
 ### The spell arena has an isolated authority
 
-The default-off `arena-prototype` feature and explicit `--arena` argument compose a
-separate native application in `hex_game`. It installs the arena world producer and
-`hex_arena` simulation without tactical gameplay, perception, or networking plugins.
-This is an implemented experiment on `experiment/spell-combat-arena`; combined
-automated validation passed at `25fa64d`, while final human playtesting remains
-pending. A draft PR is authorized; it has not landed on `dev`. Its decisions and
-ownership are recorded in the [arena manifest](planning/waves/spell-combat-arena/manifest.md).
+The `arena-prototype` feature is enabled by default in `hex_game`;
+`--no-default-features` opts out. The explicit `--arena` argument composes a
+separate native application with the arena world producer and `hex_arena`
+simulation, without tactical gameplay, perception or networking plugins.
+The Main Menu's **Battle Mode** button supervises a `current_exe --arena` child,
+preserving the asset root inherited from the Cargo-launched parent. On macOS and
+Windows it hides the parent window and suspends its cameras until child exit;
+Linux keeps the parent visible with menu actions disabled because Wayland cannot
+hide the window. Child exit restores the menu. Duplicate launches are refused;
+failures return to the menu.
+The child starts at the Fort/Dragon ready screen with Play/Spectate, map and party
+selection. `cargo battle` opens this same isolated application directly.
+
+This remains an experimental PR candidate on `experiment/spell-combat-arena`.
+[Draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) targets
+`dev` and has not merged. The `25fa64d` combined validation checkpoint predates
+the Duel-party and Main Menu follow-ups; their ownership and validation status are
+recorded in the [bestiary manifest](planning/waves/arena-bestiary/manifest.md).
+Human motion and balance acceptance remain separate from automated validation.
 
 World-owned `hex_map::arena` publishes `hex_core::arena` geometry and map selection,
 complete solid-voxel occupancy, compact column runs and dirty-column revisions,
@@ -169,8 +181,9 @@ and checks the current complete swept body before moving through dirt. Finite
 ordinary, large-body and elongated deployment pockets remain world-published facts.
 
 `hex_arena` owns actor movement, projectile sweeps, HP, cooldowns, explosions, temporary attack barriers, timed support and
-party decisions. The accepted Duel bot stays separate from authored-map party
-activation and creature policies. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
+party decisions. Duel's Shadow selection retains the accepted bot; other Duel
+parties and authored-map encounters use the existing creature policies and
+activation rules. Native input submits `ActorIntent`; presentation reads `ArenaSession` and
 the terrain projection. `ActorIntent` is the intended ingress seam for a future
 network adapter, not an implemented wire protocol or authorization layer. Captures
 and camera transforms carry no gameplay authority.

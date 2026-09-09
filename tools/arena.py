@@ -22,10 +22,22 @@ from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TARGET = Path(
+LOCAL_TARGET = Path(
     "/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/"
     "work/cargo-target-explore"
 )
+
+
+def default_target() -> Path:
+    """Honor the operator's cache; reuse the retained local cache only if present."""
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    if configured:
+        path = Path(configured).expanduser()
+        return path.resolve() if path.is_absolute() else (ROOT / path).resolve()
+    return LOCAL_TARGET if LOCAL_TARGET.is_dir() else ROOT / "target"
+
+
+DEFAULT_TARGET = default_target()
 VIEWS = (
     "overview", "first", "third", "rear", "shield", "fireball", "blast", "tuning",
     "shield-compact", "shield-large", "fireball-compact", "fireball-large",

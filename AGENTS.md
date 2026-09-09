@@ -20,6 +20,17 @@ Bevy `Path not found` asset error as a failed launch, stop that process, and rel
 through Cargo. Packaged standalone builds are the exception because their release
 workflow deliberately stages `assets/` beside the executable.
 
+### Battle Mode
+
+The ordinary Main Menu includes **Battle Mode**. It opens the isolated native
+arena; exiting it leaves the Main Menu available. For a direct source launch use
+`cargo battle` (Fort versus Dragon, paused at the ready screen). Choose Play or
+Spectate, map and parties there. To reproduce the original Shadow duel, use
+`python3 tools/arena.py launch --map duel`; observer launches add `--spectator`
+and `--team-a` / `--team-b`. The helper launches through Cargo too; apply the asset
+log check above. Commands, controls and presets are in
+[the arena guide](docs/systems/arena-encounters.md).
+
 ## Plan the integration shape first
 
 Before splitting one outcome across branches, agents, or PRs, use

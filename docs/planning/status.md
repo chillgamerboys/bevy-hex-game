@@ -16,14 +16,23 @@ and accepted the stronger Shadow opponent at `127d1ce`. The
 enemy profiles, Fort/Seven Regions encounters and Fort/Duel spectator battles.
 All 29 combined checks passed at `25fa64d`, including 271 arena gameplay tests,
 82 arena application tests, eleven actual-world battle tests, strict workspace
-lint, documentation and the shipping build. Later changes are documentation only.
+lint, documentation and the shipping build. That checkpoint predates the subsequent
+Duel-party selection and Main Menu follow-ups; it is not validation of those changes.
 Golem, Wisp and Worm have scoped static reviews; Seven Regions sustained all ten
 enemies with measured terrain destruction. Machine calibration and known movement,
 balance and performance limits are recorded in the
 [validation report](../systems/arena-bestiary-validation.md).
-The user authorized one combined draft PR from `experiment/spell-combat-arena`
-to `dev`; no merge or default-mode integration is claimed. Human motion, controls
-and balance on the final candidate remain pending. See the
+The current branch adds all seven player enemy-party choices on Duel and a
+**Battle Mode** Main Menu entry. `arena-prototype` is enabled by default in
+`hex_game`; `--no-default-features` opts out. The menu supervises an isolated native
+child and restores the menu on exit. macOS and Windows hide the parent while it
+runs; Linux retains the visible parent with menu actions disabled. Both the button
+and `cargo battle` start at the Fort/Dragon ready screen, with Play/Spectate, map and
+party selection. These launch changes preserve tactical and arena authority boundaries.
+Their final checks are tracked in the bestiary manifest.
+[Draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221) carries the
+combined `experiment/spell-combat-arena` candidate to `dev`; it has not merged.
+Human motion, controls and balance on the final candidate remain pending. See the
 [controls guide](../systems/arena-encounters.md). Multiplayer and Grand V3 are deferred.
 
 Catch-up enablers are now delivered to `dev`: [PR #214](https://github.com/chillgamerboys/bevy-hex-game/pull/214)

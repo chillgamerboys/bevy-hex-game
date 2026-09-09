@@ -44,10 +44,10 @@ hex_test_support = { workspace = true }
 hex_test_app = { workspace = true }
 
 [features]
-# Empty by default so `cargo build --release` ships without the inspector. Use
-# `cargo dev` (aliased in .cargo/config.toml) for a build with dev tooling.
-default = []
-# Local real-time spell arena; no tactical or network plugins installed by --arena.
+# Battle Mode is available in ordinary builds; the inspector remains opt-in.
+# Use `cargo dev` (aliased in .cargo/config.toml) for development tooling.
+default = ["arena-prototype"]
+# Isolated real-time combat; no tactical or network plugins installed by --arena.
 arena-prototype = ["dep:hex_arena", "hex_map/arena-prototype"]
 # Store-neutral EOS integration. Merely compiling this feature does not load an EOS
 # runtime or open a socket; a configured application flow must install the backend.

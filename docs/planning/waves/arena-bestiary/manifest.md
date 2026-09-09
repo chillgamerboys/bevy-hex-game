@@ -358,3 +358,39 @@ authorized implementation and final evidence/guide were delivered.
   recipes use the published deployment regions and existing creature behaviors.
   Fort/Duel switches preserve the choice; Seven Regions keeps its fixed parties.
   No world API, tuning, AI or terrain-generation changes are part of this follow-up.
+
+## Main Menu Battle Mode follow-up — 2026-09-08
+
+The user requested an easy Main Menu entry, discoverable launch instructions for
+other agents and inclusion in the existing combined PR. This follow-up remains on
+`experiment/spell-combat-arena` in
+[draft PR #221](https://github.com/chillgamerboys/bevy-hex-game/pull/221), targeting
+`dev`; it is not merged. Implementation and focused validation are in progress.
+The earlier `25fa64d` full-gate receipt remains evidence for that exact checkpoint.
+
+- Root owns default feature selection in `hex_game/Cargo.toml`, process supervision
+  and app integration, launcher portability in `tools/arena.py`, combined checks
+  and commits. Main Menu view-model, intent, button and lifecycle tests may be
+  delegated within their existing shared presentation/integration ownership.
+- The documentation lane owns the launch references in `AGENTS.md`, `CLAUDE.md`,
+  `README.md`, `.cargo/config.toml`, the arena guide, architecture, contracts,
+  current status and this manifest. Its only gameplay-model edit replaces the
+  stale five-action root doc comment; navigation behavior remains unchanged.
+- `arena-prototype` is enabled by default in `hex_game`; `--no-default-features`
+  opts out. The Main Menu publishes the matching capability and dispatches a
+  supervised `current_exe --arena` child. It inherits the Cargo-configured asset
+  root, clears stale capture/arena selection variables, and starts Fort/Dragon
+  at the ready screen. On macOS and Windows the parent hides its window and
+  suspends its cameras until child exit; Linux retains a visible parent with menu
+  actions disabled. Errors restore the menu, duplicate launches are refused and
+  parent shutdown owns child cleanup.
+- `cargo battle` aliases `run -p hex_game --features arena-prototype -- --arena`.
+  The ready screen offers Play/Spectate, map and party choices. Agent instructions
+  use Cargo or the Cargo-backed Python helper and require checking initial asset
+  errors. The helper respects `CARGO_TARGET_DIR`, reuses a retained local cache
+  when available and otherwise uses the checkout's `target` directory.
+- This adds a launch capability without installing tactical plugins in the arena,
+  changing creature behavior or adding world contracts. Required evidence covers
+  capability on/off, menu dispatch and supervised child success/failure/exit,
+  inherited assets and default selection, plus the changed menu presentation.
+  Human input and window behavior remain separate from static frame review.

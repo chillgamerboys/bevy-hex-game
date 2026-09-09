@@ -16,9 +16,20 @@ fn main() -> AppExit {
         bevy::log::error!("panic: {info}");
         default_hook(info);
     }));
-    #[cfg(feature = "arena-prototype")]
     if std::env::args().any(|arg| arg == "--arena") {
+        #[cfg(feature = "arena-prototype")]
         return hex_game::arena::run();
+        #[cfg(not(feature = "arena-prototype"))]
+        {
+            #[expect(
+                clippy::print_stderr,
+                reason = "report an unavailable launch capability before logging is initialized"
+            )]
+            {
+                eprintln!("Battle Mode is unavailable in this build. Enable arena-prototype or use cargo battle.");
+            }
+            return AppExit::error();
+        }
     }
     hex_game::run()
 }

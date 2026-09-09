@@ -27,6 +27,7 @@ with errors that don't obviously point at the toolchain.
 ```
 cargo dev            # inspector + live asset reload
 cargo run --release  # as it ships
+cargo battle         # Battle Mode ready screen: Fort versus Dragon
 cargo editor         # standalone Asset Workshop
 ```
 
@@ -34,6 +35,15 @@ cargo editor         # standalone Asset Workshop
 because in a workspace `CARGO_MANIFEST_DIR` is the *binary crate's* directory —
 without it the game looks in `crates/hex_game/assets/`, finds nothing, and renders
 a plain blue window with only `Path not found` in the log.
+
+**Battle Mode** is included by the default `arena-prototype` feature. Its Main
+Menu button opens a separate native arena window; exiting it leaves the Main Menu
+available. `cargo battle` opens the same ready screen directly, with Play/Spectate,
+map and party choices. The arena installs its own world and combat composition;
+it does not install the tactical plugins. For the original Shadow baseline use
+`python3 tools/arena.py launch --map duel`; observer commands and controls are in
+[the arena guide](docs/systems/arena-encounters.md). Poll initial launch output and
+treat `Path not found` asset errors as a failed launch, including helper launches.
 
 ### Deterministic map review builds
 
@@ -97,9 +107,15 @@ scenario launches — and photographs each step, so an agent can *look* at the f
 
 ```sh
 HEX_WALK_SCRIPT=walks/gameplay_ui.ron \
+HEX_WALK_HEADLESS=1 \
 HEX_WALK_OUT=.context/visual-walks/local \
 cargo run -p hex_game --features visual-walk
 ```
+
+Set `HEX_WALK_HEADLESS=1` for automated review: it disables the native Winit
+window and runs the same image-target capture pipeline. The flag is honored only
+by `visual-walk` builds. `walks/battle_entry.ron` reviews the Main Menu at three
+canvas/scale combinations without opening Battle Mode.
 
 Exit code is the mechanical verdict: any stalled step, structural UI failure, or
 black frame fails the run. The scoped gameplay route contains at most ten
