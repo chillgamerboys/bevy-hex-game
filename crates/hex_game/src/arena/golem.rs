@@ -468,9 +468,47 @@ pub(super) fn capture_camera(
     }
     if state.capture_view.contains("golem-swipe") {
         if let Some(attack) = actor.attack_state() {
-            let delta = attack.direction.with_y(0.0).normalize_or_zero() * attack.range;
+            let forward = attack.direction.with_y(0.0).normalize_or(Vec3::NEG_Z);
+            let side = Vec3::Y.cross(forward);
+            let delta = forward * attack.range;
             low = low.min(actor.center() - half + delta);
             high = high.max(actor.center() + half + delta);
+            let center = (low + high) * 0.5;
+            // Fit the complete body and frontal extension from the actual
+            // attack-facing side. The generic world azimuth hides this gap
+            // behind the Fort keep. A bounding sphere preserves the fit for
+            // either modest side offset, without changing opaque terrain.
+            let distance = (high - low).length() * 0.5 / (75.0_f32.to_radians() * 0.5).sin() * 1.1;
+            let tip = attack.origin + forward * (0.4 + attack.range * 0.65);
+            let points = [
+                actor.eye(),
+                tip - side * 0.6,
+                tip,
+                tip + side * 0.6,
+                attack.origin + forward * (0.4 + attack.range),
+            ];
+            if let Some(framed) = [-1.0, 1.0]
+                .into_iter()
+                .map(|sign| {
+                    let offset = (forward + side * sign * 0.4 + Vec3::Y * 0.7).normalize();
+                    Transform::from_translation(center + offset * distance)
+                        .looking_at(center, Vec3::Y)
+                })
+                .max_by_key(|candidate| {
+                    points
+                        .iter()
+                        .filter(|point| {
+                            session
+                                .camera_position(candidate.translation, **point)
+                                .distance(**point)
+                                < 0.08
+                        })
+                        .count()
+                })
+            {
+                *camera = framed;
+                return;
+            }
         }
     }
     *camera = super::encounter::frame_bounds(low, high, state.capture_view.ends_with("-rear"));
