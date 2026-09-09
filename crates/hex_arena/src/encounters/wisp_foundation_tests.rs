@@ -80,7 +80,7 @@ fn wisp_recipes_preserve_original_groups_and_require_authored_deployment() {
     assert_eq!(CreatureAbility::GolemLaser.index(), 8);
     assert_eq!(CreatureAbility::WispEmber.index(), 9);
     assert_eq!(CreatureAbility::WormBoulder.index(), 10);
-    assert_eq!(CREATURE_ABILITY_COUNT, 11);
+    assert_eq!(CREATURE_ABILITY_COUNT, 12);
 }
 
 #[test]

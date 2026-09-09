@@ -7,6 +7,8 @@ use std::collections::BTreeSet;
 #[path = "golem.rs"]
 mod golem;
 
+pub(super) use golem::golem_swipe_blocked;
+
 pub(super) fn index(kind: CreatureAbility) -> usize {
     kind.index()
 }
@@ -24,6 +26,28 @@ pub(super) struct Cast {
     actor_damage: BTreeMap<ActorId, f32>,
     voxels: BTreeSet<TilePos>,
     barrier_damage: BTreeMap<u64, f32>,
+    laser: Option<LaserTrack>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LaserTrack {
+    target: ActorId,
+    point: Vec3,
+    velocity: Vec3,
+    tick: u64,
+    tracking: bool,
+}
+
+impl LaserTrack {
+    fn observed(observed: targeting::ObservedTarget) -> Self {
+        Self {
+            target: observed.body.id,
+            point: observed.sight_point,
+            velocity: observed.body.velocity,
+            tick: observed.tick,
+            tracking: true,
+        }
+    }
 }
 
 impl Cast {
@@ -43,9 +67,53 @@ impl Cast {
         self.kind == CreatureAbility::WormBoulder && self.pulses == 0
     }
 
-    pub(super) fn tracks_laser(&self, tuning: &EncounterTuning) -> bool {
+    pub(super) fn tracks_laser(&self, _tuning: &EncounterTuning) -> bool {
         self.kind == CreatureAbility::GolemLaser
-            && self.age < self.windup - tuning.golem_laser_lock_seconds
+    }
+
+    pub(super) fn laser_target(&self) -> Option<ActorId> {
+        self.laser.map(|track| track.target)
+    }
+
+    pub(super) fn preparing_laser(&self) -> bool {
+        self.kind == CreatureAbility::GolemLaser && self.age < self.windup
+    }
+
+    fn track_laser(
+        &mut self,
+        actor: &Actor,
+        observed: Option<targeting::ObservedTarget>,
+        tick: u64,
+        tuning: &EncounterTuning,
+    ) {
+        let Some(track) = &mut self.laser else {
+            return;
+        };
+        let current = observed.filter(|sample| {
+            sample.body.id == track.target
+                && sample.tick >= track.tick
+                && sample.tick <= tick
+                && tick.saturating_sub(sample.tick) < 12
+        });
+        track.tracking = current.is_some();
+        if let Some(sample) = current {
+            *track = LaserTrack::observed(sample);
+        }
+        // This cast has a finite duration. Extrapolate its own frozen sample
+        // through that duration rather than a shorter projectile-forecast cap.
+        let point = track.point + track.velocity * elapsed(tick, track.tick);
+        let bearing = point - (actor.feet + Vec3::Y * 1.4);
+        let mouth = shapes::golem_mouth(actor, bearing);
+        let desired = (point - mouth).normalize_or(self.direction);
+        let angle = self.direction.dot(desired).clamp(-1.0, 1.0).acos();
+        let limit = tuning.golem_laser_turn_speed * STEP;
+        self.direction = if angle <= limit {
+            desired
+        } else {
+            let turn = bevy_math::Quat::from_rotation_arc(self.direction, desired);
+            (bevy_math::Quat::IDENTITY.slerp(turn, limit / angle) * self.direction)
+                .normalize_or(self.direction)
+        };
     }
 
     fn track_breath(&mut self, actor: &Actor, max_turn: f32) {
@@ -141,8 +209,13 @@ impl ArenaSession {
             CreatureAbility::Barrier => (0.0, 0.15, c.barrier_cooldown),
             CreatureAbility::Aura => (c.aura_windup, 0.2, c.aura_cooldown),
             CreatureAbility::GolemSlam => (c.golem_slam_windup, 0.15, c.golem_slam_cooldown),
+            CreatureAbility::GolemSwipe => (c.golem_swipe_windup, 0.15, c.golem_swipe_cooldown),
             CreatureAbility::WispEmber => (c.wisp_ember_windup, 0.15, c.wisp_ember_cooldown),
-            CreatureAbility::WormBoulder if actor.worm().is_some_and(|s| s.exposed) => {
+            CreatureAbility::WormBoulder
+                if actor
+                    .worm()
+                    .is_some_and(|s| s.exposed && s.phase == WormPhase::Exposed) =>
+            {
                 (c.worm_boulder_windup, 0.15, c.worm_boulder_cooldown)
             }
             CreatureAbility::GolemLaser => (
@@ -167,6 +240,9 @@ impl ArenaSession {
             actor_damage: BTreeMap::new(),
             voxels: BTreeSet::new(),
             barrier_damage: BTreeMap::new(),
+            laser: (request.kind == CreatureAbility::GolemLaser)
+                .then(|| brain.golem_observation().map(LaserTrack::observed))
+                .flatten(),
         });
     }
 
@@ -195,11 +271,18 @@ impl ArenaSession {
             else {
                 continue;
             };
-            if cast.tracks_boulder() && !actor.worm().is_some_and(|s| s.exposed) {
+            if cast.tracks_boulder()
+                && !actor
+                    .worm()
+                    .is_some_and(|s| s.exposed && s.phase == WormPhase::Exposed)
+            {
                 continue;
             }
             cast.track_breath(&actor, c.dragon_turn_speed * STEP);
-            if cast.tracks_laser(c) || cast.tracks_ember() || cast.tracks_boulder() {
+            if cast.tracks_laser(c) {
+                cast.track_laser(&actor, brain.golem_observation(), self.tick, c);
+            }
+            if cast.tracks_ember() || cast.tracks_boulder() {
                 cast.direction = actor.aim;
             }
             cast.age += STEP;
@@ -230,6 +313,7 @@ impl ArenaSession {
                 CreatureAbility::Aura => (c.aura_radius, std::f32::consts::PI),
                 CreatureAbility::Barrier => (c.barrier_distance, 0.0),
                 CreatureAbility::GolemSlam => (c.golem_slam_range, std::f32::consts::PI),
+                CreatureAbility::GolemSwipe => (c.golem_swipe_range, std::f32::consts::FRAC_PI_2),
                 CreatureAbility::WispEmber => (c.wisp_preferred_max, 0.0),
                 CreatureAbility::WormBoulder => (
                     c.worm_boulder_speed * c.worm_boulder_speed / c.worm_boulder_gravity,
@@ -252,13 +336,19 @@ impl ArenaSession {
             .clamp(0.0, 1.0);
             let beam = (cast.kind == CreatureAbility::GolemLaser)
                 .then(|| self.golem_beam(&actor, &cast, geometry, tuning));
-            let origin = if cast.kind == CreatureAbility::GolemSlam {
+            let origin = if matches!(
+                cast.kind,
+                CreatureAbility::GolemSlam | CreatureAbility::GolemSwipe
+            ) {
                 actor.center()
             } else {
                 beam.map_or(actor.eye(), |b| b.origin)
             };
             let range = beam.map_or(range, |b| b.origin.distance(b.end));
             if let Some(a) = self.actors.iter_mut().find(|a| a.id == *id) {
+                if cast.kind == CreatureAbility::GolemLaser {
+                    a.aim = cast.direction;
+                }
                 a.beam = beam;
                 a.attack = Some(AttackSnapshot {
                     kind: cast.kind,
@@ -340,6 +430,9 @@ impl ArenaSession {
                     CreatureAbility::GolemSlam => {
                         self.golem_slam(&actor, &mut cast, world, geometry, tuning, out)
                     }
+                    CreatureAbility::GolemSwipe => {
+                        self.golem_swipe(&actor, &mut cast, world, geometry, materials, tuning, out)
+                    }
                     CreatureAbility::WormBoulder => {
                         let mut spec = worm::boulder_spec(c);
                         spec.damage *= cast.multiplier;
@@ -349,6 +442,7 @@ impl ArenaSession {
                         let mut spec = wisp::ember_spec(c, materials);
                         spec.damage *= cast.multiplier;
                         self.release_creature_projectile(&actor, cast.direction, spec);
+                        brain.ember_released();
                     }
                     _ => {}
                 }

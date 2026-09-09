@@ -123,7 +123,7 @@ pub(super) fn face_and_laser(
     accent: Color,
 ) {
     let beam = actor.beam();
-    // The cast snapshot supplies the locked direction and mouth under knockback.
+    // The cast snapshot supplies the authoritative moving direction and mouth under knockback.
     let (mouth, direction) = beam
         .as_ref()
         .map_or((idle_mouth.origin, idle_mouth.direction), |beam| {
@@ -201,19 +201,37 @@ pub(super) fn face_and_laser(
         );
     }
 
+    if let Some(swipe) = actor.attack_state().filter(|attack| {
+        attack.kind == CreatureAbility::GolemSwipe && attack.phase != AttackPhase::Recovery
+    }) {
+        let forward = swipe.direction.with_y(0.0).normalize_or(Vec3::NEG_Z);
+        let side = Vec3::Y.cross(forward);
+        let sweep = (swipe.progress.clamp(0.0, 1.0) - 0.5) * 1.4;
+        let tip = swipe.origin + forward * (0.4 + swipe.range * 0.65) + side * sweep;
+        let color = if swipe.phase == AttackPhase::Active {
+            Color::srgb(1.0, 0.95, 0.72)
+        } else {
+            Color::srgb(1.0, 0.55, 0.12)
+        };
+        for offset in [-0.3, 0.0, 0.3] {
+            gizmos.line(tip + side * (offset - 0.3) + Vec3::Y * 0.3,
+                tip + side * (offset + 0.3) - Vec3::Y * 0.3, color);
+        }
+    }
+
     let Some((beam, attack)) = beam.zip(attack) else {
         return;
     };
     match attack.phase {
         AttackPhase::Windup => {
             // No expanding cone or fake range: this is the exact current ray.
-            let color = if beam.locked {
+            let color = if attack.progress >= 0.75 {
                 Color::srgb(1.0, 0.95, 0.72)
             } else {
                 Color::srgb(1.0, 0.55, 0.12)
             };
             gizmos.line(beam.origin, beam.end, color);
-            if beam.locked {
+            if attack.progress >= 0.75 {
                 gizmos.sphere(Isometry3d::from_translation(beam.origin), 0.24, color);
             }
         }
@@ -325,7 +343,7 @@ pub(super) fn phase_view(view: &str) -> bool {
     matches!(
         view.strip_suffix("-rear").unwrap_or(view),
         "encounter-golem-charge"
-            | "encounter-golem-locked"
+            | "encounter-golem-charge-late"
             | "encounter-golem-beam"
             | "encounter-golem-slam-windup"
             | "encounter-golem-slam"
@@ -345,17 +363,18 @@ fn phase_matches(
             attack.kind == CreatureAbility::GolemLaser
                 && attack.phase == AttackPhase::Windup
                 && (0.25..=0.55).contains(&attack.progress)
-                && beam.is_some_and(|beam| !beam.locked)
+                && beam.is_some()
         }
-        "encounter-golem-locked" => {
+        "encounter-golem-charge-late" => {
             attack.kind == CreatureAbility::GolemLaser
                 && attack.phase == AttackPhase::Windup
-                && beam.is_some_and(|beam| beam.locked)
+                && attack.progress >= 0.75
+                && beam.is_some()
         }
         "encounter-golem-beam" => {
             attack.kind == CreatureAbility::GolemLaser
                 && attack.phase == AttackPhase::Active
-                && beam.is_some_and(|beam| beam.locked)
+                && beam.is_some()
         }
         "encounter-golem-slam-windup" => {
             attack.kind == CreatureAbility::GolemSlam
@@ -453,7 +472,7 @@ mod tests {
             direction: Vec3::new(3.0, 0.0, 4.0).normalize(),
             end: Vec3::new(4.0, 2.0, 7.0),
             radius: 0.12,
-            locked: true,
+            tracking: true,
         };
         app.world_mut()
             .run_system_once(
@@ -503,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_guards_reject_unrelated_attacks_and_distinguish_charge_lock_and_pulse() {
+    fn phase_guards_reject_unrelated_attacks_and_distinguish_charge_late_charge_and_pulse() {
         let mut attack = AttackSnapshot {
             kind: CreatureAbility::GolemLaser,
             phase: AttackPhase::Windup,
@@ -518,7 +537,7 @@ mod tests {
             direction: Vec3::Z,
             end: Vec3::Z * 20.0,
             radius: 0.12,
-            locked: false,
+            tracking: true,
         };
         assert!(phase_matches(
             "encounter-golem-charge",
@@ -526,14 +545,14 @@ mod tests {
             Some(beam)
         ));
         assert!(!phase_matches(
-            "encounter-golem-locked",
+            "encounter-golem-charge-late",
             Some(attack),
             Some(beam)
         ));
-        beam.locked = true;
+        beam.tracking = false;
         attack.progress = 0.9;
         assert!(phase_matches(
-            "encounter-golem-locked",
+            "encounter-golem-charge-late",
             Some(attack),
             Some(beam)
         ));

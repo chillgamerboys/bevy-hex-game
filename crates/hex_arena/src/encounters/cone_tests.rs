@@ -56,6 +56,7 @@ fn fixture(target: Actor) -> (ArenaSession, Actor, ArenaTerrainView, ArenaTuning
 fn breath(owner: &Actor) -> Cast {
     Cast {
         kind: CreatureAbility::FireCone,
+        laser: None,
         age: 0.0,
         windup: 0.0,
         duration: 0.75,

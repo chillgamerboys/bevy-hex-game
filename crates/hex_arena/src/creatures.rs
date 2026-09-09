@@ -11,7 +11,7 @@ pub type TeamId = u8;
 pub type PartyId = u16;
 
 /// Stable creature activation-counter width; existing seven indices are preserved.
-pub const CREATURE_ABILITY_COUNT: usize = 11;
+pub const CREATURE_ABILITY_COUNT: usize = 12;
 
 /// One world-oriented native hex prism in a compound creature body.
 /// Its pointy horizontal hex has circumradius one world unit, matching terrain.
@@ -29,14 +29,14 @@ pub struct BodyHexPrism {
 pub struct BeamSnapshot {
     /// Physical mouth at the current actor pose.
     pub origin: Vec3,
-    /// Unit direction, fixed after the attack locks its aim.
+    /// Current unit direction after the authoritative angular turn limit.
     pub direction: Vec3,
     /// Current nearest impact or actual world-boundary endpoint.
     pub end: Vec3,
     /// Physical beam radius in world units.
     pub radius: f32,
-    /// Whether the action has committed its direction.
-    pub locked: bool,
+    /// Latest own sight sample still admits this target; false while extrapolating.
+    pub tracking: bool,
 }
 
 /// Authored continuous actor profile.
@@ -80,12 +80,14 @@ pub enum CreatureAbility {
     Aura,
     /// One short-range spherical physical shockwave.
     GolemSlam,
-    /// Long charged, briefly sustained straight fire beam.
+    /// Long charged, sustained fire beam with bounded observed-target tracking.
     GolemLaser,
     /// Briefly telegraphed weak ballistic ember.
     WispEmber,
     /// Physically emerged, telegraphed ballistic rock.
     WormBoulder,
+    /// Short frontal physical strike that clears obstructing stone without footing.
+    GolemSwipe,
 }
 
 impl CreatureAbility {
@@ -104,6 +106,7 @@ impl CreatureAbility {
             Self::GolemLaser => 8,
             Self::WispEmber => 9,
             Self::WormBoulder => 10,
+            Self::GolemSwipe => 11,
         }
     }
 }

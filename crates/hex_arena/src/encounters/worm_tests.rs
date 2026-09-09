@@ -4,6 +4,9 @@ use super::*;
 use hex_core::arena::{ArenaBurrowResult, ArenaMap, ArenaSelection};
 use hex_core::{ElementId, SubstanceId};
 
+#[path = "worm_pressure_tests.rs"]
+mod pressure_tests;
+
 struct Fixture {
     session: ArenaSession,
     view: ArenaTerrainView,
@@ -274,7 +277,7 @@ fn natural_head_rise_and_boulder_use_physical_exposure_frozen_payload_and_real_d
 }
 
 #[test]
-fn re_covering_the_head_cancels_unreleased_boulder_and_buried_sensing_has_no_hidden_truth() {
+fn re_covering_the_head_cancels_unreleased_boulder_and_ordinary_sight_stays_blind_underground() {
     let mut f = fixture();
     for _ in 0..180 {
         let out = f.advance();
@@ -550,10 +553,10 @@ fn an_airborne_worm_keeps_falling_while_sideways_impulse_pressures_a_wall() {
     assert!(f.worm().body.vertical_velocity < -4.0);
 }
 
-// Partial terrain destruction must not veto an otherwise safe stationary rise.
+// The new burrow/attack cycle supersedes stationary repeated-fire recovery.
 
 #[test]
-fn a_partial_tail_crater_does_not_prevent_a_safe_stationary_head_rise_and_boulder() {
+fn a_partial_tail_crater_cannot_veto_stationary_head_retraction() {
     let mut f = fixture();
     let mut reached_travel = false;
     for _ in 0..900 {
@@ -568,6 +571,20 @@ fn a_partial_tail_crater_does_not_prevent_a_safe_stationary_head_rise_and_boulde
         reached_travel,
         "normal acknowledged dive reaches shallow travel"
     );
+    f.session
+        .encounter
+        .worms
+        .get_mut(&7)
+        .expect("control")
+        .phase(WormPhase::Emerging);
+    for _ in 0..240 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        if f.worm().worm().is_some_and(|head| head.exposed) {
+            break;
+        }
+    }
+    assert!(f.worm().worm().expect("head").exposed);
     let before = pose(f.worm()).expect("current physical pose");
     let head_columns = worm_geometry::head_columns(before).expect("head footprint");
     let tail = before.parts.iter().last().expect("tail");
@@ -603,24 +620,23 @@ fn a_partial_tail_crater_does_not_prevent_a_safe_stationary_head_rise_and_boulde
     );
     let old_lift = f.session.encounter.worms.get(&7).expect("control").lift;
     let first_new_projectile = f.session.next_projectile;
-    let mut raised = false;
-    let mut fired = false;
-    for _ in 0..600 {
+    f.session.record_damage(0, 7, 1.0);
+    assert!(old_lift > 0.0);
+    for _ in 0..240 {
         let out = f.advance();
         f.apply(&out.burrows);
-        let state = f.worm().worm().expect("physical head");
-        raised |= state.exposed && state.head_clearance + SKIN >= f.geometry.level_height;
-        fired |= f.session.projectiles.iter().any(|shot| {
+        assert!(!f.session.projectiles.iter().any(|shot| {
             shot.id >= first_new_projectile
                 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
-        });
-        if raised && fired {
-            break;
-        }
+        }));
     }
-    assert!(raised && fired,
-        "head may safely rise/cast despite a mismatched tail band: old lift {old_lift}, current {:?}, control {:?}",
-        f.worm().worm(), f.session.encounter.worms.get(&7));
+    let control = f.session.encounter.worms.get(&7).expect("control");
+    assert!(
+        control.lift <= SKIN,
+        "partial tail band must not prevent lowering: {control:?}"
+    );
+    assert_eq!(control.phase, WormPhase::Diving);
+    assert!(!f.worm().worm().expect("head").exposed);
     assert!(
         f.worm().feet.distance(before.feet) < SKIN,
         "this recovery changes head lift, not position or travel-depth admission"
@@ -668,7 +684,7 @@ fn exposed_worm_releases_a_useful_boulder_at_a_close_goblin_beside_its_body() {
 }
 
 #[test]
-fn a_deep_head_crater_retains_actual_exposure_and_allows_the_next_boulder() {
+fn a_deep_head_crater_retains_true_clearance_but_cannot_create_an_exposed_firing_statue() {
     let mut f = fixture();
     for _ in 0..600 {
         let out = f.advance();
@@ -707,22 +723,19 @@ fn a_deep_head_crater_retains_actual_exposure_and_allows_the_next_boulder() {
         head.exposed && head.head_clearance > 1.5,
         "current lower floor must replace stale support height: {head:?}"
     );
-    let mut fired_again = false;
-    for _ in 0..800 {
+    let initial_lift = f.session.encounter.worms.get(&7).expect("controller").lift;
+    for _ in 0..300 {
         let out = f.advance();
         f.apply(&out.burrows);
-        fired_again |= f.session.projectiles.iter().any(|shot| {
+        assert!(!f.session.projectiles.iter().any(|shot| {
             shot.id >= next_projectile
                 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
-        });
-        if fired_again {
-            break;
-        }
+        }));
     }
-    assert!(
-        fired_again,
-        "actual exposure must permit another normal attack cycle"
-    );
+    let control = f.session.encounter.worms.get(&7).expect("controller");
+    assert_eq!(control.phase, WormPhase::Diving);
+    assert!(control.lift < initial_lift && control.lift <= SKIN);
+    assert!(control.burrow_target.is_none() && f.worm().attack_state().is_none());
     assert!(
         f.worm().feet.distance(before.feet) < SKIN,
         "no teleport or deeper travel"

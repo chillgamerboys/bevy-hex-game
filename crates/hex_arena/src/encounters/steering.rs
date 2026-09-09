@@ -95,6 +95,9 @@ pub(super) struct Steering {
     initialized: bool,
     revision: Option<u64>,
     jump: Option<JumpRoute>,
+    jump_since: u64,
+    jump_interval: f32,
+    jump_sequence: u16,
 }
 
 impl Steering {
@@ -135,6 +138,7 @@ impl Steering {
             self.progress_feet = actor.feet;
             if !self.initialized {
                 self.next_recovery = tick + 48 + u64::from(actor.id % 12) * 5;
+                self.schedule_jump(actor.id, tuning, tick);
             }
             self.initialized = true;
         }
@@ -181,6 +185,19 @@ impl Steering {
         }
         if !flight
             && run
+            && actor.species == Species::Goblin
+            && actor.grounded
+            && elapsed(tick, self.jump_since) >= self.jump_interval
+        {
+            self.schedule_jump(actor.id, tuning, tick);
+            if let Some((direction, duration)) =
+                jump_route(actor, desired, world, view, geometry, tuning, true)
+            {
+                return self.begin_route(actor, direction, duration, true, world, tuning);
+            }
+        }
+        if !flight
+            && run
             && matches!(actor.species, Species::Goblin | Species::Shaman)
             && actor.grounded
             && self.blocked_ticks(tick) >= 48
@@ -191,21 +208,12 @@ impl Steering {
             let route = descent
                 .map(|(direction, duration)| (direction, duration, false))
                 .or_else(|| {
-                    jump_route(actor, desired, world, view, geometry, tuning)
+                    jump_route(actor, desired, world, view, geometry, tuning, false)
                         .map(|(direction, duration)| (direction, duration, true))
                 });
             if let Some((direction, duration, jump)) = route {
-                let mut next = actor.clone();
-                motion::tick(&mut next, direction, true, jump, false, world, tuning);
-                let airborne = !next.grounded;
-                self.jump = Some(JumpRoute {
-                    direction,
-                    expected: next,
-                    remaining: duration.saturating_sub(1),
-                    revision: world.revision,
-                    airborne,
-                });
-                return (direction, jump);
+                self.schedule_jump(actor.id, tuning, tick);
+                return self.begin_route(actor, direction, duration, jump, world, tuning);
             }
             // A supported sideways/backward excursion can reveal the next
             // reachable intermediate ledge. It never teleports or alters terrain.
@@ -225,6 +233,36 @@ impl Steering {
             self.next_decision = tick;
         }
         (self.direction, false)
+    }
+
+    fn schedule_jump(&mut self, id: ActorId, tuning: &EncounterTuning, tick: u64) {
+        self.jump_since = tick;
+        let phase = (u16::from(id) * 37).wrapping_add(self.jump_sequence.wrapping_mul(53)) % 101;
+        self.jump_interval = tuning.goblin_jump_interval_min
+            + f32::from(phase) / 100.0
+                * (tuning.goblin_jump_interval_max - tuning.goblin_jump_interval_min);
+        self.jump_sequence = self.jump_sequence.wrapping_add(1);
+    }
+
+    fn begin_route(
+        &mut self,
+        actor: &Actor,
+        direction: Vec3,
+        duration: u16,
+        jump: bool,
+        world: &CollisionWorld,
+        tuning: &EncounterTuning,
+    ) -> (Vec3, bool) {
+        let mut next = actor.clone();
+        motion::tick(&mut next, direction, true, jump, false, world, tuning);
+        self.jump = Some(JumpRoute {
+            direction,
+            airborne: !next.grounded,
+            expected: next,
+            remaining: duration.saturating_sub(1),
+            revision: world.revision,
+        });
+        (direction, jump)
     }
 }
 
@@ -452,13 +490,17 @@ fn jump_route(
     view: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
     tuning: &EncounterTuning,
+    advancing_only: bool,
 ) -> Option<(Vec3, u16)> {
     let forward = desired.with_y(0.0).normalize_or_zero();
     let mut best = None;
     for angle in [0.0, 0.65, -0.65, 1.3, -1.3, std::f32::consts::PI] {
         let direction = Quat::from_rotation_y(angle) * forward;
+        if advancing_only && direction.dot(forward) < 0.5 {
+            continue;
+        }
         let mut body = actor.clone();
-        for tick in 0_u16..120 {
+        for tick in 0_u16..180 {
             motion::tick(&mut body, direction, true, tick == 0, false, world, tuning);
             if !volume_safe(&body, world, view, geometry) {
                 break;
@@ -467,6 +509,7 @@ fn jump_route(
                 let moved = body.feet - actor.feet;
                 let score = moved.dot(forward) + moved.y * 2.0 - angle.abs() * 0.1;
                 if moved.with_y(0.0).length() > 0.35
+                    && (!advancing_only || moved.dot(forward) > 0.5)
                     && moved.y >= -0.4 - SKIN * 8.0
                     && supported(&body, world)
                     && best.is_none_or(|(s, _, _)| score > s)

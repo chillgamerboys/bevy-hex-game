@@ -60,8 +60,8 @@ CHARGE_VIEWS = (
 # Explicit recipes preserve the legacy two-actor regression matrices.
 MAPS = ("duel", "fort", "seven-regions")
 ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12", "worm")
-PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 5,
-                  "shaman-party": ["Shaman", "Goblin", "Goblin", "Goblin"], "golem": ["Golem"],
+PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 10,
+                  "shaman-party": ["Shaman", *(["Goblin"] * 5)], "golem": ["Golem"],
                   "worm": ["Worm"], "goblin": ["Goblin"], "wisp": ["Wisp"], **{f"wisps-{n}": ["Wisp"] * n for n in (2, 4, 8, 12)}}
 PLAYER_OVERRIDES = {"worm": "Worm", "golem": "Golem", "goblin": "Goblin", "wisp": "Wisp", "wisps-2": "Wisps2", "wisps-4": "Wisps4", "wisps-8": "Wisps8", "wisps-12": "Wisps12"}
 MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions"}
@@ -130,7 +130,7 @@ GOLEM_VIEWS = (
     ("fort-golem-slam-windup", "encounter-golem-slam-windup", "fort", "golem", None),
     ("fort-golem-slam", "encounter-golem-slam", "fort", "golem", None),
     ("duel-golem-charge", "encounter-golem-charge", "duel", "shadow", None),
-    ("duel-golem-locked", "encounter-golem-locked", "duel", "shadow", None),
+    ("duel-golem-charge-late", "encounter-golem-charge-late", "duel", "shadow", None),
     ("duel-golem-beam", "encounter-golem-beam", "duel", "shadow", None),
     ("duel-golem-beam-rear", "encounter-golem-beam-rear", "duel", "shadow", None),
     ("duel-golem-observer-close", "observer-close", "duel", "shadow", None),
@@ -390,8 +390,8 @@ def validate_golem_state(state: dict, view: str) -> None:
             raise RuntimeError("Golem receipt lacks its authoritative mouth.")
         beam = actor.get("beam")
         if beam is not None:
-            if not isinstance(beam, dict) or not all(vector(beam.get(key)) for key in ("origin", "direction", "end")) or type(beam.get("locked")) is not bool:
-                raise RuntimeError("Golem beam snapshot contains invalid vectors/lock state.")
+            if not isinstance(beam, dict) or not all(vector(beam.get(key)) for key in ("origin", "direction", "end")) or type(beam.get("tracking")) is not bool:
+                raise RuntimeError("Golem beam snapshot contains invalid vectors/tracking state.")
             radius = beam.get("radius")
             direction, delta = beam["direction"], [b - a for a, b in zip(beam["origin"], beam["end"])]
             length = sum(a * b for a, b in zip(delta, direction))
@@ -411,9 +411,9 @@ def validate_golem_state(state: dict, view: str) -> None:
         kind, stage, progress = attack.get("kind"), attack.get("phase"), attack.get("progress", -1)
         laser = kind == "GolemLaser"
         valid = {
-            "encounter-golem-charge": laser and stage == "Windup" and 0.25 <= progress <= 0.55 and beam.get("locked") is False,
-            "encounter-golem-locked": laser and stage == "Windup" and beam.get("locked") is True,
-            "encounter-golem-beam": laser and stage == "Active" and beam.get("locked") is True,
+            "encounter-golem-charge": laser and stage == "Windup" and 0.25 <= progress <= 0.55 and bool(beam),
+            "encounter-golem-charge-late": laser and stage == "Windup" and progress >= 0.75 and bool(beam),
+            "encounter-golem-beam": laser and stage == "Active" and bool(beam),
             "encounter-golem-slam-windup": kind == "GolemSlam" and stage == "Windup" and progress >= 0.25,
             "encounter-golem-slam": kind == "GolemSlam" and stage == "Active" and any(
                 e.get("spell") == "AreaBlast" and 0 < e.get("age", -1) <= 0.10
@@ -785,7 +785,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
             raise RuntimeError("Synthetic performance receipt requires its fixture label and 3600 ticks.")
         seven = state.get("selection", {}).get("map") == "Seven Regions"
         party_count = 3 if seven else 1
-        enemy_count = 10 if seven else {"Dragon": 1, "Goblins": 5, "Shaman party": 4, "Shadow": 1}.get(state.get("selection", {}).get("encounter"), 0)
+        enemy_count = 17 if seven else {"Dragon": 1, "Goblins": 10, "Shaman party": 6, "Shadow": 1}.get(state.get("selection", {}).get("encounter"), 0)
         measured = rows[120:]
         all_active = [row for row in measured if row.get("active_parties") == party_count and row.get("living_enemies") == enemy_count]
         if len(all_active) < 2400:

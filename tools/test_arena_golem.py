@@ -18,7 +18,7 @@ def specimen():
                                              (-width/2, 0, -1.5), (width/2, 0, -1.5))],
                         "attack": {"kind": "GolemLaser", "phase": "Windup", "progress": .4},
                         "beam": {"origin": [0, 1.4, 2.5], "direction": [0, 0, 1],
-                                 "end": [0, 1.4, 20], "radius": .12, "locked": False}}],
+                                 "end": [0, 1.4, 20], "radius": .12, "tracking": False}}],
             "golem_render_prisms": 7, "phase_reached_frame": 100, "frame": 104}
 
 
@@ -30,14 +30,14 @@ class GolemCaptureGuards(unittest.TestCase):
         self.assertEqual(sum(row[2] == "fort" and row[3] == "golem" for row in GOLEM_VIEWS), 6)
         self.assertTrue(all(row[3] == "shadow" for row in GOLEM_VIEWS if row[2] == "duel"))
 
-    def test_partial_charge_accepts_golem_actor_zero_and_independent_locked_mouth(self):
+    def test_partial_charge_accepts_golem_actor_zero_and_independent_moving_mouth(self):
         state = specimen()
         validate_golem_state(state, "encounter-golem-charge")
         actor = state["actors"][0]
         actor["idle_mouth"] = [1, 1.4, 0]
-        actor["beam"]["locked"] = True
+        actor["beam"]["tracking"] = True
         actor["attack"]["progress"] = .9
-        validate_golem_state(state, "encounter-golem-locked")
+        validate_golem_state(state, "encounter-golem-charge-late")
         actor["attack"]["phase"] = "Active"
         for view in ("encounter-golem-beam", "encounter-golem-beam-rear"):
             validate_golem_state(state, view)
@@ -52,7 +52,7 @@ class GolemCaptureGuards(unittest.TestCase):
             lambda s: s["actors"][0]["beam"].update(direction=[0, 0, 2]),
             lambda s: s["actors"][0]["beam"].update(end=[1, 1.4, 20]),
             lambda s: s["actors"][0]["beam"].update(radius=float("nan")),
-            lambda s: s["actors"][0]["beam"].update(locked=True),
+            lambda s: s["actors"][0]["beam"].update(tracking=None),
             lambda s: s["actors"][0]["attack"].update(kind="Swipe"),
             lambda s: s["actors"][0].update(hp=0),
             lambda s: s.update(frame=103),

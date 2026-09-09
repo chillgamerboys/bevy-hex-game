@@ -121,8 +121,8 @@ fn ticks(
 fn authored_rosters_are_stable_dry_and_reset_without_respawning_dead_parties() {
     for (kind, count) in [
         (ArenaEncounter::Dragon, 2),
-        (ArenaEncounter::Goblins, 6),
-        (ArenaEncounter::ShamanParty, 5),
+        (ArenaEncounter::Goblins, 11),
+        (ArenaEncounter::ShamanParty, 7),
         (ArenaEncounter::Shadow, 2),
     ] {
         let (mut session, view, geometry, materials, tuning) = fixture(kind);
@@ -161,7 +161,7 @@ fn spawned_goblins_match_player_body_and_cannot_fit_below_a_player_height_ceilin
         .iter()
         .filter(|a| a.species == Species::Goblin)
         .collect::<Vec<_>>();
-    assert_eq!(goblins.len(), 5);
+    assert_eq!(goblins.len(), 10);
     assert!((tuning.encounters.goblin_walk - 3.5).abs() < 0.001);
     assert!((tuning.encounters.goblin_run - 6.0).abs() < 0.001);
     for goblin in &goblins {

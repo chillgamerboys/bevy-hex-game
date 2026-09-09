@@ -149,7 +149,7 @@ fn copied_emerged_geometry_drives_center_and_distance_without_live_worm_lookup()
 #[test]
 fn worm_setup_is_typed_and_atomically_refused_until_runtime_admission_exists() {
     assert_eq!(CreatureAbility::WormBoulder.index(), 10);
-    assert_eq!(CREATURE_ABILITY_COUNT, 11);
+    assert_eq!(CREATURE_ABILITY_COUNT, 12);
     assert_eq!(BattlePreset::Worm.members(), vec![Species::Worm]);
     assert_eq!(BattlePreset::from_slug("worm"), Some(BattlePreset::Worm));
     assert_eq!(BattlePreset::ORIGINAL.len(), 4);

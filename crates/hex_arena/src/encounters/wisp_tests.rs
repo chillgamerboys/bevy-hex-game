@@ -135,7 +135,7 @@ fn a_close_goblin_below_is_a_legal_target_and_the_wisp_stays_above_melee() {
 }
 
 #[test]
-fn loss_of_own_sight_cancels_windup_without_firing_from_party_memory() {
+fn own_last_sight_admits_only_two_real_cover_shots_then_expires() {
     let (mut session, mut view, geometry, materials, tuning) =
         deployed(BattlePreset::Wisp, BattlePreset::Goblin);
     session.bot_enabled = true;
@@ -158,11 +158,34 @@ fn loss_of_own_sight_cancels_windup_without_firing_from_party_memory() {
         }
     }
     view.revision += 1;
-    for _ in 0..100 {
-        session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let mut impacts = Vec::new();
+    for _ in 0..650 {
+        impacts.extend(
+            session
+                .advance(ActorIntent::default(), &view, geometry, materials, &tuning)
+                .impacts,
+        );
     }
+    assert!(
+        impacts.iter().any(|impact| matches!(
+            impact.kind,
+            hex_core::TerrainDamageKind::Elemental(_)
+        ) && impact
+            .volume
+            .iter()
+            .any(|pos| pos.level > 0 && view.voxels.contains_key(pos))),
+        "a real Ember must contact the obstructing terrain"
+    );
     assert!(session.projectiles.is_empty());
-    assert!(!session.encounter.ability_counts.contains_key(&0));
+    assert_eq!(
+        session
+            .encounter
+            .ability_counts
+            .get(&0)
+            .and_then(|counts| counts.get(CreatureAbility::WispEmber.index()))
+            .copied(),
+        Some(2)
+    );
     assert!(session
         .actors
         .first()

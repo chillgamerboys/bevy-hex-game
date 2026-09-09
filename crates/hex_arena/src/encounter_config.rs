@@ -6,6 +6,41 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EncounterTuning {
+    /// Own last-sighting lifetime for cover pressure and seeking.
+    pub wisp_memory_seconds: f32,
+    /// Maximum cover shots per own loss-of-sight episode.
+    pub wisp_cover_shots: u8,
+    /// Minimum remaining health fraction for a distant approach burst.
+    pub dragon_lunge_health_fraction: f32,
+    /// Minimum disclosed target distance for an approach burst.
+    pub dragon_lunge_min_range: f32,
+    /// Swept flight speed during a Dragon approach burst.
+    pub dragon_lunge_speed: f32,
+    /// Maximum duration of a committed Dragon approach burst.
+    pub dragon_lunge_seconds: f32,
+    /// Minimum gap between Dragon approach bursts.
+    pub dragon_lunge_cooldown: f32,
+    /// Goblin jump apex in world units; human movement stays unchanged.
+    pub goblin_jump_height: f32,
+    /// Shortest gap between optional supported advancing jumps.
+    pub goblin_jump_interval_min: f32,
+    /// Longest seeded gap between optional supported advancing jumps.
+    pub goblin_jump_interval_max: f32,
+    /// Preferred separation between Goblin approach slots.
+    pub goblin_spacing: f32,
+    /// Maximum laser direction change in radians per second.
+    pub golem_laser_turn_speed: f32,
+    /// Maximum hostile actor damage from one Stone Swipe.
+    pub golem_swipe_damage: f32,
+    /// Stone Swipe reach beyond the front of the body.
+    pub golem_swipe_range: f32,
+    /// Visible Stone Swipe preparation duration.
+    pub golem_swipe_windup: f32,
+    /// Minimum gap between Stone Swipes.
+    pub golem_swipe_cooldown: f32,
+    /// Physical power per frontal Stone Swipe voxel, excluding footing.
+    pub golem_swipe_terrain_power: u8,
+
     /// Number of native Worm components, four or six.
     pub worm_segments: u8,
     /// Shallow resting depth, one or two voxel levels.
@@ -96,8 +131,6 @@ pub struct EncounterTuning {
     pub golem_laser_min_range: f32,
     /// Full visible laser charge duration.
     pub golem_laser_charge: f32,
-    /// Final charge interval whose direction is already locked.
-    pub golem_laser_lock_seconds: f32,
     /// Active beam duration.
     pub golem_laser_seconds: f32,
     /// Time between laser casts.
@@ -245,6 +278,23 @@ pub struct EncounterTuning {
 impl Default for EncounterTuning {
     fn default() -> Self {
         Self {
+            wisp_memory_seconds: 4.0,
+            wisp_cover_shots: 2,
+            dragon_lunge_health_fraction: 0.6,
+            dragon_lunge_min_range: 8.0,
+            dragon_lunge_speed: 12.0,
+            dragon_lunge_seconds: 0.75,
+            dragon_lunge_cooldown: 8.0,
+            goblin_jump_height: 2.8,
+            goblin_jump_interval_min: 2.0,
+            goblin_jump_interval_max: 3.0,
+            goblin_spacing: 1.4,
+            golem_laser_turn_speed: 1.2,
+            golem_swipe_damage: 25.0,
+            golem_swipe_range: 3.0,
+            golem_swipe_windup: 0.35,
+            golem_swipe_cooldown: 2.5,
+            golem_swipe_terrain_power: 8,
             worm_segments: 4,
             worm_depth_levels: 2,
             worm_hp: 320.0,
@@ -286,11 +336,10 @@ impl Default for EncounterTuning {
             golem_slam_cooldown: 5.0,
             golem_slam_knockback: 5.0,
             golem_slam_terrain_power: 2,
-            golem_laser_damage: 45.0,
+            golem_laser_damage: 180.0,
             golem_laser_min_range: 12.0,
             golem_laser_charge: 2.0,
-            golem_laser_lock_seconds: 0.35,
-            golem_laser_seconds: 1.0,
+            golem_laser_seconds: 4.0,
             golem_laser_cooldown: 8.0,
             golem_laser_radius: 0.08,
             golem_laser_terrain_power: 2,
@@ -346,7 +395,7 @@ impl Default for EncounterTuning {
             shaman_reaction: 0.35,
             shaman_shield_cooldown: 8.0,
             aura_windup: 0.5,
-            aura_radius: 6.0,
+            aura_radius: 9.0,
             aura_seconds: 5.0,
             aura_cooldown: 12.0,
             aura_heal: 3.0,
@@ -382,6 +431,22 @@ impl EncounterTuning {
             return Err("Encounter actor HP must be finite and in (0, 1000].".into());
         }
         let values = [
+            self.wisp_memory_seconds,
+            self.dragon_lunge_health_fraction,
+            self.dragon_lunge_min_range,
+            self.dragon_lunge_speed,
+            self.dragon_lunge_seconds,
+            self.dragon_lunge_cooldown,
+            self.goblin_jump_height,
+            self.goblin_jump_interval_min,
+            self.goblin_jump_interval_max,
+            self.goblin_spacing,
+            self.golem_laser_turn_speed,
+            self.golem_swipe_damage,
+            self.golem_swipe_range,
+            self.golem_swipe_windup,
+            self.golem_swipe_cooldown,
+
             self.worm_speed,
             self.worm_turn_speed,
             self.worm_rise_speed,
@@ -416,7 +481,6 @@ impl EncounterTuning {
             self.golem_laser_damage,
             self.golem_laser_min_range,
             self.golem_laser_charge,
-            self.golem_laser_lock_seconds,
             self.golem_laser_seconds,
             self.golem_laser_cooldown,
             self.golem_laser_radius,
@@ -511,9 +575,17 @@ impl EncounterTuning {
                 "Wisp preferred range, flying layers or projectile radius is invalid.".into(),
             );
         }
+        if !(1..=4).contains(&self.wisp_cover_shots)
+            || !(1..=10).contains(&self.golem_swipe_terrain_power)
+            || self.dragon_lunge_health_fraction > 1.0
+            || self.goblin_jump_interval_min > self.goblin_jump_interval_max
+            || self.goblin_jump_height > 4.0
+            || self.golem_laser_turn_speed > 12.0
+        {
+            return Err("Creature pressure timing, geometry or damage power is invalid.".into());
+        }
         if self.goblin_height < self.goblin_radius * 2.0
             || self.golem_laser_min_range <= self.golem_slam_range
-            || self.golem_laser_lock_seconds >= self.golem_laser_charge
             || self.golem_laser_radius > 0.5
             || self.dragon_length < self.dragon_width
             || self.dragon_height > self.dragon_width

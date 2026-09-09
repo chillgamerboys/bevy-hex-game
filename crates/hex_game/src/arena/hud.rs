@@ -27,6 +27,9 @@ pub(super) enum Label {
     Team(usize),
     ObserverTeams,
     ObserverStatus,
+    MenuTitle,
+    MenuHelp,
+    Resume,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
@@ -182,8 +185,8 @@ pub(super) fn setup(mut commands: Commands) {
         .with_children(|overlay| {
             overlay.spawn((Node { width: px(600), height: px(710), max_width: percent(95), padding: UiRect::all(px(20)), flex_direction: FlexDirection::Column, row_gap: px(5), flex_shrink: 0.0, border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|panel| {
-                    panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("PAUSED / COMBAT MENU", 24.0, INK)));
-                    panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("Mouse is free. ESC / TAB resumes. Sizes are independent.", 13.0, INK)));
+                    panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("", 24.0, INK), Label::MenuTitle));
+                    panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("", 13.0, INK), Label::MenuHelp));
                     for index in 0..12 {
                         panel.spawn(Node { width: percent(100), height: px(30), flex_shrink: 0.0, align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
                             row.spawn((Node { width: px(375), height: px(20), flex_shrink: 0.0, ..default() }, text("", 15.0, INK), Label::Parameter(index)));
@@ -197,7 +200,10 @@ pub(super) fn setup(mut commands: Commands) {
                     panel.spawn(Node { height: px(42), flex_shrink: 0.0, column_gap: px(12), margin: UiRect::top(px(8)), ..default() }).with_children(|row| {
                         for (label, action) in [("RESUME", Action::Resume), ("RESET ARENA", Action::Restart)] {
                             row.spawn((Button, Node { width: px(260), height: px(42), border_radius: BorderRadius::all(px(5)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), action))
-                                .with_children(|button| { button.spawn(text(label, 15.0, INK)); });
+                                .with_children(|button| {
+                                    let mut text = button.spawn(text(label, 15.0, INK));
+                                    if matches!(action, Action::Resume) { text.insert(Label::Resume); }
+                                });
                         }
                     });
                     panel.spawn(Node { height: px(42), flex_shrink: 0.0, column_gap: px(12), ..default() }).with_children(|row| {
@@ -315,7 +321,7 @@ pub(super) fn buttons(
                 state.prepare_round();
             }
             Action::Start if !state.started => state.begin_play(),
-            Action::Resume if state.started => state.begin_play(),
+            Action::Resume if state.started && !session.is_finished() => state.begin_play(),
             Action::Restart if state.started => {
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
@@ -414,6 +420,10 @@ pub(super) fn update(
         };
     }
     for (action, mut color) in &mut choices {
+        if matches!(action, Action::Resume) {
+            *color = BackgroundColor(if session.is_finished() { Color::srgb(0.12, 0.15, 0.18) } else { Color::srgb(0.16, 0.37, 0.41) });
+            continue;
+        }
         let selected = match action {
             Action::Control(control) => *control == battle.control,
             Action::Map(map) => *map == selection.map,
@@ -474,6 +484,19 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::MenuTitle if session.is_finished() => {
+                if observing { "BATTLE COMPLETE".into() } else {
+                    match session.outcome {
+                        Some(ArenaOutcome::Winner(0)) => "YOU WIN / COMBAT MENU",
+                        Some(ArenaOutcome::Winner(_)) => "DEFEATED / COMBAT MENU",
+                        _ => "ROUND OVER / COMBAT MENU",
+                    }.into()
+                }
+            },
+            Label::MenuTitle => "PAUSED / COMBAT MENU".into(),
+            Label::MenuHelp if session.is_finished() => "Mouse is free. Reset Arena returns to the start screen.".into(),
+            Label::MenuHelp => "Mouse is free. ESC / TAB resumes. Sizes are independent.".into(),
+            Label::Resume => if session.is_finished() { "ROUND COMPLETE" } else { "RESUME" }.into(),
             Label::Team(slot) => format!("TEAM {}  /  {}", slot + 1, spectator::preset_for(&battle, *slot).map_or("Custom", BattlePreset::label)),
             Label::ObserverTeams => session.battle_summary().map_or_else(String::new, |summary| spectator::team_status(&summary)),
             Label::ObserverStatus => session.battle_summary().map_or_else(String::new, |summary| spectator::battle_status(&summary, state.observer.mode, state.paused)),

@@ -29,6 +29,7 @@ pub(crate) struct GroundProfile {
     pub radius: f32,
     pub walk: f32,
     pub run: f32,
+    pub jump_height: f32,
 }
 
 impl Default for GroundProfile {
@@ -38,6 +39,7 @@ impl Default for GroundProfile {
             radius: BODY_RADIUS,
             walk: WALK,
             run: RUN,
+            jump_height: JUMP_HEIGHT,
         }
     }
 }
@@ -90,7 +92,7 @@ impl Body {
             (self.coyote - STEP).max(0.0)
         };
         if self.jump_buffer > 0.0 && self.coyote > 0.0 {
-            self.vertical_velocity = (2.0 * GRAVITY * JUMP_HEIGHT).sqrt();
+            self.vertical_velocity = (2.0 * GRAVITY * profile.jump_height).sqrt();
             self.grounded = false;
             self.coyote = 0.0;
             self.jump_buffer = 0.0;

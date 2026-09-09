@@ -4,6 +4,13 @@ use super::*;
 use crate::bot::ballistic_aim;
 use crate::spells::{forecast_spell, ForecastBody};
 
+#[path = "golem_brain.rs"]
+mod golem;
+
+#[cfg(test)]
+#[path = "pressure_tests.rs"]
+mod pressure_tests;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Request {
     pub kind: CreatureAbility,
@@ -14,6 +21,7 @@ pub(super) struct MotionIntent {
     pub input: ActorIntent,
     pub direction: Vec3,
     pub flight: bool,
+    pub lunge: bool,
 }
 #[derive(Debug)]
 pub(super) struct Brain {
@@ -39,7 +47,12 @@ pub(super) struct Brain {
     battle_seen: Vec<targeting::ObservedTarget>,
     battle_sense_tick: Option<u64>,
     battle_target: Option<ActorId>,
-    ember_target: Option<Knowledge>,
+    ember_target: Option<wisp::EmberTarget>,
+    ember_seen: Option<Knowledge>,
+    ember_cover_remaining: u8,
+    golem_observation: Option<targeting::ObservedTarget>,
+    lunge: Option<(Vec3, u64)>,
+    lunge_since: Option<u64>,
     ember_opening_delay: u64,
     ember_opening_at: Option<u64>,
 }
@@ -70,6 +83,11 @@ impl Brain {
             battle_sense_tick: None,
             battle_target: None,
             ember_target: None,
+            ember_seen: None,
+            ember_cover_remaining: 0,
+            golem_observation: None,
+            lunge: None,
+            lunge_since: None,
             ember_opening_delay: 0,
             ember_opening_at: None,
         }
@@ -145,7 +163,9 @@ impl Brain {
         // Live human data is confined to visibility admission. Downstream plans
         // receive this copy or the party's dated observation, never a hidden pose.
         let battle = party.battle_search.is_some();
-        let sight = if battle {
+        let sight = if actor.species == Species::Golem {
+            self.golem_sight(actor, party, actors, collision, tuning, tick)
+        } else if battle {
             if self
                 .battle_sense_tick
                 .is_none_or(|previous| tick.saturating_sub(previous) >= 12)
@@ -238,7 +258,8 @@ impl Brain {
                 );
             }
         }
-        if sight.is_some() && !self.was_visible {
+        let reacquired = sight.is_some() && !self.was_visible;
+        if reacquired {
             self.reaction_since = tick;
         }
         self.was_visible = sight.is_some();
@@ -274,6 +295,7 @@ impl Brain {
                     direction: f * input.movement.y + f.cross(Vec3::Y) * input.movement.x,
                     input,
                     flight: false,
+                    lunge: false,
                 },
                 None,
             );
@@ -284,6 +306,7 @@ impl Brain {
         };
         let mut request = None;
         let mut flight = false;
+        let mut lunge = false;
         let target = known.map(|k| {
             k.observed
                 .map_or(k.point + Vec3::Y * 0.4, targeting::ObservedTarget::center)
@@ -440,26 +463,113 @@ impl Brain {
                     goal = actor.feet;
                 }
             }
+            let healthy = actor.hp > actor.max_hp * c.dragon_lunge_health_fraction;
+            if retreat
+                || !healthy
+                || self.active.is_some()
+                || request.is_some()
+                || party.snapshot.phase != PartyPhase::Active
+            {
+                self.lunge = None;
+            } else {
+                if self.lunge.is_some_and(|(point, since)| {
+                    elapsed(tick, since) >= c.dragon_lunge_seconds
+                        || actor.feet.distance(point) < 0.5
+                }) {
+                    self.lunge = None;
+                }
+                let pressure = threatened
+                    || cues.iter().any(|cue| {
+                        cue.team != actor.team
+                            && cue.owner == target_id.unwrap_or(0)
+                            && cue.kind == CombatCueKind::Release
+                            && elapsed(tick, cue.tick) <= 3.0
+                            && collision.sight_clear(actor.eye(), cue.position)
+                    });
+                if self.lunge.is_none()
+                    && sight.is_some()
+                    && pressure
+                    && self
+                        .lunge_since
+                        .is_none_or(|since| elapsed(tick, since) >= c.dragon_lunge_cooldown)
+                {
+                    if let Some(point) = target
+                        .filter(|point| actor.center().distance(*point) >= c.dragon_lunge_min_range)
+                    {
+                        let away = (actor.center() - point).with_y(0.0).normalize_or(Vec3::Z);
+                        if let Some(destination) = steering::flight_goal(
+                            actor,
+                            point + away * (actor.dimensions.z * 0.5 + c.bite_range * 0.6),
+                            collision,
+                            world,
+                            geometry,
+                            c,
+                        ) {
+                            self.lunge = Some((destination, tick));
+                            self.lunge_since = Some(tick);
+                        }
+                    }
+                }
+                if let Some((destination, _)) = self.lunge {
+                    goal = destination;
+                    flight = true;
+                    lunge = true;
+                }
+            }
         } else if actor.species == Species::Wisp {
             flight = true;
-            self.ember_target = sight;
+            if let Some(seen) = sight {
+                if reacquired {
+                    self.ember_cover_remaining = c.wisp_cover_shots;
+                }
+                self.ember_seen = Some(seen);
+            }
+            let memory = self
+                .ember_seen
+                .filter(|seen| elapsed(tick, seen.tick) <= c.wisp_memory_seconds);
+            self.ember_target = sight.map(wisp::EmberTarget::Visible).or_else(|| {
+                (self.ember_cover_remaining > 0)
+                    .then_some(memory)
+                    .flatten()
+                    .map(wisp::EmberTarget::Cover)
+            });
             if self
                 .active
                 .as_ref()
                 .is_some_and(super::abilities::Cast::tracks_ember)
-                && sight.is_none()
+                && self.ember_target.is_none()
             {
                 self.active = None;
             }
             if party.snapshot.phase == PartyPhase::Returning {
                 goal = self.home;
+                self.ember_target = None;
             } else if self.patrol_goal.is_none_or(|(_, until)| tick >= until) {
-                goal = wisp::positioning_goal(actor, target, goal, collision, world, geometry, c);
+                let visible_point = sight.map(|seen| {
+                    seen.observed.map_or(
+                        seen.point + Vec3::Y * 0.4,
+                        targeting::ObservedTarget::center,
+                    )
+                });
+                let search = memory.map_or(goal, |seen| seen.point);
+                // A last-known point is a search destination, not a range-band target.
+                goal = wisp::positioning_goal(
+                    actor,
+                    visible_point,
+                    search,
+                    collision,
+                    world,
+                    geometry,
+                    c,
+                );
                 self.patrol_goal = Some((goal, tick + 24 + u64::from(actor.id % 6)));
             } else if let Some((point, _)) = self.patrol_goal {
                 goal = point;
             }
-            if let Some(seen) = sight {
+            if let Some(target) = self.ember_target {
+                let seen = match target {
+                    wisp::EmberTarget::Visible(seen) | wisp::EmberTarget::Cover(seen) => seen,
+                };
                 let point = seen
                     .observed
                     .map_or(seen.point + Vec3::Y * 0.4, |o| o.sight_point);
@@ -483,8 +593,7 @@ impl Brain {
             }
         } else if actor.species == Species::Goblin {
             if let Some(target) = target {
-                let toward = (target - actor.center()).with_y(0.0).normalize_or_zero();
-                goal += toward.cross(Vec3::Y) * (f32::from(actor.id % 3) - 1.0) * 0.65;
+                goal = goblin_approach(actor, actors, party.snapshot.home, target, c);
                 let distance = sight.and_then(|seen| seen.observed).map_or_else(
                     || actor.eye().distance(target),
                     |seen| seen.distance(actor.eye(), 0.0),
@@ -502,45 +611,16 @@ impl Brain {
                     goal = actor.feet;
                 }
             }
+            if let Some(shaman) = actors.iter().find(|ally| {
+                ally.hp > 0.0 && ally.party == actor.party && ally.species == Species::Shaman
+            }) {
+                let offset = (goal - shaman.feet).with_y(0.0);
+                goal = shaman.feet + offset.clamp_length_max(c.aura_radius * 0.8);
+            }
         } else if actor.species == Species::Golem {
-            if let Some(seen) = sight {
-                let point = seen
-                    .observed
-                    .map_or(seen.point + Vec3::Y * 0.4, |o| o.sight_point);
-                let distance = seen.observed.map_or_else(
-                    || actor.center().distance(point),
-                    |o| o.distance(actor.center(), 0.0),
-                );
-                // The face may aim independently of the fixed seven-hex body.
-                // Use only this admitted observation, including for the mouth ray.
-                let bearing = point - (actor.feet + Vec3::Y * 1.4);
-                let mouth = shapes::golem_mouth(actor, bearing);
-                input.aim = (point - mouth).normalize_or(actor.aim);
-                if distance <= c.golem_slam_range && self.ready(CreatureAbility::GolemSlam) {
-                    request = Some(Request {
-                        kind: CreatureAbility::GolemSlam,
-                        aim: input.aim,
-                    });
-                } else if distance >= c.golem_laser_min_range
-                    && self.ready(CreatureAbility::GolemLaser)
-                    && collision.sight_clear(shapes::golem_mouth(actor, input.aim), point)
-                {
-                    request = Some(Request {
-                        kind: CreatureAbility::GolemLaser,
-                        aim: input.aim,
-                    });
-                }
-            }
-            if self
-                .active
-                .as_ref()
-                .is_some_and(|cast| cast.tracks_laser(c))
-                && sight.is_none()
-            {
-                // Before the advertised lock, lost sight cancels preparation.
-                // Once locked, the committed line fires without hidden tracking.
-                self.active = None;
-            }
+            request = self.golem_intent(
+                actor, party, sight, goal, collision, world, geometry, tuning, tick, &mut input,
+            );
         } else if actor.species == Species::Shaman {
             if tick >= self.next_shot_probe || sight.is_none() {
                 self.shooting_angle = sight.is_some_and(|seen| {
@@ -564,25 +644,25 @@ impl Brain {
                 if self.shooting_angle && sight.is_some() {
                     let away = (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z);
                     goal = target + away * 8.0;
-                    let frontline: Vec<_> = actors
-                        .iter()
-                        .filter(|ally| {
-                            ally.id != actor.id
-                                && ally.hp > 0.0
-                                && ally.party == actor.party
-                                && matches!(ally.species, Species::Goblin | Species::Dragon)
-                        })
-                        .collect();
-                    if !frontline.is_empty() {
-                        let count = f32::from(u8::try_from(frontline.len()).unwrap_or(24));
-                        let center = frontline.iter().map(|ally| ally.feet).sum::<Vec3>() / count;
-                        // Stay behind the fighters, leaving room inside the
-                        // existing aura for their lateral melee movement.
-                        goal = center + away * (c.aura_radius * 0.75);
-                    }
                 } else if sight.is_some() && actor.center().distance(target) < 5.0 {
                     goal = actor.feet
                         + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 4.0;
+                }
+            }
+            if let Some(center) = frontline_center(actor, actors) {
+                let away = target
+                    .map_or(actor.feet - center, |point| center - point)
+                    .with_y(0.0)
+                    .normalize_or(Vec3::Z);
+                if self.shooting_angle && sight.is_some() {
+                    goal = center + away * (c.aura_radius * 0.4);
+                } else {
+                    // Keep the support body within one field of its escorts while
+                    // searching for an angle; do not chase hidden actor truth.
+                    goal = center
+                        + (goal - center)
+                            .with_y(0.0)
+                            .clamp_length_max(c.aura_radius * 0.65);
                 }
             }
             let eligible: Vec<_> = actors
@@ -726,6 +806,13 @@ impl Brain {
             };
         let desired = if actor.species == Species::Wisp {
             wisp::spaced_direction(actor, actors, desired)
+        } else if actor.species == Species::Goblin {
+            goblin_separation(
+                actor,
+                actors,
+                desired.with_y(0.0).normalize_or_zero(),
+                c.goblin_spacing,
+            )
         } else if flight {
             desired.clamp_length_max(1.0)
         } else if moving {
@@ -743,6 +830,12 @@ impl Brain {
             }
         }
         input.run = party.snapshot.phase != PartyPhase::Dormant || self.steering.jumping();
+        let lunge_tuning = lunge.then(|| {
+            let mut profile = c.clone();
+            profile.dragon_flight_speed = c.dragon_lunge_speed;
+            profile
+        });
+        let travel_tuning = lunge_tuning.as_ref().unwrap_or(c);
         let (direction, jump) = if actor.species == Species::Shadow {
             (
                 self.shadow_travel.travel(
@@ -766,14 +859,30 @@ impl Brain {
             input.cast_released = false;
             input.cast_held = actor.charge().is_some();
             self.steering.travel(
-                actor, desired, false, input.run, collision, world, geometry, c, tick,
+                actor,
+                desired,
+                false,
+                input.run,
+                collision,
+                world,
+                geometry,
+                travel_tuning,
+                tick,
             )
         } else if self.active.is_some() || request.is_some() || input.cast_released {
             self.steering.hold(actor, tick);
             (Vec3::ZERO, false)
         } else {
             self.steering.travel(
-                actor, desired, flight, input.run, collision, world, geometry, c, tick,
+                actor,
+                desired,
+                flight,
+                input.run,
+                collision,
+                world,
+                geometry,
+                travel_tuning,
+                tick,
             )
         };
         input.jump = jump;
@@ -806,9 +915,16 @@ impl Brain {
                 input,
                 direction,
                 flight,
+                lunge,
             },
             request,
         )
+    }
+
+    pub(super) fn ember_released(&mut self) {
+        if matches!(self.ember_target, Some(wisp::EmberTarget::Cover(_))) {
+            self.ember_cover_remaining = self.ember_cover_remaining.saturating_sub(1);
+        }
     }
 
     pub(super) fn ember_release_aim(
@@ -956,4 +1072,62 @@ impl Brain {
             }))
         .then_some(caster.aim)
     }
+}
+
+fn frontline_center(actor: &Actor, actors: &[Actor]) -> Option<Vec3> {
+    let mut center = Vec3::ZERO;
+    let mut count = 0_u8;
+    for ally in actors.iter().filter(|ally| {
+        ally.id != actor.id
+            && ally.hp > 0.0
+            && ally.party == actor.party
+            && matches!(ally.species, Species::Goblin | Species::Dragon)
+    }) {
+        center += ally.feet;
+        count = count.saturating_add(1);
+    }
+    (count > 0).then(|| center / f32::from(count))
+}
+
+fn goblin_approach(
+    actor: &Actor,
+    actors: &[Actor],
+    home: Vec3,
+    target: Vec3,
+    tuning: &EncounterTuning,
+) -> Vec3 {
+    let members: Vec<_> = actors
+        .iter()
+        .filter(|ally| ally.party == actor.party && ally.species == Species::Goblin)
+        .map(|ally| ally.id)
+        .collect();
+    let slot = members.iter().filter(|id| **id < actor.id).count();
+    let count = f32::from(
+        u8::try_from(members.len().saturating_sub(1))
+            .unwrap_or(23)
+            .max(1),
+    );
+    let phase = f32::from(u8::try_from(slot).unwrap_or(23)) / count - 0.5;
+    let basis = (home - target).with_y(0.0).normalize_or(Vec3::Z);
+    let radius = if actor.center().distance(target) > 4.0 {
+        (tuning.goblin_spacing * 2.0).max(tuning.swipe_range)
+    } else {
+        tuning.swipe_range * 0.65
+    };
+    target + bevy_math::Quat::from_rotation_y(phase * 4.4) * basis * radius
+}
+
+fn goblin_separation(actor: &Actor, actors: &[Actor], desired: Vec3, spacing: f32) -> Vec3 {
+    let mut direction = desired;
+    for ally in actors
+        .iter()
+        .filter(|ally| ally.id != actor.id && ally.hp > 0.0 && ally.team == actor.team)
+    {
+        let offset = (actor.feet - ally.feet).with_y(0.0);
+        let distance = offset.length();
+        if distance > SKIN && distance < spacing {
+            direction += offset / distance * ((spacing - distance) / spacing);
+        }
+    }
+    direction.clamp_length_max(1.0)
 }

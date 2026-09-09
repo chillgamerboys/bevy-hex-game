@@ -302,7 +302,7 @@ fn all_three_seven_region_parties_have_supported_local_ground_excursions() {
     let fixture = app(ArenaMap::SevenRegions, ArenaEncounter::Dragon);
     let session = fixture.world().resource::<ArenaSession>();
     assert_eq!(session.parties().len(), 3);
-    assert_eq!(session.actors.len(), 11);
+    assert_eq!(session.actors.len(), 18);
     for (id, species, q, r) in [
         (1, Species::Dragon, -2, 0),
         (2, Species::Shaman, -2, 0),

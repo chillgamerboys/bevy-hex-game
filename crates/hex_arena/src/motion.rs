@@ -19,6 +19,19 @@ pub(crate) fn tick(
     world: &CollisionWorld,
     tuning: &EncounterTuning,
 ) {
+    tick_with_lunge(actor, direction, run, jump, flight, false, world, tuning);
+}
+
+pub(crate) fn tick_with_lunge(
+    actor: &mut Actor,
+    direction: Vec3,
+    run: bool,
+    jump: bool,
+    flight: bool,
+    lunge: bool,
+    world: &CollisionWorld,
+    tuning: &EncounterTuning,
+) {
     if actor.species == Species::Worm {
         // The session performs its world-approved component step after ordinary actors.
         // A terrain-only controller cannot authorize phaseable earth.
@@ -41,6 +54,7 @@ pub(crate) fn tick(
                 radius: actor.dimensions.x * 0.5,
                 walk: tuning.goblin_walk,
                 run: tuning.goblin_run,
+                jump_height: tuning.goblin_jump_height,
             },
             Species::Shaman => GroundProfile {
                 walk: tuning.shaman_walk,
@@ -74,9 +88,12 @@ pub(crate) fn tick(
         }
         actor.flying = true;
         actor.body.grounded = false;
-        let delta = (direction.clamp_length_max(1.0) * tuning.dragon_flight_speed
-            + actor.body.impulse_velocity)
-            * STEP;
+        let speed = if lunge {
+            tuning.dragon_lunge_speed
+        } else {
+            tuning.dragon_flight_speed
+        };
+        let delta = (direction.clamp_length_max(1.0) * speed + actor.body.impulse_velocity) * STEP;
         let (feet, contacts) = shapes::slide(world, actor, actor.feet, delta);
         actor.feet = feet;
         for normal in contacts {

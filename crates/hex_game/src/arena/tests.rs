@@ -2307,3 +2307,6 @@ mod worm_tests;
 
 #[path = "duel_party_tests.rs"]
 mod duel_party_tests;
+
+#[path = "terminal_menu_tests.rs"]
+mod terminal_menu_tests;

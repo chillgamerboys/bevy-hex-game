@@ -284,7 +284,7 @@ fn fort_player_recipe_is_accepted_at_reset_and_cleared_for_seven_regions() {
     let session = fixture.world().resource::<ArenaSession>();
     assert_eq!(session.human_actor_id(), Some(0));
     assert!(!session.is_finished());
-    assert_eq!(session.actors.len(), 11);
+    assert_eq!(session.actors.len(), 18);
     assert!(session
         .actors
         .iter()
@@ -304,7 +304,7 @@ fn spectator_setup_edits_wait_for_reset_then_return_to_ordinary_duel() {
     fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
     fixture.world_mut().run_schedule(ArenaTick);
     assert_eq!(battle(&fixture).seed, 9);
-    assert_eq!(fixture.world().resource::<ArenaSession>().actors.len(), 10);
+    assert_eq!(fixture.world().resource::<ArenaSession>().actors.len(), 20);
     *fixture.world_mut().resource_mut::<ArenaBattleSetup>() = ArenaBattleSetup::default();
     fixture.world_mut().resource_mut::<ArenaReset>().generation += 1;
     fixture.world_mut().run_schedule(ArenaTick);

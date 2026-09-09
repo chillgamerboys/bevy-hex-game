@@ -155,10 +155,7 @@ impl ArenaSession {
         let specs: Vec<(Vec3, Vec<Species>)> = if world.selection.map == ArenaMap::SevenRegions {
             [
                 ("mountains_high_pass", vec![Species::Dragon]),
-                (
-                    "fort_fort_courtyard",
-                    BattlePreset::ShamanParty.members(),
-                ),
+                ("fort_fort_courtyard", BattlePreset::ShamanParty.members()),
                 ("caves_cave_entrance", BattlePreset::Goblins.members()),
             ]
             .into_iter()
@@ -437,12 +434,28 @@ impl ArenaSession {
     }
 
     pub(super) fn wake_encounter_damage(&mut self, owner: ActorId, victim: ActorId, amount: f32) {
-        if !self.encounter.initialized || owner != 0 || amount <= 0.0 {
+        if !self.encounter.initialized || amount <= 0.0 {
             return;
         }
         let Some(actor) = self.actors.iter().find(|a| a.id == victim) else {
             return;
         };
+        let hurt_worm = actor.species == Species::Worm
+            && owner != victim
+            && self
+                .actors
+                .iter()
+                .find(|source| source.id == owner)
+                .is_none_or(|source| source.team != actor.team);
+        if hurt_worm {
+            if let Some(control) = self.encounter.worms.get_mut(&victim) {
+                // The admitted damage identifies a threat; above-ground damage
+                // never copies that actor's hidden current position.
+                control.hostile_damage(owner);
+            }
+        } else if owner != 0 {
+            return;
+        }
         let point = (actor.center() / 2.0).round() * 2.0;
         if let Some(p) = self
             .encounter
@@ -450,7 +463,7 @@ impl ArenaSession {
             .iter_mut()
             .find(|p| Some(p.snapshot.id) == actor.party)
         {
-            if p.snapshot.phase == PartyPhase::Dormant {
+            if p.snapshot.phase == PartyPhase::Dormant || hurt_worm {
                 p.snapshot.phase = PartyPhase::Active;
                 p.knowledge = Some(Knowledge {
                     point,
@@ -480,6 +493,25 @@ impl ArenaSession {
             // Stagger groups while retaining the full ten-Hz sensing cadence.
             if !(self.tick + u64::from(p.snapshot.id) * 4).is_multiple_of(12) {
                 continue;
+            }
+            // Only a Worm-only party inherits the Worm's persistent activated
+            // pursuit. Mixed allies keep their ordinary leash/search rules and
+            // never receive the private underground target position.
+            let members: Vec<_> = self
+                .actors
+                .iter()
+                .filter(|a| a.party == Some(p.snapshot.id) && a.hp > 0.0)
+                .collect();
+            let worm_pursuit = !members.is_empty()
+                && members.iter().all(|a| a.species == Species::Worm)
+                && members.iter().any(|a| {
+                    self.encounter
+                        .worms
+                        .get(&a.id)
+                        .is_some_and(worm::Controller::pursuing)
+                });
+            if worm_pursuit {
+                p.snapshot.phase = PartyPhase::Active;
             }
             let visible = self
                 .actors
@@ -553,7 +585,7 @@ impl ArenaSession {
                     .iter()
                     .filter(|a| a.party == Some(p.snapshot.id) && a.hp > 0.0)
                     .any(|a| a.feet.distance(p.snapshot.home) > p.leash);
-                if exceeded || elapsed(self.tick, p.last_sight) > p.search {
+                if !worm_pursuit && (exceeded || elapsed(self.tick, p.last_sight) > p.search) {
                     p.snapshot.phase = PartyPhase::Returning;
                 }
             } else if p.snapshot.phase == PartyPhase::Returning {
@@ -694,12 +726,13 @@ impl ArenaSession {
                 intents.get(&actor.id).map_or(Vec3::ZERO, |i| i.direction)
             };
             let flight = intents.get(&actor.id).is_some_and(|i| i.flight);
-            motion::tick(
+            motion::tick_with_lunge(
                 actor,
                 direction,
                 intent.run,
                 intent.jump,
                 flight,
+                intents.get(&actor.id).is_some_and(|i| i.lunge),
                 &self.collision,
                 &tuning.encounters,
             );

@@ -6,6 +6,13 @@ use crate::spells::{forecast_creature_projectile, CreatureProjectileSpec};
 use bevy_math::Quat;
 use hex_core::TerrainDamageKind;
 
+/// An own-sighting copy; cover pressure never receives a live hidden body.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum EmberTarget {
+    Visible(Knowledge),
+    Cover(Knowledge),
+}
+
 pub(super) fn ember_spec(c: &EncounterTuning, materials: ArenaMaterials) -> CreatureProjectileSpec {
     CreatureProjectileSpec {
         ability: CreatureAbility::WispEmber,
@@ -25,7 +32,7 @@ pub(super) fn ember_spec(c: &EncounterTuning, materials: ArenaMaterials) -> Crea
 /// The exact production projectile sweep admits the shot and its self-splash.
 pub(super) fn release_aim(
     actor: &Actor,
-    seen: Knowledge,
+    target: EmberTarget,
     collision: &CollisionWorld,
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
@@ -34,16 +41,39 @@ pub(super) fn release_aim(
     tick: u64,
 ) -> Option<Vec3> {
     let c = &tuning.encounters;
+    let (seen, cover) = match target {
+        EmberTarget::Visible(seen) => (seen, false),
+        EmberTarget::Cover(seen) => (seen, true),
+    };
     let age = elapsed(tick, seen.tick);
-    if !seen.direct || age > 0.2 {
+    if !seen.direct || age > if cover { c.wisp_memory_seconds } else { 0.2 } {
         return None;
     }
     let sight_point = seen
         .observed
         .map_or(seen.point + Vec3::Y * 0.4, |o| o.sight_point);
-    if !collision.sight_clear(actor.eye(), sight_point)
-        || actor.eye().distance(sight_point) > c.wisp_preferred_max
-    {
+    if actor.eye().distance(sight_point) > c.wisp_preferred_max {
+        return None;
+    }
+    if cover {
+        // A finite shot chips the intervening terrain, never a guessed live body.
+        // Once this line opens, seek/reacquire instead of firing into empty space.
+        if collision.sight_clear(actor.eye(), sight_point) {
+            return None;
+        }
+        let spec = ember_spec(c, materials);
+        let (aim, _) =
+            ballistic_aim_with_gravity(actor.eye(), sight_point, spec.gravity, spec.speed)?;
+        let hit = forecast_creature_projectile(actor, aim, spec, &[], collision, world, geometry)
+            .impact?;
+        return (hit.actor.is_none()
+            && hit.barrier.is_none()
+            && shapes::distance(hit.point, actor) > spec.splash_radius + 0.1
+            && hit.point.distance(actor.eye())
+                < sight_point.distance(actor.eye()) + spec.splash_radius)
+            .then_some(aim);
+    }
+    if !collision.sight_clear(actor.eye(), sight_point) {
         return None;
     }
     let mut fact = seen.observed?.body;

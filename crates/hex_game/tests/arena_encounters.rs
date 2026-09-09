@@ -46,15 +46,15 @@ fn every_recipe_publishes_the_expected_living_roster_and_safe_player_start() {
     for (selection, count) in [
         (ArenaSelection::default(), 2),
         (fort(ArenaEncounter::Dragon), 2),
-        (fort(ArenaEncounter::Goblins), 6),
-        (fort(ArenaEncounter::ShamanParty), 5),
+        (fort(ArenaEncounter::Goblins), 11),
+        (fort(ArenaEncounter::ShamanParty), 7),
         (fort(ArenaEncounter::Shadow), 2),
         (
             ArenaSelection {
                 map: ArenaMap::SevenRegions,
                 ..Default::default()
             },
-            11,
+            18,
         ),
     ] {
         let fixture = app(selection);
@@ -158,7 +158,7 @@ fn selecting_and_restarting_restores_world_and_roster_without_old_actor_ids() {
     ] {
         select(&mut fixture, selection);
         let count = if selection.map == ArenaMap::SevenRegions {
-            11
+            18
         } else {
             2
         };
@@ -212,7 +212,7 @@ fn one_surviving_enemy_does_not_win_until_the_player_dies() {
     assert_ne!(session.outcome, Some(ArenaOutcome::Winner(0)));
     assert_eq!(
         session.actors.iter().filter(|actor| actor.hp > 0.0).count(),
-        10
+        17
     );
 }
 
@@ -561,7 +561,7 @@ fn diagnostic_target_placement_uses_current_dry_support_and_avoids_living_bodies
 }
 
 #[test]
-fn home_bounded_revisits_keep_all_ten_enemies_engaged_under_real_destruction() {
+fn home_bounded_revisits_keep_all_seventeen_enemies_engaged_under_real_destruction() {
     profile_combat(ArenaSelection {
         map: ArenaMap::SevenRegions,
         ..Default::default()

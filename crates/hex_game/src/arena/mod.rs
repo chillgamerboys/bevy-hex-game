@@ -661,7 +661,7 @@ fn input(
     {
         session.cancel_charges();
         intent.human = ActorIntent::default();
-        if state.paused {
+        if state.paused && !session.is_finished() {
             state.begin_play();
         } else {
             state.pause();
@@ -1083,6 +1083,25 @@ fn drive_simulation(world: &mut World) {
             .simulation_frame_times
             .push(f64::from(u32::try_from(ticks_advanced).unwrap_or(0)) * FIXED_SECONDS * 1000.0);
     }
+    show_terminal_menu(world);
+}
+
+fn show_terminal_menu(world: &mut World) {
+    let state = world.resource::<ViewState>();
+    if !state.started || state.paused || !world.resource::<ArenaSession>().is_finished() {
+        return;
+    }
+    // Settle terrain queued by the last impact before freezing the round. The
+    // terminal gameplay guard prevents another living movement/ability tick.
+    world.run_schedule(ArenaTick);
+    world.resource_mut::<ViewState>().pause();
+    world.resource_mut::<ArenaSession>().cancel_charges();
+    world.resource_mut::<ArenaInput>().human = ActorIntent::default();
+    let mut cursors = world.query_filtered::<&mut CursorOptions, With<PrimaryWindow>>();
+    for mut cursor in cursors.iter_mut(world) {
+        cursor.visible = true;
+        cursor.grab_mode = CursorGrabMode::None;
+    }
 }
 
 // Capture fixtures drive the same input edges as native play. Existing explosion
@@ -1475,7 +1494,7 @@ fn capture_frame(
         })).collect::<Vec<_>>();
         let beam = actor.beam().map(|beam| serde_json::json!({
             "origin": beam.origin.to_array(), "direction": beam.direction.to_array(),
-            "end": beam.end.to_array(), "radius": beam.radius, "locked": beam.locked
+            "end": beam.end.to_array(), "radius": beam.radius, "tracking": beam.tracking
         }));
         serde_json::json!({
             "id": actor.id, "species": actor.species, "team": actor.team,

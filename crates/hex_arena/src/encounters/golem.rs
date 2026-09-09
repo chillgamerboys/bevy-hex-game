@@ -1,6 +1,88 @@
-//! Golem finite sphere and locked continuous beam, using ordinary damage authority.
+//! Golem sphere, frontal stone swipe and tracked beam use ordinary damage authority.
 
 use super::*;
+use crate::hex_prisms::HexPrism;
+
+fn swipe_prisms(owner: &Actor) -> impl Iterator<Item = HexPrism> + '_ {
+    owner
+        .body_hex_prisms()
+        .filter_map(|part| HexPrism::new(owner.feet + part.offset, part.height))
+}
+
+fn swipe_radius(owner: &Actor, reach: f32) -> f32 {
+    owner.dimensions.length() * 0.5 + reach
+}
+
+fn swipe_point(owner: &Actor, delta: Vec3, point: Vec3) -> bool {
+    point.y > owner.feet.y + SKIN
+        && point.y < owner.feet.y + owner.dimensions.y - SKIN
+        && shapes::distance(point, owner) > SKIN
+        && swipe_prisms(owner).any(|part| part.sweep_point(point, -delta).is_some())
+}
+
+fn swipe_voxels(
+    owner: &Actor,
+    direction: Vec3,
+    reach: f32,
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> Vec<TilePos> {
+    let delta = direction.with_y(0.0).normalize_or_zero() * reach;
+    let center = owner.center();
+    let extent = (1.0 + geometry.level_height * geometry.level_height * 0.25).sqrt();
+    geometry
+        .sphere(world, center, swipe_radius(owner, reach) + extent)
+        .into_iter()
+        .filter(|pos| geometry.top(*pos) > owner.feet.y + SKIN)
+        .filter(|pos| {
+            !world.edit_protected.get(&pos.coord).is_some_and(|spans| {
+                spans
+                    .iter()
+                    .any(|(bottom, top)| (*bottom..=*top).contains(&pos.level))
+            })
+        })
+        .filter(|pos| !shapes::voxel_overlap(*pos, geometry, owner))
+        .filter(|pos| {
+            let Some(voxel) = HexPrism::new(
+                pos.coord
+                    .to_world(geometry.top(*pos) - geometry.level_height),
+                geometry.level_height,
+            ) else {
+                return false;
+            };
+            swipe_prisms(owner).any(|part| part.swept_overlaps_prism(delta, voxel, SKIN))
+        })
+        .filter(|pos| {
+            // One pulse uses one obstruction snapshot, admitting the exposed
+            // face only. It cannot also reach through a destroyed front wall.
+            let point = closest_voxel_point(center, *pos, geometry);
+            let ray = point - center;
+            let ray = ray + ray.normalize_or_zero() * SKIN * 4.0;
+            collision
+                .attack_sweep(center, ray, 0.0)
+                .is_some_and(|(hit, barrier)| {
+                    barrier.is_none()
+                        && geometry.voxel_at(
+                            center + ray * hit.fraction + ray.normalize_or_zero() * SKIN * 2.0,
+                        ) == Some(*pos)
+                })
+        })
+        .collect()
+}
+
+/// Recovery is local terrain pressure, never an inferred hidden target or cliff.
+pub(in crate::encounters) fn golem_swipe_blocked(
+    owner: &Actor,
+    direction: Vec3,
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> bool {
+    const PROBE: f32 = 0.35;
+    shapes::sweep(collision, owner, owner.feet, direction * PROBE).is_some()
+        && !swipe_voxels(owner, direction, PROBE, collision, world, geometry).is_empty()
+}
 
 #[derive(Clone, Copy)]
 enum Contact {
@@ -41,7 +123,7 @@ impl ArenaSession {
                 direction: cast.direction,
                 end: origin + delta * fraction,
                 radius,
-                locked: !cast.tracks_laser(&tuning.encounters),
+                tracking: cast.laser.is_some_and(|track| track.tracking),
             },
             contact,
         )
@@ -205,6 +287,113 @@ impl ArenaSession {
             kind: Spell::AreaBlast,
         });
         self.combat_cue_from(owner.id, cast.team, center, CombatCueKind::Impact);
+    }
+
+    pub(super) fn golem_swipe(
+        &mut self,
+        owner: &Actor,
+        cast: &mut Cast,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        materials: ArenaMaterials,
+        tuning: &ArenaTuning,
+        out: &mut CommandsOut,
+    ) {
+        let c = &tuning.encounters;
+        let direction = cast
+            .direction
+            .with_y(0.0)
+            .normalize_or(owner.aim.with_y(0.0).normalize_or(Vec3::NEG_Z));
+        let delta = direction * c.golem_swipe_range;
+        let center = owner.center();
+        let bound = swipe_radius(owner, c.golem_swipe_range);
+        let cap = c.golem_swipe_damage * cast.multiplier;
+        let mut damage = Vec::new();
+        for actor in &mut self.actors {
+            if actor.hp <= 0.0 || actor.id == owner.id || actor.team == cast.team {
+                continue;
+            }
+            if shapes::exposed_cone_contact(
+                actor,
+                center,
+                direction,
+                bound,
+                std::f32::consts::FRAC_PI_2,
+                |point| {
+                    swipe_point(owner, delta, point)
+                        && !self
+                            .collision
+                            .attack_sweep(center, point - center, 0.0)
+                            .is_some_and(|(hit, _)| hit.fraction < 1.0 - SKIN)
+                },
+            )
+            .is_none()
+            {
+                continue;
+            }
+            let previous = cast.actor_damage.get(&actor.id).copied().unwrap_or(0.0);
+            let removed = (cap - previous).max(0.0).min(actor.hp);
+            actor.hp -= removed;
+            cast.actor_damage.insert(actor.id, cap);
+            if removed > 0.0 {
+                damage.push((actor.id, removed));
+            }
+        }
+        for (id, removed) in damage {
+            self.record_damage(owner.id, id, removed);
+        }
+        for barrier in &mut self.encounter.barriers {
+            let rotation =
+                bevy_math::Quat::from_rotation_y((-barrier.normal.x).atan2(-barrier.normal.z));
+            let half = Vec3::new(barrier.width * 0.5, barrier.height * 0.5, 0.025);
+            let Some(point) = shapes::volume_cone_contact(
+                center,
+                direction,
+                bound,
+                std::f32::consts::FRAC_PI_2,
+                |point| closest_box_point(point, barrier.center, rotation, half),
+            ) else {
+                continue;
+            };
+            let ray = point - center;
+            if swipe_point(owner, delta, point)
+                && self
+                    .collision
+                    .attack_sweep(center, ray + ray.normalize_or(direction) * SKIN * 4.0, 0.0)
+                    .is_some_and(|(_, id)| id == Some(barrier.id))
+            {
+                let previous = cast.barrier_damage.get(&barrier.id).copied().unwrap_or(0.0);
+                barrier.hp = (barrier.hp - (cap - previous).max(0.0)).max(0.0);
+                cast.barrier_damage.insert(barrier.id, cap);
+            }
+        }
+        let volume = swipe_voxels(
+            owner,
+            direction,
+            c.golem_swipe_range,
+            &self.collision,
+            world,
+            geometry,
+        )
+        .into_iter()
+        .filter(|pos| world.voxels.get(pos) != Some(&materials.bedrock))
+        .filter(|pos| cast.voxels.insert(*pos))
+        .collect::<Vec<_>>();
+        if !volume.is_empty() {
+            self.golem_terrain(
+                volume,
+                TerrainDamageKind::Physical,
+                c.golem_swipe_terrain_power,
+                out,
+            );
+        }
+        self.collision.sync_barriers(&self.encounter.barriers);
+        self.combat_cue_from(
+            owner.id,
+            cast.team,
+            shapes::golem_mouth(owner, direction),
+            CombatCueKind::Impact,
+        );
     }
 
     fn golem_terrain(

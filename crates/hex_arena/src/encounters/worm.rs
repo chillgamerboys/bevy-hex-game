@@ -15,6 +15,14 @@ use hex_core::arena::{
 };
 use hex_core::TerrainDamageKind;
 
+/// Species-specific earth sensing supplies a position, never a shot forecast.
+#[derive(Debug, Clone, Copy)]
+struct BurrowTarget {
+    id: ActorId,
+    point: Vec3,
+    tick: u64,
+}
+
 #[derive(Debug)]
 pub(super) struct Controller {
     heading: f32,
@@ -30,6 +38,10 @@ pub(super) struct Controller {
     search_step: u8,
     committed_direction: Option<Vec3>,
     committed_goal: Vec3,
+    burrow_target: Option<BurrowTarget>,
+    preferred_threat: Option<ActorId>,
+    pursuit_active: bool,
+    attempted_this_exposure: bool,
 }
 
 impl Controller {
@@ -48,12 +60,78 @@ impl Controller {
             search_step: actor.id % 4,
             committed_direction: None,
             committed_goal: actor.feet,
+            burrow_target: None,
+            preferred_threat: None,
+            pursuit_active: false,
+            attempted_this_exposure: false,
         }
     }
 
     fn phase(&mut self, next: WormPhase) {
         self.phase = next;
         self.phase_time = 0.0;
+        if next != WormPhase::Travel {
+            self.burrow_target = None;
+            self.committed_direction = None;
+        }
+        if next == WormPhase::Exposed {
+            self.attempted_this_exposure = false;
+        }
+        if next == WormPhase::Diving {
+            self.target = None;
+            self.seen.clear();
+        }
+    }
+
+    pub(super) fn pursuing(&self) -> bool {
+        self.pursuit_active
+    }
+
+    pub(super) fn hostile_damage(&mut self, owner: ActorId) {
+        self.preferred_threat = Some(owner);
+        self.pursuit_active = true;
+        if self.phase != WormPhase::Travel {
+            self.phase(WormPhase::Diving);
+        }
+    }
+
+    fn physically_buried(
+        &self,
+        actor: &Actor,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        depth: u8,
+    ) -> bool {
+        self.lift <= SKIN
+            && pose(actor).is_some_and(|body| {
+                body.parts.iter().all(|part| part.offset.y.abs() <= SKIN)
+                    && travel_depth(body, self.surface, world, geometry, depth)
+            })
+    }
+
+    fn sense_underground(&mut self, actor: &Actor, actors: &[Actor], tick: u64) {
+        let target = actors
+            .iter()
+            .filter(|a| a.hp > 0.0 && a.team != actor.team)
+            .min_by(|a, b| {
+                (Some(b.id) == self.preferred_threat)
+                    .cmp(&(Some(a.id) == self.preferred_threat))
+                    .then_with(|| {
+                        a.feet
+                            .distance_squared(actor.feet)
+                            .total_cmp(&b.feet.distance_squared(actor.feet))
+                    })
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+        self.burrow_target = target.map(|target| BurrowTarget {
+            id: target.id,
+            point: target.feet,
+            tick,
+        });
+        if target.is_none() {
+            self.pursuit_active = false;
+            self.preferred_threat = None;
+        }
     }
 
     pub(super) fn intent(
@@ -61,7 +139,7 @@ impl Controller {
         actor: &Actor,
         party: &PartyRuntime,
         actors: &[Actor],
-        brain: &brain::Brain,
+        brain: &mut brain::Brain,
         collision: &CollisionWorld,
         world: &ArenaTerrainView,
         geometry: ArenaVoxelGeometry,
@@ -70,8 +148,25 @@ impl Controller {
     ) -> (brain::MotionIntent, Option<brain::Request>) {
         let c = &tuning.encounters;
         self.phase_time += STEP;
+        self.pursuit_active |= party.snapshot.phase == PartyPhase::Active;
+        let buried = self.physically_buried(actor, world, geometry, c.worm_depth_levels);
+        if self.phase == WormPhase::Travel && !buried {
+            self.phase(WormPhase::Diving);
+        } else if self.phase == WormPhase::Diving && buried {
+            self.phase(WormPhase::Travel);
+            self.next_sense = tick;
+        }
         let exposed = actor.worm().is_some_and(|s| s.exposed);
-        if exposed && tick >= self.next_sense {
+        let can_see = exposed && matches!(self.phase, WormPhase::Emerging | WormPhase::Exposed);
+        if buried && self.phase == WormPhase::Travel && self.pursuit_active {
+            if tick >= self.next_sense {
+                self.sense_underground(actor, actors, tick);
+                self.next_sense = tick.saturating_add(12);
+            }
+        } else {
+            self.burrow_target = None;
+        }
+        if can_see && tick >= self.next_sense {
             self.seen = targeting::observe(
                 actor,
                 actors,
@@ -82,7 +177,10 @@ impl Controller {
             );
             self.next_sense = tick.saturating_add(12);
         }
-        self.target = exposed
+        if !can_see {
+            self.seen.clear();
+        }
+        self.target = can_see
             .then(|| {
                 self.seen
                     .iter()
@@ -102,35 +200,32 @@ impl Controller {
         if self.phase == WormPhase::Emerging && exposed {
             self.phase(WormPhase::Exposed);
         }
+        // Earth sensing chooses where to surface; it never authorizes a shot.
+        // Distant targets are approached underground instead of stopping every
+        // 1.5 seconds to stare at an impossible ballistic range.
+        let approach_ready = self.burrow_target.is_none_or(|target| {
+            let mouth = actor
+                .eye()
+                .with_y(self.surface + geometry.level_height * 1.5 + SKIN);
+            ballistic_aim_with_gravity(
+                mouth,
+                target.point,
+                c.worm_boulder_gravity,
+                c.worm_boulder_speed,
+            )
+            .is_some()
+        });
         if self.phase == WormPhase::Travel
+            && buried
+            && approach_ready
             && (self.phase_time >= c.worm_surface_interval || self.blocked >= 0.4)
         {
             self.phase(WormPhase::Emerging);
+            self.next_sense = tick;
         }
-        if self.phase == WormPhase::Diving
-            && self.blocked >= 0.4
-            && pose(actor)
-                .and_then(|body| band(body, self.surface, world, geometry, c.worm_depth_levels))
-                .is_none()
-        {
-            self.phase(WormPhase::Emerging);
-        }
-        if self.phase == WormPhase::Diving
-            && self.lift <= SKIN
-            && (actor.feet.y
-                - (self.surface - f32::from(c.worm_depth_levels) * geometry.level_height + SKIN))
-                .abs()
-                < SKIN * 2.0
-        {
-            self.phase(WormPhase::Travel);
-        }
-        let combat = party.snapshot.phase == PartyPhase::Active
-            || (party.snapshot.phase == PartyPhase::Returning
-                && self
-                    .target
-                    .is_some_and(|k| k.point.distance(actor.eye()) <= 6.0));
-        let request = if combat
+        let request = if self.pursuit_active
             && self.phase == WormPhase::Exposed
+            && !self.attempted_this_exposure
             && brain.ready(CreatureAbility::WormBoulder)
         {
             self.target
@@ -142,25 +237,34 @@ impl Controller {
         } else {
             None
         };
+        if request.is_some() {
+            self.attempted_this_exposure = true;
+        }
         if self.phase == WormPhase::Exposed
-            && self.phase_time >= c.worm_exposed_watch
             && brain.active.is_none()
             && request.is_none()
-            && pose(actor)
-                .and_then(|body| band(body, self.surface, world, geometry, c.worm_depth_levels))
-                .is_some()
+            && (self.attempted_this_exposure || self.phase_time >= c.worm_exposed_watch)
         {
             self.phase(WormPhase::Diving);
+        }
+        if self.phase == WormPhase::Diving {
+            // This brain belongs only to a Worm. A canceled windup keeps its
+            // normal cooldown; released projectiles keep their frozen payload.
+            brain.active = None;
         }
         let known = self.target.or_else(|| {
             party
                 .knowledge
                 .filter(|k| elapsed(tick, k.tick) <= party.search)
         });
-        self.goal = if party.snapshot.phase == PartyPhase::Returning
-            || party.snapshot.phase == PartyPhase::Dormant
-        {
+        self.goal = if !self.pursuit_active {
             party.snapshot.home
+        } else if let Some(target) = self
+            .burrow_target
+            .filter(|target| elapsed(tick, target.tick) <= 0.2)
+        {
+            self.preferred_threat = Some(target.id);
+            target.point
         } else if let Some(known) = known {
             known
                 .observed
@@ -183,7 +287,7 @@ impl Controller {
         if self.goal.distance(self.committed_goal) > 2.0 || self.blocked > 0.2 {
             self.committed_direction = None;
         }
-        let direction = if self.phase == WormPhase::Travel {
+        let direction = if self.phase == WormPhase::Travel && buried {
             self.committed_direction
                 .unwrap_or_else(|| (self.goal - actor.feet).with_y(0.0).normalize_or_zero())
         } else {
@@ -208,6 +312,7 @@ impl Controller {
                 },
                 direction,
                 flight: false,
+                lunge: false,
             },
             request,
         )
@@ -485,6 +590,9 @@ impl ArenaSession {
         tuning: &ArenaTuning,
     ) -> Option<Vec3> {
         let controller = self.encounter.worms.get(&actor.id)?;
+        if controller.phase != WormPhase::Exposed {
+            return None;
+        }
         let mut current = actor.clone();
         refresh_exposure(
             &mut current,
@@ -654,7 +762,13 @@ impl ArenaSession {
             actor.body.impulse_velocity.y += actor.body.vertical_velocity;
             actor.body.vertical_velocity = 0.0;
             let impulse = actor.body.impulse_velocity * STEP;
-            let wanted = intents.get(&id).map_or(Vec3::ZERO, |i| i.direction);
+            let wanted = if control.phase == WormPhase::Travel
+                && control.physically_buried(&actor, world, geometry, c.worm_depth_levels)
+            {
+                intents.get(&id).map_or(Vec3::ZERO, |i| i.direction)
+            } else {
+                Vec3::ZERO
+            };
             let trial = (self.tick + u64::from(id) * 3).is_multiple_of(20);
             let turns: &[f32] = if trial && control.blocked > STEP {
                 &[
@@ -690,7 +804,16 @@ impl ArenaSession {
                     feet: feet + impulse,
                     parts: proposed_parts,
                 };
-                let surface = if matches!(control.phase, WormPhase::Emerging | WormPhase::Exposed) {
+                let travel_band = band(
+                    candidate,
+                    control.surface,
+                    world,
+                    geometry,
+                    c.worm_depth_levels,
+                );
+                let surface = if matches!(control.phase, WormPhase::Emerging | WormPhase::Exposed)
+                    || (control.phase == WormPhase::Diving && travel_band.is_none())
+                {
                     // A stationary head rise need not invent a common travel
                     // band beneath a tail spanning an already existing hole.
                     // The head still needs actual local support, and the whole
@@ -704,13 +827,7 @@ impl ArenaSession {
                         },
                     )
                 } else {
-                    band(
-                        candidate,
-                        control.surface,
-                        world,
-                        geometry,
-                        c.worm_depth_levels,
-                    )
+                    travel_band
                 };
                 let Some(surface) = surface else {
                     continue;
@@ -718,6 +835,7 @@ impl ArenaSession {
                 let buried =
                     surface - f32::from(c.worm_depth_levels) * geometry.level_height + SKIN;
                 let (height, desired_lift) = match control.phase {
+                    WormPhase::Diving if travel_band.is_none() => (actor.feet.y, 0.0),
                     WormPhase::Travel | WormPhase::Diving => (buried, 0.0),
                     WormPhase::Emerging | WormPhase::Exposed => (
                         actor.feet.y,

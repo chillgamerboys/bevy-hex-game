@@ -308,7 +308,7 @@ fn invalid_observer_setup_does_not_repeat_ready_initialization_ticks() {
 }
 
 #[test]
-fn observer_camera_remains_available_after_timeout_until_pause() {
+fn observer_timeout_parks_camera_and_opens_the_menu_until_reset() {
     let (mut fixture, window) = menu_app();
     let mut setup = ArenaBattleSetup::spectator(BattlePreset::Shadow, BattlePreset::Shadow, 1);
     setup.tick_limit = Some(3);
@@ -326,7 +326,7 @@ fn observer_camera_remains_available_after_timeout_until_pause() {
     }
     assert!(fixture.world().resource::<ArenaSession>().is_finished());
     assert!(
-        !fixture
+        fixture
             .world()
             .get::<CursorOptions>(window)
             .expect("cursor")
@@ -335,7 +335,7 @@ fn observer_camera_remains_available_after_timeout_until_pause() {
     tap_key(&mut fixture, KeyCode::KeyC);
     assert_eq!(
         fixture.world().resource::<ViewState>().observer.mode,
-        ObserverCameraMode::Free
+        ObserverCameraMode::Orbit
     );
     tap_key(&mut fixture, KeyCode::Escape);
     assert!(
