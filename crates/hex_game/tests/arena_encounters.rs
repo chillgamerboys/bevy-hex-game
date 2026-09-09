@@ -14,9 +14,14 @@ use hex_core::arena::{
 use hex_core::{HexCoord, TerrainEdit, TilePos};
 
 fn app(selection: ArenaSelection) -> App {
+    app_with_tuning(selection, hex_arena::ArenaTuning::default())
+}
+
+fn app_with_tuning(selection: ArenaSelection, tuning: hex_arena::ArenaTuning) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .insert_resource(selection)
+        .insert_resource(tuning)
         .add_plugins((hex_map::arena::plugin, hex_arena::plugin));
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
     app.update();
@@ -283,7 +288,9 @@ fn authored_world_edits_refresh_camera_collision_in_the_same_tick() {
 
 /// A synthetic stress fixture, not a human balance or ordinary travel scenario.
 /// The player visits each party repeatedly and receives extra life to keep every
-/// decision loop running. Execute separately in the native launcher build profile.
+/// decision loop running. Validated 150-unit home leashes are an explicit synthetic
+/// override; search/sight/activation and all movement/attack stats stay authored.
+/// Execute separately in the native launcher build profile.
 #[test]
 #[ignore = "explicit native-profile timing measurement; emits a performance receipt"]
 fn profile_simultaneous_seven_region_combat() {
@@ -308,7 +315,19 @@ fn profile_fort_encounter_presets() {
 
 fn profile_combat(selection: ArenaSelection) {
     let load_start = std::time::Instant::now();
-    let mut fixture = app(selection);
+    let mut tuning = hex_arena::ArenaTuning::default();
+    assert!(hex_game::arena::configure_encounter_stress_tuning(
+        true,
+        "encounter-stress",
+        &mut tuning
+    )
+    .expect("validated synthetic home leashes"));
+    let home_leashes = [
+        tuning.encounters.ground_leash,
+        tuning.encounters.shadow_leash,
+        tuning.encounters.dragon_leash,
+    ];
+    let mut fixture = app_with_tuning(selection, tuning);
     let headless_setup_ms = load_start.elapsed().as_secs_f64() * 1000.0;
     let representatives = {
         let mut session = fixture.world_mut().resource_mut::<ArenaSession>();
@@ -455,7 +474,8 @@ fn profile_combat(selection: ArenaSelection) {
     let damage_ticks = damage_samples.len();
     let session = fixture.world().resource::<ArenaSession>();
     let receipt = serde_json::json!({
-        "fixture": "synthetic-party-visits-extra-life",
+        "fixture": "synthetic-party-visits-extra-life-extended-leashes",
+        "home_leashes_ground_shadow_dragon": home_leashes,
         "map": format!("{:?}", selection.map),
         "encounter": format!("{:?}", selection.encounter),
         "measurement": "headless ArenaTick wall time; excludes renderer and app frame cost",
@@ -473,7 +493,7 @@ fn profile_combat(selection: ArenaSelection) {
         "peak_barriers": peak_barriers,
         "living_enemies": session.encounter_summary().living_enemies,
         "terrain_outcomes": session.terrain_outcomes,
-        "stimulus": "72-tick visits reuse each party anchor within 10 units of home; forward range Dragon2.5, Goblin1.1, Shaman/Shadow8; current dry supported full-body/LOS placement; normal cooldowns",
+        "stimulus": "synthetic validated ground/Shadow/Dragon home leashes of 150 units before admission; authored search durations, sight, activation, movement and attacks; 72-tick visits reuse each party anchor within 10 units of home; forward range Dragon2.5, Goblin1.1, Shaman/Shadow8; current dry supported full-body/LOS placement; normal cooldowns",
         "invalid_placement_ticks": invalid_placements,
         "visits": visits,
         "final_parties": session.parties().iter().map(|p| (p.id, format!("{:?}", p.phase))).collect::<Vec<_>>(),
@@ -561,7 +581,7 @@ fn diagnostic_target_placement_uses_current_dry_support_and_avoids_living_bodies
 }
 
 #[test]
-fn home_bounded_revisits_keep_all_seventeen_enemies_engaged_under_real_destruction() {
+fn synthetic_extended_leashes_keep_all_seventeen_enemies_engaged_under_real_destruction() {
     profile_combat(ArenaSelection {
         map: ArenaMap::SevenRegions,
         ..Default::default()

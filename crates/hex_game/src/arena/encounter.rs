@@ -11,6 +11,34 @@ use hex_core::arena::{ArenaMap, ArenaTerrainView, ArenaVoxelGeometry};
 /// Synthetic visit duration; a complete three-party loop takes 1.8 seconds.
 pub const STRESS_VISIT_TICKS: u32 = 72;
 
+/// Explicit synthetic workload only: distant visible teleports must not exhaust
+/// a party's home leash. Normal search clocks, sensing and combat remain intact.
+/// Call before the reset/admission tick so the private party leash is consistent.
+pub fn configure_encounter_stress_tuning(
+    capture: bool,
+    view: &str,
+    tuning: &mut ArenaTuning,
+) -> Result<bool, String> {
+    if !capture || !stress_view(view) {
+        return Ok(false);
+    }
+    let mut candidate = tuning.clone();
+    candidate.encounters.ground_leash = 150.0;
+    candidate.encounters.shadow_leash = 150.0;
+    candidate.encounters.dragon_leash = 150.0;
+    candidate.validate()?;
+    *tuning = candidate;
+    Ok(true)
+}
+
+fn stress_home_leashes(tuning: &ArenaTuning) -> [f32; 3] {
+    [
+        tuning.encounters.ground_leash,
+        tuning.encounters.shadow_leash,
+        tuning.encounters.dragon_leash,
+    ]
+}
+
 pub(super) fn stress_view(view: &str) -> bool {
     view == "encounter-stress"
 }
@@ -25,6 +53,7 @@ pub(super) struct StressStimulus {
     pose_valid: bool,
     terrain_revision: u64,
     parties_before_tick: Vec<StressParty>,
+    home_leashes: [f32; 3],
 }
 
 #[derive(serde::Serialize)]
@@ -52,6 +81,16 @@ pub(super) struct StressTick {
 pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
     let state = world.resource::<ViewState>();
     if state.capture.is_none() || !stress_view(&state.capture_view) {
+        return None;
+    }
+    let home_leashes = stress_home_leashes(world.resource::<ArenaTuning>());
+    if home_leashes
+        .iter()
+        .any(|leash| (*leash - 150.0).abs() > f32::EPSILON)
+    {
+        error!(
+            "Synthetic encounter stress requires validated 150-unit home leashes before admission"
+        );
         return None;
     }
     let step = state.capture_stress_steps;
@@ -166,6 +205,7 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
         pose_valid,
         terrain_revision,
         parties_before_tick,
+        home_leashes,
     })
 }
 
@@ -975,5 +1015,47 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod stress_tuning_tests {
+    use super::*;
+
+    #[test]
+    fn extended_leashes_require_explicit_capture_and_change_no_other_tuning() {
+        let original = ArenaTuning::default();
+        for (capture, view) in [
+            (false, "encounter-stress"),
+            (true, "first"),
+            (true, "observer-performance"),
+        ] {
+            let mut actual = original.clone();
+            assert!(
+                !configure_encounter_stress_tuning(capture, view, &mut actual)
+                    .expect("valid original")
+            );
+            assert_eq!(
+                serde_json::to_value(&actual).expect("tuning"),
+                serde_json::to_value(&original).expect("original")
+            );
+        }
+        let mut actual = original.clone();
+        assert!(
+            configure_encounter_stress_tuning(true, "encounter-stress", &mut actual)
+                .expect("validated stress tuning")
+        );
+        assert!(actual.validate().is_ok());
+        assert_eq!(
+            stress_home_leashes(&actual).map(f32::to_bits),
+            [150.0_f32.to_bits(); 3]
+        );
+        actual.encounters.ground_leash = original.encounters.ground_leash;
+        actual.encounters.shadow_leash = original.encounters.shadow_leash;
+        actual.encounters.dragon_leash = original.encounters.dragon_leash;
+        assert_eq!(
+            serde_json::to_value(&actual).expect("restored"),
+            serde_json::to_value(&original).expect("original")
+        );
     }
 }

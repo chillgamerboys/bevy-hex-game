@@ -19,6 +19,7 @@ use hex_core::{
 };
 
 type Waypoint = (i32, i32, i32);
+type LocalRoute = (u8, Species, u16, i32, i32);
 
 // Accepted seeds: Fort 640367719 and Seven Regions 703700113. These explicit
 // cell centers were discovered once and replayed in both directions. The tests
@@ -277,34 +278,81 @@ fn assert_local_roundtrip(app: &App, id: u8, offset: HexCoord) {
         "{:?} {id} cannot make the frozen local ground excursion {:?} -> {destination:?} and return",actor.species,actor.feet);
 }
 
+fn assert_local_routes(app: &App, routes: &[LocalRoute]) {
+    let session = app.world().resource::<ArenaSession>();
+    let expected: Vec<_> = std::iter::once((0, Species::Human, None))
+        .chain(
+            routes
+                .iter()
+                .map(|&(id, species, party, _, _)| (id, species, Some(party))),
+        )
+        .collect();
+    assert_eq!(
+        session
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.species, actor.party))
+            .collect::<Vec<_>>(),
+        expected,
+        "the complete admitted roster must match exactly one frozen route per enemy"
+    );
+    for &(id, _, _, q, r) in routes {
+        assert_local_roundtrip(app, id, HexCoord::from_axial(q, r));
+    }
+}
+
 #[test]
 fn every_fort_ground_profile_can_approach_and_return_inside_courtyard() {
-    for encounter in [
-        ArenaEncounter::Dragon,
-        ArenaEncounter::Goblins,
-        ArenaEncounter::ShamanParty,
-        ArenaEncounter::Shadow,
-    ] {
+    // Each offset passed the actual cloned controller on the authored Fort seed.
+    // Wider roster members use their own local corridor, with no route search here.
+    let recipes: [(ArenaEncounter, &[LocalRoute]); 4] = [
+        (ArenaEncounter::Dragon, &[(1, Species::Dragon, 0, -2, 0)]),
+        (
+            ArenaEncounter::Goblins,
+            &[
+                (1, Species::Goblin, 0, -2, 0),
+                (2, Species::Goblin, 0, -2, 0),
+                (3, Species::Goblin, 0, -2, 0),
+                (4, Species::Goblin, 0, -2, 0),
+                (5, Species::Goblin, 0, -2, 0),
+                (6, Species::Goblin, 0, -2, 0),
+                (7, Species::Goblin, 0, -2, 0),
+                (8, Species::Goblin, 0, -2, 1),
+                (9, Species::Goblin, 0, -2, 1),
+                (10, Species::Goblin, 0, -2, 0),
+            ],
+        ),
+        (
+            ArenaEncounter::ShamanParty,
+            &[
+                (1, Species::Shaman, 0, -2, 0),
+                (2, Species::Goblin, 0, -2, 0),
+                (3, Species::Goblin, 0, -2, 0),
+                (4, Species::Goblin, 0, -2, 0),
+                (5, Species::Goblin, 0, -2, 0),
+                (6, Species::Goblin, 0, -2, 0),
+            ],
+        ),
+        (ArenaEncounter::Shadow, &[(1, Species::Shadow, 0, -2, 0)]),
+    ];
+    for (encounter, routes) in recipes {
         let fixture = app(ArenaMap::Fort, encounter);
-        let session = fixture.world().resource::<ArenaSession>();
-        assert!(
-            session.actors.len() > 1,
-            "{encounter:?} must have an admitted enemy"
+        assert_eq!(
+            fixture.world().resource::<ArenaSession>().parties().len(),
+            1
         );
-        for actor in session.actors.iter().filter(|actor| actor.id != 0) {
-            assert_local_roundtrip(&fixture, actor.id, HexCoord::from_axial(-2, 0));
-        }
+        assert_local_routes(&fixture, routes);
     }
 }
 
 #[test]
 fn all_three_seven_region_parties_have_supported_local_ground_excursions() {
     let fixture = app(ArenaMap::SevenRegions, ArenaEncounter::Dragon);
-    let session = fixture.world().resource::<ArenaSession>();
-    assert_eq!(session.parties().len(), 3);
-    assert_eq!(session.actors.len(), 18);
-    // Party-local ordinal preserves the original five cave excursions after
-    // adding two courtyard escorts. Every new actor has an explicit replay row.
+    assert_eq!(
+        fixture.world().resource::<ArenaSession>().parties().len(),
+        3
+    );
+    // Frozen once for all 17 admitted enemies after the pressure roster expansion.
     let routes = [
         (1, Species::Dragon, 0, -2, 0),
         (2, Species::Shaman, 1, -2, 0),
@@ -312,52 +360,19 @@ fn all_three_seven_region_parties_have_supported_local_ground_excursions() {
         (4, Species::Goblin, 1, -2, 0),
         (5, Species::Goblin, 1, -2, 0),
         (6, Species::Goblin, 1, -2, 0),
-        (7, Species::Goblin, 1, -2, 0),
+        (7, Species::Goblin, 1, -2, 2),
         (8, Species::Goblin, 2, -2, 2),
         (9, Species::Goblin, 2, -2, 2),
         (10, Species::Goblin, 2, -2, 1),
-        (11, Species::Goblin, 2, -1, -1),
+        (11, Species::Goblin, 2, -1, 2),
         (12, Species::Goblin, 2, -2, 0),
-        (13, Species::Goblin, 2, -2, 0),
-        (14, Species::Goblin, 2, -2, 0),
+        (13, Species::Goblin, 2, -2, 2),
+        (14, Species::Goblin, 2, 2, -1),
         (15, Species::Goblin, 2, -2, 0),
         (16, Species::Goblin, 2, -2, 0),
-        (17, Species::Goblin, 2, -2, 0),
+        (17, Species::Goblin, 2, 1, 1),
     ];
-    assert_eq!(
-        routes
-            .iter()
-            .map(|(id, _, _, _, _)| *id)
-            .collect::<Vec<_>>(),
-        session
-            .actors
-            .iter()
-            .filter(|actor| actor.id != 0)
-            .map(|actor| actor.id)
-            .collect::<Vec<_>>(),
-        "every admitted enemy needs exactly one explicit local route"
-    );
-    for (id, species, party, q, r) in routes {
-        assert_eq!(
-            session
-                .actors
-                .iter()
-                .find(|a| a.id == id)
-                .expect("stable roster")
-                .species,
-            species
-        );
-        assert_eq!(
-            session
-                .actors
-                .iter()
-                .find(|actor| actor.id == id)
-                .expect("stable party member")
-                .party,
-            Some(party)
-        );
-        assert_local_roundtrip(&fixture, id, HexCoord::from_axial(q, r));
-    }
+    assert_local_routes(&fixture, &routes);
 }
 
 #[test]

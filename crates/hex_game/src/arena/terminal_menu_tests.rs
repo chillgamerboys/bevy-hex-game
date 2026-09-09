@@ -29,7 +29,7 @@ fn install_hud(app: &mut App) {
 fn assert_terminal_menu(app: &mut App, window: Entity, expected_title: &str) {
     let state = app.world().resource::<ViewState>();
     assert!(state.started && state.paused && state.suppress_click);
-    assert_eq!(state.accumulator, 0.0);
+    assert_eq!(state.accumulator.to_bits(), 0.0_f64.to_bits());
     let cursor = app
         .world()
         .get::<CursorOptions>(window)
@@ -216,7 +216,7 @@ fn terminal_restart_button_and_r_return_to_ready_and_preserve_the_selected_party
         assert!(session
             .actors
             .iter()
-            .all(|a| a.hp == a.max_hp && a.charge().is_none()));
+            .all(|a| a.hp.to_bits() == a.max_hp.to_bits() && a.charge().is_none()));
         assert_eq!(
             session
                 .actors

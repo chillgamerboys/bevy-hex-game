@@ -272,8 +272,13 @@ fn full_speed_small_ember_chips_its_actual_thin_wall_face_without_widening_actor
     assert_eq!(terrain.kind, spec.terrain_kind);
     assert_eq!(terrain.power, spec.terrain_power);
     assert_eq!(
-        session.actors.get(1).expect("covered opponent").hp,
-        target_hp
+        session
+            .actors
+            .get(1)
+            .expect("covered opponent")
+            .hp
+            .to_bits(),
+        target_hp.to_bits()
     );
 }
 

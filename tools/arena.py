@@ -695,6 +695,17 @@ def validate_wisp_performance_state(state: dict, view: str) -> dict | None:
             "boundary": "Real CPU and Instant app-Update start-to-start intervals; no GPU/vsync/FPS, ordinary balance, movement or static approval claim. Zero publications do not exercise terrain destruction; use the separate all-ten Seven Regions/destruction workloads."}
 
 
+def validate_encounter_stress_home_leashes(rows):
+    """Every synthetic tick must disclose the admission-time leash override."""
+    if not isinstance(rows, list) or not rows or any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("stimulus"), dict)
+        or row["stimulus"].get("home_leashes") != [150.0, 150.0, 150.0]
+        for row in rows
+    ):
+        raise RuntimeError("Synthetic encounter stress requires explicit ground/Shadow/Dragon home leashes of 150 units on every tick.")
+
+
 def validate_terminal_menu_state(state: dict, view: str) -> None:
     """Explicit knockout fixtures prove result-menu presentation, not combat outcomes."""
     expected = {"terminal-win": "win", "terminal-defeat": "defeat"}.get(view)
@@ -804,6 +815,7 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
         seven = state.get("selection", {}).get("map") == "Seven Regions"
         party_count = 3 if seven else 1
         enemy_count = 17 if seven else {"Dragon": 1, "Goblins": 10, "Shaman party": 6, "Shadow": 1}.get(state.get("selection", {}).get("encounter"), 0)
+        validate_encounter_stress_home_leashes(rows)
         measured = rows[120:]
         all_active = [row for row in measured if row.get("active_parties") == party_count and row.get("living_enemies") == enemy_count]
         if len(all_active) < 2400:
@@ -854,7 +866,7 @@ def capture(args: argparse.Namespace) -> int:
             entries = [entry for entry in entries if entry[2] == args.map]
         matrix = "arena-spectator-performance-v1" if args.spectator_performance else "arena-spectator-v2-close"
     if args.performance_review:
-        matrix = "arena-performance-v1-synthetic"
+        matrix = "arena-performance-v2-synthetic-extended-leashes"
     elif args.encounter_review:
         matrix = "arena-encounters-v2-multi-angle"
     if args.golem_review:
@@ -913,7 +925,7 @@ def capture(args: argparse.Namespace) -> int:
         "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
-        "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
+        "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits with validated 150-unit ground/Shadow/Dragon home leashes before admission. Authored search durations, sight, activation, movement and attacks; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
         "human_route": "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
@@ -1022,7 +1034,7 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--golem-review", action="store_true", help="Fourteen natural Fort-player and Duel Golem-vs-Dragon observer body, charge, beam, slam and Stone Swipe views; missing natural phase admission fails.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
     review.add_argument("--spectator-performance", action="store_true", help="Fort/Duel ordinary observer frame intervals until 3600 ticks or a terminal result; no synthetic HP or movement.")
-    review.add_argument("--performance-review", action="store_true", help="Capture five separate synthetic 3600-tick performance fixtures: four Fort presets and all seventeen Seven Regions enemies.")
+    review.add_argument("--performance-review", action="store_true", help="Capture five synthetic 3600-tick extra-HP workloads with validated 150-unit home leashes: four Fort presets and all seventeen Seven Regions enemies.")
     review.add_argument("--encounter-review", action="store_true", help="Capture 27 map, creature, attack-phase, and selector views, including opposite barrier/aura azimuths.")
     review.add_argument("--menu-review", action="store_true",
                         help="Capture eight ready/menu/HUD views, including explicitly synthetic win/defeat menu fixtures.")

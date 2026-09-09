@@ -2092,6 +2092,12 @@ fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
 #[test]
 fn synthetic_stress_changes_require_explicit_capture_and_retain_tick_activity() {
     let (mut fixture, _) = menu_app();
+    encounter::configure_encounter_stress_tuning(
+        true,
+        "encounter-stress",
+        &mut fixture.world_mut().resource_mut::<ArenaTuning>(),
+    )
+    .expect("validated synthetic leashes before Fort admission");
     press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));
     {
         let mut state = fixture.world_mut().resource_mut::<ViewState>();

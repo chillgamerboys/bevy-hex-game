@@ -2,7 +2,7 @@
 
 mod encounter;
 #[cfg(feature = "test-support")]
-pub use encounter::{stress_target_pose, STRESS_VISIT_TICKS};
+pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
 mod hud;
 mod presentation;
@@ -496,6 +496,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut state: ResMut<ViewState>,
     mut tuning: ResMut<ArenaTuning>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     commands.insert_resource(hex_assets::GameAssets {
         hex_tile: assets.load(
@@ -531,6 +532,15 @@ fn setup(
     };
     state.capture_wisp_nominal_hp =
         wisp::configure_stress_tuning(state.capture.is_some(), &state.capture_view, &mut tuning);
+    if let Err(error) = encounter::configure_encounter_stress_tuning(
+        state.capture.is_some(),
+        &state.capture_view,
+        &mut tuning,
+    ) {
+        error!("Synthetic encounter stress tuning rejected: {error}");
+        exit.write(AppExit::error());
+        return;
+    }
     if state.capture.is_some() {
         let size = if state.capture_view.ends_with("-compact") {
             0
@@ -1633,7 +1643,7 @@ fn capture_frame(
         ("parties", serde_json::json!(parties)),
         ("encounter_summary", serde_json::json!(session.encounter_summary())),
         ("encounter_stats", serde_json::json!(session.encounter_stats())),
-        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life: all actors start with 100000 HP; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; normal brains/physics. Not movement, human balance, or ordinary gameplay evidence."))),
+        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life-extended-leashes: all actors start with 100000 HP; validated ground, Shadow and Dragon home leashes are 150 units before admission; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; authored search, activation, attacks and movement. Not normal home-return, movement, human balance, or ordinary gameplay evidence."))),
         ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
         ("wisp_stress", serde_json::json!(wisp::stress_view(&state.capture_view).then(|| serde_json::json!({
             "fixture": "synthetic-wisp-hp-1000", "nominal_hp": state.capture_wisp_nominal_hp,
