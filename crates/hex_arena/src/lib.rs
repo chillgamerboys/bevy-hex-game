@@ -806,6 +806,10 @@ impl ArenaSession {
         }
         if self.accepted_battle.control == ArenaControl::Spectator
             || world.selection.map != hex_core::arena::ArenaMap::Duel
+            || self
+                .accepted_battle
+                .player_recipe
+                .is_some_and(|recipe| recipe != BattlePreset::Shadow)
         {
             return self.advance_encounter(human, world, geometry, materials, tuning);
         }

@@ -11,9 +11,7 @@ fn golem_launch_is_an_explicit_fort_player_override_or_observer_roster() {
     let mut player = ArenaBattleSetup::default();
     apply_player_recipe(&mut player, selection, Some("golem")).expect("Golem enabled");
     assert_eq!(player.player_recipe, Some(BattlePreset::Golem));
-    for map in ["duel", "seven-regions"] {
-        assert!(launch_selection(Some(map), Some("golem")).is_err());
-    }
+    assert!(launch_selection(Some("seven-regions"), Some("golem")).is_err());
     let mut observer = spectator::launch_setup(
         ArenaMap::Duel,
         true,
@@ -92,7 +90,7 @@ fn golem_menu_restart_preserves_override_and_original_selection_clears_it() {
         .iter()
         .all(|a| a.species != Species::Golem));
     for leave in [
-        hud::Action::Map(ArenaMap::Duel),
+        hud::Action::Map(ArenaMap::SevenRegions),
         hud::Action::Control(ArenaControl::Spectator),
     ] {
         press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));

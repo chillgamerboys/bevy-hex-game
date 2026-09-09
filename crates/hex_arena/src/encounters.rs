@@ -121,11 +121,36 @@ impl ArenaSession {
             initialized: true,
             ..Default::default()
         };
-        let human = Actor::spawn(
+        let mut human = Actor::spawn(
             0,
             world.spawns.first().copied().unwrap_or(Vec3::ZERO),
             Vec3::NEG_Z,
         );
+        if world.selection.map == ArenaMap::Duel {
+            let feet = world
+                .battle_deployment
+                .as_ref()
+                .and_then(|regions| regions.first())
+                .and_then(|region| {
+                    battle_runtime::deployment_pose(
+                        &human,
+                        region,
+                        &[],
+                        &self.collision,
+                        world,
+                        geometry,
+                    )
+                });
+            let Some(feet) = feet else {
+                self.notice =
+                    "No complete dry Duel player deployment; reset or choose another encounter."
+                        .into();
+                self.refuse_player_encounter();
+                return;
+            };
+            human.feet = feet;
+            human.previous_feet = feet;
+        }
         self.actors = vec![human];
         let specs: Vec<(Vec3, Vec<Species>)> = if world.selection.map == ArenaMap::SevenRegions {
             [
@@ -165,6 +190,14 @@ impl ArenaSession {
             vec![(world.spawns.get(1).copied().unwrap_or(Vec3::ZERO), roster)]
         };
         for (index, (mut home, roster)) in specs.into_iter().enumerate() {
+            if world.selection.map == ArenaMap::Duel {
+                if let Some(region) = world.battle_deployment.as_ref().and_then(|r| r.get(1)) {
+                    home = region
+                        .preferred
+                        .coord
+                        .to_world(geometry.top(region.preferred) + SKIN);
+                }
+            }
             let Ok(party) = u16::try_from(index) else {
                 continue;
             };
@@ -220,6 +253,21 @@ impl ArenaSession {
                         .map(|(feet, layer)| {
                             actor.flight_layer = Some(layer);
                             feet
+                        })
+                } else if world.selection.map == ArenaMap::Duel {
+                    world
+                        .battle_deployment
+                        .as_ref()
+                        .and_then(|regions| regions.get(1))
+                        .and_then(|region| {
+                            battle_runtime::deployment_pose(
+                                &actor,
+                                region,
+                                &self.actors,
+                                &self.collision,
+                                world,
+                                geometry,
+                            )
                         })
                 } else if species == Species::Golem {
                     // Keep the authored approach when this complete body fits.
@@ -300,14 +348,12 @@ impl ArenaSession {
             });
         }
         if self.encounter.spawn_failed
-            && self.accepted_battle.player_recipe.is_some_and(|recipe| {
-                BattlePreset::WISP_SWARMS.contains(&recipe) || recipe == BattlePreset::Worm
-            })
+            && (world.selection.map == ArenaMap::Duel
+                || self.accepted_battle.player_recipe.is_some_and(|recipe| {
+                    BattlePreset::WISP_SWARMS.contains(&recipe) || recipe == BattlePreset::Worm
+                }))
         {
-            self.actors.clear();
-            self.encounter.brains.clear();
-            self.encounter.runtime.clear();
-            self.battle_result = Some(BattleResult::InvalidSetup(self.notice.clone()));
+            self.refuse_player_encounter();
             return;
         }
         if self.encounter.runtime.is_empty() {
@@ -327,6 +373,12 @@ impl ArenaSession {
                 || !dry(&human, world, geometry)
                 || !far(human.feet)
             {
+                if world.selection.map == ArenaMap::Duel {
+                    self.notice =
+                        "No safe Duel player deployment beyond encounter activation range.".into();
+                    self.refuse_player_encounter();
+                    return;
+                }
                 let mut candidates = Vec::new();
                 for coord in HexCoord::from_world(human.feet).within_radius(10) {
                     let desired = coord.to_world(human.feet.y);
@@ -367,6 +419,16 @@ impl ArenaSession {
             }
         }
         self.publish_parties();
+    }
+
+    fn refuse_player_encounter(&mut self) {
+        self.actors.clear();
+        self.encounter = EncounterState {
+            initialized: true,
+            spawn_failed: true,
+            ..Default::default()
+        };
+        self.battle_result = Some(BattleResult::InvalidSetup(self.notice.clone()));
     }
 
     fn publish_parties(&mut self) {
@@ -666,7 +728,7 @@ impl ArenaSession {
         self.separate_worms(world, geometry, materials, &mut out);
         self.refresh_worm_heads(world, geometry);
         self.advance_projectiles(world, geometry, materials, &mut out);
-        self.advance_support(tuning);
+        self.advance_support(tuning, world.selection.map);
         // Existing incoming damage resolves before simultaneous new releases.
         casts.retain(|(id, _, _)| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
         for (id, spell, speed) in casts {

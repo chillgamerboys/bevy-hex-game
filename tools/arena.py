@@ -168,8 +168,8 @@ OBSERVER_PERFORMANCE_VIEWS = tuple(
 
 
 def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool = False, result: bool = False) -> dict[str, str]:
-    if args.encounter in PLAYER_OVERRIDES and arena_map != "fort":
-        raise RuntimeError("Creature player overrides require Fort; Duel supports their spectator rosters.")
+    if args.encounter in PLAYER_OVERRIDES and arena_map not in ("fort", "duel"):
+        raise RuntimeError("Creature player overrides require Fort or Duel.")
     observing = args.spectator or matrix
     if not observing:
         if any(value is not None for value in (args.team_a, args.team_b, args.seed, args.tick_limit)):
@@ -323,7 +323,7 @@ def png_info(path: Path) -> dict:
 
 
 def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dict[str, str]) -> None:
-    """Check the accepted setup, including the independent Fort player override."""
+    """Check accepted setup and actual bodies for selectable player parties."""
     expected_selection = {"map": MAP_LABELS[arena_map],
                           "encounter": ENCOUNTER_LABELS["dragon" if encounter in PLAYER_OVERRIDES else encounter]}
     if state.get("selection") != expected_selection:
@@ -335,7 +335,9 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
     expected = {"control": "Spectator" if observing else "Player", "rosters": rosters,
                 "seed": int(env.get("HEX_ARENA_BATTLE_SEED", "1")),
                 "tick_limit": int(env.get("HEX_ARENA_BATTLE_TICK_LIMIT", "14400")),
-                "player_recipe": PLAYER_OVERRIDES.get(encounter) if not observing else None}
+                "player_recipe": None if observing else PLAYER_OVERRIDES.get(encounter,
+                    {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "ShamanParty"}.get(encounter)
+                    if arena_map == "duel" else None)}
     if state.get("battle_setup") != expected:
         raise RuntimeError("Capture accepted a different control, roster, seed, tick limit or player recipe.")
     if observing:
@@ -343,8 +345,8 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
         actual_members = Counter((actor.get("team"), actor.get("species")) for actor in state.get("actors", []))
         if actual_members != expected_members:
             raise RuntimeError("Capture actual bodies differ from the accepted spectator teams.")
-    elif encounter in PLAYER_OVERRIDES and Counter(actor.get("species") for actor in state.get("actors", [])) != Counter(["Human", *PRESET_MEMBERS[encounter]]):
-        raise RuntimeError("Fort player override published different actual creature bodies.")
+    elif (encounter in PLAYER_OVERRIDES or arena_map == "duel") and Counter(actor.get("species") for actor in state.get("actors", [])) != Counter(["Human", *PRESET_MEMBERS[encounter]]):
+        raise RuntimeError("Player party selection published different actual creature bodies.")
 
 
 def validate_golem_state(state: dict, view: str) -> None:
@@ -968,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
     captures = commands.add_parser("capture", help="Capture all 23 views without a native window.")
     for command in (launch, captures):
         command.add_argument("--map", choices=MAPS, help="Map recipe (launch: fort; legacy capture: duel).")
-        command.add_argument("--encounter", choices=ENCOUNTERS, help="Fort recipe (launch: dragon; legacy capture: shadow).")
+        command.add_argument("--encounter", choices=ENCOUNTERS, help="Duel/Fort enemy party (launch: Shadow on Duel, Dragon on Fort; capture: Shadow).")
         command.add_argument("--spectator", action="store_true", help="Observe autonomous monster teams; Fort or Duel only.")
         command.add_argument("--team-a", choices=ENCOUNTERS, help="Cyan roster preset (spectator default: goblins).")
         command.add_argument("--team-b", choices=ENCOUNTERS, help="Amber roster preset (spectator default: shaman-party).")
@@ -1007,7 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
         battle_env = battle_environment(args, args.map or "fort")
         env, _ = environment(args.target_dir)
         env.update(battle_env)
-        env.update(HEX_ARENA_MAP=args.map or "fort", HEX_ARENA_ENCOUNTER=args.encounter or "dragon")
+        env.update(HEX_ARENA_MAP=args.map or "fort", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)
         return run_cargo(env, None, None)
     except KeyboardInterrupt:

@@ -93,7 +93,7 @@ fn fort_player_override_is_reset_owned_and_none_restores_the_world_recipe() {
         ..Default::default()
     };
     assert_eq!(
-        setup.validate_for(ArenaMap::Duel),
+        setup.validate_for(ArenaMap::SevenRegions),
         Err(BattleSetupError::PlayerRecipeMap)
     );
     session.reset_with_setup(2, &view, geometry, &setup);

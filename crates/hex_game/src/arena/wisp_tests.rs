@@ -28,9 +28,7 @@ fn wisp_recipes_use_fort_override_and_reset_to_originals_cleanly() {
         apply_player_recipe(&mut setup, selection, Some(preset.slug()))
             .expect("ready creature override");
         assert_eq!(setup.player_recipe, Some(preset));
-        for map in ["duel", "seven-regions"] {
-            assert!(launch_selection(Some(map), Some(preset.slug())).is_err());
-        }
+        assert!(launch_selection(Some("seven-regions"), Some(preset.slug())).is_err());
     }
     let (mut fixture, _) = menu_app();
     press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));

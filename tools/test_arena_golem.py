@@ -97,8 +97,10 @@ class GolemCaptureGuards(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             validate_capture_setup(state, "duel", "shadow", env)
         args.spectator, args.encounter = False, "golem"
+        args.team_a = args.team_b = args.seed = args.tick_limit = None
+        self.assertEqual(battle_environment(args, "duel"), {})
         with self.assertRaises(RuntimeError):
-            battle_environment(args, "duel")
+            battle_environment(args, "seven-regions")
 
 
 if __name__ == "__main__":

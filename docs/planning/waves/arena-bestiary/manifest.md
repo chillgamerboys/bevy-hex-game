@@ -348,3 +348,13 @@ authorized implementation and final evidence/guide were delivered.
   [short report](../../../systems/arena-night-report.md) is the user handoff.
   All three lanes are integrated in the authorized local branch and remain
   `in-review` for human motion and balance acceptance. No remote delivery is claimed.
+
+- Follow-up requested after draft PR #221: enable the same seven player enemy-party
+  choices on Duel and reopen the native game. Reuse the existing combined branch
+  and contracts: gameplay owns explicit Duel recipe admission and regeneration
+  rules; the actual-world fixture lane owns Duel roster/action/reset checks;
+  root owns the menu, launcher, integration and sole Cargo slot. Shadow with no
+  override (or explicit Shadow) retains the accepted two-actor loop. Other Duel
+  recipes use the published deployment regions and existing creature behaviors.
+  Fort/Duel switches preserve the choice; Seven Regions keeps its fixed parties.
+  No world API, tuning, AI or terrain-generation changes are part of this follow-up.

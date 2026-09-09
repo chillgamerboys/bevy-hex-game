@@ -14,6 +14,9 @@ use hex_core::arena::{
 use hex_core::TerrainEdit;
 use std::time::Instant;
 
+#[path = "arena_battles/duel_parties.rs"]
+mod duel_parties;
+
 #[path = "arena_battles/wisps.rs"]
 mod wisps;
 

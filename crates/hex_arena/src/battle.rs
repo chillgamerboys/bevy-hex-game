@@ -187,7 +187,8 @@ impl TeamRoster {
 pub struct ArenaBattleSetup {
     /// Ordinary human encounter or autonomous observer match.
     pub control: ArenaControl,
-    /// Optional Fort player opponent recipe, consumed only on reset. None keeps the world recipe.
+    /// Optional Fort/Duel player opponent recipe, consumed only on reset.
+    /// None keeps the world recipe on Fort and the accepted Shadow duel on Duel.
     #[serde(default)]
     pub player_recipe: Option<BattlePreset>,
     /// Exactly two distinct teams are admitted in the initial spectator mode.
@@ -231,7 +232,7 @@ impl ArenaBattleSetup {
     /// Validate the bounded actor/party contract before resolving physical spawn positions.
     pub fn validate_for(&self, map: ArenaMap) -> Result<(), BattleSetupError> {
         if self.control == ArenaControl::Player {
-            if self.player_recipe.is_some() && map != ArenaMap::Fort {
+            if self.player_recipe.is_some() && !matches!(map, ArenaMap::Fort | ArenaMap::Duel) {
                 return Err(BattleSetupError::PlayerRecipeMap);
             }
             return Ok(());
@@ -287,7 +288,7 @@ impl ArenaBattleSetup {
 /// Setup refusal; failure to place valid bodies is a separate runtime diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BattleSetupError {
-    /// Explicit player recipes are currently authored only for Fort.
+    /// Explicit player recipes require Fort or Duel.
     PlayerRecipeMap,
     /// Observer rosters cannot also request a player encounter recipe.
     PlayerRecipeInSpectator,
@@ -310,7 +311,7 @@ pub enum BattleSetupError {
 impl std::fmt::Display for BattleSetupError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::PlayerRecipeMap => "Player opponent recipes support Fort only.",
+            Self::PlayerRecipeMap => "Player opponent recipes support Fort and Duel.",
             Self::PlayerRecipeInSpectator => {
                 "Spectator battles use team rosters, not a player recipe."
             }

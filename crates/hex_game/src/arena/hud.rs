@@ -130,7 +130,7 @@ pub(super) fn setup(mut commands: Commands) {
                         }
                     });
                     panel.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }, ModeContent(ArenaControl::Player))).with_children(|panel| {
-                    panel.spawn(text("FORT ENCOUNTER", 12.0, MUTED));
+                    panel.spawn(text("ENEMY PARTY", 12.0, MUTED));
                     let choices = [
                         ("Dragon",Action::Encounter(ArenaEncounter::Dragon)),
                         ("Goblins",Action::Encounter(ArenaEncounter::Goblins)),
@@ -239,9 +239,18 @@ pub(super) fn buttons(
                     && !(battle.control == ArenaControl::Spectator
                         && map == ArenaMap::SevenRegions) =>
             {
+                let previous = (selection.map != ArenaMap::SevenRegions)
+                    .then(|| super::player_preset(*selection, &battle));
                 selection.map = map;
-                if map != ArenaMap::Fort {
+                if map == ArenaMap::SevenRegions || battle.control == ArenaControl::Spectator {
                     battle.player_recipe = None;
+                } else {
+                    let preset = previous.unwrap_or(if map == ArenaMap::Duel {
+                        BattlePreset::Shadow
+                    } else {
+                        BattlePreset::Dragon
+                    });
+                    super::choose_player_preset(&mut selection, &mut battle, preset);
                 }
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
@@ -283,21 +292,25 @@ pub(super) fn buttons(
             Action::Encounter(encounter)
                 if !state.started
                     && battle.control == ArenaControl::Player
-                    && selection.map == ArenaMap::Fort
-                    && (selection.encounter != encounter || battle.player_recipe.is_some()) =>
+                    && matches!(selection.map, ArenaMap::Fort | ArenaMap::Duel)
+                    && super::player_preset(*selection, &battle)
+                        != super::encounter_preset(encounter) =>
             {
-                selection.encounter = encounter;
-                battle.player_recipe = None;
+                super::choose_player_preset(
+                    &mut selection,
+                    &mut battle,
+                    super::encounter_preset(encounter),
+                );
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
             Action::PlayerRecipe(recipe)
                 if !state.started
                     && battle.control == ArenaControl::Player
-                    && selection.map == ArenaMap::Fort
-                    && battle.player_recipe != Some(recipe) =>
+                    && matches!(selection.map, ArenaMap::Fort | ArenaMap::Duel)
+                    && super::player_preset(*selection, &battle) != recipe =>
             {
-                battle.player_recipe = Some(recipe);
+                super::choose_player_preset(&mut selection, &mut battle, recipe);
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
@@ -405,12 +418,13 @@ pub(super) fn update(
             Action::Control(control) => *control == battle.control,
             Action::Map(map) => *map == selection.map,
             Action::Encounter(encounter) => {
-                selection.map == ArenaMap::Fort
-                    && battle.player_recipe.is_none()
-                    && *encounter == selection.encounter
+                matches!(selection.map, ArenaMap::Fort | ArenaMap::Duel)
+                    && super::player_preset(selection, &battle)
+                        == super::encounter_preset(*encounter)
             }
             Action::PlayerRecipe(recipe) => {
-                selection.map == ArenaMap::Fort && battle.player_recipe == Some(*recipe)
+                matches!(selection.map, ArenaMap::Fort | ArenaMap::Duel)
+                    && super::player_preset(selection, &battle) == *recipe
             }
             _ => continue,
         };
@@ -473,14 +487,17 @@ Area Blast casts on release with fixed power.".into(),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection => match selection.map {
-                ArenaMap::Duel => "Duel: the original Shadow challenge.".into(),
-                ArenaMap::Fort => format!("Fort: {}. Restart keeps this encounter.", battle.player_recipe.map_or(super::encounter_name(selection.encounter), BattlePreset::label)),
-                ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nFort encounter buttons apply only to Fort.".into(),
+                ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
+                ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),
             },
             Label::Encounter => {
                 let summary = session.encounter_summary();
                 if selection.map == ArenaMap::Duel {
-                    "DUEL  /  SHADOW CHALLENGE".into()
+                    if super::player_preset(selection, &battle) == BattlePreset::Shadow {
+                        "DUEL  /  SHADOW CHALLENGE".into()
+                    } else {
+                        format!("DUEL  /  {}", super::player_preset(selection, &battle).label().to_uppercase())
+                    }
                 } else {
                     format!("{}  /  {} / {} parties cleared", super::map_name(selection.map), summary.defeated_parties, session.parties().len())
                 }

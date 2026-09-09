@@ -37,18 +37,22 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "seven-regions" => ArenaMap::SevenRegions,
         value => return Err(format!("Unknown arena map: {value}")),
     };
-    let encounter = match encounter.unwrap_or("dragon") {
+    let encounter = match encounter.unwrap_or(if map == ArenaMap::Duel {
+        "shadow"
+    } else {
+        "dragon"
+    }) {
         "dragon" => ArenaEncounter::Dragon,
         "goblins" => ArenaEncounter::Goblins,
         "shaman-party" => ArenaEncounter::ShamanParty,
         "shadow" => ArenaEncounter::Shadow,
         "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12" | "worm"
-            if map == ArenaMap::Fort =>
+            if matches!(map, ArenaMap::Fort | ArenaMap::Duel) =>
         {
             ArenaEncounter::Dragon
         }
         "golem" | "goblin" | "wisp" | "wisps-2" | "wisps-4" | "wisps-8" | "wisps-12" | "worm" => {
-            return Err("Creature player overrides require Fort.".into());
+            return Err("Creature player overrides require Fort or Duel.".into());
         }
         value => return Err(format!("Unknown arena encounter: {value}")),
     };
@@ -60,18 +64,65 @@ fn apply_player_recipe(
     selection: ArenaSelection,
     encounter: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(recipe) = encounter
-        .and_then(hex_arena::BattlePreset::from_slug)
-        .filter(|recipe| !hex_arena::BattlePreset::ORIGINAL.contains(recipe))
-    {
-        if setup.control != hex_arena::ArenaControl::Player {
+    if let Some(recipe) = encounter.and_then(hex_arena::BattlePreset::from_slug) {
+        let extended = !hex_arena::BattlePreset::ORIGINAL.contains(&recipe);
+        if extended && setup.control != hex_arena::ArenaControl::Player {
             return Err("Spectator creatures use the team roster options.".into());
         }
-        setup.player_recipe = Some(recipe);
+        if setup.control == hex_arena::ArenaControl::Player
+            && (extended
+                || (selection.map == ArenaMap::Duel && recipe != hex_arena::BattlePreset::Shadow))
+        {
+            setup.player_recipe = Some(recipe);
+        }
     }
     setup
         .validate_for(selection.map)
         .map_err(|error| error.to_string())
+}
+
+fn encounter_preset(encounter: ArenaEncounter) -> hex_arena::BattlePreset {
+    use hex_arena::BattlePreset;
+    match encounter {
+        ArenaEncounter::Dragon => BattlePreset::Dragon,
+        ArenaEncounter::Goblins => BattlePreset::Goblins,
+        ArenaEncounter::ShamanParty => BattlePreset::ShamanParty,
+        ArenaEncounter::Shadow => BattlePreset::Shadow,
+    }
+}
+
+fn player_preset(
+    selection: ArenaSelection,
+    setup: &hex_arena::ArenaBattleSetup,
+) -> hex_arena::BattlePreset {
+    setup.player_recipe.unwrap_or_else(|| {
+        if selection.map == ArenaMap::Duel {
+            hex_arena::BattlePreset::Shadow
+        } else {
+            encounter_preset(selection.encounter)
+        }
+    })
+}
+
+fn choose_player_preset(
+    selection: &mut ArenaSelection,
+    setup: &mut hex_arena::ArenaBattleSetup,
+    preset: hex_arena::BattlePreset,
+) {
+    use hex_arena::BattlePreset;
+    selection.encounter = match preset {
+        BattlePreset::Shadow => ArenaEncounter::Shadow,
+        BattlePreset::Goblins => ArenaEncounter::Goblins,
+        BattlePreset::ShamanParty => ArenaEncounter::ShamanParty,
+        _ => ArenaEncounter::Dragon,
+    };
+    setup.player_recipe = if !BattlePreset::ORIGINAL.contains(&preset)
+        || (selection.map == ArenaMap::Duel && preset != BattlePreset::Shadow)
+    {
+        Some(preset)
+    } else {
+        None
+    };
 }
 
 fn map_name(map: ArenaMap) -> &'static str {

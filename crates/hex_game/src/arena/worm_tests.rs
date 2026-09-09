@@ -474,9 +474,7 @@ fn worm_player_recipe_and_reset_return_to_ready_without_leaking_into_original_mo
     let mut setup = ArenaBattleSetup::default();
     apply_player_recipe(&mut setup, selection, Some("worm")).expect("Worm override");
     assert_eq!(setup.player_recipe, Some(BattlePreset::Worm));
-    for map in ["duel", "seven-regions"] {
-        assert!(launch_selection(Some(map), Some("worm")).is_err());
-    }
+    assert!(launch_selection(Some("seven-regions"), Some("worm")).is_err());
     let (mut fixture, _) = menu_app();
     press_action(&mut fixture, hud::Action::Map(ArenaMap::Fort));
     press_action(&mut fixture, hud::Action::PlayerRecipe(BattlePreset::Worm));
@@ -506,7 +504,11 @@ fn worm_player_recipe_and_reset_return_to_ready_without_leaking_into_original_mo
     press_action(&mut fixture, hud::Action::Control(ArenaControl::Player));
     press_action(&mut fixture, hud::Action::Map(ArenaMap::Duel));
     let session = fixture.world().resource::<ArenaSession>();
-    assert_eq!(session.accepted_battle_setup().player_recipe, None);
+    assert_eq!(
+        session.accepted_battle_setup().player_recipe,
+        Some(BattlePreset::Dragon),
+        "switching maps preserves the restored Fort party"
+    );
     assert!(!session
         .actors
         .iter()

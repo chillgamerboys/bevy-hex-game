@@ -71,7 +71,7 @@ impl EncounterState {
 }
 
 impl ArenaSession {
-    pub(super) fn advance_support(&mut self, tuning: &ArenaTuning) {
+    pub(super) fn advance_support(&mut self, tuning: &ArenaTuning, map: ArenaMap) {
         let c = &tuning.encounters;
         for a in &mut self.encounter.auras {
             a.remaining -= STEP;
@@ -106,7 +106,8 @@ impl ArenaSession {
             {
                 actor.hp = (actor.hp + c.dragon_regen_rate * STEP).min(actor.max_hp);
             }
-            if Some(actor.id) == human_id
+            if map != ArenaMap::Duel
+                && Some(actor.id) == human_id
                 && elapsed(self.tick, actor.last_activity_tick) >= c.human_regen_delay
                 && elapsed(self.tick, self.encounter.human_seen_tick) >= c.human_unseen_delay
             {

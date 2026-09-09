@@ -1,8 +1,8 @@
 # Arena encounters: controls and tuning
 
 This local experiment puts continuous spell combat on Fort and Seven Regions.
-The original Duel remains available as the reference fight against the accepted
-Shadow Player. It does not use tactical turns, lattices or multiplayer.
+Duel also offers selectable enemy parties; choosing Shadow retains the reference
+fight against the accepted bot. It does not use tactical turns, lattices or multiplayer.
 
 ## Start and controls
 
@@ -11,10 +11,13 @@ Run the local launcher from the repository:
     python3 tools/arena.py launch
 
 Choose a map on the start screen. Fort defaults to a Dragon encounter and also
-offers five Goblins, a Shaman with three Goblins, one Shadow, a Golem, four Ember Wisps, or a Worm. Seven Regions
+offers five Goblins, a Shaman with three Goblins, one Shadow, a Golem, four Ember Wisps, or a Worm.
+Duel offers the same **Enemy Party** choices and defaults to Shadow when launched directly.
+Switching between Fort and Duel keeps your selected party; R restores it and returns
+to the ready screen, where you can choose another. Seven Regions
 contains three separate parties at the mountain high pass, fort courtyard and
 cave entrance. Combat stays stopped until you press Enter or choose Start.
-The launcher also accepts `--map seven-regions` or `--map duel`; Fort presets use
+The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel presets use
 `--encounter dragon`, `goblins`, `shaman-party`, `shadow`, `golem`, `wisps-4` or `worm`.
 
 | Input | Action |
@@ -95,7 +98,7 @@ parties remain changed until restart.
 
 On Fort and Seven Regions, recover 2 HP/second after eight seconds without casting,
 dealing damage or receiving damage, and three seconds unseen by active enemies.
-The original Duel keeps its existing no-regeneration rule.
+Duel keeps its no-regeneration rule for every enemy party.
 
 Defeat all parties to clear the map. Death ends the run. R restores the entire map
 and roster, including barriers, cooldowns and party memories.

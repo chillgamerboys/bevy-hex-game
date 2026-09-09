@@ -1922,10 +1922,17 @@ fn selector_actions_reset_frozen_input_and_do_not_change_an_active_run() {
     press_action(&mut fixture, hud::Action::Encounter(ArenaEncounter::Dragon));
     assert_eq!(
         fixture.world().resource::<ArenaSelection>().encounter,
-        ArenaEncounter::Goblins,
-        "Fort-only choice is inert on Duel"
+        ArenaEncounter::Dragon,
+        "Duel also accepts the enemy party choice"
     );
     assert_eq!(fixture.world().resource::<ArenaSession>().actors.len(), 2);
+    assert_eq!(
+        fixture
+            .world()
+            .resource::<hex_arena::ArenaBattleSetup>()
+            .player_recipe,
+        Some(hex_arena::BattlePreset::Dragon)
+    );
 }
 
 #[test]
@@ -2297,3 +2304,6 @@ mod golem_tests;
 mod wisp_tests;
 #[path = "worm_tests.rs"]
 mod worm_tests;
+
+#[path = "duel_party_tests.rs"]
+mod duel_party_tests;

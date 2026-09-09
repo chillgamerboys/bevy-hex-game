@@ -5,6 +5,9 @@ use hex_core::{ElementId, SubstanceId};
 #[path = "battle_tests.rs"]
 mod battle_tests;
 
+#[path = "duel_player_tests.rs"]
+mod duel_player_tests;
+
 #[path = "visibility_tests.rs"]
 mod visibility_tests;
 
