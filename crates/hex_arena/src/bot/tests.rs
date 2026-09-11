@@ -708,3 +708,90 @@ mod navigation_tests;
 
 #[path = "duel_golden_tests.rs"]
 mod duel_golden_tests;
+
+#[test]
+fn shadow_jump_motion_is_only_for_visible_human_targets() {
+    let fixture = Fixture::new(8.0);
+    let human = Belief {
+        feet: Vec3::Y,
+        velocity: Vec3::Y * 4.0,
+        visible: true,
+        uncertainty: 0.1,
+        profile: None,
+    };
+    let shadow = fixture.actor(1);
+    assert!(shadow_motion(shadow, human, &fixture.session.collision, &fixture.tuning).is_some());
+    assert!(shadow_motion(
+        shadow,
+        Belief {
+            visible: false,
+            ..human
+        },
+        &fixture.session.collision,
+        &fixture.tuning
+    )
+    .is_none());
+    let mut goblin = shadow.clone();
+    goblin.species = crate::Species::Goblin;
+    assert!(shadow_motion(&goblin, human, &fixture.session.collision, &fixture.tuning).is_none());
+    let mut body = ForecastBody::human(2, human.feet, human.velocity, 0.5);
+    body.species = crate::Species::Shadow;
+    let monster = Belief {
+        profile: Some(crate::targeting::ObservedTarget {
+            body,
+            tick: 0,
+            sight_point: body.center(),
+        }),
+        ..human
+    };
+    assert!(shadow_motion(shadow, monster, &fixture.session.collision, &fixture.tuning).is_none());
+}
+
+#[test]
+fn shadow_jump_aim_and_splash_admission_use_the_same_projectile_motion() {
+    let mut fixture = Fixture::new(8.0);
+    let caster = fixture.actor(1).clone();
+    for (height, vertical) in [(0.3, 5.0), (1.3, 0.0), (0.5, -4.0)] {
+        let belief = Belief {
+            feet: fixture.actor(0).feet.with_y(height),
+            velocity: Vec3::new(0.0, vertical, 0.0),
+            visible: true,
+            uncertainty: 0.1,
+            profile: None,
+        };
+        let speed = fixture.tuning.launch_speed(fixture.tuning.charge_seconds);
+        let (aim, time) = fixture
+            .session
+            .bot
+            .fireball_aim(
+                &caster,
+                belief,
+                &fixture.session.collision,
+                &fixture.world,
+                fixture.geometry,
+                &fixture.tuning,
+                speed,
+            )
+            .expect("jump phase should admit a useful shot");
+        let mut shot_caster = caster.clone();
+        shot_caster.aim = aim;
+        let motion = shadow_motion(&caster, belief, &fixture.session.collision, &fixture.tuning)
+            .expect("admitted forecast");
+        let forecast = forecast_spell_with_motion(
+            &shot_caster,
+            &forecast_bodies(belief, &fixture.tuning),
+            Some(&motion),
+            &fixture.session.collision,
+            &fixture.world,
+            fixture.geometry,
+            &fixture.tuning,
+            speed,
+        );
+        let impact = forecast.impact.expect("admitted forecast");
+        assert!((impact.time - time).abs() < STEP * 0.01);
+        assert!(
+            capsule_distance(impact.point, motion.feet_at(time))
+                <= fixture.tuning.fireball_radius() * 0.6
+        );
+    }
+}

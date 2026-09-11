@@ -449,3 +449,22 @@ no new broad capture or balance campaign is part of this repair.
 The response candidate passes 45 Worm and 32 Golem library tests, strict arena
 Clippy, and the actual-map stationary-human Worm release check on Fort and Duel.
 See [response-repair.md](response-repair.md) for scope and remaining limitations.
+
+### Jump prediction, Golem pace and deeper Worm escape — 2026-09-11
+
+Approved on `fix/arena-golem-worm-response`: Shadow/human-only controller forecasts,
+Golem speed 3.2, then Worm emergency depth up to eight levels with 3.5-unit relocation
+and four seconds of buried travel. Root owns configuration, Golem pace,
+world-composition tests and the only Cargo lane. A bounded Worm lane owns
+`encounters/worm.rs` and its focused tests. The bounded Shadow lane owns
+`bot.rs`, `spells.rs` and its private forecast helper/tests. No world mutation API
+changes. Stop/checkpoint at 16% remaining usage; initial reading 27%. Run focused
+arena tests/lint and Fort/Duel checks, not broad captures or calibration.
+
+The candidate passes five Shadow jump checks, hidden-history isolation, 33 Golem
+checks, 49 Worm checks, strict arena Clippy and the Fort/Duel crater application
+regression. Full-rise preflight and the existing directional detours address
+blocked emergence and a nearby body obstructing the head. Remaining Fort firing
+angle/navigation limits and the precise synthetic setup are recorded in
+[quick-combat-fixes.md](quick-combat-fixes.md). Final usage: 25% remaining.
+Code stays local; native playtest and any later PR/merge remain separate.

@@ -172,7 +172,8 @@ damage. It excludes the Shaman; leaving range or sight stops support, and killin
 the Shaman ends the aura. Support does not stack or revive enemies.
 
 The Golem has a seven-hex footprint and is five levels (2 units) tall. It walks at
-2 units/second and cannot jump or pass Fort's low gate. Its .8-second slam windup
+3.2 units/second (below the player's 3.5-unit walk) and cannot jump or pass Fort's
+low gate. Its .8-second slam windup
 precedes a 35-damage sphere of about four horizontal hexes (6.93 units), with
 knockback and terrain damage. Its laser charges for two seconds, then fires for
 four seconds at up to 45 damage/second, capped at 180 damage per target for the
@@ -221,9 +222,12 @@ explosions still splash through cover.
 
 Burrowing converts eligible earth to dirt while preserving remaining block HP,
 and movement waits for the world's publication before checking the entire body
-again. Destroyed support can prevent a valid shallow route. The Worm may safely
-retract its head and remain unable to travel rather than cross an invalid depth or
-invent support. The optional six-segment body is refused where an authored spawn
+again. When a crater prevents ordinary shallow travel, the Worm retracts and tries
+a deeper escape, at most eight levels below local terrain across its entire body.
+It seeks at least 3.5 units of horizontal relocation and a valid shallow band before
+emerging again. Buried escape travel is limited to four seconds; protected ground,
+bedrock or no legal route can still force stationary counterfire. It never rebuilds
+lost terrain or teleports. The optional six-segment body is refused where an authored spawn
 pocket is too small; bodies are never compressed to fit.
 
 Enemy attacks spare allied actors, and enemy projectiles pass through them.
@@ -273,3 +277,10 @@ stationary exposure after the existing surface interval, allowing sight-checked
 counterfire. No above-ground movement or replacement terrain is granted. Travel
 can still fail where no valid shallow band exists. These address specific causes
 of the reported nonresponse; native playtest confirmation remains pending.
+
+### Quick repair follow-up — 2026-09-11
+
+The same local branch adds gravity-aware Shadow aim against jumping humans, raises
+Golem movement to 3.2 units/second and tries the bounded deeper Worm escape above
+before stationary fallback. Existing attacks and player controls are unchanged.
+See the [focused validation report](../planning/waves/arena-bestiary/quick-combat-fixes.md).

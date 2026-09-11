@@ -16,6 +16,11 @@ Nearby releases and impacts provide coarse, discrete cues within twelve world un
 A held charge is silent. An impact identifies a disturbance, not the shooter's
 current location. Hidden actors are absent from the decision forecast's body list.
 
+Against a visible human, Shadow predicts at most .5 seconds with the existing
+movement controller, including gravity, ceilings and landing. Aim, collision
+forecasts and splash estimates share that path. It never assumes a second jump
+before observing one; hidden targets retain the existing memory rules.
+
 The bot evaluates charge strengths for useful, self-safe Fireballs and minimizes
 remaining preparation plus projectile flight time. It keeps a charge through brief
 concealment and movement, then rechecks the current trajectory before release.

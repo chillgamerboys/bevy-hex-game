@@ -14,6 +14,9 @@ use crate::{
 #[cfg(test)]
 use hex_core::arena::ARENA_MAX_LEVEL;
 
+mod motion;
+pub(crate) use motion::ForecastMotion;
+
 const PROJECTILE_RADIUS: f32 = 0.06;
 pub(super) const MAX_FLIGHT_SECONDS: f32 = 8.0;
 pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
@@ -946,6 +949,29 @@ pub(crate) fn forecast_spell(
     tuning: &ArenaTuning,
     launch_speed: f32,
 ) -> SpellForecast {
+    forecast_spell_with_motion(
+        caster,
+        observed,
+        None,
+        collision,
+        world,
+        geometry,
+        tuning,
+        launch_speed,
+    )
+}
+
+/// Optional observed-only motion path used by the Shadow against the human.
+pub(crate) fn forecast_spell_with_motion(
+    caster: &Actor,
+    observed: &[ForecastBody],
+    motion: Option<&ForecastMotion>,
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
+    launch_speed: f32,
+) -> SpellForecast {
     if caster.selected == Spell::AreaBlast {
         return SpellForecast {
             impact: Some(ForecastImpact {
@@ -958,7 +984,7 @@ pub(crate) fn forecast_spell(
         };
     }
     let shot = projectile(caster, caster.selected, tuning, 0, launch_speed);
-    forecast_projectile(caster, observed, collision, world, geometry, shot)
+    forecast_projectile(caster, observed, motion, collision, world, geometry, shot)
 }
 
 pub(crate) fn forecast_creature_projectile(
@@ -971,12 +997,13 @@ pub(crate) fn forecast_creature_projectile(
     geometry: ArenaVoxelGeometry,
 ) -> SpellForecast {
     let shot = creature_projectile(caster, direction, spec, 0, collision.min_y.min(-10.0));
-    forecast_projectile(caster, observed, collision, world, geometry, shot)
+    forecast_projectile(caster, observed, None, collision, world, geometry, shot)
 }
 
 fn forecast_projectile(
     caster: &Actor,
     observed: &[ForecastBody],
+    motion: Option<&ForecastMotion>,
     collision: &CollisionWorld,
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
@@ -1014,8 +1041,13 @@ fn forecast_projectile(
                 body.previous_yaw = body.body_yaw;
                 body.body_yaw = fact.yaw
                     + fact.yaw_velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
-                body.feet = fact.feet
-                    + fact.velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
+                body.feet = motion.filter(|path| path.id == fact.id).map_or_else(
+                    || {
+                        fact.feet
+                            + fact.velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0))
+                    },
+                    |path| path.feet_at(shot.age + STEP),
+                );
             }
         }
         if let Some(hit) = advance_shot(&mut shot, collision, &bodies, false) {

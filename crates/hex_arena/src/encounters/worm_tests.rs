@@ -556,7 +556,145 @@ fn an_airborne_worm_keeps_falling_while_sideways_impulse_pressures_a_wall() {
 // Lost travel support must not leave a living Worm permanently unable to retaliate.
 
 #[test]
-fn a_partial_tail_crater_allows_retraction_then_stationary_counterfire() {
+fn escape_passes_a_blocked_emergence_point_without_starting_to_rise() {
+    let mut f = fixture();
+    for _ in 0..900 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        if f.worm()
+            .worm()
+            .is_some_and(|state| state.phase == WormPhase::Travel)
+        {
+            break;
+        }
+    }
+    let before = f.worm().feet;
+    let control = f.session.encounter.worms.get_mut(&7).expect("control");
+    assert_eq!(control.phase, WormPhase::Travel);
+    control.escape = Some(Escape {
+        origin: before - Vec3::X * 4.0,
+        depth: f.tuning.encounters.worm_escape_depth_levels,
+        buried_seconds: 0.0,
+        rise_admitted: false,
+    });
+    // The fixture publishes conversion after advance; refresh the query before
+    // a direct probe, just as the next production tick would do.
+    f.session.burrow_query.refresh(&f.view);
+    assert!(
+        f.session.escape_rise_admitted(
+            f.worm(),
+            f.session.encounter.worms.get(&7).expect("control"),
+            &f.view,
+            f.geometry,
+            f.materials,
+            &f.tuning.encounters,
+        ),
+        "ordinary convertible earth admits the full rise"
+    );
+    // Leave clearance above the current body's skin; block the eventual rise,
+    // without inserting a static object into an already admitted live body.
+    f.view.static_spans.push(hex_core::arena::ArenaStaticSpan {
+        bottom: TilePos::new(HexCoord::from_world(before), 10),
+        top_level: 10,
+        blocks_movement: true,
+        blocks_projectiles: true,
+        blocks_sight: true,
+    });
+    f.view.revision += 1;
+    f.view.full_rebuild = true;
+    f.session.burrow_query.refresh(&f.view);
+    assert!(!f.session.escape_rise_admitted(
+        f.worm(),
+        f.session.encounter.worms.get(&7).expect("control"),
+        &f.view,
+        f.geometry,
+        f.materials,
+        &f.tuning.encounters,
+    ));
+    for _ in 0..24 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        assert_eq!(f.worm().worm().expect("state").phase, WormPhase::Travel);
+    }
+    assert!(
+        (f.worm().feet - before).with_y(0.0).length() > 0.1,
+        "continue beneath the roof using an admitted detour: {before:?} -> {:?}",
+        f.worm().feet,
+    );
+}
+
+#[test]
+fn escape_detours_away_from_a_nearby_body_that_blocks_the_head_rise() {
+    let mut f = fixture();
+    for _ in 0..900 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        if f.worm()
+            .worm()
+            .is_some_and(|state| state.phase == WormPhase::Travel)
+        {
+            break;
+        }
+    }
+    let before = f.worm().feet;
+    let human = f.session.actors.first_mut().expect("human");
+    human.feet = Vec3::new(before.x + 1.0, 3.2 + SKIN, before.z);
+    human.previous_feet = human.feet;
+    human.body.impulse_velocity = Vec3::ZERO;
+    let target = human.feet;
+    let control = f.session.encounter.worms.get_mut(&7).expect("control");
+    assert_eq!(control.phase, WormPhase::Travel);
+    control.escape = Some(Escape {
+        origin: before - Vec3::X * 4.0,
+        depth: f.tuning.encounters.worm_escape_depth_levels,
+        buried_seconds: 0.0,
+        rise_admitted: false,
+    });
+    control.next_sense = f.session.tick;
+    f.session.burrow_query.refresh(&f.view);
+    assert!(!f.session.escape_rise_admitted(
+        f.worm(),
+        f.session.encounter.worms.get(&7).expect("control"),
+        &f.view,
+        f.geometry,
+        f.materials,
+        &f.tuning.encounters,
+    ));
+    let mut exposed = false;
+    for _ in 0..720 {
+        let out = f.advance();
+        f.apply(&out.burrows);
+        if f.worm().worm().is_some_and(|state| state.exposed) {
+            exposed = true;
+            break;
+        }
+    }
+    assert!(
+        exposed,
+        "make room for an admitted rise before the escape expires"
+    );
+    assert!(
+        (f.worm().feet - target).with_y(0.0).length() > 1.1,
+        "detour away instead of parking beneath the target"
+    );
+}
+
+#[test]
+fn a_partial_tail_crater_allows_deeper_retreat_relocation_and_counterfire() {
+    tail_crater_recovery(false, 4);
+}
+
+#[test]
+fn a_protected_tail_crater_keeps_a_safe_stationary_counterfire_fallback() {
+    tail_crater_recovery(true, 4);
+}
+
+#[test]
+fn a_tail_crater_to_bedrock_keeps_a_safe_stationary_counterfire_fallback() {
+    tail_crater_recovery(false, 0);
+}
+
+fn tail_crater_recovery(protected: bool, floor: i32) {
     let mut f = fixture();
     let mut reached_travel = false;
     for _ in 0..900 {
@@ -593,11 +731,19 @@ fn a_partial_tail_crater_allows_retraction_then_stationary_counterfire() {
         !head_columns.contains(&crater),
         "damage removes tail support only"
     );
-    // Four missing levels leave a real deeper floor, beyond the old shallow
+    // Missing levels leave a real deeper floor, beyond the old shallow
     // support window. The head and remaining spine stay in admitted solid dirt.
     f.view
         .voxels
-        .retain(|pos, _| pos.coord != crater || pos.level <= 4);
+        .retain(|pos, _| pos.coord != crater || pos.level <= floor);
+    if floor == 0 {
+        f.view
+            .voxels
+            .insert(TilePos::new(crater, 0), f.materials.bedrock);
+    }
+    if protected {
+        f.view.edit_protected.insert(crater, vec![(4, 4)]);
+    }
     f.view.revision += 1;
     f.view.full_rebuild = true;
     f.session.collision.refresh(&f.view, f.geometry);
@@ -623,12 +769,27 @@ fn a_partial_tail_crater_allows_retraction_then_stationary_counterfire() {
     f.session.record_damage(0, 7, 1.0);
     assert!(old_lift > 0.0);
     let mut retracted = false;
+    let mut deep_travel = false;
     let mut counterfire = false;
-    for _ in 0..900 {
+    for _ in 0..1800 {
         let out = f.advance();
+        if protected {
+            assert!(out
+                .burrows
+                .iter()
+                .all(|request| { !request.volume.contains(&TilePos::new(crater, 4)) }));
+        }
         f.apply(&out.burrows);
         let control = f.session.encounter.worms.get(&7).expect("control");
         retracted |= control.phase == WormPhase::Diving && control.lift <= SKIN;
+        deep_travel |= control.phase == WormPhase::Travel
+            && f.worm().feet.y < before.feet.y - f.geometry.level_height
+            && control.physically_buried(
+                f.worm(),
+                &f.view,
+                f.geometry,
+                f.tuning.encounters.worm_depth_levels,
+            );
         counterfire |= f.session.projectiles.iter().any(|shot| {
             shot.id >= first_new_projectile
                 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
@@ -639,18 +800,28 @@ fn a_partial_tail_crater_allows_retraction_then_stationary_counterfire() {
     }
     assert!(
         retracted && counterfire,
-        "retract, then retaliate without a travel band"
+        "retract, then retaliate after crater recovery: {:?}",
+        f.session.encounter.worms.get(&7)
     );
     assert!(f.worm().worm().expect("head").exposed);
-    assert!(
-        f.worm().feet.distance(before.feet) < SKIN,
-        "this recovery changes head lift, not position or travel-depth admission"
-    );
+    let relocated = (f.worm().feet - before.feet).with_y(0.0).length();
+    if protected || floor == 0 {
+        assert!(
+            !deep_travel && relocated < SKIN,
+            "immutable floor blocks escape"
+        );
+    } else {
+        assert!(deep_travel, "retreat fully beneath the lower crater floor");
+        assert!(
+            relocated >= f.tuning.encounters.worm_escape_distance,
+            "resurface elsewhere after deep travel: {relocated}"
+        );
+    }
     assert!(
         f.view
             .voxels
             .keys()
-            .all(|pos| pos.coord != crater || pos.level <= 4),
+            .all(|pos| pos.coord != crater || pos.level <= floor),
         "recovery never fabricates the lost supporting terrain"
     );
 }
@@ -721,7 +892,7 @@ fn a_deep_head_crater_retains_true_clearance_but_cannot_create_an_exposed_firing
     f.view.full_rebuild = true;
     assert!(columns
         .iter()
-        .all(|coord| surface_at(&f.view, *coord, reference, f.geometry).is_none()));
+        .all(|coord| surface_at(&f.view, *coord, reference, f.geometry, 2).is_none()));
     f.advance();
     let head = f.worm().worm().expect("physical head");
     assert!(
@@ -730,14 +901,23 @@ fn a_deep_head_crater_retains_true_clearance_but_cannot_create_an_exposed_firing
     );
     let initial_lift = f.session.encounter.worms.get(&7).expect("controller").lift;
     let mut retracted = false;
+    let mut deep_travel = false;
     let mut counterfire = false;
-    for _ in 0..900 {
+    for _ in 0..1800 {
         let out = f.advance();
         f.apply(&out.burrows);
         let control = f.session.encounter.worms.get(&7).expect("controller");
         retracted |= control.phase == WormPhase::Diving
             && control.lift < initial_lift
             && control.lift <= SKIN;
+        deep_travel |= control.phase == WormPhase::Travel
+            && f.worm().feet.y < before.feet.y - f.geometry.level_height
+            && control.physically_buried(
+                f.worm(),
+                &f.view,
+                f.geometry,
+                f.tuning.encounters.worm_depth_levels,
+            );
         counterfire |= f.session.projectiles.iter().any(|shot| {
             shot.id >= next_projectile
                 && shot.source_ability() == Some(CreatureAbility::WormBoulder)
@@ -748,13 +928,14 @@ fn a_deep_head_crater_retains_true_clearance_but_cannot_create_an_exposed_firing
     }
     let control = f.session.encounter.worms.get(&7).expect("controller");
     assert!(
-        retracted && counterfire,
-        "deeper head crater must not suppress all later shots"
+        retracted && deep_travel && counterfire,
+        "head crater recovery must dive, relocate and retaliate: {control:?}"
     );
     assert!(control.burrow_target.is_none());
     assert!(
-        f.worm().feet.distance(before.feet) < SKIN,
-        "no teleport or deeper travel"
+        (f.worm().feet - before.feet).with_y(0.0).length()
+            >= f.tuning.encounters.worm_escape_distance,
+        "head must re-emerge at a different position"
     );
     assert!(f
         .view

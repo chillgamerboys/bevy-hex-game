@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use crate::collision::{CollisionWorld, SKIN};
 use crate::spells::{
-    capsule_distance, forecast_spell, ForecastBody, EMERGENCE_SECONDS, MAX_FLIGHT_SECONDS,
+    capsule_distance, forecast_spell, forecast_spell_with_motion, ForecastBody, ForecastMotion,
+    EMERGENCE_SECONDS, MAX_FLIGHT_SECONDS,
 };
 use crate::{
     Actor, ActorIntent, ArenaTuning, CombatCue, CombatCueKind, Projectile, Spell, BODY_HEIGHT,
@@ -1033,7 +1034,11 @@ impl Bot {
         }
         let observations = self.forecast_bodies(belief, tuning);
         let (_, lead_time) = ballistic_aim(bot.eye(), belief.center(), tuning, speed)?;
-        let lead = belief.velocity * lead_time.min(tuning.bot.prediction_seconds);
+        let motion = shadow_motion(bot, belief, collision, tuning);
+        let lead = motion.as_ref().map_or_else(
+            || belief.velocity * lead_time.min(tuning.bot.prediction_seconds),
+            |path| path.feet_at(lead_time) - belief.feet,
+        );
         for (sample, vertical) in [
             belief
                 .profile
@@ -1069,9 +1074,10 @@ impl Bot {
             caster.aim = aim;
             caster.selected = Spell::Fireball;
             self.forecasts += 1;
-            let forecast = forecast_spell(
+            let forecast = forecast_spell_with_motion(
                 &caster,
                 &observations,
+                motion.as_ref(),
                 collision,
                 world,
                 geometry,
@@ -1081,8 +1087,10 @@ impl Bot {
             let Some(impact) = forecast.impact else {
                 continue;
             };
-            let target_distance =
-                belief.distance(impact.point, impact.time, tuning.bot.prediction_seconds);
+            let target_distance = motion.as_ref().map_or_else(
+                || belief.distance(impact.point, impact.time, tuning.bot.prediction_seconds),
+                |path| capsule_distance(impact.point, path.feet_at(impact.time)),
+            );
             if capsule_distance(impact.point, bot.feet) > tuning.fireball_radius() + 0.5
                 && target_distance <= tuning.fireball_radius() * 0.6
                 && (belief.visible || (impact.actor.is_none() && impact.barrier.is_none()))
@@ -1104,6 +1112,28 @@ impl Bot {
             forecast_bodies(belief, tuning)
         }
     }
+}
+
+fn shadow_motion(
+    bot: &Actor,
+    belief: Belief,
+    collision: &CollisionWorld,
+    tuning: &ArenaTuning,
+) -> Option<ForecastMotion> {
+    (bot.species == crate::Species::Shadow
+        && belief.visible
+        && belief
+            .profile
+            .is_none_or(|target| target.body.species == crate::Species::Human))
+    .then(|| {
+        ForecastMotion::human(
+            belief.profile.map_or(0, |target| target.body.id),
+            belief.feet,
+            belief.velocity,
+            tuning.bot.prediction_seconds,
+            collision,
+        )
+    })
 }
 
 fn forecast_bodies(belief: Belief, tuning: &ArenaTuning) -> Vec<ForecastBody> {
