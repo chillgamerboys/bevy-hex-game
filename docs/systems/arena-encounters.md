@@ -45,8 +45,9 @@ The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel p
 |---|---|
 | WASD / mouse | Move / look |
 | Space / Shift | Jump / sprint |
-| 1 / 2 / 3 | Select Shield / Fireball / Area Blast |
-| Hold then release left mouse | Charge and cast; Area Blast has fixed strength |
+| 1 / 2 | Select Shield / Fireball |
+| 3 | Immediate High Jump; preserves the selected spell and held charge |
+| Hold then release left mouse | Charge and cast the selected projectile |
 | C | Switch first person / close third person |
 | T | Toggle assistance for the selected projectile |
 | Escape or Tab | Pause combat, release the cursor and open the menu |
@@ -55,13 +56,28 @@ The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel p
 Maximum projectile charge takes 0.75 seconds. Holding longer does not auto-fire.
 A tap has one-third of the old reference range; full charge has 130%, measured for
 a same-height 45-degree shot. Actual range follows aim, gravity and elevation.
-Pausing, changing spells, focus loss, death and resetting cancel a charge.
+Pausing, changing projectile spells, focus loss, death and resetting cancel a charge.
+Pressing **3** does not cancel charging: you can jump high while preparing or releasing
+Shield or Fireball. High Jump replaces Area Blast. It is an immediate upward boost,
+usable on the ground or in the air, with **four world units** of rise from rest and a
+**seven-second cooldown**. Ceilings still block it. It deals no damage or terrain
+damage. Holding 3 does not repeat, and pressing during cooldown does not queue a
+future jump. Pausing, focus loss and reset discard pending presses and require a
+fresh press afterward.
 
 The paused menu contains existing spell tuning, resume/reset, window mode and
 quit. A win, death, draw or spectator timeout automatically opens the paused result
 menu and releases the cursor. A completed round cannot resume; choose Reset Arena
 to return to the ready screen or quit. There is no live HUD menu button. Menu
 clicks never become casts.
+
+The same menu adjusts **High Jump height** from **2–8 units** in 0.5-unit steps and
+its cooldown from **0.5–20 seconds**. **Shadow reaction** defaults to **150 ms** and
+can be changed from **Off (0 ms) to 500 ms** in 50 ms steps. This is the delay after
+acquiring or reacquiring sight; sight sampling can add up to 100 ms. It does not
+change charge speed or the existing post-cast gap. **Shadow escape** toggles local
+walking/jumping recovery from holes. Settings apply on resume and survive round
+reset and map changes within the session; reopening the game loads configured defaults.
 
 ## Watching monster battles
 
@@ -136,13 +152,18 @@ and roster, including barriers, cooldowns and party memories.
 
 | Enemy | Starting HP | What to expect |
 |---|---:|---|
-| Shadow |100| The accepted charged-shot opponent, unchanged. |
+| Shadow |100| Charged Fireballs and Shield, configurable reaction delay, and shared High Jump for escaping holes. |
 | Dragon |220| Slow flight, fast ground pursuit, occasional approach bursts, fire breath and a heavy bite; retreats and shields after damage. |
 | Goblin |50| Spreading melee groups with high jumps and a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 | Golem |320| Slow seven-hex stone body, broad nearby slam, a sustained tracking laser and a frontal cover-clearing swipe. |
 | Ember Wisp |30| Small glowing flyer with a long-range Ember shot; fragile alone and dangerous in groups. |
 | Worm |320| Four long native hex segments, underground pursuit and an exposed-head Boulder followed by retraction and repositioning. |
+
+Shadow attempts nearby walking, normal-jump and High Jump exits while preserving
+its combat charge. Recovery is bounded and requires supported landings; it cannot
+escape every deep or enclosed crater. See [arena bot behavior](arena-bot.md) for
+observation limits and the comparison controls.
 
 Goblins match the player body: .8 units tall with a .25-unit radius. Groups approach
 from wider angles and keep space between bodies. While pursuing, they attempt

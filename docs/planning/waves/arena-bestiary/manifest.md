@@ -2,6 +2,8 @@
 
 ## 2026-09-11 Shadow experiment continuation
 
+**Superseded:** see the [High Jump amendment](#high-jump-replaces-area-blast-and-excavation--2026-09-11-amendment) and [validation report](shadow-experiment.md). The original proposal below is historical.
+
 Approved continuation from `e0b2be9` on `fix/arena-golem-worm-response`.
 Root integrates one local candidate; no remote changes or `dev` merge. Existing
 local shared-checkout exception applies. Budget overrides broad repeated gates:
@@ -499,3 +501,42 @@ blocked emergence and a nearby body obstructing the head. Remaining Fort firing
 angle/navigation limits and the precise synthetic setup are recorded in
 [quick-combat-fixes.md](quick-combat-fixes.md). Final usage: 25% remaining.
 Code stays local; native playtest and any later PR/merge remain separate.
+
+
+### High Jump replaces Area Blast and excavation — 2026-09-11 amendment
+
+This approved revision supersedes the opening **Shadow experiment continuation**
+section's Fireball excavation, terrain-damage projection and charge-cancellation
+requirements. Its earlier foundation remains historical; the combined candidate
+removes that unused projection/publication code rather than retaining another
+world contract. Existing world mutation and collision ownership are unchanged.
+
+Human and Shadow receive an independent immediate High Jump on key 3, replacing
+Area Blast. It defaults to four world units and a seven-second cooldown, works in
+the air, preserves projectile selection/charge, and neither damages nor edits
+terrain. Normal collision, ceiling and knockback rules remain. The paused menu
+uses twelve rows: two projectile sizes, High Jump height (2–8), launch settings,
+three cooldowns (High Jump 0.5–20), Fireball damage/impulse, Shadow reaction
+(0–500 ms, 50 ms steps, default 150), and escape On/Off. Values survive session
+reset/map changes; paused time does not advance reaction deadlines.
+
+Shadow recovery now changes movement only. It tests six local directions within
+six units, preferring walking, normal jumping, then High Jump; it admits supported
+landings, commits airborne routes and revalidates changed terrain or knockback.
+One candidate runs per tick with at most two seconds of movement forecast. Full
+replanning remains bounded to twice per second, attempts to six seconds, and
+unchanged failed locations are suppressed. No Fireball excavation, Shield lifting,
+teleport, player-position privilege or new navigation framework is introduced.
+
+Root owns gameplay/configuration integration, the sole Cargo lane and the actual
+validation report. The bounded presentation lane owns native key edges, menu/HUD,
+cosmetic High Jump effects, application tests and launcher capture names. It also
+updates the two current controls/behavior guides and this amendment. Golem radial
+slam visuals retain a separate effect kind; removal of Area Blast does not remove
+creature attacks. Local commits only; no automatic PR or merge. Checkpoint at
+16% remaining usage. Native control feel and crater coverage remain playtest work.
+
+Validation complete for the High Jump amendment: 326 arena tests, 99 application
+checks (2 existing ignored), strict arena lint and workspace formatting pass.
+See [shadow-experiment.md](shadow-experiment.md) for scope, measurements and native
+playtest limits. Usage remains above the 16% checkpoint threshold.

@@ -511,11 +511,14 @@ impl ArenaSession {
         spell: Spell,
         tuning: &ArenaTuning,
         launch_speed: f32,
-        world: &ArenaTerrainView,
-        geometry: ArenaVoxelGeometry,
-        materials: ArenaMaterials,
-        out: &mut CommandsOut,
+        _world: &ArenaTerrainView,
+        _geometry: ArenaVoxelGeometry,
+        _materials: ArenaMaterials,
+        _out: &mut CommandsOut,
     ) {
+        if spell == Spell::HighJump {
+            return;
+        }
         if self.encounter.initialized {
             self.refresh_support_buffs(tuning);
         }
@@ -524,31 +527,10 @@ impl ArenaSession {
         };
         self.combat_cue(owner, actor.eye(), CombatCueKind::Release);
         self.record_cast(owner, spell);
-        if spell == Spell::AreaBlast {
-            self.explode(
-                actor.center(),
-                owner,
-                actor.team,
-                spell,
-                tuning.blast_radius(),
-                tuning.blast_damage * actor.damage_multiplier,
-                tuning.blast_knockback,
-                tuning.terrain_power,
-                None,
-                None,
-                false,
-                true,
-                world,
-                geometry,
-                materials,
-                out,
-            );
-        } else {
-            let mut shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
-            shot.parameters.min_y = self.collision.min_y.min(-10.0);
-            self.next_projectile += 1;
-            self.projectiles.push(shot);
-        }
+        let mut shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
+        shot.parameters.min_y = self.collision.min_y.min(-10.0);
+        self.next_projectile += 1;
+        self.projectiles.push(shot);
     }
 
     pub(super) fn advance_projectiles(
@@ -628,7 +610,7 @@ impl ArenaSession {
                             radius: 0.4,
                             age: 0.0,
                             lifetime: EMERGENCE_SECONDS,
-                            kind: Spell::Shield,
+                            kind: crate::VisualEffectKind::Shield,
                         });
                     }
                 } else {
@@ -694,7 +676,7 @@ impl ArenaSession {
                     radius: 0.65,
                     age: 0.0,
                     lifetime: 0.25,
-                    kind: Spell::Shield,
+                    kind: crate::VisualEffectKind::Shield,
                 });
             } else {
                 survivors.push(wall);
@@ -703,7 +685,7 @@ impl ArenaSession {
         self.pending_walls = survivors;
     }
 
-    fn explode(
+    pub(super) fn explode(
         &mut self,
         center: Vec3,
         owner: u8,
@@ -726,7 +708,7 @@ impl ArenaSession {
         let mut useful_fireball = false;
         for actor in &mut self.actors {
             if actor.hp <= 0.0
-                || ((spell == Spell::AreaBlast || owner_immune) && actor.id == owner)
+                || (owner_immune && actor.id == owner)
                 || (actor.id != owner && actor.team == owner_team)
             {
                 continue;
@@ -782,7 +764,7 @@ impl ArenaSession {
             radius,
             age: 0.0,
             lifetime: 0.45,
-            kind: spell,
+            kind: spell.into(),
         });
     }
 }
@@ -821,7 +803,7 @@ pub(super) fn preview_actor(
     tuning: &ArenaTuning,
     launch_speed: f32,
 ) -> Preview {
-    if actor.selected == Spell::AreaBlast {
+    if actor.selected == Spell::HighJump {
         return Preview {
             impact: Some(actor.center()),
             valid: true,
@@ -972,7 +954,7 @@ pub(crate) fn forecast_spell_with_motion(
     tuning: &ArenaTuning,
     launch_speed: f32,
 ) -> SpellForecast {
-    if caster.selected == Spell::AreaBlast {
+    if caster.selected == Spell::HighJump {
         return SpellForecast {
             impact: Some(ForecastImpact {
                 point: caster.center(),

@@ -45,6 +45,16 @@ impl Default for GroundProfile {
 }
 
 impl Body {
+    /// Raise ballistic velocity without stacking boosts or losing horizontal impulse.
+    pub(crate) fn boost(&mut self, height: f32) {
+        self.vertical_velocity =
+            (self.vertical_velocity + self.impulse_velocity.y).max((2.0 * GRAVITY * height).sqrt());
+        self.impulse_velocity.y = 0.0;
+        self.grounded = false;
+        self.coyote = 0.0;
+        self.jump_buffer = 0.0;
+    }
+
     pub fn tick(
         &mut self,
         feet: &mut Vec3,

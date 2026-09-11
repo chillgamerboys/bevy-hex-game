@@ -176,10 +176,8 @@ impl Opponent {
                 .get(spell.index())
                 .is_some_and(|cooldown| *cooldown <= hex_arena::STEP)
         };
-        if visible && distance < tuning.blast_radius() * 0.8 && ready(Spell::AreaBlast) {
-            input.selected = Some(Spell::AreaBlast);
-            input.cast_pressed = true;
-            input.cast_released = true;
+        if visible && distance < tuning.fireball_radius() && ready(Spell::HighJump) {
+            input.high_jump = true;
             self.next_cast = elapsed + 42;
         } else if (visible || matches!(self.kind, ScriptKind::Peeker))
             && distance >= tuning.fireball_radius() + 0.8
@@ -844,13 +842,7 @@ fn paired_report(max_seconds: u32) {
 #[test]
 fn terrain_settlement_publishes_queued_edits_without_advancing_live_combat() {
     let (mut app, _) = prepare(ScriptKind::StationaryTarget, 0, false);
-    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-        selected: Some(Spell::AreaBlast),
-        cast_pressed: true,
-        cast_released: true,
-        ..default()
-    };
-    tick(&mut app);
+    queue_ground_fireball(&mut app);
     assert!(
         !app.world().resource::<Messages<TerrainImpact>>().is_empty(),
         "the measured tick must leave a real explosion queued for the world"

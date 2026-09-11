@@ -128,7 +128,7 @@ impl Brain {
     }
 
     pub fn cancel_charge(&mut self) {
-        self.shadow.cancel_charge();
+        self.shadow.cancel_all();
         // One idle input tick clears the actor's post-pause release latch.
         self.spell_gap = STEP * 2.0;
     }

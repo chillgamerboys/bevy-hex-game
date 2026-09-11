@@ -113,9 +113,7 @@ impl Bot {
                             .get(spell.index())
                             .is_some_and(|seconds| *seconds <= STEP)
                     };
-                    if distance < tuning.blast_radius() * 0.8 && ready(Spell::AreaBlast) {
-                        selected = Some(Spell::AreaBlast);
-                    } else {
+                    {
                         let threatened = projectiles.iter().any(|shot| {
                             let to_bot = bot.center() - shot.position;
                             shot.owner != bot.id
@@ -172,7 +170,7 @@ impl Bot {
                 self.charging_fireball = true;
                 cast_held = true;
             } else {
-                cast_released = true; // Shield and Area Blast use an ordinary quick tap.
+                cast_released = true; // Shield uses an ordinary quick tap.
             }
         }
         if let Some(charge) = bot.charge().filter(|charge| {

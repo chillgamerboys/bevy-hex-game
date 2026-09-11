@@ -43,12 +43,16 @@ impl Fixture {
         session.reset(0, &world, geometry);
         session.bot.release_ticks = 0;
         session.bot.think_ticks = 0;
+        // Legacy behavior fixtures explicitly compare with both experiments off.
+        let mut tuning = ArenaTuning::default();
+        tuning.bot.acquisition_seconds = 0.0;
+        tuning.bot.escape.enabled = false;
         Self {
             session,
             world,
             geometry,
             materials,
-            tuning: ArenaTuning::default(),
+            tuning,
         }
     }
 
@@ -234,34 +238,16 @@ fn bot_fireball_actually_damages_stationary_targets_at_near_and_far_range() {
 }
 
 #[test]
-fn close_bot_uses_caster_safe_blast_and_does_not_replace_cooldown_with_suicidal_fire() {
+fn close_bot_keeps_projectile_selection_and_avoids_self_splash() {
     let mut fixture = Fixture::new(2.0);
-    let first = fixture.advance();
-    assert_eq!(fixture.actor(1).selected, Spell::AreaBlast);
-    assert_eq!(first.impacts.len(), 1);
-    assert!(fixture.actor(0).hp < 100.0);
+    for _ in 0..12 {
+        let out = fixture.advance();
+        assert!(out.impacts.is_empty());
+        assert!(fixture.session.projectiles.is_empty());
+    }
+    assert_eq!(fixture.actor(1).selected, Spell::Fireball);
+    assert!((fixture.actor(0).hp - 100.0).abs() < SKIN);
     assert!((fixture.actor(1).hp - 100.0).abs() < SKIN);
-    assert!(
-        (fixture
-            .actor(1)
-            .cooldowns
-            .get(2)
-            .copied()
-            .unwrap_or_default()
-            - 7.0)
-            .abs()
-            < SKIN
-    );
-    assert!(fixture.session.projectiles.is_empty());
-    fixture.session.bot.think_ticks = 0;
-    fixture.session.bot.release_ticks = 0;
-    let next = fixture.advance();
-    assert!(next.impacts.is_empty() && fixture.session.projectiles.is_empty());
-    assert!(fixture
-        .actor(1)
-        .cooldowns
-        .get(1)
-        .is_some_and(|cooldown| cooldown.abs() < SKIN));
 }
 
 #[test]
@@ -343,12 +329,17 @@ fn defensive_seed_without_any_impact_falls_back_without_spending_shield_cooldown
         .cooldowns
         .first()
         .is_some_and(|cooldown| cooldown.abs() < SKIN));
-    let charge = fixture
-        .actor(1)
-        .charge()
-        .expect("fallback charges fireball");
-    assert_eq!(charge.spell, Spell::Fireball);
-    assert!(fixture.session.projectiles.is_empty());
+    assert!(
+        fixture
+            .actor(1)
+            .charge()
+            .is_some_and(|c| c.spell == Spell::Fireball)
+            || fixture
+                .session
+                .projectiles
+                .iter()
+                .any(|shot| shot.owner == 1 && shot.spell == Spell::Fireball)
+    );
     assert!(fixture.session.pending_walls.is_empty());
     assert_eq!(fixture.session.shields_raised, 0);
 }
@@ -611,6 +602,9 @@ fn cancelling_a_bot_charge_discards_the_release_without_resetting_its_seed() {
 #[path = "strong_tests.rs"]
 mod strong_tests;
 
+#[path = "reaction_tests.rs"]
+mod reaction_tests;
+
 #[test]
 fn prepared_peek_reacts_on_the_sight_sample_between_behavior_decisions() {
     let mut fixture = Fixture::new(28.0);
@@ -653,8 +647,8 @@ fn prepared_peek_reacts_on_the_sight_sample_between_behavior_decisions() {
 
 #[test]
 fn interrupted_defense_revalidates_range_and_terrain_before_the_queued_tap() {
-    for spell in [Spell::AreaBlast, Spell::Shield] {
-        let mut fixture = Fixture::new(if spell == Spell::AreaBlast { 2.0 } else { 14.0 });
+    for spell in [Spell::Shield] {
+        let mut fixture = Fixture::new(14.0);
         let tuning = fixture.tuning.clone();
         if spell == Spell::Shield {
             fixture.actor_mut(1).hp = 50.0;
@@ -676,11 +670,7 @@ fn interrupted_defense_revalidates_range_and_terrain_before_the_queued_tap() {
             Some(spell)
         );
         assert!(fixture.session.projectiles.is_empty());
-        if spell == Spell::AreaBlast {
-            let human = fixture.actor_mut(0);
-            human.feet = Vec3::new(9.0, SKIN, 0.0);
-            human.previous_feet = human.feet;
-        } else {
+        {
             let blocker = HexCoord::from_world(fixture.actor(1).feet + Vec3::X * 1.7);
             for level in 1..=5 {
                 fixture

@@ -24,7 +24,7 @@ pub(crate) struct CombatCue {
 /// Actual spell releases and HP losses, independent of presentation or bot estimates.
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct ActorCombatStats {
-    /// Shield, Fireball, and Area Blast releases, including unsuccessful casts.
+    /// Shield, Fireball, and High Jump activations, including unsuccessful casts.
     pub casts: [u32; 3],
     /// HP removed from the opponent, capped by their remaining life at each impact.
     pub damage_dealt: f32,
@@ -131,7 +131,7 @@ impl ArenaSession {
             let ability = match spell {
                 Spell::Fireball => Some(0),
                 Spell::Shield => Some(1),
-                Spell::AreaBlast => None,
+                Spell::HighJump => None,
             };
             if let Some(index) = ability {
                 if let Some(count) = self

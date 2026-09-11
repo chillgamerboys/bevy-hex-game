@@ -191,7 +191,7 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
     let cast_requested = pose_valid && step.is_multiple_of(240);
     world.resource_mut::<hex_arena::ArenaInput>().human = ActorIntent {
         aim,
-        selected: Some(Spell::AreaBlast),
+        selected: Some(Spell::Fireball),
         cast_pressed: cast_requested,
         cast_released: cast_requested,
         ..default()
@@ -363,6 +363,7 @@ pub(super) fn capture_intent(
         movement,
         aim: direction,
         jump: movement != Vec2::ZERO && frame.is_multiple_of(45),
+        high_jump: false,
         run: distance > 8.0,
         selected: Some(Spell::Fireball),
         cast_pressed: attack && cycle == 45,

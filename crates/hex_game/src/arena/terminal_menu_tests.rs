@@ -26,6 +26,91 @@ fn install_hud(app: &mut App) {
         .expect("update actual arena HUD");
 }
 
+#[test]
+fn shadow_menu_tuning_is_live_bounded_and_survives_reset_and_map_selection() {
+    let (mut app, _) = menu_app();
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    install_hud(&mut app);
+    press_action(&mut app, hud::Action::Start);
+    tap_key(&mut app, KeyCode::Escape);
+    let paused_tick = app.world().resource::<ArenaSession>().tick;
+    assert!(
+        (app.world()
+            .resource::<ArenaTuning>()
+            .bot
+            .acquisition_seconds
+            - 0.15)
+            .abs()
+            < 0.001
+    );
+    for (steps, direction, expected, label) in [
+        (4, -1.0, 0.0, "Off"),
+        (3, 1.0, 0.15, "150 ms"),
+        (12, 1.0, 0.5, "500 ms"),
+    ] {
+        for _ in 0..steps {
+            press_action(&mut app, hud::Action::Change(10, direction));
+        }
+        assert!(
+            (app.world()
+                .resource::<ArenaTuning>()
+                .bot
+                .acquisition_seconds
+                - expected)
+                .abs()
+                < 0.001
+        );
+        assert_eq!(app.world().resource::<ArenaSession>().tick, paused_tick);
+        app.world_mut()
+            .run_system_once(hud::update)
+            .expect("updated parameter text");
+        let mut labels = app.world_mut().query::<(&hud::Label, &Text)>();
+        assert!(labels
+            .iter(app.world())
+            .any(
+                |(kind, text)| matches!(kind, hud::Label::Parameter(10)) && text.0.contains(label)
+            ));
+    }
+    press_action(&mut app, hud::Action::Change(11, -1.0));
+    assert!(!app.world().resource::<ArenaTuning>().bot.escape.enabled);
+    press_action(&mut app, hud::Action::Change(11, 1.0));
+    assert!(app.world().resource::<ArenaTuning>().bot.escape.enabled);
+    press_action(&mut app, hud::Action::Change(2, 1.0));
+    press_action(&mut app, hud::Action::Change(7, -1.0));
+    assert!((app.world().resource::<ArenaTuning>().high_jump_height - 4.5).abs() < 0.001);
+    assert!((app.world().resource::<ArenaTuning>().high_jump_cooldown - 6.5).abs() < 0.001);
+    press_action(&mut app, hud::Action::Resume);
+    assert!(!app.world().resource::<ViewState>().paused);
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .iter()
+        .all(|a| a.charge().is_none()));
+    tap_key(&mut app, KeyCode::Escape);
+    press_action(&mut app, hud::Action::Restart);
+    press_action(&mut app, hud::Action::Map(ArenaMap::Fort));
+    assert_eq!(app.world().resource::<ArenaSelection>().map, ArenaMap::Fort);
+    assert!((app.world().resource::<ArenaTuning>().high_jump_height - 4.5).abs() < 0.001);
+    assert!((app.world().resource::<ArenaTuning>().high_jump_cooldown - 6.5).abs() < 0.001);
+
+    assert!(
+        (app.world()
+            .resource::<ArenaTuning>()
+            .bot
+            .acquisition_seconds
+            - 0.5)
+            .abs()
+            < 0.001
+    );
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .iter()
+        .all(|a| a.charge().is_none()));
+}
+
 fn assert_terminal_menu(app: &mut App, window: Entity, expected_title: &str) {
     let state = app.world().resource::<ViewState>();
     assert!(state.started && state.paused && state.suppress_click);

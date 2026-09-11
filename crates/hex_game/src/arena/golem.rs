@@ -417,7 +417,7 @@ pub(super) fn phase_actor<'a>(
                 || actor.attack_state().is_some_and(|attack| {
                     // Age>0 means the next ArenaTick has published the pulse's queued terrain edits.
                     session.effects.iter().any(|effect| {
-                        effect.kind == hex_arena::Spell::AreaBlast
+                        effect.kind == hex_arena::VisualEffectKind::RadialBurst
                             && effect.age > 0.0
                             && effect.age <= 0.10
                             && effect.center.distance(attack.origin) < 0.5

@@ -285,7 +285,7 @@ fn recent_direct_sighting_allows_one_blind_shot_and_cues_never_restore_the_budge
         }
         fixture.advance();
         splashed_remembered_region |= fixture.session.effects.iter().any(|effect| {
-            effect.kind == Spell::Fireball
+            effect.kind == crate::VisualEffectKind::Fireball
                 && crate::spells::capsule_distance(effect.center, remembered_feet)
                     <= effect.radius * 0.6
         });

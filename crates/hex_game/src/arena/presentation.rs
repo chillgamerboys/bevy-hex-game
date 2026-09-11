@@ -244,10 +244,11 @@ pub(super) fn effects(
     state: Res<ViewState>,
     mut gizmos: Gizmos,
 ) {
-    let color = |spell| match spell {
-        Spell::Shield => Color::srgb(0.36, 0.85, 0.95),
-        Spell::Fireball => Color::srgb(1.0, 0.37, 0.07),
-        Spell::AreaBlast => Color::srgb(0.70, 0.40, 1.0),
+    let color = |kind| match kind {
+        hex_arena::VisualEffectKind::Shield => Color::srgb(0.36, 0.85, 0.95),
+        hex_arena::VisualEffectKind::Fireball => Color::srgb(1.0, 0.37, 0.07),
+        hex_arena::VisualEffectKind::RadialBurst => Color::srgb(0.70, 0.40, 1.0),
+        hex_arena::VisualEffectKind::HighJump => Color::srgb(0.36, 0.85, 0.95),
     };
     for projectile in &session.projectiles {
         if projectile.appearance() == hex_arena::ProjectileAppearance::Boulder {
@@ -261,7 +262,7 @@ pub(super) fn effects(
             );
             continue;
         }
-        let c = color(projectile.spell);
+        let c = color(projectile.spell.into());
         gizmos.sphere(Isometry3d::from_translation(projectile.position), 0.13, c);
         let start = projectile.position - projectile.velocity.normalize_or_zero() * 0.8;
         for offset in [Vec3::ZERO, Vec3::Y * 0.025, Vec3::X * 0.025] {
@@ -288,14 +289,14 @@ pub(super) fn effects(
     let enabled = match actor.selected {
         Spell::Shield => state.previews.first().copied().unwrap_or(false),
         Spell::Fireball => state.previews.get(1).copied().unwrap_or(false),
-        Spell::AreaBlast => false,
+        Spell::HighJump => false,
     };
     if !enabled || state.paused {
         return;
     }
     let predicted = preview(&session, &view, &geometry, &tuning);
     let c = if predicted.valid {
-        color(actor.selected)
+        color(actor.selected.into())
     } else {
         Color::srgba(1.0, 0.45, 0.26, 0.7)
     };
@@ -443,16 +444,22 @@ pub(super) fn solid_effects(
     for effect in &session.effects {
         let progress = (effect.age / effect.lifetime.max(0.01)).clamp(0.0, 1.0);
         let material = match effect.kind {
-            Spell::Shield => &assets.shield_wave,
-            Spell::Fireball => &assets.fire_wave,
-            Spell::AreaBlast => &assets.blast_wave,
+            hex_arena::VisualEffectKind::Shield => &assets.shield_wave,
+            hex_arena::VisualEffectKind::Fireball => &assets.fire_wave,
+            hex_arena::VisualEffectKind::RadialBurst => &assets.blast_wave,
+            hex_arena::VisualEffectKind::HighJump => &assets.shield_wave,
         };
         commands.spawn((
             TransientEffect,
             Mesh3d(assets.sphere.clone()),
             MeshMaterial3d(material.clone()),
-            Transform::from_translation(effect.center)
-                .with_scale(Vec3::splat(effect.radius * (0.3 + progress * 0.7))),
+            Transform::from_translation(effect.center).with_scale(
+                if effect.kind == hex_arena::VisualEffectKind::HighJump {
+                    Vec3::new(1.0, 0.18, 1.0) * effect.radius * (0.5 + progress * 0.5)
+                } else {
+                    Vec3::splat(effect.radius * (0.3 + progress * 0.7))
+                },
+            ),
         ));
     }
 }

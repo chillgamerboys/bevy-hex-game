@@ -147,7 +147,6 @@ continuation, ownership and unmerged PR status.
 | Contract | Publisher | Consumer | Status |
 |---|---|---|---|
 | `ArenaVoxelGeometry`, `ArenaTerrainView`, `ArenaMaterials` — physical geometry methods, complete solid occupancy keyed by `TilePos`, revision, spawns, and accepted catalog identities; only world writes these facts | world | `hex_arena` collision/spells and arena presentation | **experimental** |
-| `ArenaTerrainView.damage` — accepted damage admission, toughness and sparse partial HP with an independent revision; bounded temporary previews use the same pure voxel health resolver as actual impacts | world | private arena escape planner | **experimental**; forecast copies never authorize real mutations |
 | `ArenaTick` / `ArenaSystems` — 120 Hz `ApplyTerrain → PublishTerrain → Simulate`; gameplay's edits/impacts settle on the next tick, then matching outcomes are consumed in that tick's simulation | core ordering; world and gameplay implementations | both | **experimental** |
 | Existing `TerrainEdit`, `TerrainImpact`, `TerrainImpactOutcome` in the arena — world-owned mutation and damage admission; a `PreUpdate` inbox retains pending edits/impacts across pauses | gameplay requests; world outcomes | world / `hex_arena` | **experimental** arena composition of existing live message types |
 | `ArenaReset` generation — clear queued world messages/inbox and damage state, restore authored terrain, then reset actors and gameplay ledgers before advancing the new round | shared input adapter | world / `hex_arena` | **experimental** |

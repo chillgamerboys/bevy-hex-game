@@ -61,7 +61,7 @@ pub(crate) fn observe(
                 .find(|old| old.body.id == actor.id && tick > old.tick && tick - old.tick <= 25);
             let velocity = old.map_or(Vec3::ZERO, |old| {
                 let seconds = f32::from(u16::try_from(tick - old.tick).unwrap_or(25)) * STEP;
-                ((actor.feet - old.body.feet) / seconds).clamp_length_max(9.0)
+                observed_velocity((actor.feet - old.body.feet) / seconds)
             });
             let yaw_velocity = old.map_or(0.0, |old| {
                 let seconds = f32::from(u16::try_from(tick - old.tick).unwrap_or(25)) * STEP;
@@ -105,4 +105,9 @@ pub(crate) fn observe(
             .then_with(|| a.body.id.cmp(&b.body.id))
     });
     visible
+}
+
+/// Observed horizontal motion stays bounded while vertical boosts retain their speed.
+pub(crate) fn observed_velocity(velocity: Vec3) -> Vec3 {
+    velocity.with_y(0.0).clamp_length_max(9.0) + Vec3::Y * velocity.y.clamp(-50.0, 50.0)
 }

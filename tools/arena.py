@@ -39,13 +39,12 @@ def default_target() -> Path:
 
 DEFAULT_TARGET = default_target()
 VIEWS = (
-    "overview", "first", "third", "rear", "shield", "fireball", "blast", "tuning",
+    "overview", "first", "third", "rear", "shield", "fireball", "high-jump", "tuning",
     "shield-compact", "shield-large", "fireball-compact", "fireball-large",
-    "blast-compact", "blast-large",
     "shield-first", "shield-third", "fireball-first", "fireball-third",
-    "blast-first", "blast-third", "shield-preview-first", "shield-preview-third", "start",
+    "high-jump-first", "high-jump-third", "shield-preview-first", "shield-preview-third", "start",
 )
-MATRIX = "arena-v5-release-casting"
+MATRIX = "arena-v6-high-jump"
 MENU_VIEWS = ("start", "tuning", "first", "third", "overview", "rear", "terminal-win", "terminal-defeat")
 BOT_VIEWS = ("bot-combat-first", "bot-combat-third")
 CHARGE_VIEWS = (
@@ -54,7 +53,6 @@ CHARGE_VIEWS = (
     "shield-charge-full-first", "shield-charge-full-third",
     "fireball-charge-partial-first", "fireball-charge-partial-third",
     "fireball-charge-full-first", "fireball-charge-full-third",
-    "blast-armed-first", "blast-armed-third",
     "shield-partial-preview-first", "shield-partial-preview-third",
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
@@ -926,7 +924,7 @@ def capture(args: argparse.Namespace) -> int:
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits with validated 150-unit ground/Shadow/Dragon home leashes before admission. Authored search durations, sight, activation, movement and attacks; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
-        "human_route": "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, release Area Blast, cancel holds with pause/focus/spell changes, and reset.",
+        "human_route": "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, press 3 for High Jump while holding a charge, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
         "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS")},

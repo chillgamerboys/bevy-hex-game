@@ -365,7 +365,7 @@ fn slam_is_a_true_unoccluded_sphere_with_team_immunity_and_one_physical_terrain_
     assert!((f.owner().hp - f.tuning.encounters.golem_hp).abs() < SKIN);
     assert_eq!(f.session.effects.len(), 1);
     let effect = f.session.effects.first().expect("ordinary sphere VFX");
-    assert_eq!(effect.kind, Spell::AreaBlast);
+    assert_eq!(effect.kind, crate::VisualEffectKind::RadialBurst);
     assert!(effect.center.distance(f.owner().center()) < SKIN);
     assert!(
         impacts

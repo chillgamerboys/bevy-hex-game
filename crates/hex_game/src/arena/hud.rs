@@ -94,7 +94,7 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(52), width: percent(100), justify_content: JustifyContent::Center, column_gap: px(10), ..default() })
                 .with_children(|bar| {
-                    for (index, name) in ["1  SHIELD", "2  FIREBALL", "3  AREA BLAST"].into_iter().enumerate() {
+                    for (index, name) in ["1  SHIELD", "2  FIREBALL", "3  HIGH JUMP"].into_iter().enumerate() {
                         bar.spawn((Node { width: px(190), min_height: px(64), padding: UiRect::all(px(14)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(7)), ..default() },
                             BackgroundColor(PANEL), BorderColor::all(MUTED), SpellCard(index)))
                             .with_children(|card| { card.spawn((text(format!("{name}\nREADY"), 15.0, INK), Label::Spell(index))); });
@@ -102,7 +102,7 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), height: px(28), justify_content: JustifyContent::Center, ..default() })
                 .with_children(|footer| { footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL),
-                    text("WASD move   SHIFT sprint   SPACE jump   HOLD charge / RELEASE cast   C camera   T trajectory   ESC / TAB pause   R reset", 12.0, INK))); });
+                    text("WASD move   SHIFT sprint   SPACE jump   3 high jump   HOLD / RELEASE cast   C camera   T preview   ESC / TAB pause   R reset", 12.0, INK))); });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), display: Display::None, ..default() }, GlobalZIndex(10), ObserverHud))
         .with_children(|root| {
@@ -183,15 +183,15 @@ pub(super) fn setup(mut commands: Commands) {
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, display: Display::None, ..default() },
         BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)), GlobalZIndex(20), PausePanel))
         .with_children(|overlay| {
-            overlay.spawn((Node { width: px(600), height: px(710), max_width: percent(95), padding: UiRect::all(px(20)), flex_direction: FlexDirection::Column, row_gap: px(5), flex_shrink: 0.0, border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
+            overlay.spawn((Node { width: px(600), height: px(650), max_height: percent(95), max_width: percent(95), padding: UiRect::all(px(20)), flex_direction: FlexDirection::Column, row_gap: px(5), flex_shrink: 0.0, border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
                 .with_children(|panel| {
                     panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("", 24.0, INK), Label::MenuTitle));
                     panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("", 13.0, INK), Label::MenuHelp));
                     for index in 0..12 {
-                        panel.spawn(Node { width: percent(100), height: px(30), flex_shrink: 0.0, align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
+                        panel.spawn(Node { width: percent(100), height: px(26), flex_shrink: 0.0, align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
                             row.spawn((Node { width: px(375), height: px(20), flex_shrink: 0.0, ..default() }, text("", 15.0, INK), Label::Parameter(index)));
                             for (label, amount) in [("-", -1.0), ("+", 1.0)] {
-                                row.spawn((Button, Node { width: px(48), height: px(30), border_radius: BorderRadius::all(px(4)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Change(index, amount)))
+                                row.spawn((Button, Node { width: px(48), height: px(26), border_radius: BorderRadius::all(px(4)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Change(index, amount)))
                                     .with_children(|button| { button.spawn(text(label, 20.0, INK)); });
                             }
                         });
@@ -363,16 +363,19 @@ pub(super) fn change(t: &mut ArenaTuning, field: usize, direction: f32) {
     match field {
         0 => size(&mut t.shield_size),
         1 => size(&mut t.fireball_size),
-        2 => size(&mut t.blast_size),
+        2 => t.high_jump_height = (t.high_jump_height + direction * 0.5).clamp(2.0, 8.0),
         3 => t.projectile_speed = (t.projectile_speed + direction * 2.0).clamp(8.0, 64.0),
         4 => t.projectile_gravity = (t.projectile_gravity + direction * 2.0).clamp(2.0, 40.0),
         5 => t.shield_cooldown = (t.shield_cooldown + direction * 0.5).clamp(0.5, 20.0),
         6 => t.fireball_cooldown = (t.fireball_cooldown + direction * 0.25).clamp(0.25, 10.0),
-        7 => t.blast_cooldown = (t.blast_cooldown + direction * 0.5).clamp(0.5, 20.0),
+        7 => t.high_jump_cooldown = (t.high_jump_cooldown + direction * 0.5).clamp(0.5, 20.0),
         8 => t.fireball_damage = (t.fireball_damage + direction * 5.0).clamp(5.0, 100.0),
-        9 => t.blast_damage = (t.blast_damage + direction * 5.0).clamp(5.0, 100.0),
-        10 => t.fireball_knockback = (t.fireball_knockback + direction).clamp(0.0, 25.0),
-        11 => t.blast_knockback = (t.blast_knockback + direction).clamp(0.0, 25.0),
+        9 => t.fireball_knockback = (t.fireball_knockback + direction).clamp(0.0, 25.0),
+        10 => {
+            let steps = (t.bot.acquisition_seconds * 20.0).round() + direction;
+            t.bot.acquisition_seconds = steps.clamp(0.0, 10.0) * 0.05;
+        }
+        11 => t.bot.escape.enabled = direction > 0.0,
         _ => {}
     }
 }
@@ -459,8 +462,7 @@ pub(super) fn update(
         if let Some(kind) = charge_node {
             let visible =
                 state.started && !state.paused && !session.is_finished() && charge.is_some();
-            let has_bar = charge.is_some_and(|charge| charge.spell != Spell::AreaBlast);
-            node.display = if visible && (matches!(kind, ChargeNode::Panel) || has_bar) {
+            node.display = if visible {
                 Display::Flex
             } else {
                 Display::None
@@ -508,9 +510,9 @@ pub(super) fn update(
 Mouse look / Wheel orbit zoom / C orbit or free camera
 Camera movement never controls a creature.".into(),
             Label::Help => "WASD move / mouse look / Space jump / Shift sprint
-1 Shield / 2 Fireball / 3 Area Blast
+1 Shield / 2 Fireball / 3 High Jump
 Hold mouse to charge Shield or Fireball. Release to cast.
-Area Blast casts on release with fixed power.".into(),
+Press 3 to jump high; keeps your selected spell and charge.".into(),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection => match selection.map {
@@ -530,7 +532,6 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 }
             },
             Label::Charge => match charge {
-                Some(charge) if charge.spell == Spell::AreaBlast => "Release to cast".into(),
                 Some(_) => format!("{:.0}% / Release to cast", progress * 100.0),
                 None => String::new(),
             },
@@ -573,7 +574,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 }
             }
             Label::Spell(index) => {
-                let spell = [Spell::Shield, Spell::Fireball, Spell::AreaBlast]
+                let spell = [Spell::Shield, Spell::Fireball, Spell::HighJump]
                     .get(*index)
                     .copied()
                     .unwrap_or(Spell::Shield);
@@ -601,7 +602,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     "Fireball size                {}",
                     size_name(tuning.fireball_size)
                 ),
-                2 => format!("Area Blast size           {}", size_name(tuning.blast_size)),
+                2 => format!("High Jump height          {:.1} units", tuning.high_jump_height),
                 3 => format!(
                     "Base launch speed         {:.0} units/s",
                     tuning.projectile_speed
@@ -612,11 +613,15 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 ),
                 5 => format!("Shield cooldown          {:.1}s", tuning.shield_cooldown),
                 6 => format!("Fireball cooldown        {:.2}s", tuning.fireball_cooldown),
-                7 => format!("Area Blast cooldown    {:.1}s", tuning.blast_cooldown),
+                7 => format!("High Jump cooldown     {:.1}s", tuning.high_jump_cooldown),
                 8 => format!("Fireball damage           {:.0} HP", tuning.fireball_damage),
-                9 => format!("Area Blast damage      {:.0} HP", tuning.blast_damage),
-                10 => format!("Fireball knockback       {:.0}", tuning.fireball_knockback),
-                11 => format!("Area Blast knockback  {:.0}", tuning.blast_knockback),
+                9 => format!("Fireball knockback       {:.0}", tuning.fireball_knockback),
+                10 => if tuning.bot.acquisition_seconds <= 0.0 {
+                    "Shadow reaction             Off".into()
+                } else {
+                    format!("Shadow reaction             {:.0} ms", tuning.bot.acquisition_seconds * 1000.0)
+                },
+                11 => format!("Shadow escape                 {}", if tuning.bot.escape.enabled { "On" } else { "Off" }),
                 _ => String::new(),
             },
         };

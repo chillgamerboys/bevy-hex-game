@@ -16,6 +16,8 @@ use crate::{
 
 mod navigation;
 use navigation::Route;
+mod escape;
+pub use escape::EscapeTuning;
 
 /// Read-only evidence for bot intent and bounded planning work.
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +54,16 @@ pub struct BotDebugSnapshot {
     pub route_rollout_ticks: u64,
     /// Body ticks spent checking immediate walking and sprinting support.
     pub movement_rollout_ticks: u64,
+    /// Remaining visual acquisition delay in simulation ticks.
+    pub acquisition_wait_ticks: u16,
+    /// Most recent local escape decision, with no target-position disclosure.
+    pub escape_reason: &'static str,
+    /// Number of recovery attempts admitted this round.
+    pub escape_attempts: u32,
+    /// Number of completed exits this round.
+    pub escapes: u32,
+    /// Body ticks evaluated in recovery planning.
+    pub escape_rollout_ticks: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -170,6 +182,9 @@ pub(super) struct Bot {
     safe_expected: Option<(Vec3, Vec3)>,
     safe_run: bool,
     battle: Option<BattlePerception>,
+    acquired_at: Option<u64>,
+    acquisition_wait_ticks: u16,
+    escape: escape::EscapeRecovery,
 }
 
 impl Default for Bot {
@@ -216,6 +231,9 @@ impl Default for Bot {
             safe_expected: None,
             safe_run: false,
             battle: None,
+            acquired_at: None,
+            acquisition_wait_ticks: 0,
+            escape: Default::default(),
         }
     }
 }
@@ -289,10 +307,20 @@ impl Bot {
             forecasts: self.forecasts,
             route_rollout_ticks: self.route_rollout_ticks,
             movement_rollout_ticks: self.movement_rollout_ticks,
+            acquisition_wait_ticks: self.acquisition_wait_ticks,
+            escape_reason: self.escape.reason(),
+            escape_attempts: self.escape.attempts,
+            escapes: self.escape.escapes,
+            escape_rollout_ticks: self.escape.rollout_ticks,
         }
     }
 
     /// Cancel the plan without reseeding or spending a spell cooldown.
+    pub(super) fn cancel_all(&mut self) {
+        self.escape.cancel_charge();
+        self.cancel_charge();
+    }
+
     pub(super) fn cancel_charge(&mut self) {
         self.charging_fireball = false;
         self.pending_tap = None;
@@ -388,7 +416,9 @@ impl Bot {
                             .memory
                             .filter(|m| age(tick, m.tick) <= 0.21 && tick > m.tick)
                             .map_or(Vec3::ZERO, |m| {
-                                ((a.feet - m.feet) / age(tick, m.tick)).clamp_length_max(9.0)
+                                crate::targeting::observed_velocity(
+                                    (a.feet - m.feet) / age(tick, m.tick),
+                                )
                             });
                         Memory {
                             feet: a.feet,
@@ -448,6 +478,7 @@ impl Bot {
                 }
             }
             if target.is_some() && self.observation.target.is_none() {
+                self.acquired_at = Some(tick);
                 self.think_ticks = 0;
                 self.ambush_until = 0;
             }
@@ -483,21 +514,15 @@ impl Bot {
                 self.dodge_until = self.tick + 54;
             }
         }
+        self.update_acquisition(tuning);
+        let escape_intent = self
+            .escape
+            .intent(bot, collision, world, geometry, tuning, tick);
         let mut action = ActorIntent::default();
         if let Some((spell, aim, needs_threat)) = self.pending_tap.take() {
             if ready(bot, spell) {
                 let belief = self.belief(self.observation.target.is_some(), collision, tuning);
                 let aim = match spell {
-                    Spell::AreaBlast => self
-                        .observation
-                        .target
-                        .filter(|target| {
-                            self.battle.as_ref().and_then(|b| b.target).map_or_else(
-                                || capsule_distance(bot.center(), target.feet),
-                                |target| target.distance(bot.center(), 0.0),
-                            ) < tuning.blast_radius() * 0.8
-                        })
-                        .map(|_| aim),
                     Spell::Shield if !needs_threat || self.observation.threat.is_some() => self
                         .shield_aim(
                             bot,
@@ -586,6 +611,23 @@ impl Bot {
         action.movement = Vec2::new(travel.dot(forward.cross(Vec3::Y)), travel.dot(forward));
         action.aim = aim;
         action.run = run;
+        if let Some(recovery) = escape_intent {
+            let recovery_forward = recovery.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
+            let world_movement = recovery_forward * recovery.movement.y
+                + recovery_forward.cross(Vec3::Y) * recovery.movement.x;
+            action.movement = Vec2::new(
+                world_movement.dot(forward.cross(Vec3::Y)),
+                world_movement.dot(forward),
+            );
+            action.run = recovery.run;
+            action.jump = recovery.jump;
+            action.high_jump = recovery.high_jump;
+            self.mode = "escape";
+            self.route.clear();
+            self.safe_expected = None;
+            self.safe_at = 0;
+            self.ambush_until = 0;
+        }
         action
     }
 
@@ -776,12 +818,7 @@ impl Bot {
         self.aim = Some((belief.center() - bot.eye()).normalize_or(bot.aim));
         // Close defense and visible projectile danger are independent of seeing
         // the projectile owner. Changing a held spell uses a neutral tick first.
-        let close_blast =
-            visible && distance < tuning.blast_radius() * 0.8 && ready(bot, Spell::AreaBlast);
         let defensive = distance > 5.0 && hurt && ready(bot, Spell::Shield);
-        if self.release_ticks == 0 && close_blast {
-            return self.replace_with_tap(bot, Spell::AreaBlast, bot.aim, tuning);
-        }
         if self.release_ticks == 0 && defensive {
             if let Some(aim) = self.shield_aim(
                 bot,
@@ -841,7 +878,10 @@ impl Bot {
         self.planned_charge = choice.map_or(tuning.charge_seconds, |(_, elapsed, _)| elapsed);
         if let Some((aim, elapsed, _)) = choice {
             self.aim = Some(aim);
-            if elapsed <= current + STEP * 0.01 && self.tick >= self.ambush_until {
+            if elapsed <= current + STEP * 0.01
+                && self.tick >= self.ambush_until
+                && self.acquisition_ready()
+            {
                 self.charging_fireball = false;
                 self.last_release_reason = if blind {
                     "limited blind splash"
@@ -871,6 +911,23 @@ impl Bot {
             };
         }
         ActorIntent::default()
+    }
+
+    fn update_acquisition(&mut self, tuning: &ArenaTuning) {
+        let previous = self.acquisition_wait_ticks;
+        self.acquisition_wait_ticks = self.acquired_at.map_or(0, |acquired| {
+            let elapsed = u16::try_from(self.tick.saturating_sub(acquired)).unwrap_or(u16::MAX);
+            ticks(tuning.bot.acquisition_seconds).saturating_sub(elapsed)
+        });
+        // The deadline is based on simulation time and the CURRENT setting.
+        // This also handles paused menu edits without waiting for a 5-Hz decision.
+        if previous > 0 && self.acquisition_ready() {
+            self.think_ticks = 0;
+        }
+    }
+
+    fn acquisition_ready(&self) -> bool {
+        self.acquisition_wait_ticks == 0
     }
 
     fn tap(&mut self, spell: Spell, tuning: &ArenaTuning) -> ActorIntent {

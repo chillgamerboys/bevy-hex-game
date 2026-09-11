@@ -22,6 +22,15 @@
         waypoint_distance: 0.25,
         sprint_distance: 14.0,
         reaction_seconds: 0.35,
+        acquisition_seconds: 0.15,
+        escape: (
+            enabled: true,
+            stuck_seconds: 0.4,
+            radius: 6.0,
+            replan_seconds: 0.5,
+            rollout_seconds: 2.0,
+            attempt_seconds: 6.0,
+        ),
     ),
     // Authored map encounters; Duel ignores this section.
     encounters: (
@@ -151,7 +160,7 @@
     ),
     shield_size: 1,
     fireball_size: 1,
-    blast_size: 1,
+    high_jump_height: 4.0,
     projectile_speed: 32.0,
     // Reference same-height range: tap one third, full charge 130 percent.
     charge_seconds: 0.75,
@@ -161,10 +170,8 @@
     projectile_gravity: 12.0,
     shield_cooldown: 5.0,
     fireball_cooldown: 1.25,
-    blast_cooldown: 7.0,
+    high_jump_cooldown: 7.0,
     fireball_damage: 35.0,
-    blast_damage: 45.0,
     fireball_knockback: 8.0,
-    blast_knockback: 11.0,
     terrain_power: 2,
 )

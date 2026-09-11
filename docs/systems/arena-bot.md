@@ -24,9 +24,21 @@ before observing one; hidden targets retain the existing memory rules.
 The bot evaluates charge strengths for useful, self-safe Fireballs and minimizes
 remaining preparation plus projectile flight time. It keeps a charge through brief
 concealment and movement, then rechecks the current trajectory before release.
-Ordinary spell and cancellation authority admits every cast. Close encounters can
-interrupt preparation for Area Blast or defensive Shield; the adapter cancels the
-old hold before submitting a fresh press.
+Ordinary spell and cancellation authority admits every cast. Defensive Shield can
+interrupt preparation; its adapter cancels the old hold before submitting a fresh
+press. High Jump is an independent movement ability and preserves a held projectile
+charge and the selected spell.
+
+New visual acquisition, reacquisition and target changes add a **150 ms**
+simulation-time reaction delay before offensive Fireball releases. Charge preparation
+overlaps this delay; defensive Shield does not wait. The deadline wakes a shot
+recheck independently of five-Hz movement decisions. Ten-Hz sight sampling adds
+up to another 100 ms. The existing 350 ms post-cast gap remains separate.
+
+In the **Esc/Tab** menu, adjust **Shadow reaction** in 50 ms steps from **Off**
+to **500 ms**. Changes apply on resume, including pending acquisition deadlines,
+and survive round reset and map changes during the session. Reopening the game
+reloads configured defaults. Off removes only the new acquisition delay.
 
 One blind Fireball is allowed per loss-of-sight episode, during the first 1.5 seconds
 after a sighting. Its forecast must hit terrain close enough to splash the uncertain
@@ -45,14 +57,30 @@ most twice per second. Committed sides and stuck recovery prevent constant
 left/right switching. Unsupported paths are rejected; terrain changes and knockback
 invalidate stale routes.
 
+**Shadow escape** in the same menu enables bounded movement recovery. After 0.4
+seconds in a depression without progress toward an exit, Shadow searches six local
+directions, preferring walking, then its normal 1.3-unit jump, then the shared
+High Jump. Falling into a detected trap can also trigger an airborne High Jump
+route. Recovery changes movement without discarding a prepared Fireball.
+
+High Jump defaults to four world units of rise and a seven-second cooldown, with
+the same settings and collision rules for the human and Shadow. Candidate routes
+use cloned movement bodies, require dry supported landings, and stay within six
+horizontal units. One candidate is evaluated per tick, each covering at most two
+seconds; full replanning is limited to twice per second. A route remains committed
+while airborne and revalidates after terrain changes or knockback. An attempt lasts
+at most six seconds; repeated failures against unchanged nearby terrain are
+suppressed. Recovery does not excavate with Fireballs, raise Shield platforms,
+teleport, or modify terrain.
 This is local steering, not a navigation mesh or general planner. Deeply concave
 cover, extensive destruction, and complex stacked obstacles can defeat it.
 Shield placement remains a forecast: moving bodies and destruction can change
 which blocks actually form. Nearby splash can still cross a Shield.
 
-Behavior defaults live in the `bot` block of `assets/config/arena.ron`; existing
-paused spell controls remain unchanged. There is no adaptive difficulty, extra
-bot damage, privileged charging, or hidden-player indicator.
+Behavior defaults live in the `bot` block of `assets/config/arena.ron`; the paused
+menu includes reaction and escape controls alongside spell and High Jump settings.
+There is no adaptive difficulty, extra bot damage, privileged charging, or
+hidden-player indicator.
 
 ## Evidence and playtesting
 

@@ -688,6 +688,7 @@ impl ArenaSession {
             }
         }
         let mut casts = Vec::new();
+        let mut boosts = Vec::new();
         let human_id = self.human_actor_id();
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
@@ -716,7 +717,7 @@ impl ArenaSession {
             if intent.aim.is_finite() && intent.aim.length_squared() > 0.0001 {
                 actor.aim = intent.aim.normalize();
             }
-            if let Some(spell) = intent.selected {
+            if let Some(spell) = intent.selected.filter(|spell| *spell != Spell::HighJump) {
                 if spell != actor.selected && actor.charge.is_some() {
                     actor.cancel_charge();
                 }
@@ -724,6 +725,10 @@ impl ArenaSession {
             }
             for cd in &mut actor.cooldowns {
                 *cd = (*cd - STEP).max(0.0);
+            }
+            let boosted = intent.high_jump && actor.high_jump(tuning);
+            if boosted {
+                boosts.push((actor.id, actor.feet));
             }
             let forward = actor.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
             let direction = if Some(actor.id) == human_id {
@@ -736,7 +741,7 @@ impl ArenaSession {
                 actor,
                 direction,
                 intent.run,
-                intent.jump,
+                intent.jump && !boosted,
                 flight,
                 intents.get(&actor.id).is_some_and(|i| i.lunge),
                 &self.collision,
@@ -751,6 +756,9 @@ impl ArenaSession {
                     casts.push((actor.id, spell, speed));
                 }
             }
+        }
+        for (id, origin) in boosts {
+            self.record_high_jump(id, origin);
         }
         separate_many(&mut self.actors, &self.collision);
         self.move_worms(&intents, world, geometry, materials, tuning, &mut out);

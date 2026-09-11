@@ -1,9 +1,6 @@
 //! Explicit world/gameplay contracts for the isolated real-time arena experiment.
 
 mod burrow;
-mod damage;
-
-pub use damage::{ArenaDamageMaterial, ArenaDamageView, resolve_terrain_voxel_damage};
 
 pub use burrow::{
     ArenaBurrowChange, ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRejection,
@@ -225,8 +222,6 @@ pub struct ArenaDeploymentRegion {
 pub struct ArenaTerrainView {
     /// Changes on reset or material mutation; partial HP changes do not alter collision.
     pub revision: u64,
-    /// World-owned damage rules and sparse current HP; independently versioned.
-    pub damage: ArenaDamageView,
     /// Every resident solid voxel keyed by its exact stack-safe identity.
     pub voxels: BTreeMap<TilePos, SubstanceId>,
     /// Human and bot feet positions on valid initial supports.

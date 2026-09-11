@@ -33,6 +33,28 @@ fn tick(app: &mut App) {
     app.world_mut().run_schedule(ArenaTick);
 }
 
+// Leave a real Fireball impact pending, before world publication, for scheduling tests.
+fn queue_ground_fireball(app: &mut App) {
+    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+        aim: Vec3::NEG_Y,
+        selected: Some(Spell::Fireball),
+        cast_pressed: true,
+        cast_released: true,
+        ..default()
+    };
+    for _ in 0..60 {
+        tick(app);
+        if !app
+            .world()
+            .resource::<Messages<hex_core::TerrainImpact>>()
+            .is_empty()
+        {
+            return;
+        }
+    }
+    panic!("downward Fireball did not announce a terrain impact");
+}
+
 #[test]
 fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
     use bevy::ecs::system::RunSystemOnce;
@@ -549,15 +571,13 @@ fn enabled_bot_damages_a_player_from_normal_arena_spawns() {
 #[test]
 fn paused_last_tick_cast_survives_message_expiry_then_refreshes_before_movement() {
     let mut app = app(60);
+    // Isolate loss of terrain support from the Fireball's self-knockback.
+    app.world_mut()
+        .resource_mut::<ArenaTuning>()
+        .fireball_knockback = 0.0;
     let original = app.world().resource::<ArenaTerrainView>().clone();
     let initial_feet = original.spawns.first().copied().unwrap_or_default();
-    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-        selected: Some(Spell::AreaBlast),
-        cast_pressed: true,
-        cast_released: true,
-        ..default()
-    };
-    tick(&mut app);
+    queue_ground_fireball(&mut app);
     assert_eq!(
         app.world().resource::<ArenaTerrainView>().voxels,
         original.voxels
@@ -575,7 +595,7 @@ fn paused_last_tick_cast_survives_message_expiry_then_refreshes_before_movement(
     assert!(session
         .actors
         .first()
-        .is_some_and(|a| a.feet.y < initial_feet.y && a.hp > 99.9));
+        .is_some_and(|a| a.feet.y < initial_feet.y && a.hp > 0.0));
     assert!(app.world().resource::<ArenaTerrainView>().voxels.len() < original.voxels.len());
     app.update();
     assert_eq!(app.world().resource::<ArenaSession>().terrain_outcomes, 1);
@@ -747,29 +767,20 @@ fn every_paused_tuning_control_remains_valid_and_sizes_are_independent() {
     }
     tuning = ArenaTuning::default();
     hud::change(&mut tuning, 0, 1.0);
-    assert_eq!(
-        (tuning.shield_size, tuning.fireball_size, tuning.blast_size),
-        (2, 1, 1)
-    );
+    assert_eq!((tuning.shield_size, tuning.fireball_size), (2, 1));
 }
 
 #[test]
-fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
+fn repeated_large_fireballs_measure_mutation_and_collision_refresh_cost() {
     let mut app = app(60);
-    app.world_mut().resource_mut::<ArenaTuning>().blast_size = 2;
+    app.world_mut().resource_mut::<ArenaTuning>().fireball_size = 2;
     let mut costs = Vec::new();
     let mut destruction = Vec::new();
     for frame in 0..360 {
         if frame % 30 == 0 {
             app.world_mut().resource_mut::<ArenaReset>().generation += 1;
             tick(&mut app);
-            app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-                selected: Some(Spell::AreaBlast),
-                cast_pressed: true,
-                cast_released: true,
-                ..default()
-            };
-            tick(&mut app);
+            queue_ground_fireball(&mut app);
         }
         let before = app.world().resource::<ArenaTerrainView>().voxels.len();
         let start = std::time::Instant::now();
@@ -790,7 +801,7 @@ fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
             "cpu_frame_median_ms":costs.get(costs.len()/2),
             "cpu_frame_p95_ms":costs.get(costs.len()*95/100),
             "cpu_frame_max_ms":costs.last(), "destruction_max_ms":destruction.last(),
-            "method":"headless CPU app update, 120Hz simulation, large blasts, no GPU"
+            "method":"headless CPU app update, 120Hz simulation, large Fireballs, no GPU"
         })
     );
 }
@@ -1268,7 +1279,6 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
         ("shield-charge-full-third", Spell::Shield, 1.0),
         ("fireball-charge-partial-third", Spell::Fireball, 0.52),
         ("fireball-charge-full-first", Spell::Fireball, 1.0),
-        ("blast-armed-first", Spell::AreaBlast, 0.87),
     ] {
         let mut app = app(60);
         for frame in 1..=capture_frame_index(view) {
@@ -1295,7 +1305,7 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
             .and_then(|actor| actor.charge())
             .expect("capture must retain an authoritative charge");
         assert_eq!(charge.spell, spell);
-        if spell != Spell::AreaBlast {
+        {
             assert!(
                 (charge.elapsed / app.world().resource::<ArenaTuning>().charge_seconds
                     - expected_progress)
@@ -1355,11 +1365,7 @@ fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled()
     use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
 
     for (width, height) in [(1600, 900), (1280, 720)] {
-        for (spell, ticks) in [
-            (Spell::Shield, 60),
-            (Spell::Fireball, 120),
-            (Spell::AreaBlast, 60),
-        ] {
+        for (spell, ticks) in [(Spell::Shield, 60), (Spell::Fireball, 120)] {
             let mut fixture = app(120);
             fixture.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
                 selected: Some(spell),
@@ -1400,7 +1406,7 @@ fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled()
                 .iter()
                 .filter(|node| node.name.starts_with("Charge "))
                 .collect::<Vec<_>>();
-            assert_eq!(nodes.len(), if spell == Spell::AreaBlast { 2 } else { 4 });
+            assert_eq!(nodes.len(), 4);
             let panel = nodes
                 .iter()
                 .find(|node| node.name == "Charge panel")
@@ -1436,9 +1442,7 @@ fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled()
                 })
                 .expect("charge label");
             assert!(text.contains("Release to cast"));
-            if spell == Spell::AreaBlast {
-                assert!(!text.contains('%'));
-            } else {
+            {
                 let track = nodes
                     .iter()
                     .find(|node| node.name == "Charge track")
@@ -2320,3 +2324,6 @@ mod duel_party_tests;
 
 #[path = "terminal_menu_tests.rs"]
 mod terminal_menu_tests;
+
+#[path = "high_jump_tests.rs"]
+mod high_jump_tests;

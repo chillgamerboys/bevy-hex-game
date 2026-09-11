@@ -212,7 +212,7 @@ fn reference_speed_vertical_fireball_returns_after_five_seconds_and_matches_prev
         );
         if let Some(effect) = session.effects.first() {
             assert!(effect.center.distance(predicted) < 0.001);
-            assert_eq!(effect.kind, Spell::Fireball);
+            assert_eq!(effect.kind, crate::VisualEffectKind::Fireball);
             detonation_tick = Some(tick);
             break;
         }
@@ -220,48 +220,6 @@ fn reference_speed_vertical_fireball_returns_after_five_seconds_and_matches_prev
     assert!(detonation_tick.expect("returning fireball detonates") > 600);
     assert!(session.projectiles.is_empty());
     assert!(human(&session).hp < 100.0);
-}
-
-#[test]
-fn self_centered_area_excludes_caster_and_damages_through_cover() {
-    let (mut session, mut view, geometry, materials, tuning) = fixture();
-    set_actor(&mut session, 0, Vec3::new(0.0, SKIN, 0.0), Vec3::X);
-    set_actor(&mut session, 1, Vec3::new(3.4, SKIN, 0.0), Vec3::NEG_X);
-    for level in 1..=6 {
-        view.voxels.insert(
-            TilePos::new(HexCoord::from_axial(1, 0), level),
-            materials.stone,
-        );
-    }
-    view.revision += 1;
-    let emitted = session.advance(
-        ActorIntent {
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: true,
-            cast_released: true,
-            aim: Vec3::X,
-            ..Default::default()
-        },
-        &view,
-        geometry,
-        materials,
-        &tuning,
-    );
-    assert!((human(&session).hp - 100.0).abs() < 0.001);
-    assert!(human(&session).impulse_velocity().length() < 0.001);
-    assert!(bot(&session).hp < 100.0);
-    assert!(bot(&session).impulse_velocity().x > 0.0);
-    let impact = emitted.impacts.first().expect("sphere intersects floor");
-    assert_eq!(
-        impact.volume,
-        geometry.sphere(&view, human(&session).center(), tuning.blast_radius())
-    );
-    assert!(
-        impact
-            .volume
-            .contains(&TilePos::new(HexCoord::from_axial(2, 0), 0)),
-        "sphere includes terrain behind the wall"
-    );
 }
 
 #[test]
@@ -452,19 +410,7 @@ fn mature_shield_waits_for_blast_outcome_then_can_form_without_support() {
             .filter(|pos| pos.level == 1)
             .map(|pos| TilePos::new(pos.coord, 0))
             .collect();
-        let emitted = session.advance(
-            ActorIntent {
-                selected: Some(Spell::AreaBlast),
-                aim,
-                cast_pressed: true,
-                cast_released: true,
-                ..Default::default()
-            },
-            &view,
-            geometry,
-            materials,
-            &tuning,
-        );
+        let emitted = fixture_burst(&mut session, &view, geometry, materials, &tuning);
         let impact = emitted.impacts.first().expect("blast near wall support");
         let support = *impact
             .volume
@@ -587,7 +533,11 @@ fn preview_and_released_projectile_report_the_same_impact() {
             materials,
             &tuning,
         );
-        if let Some(effect) = session.effects.iter().find(|e| e.kind == Spell::Fireball) {
+        if let Some(effect) = session
+            .effects
+            .iter()
+            .find(|e| e.kind == crate::VisualEffectKind::Fireball)
+        {
             actual = Some(effect.center);
             break;
         }
@@ -631,18 +581,7 @@ fn reset_restores_health_cooldowns_projectiles_and_bot_preference() {
 #[test]
 fn correlated_world_rejection_is_reported_and_not_silently_retried() {
     let (mut session, view, geometry, materials, tuning) = fixture();
-    let emitted = session.advance(
-        ActorIntent {
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: true,
-            cast_released: true,
-            ..Default::default()
-        },
-        &view,
-        geometry,
-        materials,
-        &tuning,
-    );
+    let emitted = fixture_burst(&mut session, &view, geometry, materials, &tuning);
     let impact = emitted.impacts.first().expect("blast terrain message");
     let outcome = TerrainImpactOutcome {
         batch: impact.batch,
@@ -685,7 +624,6 @@ fn collision_refresh_uses_world_revision_and_new_walls_block_the_next_tick() {
 fn zero_knockback_is_a_valid_comparison_but_nan_and_bad_size_are_rejected() {
     let mut tuning = ArenaTuning {
         fireball_knockback: 0.0,
-        blast_knockback: 0.0,
         ..Default::default()
     };
     assert!(tuning.validate().is_ok());
@@ -706,18 +644,7 @@ fn knockout_ends_the_round_until_reset_restores_both_combatants() {
     if let Some(actor) = session.actors.iter_mut().find(|a| a.id == 1) {
         actor.hp = 1.0;
     }
-    session.advance(
-        ActorIntent {
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: true,
-            cast_released: true,
-            ..Default::default()
-        },
-        &view,
-        geometry,
-        materials,
-        &tuning,
-    );
+    fixture_burst(&mut session, &view, geometry, materials, &tuning);
     assert_eq!(session.outcome, Some(ArenaOutcome::Winner(0)));
     let frozen_tick = session.tick;
     let frozen_feet = human(&session).feet;
@@ -783,4 +710,38 @@ fn one_fireball_can_produce_a_simultaneous_draw_including_its_caster() {
     assert_eq!(session.outcome, Some(ArenaOutcome::Draw));
     assert!(session.actors.iter().all(|a| a.hp <= 0.0));
     assert!(session.projectiles.is_empty() && session.pending_walls.is_empty());
+}
+
+// Explicit radial damage fixture for publication tests; never a selectable ability.
+fn fixture_burst(
+    session: &mut ArenaSession,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    materials: ArenaMaterials,
+    tuning: &ArenaTuning,
+) -> CommandsOut {
+    let owner = session.actors.first().expect("caster").clone();
+    let mut out = CommandsOut::default();
+    session.explode(
+        owner.center(),
+        owner.id,
+        owner.team,
+        Spell::Fireball,
+        4.0,
+        45.0,
+        11.0,
+        tuning.terrain_power,
+        None,
+        None,
+        true,
+        false,
+        view,
+        geometry,
+        materials,
+        &mut out,
+    );
+    let next = session.advance(ActorIntent::default(), view, geometry, materials, tuning);
+    out.impacts.extend(next.impacts);
+    out.edits.extend(next.edits);
+    out
 }

@@ -153,6 +153,7 @@ struct ViewState {
     initialized: bool,
     previews: [bool; 2],
     suppress_click: bool,
+    suppress_high_jump: bool,
     capture: Option<PathBuf>,
     capture_view: String,
     image: Option<Handle<Image>>,
@@ -203,6 +204,7 @@ impl Default for ViewState {
             initialized: false,
             previews: [true, false],
             suppress_click: true,
+            suppress_high_jump: true,
             capture,
             capture_view,
             image: None,
@@ -256,12 +258,14 @@ impl ViewState {
         self.started = true;
         self.paused = false;
         self.suppress_click = true;
+        self.suppress_high_jump = true;
         self.accumulator = 0.0;
     }
 
     fn pause(&mut self) {
         self.paused = true;
         self.suppress_click = true;
+        self.suppress_high_jump = true;
         self.accumulator = 0.0;
     }
 
@@ -551,7 +555,6 @@ fn setup(
         };
         tuning.shield_size = size;
         tuning.fireball_size = size;
-        tuning.blast_size = size;
         state.third_person =
             state.capture_view == "third" || state.capture_view.ends_with("-third");
     }
@@ -595,7 +598,7 @@ fn setup(
         Transform::from_xyz(-15.0, 30.0, 18.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     info!(
-        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold LMB to charge Shield/Fireball; release LMB to cast any spell. Controls WASD mouse Space Shift 1/2/3 C T R."
+        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold LMB to charge Shield/Fireball; release LMB to cast. Press 3 for High Jump without changing selection. Controls WASD mouse Space Shift 1/2/3 C T R."
     );
 }
 
@@ -773,10 +776,13 @@ fn input(
     );
     intent.human.run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     intent.human.jump |= keys.just_pressed(KeyCode::Space);
+    intent.human.high_jump |= keys.just_pressed(KeyCode::Digit3) && !state.suppress_high_jump;
+    if !keys.pressed(KeyCode::Digit3) {
+        state.suppress_high_jump = false;
+    }
     for (key, spell) in [
         (KeyCode::Digit1, Spell::Shield),
         (KeyCode::Digit2, Spell::Fireball),
-        (KeyCode::Digit3, Spell::AreaBlast),
     ] {
         if keys.just_pressed(key) {
             if session
@@ -812,7 +818,7 @@ fn input(
         let slot = match spell {
             Spell::Shield => Some(0),
             Spell::Fireball => Some(1),
-            Spell::AreaBlast => None,
+            Spell::HighJump => None,
         };
         if let Some(enabled) = slot.and_then(|slot| state.previews.get_mut(slot)) {
             *enabled = !*enabled;
@@ -1151,8 +1157,6 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
         Some(Spell::Shield)
     } else if view.starts_with("fireball") {
         Some(Spell::Fireball)
-    } else if view.starts_with("blast") {
-        Some(Spell::AreaBlast)
     } else {
         None
     };
@@ -1170,8 +1174,6 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
             .saturating_add(1)
     } else if hold_review || spell == Some(Spell::Shield) {
         6
-    } else if spell == Some(Spell::AreaBlast) {
-        release_frame
     } else {
         release_frame.saturating_sub(reference_frames).max(3)
     };
@@ -1183,6 +1185,7 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
             direction
         },
         selected: (frame == 3).then_some(spell).flatten(),
+        high_jump: view.starts_with("high-jump") && frame == 48,
         cast_pressed: casts && frame == press_frame,
         cast_released: casts && !hold_review && frame == release_frame,
         cast_held: casts && frame >= press_frame && (hold_review || frame < release_frame),
@@ -1197,7 +1200,7 @@ fn capture_frame_index(view: &str) -> u32 {
         36
     } else if view.contains("charge-full") || view.contains("partial-preview") {
         90
-    } else if view.starts_with("blast") || view.starts_with("fireball") {
+    } else if view.starts_with("high-jump") || view.starts_with("fireball") {
         57
     } else {
         90
@@ -1646,7 +1649,7 @@ fn capture_frame(
         ("parties", serde_json::json!(parties)),
         ("encounter_summary", serde_json::json!(session.encounter_summary())),
         ("encounter_stats", serde_json::json!(session.encounter_stats())),
-        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life-extended-leashes: all actors start with 100000 HP; validated ground, Shadow and Dragon home leashes are 150 units before admission; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; authored search, activation, attacks and movement. Not normal home-return, movement, human balance, or ordinary gameplay evidence."))),
+        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life-extended-leashes: all actors start with 100000 HP; validated ground, Shadow and Dragon home leashes are 150 units before admission; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; tap Fireball requested every 240 ticks; authored search, activation, attacks and movement. Not normal home-return, movement, human balance, or ordinary gameplay evidence."))),
         ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
         ("wisp_stress", serde_json::json!(wisp::stress_view(&state.capture_view).then(|| serde_json::json!({
             "fixture": "synthetic-wisp-hp-1000", "nominal_hp": state.capture_wisp_nominal_hp,

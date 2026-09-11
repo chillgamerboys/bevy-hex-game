@@ -448,9 +448,7 @@ fn duel_outcomes_ignore_all_encounter_tuning_and_keep_two_actor_identity() {
     for tick in 0..1800 {
         let input = ActorIntent {
             aim: Vec3::X,
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: tick % 90 == 0,
-            cast_released: tick % 90 == 0,
+            high_jump: tick % 90 == 0,
             ..Default::default()
         };
         let ca = a.advance(input, &view, geometry, materials, &tuning);
@@ -1104,8 +1102,8 @@ fn returning_shadow_defends_only_nearby_visible_contact_and_keeps_homeward_motio
             .get(&1)
             .expect("shadow")
             .casts
-            .get(Spell::AreaBlast.index()),
-        Some(&1)
+            .get(Spell::HighJump.index()),
+        Some(&0)
     );
     let shadow = session.actors.iter().find(|a| a.id == 1).expect("shadow");
     assert!(
