@@ -1,5 +1,36 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
+## 2026-09-11 Shadow experiment continuation
+
+Approved continuation from `e0b2be9` on `fix/arena-golem-worm-response`.
+Root integrates one local candidate; no remote changes or `dev` merge. Existing
+local shared-checkout exception applies. Budget overrides broad repeated gates:
+check account usage before stages and checkpoint at 16% remaining.
+
+The shared foundation is a world-published read-only terrain damage projection in
+`hex_core::arena`, including partial-health revisions and shared pure health
+resolution. Root commits the foundation before its consumers. World owns its
+publication and all real mutations; gameplay owns disposable forecast copies.
+
+Continuation ownership: world worker owns `hex_map` damage/publication; root owns
+the shared core contract, reaction/configuration and menu integration; gameplay
+worker owns only new `hex_arena/src/bot/escape*` files. The world worker may prepare
+the core contract for coordinator review/commit. No Cargo or commits by workers.
+Gameplay escape depends on the agreed foundation API; reaction/menu work can run
+alongside world publication. Combine in order: contract, world, gameplay/menu.
+
+Locked behavior: reaction defaults to 150 ms, independently adjustable 0–500 ms
+in 50 ms steps in the existing menu; zero is Off. Escape uses ordinary movement
+and charged Fireballs, no Shield lifting. Forecast at most two shots, ten HP
+self-damage, no lethal release; attempt at most three shots/six seconds. Search
+six directions within six units with 1.5-second rollouts, distributed across ticks.
+
+Combined acceptance: focused damage-publication, escape and acquisition tests;
+paused menu Off/150/500 ms, reset/click suppression; strict arena lint and real
+Fort/Duel application regressions. Human control feel, difficulty and general
+crater coverage remain native playtest claims. Validation details will be recorded
+in `shadow-experiment.md`; no broad captures or calibration tournaments planned.
+
 Status: local implementation and automated validation are complete. All seven enemy profiles and spectator battles have recorded machine calibration. Final Worm comparison is 6/8 against Goblins and 0/8 against Shadow with three unresolved Fort timeouts. Wisp static review passes at cef8c12; Worm13 static review and sustained Seven Regions10 native stress pass at 1bf41f2. All 29 combined repository checks pass at 25fa64d. Human motion, feel and balance remain in review.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
