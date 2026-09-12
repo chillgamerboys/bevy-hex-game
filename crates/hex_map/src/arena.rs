@@ -27,6 +27,7 @@ use crate::{Column, VoxelMap};
 mod burrow;
 #[cfg(test)]
 mod burrow_tests;
+mod expedition;
 mod forest;
 #[cfg(test)]
 mod real_world_tests;

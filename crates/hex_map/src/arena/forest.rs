@@ -386,6 +386,7 @@ pub(super) fn build(
         span.blocks_movement |= span.blocks_sight;
     }
     compact_static(&mut view);
+    super::expedition::validate(&view, geometry, substances)?;
     Ok(worlds::WorldRecipe {
         map,
         geometry,
