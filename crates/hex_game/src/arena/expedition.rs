@@ -30,7 +30,7 @@ pub(super) struct PoolVisual {
 }
 
 #[derive(Component)]
-struct PoolGlimmer {
+pub(super) struct PoolGlimmer {
     origin: Vec3,
     phase: f32,
 }
