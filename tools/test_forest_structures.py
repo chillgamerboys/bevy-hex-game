@@ -160,6 +160,19 @@ class StructureContracts(unittest.TestCase):
             self.assertLessEqual(piece["blueprint"]["bounds"]["radius"], 32)
             self.assertLessEqual(piece["blueprint"]["bounds"]["height"], 192)
 
+    def test_generated_ids_follow_public_object_asset_id_grammar(self):
+        pieces = structures.bridge_assembly(self.bridge_surfaces(), raw=Raw)
+        center, walls, gate, surfaces = self.arena_fixture()
+        pieces += structures.arena_assembly(center, walls, gate, 92, surfaces, raw=Raw)
+        ids = [piece["asset"] for piece in pieces]
+        ids += [shape.documents(raw=Raw)[0]["id"] for shape in structures.catalog(raw=Raw)["shapes"].values()]
+        self.assertEqual(len(ids), len(set(ids)))
+        for asset in ids:
+            self.assertLessEqual(len(asset), 128)
+            self.assertRegex(asset, r"^prop/[a-z][a-z0-9-]*$")
+        with self.assertRaisesRegex(ValueError, "ObjectAssetId"):
+            structures.Shape.create("bridge-portal-+23", {(0, 0, 0): structures.STONE})
+
     def test_assembly_validation_rejects_overlap_wrong_support_and_blocked_travel(self):
         surfaces = self.bridge_surfaces()
         pieces = structures.bridge_assembly(surfaces, raw=Raw)

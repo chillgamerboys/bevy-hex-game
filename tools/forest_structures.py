@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 from typing import Callable
 
 DIRECTIONS = ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))
@@ -89,6 +90,11 @@ class Shape:
         return tuple((cell.q, cell.r) for cell in self.cells if cell.level == 0)
 
     def validate(self):
+        asset = f"prop/expedition-{self.name}"
+        # Same stable-id vocabulary as hex_assets::ObjectAssetId: ASCII path
+        # segments start lowercase and contain only lowercase, digits or '-'.
+        if len(asset) > 128 or re.fullmatch(r"prop/[a-z][a-z0-9-]*", asset) is None:
+            raise ValueError(f"{self.name}: invalid public ObjectAssetId")
         if self.radius > 32 or self.height > 192 or len(self.cells) > 65536:
             raise ValueError(f"{self.name}: blueprint exceeds bounded object geometry")
         occupied = {(cell.q, cell.r, cell.level) for cell in self.cells}
@@ -291,6 +297,7 @@ def bridge_assembly(surfaces, *, raw, clear_columns=()):
     # Each rail fits the radius32 artifact bound and stops at the portal piers.
     segments = ((-27, -25), (-21, -1), (0, 21), (25, 27))
     for side in (-5, 5):
+        side_name = "north" if side < 0 else "south"
         for index, (start, end) in enumerate(segments):
             groups = []
             for q in range(start, end + 1):
@@ -308,7 +315,7 @@ def bridge_assembly(surfaces, *, raw, clear_columns=()):
                     for z in range(support + 1, support + 1 + height):
                         voxels[q, side, z] = EDGE if z in (support + 1, support + 4) else STONE
                 suffix = f"-part{group_index}" if len(groups) > 1 else ""
-                pieces.append(_world_piece(f"bridge-rail-{side:+}-{index}{suffix}", voxels, footings,
+                pieces.append(_world_piece(f"bridge-rail-{side_name}-{index}{suffix}", voxels, footings,
                                            raw=raw, clear_columns=clear))
     for gate in (-23, 23):
         voxels = {}
@@ -323,7 +330,8 @@ def bridge_assembly(surfaces, *, raw, clear_columns=()):
                 crown = top + (3 if abs(r) in (0, 5) else 0)
                 for z in range(bottom, crown):
                     voxels[q, r, z] = EDGE if z == bottom or r == 0 else STONE
-        pieces.append(_world_piece(f"bridge-portal-{gate:+}", voxels, footings,
+        gate_name = "west" if gate < 0 else "east"
+        pieces.append(_world_piece(f"bridge-portal-{gate_name}", voxels, footings,
                                    raw=raw, clear_columns=clear))
     validate_assembly(pieces, surfaces=surfaces, clearance=4)
     return pieces
