@@ -32,6 +32,8 @@ pub enum ArenaMap {
     Fort,
     /// Three separate encounters in the authored seven-region world.
     SevenRegions,
+    /// V4 forest camps, central river bridge and three mountain Dragons.
+    ForestMassif,
 }
 
 /// Composition of the compact Fort encounter.
