@@ -31,6 +31,13 @@ arena's radius 12 interior has tall walls and a permanently open decorated gate.
 
 ## Reproduce and verify
 
+`cargo battle` and `python3 tools/arena.py launch` prepare this default package
+on first use. The equivalent standalone preparation command is
+`python3 tools/forest_package.py ensure`. It builds missing compiler prerequisites
+in `target/v4-authoring`, separate from the app target, and reuses a complete
+reviewed package without running Cargo or regenerating content. Explicit
+`HEX_FOREST_WORLD` / `--forest-world` selections are left to runtime admission.
+
 From the repository root, build the pure authoring CLI once into its own target:
 
 ```sh

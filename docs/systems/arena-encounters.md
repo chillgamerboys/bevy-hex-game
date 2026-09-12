@@ -29,6 +29,12 @@ applied. Check initial output for asset errors before calling a launch successfu
 `Path not found` means the launch failed. The helper honors `CARGO_TARGET_DIR` and
 also accepts an absolute `--target-dir` when a particular build cache is needed.
 
+The implicit Forest selection uses the expedition package. On first launch,
+Cargo/helper preparation builds the pure world compiler if needed and generates
+the reviewed package; later launches reuse it. Python 3 is required for source
+preparation. `HEX_FOREST_WORLD` or the helper's `--forest-world ABSOLUTE_PATH`
+selects an already compiled package, including the older Forest map.
+
 Choose a map on the start screen. Fort defaults to a Dragon encounter and also
 offers ten Goblins, a Shaman with five Goblins, one Shadow, a Golem, four Ember
 Wisps, or a Worm.
