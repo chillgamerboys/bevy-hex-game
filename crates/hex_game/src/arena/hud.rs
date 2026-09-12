@@ -663,6 +663,8 @@ pub(super) fn update(
     let actor = session
         .human_actor_id()
         .and_then(|id| session.actors.iter().find(|actor| actor.id == id));
+    let forest_knocked_out =
+        run.is_some() && session.is_finished() && actor.is_some_and(|actor| actor.hp <= 0.0);
     let charge = actor.and_then(|actor| actor.charge());
     let progress = charge.map_or(0.0, |charge| {
         (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0)
@@ -699,6 +701,7 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::MenuTitle if forest_knocked_out => "RUN ENDED / KNOCKED OUT".into(),
             Label::MenuTitle if session.completed_run() => "VICTORY / EXPLORE THE MAP".into(),
             Label::MenuTitle if run.is_some() && !session.is_finished() => "PAUSED / LEVEL UPGRADES".into(),
             Label::MenuTitle if session.is_finished() => {
@@ -711,10 +714,12 @@ pub(super) fn update(
                 }
             },
             Label::MenuTitle => "PAUSED / COMBAT MENU".into(),
+            Label::MenuHelp if forest_knocked_out => "Reset Arena starts a new run from level 1. Milestones are shown below.".into(),
             Label::MenuHelp if pending > 0 => format!("Preparing terrain: {pending} chunks remaining"),
             Label::MenuHelp if run.is_some() => run.map_or_else(String::new, |p| format!("Level {}  /  XP {} of {}  /  {} upgrade points", p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::MenuHelp if session.is_finished() => "Mouse is free. Reset Arena returns to the start screen.".into(),
             Label::MenuHelp => "Mouse is free. ESC / TAB resumes. Sizes are independent.".into(),
+            Label::Resume if forest_knocked_out => "RESTART TO PLAY AGAIN".into(),
             Label::Resume => if session.is_finished() { "ROUND COMPLETE" } else { "RESUME" }.into(),
             Label::Team(slot) => format!("TEAM {}  /  {}", slot + 1, spectator::preset_for(&battle, *slot).map_or("Custom", BattlePreset::label)),
             Label::ObserverTeams => session.battle_summary().map_or_else(String::new, |summary| spectator::team_status(&summary)),
@@ -762,6 +767,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 }
             }
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
+            Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nR to restart from level 1.".into(),
             Label::Status if session.completed_run() => "VICTORY — THE MAP IS CLEAR\nKeep exploring and casting. R restarts your run.".into(),
             Label::Status => {
                 if state.capture.is_some() && super::encounter::stress_view(&state.capture_view) {
