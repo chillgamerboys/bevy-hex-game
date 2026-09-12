@@ -11,8 +11,10 @@
 //! tree is live. The renderer restores each camera's previous MSAA mode as soon as
 //! the final blended presentation disappears, restoring true alpha-to-coverage.
 
+mod carved;
 /// Opt-in resident presentation of validated V4 object records.
 pub mod v4;
+pub use carved::ObjectCarveRenderStats;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::f32::consts::TAU;
@@ -24,8 +26,9 @@ use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureUsages;
 use hex_assets::{
-    GameAssets, HexObjectRotation, LocalVoxelCoord, ObjectAssetId, ObjectBlueprint, ObjectInstance,
-    ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
+    GameAssets, HexObjectRotation, LocalVoxelCoord, ObjectAssetId, ObjectBlueprint,
+    ObjectCarveMask, ObjectInstance, ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId,
+    VoxelSurfaceMode,
 };
 use hex_core::{
     CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, ReviewEdgeTreatment,
@@ -71,6 +74,7 @@ struct RenderedObject {
     source_generation: u64,
     tree_root: Option<TreeOccluder>,
     children: Vec<Entity>,
+    carved: Option<carved::RenderedCarving>,
     failed: bool,
 }
 
@@ -239,10 +243,12 @@ struct ObjectRenderCache {
     edge_treatment: ReviewEdgeTreatment,
     objects: BTreeMap<ObjectAssetId, CachedObject>,
     materials: BTreeMap<VoxelStyleId, CachedMaterial>,
+    carved: carved::CarveRenderCache,
 }
 
 impl ObjectRenderCache {
     fn invalidate_objects(&mut self, meshes: &mut Assets<Mesh>) {
+        self.carved.clear(meshes);
         for object in self.objects.values() {
             for chunk in &object.chunks {
                 drop(meshes.remove(chunk.mesh.id()));
@@ -292,6 +298,7 @@ fn reconcile_objects(
         Option<&RenderedObject>,
         Option<&Visibility>,
         Option<&TreeOccluder>,
+        Option<&ObjectCarveMask>,
     )>,
     stale_rendered: Query<&RenderedObject, Without<ObjectInstance>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -304,9 +311,12 @@ fn reconcile_objects(
         if instances.get(entity).is_ok() {
             continue;
         }
+        cache.carved.remove_entity(entity, &mut meshes);
         if let Ok(rendered) = stale_rendered.get(entity) {
             despawn_render_children(&mut commands, rendered);
-            commands.entity(entity).remove::<RenderedObject>();
+            commands
+                .entity(entity)
+                .remove::<(RenderedObject, ObjectCarveRenderStats)>();
         }
     }
 
@@ -347,7 +357,7 @@ fn reconcile_objects(
         catalog_changed || source_changed || material_treatment_changed || edge_treatment_changed;
     let mut source_mesh = None;
 
-    for (entity, instance, rendered, visibility, tree) in &instances {
+    for (entity, instance, rendered, visibility, tree, carve_mask) in &instances {
         if let Err(error) = instance.validate() {
             let already_reported = rendered.is_some_and(|rendered| {
                 rendered.failed
@@ -363,12 +373,14 @@ fn reconcile_objects(
                     "cannot render invalid authored object instance '{}': {error}",
                     instance.object_id()
                 );
+                cache.carved.remove_entity(entity, &mut meshes);
                 commands.entity(entity).insert(RenderedObject {
                     object_id: instance.object_id().clone(),
                     catalog_fingerprint,
                     source_generation: cache.source_generation,
                     tree_root: tree.copied(),
                     children: Vec::new(),
+                    carved: None,
                     failed: true,
                 });
             }
@@ -392,12 +404,21 @@ fn reconcile_objects(
                     || rendered.catalog_fingerprint != catalog_fingerprint
                     || rendered.source_generation != cache.source_generation
                     || rendered.tree_root != tree.copied()
+                    || rendered.carved.is_some() != carve_mask.is_some()
             });
-        if !needs_rebuild {
+        let carve_changed = carve_mask.is_some_and(|mask| {
+            rendered
+                .and_then(|rendered| rendered.carved.as_ref())
+                .is_none_or(|previous| previous.mask != *mask)
+        });
+        if !needs_rebuild && !carve_changed {
             continue;
         }
-        if let Some(rendered) = rendered {
-            despawn_render_children(&mut commands, rendered);
+        if needs_rebuild {
+            if let Some(rendered) = rendered {
+                despawn_render_children(&mut commands, rendered);
+            }
+            cache.carved.remove_entity(entity, &mut meshes);
         }
         if source_mesh.is_none() {
             source_mesh = meshes.get(&game_assets.hex_tile).cloned();
@@ -406,6 +427,45 @@ fn reconcile_objects(
             continue;
         };
 
+        if let Some(mask) = carve_mask {
+            let previous = (!needs_rebuild)
+                .then_some(rendered)
+                .flatten()
+                .and_then(|rendered| rendered.carved.as_ref());
+            match carved::reconcile(
+                entity,
+                &instance,
+                tree.copied(),
+                mask,
+                previous,
+                &catalog,
+                source_mesh,
+                edge_treatment,
+                &mut cache,
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+            ) {
+                Ok(carved) => {
+                    let children = carved.children();
+                    commands.entity(entity).insert(RenderedObject {
+                        object_id: instance.object_id().clone(),
+                        catalog_fingerprint,
+                        source_generation: cache.source_generation,
+                        tree_root: tree.copied(),
+                        children,
+                        carved: Some(carved),
+                        failed: false,
+                    });
+                }
+                Err(error) => error!(
+                    "cannot render carved object '{}': {error}",
+                    instance.object_id()
+                ),
+            }
+            continue;
+        }
+        commands.entity(entity).remove::<ObjectCarveRenderStats>();
         match cached_object(
             &mut cache,
             &catalog,
@@ -429,6 +489,7 @@ fn reconcile_objects(
                     source_generation: cache.source_generation,
                     tree_root: tree.copied(),
                     children,
+                    carved: None,
                     failed: false,
                 });
             }
@@ -451,6 +512,7 @@ fn reconcile_objects(
                     source_generation: cache.source_generation,
                     tree_root: tree.copied(),
                     children: Vec::new(),
+                    carved: None,
                     failed: true,
                 });
             }
@@ -1367,6 +1429,13 @@ mod tests {
     }
 
     pub(super) fn fixture_catalog(leaf_red: f32) -> RuntimeArtCatalog {
+        fixture_catalog_with_effect(leaf_red, None)
+    }
+
+    pub(super) fn fixture_catalog_with_effect(
+        leaf_red: f32,
+        effect: Option<ObjectBlueprint>,
+    ) -> RuntimeArtCatalog {
         let palette = match ArtPalette::new(BTreeMap::from([
             (
                 swatch_id("test/bark"),
@@ -1438,7 +1507,7 @@ mod tests {
             Err(error) => unreachable!("valid style fixture failed: {error}"),
         };
         let plant = fixture_blueprint();
-        let effect = material_fixture_blueprint();
+        let effect = effect.unwrap_or_else(material_fixture_blueprint);
         assert_eq!(plant.validate(&styles), Ok(()));
         assert_eq!(effect.validate(&styles), Ok(()));
         let manifest = match ObjectCatalogFile::new([plant.id.clone(), effect.id.clone()]) {
@@ -1483,7 +1552,7 @@ mod tests {
         }
     }
 
-    fn instance(
+    pub(super) fn instance(
         id: &str,
         coord: HexCoord,
         level: i32,
@@ -1501,7 +1570,7 @@ mod tests {
         }
     }
 
-    fn test_app(catalog: RuntimeArtCatalog) -> App {
+    pub(super) fn test_app(catalog: RuntimeArtCatalog) -> App {
         let mut builder = HeadlessAppBuilder::new()
             .with_minimal_plugins()
             .with_state_plugin()
@@ -1521,7 +1590,7 @@ mod tests {
         builder.build()
     }
 
-    fn settle(app: &mut App) {
+    pub(super) fn settle(app: &mut App) {
         app.update();
         app.update();
     }
