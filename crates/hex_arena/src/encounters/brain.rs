@@ -218,29 +218,31 @@ impl Brain {
                     tick,
                     direct: true,
                     cue_kind: None,
-                    observed: (actor.species == Species::Wisp).then(|| targeting::ObservedTarget {
-                        body: ForecastBody {
-                            id: target.id,
-                            feet: target.feet,
-                            velocity: party
-                                .knowledge
-                                .filter(|k| k.direct)
-                                .map_or(Vec3::ZERO, |k| k.velocity),
-                            predict_seconds: tuning.bot.prediction_seconds,
-                            species: target.species,
-                            team: target.team,
-                            dimensions: target.dimensions,
-                            yaw: target.body_yaw,
-                            yaw_velocity: 0.0,
-                            prisms: target.body_prism_snapshot(),
+                    observed: (actor.species == Species::Wisp || target.expedition_player).then(
+                        || targeting::ObservedTarget {
+                            body: ForecastBody {
+                                id: target.id,
+                                feet: target.feet,
+                                velocity: party
+                                    .knowledge
+                                    .filter(|k| k.direct)
+                                    .map_or(Vec3::ZERO, |k| k.velocity),
+                                predict_seconds: tuning.bot.prediction_seconds,
+                                species: target.species,
+                                team: target.team,
+                                dimensions: target.dimensions,
+                                yaw: target.body_yaw,
+                                yaw_velocity: 0.0,
+                                prisms: target.body_prism_snapshot(),
+                            },
+                            tick,
+                            sight_point: if collision.sight_clear(actor.eye(), target.center()) {
+                                target.center()
+                            } else {
+                                target.eye()
+                            },
                         },
-                        tick,
-                        sight_point: if collision.sight_clear(actor.eye(), target.center()) {
-                            target.center()
-                        } else {
-                            target.eye()
-                        },
-                    }),
+                    ),
                 })
         };
         let target_id = sight.and_then(|s| s.observed.map(|o| o.body.id));
@@ -1094,12 +1096,14 @@ impl Brain {
         let mut caster = actor.clone();
         caster.selected = Spell::Fireball;
         caster.aim = aim;
-        let bodies: Vec<_> = if seen.observed.is_some() {
+        let bodies: Vec<_> = if seen.observed.is_some() && !self.battle_seen.is_empty() {
             self.battle_seen
                 .iter()
                 .filter(|seen| collision.sight_clear(actor.eye(), seen.sight_point))
                 .map(|seen| seen.body)
                 .collect()
+        } else if let Some(target) = seen.observed {
+            vec![target.body]
         } else {
             vec![ForecastBody::human(0, seen.point, seen.velocity, 0.5)]
         };

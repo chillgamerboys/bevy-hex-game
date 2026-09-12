@@ -8,6 +8,35 @@ use hex_core::{ElementId, HexCoord, SubstanceId, TerrainEdit, TilePos};
 #[path = "battle_tests.rs"]
 mod battle_tests;
 
+#[test]
+fn expedition_target_height_is_copied_on_sight_and_not_refreshed_behind_cover() {
+    let mut f = Fixture::new(10.0);
+    f.actor_mut(0).configure_expedition_player();
+    f.decide();
+    let observed = f
+        .session
+        .bot
+        .player_profile
+        .expect("visible player profile");
+    assert!((observed.body.dimensions.y - 1.2).abs() < 0.0001);
+    assert!(observed.body.feet.distance(f.actor(0).feet) < 0.0001);
+    for coord in HexCoord::ORIGIN.within_radius(12) {
+        if coord.to_world(0.0).x.abs() < 1.0 {
+            for level in 1..=12 {
+                f.world
+                    .voxels
+                    .insert(TilePos::new(coord, level), f.materials.stone);
+            }
+        }
+    }
+    f.refresh();
+    f.actor_mut(0).feet += Vec3::Z * 3.0;
+    f.decide();
+    assert!(f.session.bot.observation.target.is_none());
+    let remembered = f.session.bot.player_profile.expect("frozen profile");
+    assert!(remembered.body.feet.distance(observed.body.feet) < 0.0001);
+}
+
 struct Fixture {
     session: ArenaSession,
     world: ArenaTerrainView,

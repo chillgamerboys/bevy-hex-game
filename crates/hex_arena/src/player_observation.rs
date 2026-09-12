@@ -119,6 +119,7 @@ pub(crate) struct PlayerKnowledge {
     landmarks: BTreeMap<String, DiscoveredLandmark>,
     actors: BTreeMap<ActorId, (String, LandmarkKind)>,
     credited_defeats: BTreeSet<ActorId>,
+    visible_last_sample: BTreeSet<ActorId>,
     target: Option<TargetHealthSnapshot>,
     last_hit: Option<(ActorId, f32)>,
     hit_sequence: u64,
@@ -166,11 +167,13 @@ impl ArenaSession {
         let player = self
             .human_actor_id()
             .and_then(|id| self.actors.iter().find(|a| a.id == id));
-        let active = observation.valid() && player.is_some_and(|a| a.hp > 0.0);
+        let active =
+            observation.valid() && !self.is_finished() && player.is_some_and(|a| a.hp > 0.0);
         self.player_knowledge.active = active;
         if !active {
             self.player_knowledge.sample_elapsed = 0.0;
             self.player_knowledge.dwell.clear();
+            self.player_knowledge.visible_last_sample.clear();
             self.player_knowledge.target = None;
             return;
         }
@@ -187,7 +190,8 @@ impl ArenaSession {
             return;
         }
         // Never turn one stalled frame into several purported distinct sightings.
-        self.player_knowledge.sample_elapsed %= 0.1;
+        self.player_knowledge.sample_elapsed =
+            (self.player_knowledge.sample_elapsed - 0.1).max(0.0) % 0.1;
         self.collision.refresh(world, geometry);
         let team = player.map_or(0, |p| p.team);
         let mut seen = BTreeSet::new();
@@ -200,7 +204,13 @@ impl ArenaSession {
             .map_or(1.0, |(hit, _)| hit.fraction);
         let mut aimed = None;
         for actor in self.actors.iter().filter(|a| a.team != team) {
-            let diameter = actor.dimensions.max_element();
+            let right = direction.cross(Vec3::Y).normalize_or(Vec3::X);
+            let up = right.cross(direction).normalize();
+            let rotation = actor.body_rotation().inverse();
+            let diameter = (rotation * right)
+                .abs()
+                .dot(actor.dimensions)
+                .max((rotation * up).abs().dot(actor.dimensions));
             let sighted = [actor.center(), actor.eye()].into_iter().any(|point| {
                 observation.contains(point, diameter)
                     && self.collision.sight_clear(observation.origin, point)
@@ -209,16 +219,21 @@ impl ArenaSession {
                 continue;
             }
             if let Some((id, kind)) = self.player_knowledge.actors.get(&actor.id).cloned() {
-                let known = self.player_knowledge.landmarks.get(&id);
+                let known = self.player_knowledge.landmarks.get(&id).cloned();
+                let witnessed_death = actor.hp <= 0.0
+                    && self
+                        .player_knowledge
+                        .visible_last_sample
+                        .contains(&actor.id);
                 // Corpses are not rendered. Only an already known encounter can
                 // publish a witnessed disappearance, never discover a hidden corpse.
-                if actor.hp > 0.0 || known.is_some() {
+                if actor.hp > 0.0 || witnessed_death && known.is_some() {
                     seen.insert(id.clone());
                     self.player_knowledge.admit(DiscoveredLandmark {
                         id,
                         kind,
                         position: actor.feet,
-                        defeated: actor.hp <= 0.0
+                        defeated: witnessed_death
                             || self.player_knowledge.credited_defeats.contains(&actor.id),
                         consumed: false,
                     });
@@ -288,6 +303,7 @@ impl ArenaSession {
         self.player_knowledge
             .dwell
             .retain(|id, _| seen.contains(id));
+        self.player_knowledge.visible_last_sample = visible.keys().copied().collect();
         let fallback = self
             .player_knowledge
             .last_hit
@@ -309,7 +325,9 @@ impl ArenaSession {
             .human_actor_id()
             .and_then(|id| self.actors.iter().find(|a| a.id == id));
         let tuning = self.player_tuning(tuning);
-        let active = self.player_knowledge.active && actor.is_some_and(|a| a.hp > 0.0);
+        let active = self.player_knowledge.active
+            && !self.is_finished()
+            && actor.is_some_and(|a| a.hp > 0.0);
         CombatFeedbackSnapshot {
             target: active.then_some(self.player_knowledge.target).flatten(),
             hit: (active
@@ -327,7 +345,11 @@ impl ArenaSession {
                     .unwrap_or(0.0);
                 let charge = actor.and_then(Actor::charge);
                 let charging = charge.filter(|c| c.spell == spell);
-                let state = if !active {
+                let state = if !active
+                    || spell == Spell::HighJump
+                        && actor
+                            .is_none_or(|a| !matches!(a.species, Species::Human | Species::Shadow))
+                {
                     SpellAvailabilityState::Unavailable
                 } else if charging.is_some() {
                     SpellAvailabilityState::Charging
@@ -412,3 +434,6 @@ fn target_snapshot(actor: &Actor) -> TargetHealthSnapshot {
         },
     }
 }
+
+#[cfg(test)]
+mod tests;
