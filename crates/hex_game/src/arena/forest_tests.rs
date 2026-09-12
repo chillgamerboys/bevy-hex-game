@@ -97,6 +97,103 @@ fn distribution(mut samples: Vec<f64>) -> serde_json::Value {
     })
 }
 
+/// Coarse CPU boundaries installed only by the populated expedition workload.
+/// Measurements include schedule/marker overhead, never rendering or GPU work.
+#[derive(Resource)]
+struct TickPhaseClock {
+    boundary: Instant,
+    completed: u8,
+    apply_ms: f64,
+    publish_ms: f64,
+    simulate_ms: f64,
+}
+
+impl Default for TickPhaseClock {
+    fn default() -> Self {
+        Self {
+            boundary: Instant::now(),
+            completed: 0,
+            apply_ms: 0.0,
+            publish_ms: 0.0,
+            simulate_ms: 0.0,
+        }
+    }
+}
+
+impl TickPhaseClock {
+    fn elapsed_ms(&mut self) -> f64 {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.boundary).as_secs_f64() * 1000.0;
+        self.boundary = now;
+        elapsed
+    }
+}
+
+fn phase_begin(mut clock: ResMut<TickPhaseClock>) {
+    clock.completed = 0;
+    clock.boundary = Instant::now();
+}
+
+fn phase_applied(mut clock: ResMut<TickPhaseClock>) {
+    assert_eq!(clock.completed, 0, "ApplyTerrain marker order");
+    clock.apply_ms = clock.elapsed_ms();
+    clock.completed = 1;
+}
+
+fn phase_published(mut clock: ResMut<TickPhaseClock>) {
+    assert_eq!(clock.completed, 1, "PublishTerrain marker order");
+    clock.publish_ms = clock.elapsed_ms();
+    clock.completed = 2;
+}
+
+fn phase_simulated(mut clock: ResMut<TickPhaseClock>) {
+    assert_eq!(clock.completed, 2, "Simulate marker order");
+    clock.simulate_ms = clock.elapsed_ms();
+    clock.completed = 3;
+}
+
+struct TickPhaseSample {
+    total_ms: f64,
+    apply_ms: f64,
+    publish_ms: f64,
+    simulate_ms: f64,
+    terrain_changed: bool,
+}
+
+fn phase_sample(app: &App, total_ms: f64, terrain_changed: bool) -> TickPhaseSample {
+    let clock = app.world().resource::<TickPhaseClock>();
+    assert_eq!(clock.completed, 3, "all phase markers must run each tick");
+    TickPhaseSample {
+        total_ms,
+        apply_ms: clock.apply_ms,
+        publish_ms: clock.publish_ms,
+        simulate_ms: clock.simulate_ms,
+        terrain_changed,
+    }
+}
+
+fn phase_distributions(samples: &[TickPhaseSample]) -> serde_json::Value {
+    let group = |terrain_changed: Option<bool>| {
+        let selected = samples
+            .iter()
+            .filter(|sample| {
+                terrain_changed.is_none_or(|changed| sample.terrain_changed == changed)
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "arena_tick": distribution(selected.iter().map(|sample| sample.total_ms).collect()),
+            "apply_terrain": distribution(selected.iter().map(|sample| sample.apply_ms).collect()),
+            "publish_terrain": distribution(selected.iter().map(|sample| sample.publish_ms).collect()),
+            "simulate": distribution(selected.iter().map(|sample| sample.simulate_ms).collect()),
+        })
+    };
+    serde_json::json!({
+        "all": group(None),
+        "terrain_changed": group(Some(true)),
+        "terrain_unchanged": group(Some(false)),
+    })
+}
+
 /// Geometry/roster proxy checkpoint only. Rewards, populated forest performance
 /// and final visual/native acceptance have separate, still-pending gates.
 #[test]
@@ -361,7 +458,21 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
             map: ArenaMap::ForestMassif,
             ..default()
         })
-        .add_plugins((hex_map::arena::plugin, hex_arena::plugin));
+        .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
+        .init_resource::<TickPhaseClock>()
+        .add_systems(
+            ArenaTick,
+            (
+                phase_begin.before(ArenaSystems::ApplyTerrain),
+                phase_applied
+                    .after(ArenaSystems::ApplyTerrain)
+                    .before(ArenaSystems::PublishTerrain),
+                phase_published
+                    .after(ArenaSystems::PublishTerrain)
+                    .before(ArenaSystems::Simulate),
+                phase_simulated.after(ArenaSystems::Simulate),
+            ),
+        );
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
     app.update();
     tick(&mut app);
@@ -420,13 +531,20 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
     visit(&mut app, goblin, home, None);
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = true;
     let mut camp_samples = Vec::new();
+    let mut camp_phase_samples = Vec::with_capacity(600);
+    let mut camp_publication_ticks = 0;
     let mut camp_activated = false;
     let mut peak_projectiles = 0;
     for step in 0..720 {
+        let revision = app.world().resource::<ArenaTerrainView>().revision;
         let start = Instant::now();
         tick(&mut app);
         if step >= 120 {
-            camp_samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let changed = app.world().resource::<ArenaTerrainView>().revision != revision;
+            camp_samples.push(elapsed_ms);
+            camp_phase_samples.push(phase_sample(&app, elapsed_ms, changed));
+            camp_publication_ticks += usize::from(changed);
         }
         let session = app.world().resource::<ArenaSession>();
         assert!(!session.is_finished());
@@ -475,6 +593,7 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
     assert_eq!((issued.ordered_parties, issued.ordered_actors), (14, 109));
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = true;
     let mut rally_samples = Vec::new();
+    let mut rally_phase_samples = Vec::with_capacity(2400);
     let mut publication_ticks = 0;
     let mut peak_active = 0;
     let mut moved_parties = BTreeSet::new();
@@ -483,9 +602,11 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
         let start = Instant::now();
         tick(&mut app);
         if step >= 120 {
-            rally_samples.push(start.elapsed().as_secs_f64() * 1000.0);
-            publication_ticks +=
-                usize::from(app.world().resource::<ArenaTerrainView>().revision != revision);
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let changed = app.world().resource::<ArenaTerrainView>().revision != revision;
+            rally_samples.push(elapsed_ms);
+            rally_phase_samples.push(phase_sample(&app, elapsed_ms, changed));
+            publication_ticks += usize::from(changed);
         }
         let session = app.world().resource::<ArenaSession>();
         assert!(!session.is_finished());
@@ -517,6 +638,8 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
             }
         }
     }
+    assert_eq!(camp_phase_samples.len(), 600);
+    assert_eq!(rally_phase_samples.len(), 2400);
     let session = app.world().resource::<ArenaSession>();
     println!(
         "EXPEDITION_ACTIVE_RECEIPT {}",
@@ -525,6 +648,12 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
             "scope":"ArenaTick CPU wall time; no renderer, GPU, FPS or native traversal claim",
             "synthetic_changes":"extra player HP and two validated player visits; ordinary single contact shot triggers Troll rally; authored enemy stats and placements",
             "largest_camp":distribution(camp_samples),"rally":distribution(rally_samples),
+            "phase_timing_scope":"Test-only ordered markers around ApplyTerrain, PublishTerrain and Simulate; CPU wall time includes marker/schedule overhead. Samples match the existing 600 camp and 2400 rally measured ticks after 120 warm-up ticks each. Revision and sample bookkeeping happen outside the total tick timer; no renderer, GPU or FPS claim.",
+            "phase_timings":{
+                "largest_camp":phase_distributions(&camp_phase_samples),
+                "rally":phase_distributions(&rally_phase_samples),
+            },
+            "camp_terrain_publication_ticks":camp_publication_ticks,
             "issued_rally":issued,"final_rally":session.expedition_rally_status(),
             "moved_forest_parties":moved_parties.len(),"peak_active_parties":peak_active,
             "peak_projectiles":peak_projectiles,"terrain_publication_ticks":publication_ticks,
