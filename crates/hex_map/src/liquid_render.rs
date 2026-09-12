@@ -27,6 +27,7 @@ use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresen
 use crate::voxel::{runs, terrain_chunk_coord, SubstanceRun, TerrainChunkCoord, VoxelMap};
 
 mod fountains;
+mod volume;
 
 #[cfg(feature = "arena-prototype")]
 pub(crate) use fountains::sync_fountain_materials;
@@ -34,7 +35,7 @@ pub(crate) use fountains::FountainWater;
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
 /// Grand's accepted water opacity, used by the Forest arena presentation.
-const TRANSLUCENT_WATER_ALPHA: f32 = 0.85;
+const TRANSLUCENT_WATER_ALPHA: f32 = 0.58;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WaterSurfaceStyle {
@@ -416,18 +417,39 @@ pub(crate) fn spawn_presentations(
     projection: Option<&MapPresentationProjection>,
     fountains: &FountainWater,
 ) -> Result<Vec<Entity>, LiquidPresentationError> {
-    let plan = build_presentation_plan(map, table, level_height, projection, fountains)?;
+    let mut plan = build_presentation_plan(map, table, level_height, projection, fountains)?;
     if plan.surfaces.is_empty() {
         clear_material_cache(commands);
         return Ok(Vec::new());
     }
-    let cap_batches = batch_liquid_caps(&plan.surfaces, fountains)
+    let closed = water_style == WaterSurfaceStyle::Translucent;
+    let cap_surfaces: Vec<_> = plan
+        .surfaces
+        .iter()
+        .copied()
+        .filter(|surface| !closed || surface.role != FillMaterialRole::Water)
+        .collect();
+    let mut cap_batches = batch_liquid_caps(&cap_surfaces, fountains)
         .into_iter()
         .map(|(key, surfaces)| {
             cap_batch_geometry(&surfaces, level_height).map(|geometry| (key, surfaces, geometry))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    if closed {
+        let water = LiquidSubstances::resolve(table)?.water.ok_or(
+            LiquidPresentationError::MissingSubstance {
+                role: FillMaterialRole::Water,
+            },
+        )?;
+        cap_batches.extend(
+            volume::water_boundary(map, water, level_height, fountains)?
+                .into_iter()
+                .map(|(key, mesh)| (key, Vec::new(), mesh)),
+        );
+        plan.curtains
+            .retain(|key, _| key.role != FillMaterialRole::Water);
+    }
     let role_colors = plan
         .roles
         .iter()
@@ -933,6 +955,8 @@ impl MaterialSet {
                 // Forest omits opaque water prisms; this is the water surface,
                 // not an overlay that should sort in front of other objects.
                 material.base.depth_bias = 0.0;
+                material.base.cull_mode = None;
+                material.base.double_sided = true;
             }
             materials.add(material)
         };
