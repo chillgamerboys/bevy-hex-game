@@ -137,6 +137,21 @@ def final_source(value, report, assets, revision):
         {"id": "foliage", "solid": True, "diggable": True, "color": Raw("(53,110,66,255)")}])
 
 
+
+def merge_catalog_ids(source, additions):
+    """Preserve the public manifest while maintaining its strict ID-set order."""
+    match = re.search(r"\bobjects\s*:\s*\[(.*?)\]", source, re.DOTALL)
+    if match is None:
+        raise ValueError("object catalog has no objects list")
+    # This authored field contains only quoted strings and a trailing comma.
+    # Read that JSON-compatible list, not arbitrary RON or private package data.
+    ids = json.loads("[" + match.group(1).rstrip().removesuffix(",") + "]")
+    if any(not isinstance(asset, str) for asset in ids):
+        raise ValueError("object catalog entries must be string IDs")
+    body = "\n" + "".join(f"        {ron(asset)},\n" for asset in sorted(set(ids) | set(additions))) + "    "
+    return source[:match.start(1)] + body + source[match.end(1):]
+
+
 def write_assets(outputs, styles):
     for path, text in sorted(outputs.items()):
         target = ROOT / path
@@ -144,10 +159,8 @@ def write_assets(outputs, styles):
         target.write_text(text)
     path = ROOT / "assets/art/object_catalog.ron"
     original = path.read_text()
-    additions = [p.removeprefix("assets/art/objects/").removesuffix(".ron") for p in sorted(outputs)]
-    additions = [asset for asset in additions if f'"{asset}"' not in original]
-    if additions:
-        path.write_text(original.replace("    ],", "".join(f'        "{asset}",\n' for asset in additions) + "    ],"))
+    additions = [p.removeprefix("assets/art/objects/").removesuffix(".ron") for p in outputs]
+    path.write_text(merge_catalog_ids(original, additions))
     path = ROOT / "assets/art/voxel_styles.ron"
     original = path.read_text()
     additions = {name: style for name, style in styles.items() if f'"{name}":' not in original}
