@@ -23,6 +23,10 @@ mod bot_baseline;
 mod bot_config;
 mod collision;
 mod controller;
+#[cfg(any(test, feature = "test-support"))]
+mod cpu_diagnostics;
+#[cfg(any(test, feature = "test-support"))]
+pub use cpu_diagnostics::{ArenaCpuPhase, ArenaCpuSnapshot, SteeringCpuCounters};
 mod creatures;
 mod encounter_config;
 mod encounters;
@@ -679,6 +683,8 @@ pub struct ArenaSession {
     battle_initial: Vec<BattleTeamSummary>,
     #[cfg(any(test, feature = "test-support"))]
     baseline_bot: Option<bot_baseline::Bot>,
+    #[cfg(any(test, feature = "test-support"))]
+    cpu: cpu_diagnostics::CpuDiagnostics,
 }
 
 impl Default for ArenaSession {
@@ -715,6 +721,8 @@ impl Default for ArenaSession {
             battle_initial: Vec::new(),
             #[cfg(any(test, feature = "test-support"))]
             baseline_bot: None,
+            #[cfg(any(test, feature = "test-support"))]
+            cpu: cpu_diagnostics::CpuDiagnostics::default(),
         }
     }
 }
@@ -807,6 +815,8 @@ impl ArenaSession {
         let bot_enabled = self.bot_enabled;
         #[cfg(any(test, feature = "test-support"))]
         let baseline = self.baseline_bot.is_some();
+        #[cfg(any(test, feature = "test-support"))]
+        let cpu_profiling = self.cpu.enabled;
         *self = Self {
             actors: vec![Actor::spawn(0, human, aim), Actor::spawn(1, bot, -aim)],
             generation: Some(generation),
@@ -816,6 +826,8 @@ impl ArenaSession {
             bot: Bot::default(),
             #[cfg(any(test, feature = "test-support"))]
             baseline_bot: baseline.then(bot_baseline::Bot::default),
+            #[cfg(any(test, feature = "test-support"))]
+            cpu: cpu_diagnostics::CpuDiagnostics::enabled(cpu_profiling),
             ..Default::default()
         };
         self.collision.refresh(world, geometry);
@@ -864,7 +876,11 @@ impl ArenaSession {
         materials: ArenaMaterials,
         tuning: &ArenaTuning,
     ) -> CommandsOut {
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.begin(world.revision);
         self.collision.refresh(world, geometry);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(ArenaCpuPhase::CollisionRefresh);
         let mut commands = CommandsOut::default();
         for effect in &mut self.effects {
             effect.age += STEP;

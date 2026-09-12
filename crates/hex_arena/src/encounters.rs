@@ -691,8 +691,16 @@ impl ArenaSession {
             .retain(|b| b.remaining > 0.0 && b.hp > 0.0);
         self.collision.sync_barriers(&self.encounter.barriers);
         self.prepare_worms(world, geometry);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::EncounterSetup);
         self.observe_parties(tuning);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::ObserveParties);
         self.advance_rally(world, geometry, tuning);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::Rally);
+        #[cfg(any(test, feature = "test-support"))]
+        let steering_scope = self.cpu.begin_brains();
         let mut brains = std::mem::take(&mut self.encounter.brains);
         let mut intents = BTreeMap::new();
         let mut plans = Vec::new();
@@ -747,6 +755,8 @@ impl ArenaSession {
                 }
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.finish_brains(steering_scope);
         let mut casts = Vec::new();
         let mut boosts = Vec::new();
         let human_id = self.human_actor_id();
@@ -835,7 +845,11 @@ impl ArenaSession {
         self.move_worms(&intents, world, geometry, materials, tuning, &mut out);
         self.separate_worms(world, geometry, materials, &mut out);
         self.refresh_worm_heads(world, geometry);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::MovementAndSeparation);
         self.advance_projectiles(world, geometry, materials, &mut out);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::Projectiles);
         self.advance_support(tuning, world.selection.map);
         // Existing incoming damage resolves before simultaneous new releases.
         casts.retain(|(id, _, _)| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
@@ -910,6 +924,8 @@ impl ArenaSession {
                 brain.active = None;
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.finish(self.tick);
         out
     }
 }

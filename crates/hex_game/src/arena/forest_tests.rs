@@ -158,17 +158,38 @@ struct TickPhaseSample {
     publish_ms: f64,
     simulate_ms: f64,
     terrain_changed: bool,
+    simulation: hex_arena::ArenaCpuSnapshot,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "Every measured encounter must publish its explicitly enabled CPU sample."
+)]
 fn phase_sample(app: &App, total_ms: f64, terrain_changed: bool) -> TickPhaseSample {
     let clock = app.world().resource::<TickPhaseClock>();
     assert_eq!(clock.completed, 3, "all phase markers must run each tick");
+    let session = app.world().resource::<ArenaSession>();
+    let simulation = session
+        .cpu_profile()
+        .expect("completed encounter CPU sample")
+        .clone();
+    assert_eq!(simulation.tick, session.tick);
+    assert_eq!(
+        simulation.world_revision,
+        app.world().resource::<ArenaTerrainView>().revision
+    );
+    assert_eq!(
+        simulation.phases_ms.len(),
+        8,
+        "every encounter CPU phase must be measured"
+    );
     TickPhaseSample {
         total_ms,
         apply_ms: clock.apply_ms,
         publish_ms: clock.publish_ms,
         simulate_ms: clock.simulate_ms,
         terrain_changed,
+        simulation,
     }
 }
 
@@ -180,17 +201,65 @@ fn phase_distributions(samples: &[TickPhaseSample]) -> serde_json::Value {
                 terrain_changed.is_none_or(|changed| sample.terrain_changed == changed)
             })
             .collect::<Vec<_>>();
+        let mut phases = BTreeMap::<hex_arena::ArenaCpuPhase, Vec<f64>>::new();
+        let mut counters = BTreeMap::<&str, u64>::new();
+        for sample in &selected {
+            for (phase, elapsed) in &sample.simulation.phases_ms {
+                phases.entry(*phase).or_default().push(*elapsed);
+            }
+            let c = &sample.simulation.steering;
+            for (name, value) in [
+                ("decisions", c.decisions),
+                ("deadline_decisions", c.deadline_decisions),
+                ("revision_decisions", c.revision_decisions),
+                ("displaced_decisions", c.displaced_decisions),
+                ("recovery_searches", c.recovery_searches),
+                ("detour_searches", c.detour_searches),
+                ("walk_probe_steps", c.walk_probe_steps),
+                ("descent_probe_steps", c.descent_probe_steps),
+                ("jump_probe_steps", c.jump_probe_steps),
+            ] {
+                *counters.entry(name).or_default() += u64::from(value);
+            }
+        }
+        let phases = phases
+            .into_iter()
+            .map(|(phase, values)| (phase, distribution(values)))
+            .collect::<BTreeMap<_, _>>();
         serde_json::json!({
             "arena_tick": distribution(selected.iter().map(|sample| sample.total_ms).collect()),
             "apply_terrain": distribution(selected.iter().map(|sample| sample.apply_ms).collect()),
             "publish_terrain": distribution(selected.iter().map(|sample| sample.publish_ms).collect()),
             "simulate": distribution(selected.iter().map(|sample| sample.simulate_ms).collect()),
+            "simulation_subphases": phases,
+            "steering_counter_totals": counters,
         })
+    };
+    let slowest = |changed| {
+        let mut selected = samples
+            .iter()
+            .filter(|sample| sample.terrain_changed == changed)
+            .collect::<Vec<_>>();
+        selected.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
+        selected
+            .iter()
+            .take(8)
+            .map(|sample| {
+                serde_json::json!({
+                    "arena_tick_ms": sample.total_ms,
+                    "simulate_ms": sample.simulate_ms,
+                    "terrain_changed": sample.terrain_changed,
+                    "simulation": sample.simulation,
+                })
+            })
+            .collect::<Vec<_>>()
     };
     serde_json::json!({
         "all": group(None),
         "terrain_changed": group(Some(true)),
         "terrain_unchanged": group(Some(false)),
+        "slowest_changed_ticks": slowest(true),
+        "slowest_unchanged_ticks": slowest(false),
     })
 }
 
@@ -473,6 +542,9 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
                 phase_simulated.after(ArenaSystems::Simulate),
             ),
         );
+    app.world_mut()
+        .resource_mut::<ArenaSession>()
+        .set_cpu_profiling(true);
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
     app.update();
     tick(&mut app);
@@ -649,6 +721,7 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
             "synthetic_changes":"extra player HP and two validated player visits; ordinary single contact shot triggers Troll rally; authored enemy stats and placements",
             "largest_camp":distribution(camp_samples),"rally":distribution(rally_samples),
             "phase_timing_scope":"Test-only ordered markers around ApplyTerrain, PublishTerrain and Simulate; CPU wall time includes marker/schedule overhead. Samples match the existing 600 camp and 2400 rally measured ticks after 120 warm-up ticks each. Revision and sample bookkeeping happen outside the total tick timer; no renderer, GPU or FPS claim.",
+            "simulation_diagnostic_scope":"Opt-in test-support session snapshots divide encounter CPU into collision refresh, setup, party observation, rally, brains, live movement/separation, projectiles and remaining resolution. Counters count actual look-ahead controller steps only during brains, with no per-step clocks; deadline and revision reasons may overlap. Timings include diagnostics overhead. Eight slowest changed and eight slowest unchanged ticks per workload retain matched phase/counter evidence; all reporting happens after measurement.",
             "phase_timings":{
                 "largest_camp":phase_distributions(&camp_phase_samples),
                 "rally":phase_distributions(&rally_phase_samples),
