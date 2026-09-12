@@ -1352,8 +1352,10 @@ fn capture_frame(
         Query<&Mesh3d, With<wisp::WispWindup>>,
     ),
     cameras: Query<&Transform, With<ArenaCamera>>,
-    liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
-    render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
+    render_context: (
+        Option<Res<hex_map::LiquidVisualTime>>,
+        Option<Res<hex_core::arena::ArenaRenderStatus>>,
+    ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
     worm_context: (
@@ -1363,6 +1365,7 @@ fn capture_frame(
         Res<hex_core::DamagedVoxels>,
     ),
 ) {
+    let (liquid_clock, render) = render_context;
     let Some(path) = state.capture.clone() else {
         return;
     };
