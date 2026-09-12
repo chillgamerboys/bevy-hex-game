@@ -38,7 +38,7 @@ pub(crate) struct SkyParams {
     pub moon_halo_strength: f32,
     pub lower_glow_angular_radius_radians: f32,
     pub lower_glow_strength: f32,
-    pub _padding: f32,
+    pub cloud_phase_seconds: f32,
 }
 
 /// Material that renders the procedural sky onto the dome.

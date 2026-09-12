@@ -9,6 +9,9 @@
 
 use bevy::prelude::*;
 
+/// Standalone fixed-time sky for Battle Mode without the tactical camera.
+pub mod battle_sky;
+
 /// Pan/orbit camera and the sky dome.
 pub mod camera;
 /// Adaptive tree fading and explicit review-only interior cutaways.

@@ -31,7 +31,7 @@ struct SkyParams {
     moon_halo_strength: f32,
     lower_glow_angular_radius_radians: f32,
     lower_glow_strength: f32,
-    _padding: f32,
+    cloud_phase_seconds: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyParams;
@@ -230,7 +230,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (horizontal_len > 1e-6) {
         radial = horizontal / horizontal_len;
     }
-    let p = radial * theta * sky.hex_scale;
+    let p = radial * theta * sky.hex_scale
+        + vec2<f32>(0.012, 0.004) * sky.cloud_phase_seconds;
 
     // Accumulate cloud density over the cell the pixel is in and its six neighbours,
     // so a cloud spanning several present cells is one continuous mass.
