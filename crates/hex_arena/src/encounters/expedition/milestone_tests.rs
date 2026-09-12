@@ -366,3 +366,77 @@ fn pickup_keeps_the_damage_and_mode_of_an_already_flying_contact_shot() {
             < 100.0
     );
 }
+
+#[test]
+fn elevated_death_does_not_leave_a_reward_on_an_unreachable_tree_crown() {
+    let (mut session, mut view, geometry, materials, _) = start();
+    let crown = TilePos::new(
+        HexCoord::from_world(*view.spawns.first().expect("bridge")),
+        50,
+    );
+    for coord in crown.coord.within_radius(2) {
+        view.voxels
+            .insert(TilePos::new(coord, crown.level), materials.stone);
+    }
+    view.revision += 1;
+    session.collision.refresh(&view, geometry);
+    let troll = session
+        .actors
+        .iter_mut()
+        .find(|a| a.expedition_role() == Some(ExpeditionRole::Troll))
+        .expect("Troll");
+    troll.feet = crown.coord.to_world(geometry.top(crown) + 4.0);
+    kill_role(&mut session, ExpeditionRole::Troll, false);
+    session.advance_milestones(&view, geometry);
+    let point = Vec3::from_array(
+        milestone(&session, ExpeditionReward::TrollDamage)
+            .available_position
+            .expect("reachable orb"),
+    );
+    let support = geometry
+        .voxel_at(point - Vec3::Y * (0.6 + SKIN * 2.0))
+        .expect("orb support");
+    assert!(view
+        .expedition
+        .as_ref()
+        .expect("sites")
+        .encounters
+        .values()
+        .any(|site| site.deployment.surfaces.contains(&support)));
+    assert!(point.y < geometry.top(crown) - 1.0);
+}
+
+#[test]
+fn shadow_capacity_is_not_healing_and_fountain_uses_the_new_capacity() {
+    let (mut session, mut view, geometry, materials, tuning) = start();
+    kill_role(&mut session, ExpeditionRole::MountainShadow, false);
+    session.advance_milestones(&view, geometry);
+    collect(
+        &mut session,
+        ExpeditionReward::ShadowVitality,
+        &view,
+        geometry,
+    );
+    let player = session.actors.first().expect("player");
+    assert!((player.hp - 100.0).abs() < 0.001);
+    assert!((player.max_hp - 125.0).abs() < 0.001);
+    session.tick = 10_000;
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    assert!((session.actors.first().expect("player").hp - 100.0).abs() < 0.001);
+    let (_, feet) = pool(&mut view, geometry);
+    session.actors.first_mut().expect("player").feet = feet;
+    session.advance_fountains(&view, geometry);
+    let player = session.actors.first().expect("player");
+    assert!((player.hp - 125.0).abs() < 0.001);
+    assert!((player.max_hp - 125.0).abs() < 0.001);
+    assert_eq!(
+        session
+            .expedition_progress()
+            .expect("snapshot")
+            .fountains
+            .iter()
+            .filter(|f| f.consumed)
+            .count(),
+        1
+    );
+}

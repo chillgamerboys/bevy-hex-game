@@ -234,18 +234,25 @@ impl ArenaSession {
             .iter()
             .map(|support| support.coord.to_world(geometry.top(*support) + SKIN))
             .collect();
-        // An ordinary death drops where it happened; a flying death first falls
-        // to actual dry support below. Authored candidate surfaces recover falls
-        // outside the region, underwater deaths, or terrain removed beneath a shot.
+        // Preserve exact placement when the death lies above a reachable authored
+        // surface. A tree crown or other isolated new platform must not trap the
+        // reward; those deaths settle on the nearest valid authored route or shelf.
         let drop = geometry.top(TilePos::new(hex_core::HexCoord::ORIGIN, geometry.max_level))
             - geometry.top(TilePos::new(hex_core::HexCoord::ORIGIN, geometry.min_level))
             + geometry.level_height;
-        if let Some(ground) = self.collision.ground(
-            origin + Vec3::Y * SKIN * 8.0,
-            crate::BODY_HEIGHT,
-            crate::BODY_RADIUS,
-            drop.max(1.0),
-        ) {
+        if let Some(ground) = self
+            .collision
+            .ground(
+                origin + Vec3::Y * SKIN * 8.0,
+                crate::BODY_HEIGHT,
+                crate::BODY_RADIUS,
+                drop.max(1.0),
+            )
+            .filter(|ground| {
+                let support = geometry.voxel_at(*ground - Vec3::Y * SKIN * 2.0);
+                support.is_some_and(|support| state.settlement_supports.contains(&support))
+            })
+        {
             candidates.push(ground);
         }
         candidates.sort_by(|a, b| {
