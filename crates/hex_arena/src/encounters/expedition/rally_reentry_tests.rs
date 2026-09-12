@@ -311,8 +311,10 @@ fn downhill_reentry_settles_across_budgets_before_admitting_the_route() {
     };
     let mut view = ArenaTerrainView::default();
     for coord in HexCoord::ORIGIN.within_radius(4) {
-        view.voxels
-            .insert(TilePos::new(coord, i32::from(coord.x() <= 0)), SubstanceId(1));
+        view.voxels.insert(
+            TilePos::new(coord, i32::from(coord.x() <= 0)),
+            SubstanceId(1),
+        );
     }
     let mut collision = CollisionWorld::default();
     collision.refresh(&view, geometry);

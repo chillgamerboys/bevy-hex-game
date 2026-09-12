@@ -366,15 +366,13 @@ mod tests {
                 session.expedition_progress()
             );
             assert_eq!(session.progress().expect("progress").total_xp, 0);
-            assert!(
-                camera(
-                    session,
-                    app.world().resource::<ArenaTerrainView>(),
-                    *app.world().resource::<ArenaVoxelGeometry>(),
-                    name
-                )
-                .is_some()
-            );
+            assert!(camera(
+                session,
+                app.world().resource::<ArenaTerrainView>(),
+                *app.world().resource::<ArenaVoxelGeometry>(),
+                name
+            )
+            .is_some());
         }
     }
 }

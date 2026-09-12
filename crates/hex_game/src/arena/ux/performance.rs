@@ -14,10 +14,10 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy::window::PrimaryWindow;
 use hex_arena::ArenaSession;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::{Page, UxState};
-use crate::arena::{ViewState, recording::Recorder};
+use crate::arena::{recording::Recorder, ViewState};
 
 const CAPACITY: usize = 512;
 const REPORT_INTERVAL: Duration = Duration::from_secs(5);
@@ -254,15 +254,13 @@ mod tests {
         };
         assert!(samples.observe(now, Some(phase()), 10.0).is_none());
         for frame in 1..50_u32 {
-            assert!(
-                samples
-                    .observe(
-                        now + Duration::from_millis(u64::from(frame) * 100),
-                        Some(phase()),
-                        100.0
-                    )
-                    .is_none()
-            );
+            assert!(samples
+                .observe(
+                    now + Duration::from_millis(u64::from(frame) * 100),
+                    Some(phase()),
+                    100.0
+                )
+                .is_none());
         }
         let report = samples
             .observe(now + Duration::from_secs(5), Some(phase()), 100.0)
@@ -287,11 +285,9 @@ mod tests {
         );
         assert_eq!(report.get("bevy_ui_postupdate_samples"), Some(&json!(50)));
         assert!(samples.retained.is_empty());
-        assert!(
-            samples
-                .observe(now + Duration::from_secs(6), Some(phase()), 100.0)
-                .is_none()
-        );
+        assert!(samples
+            .observe(now + Duration::from_secs(6), Some(phase()), 100.0)
+            .is_none());
     }
 
     #[test]
@@ -368,22 +364,16 @@ mod tests {
             let mut samples = Samples::default();
             samples.observe(start, Some(phase()), 1.0);
             samples.observe(start + Duration::from_secs(4), Some(phase()), 1.0);
-            assert!(
-                samples
-                    .observe(start + Duration::from_secs(5), Some(changed), 1.0)
-                    .is_none()
-            );
+            assert!(samples
+                .observe(start + Duration::from_secs(5), Some(changed), 1.0)
+                .is_none());
             assert!(samples.retained.is_empty());
-            assert!(
-                samples
-                    .observe(start + Duration::from_secs(9), Some(changed), 2.0)
-                    .is_none()
-            );
-            assert!(
-                samples
-                    .observe(start + Duration::from_secs(10), Some(changed), 2.0)
-                    .is_some()
-            );
+            assert!(samples
+                .observe(start + Duration::from_secs(9), Some(changed), 2.0)
+                .is_none());
+            assert!(samples
+                .observe(start + Duration::from_secs(10), Some(changed), 2.0)
+                .is_some());
             samples.observe(start + Duration::from_secs(11), None, 2.0);
             assert!(
                 samples
@@ -400,11 +390,9 @@ mod tests {
         let mut samples = Samples::default();
         samples.observe(start, Some(phase()), 1.0);
         for frame in 1..5000_u64 {
-            assert!(
-                samples
-                    .observe(start + Duration::from_millis(frame), Some(phase()), 250.0)
-                    .is_none()
-            );
+            assert!(samples
+                .observe(start + Duration::from_millis(frame), Some(phase()), 250.0)
+                .is_none());
             assert!(samples.retained.len() <= CAPACITY);
         }
         let report = samples

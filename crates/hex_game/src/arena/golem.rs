@@ -561,14 +561,12 @@ mod tests {
         }));
         for (pose, material, no_shadow) in segments {
             assert!(no_shadow);
-            assert!(
-                pose.transform_point(Vec3::NEG_Y * 0.5)
-                    .abs_diff_eq(beam.origin, 0.0001)
-            );
-            assert!(
-                pose.transform_point(Vec3::Y * 0.5)
-                    .abs_diff_eq(beam.end, 0.0001)
-            );
+            assert!(pose
+                .transform_point(Vec3::NEG_Y * 0.5)
+                .abs_diff_eq(beam.origin, 0.0001));
+            assert!(pose
+                .transform_point(Vec3::Y * 0.5)
+                .abs_diff_eq(beam.end, 0.0001));
             assert!(pose.scale.x <= beam.radius && pose.scale.z <= beam.radius);
             let is_core = &material == core;
             let material = materials.get(&material).expect("cached beam material");
