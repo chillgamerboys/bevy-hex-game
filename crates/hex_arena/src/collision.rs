@@ -2,10 +2,18 @@
 //! This cache consumes only the arena's world-owned complete voxel projection.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
+
+mod probe_cache;
+#[cfg(any(test, feature = "test-support"))]
+pub use probe_cache::ProbeCacheStats;
 
 #[cfg(test)]
 #[path = "collision_candidates_tests.rs"]
 mod candidate_tests;
+#[cfg(test)]
+#[path = "collision_probe_cache_tests.rs"]
+mod probe_cache_tests;
 
 use bevy_math::Vec3;
 use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
@@ -44,6 +52,7 @@ pub(crate) struct CollisionWorld {
     static_attack: HashMap<HexCoord, Vec<Span>>,
     barriers: Vec<crate::BarrierSnapshot>,
     pub min_y: f32,
+    probe_cache: probe_cache::ProbeCache,
 }
 
 #[derive(Clone, Copy)]
@@ -169,8 +178,26 @@ impl CollisionWorld {
             ring += 1;
             covered += FACE;
         }
-        let mut coords = HexCoord::from_world(start)
-            .line_between(HexCoord::from_world(end))
+        let start = HexCoord::from_world(start);
+        let end = HexCoord::from_world(end);
+        let key = probe_cache::Key { start, end, ring };
+        // Small movement queries repeat throughout body/landing probes. Long
+        // rays and nonmovement masks retain their original lazy query path.
+        let lookup = if matches!(kind, QueryKind::Movement) && ring <= 2 && start.distance(end) <= 1
+        {
+            self.probe_cache.lookup(key)
+        } else {
+            probe_cache::Lookup::Inactive
+        };
+        let cache_miss = match lookup {
+            probe_cache::Lookup::Hit(spans) => {
+                return probe_cache::Candidates::Cached { spans, next: 0 }
+            }
+            probe_cache::Lookup::Miss => true,
+            probe_cache::Lookup::Inactive => false,
+        };
+        let mut coords = start
+            .line_between(end)
             .into_iter()
             .flat_map(|coord| coord.within_radius(ring))
             .collect::<Vec<_>>();
@@ -181,13 +208,36 @@ impl CollisionWorld {
             QueryKind::Sight => &self.static_sight,
             QueryKind::Attack => &self.static_attack,
         };
-        coords.into_iter().flat_map(move |coord| {
+        let mut candidates = coords.into_iter().flat_map(move |coord| {
             [self.columns.get(&coord), extra.get(&coord)]
                 .into_iter()
                 .flatten()
                 .flatten()
                 .copied()
-        })
+        });
+        if !cache_miss {
+            return probe_cache::Candidates::Live(candidates);
+        }
+        let mut spans = Vec::new();
+        for span in candidates.by_ref() {
+            spans.push(span);
+            if spans.len() > probe_cache::MAX_ENTRY_SPANS {
+                #[cfg(any(test, feature = "test-support"))]
+                self.probe_cache.oversized();
+                return probe_cache::Candidates::Overflow {
+                    prefix: spans.into_iter(),
+                    rest: candidates,
+                };
+            }
+        }
+        let spans: Arc<[Span]> = spans.into();
+        self.probe_cache.insert(key, spans.clone());
+        probe_cache::Candidates::Cached { spans, next: 0 }
+    }
+
+    /// Memoize candidate lists only while this immutable world borrow is held.
+    pub(crate) fn probe_scope(&self) -> probe_cache::ProbeScope<'_> {
+        self.probe_cache.scope()
     }
 
     pub(crate) fn candidates(

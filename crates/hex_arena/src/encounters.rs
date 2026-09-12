@@ -701,6 +701,9 @@ impl ArenaSession {
         self.cpu.mark(crate::ArenaCpuPhase::Rally);
         #[cfg(any(test, feature = "test-support"))]
         let steering_scope = self.cpu.begin_brains();
+        // All brains read one immutable world; discard candidate memoization
+        // before live movement or any subsequent simulation phase.
+        let probe_scope = self.collision.probe_scope();
         let mut brains = std::mem::take(&mut self.encounter.brains);
         let mut intents = BTreeMap::new();
         let mut plans = Vec::new();
@@ -755,6 +758,9 @@ impl ArenaSession {
                 }
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.record_probe_cache(probe_scope.stats());
+        drop(probe_scope);
         #[cfg(any(test, feature = "test-support"))]
         self.cpu.finish_brains(steering_scope);
         let mut casts = Vec::new();

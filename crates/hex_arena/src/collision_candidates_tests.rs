@@ -108,19 +108,27 @@ fn query_cache_preserves_every_ordered_span_across_masks_radii_and_dirty_refresh
             view.dirty_columns.clear();
         }
         world.refresh(&view, geometry);
-        for (start, end) in [
-            (Vec3::ZERO, Vec3::ZERO),
-            (Vec3::new(0.8, 0.2, 0.45), Vec3::new(0.81, 1.2, 0.46)),
-            (Vec3::new(-8.0, 2.0, -4.0), Vec3::new(8.0, -1.0, 4.0)),
-            (Vec3::new(8.0, -1.0, 4.0), Vec3::new(-8.0, 2.0, -4.0)),
-        ] {
-            for radius in [0.0, 0.06, 0.25, FACE, 1.51, 2.7] {
-                for kind in [QueryKind::Movement, QueryKind::Sight, QueryKind::Attack] {
-                    assert_eq!(
-                        identities(world.candidates_for(start, end, radius, kind)),
-                        previous_candidates(&world, start, end, radius, kind)
-                    );
+        for cached in [false, true] {
+            let scope = cached.then(|| world.probe_scope());
+            for (start, end) in [
+                (Vec3::ZERO, Vec3::ZERO),
+                (Vec3::new(0.8, 0.2, 0.45), Vec3::new(0.81, 1.2, 0.46)),
+                (Vec3::new(-8.0, 2.0, -4.0), Vec3::new(8.0, -1.0, 4.0)),
+                (Vec3::new(8.0, -1.0, 4.0), Vec3::new(-8.0, 2.0, -4.0)),
+            ] {
+                for radius in [0.0, 0.06, 0.25, FACE, 1.51, 2.7] {
+                    for kind in [QueryKind::Movement, QueryKind::Sight, QueryKind::Attack] {
+                        for _ in 0..2 {
+                            assert_eq!(
+                                identities(world.candidates_for(start, end, radius, kind)),
+                                previous_candidates(&world, start, end, radius, kind)
+                            );
+                        }
+                    }
                 }
+            }
+            if let Some(scope) = scope {
+                assert!(scope.stats().hits > 0);
             }
         }
     }

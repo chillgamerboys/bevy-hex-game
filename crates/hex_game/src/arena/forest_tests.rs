@@ -203,11 +203,25 @@ fn phase_distributions(samples: &[TickPhaseSample]) -> serde_json::Value {
             .collect::<Vec<_>>();
         let mut phases = BTreeMap::<hex_arena::ArenaCpuPhase, Vec<f64>>::new();
         let mut counters = BTreeMap::<&str, u64>::new();
+        let mut cache = BTreeMap::<&str, u64>::new();
+        let mut peak_cache_entries = 0;
+        let mut peak_cache_spans = 0;
         for sample in &selected {
             for (phase, elapsed) in &sample.simulation.phases_ms {
                 phases.entry(*phase).or_default().push(*elapsed);
             }
             let c = &sample.simulation.steering;
+            let q = &sample.simulation.probe_cache;
+            for (name, value) in [
+                ("hits", q.hits),
+                ("misses", q.misses),
+                ("evictions", q.evictions),
+                ("oversized", q.oversized),
+            ] {
+                *cache.entry(name).or_default() += value;
+            }
+            peak_cache_entries = peak_cache_entries.max(q.peak_entries);
+            peak_cache_spans = peak_cache_spans.max(q.peak_spans);
             for (name, value) in [
                 ("decisions", c.decisions),
                 ("deadline_decisions", c.deadline_decisions),
@@ -233,6 +247,9 @@ fn phase_distributions(samples: &[TickPhaseSample]) -> serde_json::Value {
             "simulate": distribution(selected.iter().map(|sample| sample.simulate_ms).collect()),
             "simulation_subphases": phases,
             "steering_counter_totals": counters,
+            "probe_cache_totals": cache,
+            "probe_cache_peak_entries": peak_cache_entries,
+            "probe_cache_peak_spans": peak_cache_spans,
         })
     };
     let slowest = |changed| {

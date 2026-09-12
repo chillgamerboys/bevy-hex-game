@@ -63,6 +63,8 @@ pub struct ArenaCpuSnapshot {
     pub phases_ms: BTreeMap<ArenaCpuPhase, f64>,
     /// Exact counted look-ahead work in this tick's creature brain loop.
     pub steering: SteeringCpuCounters,
+    /// Exact small-movement candidate reuse within the same immutable brain loop.
+    pub probe_cache: crate::ProbeCacheStats,
 }
 
 #[derive(Debug, Default)]
@@ -112,6 +114,12 @@ impl CpuDiagnostics {
             }
         }
         self.mark(ArenaCpuPhase::Brains);
+    }
+
+    pub(crate) fn record_probe_cache(&mut self, stats: crate::ProbeCacheStats) {
+        if let Some(snapshot) = self.snapshot.as_mut() {
+            snapshot.probe_cache = stats;
+        }
     }
 
     pub(crate) fn finish(&mut self, tick: u64) {

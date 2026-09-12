@@ -22,6 +22,8 @@ mod bot;
 mod bot_baseline;
 mod bot_config;
 mod collision;
+#[cfg(any(test, feature = "test-support"))]
+pub use collision::ProbeCacheStats;
 mod controller;
 #[cfg(any(test, feature = "test-support"))]
 mod cpu_diagnostics;
