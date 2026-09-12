@@ -1734,6 +1734,9 @@ fn capture_frame(
         ("paused", serde_json::json!(state.paused)),
         ("progress", serde_json::json!(session.progress())),
         ("expedition", serde_json::json!(session.expedition_progress())),
+        ("package_identity", serde_json::json!(view.package_identity)),
+        ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
+        ("expedition_rally", serde_json::json!(session.expedition_rally_status())),
         ("player_tuning", serde_json::json!(session.player_tuning(&tuning))),
         ("terminal_menu_fixture", serde_json::json!(matches!(state.capture_view.as_str(), "terminal-win" | "terminal-defeat").then_some("synthetic-knockout-for-menu-presentation"))),
         ("terminal_menu_outcome", serde_json::json!(session.outcome.map(|outcome| match outcome {

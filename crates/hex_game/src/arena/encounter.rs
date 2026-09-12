@@ -821,6 +821,7 @@ pub(super) fn camera(
                 Some("dragon_upper") => (Vec3::new(-150.0, 90.0, 160.0), -18.0),
                 Some("dragon_lower" | "dragon_middle") => (Vec3::new(55.0, 38.0, 60.0), 0.0),
                 Some("mountain_shadow") => (Vec3::new(-30.0, 28.0, 34.0), 2.0),
+                Some(name) if name.contains("_fountain_") => (Vec3::new(6.0, 4.0, 7.0), 0.0),
                 Some("forest_deep_a" | "forest_deep_b") => (Vec3::new(55.0, 45.0, 60.0), 12.0),
                 Some("forest_middle") => (Vec3::new(35.0, 30.0, 40.0), 6.0),
                 _ => (Vec3::new(24.0, 21.0, 28.0), 3.0),

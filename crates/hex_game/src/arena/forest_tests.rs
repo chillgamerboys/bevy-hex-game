@@ -44,6 +44,10 @@ fn roster(app: &App) -> Vec<(ActorId, Species, Vec3)> {
         .collect()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "A failed authored visit must fail this explicit CPU fixture."
+)]
 fn visit(app: &mut App, representative: ActorId, home: Vec3, previous: Option<Vec3>) -> Vec3 {
     let (feet, aim) = {
         let session = app.world().resource::<ArenaSession>();

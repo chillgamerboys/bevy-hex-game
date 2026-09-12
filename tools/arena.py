@@ -129,6 +129,11 @@ EXPEDITION_VIEWS = (
     ("forest-fountain", "forest-landmark", "forest-massif", "dragon", "forest_fountain_01"),
     ("mountain-fountain", "forest-landmark", "forest-massif", "dragon", "mountain_fountain_02"),
     ("expedition-upgrades", "tuning", "forest-massif", "dragon", None),
+    ("troll-reward-orb", "expedition-orb-troll", "forest-massif", "dragon", None),
+    ("dragon-reward-orb", "expedition-orb-dragon", "forest-massif", "dragon", None),
+    ("shadow-reward-orb", "expedition-orb-shadow", "forest-massif", "dragon", None),
+    ("shadow-reward-collected", "expedition-shadow-collected", "forest-massif", "dragon", None),
+    ("fountain-spent", "expedition-fountain-spent", "forest-massif", "dragon", None),
 )
 
 PERFORMANCE_VIEWS = (
@@ -985,7 +990,7 @@ def capture(args: argparse.Namespace) -> int:
         if any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
             raise RuntimeError("Forest review uses the fixed authored map and roster; use --view to select entries.")
         entries = list(EXPEDITION_VIEWS if args.expedition_review else FOREST_VIEWS)
-        matrix = "forest-expedition-v1" if args.expedition_review else "forest-massif-v1"
+        matrix = "forest-expedition-v2-rewards" if args.expedition_review else "forest-massif-v1"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -1038,6 +1043,7 @@ def capture(args: argparse.Namespace) -> int:
         "scenario_correction": "Worm buried view requires actual Travel plus published head-center earth. Conversion view uses ordinary Duel Worm/Goblins and waits for a correlated exposed dirt top after actor body and surface decoration clear it; Fort retains the ordinary reset comparison. Windup uses the exposed physical head warning material." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards. Fort Stone Swipe uses ordinary player Shield taps and medium-range movement after the dry gate route; actual Golem policy must choose the recovery attack." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
         "forest_package": package,
+        "expedition_fixture_note": "Reward and spent-fountain rows explicitly stage enemy HP or player position/HP; ordinary ticks resolve the public snapshot. These are presentation fixtures, not naturally earned XP/combat or native camera evidence." if args.expedition_review else None,
         "terminal_menu_note": "terminal-win/terminal-defeat explicitly set fixture HP to zero; normal authority computes the result and opens the menu. These rows establish presentation only, not naturally won/lost combat." if any(row[1].startswith("terminal-") for row in entries) else None,
         "logical_canvas": CANVAS, "device_scale": 1.0,
         "changed_surfaces": ["layered forest canopy and roots", "arched bridge and decorated Shadow arena", "mountain shelves and curved river", "milestone spheres and finite fountain glow", "afternoon lighting", "115-actor role presentation", "progression HUD and upgrades"] if args.expedition_review else ["V4 Forest Massif terrain", "Grand palette and lighting", "fixed enemy roster", "progression HUD", "upgrade menu"] if args.forest_review else ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
@@ -1157,7 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
     review.add_argument("--forest-review", action="store_true", help="Ten fixed Forest Massif map, biome, giant tree, bridge, massif and upgrade menu views.")
-    review.add_argument("--expedition-review", action="store_true", help="Twenty-one expedition map, ground, bridge, Heart, Dragon, Shadow, fountain and HUD views.")
+    review.add_argument("--expedition-review", action="store_true", help="Twenty-six expedition map, ground, bridge, Heart, Dragon, Shadow, fountain, reward and HUD views; reward states are explicit synthetic presentation fixtures.")
     review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
     review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and R-key reset views.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
