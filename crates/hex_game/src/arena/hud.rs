@@ -1,5 +1,6 @@
 //! Small native combat HUD and paused parameter controls.
 
+use super::ux::set_display;
 use super::{spectator, ViewState};
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
@@ -381,53 +382,64 @@ pub(super) fn update(
     let battle = battle.as_deref().cloned().unwrap_or_default();
     let observing = spectator::active(&session);
     for (content, mut node) in &mut mode_contents {
-        node.display = if content.0 == battle.control && selection.map != ArenaMap::ForestMassif {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        set_display(
+            &mut node,
+            if content.0 == battle.control && selection.map != ArenaMap::ForestMassif {
+                Display::Flex
+            } else {
+                Display::None
+            },
+        );
     }
     for (action, mut color, mut node) in &mut choices {
         if let Action::Change(index, direction) = action {
             if run.is_some() {
                 let stat = upgrade_stat(*index);
-                node.display = if *direction > 0.0 && stat.is_some() {
-                    Display::Flex
-                } else {
-                    Display::None
-                };
-                *color = BackgroundColor(if stat.is_some_and(|stat| session.can_upgrade(stat)) {
-                    Color::srgb(0.16, 0.40, 0.43)
-                } else {
-                    Color::srgb(0.12, 0.15, 0.18)
-                });
+                set_display(
+                    &mut node,
+                    if *direction > 0.0 && stat.is_some() {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    },
+                );
+                color.set_if_neq(BackgroundColor(
+                    if stat.is_some_and(|stat| session.can_upgrade(stat)) {
+                        Color::srgb(0.16, 0.40, 0.43)
+                    } else {
+                        Color::srgb(0.12, 0.15, 0.18)
+                    },
+                ));
             } else {
-                node.display = Display::Flex;
-                *color = BackgroundColor(Color::srgb(0.14, 0.21, 0.26));
+                set_display(&mut node, Display::Flex);
+                color.set_if_neq(BackgroundColor(Color::srgb(0.14, 0.21, 0.26)));
             }
             continue;
         }
         if matches!(action, Action::Control(ArenaControl::Spectator)) {
-            node.display = if selection.map == ArenaMap::ForestMassif {
-                Display::None
-            } else {
-                Display::Flex
-            };
+            set_display(
+                &mut node,
+                if selection.map == ArenaMap::ForestMassif {
+                    Display::None
+                } else {
+                    Display::Flex
+                },
+            );
         }
         if matches!(action, Action::Start) {
-            *color = BackgroundColor(if pending > 0 {
+            color.set_if_neq(BackgroundColor(if pending > 0 {
                 Color::srgb(0.12, 0.15, 0.18)
             } else {
                 Color::srgb(0.16, 0.37, 0.41)
-            });
+            }));
             continue;
         }
         if matches!(action, Action::Resume) {
-            *color = BackgroundColor(if session.is_finished() || pending > 0 {
+            color.set_if_neq(BackgroundColor(if session.is_finished() || pending > 0 {
                 Color::srgb(0.12, 0.15, 0.18)
             } else {
                 Color::srgb(0.16, 0.37, 0.41)
-            });
+            }));
             continue;
         }
         let selected = match action {
@@ -444,11 +456,11 @@ pub(super) fn update(
             }
             _ => continue,
         };
-        *color = BackgroundColor(if selected {
+        color.set_if_neq(BackgroundColor(if selected {
             Color::srgb(0.16, 0.40, 0.43)
         } else {
             Color::srgb(0.11, 0.16, 0.20)
-        });
+        }));
     }
     let actor = session
         .human_actor_id()
@@ -456,15 +468,18 @@ pub(super) fn update(
     let forest_knocked_out =
         run.is_some() && session.is_finished() && actor.is_some_and(|actor| actor.hp <= 0.0);
     for (mut node, pause, start, combat, observer) in &mut panels {
-        node.display = if (pause && state.paused && state.started)
-            || (start && !state.started)
-            || (combat && state.started && !state.paused && !observing)
-            || (observer && state.started && observing)
-        {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        set_display(
+            &mut node,
+            if (pause && state.paused && state.started)
+                || (start && !state.started)
+                || (combat && state.started && !state.paused && !observing)
+                || (observer && state.started && observing)
+            {
+                Display::Flex
+            } else {
+                Display::None
+            },
+        );
     }
     let size_name = |index| {
         ["Compact", "Standard", "Large"]
@@ -473,7 +488,7 @@ pub(super) fn update(
             .unwrap_or("Standard")
     };
     for (label, mut text) in &mut labels {
-        text.0 = match label {
+        let next = match label {
             Label::WindowMode => if windows.iter().next().is_some_and(|w| w.mode != WindowMode::Windowed) {"Windowed".into()} else {"Fullscreen".into()},
             Label::MenuTitle if forest_knocked_out => "RUN ENDED / KNOCKED OUT".into(),
             Label::MenuTitle if session.completed_run() => "VICTORY / EXPLORE THE MAP".into(),
@@ -613,16 +628,19 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 _ => String::new(),
             },
         };
+        if text.0 != next {
+            text.0 = next;
+        }
     }
     let feedback = session.combat_feedback(&tuning);
     for (card, mut border) in &mut cards {
         let Some(spell) = feedback.spells.get(card.0) else {
             continue;
         };
-        *border = BorderColor::all(match spell.state {
+        border.set_if_neq(BorderColor::all(match spell.state {
             hex_arena::SpellAvailabilityState::Ready => Color::srgb(0.4, 0.9, 0.8),
             hex_arena::SpellAvailabilityState::Charging => Color::srgb(1.0, 0.75, 0.32),
             _ => MUTED,
-        });
+        }));
     }
 }

@@ -404,6 +404,9 @@ pub(super) fn controls(
             }
         })
         .sum::<f32>();
+    if dy.abs() <= f32::EPSILON {
+        return;
+    }
     for (mut scroll, node) in &mut scrolls {
         if node.size().y > 0.0 {
             let max =
@@ -560,15 +563,18 @@ fn present_map(
         .as_ref()
         .is_some_and(|o| o.width > 0 && !o.rgba.is_empty());
     for mut node in &mut minis {
-        node.display = if valid && ux.map_visible && !state.paused {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        set_display(
+            &mut node,
+            if valid && ux.map_visible && !state.paused {
+                Display::Flex
+            } else {
+                Display::None
+            },
+        );
     }
     let Some(overview) = overview.filter(|o| !o.rgba.is_empty()) else {
         for (_, mut image, mut node) in &mut canvases {
-            node.display = Display::None;
+            set_display(&mut node, Display::None);
             image.image = Handle::default();
         }
         if let Some(handle) = ux.image.take() {
@@ -576,12 +582,12 @@ fn present_map(
         }
         ux.image_generation = None;
         for (_, mut node, _, _) in &mut dots {
-            node.display = Display::None;
+            set_display(&mut node, Display::None);
         }
         return;
     };
     for (_, _, mut node) in &mut canvases {
-        node.display = Display::Flex;
+        set_display(&mut node, Display::Flex);
     }
     if overview.is_changed()
         || ux.image_generation != Some(overview.generation)
@@ -654,13 +660,21 @@ fn present_map(
     for (dot, mut node, mut text, mut color) in &mut dots {
         if let Some(Some((position, glyph, c))) = markers.get(dot.0) {
             let f = coordinates(&overview, *position);
-            node.left = percent(f.x * 100.0);
-            node.top = percent(f.y * 100.0);
-            node.display = Display::Flex;
-            text.0 = (*glyph).into();
-            color.0 = *c;
+            let left = percent(f.x * 100.0);
+            let top = percent(f.y * 100.0);
+            if node.left != left {
+                node.left = left;
+            }
+            if node.top != top {
+                node.top = top;
+            }
+            set_display(&mut node, Display::Flex);
+            if text.0 != *glyph {
+                text.0 = (*glyph).into();
+            }
+            color.set_if_neq(TextColor(*c));
         } else {
-            node.display = Display::None;
+            set_display(&mut node, Display::None);
         }
     }
     ux.present_micros = start.elapsed().as_secs_f64() * 1e6;
@@ -695,11 +709,11 @@ fn present_feedback(
     }
     ux.flash = (ux.flash - time.delta_secs()).max(0.0);
     for mut c in &mut reticles {
-        c.0 = if ux.flash > 0.0 {
+        c.set_if_neq(TextColor(if ux.flash > 0.0 {
             Color::srgb(1.0, 0.8, 0.3)
         } else {
             Color::WHITE
-        };
+        }));
     }
     for (fill, mut node, mut color) in &mut fills {
         let Some(s) = feedback.spells.get(fill.0) else {
@@ -714,11 +728,14 @@ fn present_feedback(
             SpellAvailabilityState::Charging => (s.charge_fraction, Color::srgb(1.0, 0.75, 0.32)),
             SpellAvailabilityState::Unavailable => (0.0, Color::srgb(0.35, 0.4, 0.46)),
         };
-        node.width = percent(fraction * 100.0);
-        color.0 = c;
+        let width = percent(fraction * 100.0);
+        if node.width != width {
+            node.width = width;
+        }
+        color.set_if_neq(BackgroundColor(c));
     }
     for (icon, mut c) in &mut icons {
-        c.color = if feedback
+        let next = if feedback
             .spells
             .get(icon.0)
             .is_some_and(|spell| spell.state == SpellAvailabilityState::CoolingDown)
@@ -727,6 +744,9 @@ fn present_feedback(
         } else {
             Color::WHITE
         };
+        if c.color != next {
+            c.color = next;
+        }
     }
 }
 fn present_menus(
@@ -742,23 +762,32 @@ fn present_menus(
     mut borders: Query<(Entity, &mut BorderColor, Option<&UxAction>), With<Button>>,
 ) {
     let height = windows.single().map_or(1080.0, Window::height);
-    scale.0 = (height / 1080.0).clamp(2.0 / 3.0, 2.0) * ux.scale;
+    let next_scale = (height / 1080.0).clamp(2.0 / 3.0, 2.0) * ux.scale;
+    if scale.0.to_bits() != next_scale.to_bits() {
+        scale.0 = next_scale;
+    }
     for (page, mut node) in &mut pages {
-        node.display = if ux.page == page.0 {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        set_display(
+            &mut node,
+            if ux.page == page.0 {
+                Display::Flex
+            } else {
+                Display::None
+            },
+        );
     }
     let feedback = session.combat_feedback(&tuning);
     for (label, mut text, mut node) in &mut labels {
         let next = match label {
             UxLabel::Notice => {
-                node.display = if ux.notice_remaining > 0.0 {
-                    Display::Flex
-                } else {
-                    Display::None
-                };
+                set_display(
+                    &mut node,
+                    if ux.notice_remaining > 0.0 {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    },
+                );
                 ux.notice.clone()
             }
             UxLabel::Target => feedback.target.as_ref().map_or(String::new(), |t| {
@@ -775,11 +804,14 @@ fn present_menus(
                 format!("{name}  {pips}  {condition}")
             }),
             UxLabel::Recording => {
-                node.display = if recorder.as_ref().is_some_and(|r| r.is_recording()) {
-                    Display::Flex
-                } else {
-                    Display::None
-                };
+                set_display(
+                    &mut node,
+                    if recorder.as_ref().is_some_and(|r| r.is_recording()) {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    },
+                );
                 recorder.as_ref().map_or(String::new(), |r| {
                     let secs = std::time::Duration::from_secs_f64(r.elapsed_seconds()).as_secs();
                     format!("● REC  {:02}:{:02}", secs / 60, secs % 60)
@@ -869,13 +901,13 @@ fn present_menus(
     }
     for (entity, mut border, action) in &mut borders {
         if ux.focus == Some(entity) && state.paused {
-            *border = BorderColor::all(Color::srgb(1.0, 0.8, 0.3));
+            border.set_if_neq(BorderColor::all(Color::srgb(1.0, 0.8, 0.3)));
         } else if action
             .is_some_and(|action| matches!(action,UxAction::Page(page) if *page == ux.page))
         {
-            *border = BorderColor::all(Color::srgb(0.4, 0.9, 0.8));
+            border.set_if_neq(BorderColor::all(Color::srgb(0.4, 0.9, 0.8)));
         } else {
-            *border = BorderColor::all(Color::NONE);
+            border.set_if_neq(BorderColor::all(Color::NONE));
         }
     }
 }
@@ -887,15 +919,24 @@ fn reflow(
 ) {
     let compact = ux.scale >= 1.75;
     for mut node in &mut panels {
-        node.padding = UiRect::all(px(if compact { 16 } else { 24 }));
-        node.row_gap = px(if compact { 8 } else { 14 });
+        let padding = UiRect::all(px(if compact { 16 } else { 24 }));
+        let gap = px(if compact { 8 } else { 14 });
+        if node.padding != padding {
+            node.padding = padding;
+        }
+        if node.row_gap != gap {
+            node.row_gap = gap;
+        }
     }
     for mut node in &mut helpers {
-        node.display = if compact {
-            Display::None
-        } else {
-            Display::Flex
-        };
+        set_display(
+            &mut node,
+            if compact {
+                Display::None
+            } else {
+                Display::Flex
+            },
+        );
     }
 }
 fn begin_timing(mut ux: ResMut<UxState>) {
@@ -909,5 +950,12 @@ fn end_timing(mut ux: ResMut<UxState>) {
             ux.timing_samples.pop_front();
         }
         ux.timing_samples.push_back(micros);
+    }
+}
+
+/// Avoid invalidating Bevy layout for unchanged visibility.
+pub(super) fn set_display(node: &mut Mut<Node>, display: Display) {
+    if node.display != display {
+        node.display = display;
     }
 }
