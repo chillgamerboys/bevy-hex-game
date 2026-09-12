@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Reproduce or verify the complete expedition through the supported world CLI.
 
-Build the compiler explicitly with tools/world.py first. This command never
-invokes Cargo, reads private package files, or changes the legacy Forest source.
+Compile/verify use an explicitly built compiler. The launch-only ensure command
+builds a missing compiler/package once in an isolated target. No command reads
+private package files or changes the legacy Forest source.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,8 +18,61 @@ from forest_expedition import document, site_document
 from forest_finish import compose, final_source
 from forest_verify import verify
 from forest_world import ROOT, Raw, ron
+import world as world_tool
 
 CONTENT = ROOT / "assets/config/v4/forest-massif/expedition"
+DEFAULT_OUTPUT = CONTENT / "compiled"
+DEFAULT_TARGET = ROOT / "target/v4-authoring"
+
+
+def package_ready(output: Path, generation: dict) -> bool:
+    """Cheap launch preflight; the runtime still validates all authoritative bytes.
+
+    Require both public compiler and content verification receipts from the
+    reviewed generation, plus the runtime pointer and exact companion. Missing,
+    stale or interrupted publication rebuilds; no full survey runs on a ready map.
+    """
+    try:
+        if not all((output / name).is_file() for name in
+                   ("current.ron", "arena-sites.ron", "compile-receipt.json", "content-verification.json")):
+            return False
+        if any((output / name).stat().st_size == 0 for name in ("current.ron", "arena-sites.ron")):
+            return False
+        compiled = json.loads((output / "compile-receipt.json").read_text())
+        verified = json.loads((output / "content-verification.json").read_text())
+        fingerprint = generation["package_fingerprint"]
+        return (compiled.get("strict") is True
+                and compiled.get("package_fingerprint") == fingerprint
+                and verified.get("version") == 1
+                and verified.get("world_id") == generation["world_id"]
+                and verified.get("manifest_fingerprint") == int(fingerprint, 16))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def ensure_package(target: Path, output: Path, scratch: Path) -> bool:
+    """Prepare the implicit expedition only when its reviewed package is missing.
+
+    Child Cargo always gets a separate authoring target, including cargo metadata;
+    it must never inherit the running app's build target or lock.
+    """
+    generation = json.loads((CONTENT / "generation.json").read_text())
+    if package_ready(output, generation):
+        return False
+    target = target.resolve()
+    env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2")
+    print("Preparing the reviewed Forest Expedition package for the first launch…", flush=True)
+    try:
+        world_tool.checked_binary(target)
+    except (OSError, ValueError):
+        subprocess.run([sys.executable, str(ROOT / "tools/world.py"), "--target-dir", str(target), "build"],
+                       cwd=ROOT, env=env, check=True)
+    subprocess.run([sys.executable, str(ROOT / "tools/forest_package.py"), "compile",
+                    "--target-dir", str(target), "--output", str(output), "--scratch", str(scratch)],
+                   cwd=ROOT, env=env, check=True)
+    if not package_ready(output, generation):
+        raise ValueError("Forest package preparation did not publish the reviewed expedition; launch stopped")
+    return True
 
 
 def run_world(target, *args):
@@ -27,11 +82,14 @@ def run_world(target, *args):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command",choices=("compile","verify"))
-    parser.add_argument("--target-dir",type=Path,default=ROOT/"target")
-    parser.add_argument("--output",type=Path,default=CONTENT/"compiled")
+    parser.add_argument("command",choices=("compile","verify","ensure"))
+    parser.add_argument("--target-dir",type=Path,default=DEFAULT_TARGET)
+    parser.add_argument("--output",type=Path,default=DEFAULT_OUTPUT)
     parser.add_argument("--scratch",type=Path,default=ROOT/".context/expedition-reproduction")
     args=parser.parse_args()
+    if args.command == "ensure":
+        ensure_package(args.target_dir, args.output, args.scratch)
+        return
     args.scratch.mkdir(parents=True,exist_ok=True)
     generation=json.loads((CONTENT/"generation.json").read_text())
     terrain,_=document(raw=Raw,ron=ron)

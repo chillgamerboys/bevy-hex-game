@@ -183,11 +183,11 @@ pub(super) fn build(
 ) -> Result<worlds::WorldRecipe, String> {
     let path = std::env::var_os("HEX_FOREST_WORLD")
         .map(PathBuf::from)
-        .unwrap_or_else(|| asset_root().join("assets/config/v4/forest-massif/compiled"));
+        .unwrap_or_else(|| asset_root().join("assets/config/v4/forest-massif/expedition/compiled"));
     let source = Arc::new(
         FileChunkSource::open_workspace(&path, IoLimits::default()).map_err(|error| {
             format!(
-                "Forest V4 package {}: {error}. Run python3 tools/forest_world.py compile.",
+                "Forest V4 package {}: {error}. Run python3 tools/forest_package.py compile (or ensure to build missing prerequisites).",
                 path.display()
             )
         })?,
@@ -768,7 +768,7 @@ mod tests {
     /// Full authored fixture test is explicit so ordinary small arena checks do
     /// not quietly depend on an operator's generated world workspace.
     #[test]
-    #[ignore = "requires python3 tools/forest_world.py compile; run explicitly for delivery"]
+    #[ignore = "requires HEX_FOREST_WORLD pointing to the legacy package built by tools/forest_world.py compile"]
     fn authored_forest_publication_and_v4_edit_roundtrip() {
         let content = load_content().expect("accepted content");
         let selection = ArenaSelection {

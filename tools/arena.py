@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_FOREST_PACKAGE = ROOT / "assets/config/v4/forest-massif/expedition/compiled"
 LOCAL_TARGET = Path(
     "/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/"
     "work/cargo-target-explore"
@@ -298,7 +299,7 @@ def source_state() -> tuple[dict, bytes, bytes]:
 def environment(target: Path) -> tuple[dict[str, str], list[str]]:
     """Discard inherited game capabilities; only this invocation may opt them in."""
     env = dict(os.environ)
-    removed = sorted(key for key in env if key.startswith("HEX_"))
+    removed = sorted(key for key in env if key.startswith("HEX_") and key != "HEX_FOREST_WORLD")
     for key in removed:
         del env[key]
     # Let .cargo/config.toml supply the checkout's asset root, even from Finder.
@@ -406,6 +407,20 @@ def forest_package_state(directory: Path) -> dict:
     except ValueError as error:
         raise RuntimeError("Invalid compiler package fingerprint.") from error
     return {"directory": str(directory), "manifest_fingerprint": manifest_fingerprint, "files": files}
+
+
+def prepare_forest_package(env: dict[str, str]) -> Path:
+    """Honor explicit packages; reproducibly prepare only the implicit default."""
+    if "HEX_FOREST_WORLD" in env:
+        return Path(env["HEX_FOREST_WORLD"])
+    target = ROOT / "target/v4-authoring"
+    if Path(env.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() == target.resolve():
+        target /= "forest-bootstrap"
+    compiler_env = dict(env, CARGO_TARGET_DIR=str(target), CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2")
+    subprocess.run([sys.executable, str(ROOT / "tools/forest_package.py"), "ensure",
+                    "--target-dir", str(target)], cwd=ROOT, env=compiler_env, check=True)
+    env["HEX_FOREST_WORLD"] = str(DEFAULT_FOREST_PACKAGE)
+    return DEFAULT_FOREST_PACKAGE
 
 
 def validate_forest_package(state: dict, package: dict, previous: dict | None) -> dict:
@@ -1020,7 +1035,7 @@ def capture(args: argparse.Namespace) -> int:
         env["HEX_FOREST_WORLD"] = str(args.forest_world)
     package = None
     if any(entry[2] == "forest-massif" for entry in entries):
-        directory = Path(env.get("HEX_FOREST_WORLD", ROOT / "assets/config/v4/forest-massif/compiled"))
+        directory = prepare_forest_package(env)
         package = forest_package_state(directory)
         env["HEX_FOREST_WORLD"] = package["directory"]
     initial, staged, unstaged = source_state()
@@ -1196,6 +1211,8 @@ def main(argv: list[str] | None = None) -> int:
             if (args.map or "forest-massif") != "forest-massif":
                 raise RuntimeError("--forest-world requires the Forest map.")
             env["HEX_FOREST_WORLD"] = str(args.forest_world)
+        if (args.map or "forest-massif") == "forest-massif":
+            prepare_forest_package(env)
         env.update(battle_env)
         env.update(HEX_ARENA_MAP=args.map or "forest-massif", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)

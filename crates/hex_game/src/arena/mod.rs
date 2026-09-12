@@ -1,5 +1,6 @@
 //! Native composition for isolated Battle Mode, launched through the menu or `--arena`.
 
+mod bootstrap;
 mod cast_input;
 mod encounter;
 mod expedition;
@@ -376,6 +377,10 @@ pub fn run() -> AppExit {
     if let Err(error) =
         wisp::validate_stress_setup(capture, &state.capture_view, selection.map, &battle)
     {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
+    if let Err(error) = bootstrap::prepare_default(selection.map) {
         eprintln!("{error}");
         return AppExit::error();
     }
