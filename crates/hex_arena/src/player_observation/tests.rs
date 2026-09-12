@@ -189,15 +189,15 @@ fn projected_size_threshold_is_eight_pixels_and_sampling_is_frame_rate_independe
     for dt in [1.0 / 30.0, 1.0 / 60.0, 1.0 / 120.0] {
         let (mut session, view, geometry, observation) = fixture();
         let mut elapsed = 0.0;
-        while elapsed + dt < 0.29 {
+        while elapsed + dt < 0.49 {
             session.observe_player(&view, geometry, observation, dt);
             elapsed += dt;
         }
         assert!(
             session.discovered_landmarks().is_empty(),
-            "less than .3 seconds cannot discover a marker"
+            "less than .5 seconds cannot discover a marker"
         );
-        while elapsed < 0.4 {
+        while elapsed < 0.6 {
             session.observe_player(&view, geometry, observation, dt);
             elapsed += dt;
         }
@@ -206,9 +206,9 @@ fn projected_size_threshold_is_eight_pixels_and_sampling_is_frame_rate_independe
 }
 
 #[test]
-fn discovery_requires_three_distinct_samples_and_resets_dwell_after_occlusion() {
+fn discovery_requires_five_distinct_samples_and_resets_dwell_after_occlusion() {
     let (mut session, mut view, geometry, observation) = fixture();
-    sample(&mut session, &view, geometry, observation, 2);
+    sample(&mut session, &view, geometry, observation, 4);
     assert!(session.discovered_landmarks().is_empty());
     sample(&mut session, &view, geometry, observation, 1);
     let found = session.discovered_landmarks();
@@ -227,7 +227,7 @@ fn discovery_requires_three_distinct_samples_and_resets_dwell_after_occlusion() 
     session
         .player_knowledge
         .register_actor(session.actors.get(1).expect("shadow"), "mountain_shadow");
-    sample(&mut session, &view, geometry, observation, 2);
+    sample(&mut session, &view, geometry, observation, 4);
     let wall: Vec<_> = view
         .voxels
         .keys()
@@ -256,7 +256,7 @@ fn discovery_requires_three_distinct_samples_and_resets_dwell_after_occlusion() 
         }
     }
     view.revision += 1;
-    sample(&mut session, &view, geometry, observation, 2);
+    sample(&mut session, &view, geometry, observation, 4);
     assert!(session.discovered_landmarks().is_empty());
     sample(&mut session, &view, geometry, observation, 1);
     assert_eq!(session.discovered_landmarks().len(), 1);
@@ -307,7 +307,7 @@ fn discovery_rejects_small_offscreen_inactive_and_invalid_observations() {
 #[test]
 fn hidden_movement_health_and_uncredited_death_do_not_update_memory() {
     let (mut session, view, geometry, observation) = fixture();
-    sample(&mut session, &view, geometry, observation, 3);
+    sample(&mut session, &view, geometry, observation, 5);
     let initial = session.discovered_landmarks();
     let away = PlayerObservation {
         direction: -observation.direction,
@@ -357,7 +357,7 @@ fn hidden_movement_health_and_uncredited_death_do_not_update_memory() {
 #[test]
 fn a_continuously_observed_uncredited_defeat_updates_only_the_known_encounter() {
     let (mut session, view, geometry, observation) = fixture();
-    sample(&mut session, &view, geometry, observation, 3);
+    sample(&mut session, &view, geometry, observation, 5);
     session.actors.get_mut(1).expect("target").hp = 0.0;
     sample(&mut session, &view, geometry, observation, 1);
     assert!(
@@ -587,7 +587,7 @@ fn fountain_marker_is_observed_then_updates_only_when_consumption_is_observed() 
         top_level: 1,
         substance: SubstanceId(2),
     });
-    sample(&mut session, &view, geometry, observation, 3);
+    sample(&mut session, &view, geometry, observation, 5);
     assert!(session
         .discovered_landmarks()
         .iter()
@@ -617,4 +617,121 @@ fn fountain_marker_is_observed_then_updates_only_when_consumption_is_observed() 
         .discovered_landmarks()
         .iter()
         .any(|m| m.kind == LandmarkKind::Fountain && m.consumed));
+}
+
+#[test]
+fn health_announcements_are_event_driven_and_same_band_hits_do_not_extend_them() {
+    let (mut session, view, geometry, observation) = fixture();
+    sample(&mut session, &view, geometry, observation, 1);
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+    session.record_damage(0, 1, 1.0);
+    sample(&mut session, &view, geometry, observation, 1);
+    let cue = session.combat_feedback(&ArenaTuning::default()).health_cues;
+    assert_eq!(cue.len(), 1);
+    assert_eq!(cue.first().expect("first hit cue").health_pips, 3);
+    sample(&mut session, &view, geometry, observation, 8);
+    session.record_damage(0, 1, 1.0);
+    sample(&mut session, &view, geometry, observation, 3);
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+    let enemy = session.actors.get_mut(1).expect("enemy");
+    enemy.hp = enemy.max_hp * 0.5;
+    sample(&mut session, &view, geometry, observation, 1);
+    assert_eq!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .first()
+            .expect("changed")
+            .health_pips,
+        2
+    );
+    let enemy = session.actors.get_mut(1).expect("enemy");
+    enemy.hp = enemy.max_hp;
+    sample(&mut session, &view, geometry, observation, 1);
+    assert_eq!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .first()
+            .expect("healed")
+            .health_pips,
+        3
+    );
+}
+
+#[test]
+fn hidden_health_changes_announce_once_on_return_and_death_clears() {
+    let (mut session, view, geometry, observation) = fixture();
+    sample(&mut session, &view, geometry, observation, 1);
+    session.record_damage(0, 1, 1.0);
+    sample(&mut session, &view, geometry, observation, 1);
+    let hidden = PlayerObservation {
+        direction: Vec3::NEG_X,
+        ..observation
+    };
+    sample(&mut session, &view, geometry, hidden, 12);
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+    sample(&mut session, &view, geometry, observation, 1);
+    assert!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .is_empty(),
+        "same band never replays"
+    );
+    sample(&mut session, &view, geometry, hidden, 1);
+    session.actors.get_mut(1).expect("enemy").hp = 1.0;
+    sample(&mut session, &view, geometry, hidden, 1);
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+    sample(&mut session, &view, geometry, observation, 1);
+    assert_eq!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .first()
+            .expect("new band")
+            .health_pips,
+        1
+    );
+    session.actors.get_mut(1).expect("enemy").hp = 0.0;
+    sample(&mut session, &view, geometry, observation, 1);
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+}
+
+#[test]
+fn landmark_distance_is_euclidean_and_projected_size_is_resolution_independent() {
+    let (_, _, _, mut observation) = fixture();
+    observation.origin = Vec3::ZERO;
+    observation.direction = Vec3::X;
+    for (kind, range) in [
+        (LandmarkKind::Dragon, 120.0),
+        (LandmarkKind::Troll, 60.0),
+        (LandmarkKind::Shadow, 60.0),
+        (LandmarkKind::Golem, 60.0),
+        (LandmarkKind::Fountain, 35.0),
+    ] {
+        assert!(observation.landmark_contains(Vec3::X * range, 8.0, kind));
+        assert!(!observation.landmark_contains(Vec3::X * (range + 0.01), 8.0, kind));
+        assert!(!observation.landmark_contains(Vec3::new(range, 1.0, 0.0), 8.0, kind));
+    }
+    for height in [720.0, 900.0, 1080.0, 2160.0] {
+        observation.viewport_height = height;
+        assert!(!observation.landmark_contains(Vec3::X * 34.0, 0.4, LandmarkKind::Fountain));
+        assert!(observation.landmark_contains(Vec3::X * 34.0, 1.0, LandmarkKind::Fountain));
+    }
 }

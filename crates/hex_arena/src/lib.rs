@@ -41,8 +41,9 @@ pub use glider::GliderSnapshot;
 mod motion;
 mod player_observation;
 pub use player_observation::{
-    CombatFeedbackSnapshot, DiscoveredLandmark, HitConfirmationSnapshot, LandmarkKind,
-    PlayerObservation, SpellAvailability, SpellAvailabilityState, TargetHealthSnapshot,
+    CombatFeedbackSnapshot, DiscoveredLandmark, EnemyHealthCueSnapshot, HitConfirmationSnapshot,
+    LandmarkKind, PlayerObservation, SpellAvailability, SpellAvailabilityState,
+    TargetHealthSnapshot,
 };
 mod progression;
 pub use progression::{

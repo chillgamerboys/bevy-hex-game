@@ -35,6 +35,8 @@ pub enum LandmarkKind {
     Troll,
     /// A single-use healing pool.
     Fountain,
+    /// One of the independent lowland Golem encounters.
+    Golem,
 }
 
 /// Remembered facts, never a live reference to an undisclosed enemy or pool.
@@ -63,6 +65,24 @@ pub struct TargetHealthSnapshot {
     pub role: Option<ExpeditionRole>,
     /// Three above two thirds, two above one third, otherwise one.
     pub health_pips: u8,
+}
+
+/// One briefly announced, currently visible coarse enemy-health event.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnemyHealthCueSnapshot {
+    /// Stable identity used to place the cue, without exporting hidden actors.
+    pub actor_id: ActorId,
+    /// Visible world-space point just above the actor's body.
+    pub position: Vec3,
+    /// Three white, two amber or one red health dots.
+    pub health_pips: u8,
+}
+
+#[derive(Debug, Default)]
+struct HealthAnnouncement {
+    shown_band: Option<u8>,
+    remaining: f32,
+    visible: Option<EnemyHealthCueSnapshot>,
 }
 
 /// A short positive-damage confirmation without exact damage or hidden positions.
@@ -103,6 +123,8 @@ pub struct SpellAvailability {
 /// HUD authority; target values are copied only after successful observation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CombatFeedbackSnapshot {
+    /// Event-driven dots above visible enemies; same-band hits never refresh them.
+    pub health_cues: Vec<EnemyHealthCueSnapshot>,
     /// Crosshair target, or a still-visible recent player-hit target.
     pub target: Option<TargetHealthSnapshot>,
     /// Brief positive-damage pulse; terrain, friendly and self hits do not count.
@@ -123,6 +145,7 @@ pub(crate) struct PlayerKnowledge {
     target: Option<TargetHealthSnapshot>,
     last_hit: Option<(ActorId, f32)>,
     hit_sequence: u64,
+    health_announcements: BTreeMap<ActorId, HealthAnnouncement>,
 }
 
 impl PlayerKnowledge {
@@ -147,8 +170,8 @@ impl PlayerKnowledge {
 
     fn admit(&mut self, landmark: DiscoveredLandmark) {
         let dwell = self.dwell.entry(landmark.id.clone()).or_default();
-        *dwell = dwell.saturating_add(1).min(3);
-        if *dwell >= 3 || self.landmarks.contains_key(&landmark.id) {
+        *dwell = dwell.saturating_add(1).min(5);
+        if *dwell >= 5 || self.landmarks.contains_key(&landmark.id) {
             self.landmarks.insert(landmark.id.clone(), landmark);
         }
     }
@@ -175,6 +198,9 @@ impl ArenaSession {
             self.player_knowledge.dwell.clear();
             self.player_knowledge.visible_last_sample.clear();
             self.player_knowledge.target = None;
+            for announcement in self.player_knowledge.health_announcements.values_mut() {
+                announcement.visible = None;
+            }
             return;
         }
         let dt = if dt.is_finite() {
@@ -185,6 +211,9 @@ impl ArenaSession {
         if let Some((_, elapsed)) = &mut self.player_knowledge.last_hit {
             *elapsed += dt;
         }
+        for announcement in self.player_knowledge.health_announcements.values_mut() {
+            announcement.remaining = (announcement.remaining - dt).max(0.0);
+        }
         self.player_knowledge.sample_elapsed += dt;
         if self.player_knowledge.sample_elapsed + 0.00001 < 0.1 {
             return;
@@ -194,6 +223,14 @@ impl ArenaSession {
             (self.player_knowledge.sample_elapsed - 0.1).max(0.0) % 0.1;
         self.collision.refresh(world, geometry);
         let team = player.map_or(0, |p| p.team);
+        self.player_knowledge.health_announcements.retain(|id, _| {
+            self.actors
+                .iter()
+                .any(|actor| actor.id == *id && actor.hp > 0.0)
+        });
+        for announcement in self.player_knowledge.health_announcements.values_mut() {
+            announcement.visible = None;
+        }
         let mut seen = BTreeSet::new();
         let mut visible = BTreeMap::new();
         let direction = observation.direction.normalize();
@@ -224,7 +261,12 @@ impl ArenaSession {
                         .contains(&actor.id);
                 // Corpses are not rendered. Only an already known encounter can
                 // publish a witnessed disappearance, never discover a hidden corpse.
-                if actor.hp > 0.0 || witnessed_death && known.is_some() {
+                let central_sighting =
+                    observation.landmark_contains(actor.center(), diameter, kind)
+                        && self
+                            .collision
+                            .sight_clear(observation.origin, actor.center());
+                if central_sighting && (actor.hp > 0.0 || witnessed_death && known.is_some()) {
                     seen.insert(id.clone());
                     self.player_knowledge.admit(DiscoveredLandmark {
                         id,
@@ -239,7 +281,23 @@ impl ArenaSession {
             if actor.hp <= 0.0 {
                 continue;
             }
-            visible.insert(actor.id, target_snapshot(actor));
+            let target = target_snapshot(actor);
+            visible.insert(actor.id, target);
+            if let Some(announcement) = self
+                .player_knowledge
+                .health_announcements
+                .get_mut(&actor.id)
+            {
+                if announcement.shown_band != Some(target.health_pips) {
+                    announcement.shown_band = Some(target.health_pips);
+                    announcement.remaining = 1.0;
+                }
+                announcement.visible = Some(EnemyHealthCueSnapshot {
+                    actor_id: actor.id,
+                    position: actor.center() + Vec3::Y * (actor.dimensions.y * 0.5 + 0.35),
+                    health_pips: target.health_pips,
+                });
+            }
             if let Some(hit) =
                 crate::shapes::sweep_actor(observation.origin, delta, actor, false, 0.0)
             {
@@ -284,12 +342,10 @@ impl ArenaSession {
                     })
                     .copied()
                     .unwrap_or(first);
-                let diameter = (max - min).max_element().max(0.5);
-                let sighted = observation.contains(point, diameter)
-                    && points.iter().any(|p| {
-                        observation.contains(*p, diameter)
-                            && self.collision.sight_clear(observation.origin, *p)
-                    });
+                // A central cell-sized patch must itself be visible: the extent of
+                // the whole pool cannot make a distant sliver count as observation.
+                let sighted = observation.landmark_contains(point, 1.0, LandmarkKind::Fountain)
+                    && self.collision.sight_clear(observation.origin, point);
                 if sighted {
                     seen.insert(id.clone());
                     self.player_knowledge.admit(DiscoveredLandmark {
@@ -334,6 +390,16 @@ impl ArenaSession {
             && !self.is_finished()
             && actor.is_some_and(|a| a.hp > 0.0);
         CombatFeedbackSnapshot {
+            health_cues: if active {
+                self.player_knowledge
+                    .health_announcements
+                    .values()
+                    .filter(|announcement| announcement.remaining > 0.0)
+                    .filter_map(|announcement| announcement.visible)
+                    .collect()
+            } else {
+                Vec::new()
+            },
             target: active.then_some(self.player_knowledge.target).flatten(),
             hit: (active
                 && self
@@ -391,11 +457,31 @@ impl ArenaSession {
             self.player_knowledge.hit_sequence =
                 self.player_knowledge.hit_sequence.saturating_add(1);
             self.player_knowledge.last_hit = Some((victim, 0.0));
+            if self.player_knowledge.active
+                && self.player_knowledge.visible_last_sample.contains(&victim)
+            {
+                self.player_knowledge
+                    .health_announcements
+                    .entry(victim)
+                    .or_default();
+            }
         }
     }
 }
 
 impl PlayerObservation {
+    fn landmark_contains(self, point: Vec3, diameter: f32, kind: LandmarkKind) -> bool {
+        let (range, pixels) = match kind {
+            LandmarkKind::Dragon => (120.0, 16.0),
+            LandmarkKind::Shadow | LandmarkKind::Troll | LandmarkKind::Golem => (60.0, 16.0),
+            LandmarkKind::Fountain => (35.0, 12.0),
+        };
+        let depth = (point - self.origin).dot(self.direction.normalize());
+        self.origin.distance_squared(point) <= range * range
+            && self.contains(point, diameter)
+            && diameter * 1080.0 / (2.0 * depth * (self.vertical_fov * 0.5).tan()) >= pixels
+    }
+
     fn valid(self) -> bool {
         self.active
             && self.origin.is_finite()

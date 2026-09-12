@@ -815,6 +815,9 @@ impl ArenaSession {
             } else {
                 &profile_tuning
             };
+            if let Some(profile) = actor_tuning.player_profile {
+                actor.walking_speed = profile.walking_speed;
+            }
             crate::glider::prepare(actor, intent, &self.collision, world, geometry);
             let boosted = intent.high_jump && actor.high_jump(actor_tuning);
             if boosted {
