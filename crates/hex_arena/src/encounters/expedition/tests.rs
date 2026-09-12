@@ -547,3 +547,6 @@ fn expedition_snapshot_uses_registered_roles_and_does_not_invent_reward_orbs() {
 
 #[path = "milestone_tests.rs"]
 mod milestone_tests;
+
+#[path = "rally_tests.rs"]
+mod rally_tests;

@@ -26,6 +26,7 @@ pub(super) struct MotionIntent {
 #[derive(Debug)]
 pub(super) struct Brain {
     pub active: Option<super::abilities::Cast>,
+    pub(super) rally_goal: Option<Vec3>,
     pub cooldowns: [f32; CREATURE_ABILITY_COUNT],
     shadow: Bot,
     home: Vec3,
@@ -61,6 +62,7 @@ impl Brain {
     pub fn new(id: u8, home: Vec3) -> Self {
         Self {
             active: None,
+            rally_goal: None,
             cooldowns: [0.0; CREATURE_ABILITY_COUNT],
             shadow: Bot::default(),
             home,
@@ -808,8 +810,16 @@ impl Brain {
                 }
             }
         }
+        // An allied call is a travel order, never a target observation. Ordinary
+        // admitted combat takes priority; lost contact resumes the authored route.
+        if known.is_none() {
+            if let Some(rally) = self.rally_goal {
+                goal = rally;
+            }
+        }
         if party.snapshot.phase == PartyPhase::Returning {
-            goal = self.home.with_y(if flight { goal.y } else { self.home.y });
+            let home = self.rally_goal.unwrap_or(self.home);
+            goal = home.with_y(if flight { goal.y } else { home.y });
             if actor.species == Species::Shadow {
                 if sight.is_some() {
                     input = self.shadow.intent_for(
@@ -856,7 +866,9 @@ impl Brain {
                 input.aim = active.direction();
             }
         }
-        input.run = party.snapshot.phase != PartyPhase::Dormant || self.steering.jumping();
+        input.run = party.snapshot.phase != PartyPhase::Dormant
+            || self.rally_goal.is_some()
+            || self.steering.jumping();
         let lunge_tuning = lunge.then(|| {
             let mut profile = c.clone();
             profile.dragon_flight_speed = c.dragon_lunge_speed;

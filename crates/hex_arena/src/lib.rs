@@ -27,6 +27,7 @@ mod creatures;
 mod encounter_config;
 mod encounters;
 mod expedition;
+pub use encounters::ExpeditionRallySnapshot;
 pub use expedition::ExpeditionRole;
 mod hex_prisms;
 mod motion;

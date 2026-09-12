@@ -3,6 +3,10 @@
 use super::*;
 use hex_core::arena::ArenaExpeditionSites;
 
+mod rally;
+pub(super) use rally::Control;
+pub use rally::ExpeditionRallySnapshot;
+
 pub(crate) const CAMP_COUNTS: [usize; 14] = [3, 3, 3, 3, 3, 5, 5, 5, 9, 9, 11, 13, 15, 20];
 
 fn roster() -> Vec<(String, Vec<ExpeditionRole>)> {
@@ -173,6 +177,7 @@ impl ArenaSession {
                 player.aim = (home - player.eye()).normalize_or(Vec3::NEG_Z);
             }
         }
+        encounter.expedition = Some(Control::new(sites, &actors, geometry));
         self.actors = actors;
         self.encounter = encounter;
         self.register_forest_roster();

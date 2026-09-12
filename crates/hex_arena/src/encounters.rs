@@ -43,6 +43,7 @@ struct PartyRuntime {
 #[derive(Debug, Default)]
 pub(crate) struct EncounterState {
     pub initialized: bool,
+    expedition: Option<expedition::Control>,
     separation_stats: ActorSeparationStats,
     worms: BTreeMap<ActorId, worm::Controller>,
     spawn_failed: bool,
@@ -489,6 +490,7 @@ impl ArenaSession {
         if !self.encounter.initialized || amount <= 0.0 {
             return;
         }
+        self.rally_on_player_damage(owner, victim);
         let Some(actor) = self.actors.iter().find(|a| a.id == victim) else {
             return;
         };
@@ -685,6 +687,7 @@ impl ArenaSession {
         self.collision.sync_barriers(&self.encounter.barriers);
         self.prepare_worms(world, geometry);
         self.observe_parties(tuning);
+        self.advance_rally();
         let mut brains = std::mem::take(&mut self.encounter.brains);
         let mut intents = BTreeMap::new();
         let mut plans = Vec::new();
@@ -853,6 +856,7 @@ impl ArenaSession {
         }
         self.advance_abilities(&mut brains, world, geometry, materials, tuning, &mut out);
         self.encounter.brains = brains;
+        self.cancel_dead_rally();
         self.advance_walls(world, geometry, materials, &mut out);
         self.publish_parties();
         self.reconcile_progression();
@@ -1346,3 +1350,5 @@ impl ArenaSession {
             .collect()
     }
 }
+
+pub use expedition::ExpeditionRallySnapshot;
