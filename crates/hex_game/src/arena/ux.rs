@@ -190,7 +190,10 @@ pub(super) fn install(app: &mut App) {
     app.init_resource::<UxState>()
         .add_systems(
             Update,
-            begin_timing.before(hud::update).in_set(ArenaFrame::Present),
+            begin_timing
+                .after(super::expedition::present)
+                .before(hud::update)
+                .in_set(ArenaFrame::Present),
         )
         .add_systems(Startup, load)
         .add_systems(
