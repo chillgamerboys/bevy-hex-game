@@ -75,3 +75,18 @@ The runtime-loaded stone-bridge package is `987d396f3972feb5`. Source generation
 Gameplay lane validation passed all 334 `hex_arena` library tests, eight final focused progression/contact/liquid checks, and strict arena Clippy. Python arena helper checks passed; combined game, runtime terrain edits, environment captures and native playtest remain the coordinator’s final gate. The ignored combined fixture measures ArenaTick CPU time only, with synthetic player camp visits; it makes no renderer or FPS claim.
 
 Combined validation: 108 arena app tests pass; actual V4 world edit roundtrip passes; full authored spawn/contact-kill/reset fixture passes with 26 actors and eight parties. The bounded three-second CPU fixture recorded all eight parties active for all 360 measured ticks (median 2.867 ms; p95 7.637 ms; no renderer/FPS claim). Eighteen land routes passed 750 runtime column probes; grades remain at most .35 units per hex, below .4 automatic step. All eleven final progression tests pass, including both clear orders, prior purchases plus the 25-point reward beyond the normal cap, protected-tree contacts, and launch-time payloads. Contact hit presentation now has a separate spark kind with no explosion sphere. Final windowless captures and native controls review follow.
+
+## Wider crowns and mountain revision
+
+The user's follow-up keeps the combat and encounter contracts and asks for at
+least 50% forest canopy coverage, a taller irregular massif and surrounding
+mountains. The content lane additionally owns narrow hex_schematic reservation
+and interval-admission changes and their focused tests; the presentation lane owns
+hex_objects hidden-cell baking and Forest capture readiness. Root owns the shared
+radius-32 / 65,536-cell blueprint bounds and updated catalog fingerprints. Crown
+coverage includes the forest mask's camps, paths and clearings; exact vertical
+occupancy must remain disjoint. Anchors, trunk centers and gameplay remain fixed.
+
+The shared blueprint boundary suite passes all 15 tests. Revised content compile,
+traversal, combined spawn/reset and windowless review are in progress. Native
+interactive validation is blocked by the locked Mac; no native feel claim is made.
