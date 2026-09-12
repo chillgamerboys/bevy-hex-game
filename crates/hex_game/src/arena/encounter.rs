@@ -596,6 +596,57 @@ pub(super) fn overview(
     frame_bounds(minimum, maximum, rear)
 }
 
+fn forest_overview(geometry: ArenaVoxelGeometry, view: &ArenaTerrainView, rear: bool) -> Transform {
+    if view.columns.is_empty() {
+        return overview(geometry, view, rear);
+    }
+    let forward = Vec3::new(
+        if rear { 0.65 } else { -0.65 },
+        -0.85,
+        if rear { 0.75 } else { -0.75 },
+    )
+    .normalize();
+    let right = forward.cross(Vec3::Y).normalize();
+    let up = right.cross(forward);
+    let tangent = (75.0_f32.to_radians() * 0.5).tan();
+    // Fit occupied spans instead of empty corners of the map's rectangular volume.
+    // Solve camera-plane translation as well as distance so perspective does not
+    // leave the distant half of this broad, flat map surrounded by unused sky.
+    let horizontal = tangent * 16.0 / 9.0 * 0.90;
+    let vertical = tangent * 0.66;
+    let mut lower = Vec2::splat(f32::NEG_INFINITY);
+    let mut upper = Vec2::splat(f32::INFINITY);
+    let spans = view
+        .columns
+        .values()
+        .flatten()
+        .map(|span| (span.bottom, span.top_level))
+        .chain(
+            view.static_spans
+                .iter()
+                .map(|span| (span.bottom, span.top_level)),
+        );
+    for (bottom, top_level) in spans {
+        for height in [
+            geometry.top(bottom) - geometry.level_height,
+            geometry.top(hex_core::TilePos::new(bottom.coord, top_level)),
+        ] {
+            let point = bottom.coord.to_world(height);
+            let depth = point.dot(forward);
+            let plane = Vec2::new(point.dot(right), point.dot(up));
+            let spread = Vec2::new(horizontal, vertical) * depth;
+            lower = lower.max(plane - spread);
+            upper = upper.min(plane + spread);
+        }
+    }
+    let distance = ((lower.x - upper.x) / (2.0 * horizontal))
+        .max((lower.y - upper.y) / (2.0 * vertical))
+        + 4.0;
+    let center = (lower + upper) * 0.5;
+    Transform::from_translation(right * center.x + up * center.y - forward * distance)
+        .looking_to(forward, Vec3::Y)
+}
+
 pub(super) fn frame_bounds(minimum: Vec3, maximum: Vec3, rear: bool) -> Transform {
     let center = (minimum + maximum) * 0.5;
     let forward = Vec3::new(
@@ -743,7 +794,11 @@ pub(super) fn camera(
         return;
     };
     if matches!(state.capture_view.as_str(), "overview" | "rear") {
-        *camera = overview(*geometry, &view, state.capture_view == "rear");
+        *camera = if session.is_forest_run() {
+            forest_overview(*geometry, &view, state.capture_view == "rear")
+        } else {
+            overview(*geometry, &view, state.capture_view == "rear")
+        };
     } else if state.capture_view == "forest-landmark" {
         if let Some(anchor) = state
             .capture_focus

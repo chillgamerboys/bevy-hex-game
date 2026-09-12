@@ -768,7 +768,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             }
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
             Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nR to restart from level 1.".into(),
-            Label::Status if session.completed_run() => "VICTORY — THE MAP IS CLEAR\nKeep exploring and casting. R restarts your run.".into(),
+            Label::Status if session.completed_run() => "VICTORY - THE MAP IS CLEAR\nKeep exploring and casting. R restarts your run.".into(),
             Label::Status => {
                 if state.capture.is_some() && super::encounter::stress_view(&state.capture_view) {
                     "SYNTHETIC PERFORMANCE FIXTURE\nExtra HP / scripted party visits".into()
@@ -822,8 +822,8 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             }
             Label::MenuRules if run.is_some() => "Each level grants one + upgrade; cooldown + makes it faster.\nClear forest: +25 damage. Slay 3 Dragons: explosions. Reset clears upgrades.".into(),
             Label::MenuRules => "Splash passes through walls. Fireballs can hurt their caster.\nShield walls remain until destroyed; restart restores all terrain.".into(),
-            Label::Parameter(1) if run.is_some_and(|p| !p.explosions_unlocked) => "Fireball impact only — slay 3 Dragons".into(),
-            Label::Parameter(4) if run.is_some() => "Projectile gravity       12 units/s² (fixed)".into(),
+            Label::Parameter(1) if run.is_some_and(|p| !p.explosions_unlocked) => "Fireball impact only - slay 3 Dragons".into(),
+            Label::Parameter(4) if run.is_some() => "Gravity (fixed)           12 units/s^2".into(),
             Label::Parameter(10) if run.is_some() => run.map_or_else(String::new, |p| format!("Forest {}/22    +25 damage {}", p.forest_defeated, if p.forest_cleared { "earned" } else { "reward" })),
             Label::Parameter(11) if run.is_some() => run.map_or_else(String::new, |p| format!("Dragons {}/3    Explosions {}", p.dragons_defeated, if p.explosions_unlocked { "unlocked" } else { "locked" })),
             Label::Parameter(index) => match index {
