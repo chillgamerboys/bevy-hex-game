@@ -11,6 +11,8 @@ mod duel_player_tests;
 #[path = "visibility_tests.rs"]
 mod visibility_tests;
 
+#[path = "liquid_query_tests.rs"]
+mod liquid_query_tests;
 #[path = "probe_cache_tests.rs"]
 mod probe_cache_tests;
 #[path = "recovery_tests.rs"]

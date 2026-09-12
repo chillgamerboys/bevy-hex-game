@@ -974,17 +974,28 @@ pub(super) fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGe
         radius += 1;
         covered += hex_core::config::HEX_SMALL_DIAMETER * 0.5;
     }
-    !HexCoord::from_world(actor.feet)
-        .within_radius(radius)
-        .into_iter()
-        .any(|coord| {
-            let start = view.liquids.partition_point(|run| run.bottom.coord < coord);
-            view.liquids
+    let coords = HexCoord::from_world(actor.feet).within_radius(radius);
+    let wet = liquid_candidates(&view.liquids, &coords).any(overlaps);
+    !wet
+}
+
+// `within_radius` enumerates contiguous axial rows in coordinate order. Search
+// each exact row once; every candidate and its order match per-column searches.
+// This keeps the same neighborhood allocation and stores no cross-query state.
+fn liquid_candidates<'a>(
+    liquids: &'a [hex_core::arena::ArenaSolidSpan],
+    coords: &'a [HexCoord],
+) -> impl Iterator<Item = &'a hex_core::arena::ArenaSolidSpan> {
+    coords
+        .chunk_by(|a, b| a.x() == b.x())
+        .filter_map(|row| row.first().zip(row.last()))
+        .flat_map(move |(first, last)| {
+            let start = liquids.partition_point(|run| run.bottom.coord < *first);
+            liquids
                 .get(start..)
                 .unwrap_or(&[])
                 .iter()
-                .take_while(|run| run.bottom.coord == coord)
-                .any(overlaps)
+                .take_while(move |run| run.bottom.coord <= *last)
         })
 }
 
