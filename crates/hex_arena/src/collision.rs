@@ -137,29 +137,41 @@ impl CollisionWorld {
             }
             *spans = merged;
         }
-        // Authored object masks are immutable between complete publications.
-        if !incremental {
+        // Object removals and terrain edits share the accepted revision and dirty
+        // columns. Clear empty buckets too, so the last carved cell cannot leave
+        // an invisible movement, sight, or attack blocker behind.
+        if incremental {
+            for coord in &view.dirty_columns {
+                self.static_movement.remove(coord);
+                self.static_sight.remove(coord);
+                self.static_attack.remove(coord);
+            }
+        } else {
             self.static_movement.clear();
             self.static_sight.clear();
             self.static_attack.clear();
-            for volume in &view.static_spans {
-                let span = Span {
-                    coord: volume.bottom.coord,
-                    bottom: geometry.top(volume.bottom) - geometry.level_height,
-                    top: geometry.top(TilePos::new(volume.bottom.coord, volume.top_level)),
-                };
-                if volume.blocks_movement {
-                    self.static_movement
-                        .entry(span.coord)
-                        .or_default()
-                        .push(span);
-                }
-                if volume.blocks_sight {
-                    self.static_sight.entry(span.coord).or_default().push(span);
-                }
-                if volume.blocks_projectiles {
-                    self.static_attack.entry(span.coord).or_default().push(span);
-                }
+        }
+        for volume in view
+            .static_spans
+            .iter()
+            .filter(|volume| !incremental || view.dirty_columns.contains(&volume.bottom.coord))
+        {
+            let span = Span {
+                coord: volume.bottom.coord,
+                bottom: geometry.top(volume.bottom) - geometry.level_height,
+                top: geometry.top(TilePos::new(volume.bottom.coord, volume.top_level)),
+            };
+            if volume.blocks_movement {
+                self.static_movement
+                    .entry(span.coord)
+                    .or_default()
+                    .push(span);
+            }
+            if volume.blocks_sight {
+                self.static_sight.entry(span.coord).or_default().push(span);
+            }
+            if volume.blocks_projectiles {
+                self.static_attack.entry(span.coord).or_default().push(span);
             }
         }
         self.revision = Some(view.revision);

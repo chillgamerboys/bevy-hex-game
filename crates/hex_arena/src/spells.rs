@@ -104,7 +104,7 @@ fn ember_contact_voxel(
     let inside = impact.point - impact.normal * (shot.collision_radius() + SKIN * 4.0);
     geometry
         .voxel_at(inside)
-        .filter(|pos| world.voxels.contains_key(pos))
+        .filter(|pos| world.solid_at(*pos).is_some())
 }
 
 fn projectile(
@@ -480,7 +480,7 @@ fn available_wall_voxels(
         .filter(|pos| {
             geometry.contains_column(pos.coord)
                 && (geometry.min_level..=geometry.max_level).contains(&pos.level)
-                && !world.voxels.contains_key(pos)
+                && world.solid_at(*pos).is_none()
                 && !world.edit_protected.get(&pos.coord).is_some_and(|ranges| {
                     ranges
                         .iter()
@@ -748,7 +748,7 @@ impl ArenaSession {
             let inside = impact.point - impact.normal * (shot.collision_radius() + SKIN * 4.0);
             if let Some(pos) = geometry
                 .voxel_at(inside)
-                .filter(|pos| world.voxels.contains_key(pos))
+                .filter(|pos| world.solid_at(*pos).is_some())
             {
                 let request = TerrainImpact {
                     batch: TerrainBatchId(self.next_impact),
@@ -1615,6 +1615,181 @@ mod camera_mask_tests {
             session.aim_from_camera(0, origin, direction).x < 0.0,
             "an actor nearer than the canopy still wins aim arbitration"
         );
+    }
+}
+
+#[cfg(test)]
+mod carved_object_tests {
+    use super::*;
+    use hex_core::arena::{ArenaSolidSpan, ArenaStaticSpan};
+    use hex_core::{ElementId, SubstanceId};
+
+    #[test]
+    fn contact_damage_targets_one_object_cell_and_carving_opens_all_consumers() {
+        let geometry = ArenaVoxelGeometry::default();
+        let object = TilePos::new(HexCoord::ORIGIN, 2);
+        let mut view = ArenaTerrainView {
+            revision: 1,
+            full_rebuild: true,
+            ..Default::default()
+        };
+        for coord in HexCoord::ORIGIN.within_radius(4) {
+            let floor = TilePos::new(coord, 0);
+            view.voxels.insert(floor, SubstanceId(1));
+            view.columns.insert(
+                coord,
+                vec![ArenaSolidSpan {
+                    bottom: floor,
+                    top_level: 0,
+                    substance: SubstanceId(1),
+                }],
+            );
+        }
+        let object_span = ArenaSolidSpan {
+            bottom: TilePos::new(object.coord, 1),
+            top_level: 3,
+            substance: SubstanceId(5),
+        };
+        view.object_columns.insert(object.coord, vec![object_span]);
+        view.static_spans.push(ArenaStaticSpan {
+            bottom: object_span.bottom,
+            top_level: object_span.top_level,
+            blocks_movement: true,
+            blocks_sight: true,
+            blocks_projectiles: true,
+        });
+        let material = ArenaMaterials {
+            stone: SubstanceId(1),
+            grass: SubstanceId(2),
+            dirt: SubstanceId(3),
+            bedrock: SubstanceId(4),
+            fire: ElementId(1),
+        };
+        let tuning = ArenaTuning::default();
+        let actor = Actor::spawn(0, Vec3::new(-3.0, SKIN, 0.0), Vec3::X);
+        let mut shot = projectile(&actor, Spell::Fireball, &tuning, 0, 45.0);
+        shot.parameters.mode = crate::FireballMode::ContactOnly;
+        let mut session = ArenaSession::default();
+        session.actors = vec![actor];
+        session.projectiles = vec![shot];
+        session.collision.refresh(&view, geometry);
+        let mut commands = CommandsOut::default();
+        for _ in 0..60 {
+            session.advance_projectiles(&view, geometry, material, &mut commands);
+        }
+        assert_eq!(commands.impacts.len(), 1);
+        assert_eq!(
+            commands.impacts.first().expect("one contact").volume,
+            [object]
+        );
+        assert!(session
+            .effects
+            .iter()
+            .all(|effect| effect.kind != crate::VisualEffectKind::Fireball));
+        assert!(
+            available_wall_voxels(&[object], &view, geometry, &[], &BTreeSet::new()).is_empty()
+        );
+        // The world accepts exactly this one removed cell and publishes both masks.
+        view.object_columns.insert(
+            object.coord,
+            vec![
+                ArenaSolidSpan {
+                    bottom: object_span.bottom,
+                    top_level: 1,
+                    ..object_span
+                },
+                ArenaSolidSpan {
+                    bottom: TilePos::new(object.coord, 3),
+                    top_level: 3,
+                    ..object_span
+                },
+            ],
+        );
+        view.static_spans = vec![
+            ArenaStaticSpan {
+                bottom: object_span.bottom,
+                top_level: 1,
+                blocks_movement: true,
+                blocks_sight: true,
+                blocks_projectiles: true,
+            },
+            ArenaStaticSpan {
+                bottom: TilePos::new(object.coord, 3),
+                top_level: 3,
+                blocks_movement: true,
+                blocks_sight: true,
+                blocks_projectiles: true,
+            },
+        ];
+        view.revision += 1;
+        view.full_rebuild = false;
+        view.dirty_columns.insert(object.coord);
+        session.collision.refresh(&view, geometry);
+        let center = geometry.center(object);
+        assert!(session
+            .collision
+            .sight_clear(center - Vec3::X * 2.0, center + Vec3::X * 2.0));
+        assert!(session
+            .collision
+            .attack_sweep(center - Vec3::X * 2.0, Vec3::X * 4.0, 0.01)
+            .is_none());
+        assert!(session.collision.clear(center - Vec3::Y * 0.05, 0.1, 0.05));
+        assert_eq!(
+            available_wall_voxels(&[object], &view, geometry, &[], &BTreeSet::new()),
+            [object]
+        );
+        assert!(
+            view.solid_at(TilePos::new(object.coord, 3)).is_some(),
+            "unsupported crown survives"
+        );
+    }
+
+    #[test]
+    fn explosion_transaction_contains_terrain_and_object_cells_once() {
+        let geometry = ArenaVoxelGeometry::default();
+        let object = TilePos::new(HexCoord::ORIGIN, 2);
+        let floor = TilePos::new(HexCoord::ORIGIN, 0);
+        let mut view = ArenaTerrainView::default();
+        view.voxels.insert(floor, SubstanceId(1));
+        // Overlap at floor exercises transaction deduplication too.
+        view.object_columns.insert(
+            object.coord,
+            vec![ArenaSolidSpan {
+                bottom: floor,
+                top_level: 3,
+                substance: SubstanceId(5),
+            }],
+        );
+        let material = ArenaMaterials {
+            stone: SubstanceId(1),
+            grass: SubstanceId(2),
+            dirt: SubstanceId(3),
+            bedrock: SubstanceId(4),
+            fire: ElementId(1),
+        };
+        let mut session = ArenaSession::default();
+        let mut commands = CommandsOut::default();
+        session.explode(
+            geometry.center(object),
+            0,
+            0,
+            Spell::Fireball,
+            2.5,
+            35.0,
+            8.0,
+            2,
+            None,
+            None,
+            false,
+            true,
+            &view,
+            geometry,
+            material,
+            &mut commands,
+        );
+        let volume = &commands.impacts.first().expect("mixed transaction").volume;
+        assert!(volume.contains(&floor) && volume.contains(&object));
+        assert_eq!(volume.len(), volume.iter().collect::<BTreeSet<_>>().len());
     }
 }
 

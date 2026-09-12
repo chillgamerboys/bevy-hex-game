@@ -133,3 +133,75 @@ fn query_cache_preserves_every_ordered_span_across_masks_radii_and_dirty_refresh
         }
     }
 }
+
+#[test]
+fn carved_object_only_revision_removes_each_query_mask_and_keeps_other_columns() {
+    let geometry = ArenaVoxelGeometry::default();
+    let coord = HexCoord::ORIGIN;
+    let unchanged = HexCoord::from_axial(4, 0);
+    let mut view = ArenaTerrainView {
+        revision: 1,
+        full_rebuild: true,
+        ..Default::default()
+    };
+    for at in [coord, unchanged] {
+        view.columns.insert(
+            at,
+            vec![ArenaSolidSpan {
+                bottom: TilePos::new(at, 0),
+                top_level: 0,
+                substance: SubstanceId(1),
+            }],
+        );
+        view.static_spans.push(ArenaStaticSpan {
+            bottom: TilePos::new(at, 1),
+            top_level: 5,
+            blocks_movement: true,
+            blocks_sight: true,
+            blocks_projectiles: true,
+        });
+    }
+    let mut world = CollisionWorld::default();
+    world.refresh(&view, geometry);
+    let point = geometry.center(TilePos::new(coord, 3));
+    let start = point - Vec3::X * 2.0;
+    let end = point + Vec3::X * 2.0;
+    assert!(!world.clear(point, 0.1, 0.1));
+    assert!(!world.sight_clear(start, end));
+    assert!(world.attack_sweep(start, end - start, 0.0).is_some());
+    let preserved = identities(
+        world
+            .static_movement
+            .get(&unchanged)
+            .expect("other object")
+            .iter()
+            .copied(),
+    );
+    view.static_spans.retain(|span| span.bottom.coord != coord);
+    view.revision += 1;
+    view.full_rebuild = false;
+    view.dirty_columns.insert(coord);
+    world.refresh(&view, geometry);
+    assert!(world.clear(point, 0.1, 0.1));
+    assert!(world.sight_clear(start, end));
+    assert!(world.attack_sweep(start, end - start, 0.0).is_none());
+    assert_eq!(
+        identities(
+            world
+                .static_movement
+                .get(&unchanged)
+                .expect("unchanged object")
+                .iter()
+                .copied()
+        ),
+        preserved
+    );
+    let mut rebuilt = CollisionWorld::default();
+    rebuilt.refresh(&view, geometry);
+    for kind in [QueryKind::Movement, QueryKind::Sight, QueryKind::Attack] {
+        assert_eq!(
+            identities(world.candidates_for(start, end, 0.25, kind)),
+            identities(rebuilt.candidates_for(start, end, 0.25, kind))
+        );
+    }
+}
