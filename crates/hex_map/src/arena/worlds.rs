@@ -21,6 +21,7 @@ pub(super) struct WorldRecipe {
     pub geometry: ArenaVoxelGeometry,
     pub view: ArenaTerrainView,
     pub presentation: MapPresentationProjection,
+    pub forest_source: Option<std::sync::Arc<hex_world_runtime::FileChunkSource>>,
 }
 
 pub(super) fn load_art(palette: &ArtPalette) -> Result<RuntimeArtCatalog, String> {
@@ -54,6 +55,18 @@ pub(super) fn load_art(palette: &ArtPalette) -> Result<RuntimeArtCatalog, String
             ron::from_str(source).map_err(|error| format!("Arena object blueprint: {error}"))?;
         objects.insert(object.id.clone(), object);
     }
+    for id in manifest.ids() {
+        if !objects.contains_key(id) {
+            let path = super::forest::asset_root()
+                .join("assets/art/objects")
+                .join(format!("{}.ron", id.as_str()));
+            let source = std::fs::read_to_string(&path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let object: ObjectBlueprint =
+                ron::from_str(&source).map_err(|error| error.to_string())?;
+            objects.insert(object.id.clone(), object);
+        }
+    }
     RuntimeArtCatalog::from_sources(palette, &styles, &manifest, objects)
         .map_err(|error| format!("Arena accepted art graph: {error}"))
 }
@@ -64,6 +77,9 @@ pub(super) fn build(
     substances: &SubstanceTable,
     art: &RuntimeArtCatalog,
 ) -> Result<WorldRecipe, String> {
+    if selection.map == ArenaMap::ForestMassif {
+        return super::forest::build(selection, substances, art);
+    }
     let (map, geometry, anchors, presentation) = match selection.map {
         ArenaMap::Duel => {
             let geometry = ArenaVoxelGeometry::default();
@@ -78,6 +94,7 @@ pub(super) fn build(
                 MapPresentationProjection::default(),
             )
         }
+        ArenaMap::ForestMassif => return Err("Forest must load through its V4 adapter".into()),
         ArenaMap::Fort | ArenaMap::SevenRegions => {
             let (source, seed) = match selection.map {
                 ArenaMap::Fort => (
@@ -171,6 +188,7 @@ pub(super) fn build(
         geometry,
         view,
         presentation,
+        forest_source: None,
     })
 }
 
@@ -186,7 +204,7 @@ fn battle_deployment(
         // Both sides share the open west courtyard. The adventure starts lie
         // outside/inside the curtain wall and would require gate/keep routing.
         ArenaMap::Fort => ([(-4, 2), (-2, -2)], 15),
-        ArenaMap::SevenRegions => return Ok(None),
+        ArenaMap::SevenRegions | ArenaMap::ForestMassif => return Ok(None),
     };
     let regions = centers.map(|(q, r)| {
         let preferred = TilePos::new(HexCoord::from_axial(q, r), level);
@@ -317,7 +335,7 @@ fn contains_straight_run(region: &ArenaDeploymentRegion, count: i32) -> bool {
 #[path = "burrow_world_tests.rs"]
 mod burrow_tests;
 
-fn project_static(
+pub(super) fn project_static(
     view: &mut ArenaTerrainView,
     presentation: &MapPresentationProjection,
     geometry: ArenaVoxelGeometry,

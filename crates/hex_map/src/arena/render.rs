@@ -6,6 +6,8 @@ use bevy::transform::TransformSystems;
 
 use super::*;
 
+mod forest_chunks;
+
 #[derive(Resource, Default)]
 struct RenderCache {
     mesh: Option<Handle<Mesh>>,
@@ -14,12 +16,14 @@ struct RenderCache {
     presentations: Vec<Entity>,
     features: BTreeMap<crate::procedural_v3::FeatureId, Entity>,
     generation: Option<u64>,
+    forest: forest_chunks::ForestRender,
 }
 
 pub(super) fn plugin(app: &mut App) {
     if app.world().contains_resource::<AssetServer>() {
         app.add_plugins(crate::liquid_render::arena_plugin);
     }
+    app.init_resource::<hex_core::arena::ArenaRenderStatus>();
     app.init_resource::<RenderCache>().add_systems(
         PostUpdate,
         (refresh, refresh_presentations)
@@ -38,11 +42,28 @@ fn refresh(
     substances: Res<SubstanceTable>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut status: ResMut<hex_core::arena::ArenaRenderStatus>,
 ) {
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         // Logical tests intentionally do not install a renderer or asset storage.
         return;
     };
+    if state.forest.is_some() {
+        forest_chunks::refresh(
+            &mut commands,
+            &mut cache.forest,
+            &mut state,
+            &map,
+            *geometry,
+            &substances,
+            &mut meshes,
+            &mut materials,
+            &mut status,
+        );
+        return;
+    }
+    cache.forest.clear(&mut commands, &mut meshes);
+    status.pending_chunks = 0;
     if state.render_dirty.is_empty() {
         return;
     }
@@ -248,6 +269,8 @@ mod tests {
     use bevy::mesh::VertexAttributeValues;
 
     use super::*;
+
+    mod forest_chunks;
 
     #[test]
     fn prism_faces_have_outward_normals_and_exact_hex_extents() {

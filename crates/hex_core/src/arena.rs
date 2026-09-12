@@ -253,6 +253,13 @@ pub struct ArenaTerrainView {
     pub edit_protected: BTreeMap<HexCoord, Vec<(i32, i32)>>,
 }
 
+/// Disposable terrain presentation work remaining before a map can be shown complete.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct ArenaRenderStatus {
+    /// Number of queued terrain chunks; zero permits the ready screen to start.
+    pub pending_chunks: usize,
+}
+
 /// Accepted material identities published from the same content catalog as damage rules.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct ArenaMaterials {

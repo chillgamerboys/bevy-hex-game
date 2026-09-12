@@ -27,6 +27,7 @@ use crate::{Column, VoxelMap};
 mod burrow;
 #[cfg(test)]
 mod burrow_tests;
+mod forest;
 #[cfg(test)]
 mod real_world_tests;
 mod render;
@@ -39,6 +40,7 @@ const GROUND_LEVEL: i32 = 8;
 #[derive(Resource, Default)]
 struct ArenaWorldState {
     generation: u64,
+    forest: Option<forest::ForestRuntime>,
     burrow_sequences: BTreeMap<u8, u64>,
     changed: BTreeSet<HexCoord>,
     render_dirty: BTreeSet<HexCoord>,
@@ -188,9 +190,23 @@ fn initialize(world: &mut World) {
             return;
         }
     };
+    let forest = match recipe
+        .forest_source
+        .as_ref()
+        .map(|source| forest::ForestRuntime::new(source.clone()))
+        .transpose()
+    {
+        Ok(forest) => forest,
+        Err(error) => {
+            error!("{error}");
+            world.write_message(AppExit::error());
+            return;
+        }
+    };
     let generation = world.resource::<ArenaReset>().generation;
     world.insert_resource(ArenaWorldState {
         generation,
+        forest,
         render_dirty: recipe.map.columns().map(|(coord, _)| coord).collect(),
         original: Some(recipe.clone()),
         presentation_dirty: true,
@@ -310,6 +326,19 @@ fn apply_terrain(
             .unwrap_or_else(|| worlds::build(*selection, *materials, &substances, &art))
         {
             Ok(recipe) => recipe,
+            Err(error) => {
+                error!("{error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        };
+        state.forest = match recipe
+            .forest_source
+            .as_ref()
+            .map(|source| forest::ForestRuntime::new(source.clone()))
+            .transpose()
+        {
+            Ok(forest) => forest,
             Err(error) => {
                 error!("{error}");
                 exit.write(AppExit::error());
@@ -447,6 +476,17 @@ fn apply_terrain(
         burrows.outcomes.write(outcome);
     }
     if !state.changed.is_empty() {
+        let changed = state.changed.clone();
+        if let Some(forest) = &mut state.forest {
+            if let Err(error) = forest.commit_projection(&map, &changed, &substances) {
+                // Never publish a staging projection whose authoritative transaction failed.
+                outcomes.clear();
+                state.changed.clear();
+                error!("V4 terrain transaction rejected: {error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        }
         let before = presentation.features().len();
         presentation.retain_features(|feature| {
             feature.kind == crate::procedural_v3::FeatureKind::Tree

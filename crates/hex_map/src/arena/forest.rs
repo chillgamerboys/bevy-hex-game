@@ -1,0 +1,381 @@
+//! V4 authority behind the finite forest arena. Legacy voxel storage is a staging
+//! and collision projection; every material change commits to V4 before publication.
+
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use hex_assets::{HexObjectRotation, ObjectAssetId};
+use hex_world_contracts::{
+    LiquidKind, ResidencyRequest, VoxelEdit, VoxelPosition, WorldEditTransaction, WorldHex,
+};
+use hex_world_runtime::{FileChunkSource, IoLimits, RuntimeConfig, WorldRuntime};
+
+use super::*;
+use crate::procedural_v3::{
+    FeatureId, FeatureKind, FillMaterialRole, LiquidFlowState, MapPresentationProjection,
+    MaterializedLiquidVoxel, PlannedFeature,
+};
+
+pub(super) fn asset_root() -> PathBuf {
+    std::env::var_os("BEVY_ASSET_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
+}
+
+pub(super) struct ForestRuntime {
+    pub runtime: WorldRuntime,
+    next_edit: u64,
+}
+
+impl ForestRuntime {
+    pub fn new(source: Arc<FileChunkSource>) -> Result<Self, String> {
+        let count = source.manifest().chunks.len();
+        let mut runtime = WorldRuntime::new(
+            source,
+            RuntimeConfig {
+                max_resident_chunks: count,
+                max_unsaved_chunks: count,
+                max_publications_per_pump: 32,
+                max_unsaved_transactions: 16_384,
+                max_unsaved_transaction_bytes: 256 * 1024 * 1024,
+                ..default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        runtime
+            .set_interests(vec![ResidencyRequest {
+                id: "forest-battle-session".into(),
+                center: WorldHex::new(0, 0),
+                radius: 187,
+                retention_radius: 187,
+                priority: 255,
+            }])
+            .map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while runtime.resident_chunks().count() < count {
+            let update = runtime.pump();
+            if let Some(failure) = update.failures.first() {
+                return Err(format!(
+                    "Forest chunk {:?}: {}",
+                    failure.coordinate, failure.error
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err("Forest V4 residency timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(Self {
+            runtime,
+            next_edit: 0,
+        })
+    }
+
+    pub fn commit_projection(
+        &mut self,
+        map: &VoxelMap,
+        changed: &BTreeSet<HexCoord>,
+        substances: &SubstanceTable,
+    ) -> Result<(), String> {
+        let mut edits = Vec::new();
+        let mut revisions = BTreeMap::new();
+        for coord in changed {
+            let global = WorldHex::new(i64::from(coord.x()), i64::from(coord.y()));
+            let product = self
+                .runtime
+                .resident_chunk(global.chunk())
+                .ok_or("Unloaded forest edit")?;
+            let column = product
+                .package
+                .columns
+                .iter()
+                .find(|column| column.position == global)
+                .ok_or("Forest edit outside package")?;
+            let old_top = column.runs.iter().map(|run| run.top).max().unwrap_or(0);
+            let new_top = map.column(*coord).map_or(0, Column::top);
+            for level in 0..old_top.max(new_top) {
+                let old = column
+                    .runs
+                    .iter()
+                    .find(|run| (run.bottom..run.top).contains(&level));
+                let old_id = old
+                    .map(|run| material_id(&run.material, substances))
+                    .transpose()?
+                    .unwrap_or(SubstanceId::AIR);
+                let new = map.get(TilePos::new(*coord, level));
+                if old_id == new {
+                    continue;
+                }
+                let material = if new.is_air() {
+                    None
+                } else {
+                    Some(
+                        match substances.name(new).ok_or("Unknown staged material")? {
+                            "dirt" => "soil",
+                            other => other,
+                        }
+                        .to_owned(),
+                    )
+                };
+                edits.push(VoxelEdit {
+                    position: VoxelPosition {
+                        column: global,
+                        level,
+                    },
+                    material,
+                });
+                revisions.insert(global.chunk(), product.revision);
+            }
+        }
+        if edits.is_empty() {
+            return Ok(());
+        }
+        edits.sort_by_key(|edit| edit.position);
+        self.next_edit = self.next_edit.saturating_add(1);
+        self.runtime
+            .apply_transaction(&WorldEditTransaction {
+                id: format!("battle-edit-{}", self.next_edit),
+                expected_revisions: revisions,
+                edits,
+            })
+            .map_err(|error| error.to_string())?;
+        self.runtime.pump();
+        Ok(())
+    }
+}
+
+pub(super) fn material_id(name: &str, substances: &SubstanceTable) -> Result<SubstanceId, String> {
+    // Physics/durability vocabulary remains compatible with battle. Presentation
+    // keeps the original V4 names and colors, including distinct forest floors.
+    let name = match name {
+        "soil" | "pine-floor" => "dirt",
+        "moss" | "foliage" => "grass",
+        "timber" | "limestone" => "stone",
+        other => other,
+    };
+    substances
+        .id(name)
+        .ok_or_else(|| format!("Forest material {name} has no battle policy"))
+}
+
+fn local(column: WorldHex) -> Result<HexCoord, String> {
+    Ok(HexCoord::from_axial(
+        i32::try_from(column.q).map_err(|error| error.to_string())?,
+        i32::try_from(column.r).map_err(|error| error.to_string())?,
+    ))
+}
+
+fn position(voxel: VoxelPosition) -> Result<TilePos, String> {
+    Ok(TilePos::new(local(voxel.column)?, voxel.level))
+}
+
+pub(super) fn build(
+    selection: ArenaSelection,
+    substances: &SubstanceTable,
+    art: &RuntimeArtCatalog,
+) -> Result<worlds::WorldRecipe, String> {
+    let path = std::env::var_os("HEX_FOREST_WORLD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| asset_root().join("assets/config/v4/forest-massif/compiled"));
+    let source = Arc::new(
+        FileChunkSource::open_workspace(&path, IoLimits::default()).map_err(|error| {
+            format!(
+                "Forest V4 package {}: {error}. Run python3 tools/forest_world.py compile.",
+                path.display()
+            )
+        })?,
+    );
+    if source.manifest().world_id != "forest-massif-battle" {
+        return Err("Forest selection requires forest-massif-battle package".into());
+    }
+    let backend = ForestRuntime::new(source.clone())?;
+    let mut map = VoxelMap::new();
+    let mut anchors = BTreeMap::new();
+    let mut liquids = BTreeMap::new();
+    let mut features = BTreeMap::new();
+    let mut max_level = 128;
+    for product in backend.runtime.resident_chunks() {
+        for column in &product.package.columns {
+            let coord = local(column.position)?;
+            let mut projected = Column::new();
+            for run in &column.runs {
+                if run.bottom < 0 {
+                    return Err("Forest recipe requires nonnegative terrain".into());
+                }
+                let material = material_id(&run.material, substances)?;
+                for level in run.bottom..run.top {
+                    projected.set(level, material);
+                }
+                max_level = max_level.max(run.top + 32);
+            }
+            map.insert_column(coord, projected);
+        }
+        for anchor in &product.package.semantics.anchors {
+            let name = anchor
+                .id
+                .strip_prefix("forest/anchor/")
+                .unwrap_or(&anchor.id);
+            anchors.insert(name.to_owned(), position(anchor.position)?);
+        }
+        for liquid in &product.package.semantics.liquids {
+            let coord = local(liquid.column)?;
+            let downstream = liquid
+                .downstream
+                .first()
+                .copied()
+                .map(position)
+                .transpose()?;
+            for level in liquid.bottom..liquid.top {
+                liquids.insert(
+                    TilePos::new(coord, level),
+                    MaterializedLiquidVoxel {
+                        material: FillMaterialRole::Water,
+                        flow: match liquid.kind {
+                            LiquidKind::Standing => LiquidFlowState::Still,
+                            LiquidKind::Directed => LiquidFlowState::Current,
+                            LiquidKind::Waterfall => LiquidFlowState::Fall,
+                        },
+                        downstream,
+                    },
+                );
+            }
+        }
+        for object in &product.package.semantics.objects {
+            let mut root = position(object.origin)?;
+            root.level -= 1;
+            let id = FeatureId(u32::try_from(features.len()).map_err(|error| error.to_string())?);
+            features.insert(
+                id,
+                PlannedFeature {
+                    root,
+                    kind: if object.asset.starts_with("plant/") {
+                        FeatureKind::Tree
+                    } else {
+                        FeatureKind::TallGrass
+                    },
+                    object_id: ObjectAssetId::new(object.asset.clone())
+                        .map_err(|error| error.to_string())?,
+                    rotation: HexObjectRotation::new(object.rotation)
+                        .map_err(|error| error.to_string())?,
+                    blocker_footprint: BTreeSet::from([root]),
+                },
+            );
+            for column in &object.occupancy {
+                for run in &column.runs {
+                    max_level = max_level.max(run.top + 32);
+                }
+            }
+        }
+    }
+    let geometry = ArenaVoxelGeometry {
+        radius: 187,
+        level_height: 0.35,
+        vertical_offset: 0.35,
+        max_level,
+        ..default()
+    };
+    let anchors: BTreeMap<_, _> = anchors
+        .into_iter()
+        .map(|(name, pos)| (name, pos.coord.to_world(geometry.top(pos))))
+        .collect();
+    let required = [
+        "party_start",
+        "hostile_start",
+        "forest_outer_a",
+        "forest_outer_b",
+        "forest_middle",
+        "forest_deep_a",
+        "forest_deep_b",
+        "dragon_lower",
+        "dragon_middle",
+        "dragon_upper",
+        "ancient_tree",
+        "bridge_west",
+        "bridge_east",
+    ];
+    for name in required {
+        if !anchors.contains_key(name) {
+            return Err(format!("Forest lacks {name}"));
+        }
+    }
+    let mut view = ArenaTerrainView {
+        revision: 1,
+        selection,
+        spawns: [
+            *anchors.get("party_start").ok_or("Missing start")?,
+            *anchors
+                .get("hostile_start")
+                .ok_or("Missing hostile start")?,
+        ],
+        anchors,
+        full_rebuild: true,
+        ..default()
+    };
+    for (coord, column) in map.columns() {
+        publish_column(&mut view, coord, column, substances);
+        view.dirty_columns.insert(coord);
+        for run in crate::runs(column)
+            .into_iter()
+            .filter(|run| !substances.is_solid(run.substance))
+        {
+            view.liquids.push(ArenaSolidSpan {
+                bottom: TilePos::new(coord, run.bottom),
+                top_level: run.top - 1,
+                substance: run.substance,
+            });
+        }
+    }
+    view.liquids.sort_by_key(|span| span.bottom);
+    let presentation =
+        MapPresentationProjection::from_snapshot_parts(liquids, features, BTreeMap::new());
+    worlds::project_static(&mut view, &presentation, geometry, art)?;
+    // The one built crossing is an authored reservation: explosions cannot remove
+    // its only support and strand the run. Ordinary bank/bed physics is unchanged.
+    for (coord, column) in map.columns() {
+        if coord.y().abs() <= 4 && coord.x().abs() <= 26 {
+            view.edit_protected
+                .entry(coord)
+                .or_default()
+                .push((0, column.top().saturating_sub(1)));
+        }
+    }
+    compact_static(&mut view);
+    Ok(worlds::WorldRecipe {
+        map,
+        geometry,
+        view,
+        presentation,
+        forest_source: Some(source),
+    })
+}
+
+fn compact_static(view: &mut ArenaTerrainView) {
+    view.static_spans.sort_by_key(|span| {
+        (
+            span.bottom.coord,
+            span.blocks_movement,
+            span.blocks_projectiles,
+            span.blocks_sight,
+            span.bottom.level,
+        )
+    });
+    let mut compact: Vec<hex_core::arena::ArenaStaticSpan> = Vec::new();
+    for span in std::mem::take(&mut view.static_spans) {
+        if let Some(last) = compact.last_mut() {
+            if last.bottom.coord == span.bottom.coord
+                && last.blocks_movement == span.blocks_movement
+                && last.blocks_projectiles == span.blocks_projectiles
+                && last.blocks_sight == span.blocks_sight
+                && span.bottom.level <= last.top_level + 1
+            {
+                last.top_level = last.top_level.max(span.top_level);
+                continue;
+            }
+        }
+        compact.push(span);
+    }
+    view.static_spans = compact;
+}

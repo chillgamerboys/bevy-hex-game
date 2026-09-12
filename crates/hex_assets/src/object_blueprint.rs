@@ -17,7 +17,7 @@ pub const OBJECT_BLUEPRINT_SCHEMA_VERSION: u16 = 1;
 /// Largest horizontal authoring radius accepted by the editor contract.
 pub const MAX_OBJECT_RADIUS: u8 = 12;
 /// Largest number of vertical levels in one authoring canvas.
-pub const MAX_OBJECT_HEIGHT: u8 = 64;
+pub const MAX_OBJECT_HEIGHT: u8 = 192;
 /// Largest number of occupied cells in one object.
 pub const MAX_OBJECT_VOXELS: usize = 8_192;
 
