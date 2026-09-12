@@ -115,6 +115,7 @@ fn initial_window_mode() -> WindowMode {
     }
 }
 
+#[cfg(test)]
 fn headless_visual_walk_requested(value: Option<&std::ffi::OsStr>) -> bool {
     cfg!(feature = "visual-walk") && value == Some(std::ffi::OsStr::new("1"))
 }

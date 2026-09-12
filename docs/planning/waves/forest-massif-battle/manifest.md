@@ -1,6 +1,6 @@
 # Forest–Massif Battle
 
-Status: integrated local candidate; combined validation in progress. Coordinator: root. Branch: wave/forest-massif-battle.
+Status: integrated local candidate; logic validated; final native visual review in progress. Coordinator: root. Branch: wave/forest-massif-battle.
 User-approved local implementation; no dev/main merge or remote publication in this delivery.
 Source: battle 99d56c7 and V4 45f689b, common base 495a73d, composed in 98f68fb.
 The explicit user source checkpoints supersede the ordinary dev-first landing sequence for this local experiment. Shared changes remain reviewable in the candidate.
@@ -73,3 +73,5 @@ Focused world compile/geometry/roster tests; contact-only vs explosion, reward, 
 The runtime-loaded stone-bridge package is `987d396f3972feb5`. Source generation, exact tree spacing/height/stock checks and 388 runtime column probes pass. The source has 105,469 columns, 444 storage chunks, 275 exact-voxel trees and thirteen named gameplay anchors.
 
 Gameplay lane validation passed all 334 `hex_arena` library tests, eight final focused progression/contact/liquid checks, and strict arena Clippy. Python arena helper checks passed; combined game, runtime terrain edits, environment captures and native playtest remain the coordinator’s final gate. The ignored combined fixture measures ArenaTick CPU time only, with synthetic player camp visits; it makes no renderer or FPS claim.
+
+Combined validation: 108 arena app tests pass; actual V4 world edit roundtrip passes; full authored spawn/contact-kill/reset fixture passes with 26 actors and eight parties. The bounded three-second CPU fixture recorded all eight parties active for all 360 measured ticks (median 2.867 ms; p95 7.637 ms; no renderer/FPS claim). Eighteen land routes passed 750 runtime column probes; grades remain at most .35 units per hex, below .4 automatic step. All eleven final progression tests pass, including both clear orders, prior purchases plus the 25-point reward beyond the normal cap, protected-tree contacts, and launch-time payloads. Contact hit presentation now has a separate spark kind with no explosion sphere. Final windowless captures and native controls review follow.

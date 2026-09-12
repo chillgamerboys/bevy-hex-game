@@ -414,12 +414,11 @@ fn contact_hits_one_body_and_freezes_before_dragon_unlock() {
     assert!(f.session.effects.iter().any(|effect| {
         effect.kind == crate::VisualEffectKind::FireballContact && effect.radius <= 0.16
     }));
-    assert!(
-        f.session
-            .effects
-            .iter()
-            .all(|effect| effect.kind != crate::VisualEffectKind::Fireball)
-    );
+    assert!(f
+        .session
+        .effects
+        .iter()
+        .all(|effect| effect.kind != crate::VisualEffectKind::Fireball));
     assert!((f.session.actors.get(1).expect("target").hp - 35.0).abs() < SKIN);
     assert!((f.session.actors.get(2).expect("nearby").hp - 50.0).abs() < SKIN);
     f.launch(0, Vec3::X);
