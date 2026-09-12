@@ -1,4 +1,4 @@
-//! Opaque, non-interactive presentation geometry for liquid voxel runs.
+//! Non-interactive presentation geometry for liquid voxel runs.
 //!
 //! The ordinary voxel prisms remain the authoritative volume, pick target, and
 //! shadow caster. This module adds only chunk-batched biased horizontal caps for
@@ -27,6 +27,14 @@ use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresen
 use crate::voxel::{runs, terrain_chunk_coord, SubstanceRun, TerrainChunkCoord, VoxelMap};
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
+/// Grand's accepted water opacity, used by the Forest arena presentation.
+const TRANSLUCENT_WATER_ALPHA: f32 = 0.85;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WaterSurfaceStyle {
+    Opaque,
+    Translucent,
+}
 const LIQUID_FOAM_SWATCH: &str = "liquid/foam";
 const PHASE_WRAP_SECONDS: f32 = 400.0;
 const FALL_FLOW_SPEED: f32 = 0.85;
@@ -396,6 +404,7 @@ pub(crate) fn spawn_presentations(
     table: &SubstanceTable,
     level_height: f32,
     phase_seconds: f32,
+    water_style: WaterSurfaceStyle,
     projection: Option<&MapPresentationProjection>,
 ) -> Result<Vec<Entity>, LiquidPresentationError> {
     let plan = build_presentation_plan(map, table, level_height, projection)?;
@@ -425,7 +434,7 @@ pub(crate) fn spawn_presentations(
     let mut material_sets = Vec::with_capacity(role_colors.len());
     let mut registered_handles = Vec::with_capacity(role_colors.len().saturating_mul(2));
     for (role, color) in role_colors {
-        let set = MaterialSet::create(role, color, foam, phase_seconds, materials);
+        let set = MaterialSet::create(role, color, foam, phase_seconds, water_style, materials);
         set.extend_registry(&mut registered_handles);
         material_sets.push(set);
     }
@@ -868,15 +877,24 @@ impl MaterialSet {
         color: Color,
         foam: Color,
         phase_seconds: f32,
+        water_style: WaterSurfaceStyle,
         materials: &mut Assets<LiquidMaterial>,
     ) -> Self {
         let mut add = |style| {
-            materials.add(liquid_material(
+            let mut material = liquid_material(
                 color,
                 phase_seconds,
                 foam,
                 LiquidMaterialProfile::new(role, style),
-            ))
+            );
+            if role == FillMaterialRole::Water && water_style == WaterSurfaceStyle::Translucent {
+                material.base.alpha_mode = AlphaMode::Blend;
+                material.base.base_color.set_alpha(TRANSLUCENT_WATER_ALPHA);
+                // Forest omits opaque water prisms; this is the water surface,
+                // not an overlay that should sort in front of other objects.
+                material.base.depth_bias = 0.0;
+            }
+            materials.add(material)
         };
         Self {
             role,
@@ -1310,6 +1328,7 @@ mod tests {
             Color::srgb(0.08, 0.32, 0.65),
             Color::srgb(0.896_243_8, 0.959_346_6, 0.991_156_4),
             phase,
+            WaterSurfaceStyle::Opaque,
             &mut materials,
         );
         let mut handles = Vec::new();
@@ -1572,6 +1591,7 @@ mod tests {
                 &table,
                 0.4,
                 0.0,
+                WaterSurfaceStyle::Opaque,
                 None,
             )
             .expect("valid liquid batches should spawn")
@@ -1817,6 +1837,53 @@ mod tests {
             material.base.opaque_render_method,
             OpaqueRendererMethod::Forward
         );
+    }
+
+    #[test]
+    fn translucent_water_keeps_legacy_water_and_lava_opaque() {
+        for water_style in [WaterSurfaceStyle::Opaque, WaterSurfaceStyle::Translucent] {
+            for role in [FillMaterialRole::Water, FillMaterialRole::Lava] {
+                let mut materials = Assets::<LiquidMaterial>::default();
+                let set = MaterialSet::create(
+                    role,
+                    Color::srgb(0.08, 0.32, 0.65),
+                    Color::WHITE,
+                    17.25,
+                    water_style,
+                    &mut materials,
+                );
+                for handle in [&set.surface, &set.fall] {
+                    let material = materials.get(handle).expect("liquid material");
+                    let translucent = role == FillMaterialRole::Water
+                        && water_style == WaterSurfaceStyle::Translucent;
+                    assert_eq!(
+                        material.base.alpha_mode,
+                        if translucent {
+                            AlphaMode::Blend
+                        } else {
+                            AlphaMode::Opaque
+                        }
+                    );
+                    assert_f32_near(
+                        material.base.base_color.alpha(),
+                        if translucent {
+                            TRANSLUCENT_WATER_ALPHA
+                        } else {
+                            1.0
+                        },
+                    );
+                    assert_f32_near(
+                        material.base.depth_bias,
+                        if translucent {
+                            0.0
+                        } else {
+                            LIQUID_PRESENTATION_DEPTH_BIAS
+                        },
+                    );
+                    assert_f32_near(material.extension.params.flow_phase_scale.z, 17.25);
+                }
+            }
+        }
     }
 
     #[test]

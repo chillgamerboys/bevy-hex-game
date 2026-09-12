@@ -826,6 +826,7 @@ fn build_grid(
         table,
         settings.level_height,
         liquid_phase_seconds,
+        liquid_render::WaterSurfaceStyle::Opaque,
         presentation,
     )
     .map_err(MapPresentationError::Liquid)?;

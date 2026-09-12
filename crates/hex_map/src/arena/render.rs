@@ -198,6 +198,11 @@ fn refresh_presentations(
             &substances,
             geometry.level_height,
             phase.as_ref().map_or(0.0, |clock| clock.phase_seconds()),
+            if state.forest.is_some() {
+                crate::liquid_render::WaterSurfaceStyle::Translucent
+            } else {
+                crate::liquid_render::WaterSurfaceStyle::Opaque
+            },
             Some(&projection),
         ) {
             Ok(roots) => roots,

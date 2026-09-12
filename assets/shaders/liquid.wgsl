@@ -1,11 +1,16 @@
-// Opaque animated liquid overlay. Extending StandardMaterial retains Bevy's
+// Animated liquid presentation. Extending StandardMaterial retains Bevy's
 // forward PBR lighting, shadows, fog, exposure, and tonemapping.
 
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_types,
 }
+
+#ifdef OIT_ENABLED
+#import bevy_core_pipeline::oit::oit_draw
+#endif
 
 struct LiquidMaterialParams {
     // xy: downstream UV velocity, z: deterministic phase, w: UV scale.
@@ -103,6 +108,15 @@ fn fragment(
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-    out.color.a = 1.0;
+
+#ifdef OIT_ENABLED
+    let alpha_mode =
+        pbr_input.material.flags & pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
+    if alpha_mode != pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE {
+        oit_draw(in.position, out.color);
+        discard;
+    }
+#endif
+
     return out;
 }
