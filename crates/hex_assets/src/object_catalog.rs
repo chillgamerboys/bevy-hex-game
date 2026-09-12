@@ -871,6 +871,21 @@ impl fmt::Display for ObjectInstanceError {
 
 impl std::error::Error for ObjectInstanceError {}
 
+/// World-published sparse removals from one immutable authored blueprint.
+///
+/// Coordinates use the blueprint's unrotated local frame. Missing cells survive;
+/// removed cells never occlude newly exposed faces. Producers advance `revision`
+/// only when this instance changes. The renderer may partition local coordinates
+/// into bounded sections, rebaking a removed cell's section and its neighbors.
+/// This component owns no damage, support, or collapse behavior.
+#[derive(Component, Debug, Default, Clone, PartialEq, Eq)]
+pub struct ObjectCarveMask {
+    /// Accepted world revision for these removals.
+    pub revision: u64,
+    /// Removed local cells only; never the complete surviving blueprint.
+    pub removed: BTreeSet<LocalVoxelCoord>,
+}
+
 /// Renderer-neutral request to place one authored object at an exact world voxel.
 #[derive(Component, Reflect, Debug, Clone, PartialEq)]
 #[reflect(opaque)]

@@ -180,9 +180,20 @@ impl ArenaVoxelGeometry {
                         result.push(*pos);
                     }
                 }
+                if let Some(spans) = view.object_columns.get(&coord) {
+                    for span in spans {
+                        for level in span.bottom.level..=span.top_level {
+                            let position = TilePos::new(coord, level);
+                            if self.center(position).distance_squared(center) <= radius * radius {
+                                result.push(position);
+                            }
+                        }
+                    }
+                }
             }
         }
         result.sort_unstable();
+        result.dedup();
         result
     }
 }
@@ -198,7 +209,7 @@ pub struct ArenaSolidSpan {
     pub substance: SubstanceId,
 }
 
-/// Indestructible authored-object occupancy, separate from terrain HP.
+/// Authored-object collision occupancy, with damage policy supplied separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArenaStaticSpan {
     /// Lowest occupied voxel and horizontal identity.
@@ -270,13 +281,34 @@ pub struct ArenaTerrainView {
     pub dirty_columns: BTreeSet<HexCoord>,
     /// A reset or recipe change requires rebuilding every collision column.
     pub full_rebuild: bool,
-    /// Static object query geometry; not terrain and never a terrain damage target.
+    /// Static object query geometry, refreshed with the same dirty columns as terrain.
     pub static_spans: Vec<ArenaStaticSpan>,
+    /// Compact damageable authored-object material runs. Empty on legacy maps.
+    /// Removed cells must be absent here and in `static_spans` at the same revision.
+    pub object_columns: BTreeMap<HexCoord, Vec<ArenaSolidSpan>>,
     /// Non-solid liquid volumes used for dry spawn and route validation.
     pub liquids: Vec<ArenaSolidSpan>,
     /// Inclusive protected edit-level intervals per column, including authored
     /// object supports and liquid topology. Placement previews use the same facts.
     pub edit_protected: BTreeMap<HexCoord, Vec<(i32, i32)>>,
+}
+
+impl ArenaTerrainView {
+    /// Material occupying an exact cell, including destructible authored objects.
+    /// Terrain takes precedence where initial solid contributors overlap.
+    #[must_use]
+    pub fn solid_at(&self, position: TilePos) -> Option<SubstanceId> {
+        self.voxels.get(&position).copied().or_else(|| {
+            self.object_columns
+                .get(&position.coord)?
+                .iter()
+                .find_map(|span| {
+                    (span.bottom.level..=span.top_level)
+                        .contains(&position.level)
+                        .then_some(span.substance)
+                })
+        })
+    }
 }
 
 /// Cached, world-owned overview of the authored arena geography.
