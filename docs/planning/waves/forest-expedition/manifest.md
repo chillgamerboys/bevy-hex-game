@@ -167,3 +167,32 @@ The hourly check confirmed a fresh weekly window with 100% available. State now 
 ## Checkpoint 2026-09-12, resumed gameplay complete in source
 
 Root `e864034` includes all planned gameplay systems and their read-only presentation seam. Focused arena suite: 367 passed / one ignored at `4e94638`; combined map/game tests are in progress. The exact 115-actor camp/rally CPU fixture and 21-view map matrix are authored but not run on final content. A narrow reward-settlement correction remains to integrate. Content composition now targets 807 trees with preliminary 69.45% canopy before final compilation and structure reservations. Actual compiled geometry, full map performance, reviewed pixels and native play remain acceptance gates. No delivery launcher replacement or complete/visual-ready claim.
+
+
+## Active integration checkpoint — September 12, 02:50 PT
+
+Source through `ce155de` contains the full populated expedition, default package
+preparation, milestone/healing/progression presentation, physical Shadow bounds,
+and bounded forward rally re-entry after kiting or combat. The exact reproduced
+package remains `f06ba29a0bdfa9b0`: 914 objects, 807 trees, 68.9567% whole-forest canopy,
+42 routes, 19 encounters and 6 fountains. The requested Cube World tree scale reference
+has now been inspected and is recorded in `render-review.md`.
+
+Production art admission initially failed on an unsorted generated catalog; the
+catalog and generator were repaired without relaxing validation. The complete
+63-object/14-style art test passes, and all 25 legacy object fingerprints are
+unchanged. Map regressions pass 45 tests / 1 ignored. Arena regressions pass 374 tests /
+1 ignored, including four rally re-entry cases and an actual enemy shot comparison
+after all player milestone pickups/upgrades; scoped strict arena Clippy passes.
+Python content tests pass 52 cases and arena helpers 51 cases. Fresh launch preparation
+reproduced the complete package, then reused 453 file hashes unchanged without a
+compiler cache in 0.120 seconds. The lazy ready-screen Forest selection path is the last
+source slice in progress before the combined app check.
+
+Full populated 115-actor admission/reset, camp/rally CPU and route-controller
+fixtures, the fresh 26-frame windowless review and native play remain pending.
+macOS native access currently reports a locked Mac; no bypass is permitted.
+The original user launcher still opens the preserved earlier map. Broad inherited
+Grand/V3 map Clippy debt is not a passed full merge gate. No remote changes or
+dev/main integration have occurred. Live quota is 92% remaining; user's 3% floor and
+conditional post-game OpenAI audit still apply.
