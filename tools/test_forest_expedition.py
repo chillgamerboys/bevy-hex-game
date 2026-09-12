@@ -21,7 +21,7 @@ class ExpeditionProxy(unittest.TestCase):
         self.assertEqual(sum(c["goblins"] for c in camps), 107)
         self.assertEqual([i for i, c in enumerate(camps, 1) if c["shamans"]], [12, 13])
         self.assertEqual(sum(c["goblins"] for c in camps if c["profile"] == "baby"), 15)
-        self.assertEqual(meta["roster"]["actors_including_player"], 115)
+        self.assertEqual(meta["roster"]["actors_including_player"], 128)
         for operator in self.recipe["biomes"] + self.recipe["basins"] + self.recipe["overrides"]:
             mask = operator["mask"]
             self.assertLessEqual(world.distance((mask["center"]["q"], mask["center"]["r"])) + mask["radius"], 187)
@@ -184,8 +184,8 @@ class ExpeditionProxy(unittest.TestCase):
         value = captured[0]
         self.assertEqual(set(value), {"version", "world_id", "manifest_fingerprint", "encounters",
                                      "route_nodes", "routes", "fountains"})
-        self.assertEqual(len(value["encounters"]), 19)
-        self.assertEqual(len(value["routes"]), 42)
+        self.assertEqual(len(value["encounters"]), 25)
+        self.assertEqual(len(value["routes"]), 49)
         self.assertEqual(len(value["fountains"]), 6)
         for entry in value["encounters"]:
             self.assertEqual(set(entry), {"id", "preferred", "surfaces", "rally_entry"})

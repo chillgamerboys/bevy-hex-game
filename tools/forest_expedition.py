@@ -33,6 +33,11 @@ ANCHORS = {f"forest_camp_{i:02}": p for i, p in enumerate(CAMP_CENTERS, 1)} | {
     "ascent_rest_02": (85, -45, 195), "ascent_rest_03": (145, -60, 235),
     "shadow_turn": (52, 52, 50), "shadow_gate": (86, 71, 56),
 }
+PLAIN_GOLEMS = ((15, 72, 40), (5, 115, 40), (35, 137, 40))
+PLAIN_WISPS = ((35, 60, 40), (20, 95, 40), (0, 145, 40))
+ANCHORS.update({f"plain_golem_{i:02}": p for i, p in enumerate(PLAIN_GOLEMS, 1)})
+ANCHORS.update({f"plain_wisp_{i:02}": p for i, p in enumerate(PLAIN_WISPS, 1)})
+ANCHORS["plain_path_entry"] = (33, 42, 40)
 RIVER = ((87, -174, 34), (77, -128, 34), (28, -75, 34), (30, -38, 34),
          (0, 0, 34), (-8, 45, 34), (-52, 92, 34), (-55, 133, 34), (-87, 174, 34))
 BRIDGE = ((-28, 0, 44), (-20, 0, 46), (-10, 0, 54), (0, 0, 58),
@@ -129,6 +134,10 @@ def _routes():
                 ("shadow_turn", "shadow_gate", 2), ("shadow_gate", "mountain_shadow", 2)]
     result = [(f"forest-path-{i:02}", a, b, width) for i, (a, b, width) in enumerate(edges, 1)] + [
         (f"mountain-path-{i:02}", a, b, width) for i, (a, b, width) in enumerate(mountain, 1)]
+    lowland = ("shadow_turn", "plain_path_entry", "plain_wisp_01", "plain_golem_01",
+               "plain_wisp_02", "plain_golem_02", "plain_golem_03", "plain_wisp_03")
+    result += [(f"plain-path-{i:02}", a, b, 1 if i % 2 else 2)
+               for i, (a, b) in enumerate(zip(lowland, lowland[1:]), 1)]
     # Small unmarked spurs reach dry footing beside each pool's open entry. The
     # final one-column trail stops before water, preserving ordinary pool entry.
     for i, (name, start) in enumerate(zip(FOUNTAINS, (camp(9), camp(5), camp(10), camp(11),
@@ -187,6 +196,13 @@ def recipe(*, raw):
         sites[name] = {"preferred": p, "surfaces": [(*at, p[2]) for at in sorted(disk(p, radius))],
                        "rally_entry": name if name == "forest_troll" else None}
         overrides.append(override(f"site-{name}", p, radius))
+    for kind, centers, radius, clearance in (("golem", PLAIN_GOLEMS, 8, 16), ("wisp", PLAIN_WISPS, 6, 96)):
+        for i, p in enumerate(centers, 1):
+            name = f"plain_{kind}_{i:02}"
+            sites[name] = {"preferred": p, "surfaces": [(*at, p[2]) for at in sorted(disk(p, radius))],
+                           "rally_entry": None, "clearance_levels": clearance,
+                           "count": 1 if kind == "golem" else (3, 3, 4)[i-1]}
+            overrides.append(override(f"site-{name}", p, radius))
     overrides.append(override("heart-clearing", HEART, 28))
     routes, graph, route_levels = [], {}, {}
     for name, start, end, width in _routes():
@@ -272,7 +288,7 @@ def recipe(*, raw):
                 "radius": RADIUS, "columns": len(region), "level_height": LEVEL_HEIGHT,
                 "anchors": ANCHORS.copy(), "encounters": sites,
                 "roster": {"goblins": 107, "shamans": 2, "trolls": 1, "dragons": 3, "shadows": 1,
-                           "enemies": 114, "actors_including_player": 115},
+                           "golems": 3, "wisps": 10, "enemies": 127, "actors_including_player": 128},
                 "route_nodes": {name: ANCHORS[name] for edge in graph.values() for name in (edge["from"], edge["to"])},
                 "routes": graph, "fountains": pools,
                 "river": {"centerline": river_path, "wet_columns": sorted(wet), "water_level": 34},

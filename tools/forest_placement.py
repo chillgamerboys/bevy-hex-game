@@ -80,7 +80,7 @@ class PlacementWorld:
                 self.protected[q, r] = max(self.protected.get((q, r), 0), level + 1 + route["clearance_levels"])
         for site in metadata["encounters"].values():
             for q, r, level in site["surfaces"]:
-                self.protected[q, r] = max(self.protected.get((q, r), 0), level + 5)
+                self.protected[q, r] = max(self.protected.get((q, r), 0), level + 1 + site.get("clearance_levels", 4))
         self.foundations = {}
         self.placements = []
         self.canopy = set()

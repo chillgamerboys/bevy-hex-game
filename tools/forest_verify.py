@@ -77,7 +77,7 @@ def verify(survey, metadata, report):
             supports[q,r,level] = max(supports.get((q,r,level),0), route["clearance_levels"])
     for site in metadata["encounters"].values():
         for q,r,level in site["surfaces"]:
-            supports[q,r,level] = max(supports.get((q,r,level),0), 4)
+            supports[q,r,level] = max(supports.get((q,r,level),0), site.get("clearance_levels", 4))
     for (q,r,level), clear in supports.items():
         if not any(v["bottom"] <= level < v["top"] and v["material"] in solid for v in terrain[q,r]):
             raise ValueError(f"site support changed at {(q,r,level)}")
