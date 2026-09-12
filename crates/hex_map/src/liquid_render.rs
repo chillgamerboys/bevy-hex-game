@@ -2002,7 +2002,7 @@ mod tests {
     }
 
     #[test]
-    fn shader_preserves_opaque_forward_pbr_contract() {
+    fn shader_preserves_forward_pbr_alpha_contract() {
         let shader = include_str!("../../../assets/shaders/liquid.wgsl");
         let flow = shader
             .find("flow_phase_scale: vec4<f32>")
@@ -2030,6 +2030,8 @@ mod tests {
         assert!(shader.contains(&format!(
             "liquid.flow_phase_scale.z * {SECONDARY_WAVE_PHASE_RATE}"
         )));
-        assert!(shader.contains("out.color.a = 1.0"));
+        assert!(!shader.contains("out.color.a = 1.0"));
+        assert!(shader.contains("#ifdef OIT_ENABLED"));
+        assert!(shader.contains("oit_draw(in.position, out.color)"));
     }
 }

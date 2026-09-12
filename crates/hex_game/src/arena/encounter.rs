@@ -821,7 +821,25 @@ pub(super) fn camera(
                     // haunches, banks and portals remain visible in silhouette.
                     let side = if rear { -1.0 } else { 1.0 };
                     let target = *center - Vec3::Y;
-                    let position = target + Vec3::new(0.0, -2.0, 50.0 * side);
+                    let mut position = target + Vec3::new(0.0, -2.0, 50.0 * side);
+                    // The river bends east of x=0 on both sides of the bridge.
+                    // Center the external review eye on its published water row
+                    // instead of leaving it beneath a bank's overhanging trees.
+                    let mut west = f32::INFINITY;
+                    let mut east = f32::NEG_INFINITY;
+                    for water in &view.liquids {
+                        let point = water.bottom.coord.to_world(
+                            geometry
+                                .top(hex_core::TilePos::new(water.bottom.coord, water.top_level)),
+                        );
+                        if (point.z - position.z).abs() < 1.0 && point.y < target.y - 3.0 {
+                            west = west.min(point.x);
+                            east = east.max(point.x);
+                        }
+                    }
+                    if west.is_finite() {
+                        position.x = (west + east) * 0.5;
+                    }
                     *camera = Transform::from_translation(position).looking_at(target, Vec3::Y);
                     return;
                 }
