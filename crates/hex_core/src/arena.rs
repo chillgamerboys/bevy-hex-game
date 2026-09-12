@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
-use bevy_math::Vec3;
+use bevy_math::{Vec2, Vec3};
 
 use crate::{ElementId, HexCoord, SubstanceId, TilePos};
 
@@ -277,6 +277,27 @@ pub struct ArenaTerrainView {
     /// Inclusive protected edit-level intervals per column, including authored
     /// object supports and liquid topology. Placement previews use the same facts.
     pub edit_protected: BTreeMap<HexCoord, Vec<(i32, i32)>>,
+}
+
+/// Cached, world-owned overview of the authored arena geography.
+///
+/// This disposable image contains no actor or discovery state. Consumers place
+/// their own markers using world X/Z within `min` and `max`. The default empty
+/// image indicates that the selected world has no overview.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ArenaOverview {
+    /// Accepted reset generation belonging to this complete image.
+    pub generation: u64,
+    /// Image width in pixels; zero when unavailable.
+    pub width: u32,
+    /// Image height in pixels; zero when unavailable.
+    pub height: u32,
+    /// Minimum world X/Z corner; minimum Z is north and image row zero.
+    pub min: Vec2,
+    /// Maximum world X/Z corner, exclusive at the far image edge.
+    pub max: Vec2,
+    /// Row-major, straight-alpha sRGB bytes, four bytes per pixel.
+    pub rgba: Vec<u8>,
 }
 
 /// Disposable terrain presentation work remaining before a map can be shown complete.
