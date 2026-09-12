@@ -86,3 +86,12 @@ The next repair strengthens the translucent pool tint and adds small drifting li
 ## Translucent water omission found before the next pack
 
 A read-only audit confirmed that the Forest renderer still used `AlphaMode::Opaque` and the shared shader forced alpha1. The separate charged-pool cap could not make that water transparent. Historical accepted Grand commit **4e4f93f** supplies the intended alpha0.85 and shader alpha handling. Root **8543b2f** restores these narrowly for Forest Water materials, removes their opaque-overlay depth bias, preserves the standard shader's post-lighting alpha/OIT handling, and keeps grid/non-Forest/Lava materials opaque. Existing underwater terrain already publishes visible solid faces; authoritative water cells and animation remain unchanged. Material regression and fresh shader/pixel review are pending. No new package geometry/fingerprint is introduced.
+
+
+## Translucent-water repair subset, September 12
+
+Exact clean source **6b455e12e1828c979b034d618c4e4159f0ed7506**, package **a538263d612e891f**, produced all six selected views with source/package hashes unchanged. Root and the independent reviewer inspected every full-resolution original and the entire contact sheet. Static verdict: **3 PASS / 3 FAIL**. Notes and per-frame hashes are under `.context/expedition-repair-water/6b455e12e1828c979b034d618c4e4159f0ed7506-forest-expedition-v2-rewards-focused/independent-review-actor-broadphase.md` and sibling JSON/receipt.
+
+The complete overview, reverse bridge span and spent fountain pass. River bank terraces are visible through the water, and foreground foliage no longer hides the reverse span. Charged glimmers are clearly visible, the mountain basin fits completely, and spent forest water retains its ripples without charged lights. Two charged pools fail because flat cyan hex patches alternate abruptly with dark-blue animated water; the independent translucent cap and water batches have conflicting sort centers. Forward bridge framing also cuts the east portal's outer pier, which the nearly edge-on reverse view does not show coherently. These are presentation repairs; no terrain/package regeneration is needed.
+
+The next candidate widens the river-centered bridge view and repairs charged-water rendering order. All six entries must be freshly recaptured before the full 26-view matrix. Native access was checked again and still reports the Mac locked; the existing manual-unlock request remains pending.

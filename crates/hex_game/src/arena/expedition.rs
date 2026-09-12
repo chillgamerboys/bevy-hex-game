@@ -1,22 +1,18 @@
 //! Visible milestone spheres and charged fountain water from public snapshots.
 
-use bevy::asset::RenderAssetUsages;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
-use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use hex_arena::{ArenaSession, ExpeditionReward};
-use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
+use hex_core::arena::{ArenaFountainVisuals, ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 use std::collections::BTreeMap;
 
 #[derive(Resource)]
 pub(super) struct ExpeditionVisualAssets {
     sphere: Handle<Mesh>,
-    cap: Handle<Mesh>,
     gold: Handle<StandardMaterial>,
     blue: Handle<StandardMaterial>,
     violet: Handle<StandardMaterial>,
     halo: Handle<StandardMaterial>,
-    pool: Handle<StandardMaterial>,
     glimmer: Handle<StandardMaterial>,
 }
 
@@ -55,31 +51,13 @@ pub(super) fn setup(
     };
     commands.insert_resource(ExpeditionVisualAssets {
         sphere: meshes.add(Sphere::new(1.0).mesh().uv(20, 14)),
-        cap: meshes.add(water_glow_cap()),
         gold: light(Color::srgb(1.0, 0.76, 0.19)),
         blue: light(Color::srgb(0.35, 0.83, 1.0)),
         violet: light(Color::srgb(0.82, 0.55, 1.0)),
         halo: light(Color::srgba(0.88, 0.96, 1.0, 0.10)),
-        pool: light(Color::srgba(0.28, 1.0, 0.80, 0.38)),
         glimmer: light(Color::srgb(0.72, 1.0, 0.88)),
     });
-}
-
-/// One surface per liquid column. A closed translucent prism layers its top,
-/// bottom and sides over the water and makes a shallow pool look like solid tiles.
-fn water_glow_cap() -> Mesh {
-    let corners = super::golem::CORNERS;
-    let mut positions = Vec::with_capacity(18);
-    for (a, b) in corners.into_iter().zip(corners.into_iter().cycle().skip(1)) {
-        positions.extend([Vec3::ZERO.to_array(), a.to_array(), b.to_array()]);
-    }
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 18])
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; 18])
+    commands.insert_resource(ArenaFountainVisuals::default());
 }
 
 fn reward_color(reward: ExpeditionReward) -> Color {
@@ -96,12 +74,26 @@ pub(super) fn present(
     world: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
     reset: Res<ArenaReset>,
+    mut fountain_visuals: ResMut<ArenaFountainVisuals>,
     assets: Res<ExpeditionVisualAssets>,
     mut rewards: Query<(Entity, &RewardVisual, &mut Transform)>,
     mut pools: Query<(Entity, &PoolVisual, &mut Visibility)>,
     mut glimmers: Query<(&PoolGlimmer, &mut Transform), Without<RewardVisual>>,
 ) {
     let progress = session.expedition_progress();
+    let snapshot = ArenaFountainVisuals {
+        generation: reset.generation,
+        charged: progress
+            .as_ref()
+            .into_iter()
+            .flat_map(|progress| &progress.fountains)
+            .filter(|fountain| !fountain.consumed)
+            .map(|fountain| fountain.name.clone())
+            .collect(),
+    };
+    if *fountain_visuals != snapshot {
+        *fountain_visuals = snapshot;
+    }
     // Tie animation to simulation time so pausing and deterministic captures freeze it.
     let cycle_tick = u16::try_from(session.tick % 480).unwrap_or_default();
     let phase = f32::from(cycle_tick) / 480.0 * std::f32::consts::TAU;
@@ -228,13 +220,6 @@ pub(super) fn present(
             ))
             .with_children(|pool| {
                 for (index, pos) in caps.values().enumerate() {
-                    pool.spawn((
-                        Mesh3d(assets.cap.clone()),
-                        MeshMaterial3d(assets.pool.clone()),
-                        Transform::from_translation(pos.coord.to_world(geometry.top(*pos) + 0.025)),
-                        NotShadowCaster,
-                        NotShadowReceiver,
-                    ));
                     // Small rising lights distinguish a charged spring from
                     // ordinary water without obscuring the animated surface.
                     // The common parent hides every glimmer when it is spent.
@@ -304,6 +289,10 @@ mod tests {
             })
             .collect::<BTreeMap<_, _>>();
         assert_eq!(initial.len(), 6);
+        assert_eq!(
+            app.world().resource::<ArenaFountainVisuals>().charged,
+            initial.keys().cloned().collect(),
+        );
         let glimmers = app
             .world_mut()
             .query_filtered::<&ChildOf, With<PoolGlimmer>>()
@@ -311,11 +300,9 @@ mod tests {
             .map(ChildOf::parent)
             .collect::<Vec<_>>();
         assert_eq!(glimmers.len(), 42);
-        assert!(
-            glimmers
-                .iter()
-                .all(|parent| initial.values().any(|entity| entity == parent))
-        );
+        assert!(glimmers
+            .iter()
+            .all(|parent| initial.values().any(|entity| entity == parent)));
 
         super::super::expedition_capture::stage(app.world_mut(), 20, "expedition-fountain-spent")
             .expect("wounded player enters actual fountain");
@@ -334,25 +321,30 @@ mod tests {
                 "only the consumed fountain loses its surface tint and lights",
             );
         }
+        let spent = app.world().resource::<ArenaFountainVisuals>();
+        assert_eq!(spent.charged.len(), 5);
+        assert!(!spent.charged.contains("forest_fountain_01"));
         app.world_mut().resource_mut::<ArenaReset>().generation += 1;
         app.world_mut().run_schedule(ArenaTick);
         app.world_mut()
             .run_system_once(present)
             .expect("reset visuals");
-        assert!(
-            initial
-                .values()
-                .all(|entity| app.world().get_entity(*entity).is_err())
-        );
+        assert!(initial
+            .values()
+            .all(|entity| app.world().get_entity(*entity).is_err()));
         let mut query = app
             .world_mut()
             .query_filtered::<&Visibility, With<PoolVisual>>();
         let reset = query.iter(app.world()).collect::<Vec<_>>();
         assert_eq!(reset.len(), 6);
-        assert!(
-            reset
-                .iter()
-                .all(|visibility| **visibility == Visibility::Visible)
+        assert!(reset
+            .iter()
+            .all(|visibility| **visibility == Visibility::Visible));
+        let visuals = app.world().resource::<ArenaFountainVisuals>();
+        assert_eq!(visuals.charged.len(), 6);
+        assert_eq!(
+            visuals.generation,
+            app.world().resource::<ArenaReset>().generation,
         );
     }
 }

@@ -821,7 +821,7 @@ pub(super) fn camera(
                     // haunches, banks and portals remain visible in silhouette.
                     let side = if rear { -1.0 } else { 1.0 };
                     let target = *center - Vec3::Y;
-                    let mut position = target + Vec3::new(0.0, -2.0, 50.0 * side);
+                    let mut position = target + Vec3::new(0.0, -2.0, 62.0 * side);
                     // The river bends east of x=0 on both sides of the bridge.
                     // Center the external review eye on its published water row
                     // instead of leaving it beneath a bank's overhanging trees.
