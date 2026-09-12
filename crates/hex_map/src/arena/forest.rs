@@ -667,10 +667,11 @@ mod tests {
             for span in &view.static_spans {
                 assert_eq!(span.bottom.level, span.top_level);
                 assert!(span.blocks_movement && span.blocks_projectiles && span.blocks_sight);
-                assert!(
-                    view.edit_protected[&span.bottom.coord]
-                        .contains(&(span.bottom.level, span.bottom.level))
-                );
+                assert!(view
+                    .edit_protected
+                    .get(&span.bottom.coord)
+                    .expect("authored prop cell is protected")
+                    .contains(&(span.bottom.level, span.bottom.level)));
             }
         }
     }
@@ -682,10 +683,17 @@ mod tests {
         let mut changed = original.clone();
         changed.occupancy.pop();
         let mut nonsolid = materials.clone();
-        nonsolid[0].solid = false;
+        nonsolid.first_mut().expect("fixture material").solid = false;
         let (transparent, _) = prop_fixture("prop/crystal-spire", 0);
         let mut oversized = original.clone();
-        oversized.occupancy[0].runs[0].top = i32::MAX;
+        oversized
+            .occupancy
+            .first_mut()
+            .expect("fixture column")
+            .runs
+            .first_mut()
+            .expect("fixture run")
+            .top = i32::MAX;
         for (source, policy) in [
             (&changed, &materials),
             (&original, &nonsolid),

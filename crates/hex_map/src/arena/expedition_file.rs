@@ -261,7 +261,7 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
     #[test]
     fn companion_size_limit_precedes_parsing() {
         assert!(decode(
-            &vec![b' '; MAX_BYTES as usize + 1],
+            &vec![b' '; usize::try_from(MAX_BYTES).expect("16 MiB fits usize") + 1],
             WORLD_ID,
             42,
             ArenaVoxelGeometry::default()
