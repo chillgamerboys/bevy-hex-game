@@ -380,6 +380,9 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
         for bridge in &recipe.bridges {
             if bridge.points.len() < 2
                 || bridge.half_width > 32
+                || bridge
+                    .walkway_half_width
+                    .is_some_and(|width| width > bridge.half_width)
                 || bridge.thickness == 0
                 || bridge.thickness > 1024
                 || bridge

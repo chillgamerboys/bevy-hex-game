@@ -269,6 +269,10 @@ pub struct BridgeSpec {
     pub points: Vec<GradePoint>,
     /// Deck ribbon radius.
     pub half_width: u32,
+    /// Reserved travel ribbon inside the full deck. Omission preserves the
+    /// legacy full-width reservation; explicit outer ledges can support props.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walkway_half_width: Option<u32>,
     /// Solid deck thickness in voxels.
     pub thickness: u32,
     /// Deck material.

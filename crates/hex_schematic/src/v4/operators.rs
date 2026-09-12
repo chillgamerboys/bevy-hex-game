@@ -617,6 +617,12 @@ pub(super) fn auto_route(
 }
 
 pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<()> {
+    if bridge
+        .walkway_half_width
+        .is_some_and(|width| width > bridge.half_width)
+    {
+        return Err(format!("bridge {} walkway exceeds its deck", bridge.id));
+    }
     let mut center = Vec::new();
     for pair in bridge.points.windows(2) {
         let [a, b] = pair else { continue };
@@ -637,6 +643,10 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
             });
         }
     }
+    let walkway = geometry::ribbon(
+        &center.iter().map(|point| point.column).collect::<Vec<_>>(),
+        bridge.walkway_half_width.unwrap_or(bridge.half_width),
+    )?;
     let mut sections = BTreeMap::new();
     for point in &center {
         for p in geometry::disk(point.column, bridge.half_width)? {
@@ -696,6 +706,13 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
             .columns
             .get(&p)
             .ok_or_else(|| format!("bridge {} leaves region", bridge.id))?;
+        // The old liquid reservation describes the lower water surface. A new
+        // solid outer ledge above it is a different support. Do not erase prior
+        // dry route, cave or bridge reservations merely because water is below.
+        let was_water_surface = build
+            .liquids
+            .get(&p)
+            .is_some_and(|liquid| columns.last().is_some_and(|run| run.top <= liquid.top));
         let bottom = level - bridge.thickness as i32 + 1;
         if columns.last().is_some_and(|run| run.top > level + 1) {
             return Err(format!(
@@ -706,11 +723,15 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
         // Endpoints can be rooted in solid abutments; crossing intervals must retain air/water below.
         let mut columns = columns.clone();
         volume::replace(&mut columns, bottom, level + 1, Some(&bridge.material))?;
-        staged.push((p, columns));
+        staged.push((p, columns, was_water_surface));
     }
-    for (p, columns) in staged {
+    for (p, columns, was_water_surface) in staged {
         build.columns.insert(p, columns);
-        build.reserved.insert(p);
+        if walkway.contains(&p) {
+            build.reserved.insert(p);
+        } else if was_water_surface && !build.routes.values().any(|route| route.contains_key(&p)) {
+            build.reserved.remove(&p);
+        }
     }
     Ok(())
 }

@@ -32,6 +32,7 @@ fn arch() -> BridgeSpec {
             })
             .collect(),
         half_width: 3,
+        walkway_half_width: None,
         thickness: 3,
         material: "limestone".into(),
     }
@@ -136,4 +137,94 @@ fn flat_bridge_keeps_its_existing_exact_ribbon() {
     for p in &world.reserved {
         assert_eq!(operators::terrain(&world, *p).expect("deck").0, 48);
     }
+}
+
+#[test]
+fn authored_walkway_reserves_travel_and_releases_supported_outer_water_ledge() {
+    use hex_world_contracts::{LiquidColumn, LiquidKind};
+    let mut world = ground();
+    let mut bridge = arch();
+    bridge.half_width = 5;
+    bridge.walkway_half_width = Some(4);
+    let outer = WorldHex::new(0, 5);
+    world.columns.insert(
+        outer,
+        vec![
+            VoxelRun {
+                bottom: 0,
+                top: 31,
+                material: "stone".into(),
+            },
+            VoxelRun {
+                bottom: 31,
+                top: 36,
+                material: "water".into(),
+            },
+        ],
+    );
+    world.liquids.insert(
+        outer,
+        LiquidColumn {
+            column: outer,
+            bottom: 31,
+            top: 36,
+            kind: LiquidKind::Standing,
+            body_id: "river".into(),
+            downstream: vec![],
+        },
+    );
+    world.reserved.insert(outer);
+    let water_before = world.liquids.clone();
+    operators::bridge(&mut world, &bridge).expect("separate dry ledge");
+    let centerline = geometry::line(WorldHex::new(-24, 0), WorldHex::new(24, 0)).expect("line");
+    assert_eq!(
+        world.reserved,
+        geometry::ribbon(&centerline, 4).expect("walkway")
+    );
+    assert!(!world.reserved.contains(&outer));
+    assert_eq!(
+        operators::terrain(&world, outer).expect("ledge").1,
+        "limestone"
+    );
+    assert_eq!(world.liquids, water_before);
+    assert_eq!(
+        volume::material_at(world.columns.get(&outer).expect("column"), 33),
+        Some("water")
+    );
+}
+
+#[test]
+fn bridge_outer_ledge_preserves_an_existing_dry_reservation() {
+    let mut world = ground();
+    let mut bridge = arch();
+    bridge.half_width = 5;
+    bridge.walkway_half_width = Some(4);
+    let prior = WorldHex::new(0, 5);
+    world.reserved.insert(prior);
+    operators::bridge(&mut world, &bridge).expect("bridge");
+    assert!(world.reserved.contains(&prior));
+}
+
+#[test]
+fn invalid_walkway_width_is_atomic_and_legacy_serialization_omits_it() {
+    let mut bridge = arch();
+    assert!(!ron::ser::to_string(&bridge)
+        .expect("serialize")
+        .contains("walkway_half_width"));
+    bridge.walkway_half_width = Some(bridge.half_width + 1);
+    let mut world = ground();
+    let before = world.columns.clone();
+    assert!(operators::bridge(&mut world, &bridge)
+        .expect_err("oversize walkway")
+        .contains("walkway"));
+    assert_eq!(world.columns, before);
+    assert!(world.reserved.is_empty());
+
+    let mut source =
+        super::parse_world(include_str!("../../../../assets/config/v4/rich-region.ron"))
+            .expect("source");
+    let recipe = source.recipes.values_mut().next().expect("recipe");
+    let bridge = recipe.bridges.first_mut().expect("bridge");
+    bridge.walkway_half_width = Some(bridge.half_width + 1);
+    assert!(super::validate_world(&source).is_err());
 }
