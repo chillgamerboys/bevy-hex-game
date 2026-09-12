@@ -61,6 +61,122 @@ fn sample(
     }
 }
 
+// Retain the previous eager-query target selection as a differential oracle.
+fn eager_reticle_target(session: &ArenaSession, observation: PlayerObservation) -> Option<ActorId> {
+    let team = session.actors.first()?.team;
+    let direction = observation.direction.normalize();
+    let delta = direction * 1600.0;
+    let mut nearest = session
+        .collision
+        .attack_sweep(observation.origin, delta, 0.0)
+        .map_or(1.0, |(hit, _)| hit.fraction);
+    let mut aimed = None;
+    for actor in session.actors.iter().filter(|a| a.team != team) {
+        let right = direction.cross(Vec3::Y).normalize_or(Vec3::X);
+        let up = right.cross(direction).normalize();
+        let rotation = actor.body_rotation().inverse();
+        let diameter = (rotation * right)
+            .abs()
+            .dot(actor.dimensions)
+            .max((rotation * up).abs().dot(actor.dimensions));
+        let sighted = [actor.center(), actor.eye()].into_iter().any(|point| {
+            observation.contains(point, diameter)
+                && session.collision.sight_clear(observation.origin, point)
+        });
+        if !sighted || actor.hp <= 0.0 {
+            continue;
+        }
+        if let Some(hit) = crate::shapes::sweep_actor(observation.origin, delta, actor, false, 0.0)
+        {
+            if hit.fraction < nearest {
+                nearest = hit.fraction;
+                aimed = Some(actor.id);
+            }
+        }
+    }
+    aimed
+}
+
+#[test]
+fn lazy_reticle_occlusion_matches_eager_selection_for_protected_and_live_barriers() {
+    use crate::BarrierSnapshot;
+    use hex_core::arena::ArenaStaticSpan;
+    for blocker in 0..6 {
+        let (mut session, mut view, geometry, observation) = fixture();
+        // Equal-distance ties retain roster order; another shape is farther away.
+        let mut tied = session.actors.get(1).expect("shadow").clone();
+        tied.id = 2;
+        session.actors.push(tied);
+        let mut farther = Actor::spawn(3, Vec3::new(12.0, SKIN, 2.0), Vec3::NEG_X);
+        farther.configure_expedition(ExpeditionRole::Goblin, &Default::default());
+        session.actors.push(farther);
+        if matches!(blocker, 1 | 2) {
+            view.static_spans.push(ArenaStaticSpan {
+                bottom: TilePos::new(HexCoord::from_world(Vec3::X * 4.0), 0),
+                top_level: 8,
+                blocks_movement: true,
+                blocks_projectiles: true,
+                blocks_sight: blocker == 2,
+            });
+            view.revision += 1;
+        }
+        if blocker >= 3 {
+            let barrier = BarrierSnapshot {
+                id: 7,
+                owner: 1,
+                center: Vec3::new(if blocker == 4 { 12.0 } else { 4.0 }, 0.8, 0.0),
+                normal: Vec3::X,
+                width: 4.0,
+                height: 1.6,
+                hp: if blocker == 5 { 0.0 } else { 60.0 },
+                max_hp: 60.0,
+                remaining: 4.0,
+                lifetime: 4.0,
+            };
+            session.collision.sync_barriers(&[barrier]);
+        }
+        session.collision.refresh(&view, geometry);
+        for yaw_step in -8_i16..=8 {
+            for pitch_step in -2_i16..=2 {
+                let direction = Vec3::new(
+                    1.0,
+                    f32::from(pitch_step) * 0.05,
+                    f32::from(yaw_step) * 0.04,
+                )
+                .normalize();
+                let observation = PlayerObservation {
+                    direction,
+                    ..observation
+                };
+                let expected = eager_reticle_target(&session, observation);
+                sample(&mut session, &view, geometry, observation, 1);
+                assert_eq!(
+                    session
+                        .player_knowledge
+                        .target
+                        .map(|target| target.actor_id),
+                    expected,
+                    "blocker={blocker}, yaw={yaw_step}, pitch={pitch_step}"
+                );
+            }
+        }
+        sample(&mut session, &view, geometry, observation, 1);
+        let expected = if matches!(blocker, 1..=3) {
+            None
+        } else {
+            Some(1)
+        };
+        assert_eq!(
+            session
+                .player_knowledge
+                .target
+                .map(|target| target.actor_id),
+            expected,
+            "blocker={blocker}"
+        );
+    }
+}
+
 #[test]
 fn projected_size_threshold_is_eight_pixels_and_sampling_is_frame_rate_independent() {
     let (_, _, _, mut observation) = fixture();

@@ -198,14 +198,11 @@ impl ArenaSession {
         let mut visible = BTreeMap::new();
         let direction = observation.direction.normalize();
         let delta = direction * 1600.0;
-        let mut nearest = self
-            .collision
-            .attack_sweep(observation.origin, delta, 0.0)
-            .map_or(1.0, |(hit, _)| hit.fraction);
+        let right = direction.cross(Vec3::Y).normalize_or(Vec3::X);
+        let up = right.cross(direction).normalize();
+        let mut nearest = 1.0;
         let mut aimed = None;
         for actor in self.actors.iter().filter(|a| a.team != team) {
-            let right = direction.cross(Vec3::Y).normalize_or(Vec3::X);
-            let up = right.cross(direction).normalize();
             let rotation = actor.body_rotation().inverse();
             let diameter = (rotation * right)
                 .abs()
@@ -252,6 +249,14 @@ impl ArenaSession {
                 }
             }
         }
+        // A terrain/barrier ray cannot change the result when no visible living
+        // actor intersects the reticle. Keep the original full-range query when
+        // it can matter, including strict ties and projectile-only blockers.
+        let aimed = aimed.filter(|_| {
+            self.collision
+                .attack_sweep(observation.origin, delta, 0.0)
+                .is_none_or(|(hit, _)| nearest < hit.fraction)
+        });
         if let Some(sites) = world
             .expedition
             .as_ref()
