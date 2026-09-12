@@ -36,6 +36,20 @@ fn roster() -> Vec<(String, Vec<ExpeditionRole>)> {
 }
 
 impl ArenaSession {
+    pub(crate) fn reward_standing_pose(
+        &self,
+        feet: Vec3,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> bool {
+        let body = Actor::spawn(0, feet, Vec3::NEG_Z);
+        feet.is_finite()
+            && steering::contained(&body, geometry)
+            && shapes::clear(&self.collision, &body, feet, body.body_yaw)
+            && dry(&body, world, geometry)
+            && shapes::ground(&self.collision, &body, feet, SKIN * 8.0).is_some()
+    }
+
     pub(super) fn initialize_expedition(
         &mut self,
         sites: &ArenaExpeditionSites,
@@ -162,7 +176,7 @@ impl ArenaSession {
         self.actors = actors;
         self.encounter = encounter;
         self.register_forest_roster();
-        self.register_expedition_fountains(sites);
+        self.register_expedition_sites(sites);
         self.publish_parties();
         Ok(())
     }

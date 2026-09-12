@@ -544,3 +544,6 @@ fn expedition_snapshot_uses_registered_roles_and_does_not_invent_reward_orbs() {
         .iter()
         .all(|m| !m.collected && m.available_position.is_none()));
 }
+
+#[path = "milestone_tests.rs"]
+mod milestone_tests;

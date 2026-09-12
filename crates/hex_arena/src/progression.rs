@@ -114,6 +114,10 @@ pub(crate) struct ProgressState {
     roster: BTreeMap<ActorId, RosterEntry>,
     expedition: bool,
     fountains: BTreeMap<String, expedition::FountainState>,
+    rewards: BTreeMap<ExpeditionReward, expedition::RewardState>,
+    settlement_supports: BTreeSet<hex_core::TilePos>,
+    death_positions: BTreeMap<ActorId, bevy_math::Vec3>,
+    death_order: Vec<ActorId>,
     defeated: BTreeSet<ActorId>,
     hits: BTreeMap<ActorId, u64>,
 }
@@ -145,6 +149,10 @@ impl Default for ProgressState {
             roster: BTreeMap::new(),
             expedition: false,
             fountains: BTreeMap::new(),
+            rewards: BTreeMap::new(),
+            settlement_supports: BTreeSet::new(),
+            death_positions: BTreeMap::new(),
+            death_order: Vec::new(),
             defeated: BTreeSet::new(),
             hits: BTreeMap::new(),
         }
@@ -287,6 +295,8 @@ impl ArenaSession {
             if !state.defeated.insert(actor.id) {
                 continue;
             }
+            state.death_positions.insert(actor.id, actor.feet);
+            state.death_order.push(actor.id);
             if entry.is_minion() {
                 state.snapshot.forest_defeated += 1;
             }

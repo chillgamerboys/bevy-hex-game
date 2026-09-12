@@ -88,7 +88,7 @@ impl Actor {
                 tuning.fireball_cooldown = 0.75;
                 tuning.projectile_speed = 45.0;
                 tuning.projectile_gravity = 12.0;
-                tuning.fireball_size = 0;
+                tuning.fireball_size = 1;
             }
             _ => {}
         }
