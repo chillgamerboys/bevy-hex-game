@@ -440,3 +440,144 @@ fn shadow_capacity_is_not_healing_and_fountain_uses_the_new_capacity() {
         1
     );
 }
+
+#[test]
+fn enemy_shaman_payload_is_unchanged_after_milestone_pickups_and_player_upgrades() {
+    let mut samples = Vec::new();
+    for rewarded in [false, true] {
+        let (mut session, view, geometry, materials, mut tuning) = start();
+        // Distinct valid enemy settings make accidental substitution of the
+        // player's fixed gravity and unlocked radius observable in real flight.
+        tuning.projectile_gravity = 16.0;
+        tuning.fireball_size = 0;
+        tuning.validate().expect("valid enemy comparison profile");
+        if rewarded {
+            for (role, reward) in [
+                (ExpeditionRole::Troll, ExpeditionReward::TrollDamage),
+                (ExpeditionRole::Dragon, ExpeditionReward::DragonExplosions),
+                (
+                    ExpeditionRole::MountainShadow,
+                    ExpeditionReward::ShadowVitality,
+                ),
+            ] {
+                kill_role(&mut session, role, true);
+                session.advance_milestones(&view, geometry);
+                collect(&mut session, reward, &view, geometry);
+            }
+            for stat in [
+                UpgradeStat::FireballSize,
+                UpgradeStat::FireballDamage,
+                UpgradeStat::ProjectileSpeed,
+            ] {
+                assert!(session.spend_upgrade(stat));
+            }
+            let player = session.player_tuning(&tuning);
+            assert!((player.fireball_damage - 45.0).abs() < 0.001);
+            assert!((player.fireball_radius() - 3.5).abs() < 0.001);
+            assert!((player.projectile_speed - 47.0).abs() < 0.001);
+            assert!((player.projectile_gravity - 12.0).abs() < 0.001);
+        }
+        let bridge = view.spawns.first().copied().expect("bridge");
+        let player = session.actors.first_mut().expect("player");
+        player.feet = bridge + Vec3::X * 0.6;
+        player.previous_feet = player.feet;
+        assert!((player.hp - 100.0).abs() < 0.001, "Shadow did not heal");
+        let actor = session
+            .actors
+            .iter_mut()
+            .find(|actor| actor.expedition_role() == Some(ExpeditionRole::Shaman))
+            .expect("living Shaman");
+        actor.feet = bridge - Vec3::X * 2.6;
+        actor.previous_feet = actor.feet;
+        actor.aim = Vec3::X;
+        actor.selected = Spell::Fireball;
+        let enemy = actor.expedition_tuning(&tuning);
+        assert!(actor
+            .casting(
+                ActorIntent {
+                    cast_pressed: true,
+                    cast_held: true,
+                    ..Default::default()
+                },
+                &enemy
+            )
+            .is_none());
+        while actor.charge().expect("normal charge").elapsed < enemy.encounters.shaman_charge {
+            assert!(actor
+                .casting(
+                    ActorIntent {
+                        cast_held: true,
+                        ..Default::default()
+                    },
+                    &enemy
+                )
+                .is_none());
+        }
+        let charge = actor.charge().expect("charged").elapsed;
+        let (spell, speed) = actor
+            .casting(
+                ActorIntent {
+                    cast_released: true,
+                    ..Default::default()
+                },
+                &enemy,
+            )
+            .expect("ordinary charged release");
+        assert!((speed - tuning.launch_speed(charge)).abs() < 0.001);
+        let owner = actor.id;
+        session.release(
+            owner,
+            spell,
+            &tuning,
+            speed,
+            &view,
+            geometry,
+            materials,
+            &mut CommandsOut::default(),
+        );
+        let shot = session.projectiles.last().expect("enemy projectile");
+        assert_eq!(shot.owner, owner);
+        assert_eq!(shot.fireball_mode(), FireballMode::Explosive);
+        let initial_velocity = shot.velocity;
+        assert!((initial_velocity.length() - speed).abs() < 0.001);
+        session.advance_projectiles(&view, geometry, materials, &mut CommandsOut::default());
+        let velocity = session.projectiles.last().expect("still flying").velocity;
+        let gravity = (initial_velocity.y - velocity.y) / STEP;
+        assert!((gravity - 16.0).abs() < 0.001);
+        if rewarded {
+            // Player tuning changes again while the enemy payload is in flight.
+            assert!(session.spend_upgrade(UpgradeStat::FireballDamage));
+            assert!(session.spend_upgrade(UpgradeStat::ProjectileSpeed));
+            assert!((session.player_tuning(&tuning).fireball_damage - 50.0).abs() < 0.001);
+        }
+        for _ in 0..120 {
+            session.advance_projectiles(&view, geometry, materials, &mut CommandsOut::default());
+            if session.projectiles.is_empty() {
+                break;
+            }
+        }
+        assert!(session.projectiles.is_empty(), "enemy shot resolved");
+        let impact = session
+            .effects
+            .iter()
+            .rev()
+            .find(|effect| effect.kind == VisualEffectKind::Fireball)
+            .expect("enemy explosion");
+        assert!((impact.radius - 1.5).abs() < 0.001);
+        let damage = 100.0 - session.actors.first().expect("player").hp;
+        assert!(
+            damage > 30.0 && damage <= tuning.encounters.shaman_fireball_damage,
+            "enemy retains its own damage and one falloff contribution: {damage}"
+        );
+        samples.push([damage, impact.radius, gravity, initial_velocity.length()]);
+    }
+    let baseline = samples.first().expect("baseline");
+    let rewarded = samples.last().expect("rewarded player");
+    assert!(
+        baseline
+            .iter()
+            .zip(rewarded)
+            .all(|(a, b)| (a - b).abs() < 0.001),
+        "enemy damage/radius/gravity/speed changed after player rewards: {samples:?}"
+    );
+}
