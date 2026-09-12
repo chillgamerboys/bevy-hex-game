@@ -1,4 +1,8 @@
 //! Player-facing UI consumes gameplay observations and a cached world overview.
+pub(super) mod icons;
+mod performance;
+#[cfg(test)]
+mod tests;
 use super::{hud, recording::Recorder, ArenaFrame, ViewState};
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -50,9 +54,11 @@ pub(super) enum UxAction {
 #[derive(Component)]
 pub(super) enum UxLabel {
     Target,
+    Notice,
     Recording,
     RecordButton,
     RecorderDetail,
+    RecorderFull,
     Scale,
     MapSelection,
     Pin,
@@ -64,13 +70,17 @@ pub(super) struct MiniMap;
 #[derive(Component)]
 pub(super) struct MenuScroll;
 #[derive(Component)]
+pub(super) struct MenuPanel;
+#[derive(Component)]
+pub(super) struct MenuHelper;
+#[derive(Component)]
 pub(super) struct SpellFill(pub usize);
 #[derive(Component)]
 pub(super) struct SpellIcon(pub usize);
 #[derive(Component)]
 pub(super) struct Reticle;
 #[derive(Component)]
-struct MapCanvas {
+pub(super) struct MapCanvas {
     large: bool,
 }
 #[derive(Component)]
@@ -96,6 +106,11 @@ pub(super) struct UxState {
     keyboard_press: Option<Entity>,
     focus: Option<Entity>,
     pub(super) present_micros: f64,
+    timing_start: Option<std::time::Instant>,
+    timing_samples: std::collections::VecDeque<f64>,
+    observation_micros: f64,
+    notice: String,
+    notice_remaining: f32,
 }
 impl Default for UxState {
     fn default() -> Self {
@@ -115,10 +130,20 @@ impl Default for UxState {
             keyboard_press: None,
             focus: None,
             present_micros: 0.0,
+            timing_start: None,
+            timing_samples: std::collections::VecDeque::with_capacity(256),
+            observation_micros: 0.0,
+            notice: String::new(),
+            notice_remaining: 0.0,
         }
     }
 }
 impl UxState {
+    pub(super) fn snapshot(&self) -> serde_json::Value {
+        let mut samples: Vec<_> = self.timing_samples.iter().copied().collect();
+        samples.sort_by(f64::total_cmp);
+        serde_json::json!({"page":self.page.name(),"scale":self.scale,"map_visible":self.map_visible,"destination":self.pin.map(|value| value.to_array()),"selected_landmark":self.selected_id,"ui_cpu_samples":samples.len(),"ui_cpu_p95_micros":samples.get(samples.len().saturating_sub(1)*95/100)})
+    }
     pub(super) fn has_menu_focus(&self) -> bool {
         self.focus.is_some()
     }
@@ -130,6 +155,24 @@ fn preference_path() -> std::path::PathBuf {
         .with_file_name("battle-ui.ron")
 }
 fn load(mut ux: ResMut<UxState>, state: Res<ViewState>) {
+    if state.capture.is_some() {
+        ux.page = match std::env::var("HEX_ARENA_UI_PAGE").ok().as_deref() {
+            Some("map") => Page::Map,
+            Some("upgrades") => Page::Upgrades,
+            Some("settings") => Page::Settings,
+            Some("controls") => Page::Controls,
+            Some("overview") => Page::Overview,
+            _ if state.capture_view == "tuning" => Page::Upgrades,
+            _ => Page::Overview,
+        };
+        ux.map_visible = std::env::var("HEX_ARENA_UI_MAP").is_ok_and(|s| s == "1");
+        ux.scale = std::env::var("HEX_ARENA_UI_SCALE")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(1.0)
+            .clamp(1.0, 2.0);
+    }
     if state.capture.is_none() {
         if let Ok(p) = crate::storage::read(&preference_path())
             .and_then(|s| ron::from_str::<Preferences>(&s).map_err(std::io::Error::other))
@@ -141,7 +184,12 @@ fn load(mut ux: ResMut<UxState>, state: Res<ViewState>) {
     }
 }
 pub(super) fn install(app: &mut App) {
+    performance::install(app);
     app.init_resource::<UxState>()
+        .add_systems(
+            Update,
+            begin_timing.before(hud::update).in_set(ArenaFrame::Present),
+        )
         .add_systems(Startup, load)
         .add_systems(
             Update,
@@ -149,7 +197,13 @@ pub(super) fn install(app: &mut App) {
         )
         .add_systems(
             Update,
-            (present_map, present_feedback, present_menus)
+            (
+                present_map,
+                present_feedback,
+                present_menus,
+                reflow,
+                end_timing,
+            )
                 .chain()
                 .after(hud::update)
                 .in_set(ArenaFrame::Present),
@@ -191,6 +245,14 @@ pub(super) fn spawn_map(parent: &mut ChildSpawnerCommands, large: bool, size: f3
             }
         });
 }
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Finite camera directions are rounded to eight octants, then wrapped to 0..8."
+)]
+fn direction_octant(direction: Vec2) -> usize {
+    ((direction.x.atan2(-direction.y) / std::f32::consts::FRAC_PI_4).round() as i32).rem_euclid(8)
+        as usize
+}
 fn coordinates(overview: &ArenaOverview, position: Vec2) -> Vec2 {
     ((position - overview.min) / (overview.max - overview.min)).clamp(Vec2::ZERO, Vec2::ONE)
 }
@@ -214,8 +276,12 @@ pub(super) fn controls(
         ux.pin = None;
         ux.selected.clear();
         ux.selected_id = None;
-        ux.map_visible = false;
-        ux.page = Page::Overview;
+        if state.capture.is_none() {
+            ux.map_visible = false;
+        }
+        if state.capture.is_none() {
+            ux.page = Page::Overview;
+        }
         ux.focus = None;
     }
     if windows.iter().any(|w| !w.focused) {
@@ -351,6 +417,8 @@ pub(super) fn keyboard(
     keys: Res<ButtonInput<KeyCode>>,
     mut ux: ResMut<UxState>,
     mut buttons: Query<(Entity, &mut Interaction, &ComputedNode, &UiGlobalTransform), With<Button>>,
+    parents: Query<&ChildOf>,
+    mut scrolls: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<MenuScroll>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     if let Some(entity) = ux.keyboard_press.take() {
@@ -383,8 +451,10 @@ pub(super) fn keyboard(
                 (None, 1) => 0,
                 _ => visible.len() - 1,
             };
-            ux.focus = Some(visible[next].0);
-            let focused = visible[next].0;
+            let Some((focused, _)) = visible.get(next).copied() else {
+                return;
+            };
+            ux.focus = Some(focused);
             if let Ok((_, _, child, transform)) = buttons.get(focused) {
                 let child_rect =
                     Rect::from_center_size(transform.affine().translation, child.size());
@@ -424,12 +494,14 @@ pub(super) fn keyboard(
 }
 fn observe(
     mut session: ResMut<ArenaSession>,
+    mut ux: ResMut<UxState>,
     world: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
     state: Res<ViewState>,
     time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let start = std::time::Instant::now();
     let Some(actor) = session
         .human_actor_id()
         .and_then(|id| session.actors.iter().find(|a| a.id == id))
@@ -439,7 +511,10 @@ fn observe(
     let direction = super::aim(&state);
     let origin = super::camera_origin(&session, &state, actor.eye(), direction);
     let (aspect, height) = windows.single().map_or((16.0 / 9.0, 900.0), |w| {
-        (w.width() / w.height().max(1.0), w.physical_height() as f32)
+        (
+            w.width() / w.height().max(1.0),
+            w.height() * w.resolution.scale_factor(),
+        )
     });
     session.observe_player(
         &world,
@@ -448,7 +523,7 @@ fn observe(
             active: state.started
                 && !state.paused
                 && !state.external_camera()
-                && windows.iter().all(|w| w.focused),
+                && (state.capture.is_some() || windows.iter().all(|w| w.focused)),
             origin,
             direction,
             vertical_fov: 75.0_f32.to_radians(),
@@ -457,6 +532,7 @@ fn observe(
         },
         time.delta_secs(),
     );
+    ux.observation_micros = start.elapsed().as_secs_f64() * 1e6;
 }
 fn landmark_name(kind: LandmarkKind) -> &'static str {
     match kind {
@@ -543,9 +619,12 @@ fn present_map(
     if let Some(player) = player {
         let d = super::aim(&state);
         let arrows = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"];
-        let index =
-            ((d.x.atan2(-d.z) / std::f32::consts::FRAC_PI_4).round() as i32).rem_euclid(8) as usize;
-        markers.push(Some((player.feet.xz(), arrows[index], Color::WHITE)));
+        let index = direction_octant(d.xz());
+        markers.push(Some((
+            player.feet.xz(),
+            arrows.get(index).copied().unwrap_or("↑"),
+            Color::WHITE,
+        )));
     } else {
         markers.push(None);
     }
@@ -592,9 +671,21 @@ fn present_feedback(
     time: Res<Time>,
     mut ux: ResMut<UxState>,
     mut fills: Query<(&SpellFill, &mut Node, &mut BackgroundColor)>,
-    mut icons: Query<(&SpellIcon, &mut TextColor), Without<Reticle>>,
+    mut icons: Query<(&SpellIcon, &mut ImageNode), Without<Reticle>>,
     mut reticles: Query<&mut TextColor, (With<Reticle>, Without<SpellIcon>)>,
 ) {
+    ux.notice_remaining = (ux.notice_remaining - time.delta_secs()).max(0.0);
+    if ux.notice != session.notice {
+        ux.notice.clone_from(&session.notice);
+        ux.notice_remaining = if ["reward:", "fountain", "Troll calls", "Level "]
+            .iter()
+            .any(|needle| session.notice.contains(needle))
+        {
+            3.0
+        } else {
+            0.0
+        };
+    }
     let feedback = session.combat_feedback(&tuning);
     if let Some(hit) = feedback.hit {
         if hit.sequence != ux.hit_sequence {
@@ -611,7 +702,9 @@ fn present_feedback(
         };
     }
     for (fill, mut node, mut color) in &mut fills {
-        let s = feedback.spells[fill.0];
+        let Some(s) = feedback.spells.get(fill.0) else {
+            continue;
+        };
         let (fraction, c) = match s.state {
             SpellAvailabilityState::Ready => (1.0, Color::srgb(0.4, 0.9, 0.8)),
             SpellAvailabilityState::CoolingDown => (
@@ -625,7 +718,11 @@ fn present_feedback(
         color.0 = c;
     }
     for (icon, mut c) in &mut icons {
-        c.0 = if feedback.spells[icon.0].state == SpellAvailabilityState::CoolingDown {
+        c.color = if feedback
+            .spells
+            .get(icon.0)
+            .is_some_and(|spell| spell.state == SpellAvailabilityState::CoolingDown)
+        {
             Color::srgb(0.5, 0.56, 0.62)
         } else {
             Color::WHITE
@@ -642,7 +739,7 @@ fn present_menus(
     mut pages: Query<(&PageBody, &mut Node), Without<UxLabel>>,
     mut scale: ResMut<UiScale>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut borders: Query<(Entity, &mut BorderColor), With<Button>>,
+    mut borders: Query<(Entity, &mut BorderColor, Option<&UxAction>), With<Button>>,
 ) {
     let height = windows.single().map_or(1080.0, Window::height);
     scale.0 = (height / 1080.0).clamp(2.0 / 3.0, 2.0) * ux.scale;
@@ -656,13 +753,26 @@ fn present_menus(
     let feedback = session.combat_feedback(&tuning);
     for (label, mut text, mut node) in &mut labels {
         let next = match label {
+            UxLabel::Notice => {
+                node.display = if ux.notice_remaining > 0.0 {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+                ux.notice.clone()
+            }
             UxLabel::Target => feedback.target.as_ref().map_or(String::new(), |t| {
                 let (pips, condition) = match t.health_pips {
                     3 => ("● ● ●", "Healthy"),
                     2 => ("● ● ○", "Wounded"),
                     _ => ("● ○ ○", "Critical"),
                 };
-                format!("{pips}  {condition}")
+                let name = match t.role {
+                    Some(hex_arena::ExpeditionRole::BabyGoblin) => "Baby goblin".into(),
+                    Some(hex_arena::ExpeditionRole::Troll) => "Troll".into(),
+                    _ => format!("{:?}", t.species),
+                };
+                format!("{name}  {pips}  {condition}")
             }),
             UxLabel::Recording => {
                 node.display = if recorder.as_ref().is_some_and(|r| r.is_recording()) {
@@ -671,7 +781,7 @@ fn present_menus(
                     Display::None
                 };
                 recorder.as_ref().map_or(String::new(), |r| {
-                    let secs = r.elapsed_seconds() as u64;
+                    let secs = std::time::Duration::from_secs_f64(r.elapsed_seconds()).as_secs();
                     format!("● REC  {:02}:{:02}", secs / 60, secs % 60)
                 })
             }
@@ -679,7 +789,11 @@ fn present_menus(
                 recorder
                     .as_ref()
                     .map_or("RECORDING UNAVAILABLE".into(), |r| {
-                        if r.is_recording() {
+                        if r.is_starting() {
+                            "STARTING…".into()
+                        } else if r.is_finalizing() {
+                            "SAVING…".into()
+                        } else if r.is_recording() {
                             "STOP RECORDING".into()
                         } else if r.can_record() {
                             "START RECORDING".into()
@@ -688,7 +802,15 @@ fn present_menus(
                         }
                     })
             }
-            UxLabel::RecorderDetail => recorder
+            UxLabel::RecorderDetail => recorder.as_ref().map_or(String::new(), |r| {
+                let status = r.status_text();
+                if status.chars().count() > 85 {
+                    "Recording details are in Overview.".into()
+                } else {
+                    status.into()
+                }
+            }),
+            UxLabel::RecorderFull => recorder
                 .as_ref()
                 .map_or(String::new(), |r| r.status_text().into()),
             UxLabel::Scale => format!("Interface size: {:.0}%", ux.scale * 100.0),
@@ -726,7 +848,18 @@ fn present_menus(
                     session
                         .human_actor_id()
                         .and_then(|id| session.actors.iter().find(|a| a.id == id))
-                        .map(|a| format!("◆ Destination  {:.0} units", a.feet.xz().distance(p)))
+                        .map(|a| {
+                            let delta = p - a.feet.xz();
+                            let index = direction_octant(delta);
+                            format!(
+                                "◆ {}  {:.0} units",
+                                ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+                                    .get(index)
+                                    .copied()
+                                    .unwrap_or("N"),
+                                delta.length()
+                            )
+                        })
                 })
                 .unwrap_or_default(),
         };
@@ -734,11 +867,47 @@ fn present_menus(
             text.0 = next;
         }
     }
-    for (entity, mut border) in &mut borders {
+    for (entity, mut border, action) in &mut borders {
         if ux.focus == Some(entity) && state.paused {
             *border = BorderColor::all(Color::srgb(1.0, 0.8, 0.3));
+        } else if action
+            .is_some_and(|action| matches!(action,UxAction::Page(page) if *page == ux.page))
+        {
+            *border = BorderColor::all(Color::srgb(0.4, 0.9, 0.8));
         } else {
             *border = BorderColor::all(Color::NONE);
         }
+    }
+}
+
+fn reflow(
+    ux: Res<UxState>,
+    mut panels: Query<&mut Node, (With<MenuPanel>, Without<MenuHelper>)>,
+    mut helpers: Query<&mut Node, (With<MenuHelper>, Without<MenuPanel>)>,
+) {
+    let compact = ux.scale >= 1.75;
+    for mut node in &mut panels {
+        node.padding = UiRect::all(px(if compact { 16 } else { 24 }));
+        node.row_gap = px(if compact { 8 } else { 14 });
+    }
+    for mut node in &mut helpers {
+        node.display = if compact {
+            Display::None
+        } else {
+            Display::Flex
+        };
+    }
+}
+fn begin_timing(mut ux: ResMut<UxState>) {
+    ux.timing_start = Some(std::time::Instant::now());
+}
+fn end_timing(mut ux: ResMut<UxState>) {
+    if let Some(start) = ux.timing_start.take() {
+        let micros = start.elapsed().as_secs_f64() * 1e6 + ux.observation_micros;
+        ux.present_micros = micros;
+        if ux.timing_samples.len() == 256 {
+            ux.timing_samples.pop_front();
+        }
+        ux.timing_samples.push_back(micros);
     }
 }

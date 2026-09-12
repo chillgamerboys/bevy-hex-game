@@ -49,7 +49,7 @@ The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel p
 
 | Input | Action |
 |---|---|
-| WASD / mouse | Move at 4.5 units/second / look |
+| WASD / mouse | Move / look (4.725 units/s in the expedition; 4.5 on legacy maps) |
 | Space | Ordinary jump |
 | E | Immediate High Jump; preserves a held projectile charge |
 | Hold then release left mouse (LMB) | Charge and cast Fireball |
@@ -58,6 +58,36 @@ The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel p
 | T | Toggle assistance for the active gesture, or the last-used projectile (initially Fireball) |
 | Escape or Tab | Pause combat, release the cursor and open the menu |
 | R | Restore the whole selected encounter and return to the ready screen |
+| M | Toggle the expedition minimap without pausing |
+| F9 | Bookmark the current native recording |
+| Cmd-Q (macOS) | Finalize any recording and quit |
+
+Battle UI keeps the active screen to the reticle, spell cards and compact player HP.
+Cards distinguish ready, cooldown and held-charge states; aiming at a visible enemy
+shows Healthy, Wounded or Critical pips. Esc pages hold Overview, Map, Upgrades,
+Settings and Controls. Settings cycles interface size from 100% through 200%; menus
+scroll with the wheel and arrows move keyboard focus. Presentation preferences
+persist separately from the current run.
+
+The expedition's north-up map remembers Dragons, Shadow, Troll and fountains only
+after the player visibly observes them. Icons remember last-seen locations and
+charged/spent fountain state; hidden enemies do not update their remembered position.
+Click a discovered marker in Esc → Map to inspect it, or click terrain to set one
+personal destination. M starts hidden each run; Restart clears all discoveries and
+the destination. The expedition player has a 1.2-unit physical body and 1.02-unit
+physical eyes, retaining the .25 radius and existing jump/step behavior.
+
+On macOS 15+, Esc provides Start/Stop Recording and Open Recordings. The bundled
+helper requests screen-capture permission on the first Record action, captures only
+the requesting arena window (HUD and menus included), and records video without
+microphone or system audio. MP4 clips are H.264, SDR, 30 fps, at most 1080p, saved to
+`~/Movies/Hex Game/Recordings/` alongside timestamped `.events.jsonl` metadata and F9
+bookmarks. Red REC appears only after the native start callback. Pause, death and
+Restart remain in the same clip. Esc Quit, the window close button and Cmd-Q wait
+for finalization; forced termination, Dock Quit or logout may leave an explicitly
+partial file. Other platforms keep gameplay available and show recording unavailable.
+Full recorder status appears in Overview. Native implementation details are in
+[the recorder guide](../../crates/hex_game/native/recorder/README.md).
 
 Maximum projectile charge takes 0.75 seconds. Holding longer does not auto-fire.
 A tap has one-third of the old reference range; full charge has 130%, measured for
@@ -66,7 +96,7 @@ The first mouse button pressed owns the charge. Pressing the other button during
 that hold neither switches spells nor queues another cast; release and press it
 again to begin a new gesture. Only the actively charging spell is highlighted.
 Pausing, focus loss, death and resetting cancel a charge.
-Human and Shadow share the 4.5-unit movement speed; Shift does not add sprinting.
+Legacy Human and Shadow use 4.5 units/s; the expedition player uses 4.725. Shift does not add sprinting.
 Pressing **E** does not cancel charging: you can jump high while preparing or releasing
 Shield or Fireball. High Jump replaces Area Blast. It is an immediate upward boost,
 usable on the ground or in the air, with **four world units** of rise from rest and a

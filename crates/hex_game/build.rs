@@ -2,10 +2,6 @@
 
 use std::{env, error::Error, path::PathBuf, process::Command};
 
-#[expect(
-    clippy::print_stdout,
-    reason = "Cargo build-script directives must be written to stdout."
-)]
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=native/recorder/Recorder.swift");
     println!("cargo:rerun-if-changed=native/recorder/Info.plist");

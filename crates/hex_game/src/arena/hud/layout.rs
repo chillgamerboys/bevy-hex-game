@@ -77,7 +77,12 @@ fn overlay() -> Node {
     }
 }
 
-pub(crate) fn setup(mut commands: Commands) {
+pub(crate) fn setup(mut commands: Commands, mut images: Option<ResMut<Assets<Image>>>) {
+    let icons: [Handle<Image>; 3] = std::array::from_fn(|i| {
+        images
+            .as_mut()
+            .map_or_else(Handle::default, |images| ux::icons::create(images, i))
+    });
     commands.init_resource::<ux::UxState>();
     commands
         .spawn((overlay(), GlobalZIndex(10), CombatHud))
@@ -127,6 +132,17 @@ pub(crate) fn setup(mut commands: Commands) {
             .with_children(|strip| {
                 strip.spawn((
                     Node {
+                        max_width: percent(80),
+                        padding: UiRect::axes(px(14), px(6)),
+                        display: Display::None,
+                        ..default()
+                    },
+                    BackgroundColor(PANEL),
+                    text("", 24.0, INK),
+                    UxLabel::Notice,
+                ));
+                strip.spawn((
+                    Node {
                         padding: UiRect::axes(px(14), px(5)),
                         border_radius: BorderRadius::all(px(6)),
                         ..default()
@@ -136,7 +152,7 @@ pub(crate) fn setup(mut commands: Commands) {
                     Label::Health,
                 ));
                 strip.spawn(row()).with_children(|bar| {
-                    for (index, (key, name, icon)) in [
+                    for (index, (key, name, _icon)) in [
                         ("RMB", "SHIELD", "[]"),
                         ("LMB", "FIREBALL", "*"),
                         ("E", "HIGH JUMP", "↑"),
@@ -166,7 +182,16 @@ pub(crate) fn setup(mut commands: Commands) {
                                 ..default()
                             })
                             .with_children(|r| {
-                                r.spawn((text(icon, 38.0, INK), ux::SpellIcon(index)));
+                                r.spawn((
+                                    Node {
+                                        width: px(44),
+                                        height: px(44),
+                                        flex_shrink: 0.0,
+                                        ..default()
+                                    },
+                                    ImageNode::new(icons.get(index).cloned().unwrap_or_default()),
+                                    ux::SpellIcon(index),
+                                ));
                                 r.spawn(text(format!("{key}  {name}"), 22.0, INK));
                             });
                             card.spawn((text("", 26.0, INK), Label::Spell(index)));
@@ -257,9 +282,14 @@ pub(crate) fn setup(mut commands: Commands) {
                 text("", 22.0, INK),
                 Label::ObserverStatus,
             ));
+            r.spawn((Node { position_type:PositionType::Absolute,bottom:px(14),width:percent(100),padding:UiRect::horizontal(px(18)),justify_content:JustifyContent::Center,..default() },Name::new("Observer footer container"))).with_children(|footer| {
+                footer.spawn((Node {padding:UiRect::axes(px(12),px(6)),border_radius:BorderRadius::all(px(4)),max_width:percent(100),..default()},BackgroundColor(PANEL),Name::new("Observer footer panel"))).with_children(|panel| {
+                    panel.spawn((text("WASD move   Q / E vertical   Shift fast   Mouse look   Wheel zoom   C orbit / free   Esc pause",18.0,INK),Name::new("Observer footer text")));
+                });
+            });
         });
     commands.spawn((overlay(),BackgroundColor(Color::srgba(0.01,0.02,0.035,0.8)),GlobalZIndex(20),StartPanel)).with_children(|overlay| {
-        overlay.spawn((panel(),BackgroundColor(PANEL))).with_children(|p| {
+        overlay.spawn((panel(),BackgroundColor(PANEL),ux::MenuPanel)).with_children(|p| {
             p.spawn(text("BATTLE MODE",36.0,INK));
             p.spawn(scroll()).with_children(|p| {
                 p.spawn(row()).with_children(|r| {
@@ -296,9 +326,9 @@ pub(crate) fn setup(mut commands: Commands) {
         });
     });
     commands.spawn((Node { display:Display::None,..overlay() },BackgroundColor(Color::srgba(0.01,0.02,0.035,0.8)),GlobalZIndex(20),PausePanel)).with_children(|overlay| {
-        overlay.spawn((panel(),BackgroundColor(PANEL))).with_children(|p| {
+        overlay.spawn((panel(),BackgroundColor(PANEL),ux::MenuPanel)).with_children(|p| {
             p.spawn((text("",36.0,INK),Label::MenuTitle));
-            p.spawn((text("",24.0,INK),Label::MenuHelp));
+            p.spawn((text("",24.0,INK),Label::MenuHelp,ux::MenuHelper));
             p.spawn(row()).with_children(|r| { for page in Page::ALL {button(r,page.name(),UxAction::Page(page));} });
             p.spawn(scroll()).with_children(|body| {
                 for page in Page::ALL {
@@ -311,6 +341,7 @@ pub(crate) fn setup(mut commands: Commands) {
 
                                 p.spawn((text("",26.0,INK),Label::MenuRules));
                                 p.spawn((text("",24.0,INK),Label::Status));
+                                p.spawn((text("",24.0,INK),UxLabel::RecorderFull));
                             }
                             Page::Map => {
                                 ux::spawn_map(p,true,480.0);
@@ -328,7 +359,7 @@ pub(crate) fn setup(mut commands: Commands) {
                             Page::Settings => {
                                 p.spawn((text("",26.0,INK),UxLabel::Scale));
                                 button(p,"CHANGE UI SIZE",UxAction::Scale);
-                                button(p,"FULLSCREEN / WINDOWED",Action::Fullscreen);
+                                p.spawn((Button, Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),border:UiRect::all(px(2)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,..default() }, BackgroundColor(Color::srgb(0.12, 0.24, 0.29)), BorderColor::all(Color::NONE), Action::Fullscreen)).with_children(|b| {b.spawn((text("Fullscreen",26.0,INK),Label::WindowMode));});
                                 p.spawn(text("C switches first / third person.\nUI preferences persist; Restart resets only your run.",26.0,INK));
                             }
                             Page::Controls => {p.spawn(text("WASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nEsc / Tab   Pause / resume\nR   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls",26.0,INK));}

@@ -1404,6 +1404,7 @@ fn capture_frame(
     render_context: (
         Option<Res<hex_map::LiquidVisualTime>>,
         Option<Res<hex_core::arena::ArenaRenderStatus>>,
+        Option<Res<ux::UxState>>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1414,7 +1415,7 @@ fn capture_frame(
         Res<hex_core::DamagedVoxels>,
     ),
 ) {
-    let (liquid_clock, render) = render_context;
+    let (liquid_clock, render, ui) = render_context;
     let Some(path) = state.capture.clone() else {
         return;
     };
@@ -1832,6 +1833,7 @@ fn capture_frame(
         ("frame_timing_note", serde_json::json!("Instant start-to-start of consecutive main app Update frames; includes scheduler and render-submission waits, not GPU execution or vsync timing. Simulation dt is a separate engine clock.")),
         ("frame_interval_indexing", serde_json::json!("Wall interval index 0 spans Update starts at frame 1 to 2 and includes frame 1 work; stress tick rows identify their containing app frame.")),
         ("tick_samples", serde_json::json!(tick_samples)),
+        ("battle_ui", serde_json::json!(ui.as_ref().map(|ui|ui.snapshot()))),
         ("width", serde_json::json!(WIDTH)),
         ("height", serde_json::json!(HEIGHT)),
         ("evidence", serde_json::json!(if encounter::stress_view(&state.capture_view) || wisp::stress_view(&state.capture_view) { "SYNTHETIC_PERFORMANCE; normal gameplay, movement, human balance, GPU and vsync are not established" } else { "STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending" })),

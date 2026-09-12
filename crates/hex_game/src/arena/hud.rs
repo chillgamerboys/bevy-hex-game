@@ -48,6 +48,7 @@ pub(super) enum Label {
     MenuHelp,
     Resume,
     MenuRules,
+    WindowMode,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
@@ -370,6 +371,7 @@ pub(super) fn update(
         ),
     >,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let pending = render.map_or(0, |status| status.pending_chunks);
     let tuning = session.player_tuning(&tuning);
@@ -472,6 +474,7 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::WindowMode => if windows.iter().next().is_some_and(|w| w.mode != WindowMode::Windowed) {"Windowed".into()} else {"Fullscreen".into()},
             Label::MenuTitle if forest_knocked_out => "RUN ENDED / KNOCKED OUT".into(),
             Label::MenuTitle if session.completed_run() => "VICTORY / EXPLORE THE MAP".into(),
             Label::MenuTitle if run.is_some() && !session.is_finished() => "PAUSED / LEVEL UPGRADES".into(),
@@ -560,7 +563,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             }
             Label::Spell(index) => {
                 let feedback = session.combat_feedback(&tuning);
-                let spell = feedback.spells[*index];
+                let Some(spell) = feedback.spells.get(*index) else { continue; };
                 match spell.state {
                     hex_arena::SpellAvailabilityState::Ready => "✓ READY".into(),
                     hex_arena::SpellAvailabilityState::CoolingDown => format!("{:.1}s", (spell.cooldown_remaining * 10.0).ceil() / 10.0),
@@ -613,7 +616,10 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
     }
     let feedback = session.combat_feedback(&tuning);
     for (card, mut border) in &mut cards {
-        *border = BorderColor::all(match feedback.spells[card.0].state {
+        let Some(spell) = feedback.spells.get(card.0) else {
+            continue;
+        };
+        *border = BorderColor::all(match spell.state {
             hex_arena::SpellAvailabilityState::Ready => Color::srgb(0.4, 0.9, 0.8),
             hex_arena::SpellAvailabilityState::Charging => Color::srgb(1.0, 0.75, 0.32),
             _ => MUTED,
