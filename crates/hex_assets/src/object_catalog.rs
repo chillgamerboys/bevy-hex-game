@@ -1481,6 +1481,16 @@ mod tests {
                 .expect("shipped object manifest should parse");
         let objects = [
             include_str!("../../../assets/art/objects/plant/date-palm.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-ancient-1.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-ancient-2.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-ancient-3.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-broadleaf-1.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-broadleaf-2.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-broadleaf-3.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-heart.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-pine-1.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-pine-2.ron"),
+            include_str!("../../../assets/art/objects/plant/forest-pine-3.ron"),
             include_str!("../../../assets/art/objects/plant/old-growth.ron"),
             include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
             include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
@@ -1505,6 +1515,16 @@ mod tests {
         .collect::<BTreeMap<_, _>>();
         let expected_ids = [
             "plant/date-palm",
+            "plant/forest-ancient-1",
+            "plant/forest-ancient-2",
+            "plant/forest-ancient-3",
+            "plant/forest-broadleaf-1",
+            "plant/forest-broadleaf-2",
+            "plant/forest-broadleaf-3",
+            "plant/forest-heart",
+            "plant/forest-pine-1",
+            "plant/forest-pine-2",
+            "plant/forest-pine-3",
             "plant/old-growth",
             "plant/small-broadleaf",
             "plant/snowy-old-growth",
@@ -1525,7 +1545,7 @@ mod tests {
 
         let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
             .expect("shipped authored object graph should resolve");
-        assert_eq!(resolved.objects().len(), 15);
+        assert_eq!(resolved.objects().len(), 25);
         assert_eq!(resolved.styles().styles().len(), 8);
 
         let palm = resolved
@@ -1800,12 +1820,22 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                12_455_183_987_975_877_660,
-                8_439_221_568_114_641_522,
-                7_479_919_725_092_961_930,
+                6_189_532_245_158_489_920,
+                551_303_460_016_448_058,
+                16_422_034_895_737_189_577,
             )
         );
         let expected_object_fingerprints = BTreeMap::from([
+            (id("plant/forest-ancient-1"), 847_996_166_293_989_302),
+            (id("plant/forest-ancient-2"), 13_745_455_107_971_422_036),
+            (id("plant/forest-ancient-3"), 5_341_276_170_896_364_228),
+            (id("plant/forest-broadleaf-1"), 12_415_967_048_506_086_311),
+            (id("plant/forest-broadleaf-2"), 5_492_519_561_514_625_474),
+            (id("plant/forest-broadleaf-3"), 12_205_010_983_471_196_521),
+            (id("plant/forest-heart"), 9_548_397_594_607_149_242),
+            (id("plant/forest-pine-1"), 17_810_419_037_564_702_941),
+            (id("plant/forest-pine-2"), 13_473_790_600_682_508_947),
+            (id("plant/forest-pine-3"), 13_411_792_545_299_859_818),
             (id("plant/date-palm"), 17_225_330_407_669_589_318),
             (id("plant/old-growth"), 18_215_252_645_504_955_369),
             (id("plant/small-broadleaf"), 692_655_780_260_542_668),
