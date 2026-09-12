@@ -793,7 +793,11 @@ pub(super) fn camera(
     let Ok(mut camera) = cameras.single_mut() else {
         return;
     };
-    if matches!(state.capture_view.as_str(), "overview" | "rear") {
+    if let Some(pose) =
+        super::expedition_capture::camera(&session, &view, *geometry, &state.capture_view)
+    {
+        *camera = pose;
+    } else if matches!(state.capture_view.as_str(), "overview" | "rear") {
         *camera = if session.is_forest_run() {
             forest_overview(*geometry, &view, state.capture_view == "rear")
         } else {

@@ -3,6 +3,7 @@
 mod cast_input;
 mod encounter;
 mod expedition;
+mod expedition_capture;
 #[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
 #[cfg(feature = "test-support")]
@@ -1021,6 +1022,12 @@ fn drive_simulation(world: &mut World) {
                 }
             }
         }
+        if let Err(error) = expedition_capture::stage(world, frame, &view) {
+            error!("Expedition presentation fixture failed: {error}");
+            world.resource_mut::<ViewState>().requested = true;
+            world.write_message(AppExit::error());
+            return;
+        }
         if frame == 80 && view.contains("partial-preview") {
             stage_partial_preview(world);
         }
@@ -1159,6 +1166,12 @@ fn drive_simulation(world: &mut World) {
         }
         let approach_ready = world.resource::<ArenaTerrainView>().selection.map != ArenaMap::Fort
             || encounter::fort_approach_complete(world.resource::<ViewState>().capture_route_step);
+        if capture && expedition_capture::ready(world.resource::<ArenaSession>(), &view) {
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
         if capture
             && approach_ready
             && encounter::phase_ready(world.resource::<ArenaSession>(), &view)
@@ -1500,6 +1513,17 @@ fn capture_frame(
     if encounter::stress_view(&state.capture_view) && state.capture_event_frame.is_none() {
         if state.frames > 2000 || session.is_finished() {
             error!("Synthetic encounter stress capture ended before 3600 active simulation ticks");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    if expedition_capture::fixture_view(&state.capture_view)
+        && (state.capture_event_frame.is_none()
+            || !expedition_capture::ready(&session, &state.capture_view))
+    {
+        if state.frames >= 180 || session.is_finished() {
+            error!(snapshot = ?session.expedition_progress(), "Expedition synthetic capture failed: expected reward or fountain state was not reached");
             state.requested = true;
             exit.write(AppExit::error());
         }
