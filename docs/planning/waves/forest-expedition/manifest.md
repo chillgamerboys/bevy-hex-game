@@ -162,3 +162,8 @@ Hourly heartbeat `resume-forest-expedition-after-reset` is ACTIVE on this task. 
 ## Resumed 2026-09-12
 
 The hourly check confirmed a fresh weekly window with 100% available. State now has `waiting_for_reset=false`. Integrated fountain/snapshot source as `d8958a8`; 355 arena tests pass, one manual benchmark ignored. Gameplay continues milestone pickups and Troll/Shadow AI, content continues supported vegetation/global reservations, and structures continue bridge/arena/rock/crystal/fountain architecture in isolated source branches. Root owns app HUD/effects and combined checks. Explicit fixed feature rotation, public compiled-world survey and bridge travel-strip reservation are small world foundations being coordinated by the content owner before final placement. The old playable launcher remains unchanged until final acceptance.
+
+
+## Checkpoint 2026-09-12, resumed gameplay complete in source
+
+Root `e864034` includes all planned gameplay systems and their read-only presentation seam. Focused arena suite: 367 passed / one ignored at `4e94638`; combined map/game tests are in progress. The exact 115-actor camp/rally CPU fixture and 21-view map matrix are authored but not run on final content. A narrow reward-settlement correction remains to integrate. Content composition now targets 807 trees with preliminary 69.45% canopy before final compilation and structure reservations. Actual compiled geometry, full map performance, reviewed pixels and native play remain acceptance gates. No delivery launcher replacement or complete/visual-ready claim.

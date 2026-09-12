@@ -4,6 +4,10 @@ Checkpoint: `c5a1a966ed0b19e5e0c869a4d20b38f23a74e958` on
 `feat/expedition-gameplay`. This is a resume design, not a completed feature report.
 The manifest's amendments A1–A3 supersede its original roster and healing decisions.
 
+## Resumed implementation status (2026-09-12)
+
+The old checkpoint and next-slice list below are historical design/provenance. Root `e864034` now contains fountains and public snapshots, settled proximity/LOS milestone pickups, Troll ranged attack/aura/route rally, physical Shadow arena confinement, and app presentation. Arena tests pass 367 cases with one ignored at `4e94638`. New isolated-crown reward settlement correction `7bbd0d0` remains pending root integration/testing. Actual populated-map profiling and visual/native acceptance remain pending. Read `resume.md` and current source before dispatching work.
+
 ## Implemented checkpoint
 
 - `ExpeditionRole` exposes gameplay-owned authored identity through

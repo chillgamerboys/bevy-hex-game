@@ -1,6 +1,17 @@
 # Expedition resume checkpoint
 
-**Active continuation, 2026-09-12:** quota reset confirmed (100% available); waiting_for_reset is false. The prior pause record below remains historical evidence. Fountain/snapshot commit 6a822d70 is now integrated as d8958a8 and its arena suite passes 355 tests / one ignored. Root app presentation is being checked at d2b3bb0. Gameplay, content and structures agents are continuing from d8958a8 on new `feat/expedition-*-finish` / `feat/expedition-structures` branches. Read current source/task state before following the historical next-work list.
+**Active continuation, 2026-09-12, 01:58 PT:** quota reset confirmed; live quota is 96% remaining and `waiting_for_reset` is false. Integration HEAD `e864034` includes milestone pickup authority, fountains-only healing, snapshot-driven HUD/orbs/pool glow, Troll ranged/aura/rally, physical Shadow confinement, exact V4 prop collision, fixed prefab rotation, split bridge walkway reservations and a 21-view expedition capture matrix. **367 arena tests pass / one ignored** at `4e94638`. Combined map/game tests at `e864034` are running. The 115-actor largest-camp/full-rally profile is authored but has not run. The historical pre-reset record below is superseded by this paragraph and current task/source state.
+
+Latest pending work:
+
+- Gameplay `7bbd0d0` in `work/expedition-gameplay` fixes milestone settlement on isolated tree crowns and adds no-heal/capacity integration coverage; not yet integrated or tested. Its equivalent BTreeSet imports are already root `4e94638`.
+- Content agent in `work/expedition-content`, branch `feat/expedition-content-finish`, is composing 807 supported trees (36 landmarks, Heart, 700 forest understory and 70 mountain trees), 42 route segments, exact fountain rims and structures. Preliminary placement canopy is 69.45%; final compiled coverage is still pending. Do not call this accepted final coverage.
+- Structure commits `b6e29f1`, `4a56835`, `6650eeb` are held by content for global integration; root already contains adapter `18a3ae9` as `a908311`. Bridge endpoint rail clipping against a side-path aperture is being corrected before final composition.
+- Root app tests and actual populated-map spawn/reset, contact hits, rally/camp CPU, destruction, fresh windowless captures and native playtest remain pending. No new native/visual acceptance yet. Expanded reward/fountain state capture fixtures are in progress on the gameplay agent's separate presentation branch.
+- Broad strict Clippy currently fails in inherited Grand/V3 map code (517 library errors, 829 library-test errors). Five new map-test lint findings were corrected in `4f1e866`; initial rally/confinement missing imports were corrected in `4e94638`. Record inherited failures honestly and run scoped no-dependency Clippy to isolate new code.
+- Keep the old launcher on `work/hex-forest` until the new candidate passes composed acceptance. After all game work is done and quota remains at least 20%, perform the requested official OpenAI guidance audit.
+
+The original pre-reset checkpoint follows for provenance; its "unimplemented" and "next work" statements are historical.
 
 The latest user amendments A1–A3 in `manifest.md` override the original locked decisions: 107 Goblins in fourteen camps (3,3,3,3,3,5,5,5,9,9,11,13,15,20), two Shamans, Troll, three Dragons and Shadow. Total 114 enemies / 115 actors. No enemy healing drops or player regeneration. Hidden finite fountains are the only healing source. Shadow grants +25 maximum HP with **no current-HP increase**. Troll grants +25 damage; the final Dragon unlocks explosions, both through milestone pickups.
 
