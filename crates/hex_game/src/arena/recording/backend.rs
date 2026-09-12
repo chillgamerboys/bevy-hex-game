@@ -180,6 +180,7 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
 }
 
 struct Clip {
+    identity: SourceIdentity,
     child: Child,
     input: ChildStdin,
     output: Receiver<Result<Value, String>>,
@@ -270,6 +271,7 @@ impl Clip {
             }
         };
         Ok(Self {
+            identity: SourceIdentity { pid, window: None },
             child,
             input,
             output,
@@ -380,8 +382,12 @@ impl Clip {
     ) -> Result<(), String> {
         self.event("native", event.clone())?;
         match event.get("event").and_then(Value::as_str) {
-            Some("ready" | "configured") => {}
+            Some("ready") => {}
+            Some("configured") => {
+                self.identity.configure(&event)?;
+            }
             Some("started") if self.started.is_none() => {
+                self.identity.confirm_started(&event)?;
                 self.started = Some(Instant::now());
                 responses
                     .send(Response::Started)
@@ -426,6 +432,40 @@ impl Drop for Clip {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
+    }
+}
+
+#[derive(Default)]
+struct SourceIdentity {
+    pid: u32,
+    window: Option<u64>,
+}
+
+impl SourceIdentity {
+    fn configure(&mut self, event: &Value) -> Result<(), String> {
+        let number = |key| event.get(key).and_then(Value::as_u64);
+        let valid = self.window.is_none()
+            && number("pid") == Some(u64::from(self.pid))
+            && number("window_id").is_some_and(|id| id > 0)
+            && number("width").is_some_and(|size| size > 0 && size <= 1920)
+            && number("height").is_some_and(|size| size > 0 && size <= 1080)
+            && number("fps") == Some(30)
+            && event.get("audio").and_then(Value::as_bool) == Some(false)
+            && event.get("codec").and_then(Value::as_str) == Some("h264");
+        if !valid {
+            return Err(
+                "The recorder did not confirm the requested game process and video-only settings."
+                    .into(),
+            );
+        }
+        self.window = number("window_id");
+        Ok(())
+    }
+    fn confirm_started(&self, event: &Value) -> Result<(), String> {
+        if self.window.is_none() || event.get("window_id").and_then(Value::as_u64) != self.window {
+            return Err("Recording started without the validated game-window identity.".into());
+        }
+        Ok(())
     }
 }
 
@@ -474,6 +514,34 @@ fn prepare_helper() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_start_requires_the_confirmed_process_window_and_bounded_video_settings() {
+        let configured = json!({"pid":42,"window_id":7,"width":1600,"height":900,"fps":30,"audio":false,"codec":"h264"});
+        let mut identity = SourceIdentity {
+            pid: 42,
+            window: None,
+        };
+        assert!(identity.confirm_started(&json!({"window_id":7})).is_err());
+        assert!(SourceIdentity {
+            pid: 99,
+            window: None
+        }
+        .configure(&configured)
+        .is_err());
+        let mut audio = configured.clone();
+        *audio.get_mut("audio").expect("audio field") = json!(true);
+        assert!(identity.configure(&audio).is_err());
+        identity.configure(&configured).expect("exact video source");
+        assert!(identity.confirm_started(&json!({"window_id":8})).is_err());
+        identity
+            .confirm_started(&json!({"window_id":7}))
+            .expect("same window");
+        assert!(
+            identity.configure(&configured).is_err(),
+            "source cannot silently switch"
+        );
+    }
+
     #[test]
     fn protocol_preserves_paths_unicode_and_one_event_per_line() {
         let mut bytes = Vec::new();

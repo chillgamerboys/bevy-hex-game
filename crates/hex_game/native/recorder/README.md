@@ -34,7 +34,7 @@ Safe validation without recording:
 
 ```sh
 xcrun swiftc -O -swift-version 5 -warnings-as-errors -parse-as-library \
-  -target arm64-apple-macos12.3 Recorder.swift -o /tmp/hex-game-recorder-test \
+  -target arm64-apple-macos15.0 Recorder.swift -o /tmp/hex-game-recorder-test \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
 /tmp/hex-game-recorder-test --self-test
 ```

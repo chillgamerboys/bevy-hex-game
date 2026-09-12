@@ -20,6 +20,7 @@ pub(super) struct Recorder {
     responses: Mutex<mpsc::Receiver<backend::Response>>,
     supported: bool,
     active: bool,
+    finalizing: bool,
     started: Option<Instant>,
     status: String,
     toggle: bool,
@@ -46,6 +47,12 @@ impl Recorder {
     }
     pub(super) fn is_recording(&self) -> bool {
         self.started.is_some()
+    }
+    pub(super) fn is_starting(&self) -> bool {
+        self.active && self.started.is_none() && !self.finalizing
+    }
+    pub(super) fn is_finalizing(&self) -> bool {
+        self.finalizing
     }
     pub(super) fn elapsed_seconds(&self) -> f64 {
         self.started
@@ -98,6 +105,7 @@ pub(super) fn install(app: &mut App) {
         responses: Mutex::new(responses),
         supported: false,
         active: false,
+        finalizing: false,
         started: None,
         status: "Checking recording support…".into(),
         toggle: false,
@@ -147,11 +155,14 @@ fn update(
             }
             backend::Response::Started => {
                 recorder.started = Some(Instant::now());
-                recorder.status = "Recording video · F9 adds a bookmark".into();
+                if !recorder.finalizing {
+                    recorder.status = "Recording video · F9 adds a bookmark".into();
+                }
             }
             backend::Response::Status(message) => recorder.status = message,
             backend::Response::Finished(message) | backend::Response::Failed(message) => {
                 recorder.active = false;
+                recorder.finalizing = false;
                 recorder.started = None;
                 recorder.status = message;
             }
@@ -164,6 +175,7 @@ fn update(
         recorder.request_quit();
     }
     if recorder.quit && !recorder.quit_sent {
+        recorder.finalizing = recorder.active;
         recorder.quit_sent = recorder.send(backend::Command::Quit);
         recorder.status = "Finalizing recording before quitting…".into();
         // A disconnected worker cannot finalize; report the failure, then exit.
@@ -178,6 +190,7 @@ fn update(
     if std::mem::take(&mut recorder.toggle) && !recorder.quit {
         if recorder.active {
             if recorder.send(backend::Command::Stop) {
+                recorder.finalizing = true;
                 recorder.status = "Finalizing recording…".into();
             }
         } else if view.capture.is_some() {
@@ -190,6 +203,7 @@ fn update(
             };
             if recorder.send(command) {
                 recorder.active = true;
+                recorder.finalizing = false;
                 recorder.status = "Starting recorder; macOS may request screen permission…".into();
             }
         } else {
@@ -207,27 +221,13 @@ fn update(
         finished: session.outcome.is_some(),
     };
     if recorder.active {
-        let previous = recorder.last_run;
-        let kind = previous.and_then(|previous| {
-            if previous.generation != marker.generation {
-                Some("restart")
-            } else if previous.dead != marker.dead && marker.dead {
-                Some("player_death")
-            } else if previous.paused != marker.paused {
-                Some(if marker.paused { "pause" } else { "resume" })
-            } else if previous.finished != marker.finished && marker.finished {
-                Some("run_finished")
-            } else {
-                None
-            }
-        });
-        if let Some(kind) = kind {
+        for kind in changed_events(recorder.last_run, marker) {
             recorder.send(backend::Command::Event {
                 kind: kind.into(),
                 snapshot: snapshot(&view, &session, &reset, &terrain),
             });
         }
-        if keys.just_pressed(KeyCode::F9) && recorder.is_recording() {
+        if keys.just_pressed(KeyCode::F9) && recorder.is_recording() && !recorder.finalizing {
             if recorder.send(backend::Command::Event {
                 kind: "bookmark".into(),
                 snapshot: snapshot(&view, &session, &reset, &terrain),
@@ -239,9 +239,60 @@ fn update(
     recorder.last_run = Some(marker);
 }
 
+fn changed_events(previous: Option<RunMarker>, current: RunMarker) -> Vec<&'static str> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    if previous.generation != current.generation {
+        return vec!["restart"];
+    }
+    let mut events = Vec::with_capacity(3);
+    if previous.dead != current.dead && current.dead {
+        events.push("player_death");
+    }
+    if previous.paused != current.paused {
+        events.push(if current.paused { "pause" } else { "resume" });
+    }
+    if previous.finished != current.finished && current.finished {
+        events.push("run_finished");
+    }
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_events_keep_simultaneous_death_pause_and_outcome_and_restart_once() {
+        let before = RunMarker {
+            generation: 4,
+            paused: false,
+            dead: false,
+            finished: false,
+        };
+        let terminal = RunMarker {
+            generation: 4,
+            paused: true,
+            dead: true,
+            finished: true,
+        };
+        assert_eq!(
+            changed_events(Some(before), terminal),
+            vec!["player_death", "pause", "run_finished"]
+        );
+        assert!(changed_events(Some(terminal), terminal).is_empty());
+        assert_eq!(
+            changed_events(
+                Some(terminal),
+                RunMarker {
+                    generation: 5,
+                    ..before
+                }
+            ),
+            vec!["restart"]
+        );
+    }
 
     #[test]
     fn recording_state_waits_for_native_start_and_toggle_only_requests_work() {
@@ -252,6 +303,7 @@ mod tests {
             responses: Mutex::new(responses),
             supported: true,
             active: false,
+            finalizing: false,
             started: None,
             status: String::new(),
             toggle: false,

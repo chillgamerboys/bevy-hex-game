@@ -8,6 +8,6 @@
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSUIElement</key><true/>
-<key>LSMinimumSystemVersion</key><string>12.3</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>NSScreenCaptureUsageDescription</key><string>Record only your Hex Game battle window to a local video when you press Record.</string>
 </dict></plist>

@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "-parse-as-library",
             "-target",
         ])
-        .arg(format!("{architecture}-apple-macos12.3"))
+        .arg(format!("{architecture}-apple-macos15.0"))
         .args(["native/recorder/Recorder.swift", "-o"])
         .arg(&output)
         .args([
