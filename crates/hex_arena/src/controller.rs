@@ -326,6 +326,49 @@ mod tests {
     }
 
     #[test]
+    fn reported_bridge_stride_steps_without_ever_embedding_the_player() {
+        let geometry = ArenaVoxelGeometry {
+            radius: 187,
+            level_height: 0.35,
+            ..Default::default()
+        };
+        for sign in [-1_i16, 1] {
+            let step = HexCoord::from_axial(i32::from(sign) * 24, 0);
+            let mut view = ArenaTerrainView::default();
+            for coord in step.within_radius(3) {
+                view.voxels.insert(TilePos::new(coord, 45), SubstanceId(1));
+            }
+            view.voxels.insert(TilePos::new(step, 46), SubstanceId(1));
+            let mut world = CollisionWorld::default();
+            world.refresh(&view, geometry);
+            let direction = Vec3::X * -f32::from(sign);
+            let mut feet = Vec3::new(f32::from(sign) * 42.685_158, 15.750_1, 0.0);
+            let mut body = Body::default();
+            assert!(world.clear(feet, BODY_HEIGHT, BODY_RADIUS));
+            let original = feet;
+            body.tick(&mut feet, direction, true, false, &world);
+            assert!(
+                world.clear(feet, BODY_HEIGHT, BODY_RADIUS),
+                "first reported stride embedded: {feet:?}"
+            );
+            assert!(
+                feet.y > original.y + 0.3,
+                "must take the actual0.35 step: {feet:?}"
+            );
+            let target = step.to_world(geometry.top(TilePos::new(step, 46)));
+            for _ in 0..40 {
+                body.tick(&mut feet, (target - feet).with_y(0.0), true, false, &world);
+                assert!(
+                    world.clear(feet, BODY_HEIGHT, BODY_RADIUS),
+                    "later stride embedded: {feet:?}"
+                );
+            }
+            assert!((feet.y - target.y).abs() < 0.001);
+            assert!(feet.with_y(0.0).distance(target.with_y(0.0)) < 0.1);
+        }
+    }
+
+    #[test]
     fn one_level_step_is_accepted_but_two_levels_require_a_jump() {
         let make_world = |levels| {
             let mut view = ArenaTerrainView {

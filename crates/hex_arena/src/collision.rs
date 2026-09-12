@@ -344,7 +344,11 @@ fn sweep_span(span: Span, feet: Vec3, delta: Vec3, height: f32, radius: f32) -> 
             return None;
         }
     }
-    if exit < 0.0 || !(-SKIN..=1.0).contains(&enter) || normal.dot(delta) >= 0.0 {
+    // `clear` admits the world-space skin immediately outside the solid.
+    // A short stride can start inside the expanded sweep plane by that skin;
+    // compare its negative entry distance, not its normalized travel fraction.
+    let incoming = -normal.dot(delta);
+    if exit < 0.0 || enter > 1.0 || incoming <= 0.0 || enter * incoming < -SKIN {
         return None;
     }
     Some(Hit {
@@ -402,6 +406,27 @@ mod tests {
                 .expect("each prism face must block the sweep");
             assert!((hit.fraction - (10.0 - FACE - 0.25) / 20.0).abs() < 0.00001);
             assert!(hit.normal.dot(axis) > 0.99);
+        }
+    }
+
+    #[test]
+    fn short_strides_intercept_faces_inside_the_accepted_world_space_skin() {
+        for sign in [-1.0_f32, 1.0] {
+            let span = Span {
+                coord: HexCoord::from_axial(if sign < 0.0 { -24 } else { 24 }, 0),
+                bottom: 15.75,
+                top: 16.1,
+            };
+            // Exact valid pre-step pose reported by both authored bridge probes.
+            let start = Vec3::new(sign * 42.685_158, 15.750_1, 0.0);
+            assert!(!contains(span, start, 0.8, 0.25));
+            for stride in [0.005, 0.0375, 0.05] {
+                let hit = sweep_span(span, start, Vec3::X * (-sign * stride), 0.8, 0.25)
+                    .expect("every short inward stride must intercept the admitted skin face");
+                assert!(hit.fraction.abs() < f32::EPSILON);
+                assert!(hit.normal.dot(Vec3::X * sign) > 0.99);
+            }
+            assert!(sweep_span(span, start, Vec3::X * sign * 0.0375, 0.8, 0.25).is_none());
         }
     }
 
