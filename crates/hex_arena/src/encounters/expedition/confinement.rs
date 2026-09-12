@@ -3,6 +3,7 @@
 use super::*;
 use crate::hex_prisms::HexPrism;
 use hex_core::arena::ArenaDeploymentRegion;
+use std::collections::BTreeSet;
 
 #[derive(Debug)]
 pub(in crate::encounters) struct ShadowArena {

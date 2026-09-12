@@ -1,7 +1,7 @@
 //! Frozen authored travel orders; no player observations enter this state.
 
 use super::*;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 /// Read-only evidence of issued rally orders, without actor or target positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
