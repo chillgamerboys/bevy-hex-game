@@ -62,7 +62,7 @@ class ExpeditionProxy(unittest.TestCase):
 
     def test_complete_route_ribbons_are_dry_connected_and_preserve_camps(self):
         meta = self.metadata
-        wet = set(meta["river"]["wet_columns"])
+        wet = set(meta["river"]["wet_columns"]) | {p[:2] for pool in meta["fountains"].values() for p in pool["cells"]}
         all_levels = {}
         for name, route in meta["routes"].items():
             with self.subTest(route=name):
@@ -185,7 +185,7 @@ class ExpeditionProxy(unittest.TestCase):
         self.assertEqual(set(value), {"version", "world_id", "manifest_fingerprint", "encounters",
                                      "route_nodes", "routes", "fountains"})
         self.assertEqual(len(value["encounters"]), 19)
-        self.assertEqual(len(value["routes"]), 30)
+        self.assertEqual(len(value["routes"]), 42)
         self.assertEqual(len(value["fountains"]), 6)
         for entry in value["encounters"]:
             self.assertEqual(set(entry), {"id", "preferred", "surfaces", "rally_entry"})

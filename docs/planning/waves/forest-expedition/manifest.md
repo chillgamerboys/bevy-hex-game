@@ -75,13 +75,13 @@ lanes:
     ticket: null
     authority: world
     builder: worker
-    branch: feat/expedition-content
+    branch: feat/expedition-content-finish
     owns: ['assets/config/v4/forest-massif', 'assets/art/objects/plant/forest-*', 'assets/art/object_catalog.ron', 'tools/forest_world.py', 'tools/forest_trees.py', 'tools/test_forest_trees.py', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
     dispatch_blockers: ['shared site contract fixed', 'L1 no overlapping work']
     merge_blockers: ['L1']
-    fences: ['Bounded pure tree generator ready; geography, generated assets, support on final terrain, canopy coverage and rendered review remain pending.']
+    fences: ['Exact terrain survey and 807-tree/107-prop authoring composition ready; final compiled grounding, canopy verification, production site admission and visual review remain pending.']
     selector: {concerns: [combined_gate], full: true}
-    evidence: static-presentation
+    evidence: logic-only
     sizing: {model: inherited, effort: inherited}
     state: in_progress
     pr: null

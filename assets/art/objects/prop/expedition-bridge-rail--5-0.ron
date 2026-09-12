@@ -1,0 +1,19 @@
+// Authored by tools/forest_finish.py; exact voxel geometry, .35 units/level.
+(schema_version:1,id:"prop/expedition-bridge-rail--5-0",display_name:"Bridge Rail  5 0",category:Prop,bounds:(radius:2,min_level:0,height:4),connectivity:Grounded,origin:(q:0,r:0,level:0),placements:[
+(position:(q:0,r:0,level:0),style:"expedition/stone-edge",part:Prop(Structure)),
+(position:(q:0,r:0,level:1),style:"expedition/stone",part:Prop(Structure)),
+(position:(q:0,r:0,level:2),style:"expedition/stone",part:Prop(Structure)),
+(position:(q:0,r:0,level:3),style:"expedition/stone-edge",part:Prop(Structure)),
+(position:(q:1,r:0,level:0),style:"expedition/stone-edge",part:Prop(Structure)),
+(position:(q:1,r:0,level:1),style:"expedition/stone",part:Prop(Structure)),
+(position:(q:1,r:0,level:2),style:"expedition/stone",part:Prop(Structure)),
+(position:(q:1,r:0,level:3),style:"expedition/stone-edge",part:Prop(Structure)),
+(position:(q:2,r:0,level:0),style:"expedition/stone-edge",part:Prop(Structure)),
+(position:(q:2,r:0,level:1),style:"expedition/stone",part:Prop(Structure)),
+(position:(q:2,r:0,level:2),style:"expedition/stone",part:Prop(Structure)),
+(position:(q:2,r:0,level:3),style:"expedition/stone-edge",part:Prop(Structure)),
+],blocker_footprint:[
+(q:0,r:0),
+(q:1,r:0),
+(q:2,r:0),
+],canopy_occluders:[])

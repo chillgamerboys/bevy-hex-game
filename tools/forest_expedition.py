@@ -42,6 +42,11 @@ FOUNTAINS = {
     "forest_fountain_03": (-171, 54, 55), "forest_fountain_04": (-142, -34, 52),
     "mountain_fountain_01": (44, 97, 52), "mountain_fountain_02": (159, -93, 232),
 }
+FOUNTAIN_ENTRIES = {name: (p[0], p[1] - 3, p[2] - 2) for name, p in FOUNTAINS.items()}
+ANCHORS.update({f"{name}_approach": p for name, p in FOUNTAIN_ENTRIES.items()})
+ANCHORS.update({f"{name}_turn": (p[0] + (10 if name == "mountain_fountain_02" else 6),
+                                       p[1] - (8 if name == "mountain_fountain_02" else 6), p[2] - 2)
+                for name, p in FOUNTAINS.items()})
 
 
 def distance(a, b=(0, 0)):
@@ -122,8 +127,15 @@ def _routes():
                 ("dragon_middle", "ascent_rest_02", 1), ("ascent_rest_02", "ascent_rest_03", 2),
                 ("ascent_rest_03", "dragon_upper", 3), ("bridge_east", "shadow_turn", 2),
                 ("shadow_turn", "shadow_gate", 2), ("shadow_gate", "mountain_shadow", 2)]
-    return [(f"forest-path-{i:02}", a, b, width) for i, (a, b, width) in enumerate(edges, 1)] + [
+    result = [(f"forest-path-{i:02}", a, b, width) for i, (a, b, width) in enumerate(edges, 1)] + [
         (f"mountain-path-{i:02}", a, b, width) for i, (a, b, width) in enumerate(mountain, 1)]
+    # Small unmarked spurs reach dry footing beside each pool's open entry. The
+    # final one-column trail stops before water, preserving ordinary pool entry.
+    for i, (name, start) in enumerate(zip(FOUNTAINS, (camp(9), camp(5), camp(10), camp(11),
+                                                     "shadow_turn", "ascent_rest_03")), 1):
+        result.append((f"fountain-path-{i:02}", start, f"{name}_turn", 0))
+        result.append((f"fountain-entry-{i:02}", f"{name}_turn", f"{name}_approach", 0))
+    return result
 
 
 def _landmarks(forest, excluded):
@@ -133,7 +145,7 @@ def _landmarks(forest, excluded):
     selected = []
     for p in candidates:
         deep = distance(p, HEART) < 65
-        radius = 9 if deep else 7
+        radius = 12 if deep else 9
         clearing = disk(p, radius)
         if not clearing <= forest or clearing & excluded:
             continue
@@ -250,7 +262,8 @@ def recipe(*, raw):
                         for name, p in FOUNTAINS.items()],
              "routes": routes,
              "bridges": [{"id": "central-crossing", "points": [grade(p) for p in BRIDGE],
-                          "half_width": 4, "thickness": 3, "material": "stone"}],
+                          "half_width": 5, "walkway_half_width": raw("Some(4)"),
+                          "thickness": 3, "material": "stone"}],
              "features": [], "overrides": overrides,
              "anchors": [{"id": name, "column": xy(p), "level": raw(f"Some({p[2]})"),
                           "role": raw("Observation" if name == "ancient_tree" else "Gameplay")}
@@ -273,25 +286,30 @@ def recipe(*, raw):
                            "initial_understory_count": 700},
                 "pending": ["compile and verify all final supports", "tree placement and canopy coverage",
                             "bridge supports, parapets and open portal lintels", "arena ornament and gate lintel",
-                            "hidden fountain approach grading", "rendered and native traversal review"]}
+                            "rendered and native traversal review"]}
     return value, metadata
 
 
 def document(*, raw, ron):
     """Return complete source text plus metadata; the caller chooses output paths."""
     value, metadata = recipe(raw=raw)
+    return source_document(value, raw=raw, ron=ron), metadata
+
+
+def source_document(value, *, raw, ron, extra_materials=()):
+    """Wrap an authored recipe without parsing serialized/private world data."""
     colors = {"bedrock": (33, 38, 42, 255), "basalt": (76, 88, 101, 255), "soil": (98, 76, 49, 255),
               "grass": (105, 141, 72, 255), "moss": (49, 91, 57, 255), "pine-floor": (78, 98, 60, 255),
               "sand": (160, 155, 113, 255), "snow": (219, 231, 235, 255), "gravel": (126, 131, 120, 255),
               "water": (42, 115, 144, 190), "spring-water": (72, 217, 189, 190), "stone": (105, 112, 116, 255)}
     materials = [{"id": name, "solid": name not in ("water", "spring-water"),
                   "diggable": name not in ("bedrock", "water", "spring-water"), "color": raw(str(color))}
-                 for name, color in colors.items()]
+                 for name, color in colors.items()] + list(extra_materials)
     source = {"version": 1, "id": WORLD_ID, "seed": SEED, "materials": materials,
               "recipes": raw('{"forest-massif":' + ron(value) + '}'),
               "regions": [{"id": "forest", "recipe": "forest-massif", "origin": {"q": 0, "r": 0},
                            "radius": RADIUS, "rotation": 0}], "connections": []}
-    return ron(source) + "\n", metadata
+    return ron(source) + "\n"
 
 
 def site_document(metadata, *, world_id, manifest_fingerprint, raw, ron):
