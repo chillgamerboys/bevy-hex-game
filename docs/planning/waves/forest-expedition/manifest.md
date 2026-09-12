@@ -199,3 +199,7 @@ The original user launcher still opens the preserved earlier map. Broad inherite
 Grand/V3 map Clippy debt is not a passed full merge gate. No remote changes or
 dev/main integration have occurred. Live quota is 92% remaining; user's 3% floor and
 conditional post-game OpenAI audit still apply.
+
+## September 12 combat/glider/world injection
+
+The approved [combat and world upgrade](combat-world-upgrade.md) extends this isolated candidate. Its ownership, locked contracts, checkpoint acceptance and current status supersede the prior UX phase’s pending-work list only for the new implementation. Historical validation remains historical.
