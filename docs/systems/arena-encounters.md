@@ -1,6 +1,6 @@
 # Arena encounters: controls and tuning
 
-Battle Mode puts continuous spell combat on Fort, Duel and Seven Regions.
+Battle Mode defaults to Forest–Massif and also offers Fort, Duel and Seven Regions.
 Fort and Duel offer selectable enemy parties; choosing Shadow on Duel retains
 the reference fight against the accepted bot. It does not use tactical turns, lattices or multiplayer.
 
@@ -10,9 +10,9 @@ Choose **Battle Mode** on the ordinary Main Menu. It opens an isolated native
 arena window, leaving the Main Menu available after you exit. On macOS and Windows
 the Main Menu hides while the battle window is open; on Linux it remains visible
 with its actions disabled. The ready screen offers **PLAY** and **SPECTATE BATTLE**,
-map selection and party selection.
+map selection and, on Fort/Duel, party selection. Forest–Massif uses its fixed player roster.
 
-From a source checkout, open the same Fort-versus-Dragon ready screen directly:
+From a source checkout, open the same Forest–Massif ready screen directly:
 
     cargo battle
 
@@ -71,17 +71,43 @@ fresh press afterward.
 
 The paused menu contains existing spell tuning, resume/reset, window mode and
 quit. A win, death, draw or spectator timeout automatically opens the paused result
-menu and releases the cursor. A completed round cannot resume; choose Reset Arena
+menu and releases the cursor. A completed Fort/Duel/Seven Regions round cannot resume; choose Reset Arena
 to return to the ready screen or quit. There is no live HUD menu button. Menu
 clicks never become casts.
 
-The same menu adjusts **High Jump height** from **2–8 units** in 0.5-unit steps and
+On the older maps, the same menu adjusts **High Jump height** from **2–8 units** in 0.5-unit steps and
 its cooldown from **0.5–20 seconds**. **Shadow reaction** defaults to **150 ms** and
 can be changed from **Off (0 ms) to 500 ms** in 50 ms steps. This is the delay after
 acquiring or reacquiring sight; sight sampling can add up to 100 ms. It does not
 change charge speed or the existing post-cast gap. **Shadow escape** toggles local
 walking/jumping recovery from holes. Settings apply on resume and survive round
 reset and map changes within the session; reopening the game loads configured defaults.
+
+## Forest–Massif progression
+
+The radius-187 V4 map has five forest camps (20 Goblins and two Shamans), three
+independent mountain Dragons, a central stone bridge and one reserved giant-tree
+clearing. The player begins outside enemy activation range. Its terrain package
+loads at runtime; the ready screen waits for terrain publication.
+
+Fireball starts with 15 contact damage, 45 base launch speed, 12 projectile gravity,
+12 knockback and a 0.5-second cooldown. A contact shot stops on its first valid
+collision and only affects the struck target. Clearing all 22 forest enemies adds
+25 damage separately from purchased upgrades. Clearing all three Dragons unlocks
+the standard 2.5-unit explosion. Each shot retains the damage and impact mode it
+had at launch. Enemy spells keep their original tuning.
+
+Player kills award 1 XP per Goblin, 5 per Shaman and 20 per Dragon, including
+attributed knockback deaths within ten seconds. Levels require 10, 15, 23, 34…
+additional XP; surplus carries forward. Each level banks one upgrade point. Spend
+it with a beneficial **+** in the Esc menu; unavailable or capped upgrades are
+disabled. Explosion radius stays locked until the Dragon reward; gravity stays 12.
+The menu shows both objectives and their rewards.
+
+Clearing all 25 enemies marks victory and leaves exploration and casting available.
+Pausing preserves the run. Restart restores terrain, enemies, initial stats, level 1,
+zero XP and locked rewards. Runs do not persist across launches. Forest–Massif does
+not use the older maps' unrestricted tuning or spectator roster overrides.
 
 ## Watching monster battles
 

@@ -33,7 +33,7 @@ with errors that don't obviously point at the toolchain.
 ```
 cargo dev            # inspector + live asset reload
 cargo run --release  # as it ships
-cargo battle         # Battle Mode ready screen: Fort versus Dragon
+cargo battle         # Battle Mode ready screen: Forest–Massif
 cargo editor         # standalone Asset Workshop
 ```
 

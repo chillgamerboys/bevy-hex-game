@@ -30,7 +30,7 @@ workflow deliberately stages `assets/` beside the executable.
 
 The ordinary Main Menu includes **Battle Mode**. It opens the isolated native
 arena; exiting it leaves the Main Menu available. For a direct source launch use
-`cargo battle` (Fort versus Dragon, paused at the ready screen). Choose Play or
+`cargo battle` (Forest–Massif, paused at the ready screen). Choose Play or
 Spectate, map and parties there. To reproduce the original Shadow duel, use
 `python3 tools/arena.py launch --map duel`; observer launches add `--spectator`
 and `--team-a` / `--team-b`. The helper launches through Cargo too; apply the asset
