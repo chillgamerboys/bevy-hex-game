@@ -344,3 +344,192 @@ fn authored_forest_spawn_reset_and_three_second_active_tick_profile() {
     assert_eq!(peak_active, 8, "all real camps must activate");
     assert!(all_active_ticks >= 240, "at least two of the three measured seconds need all eight parties active; got {all_active_ticks}/360 ticks");
 }
+
+/// Explicit CPU workload on the complete expedition. Validated player visits and
+/// extra player HP keep the measurement bounded; every enemy keeps its authored
+/// body, stats, position, perception and ordinary combat behavior.
+#[test]
+#[ignore = "requires HEX_FOREST_WORLD pointing at the final populated expedition"]
+fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .insert_resource(ArenaSelection {
+            map: ArenaMap::ForestMassif,
+            ..default()
+        })
+        .add_plugins((hex_map::arena::plugin, hex_arena::plugin));
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    app.update();
+    tick(&mut app);
+    let inspect = |app: &App| {
+        let session = app.world().resource::<ArenaSession>();
+        let world = app.world().resource::<ArenaTerrainView>();
+        let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+        assert!(world.expedition.is_some());
+        assert_eq!(session.actors.len(), 115, "{}", session.notice);
+        assert_eq!(session.parties().len(), 19);
+        for actor in &session.actors {
+            assert!(session.actor_pose_valid(actor.id, world, geometry));
+        }
+        session
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.feet))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let initial = inspect(&app);
+    let representative = |app: &App, largest: bool| {
+        let session = app.world().resource::<ArenaSession>();
+        let party = if largest {
+            session
+                .parties()
+                .iter()
+                .find(|party| party.living == 20)
+                .expect("twenty-Goblin camp")
+        } else {
+            let troll = session
+                .actors
+                .iter()
+                .find(|a| a.expedition_role() == Some(hex_arena::ExpeditionRole::Troll))
+                .expect("Troll");
+            session
+                .parties()
+                .iter()
+                .find(|party| Some(party.id) == troll.party)
+                .expect("Troll party")
+        };
+        let actor = session
+            .actors
+            .iter()
+            .find(|actor| actor.party == Some(party.id))
+            .expect("party representative");
+        (actor.id, party.id, party.home)
+    };
+    let protect_player = |app: &mut App| {
+        let mut session = app.world_mut().resource_mut::<ArenaSession>();
+        let human = session.actors.first_mut().expect("player");
+        human.max_hp = 100_000.0;
+        human.hp = human.max_hp;
+    };
+    let (goblin, party_id, home) = representative(&app, true);
+    protect_player(&mut app);
+    visit(&mut app, goblin, home, None);
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = true;
+    let mut camp_samples = Vec::new();
+    let mut camp_activated = false;
+    let mut peak_projectiles = 0;
+    for step in 0..720 {
+        let start = Instant::now();
+        tick(&mut app);
+        if step >= 120 {
+            camp_samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        let session = app.world().resource::<ArenaSession>();
+        assert!(!session.is_finished());
+        camp_activated |= session
+            .parties()
+            .iter()
+            .any(|party| party.id == party_id && party.phase == PartyPhase::Active);
+        peak_projectiles = peak_projectiles.max(session.projectiles.len());
+    }
+    assert!(camp_activated, "largest authored camp must see the visitor");
+
+    app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    tick(&mut app);
+    assert_eq!(inspect(&app), initial);
+    let (troll, _, home) = representative(&app, false);
+    protect_player(&mut app);
+    visit(&mut app, troll, home, None);
+    {
+        let mut input = app.world_mut().resource_mut::<ArenaInput>();
+        input.human.selected = Some(Spell::Fireball);
+        input.human.cast_pressed = true;
+        input.human.cast_released = true;
+    }
+    for _ in 0..120 {
+        tick(&mut app);
+        if app
+            .world()
+            .resource::<ArenaSession>()
+            .expedition_rally_status()
+            .expect("rally snapshot")
+            .triggered
+        {
+            break;
+        }
+    }
+    let issued = app
+        .world()
+        .resource::<ArenaSession>()
+        .expedition_rally_status()
+        .expect("issued orders");
+    assert!(
+        issued.triggered && issued.active,
+        "ordinary contact shot must damage Troll"
+    );
+    assert_eq!((issued.ordered_parties, issued.ordered_actors), (14, 109));
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = true;
+    let mut rally_samples = Vec::new();
+    let mut publication_ticks = 0;
+    let mut peak_active = 0;
+    let mut moved_parties = BTreeSet::new();
+    for step in 0..2520 {
+        let revision = app.world().resource::<ArenaTerrainView>().revision;
+        let start = Instant::now();
+        tick(&mut app);
+        if step >= 120 {
+            rally_samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            publication_ticks +=
+                usize::from(app.world().resource::<ArenaTerrainView>().revision != revision);
+        }
+        let session = app.world().resource::<ArenaSession>();
+        assert!(!session.is_finished());
+        peak_projectiles = peak_projectiles.max(session.projectiles.len());
+        peak_active = peak_active.max(
+            session
+                .parties()
+                .iter()
+                .filter(|party| party.phase == PartyPhase::Active)
+                .count(),
+        );
+        for actor in session.actors.iter().filter(|actor| {
+            matches!(
+                actor.expedition_role(),
+                Some(
+                    hex_arena::ExpeditionRole::BabyGoblin
+                        | hex_arena::ExpeditionRole::Goblin
+                        | hex_arena::ExpeditionRole::Shaman
+                )
+            )
+        }) {
+            if initial
+                .get(&actor.id)
+                .is_some_and(|feet| actor.feet.distance(*feet) > 1.0)
+            {
+                if let Some(party) = actor.party {
+                    moved_parties.insert(party);
+                }
+            }
+        }
+    }
+    let session = app.world().resource::<ArenaSession>();
+    println!(
+        "EXPEDITION_ACTIVE_RECEIPT {}",
+        serde_json::json!({
+            "actors_at_reset":115,"parties":19,
+            "scope":"ArenaTick CPU wall time; no renderer, GPU, FPS or native traversal claim",
+            "synthetic_changes":"extra player HP and two validated player visits; ordinary single contact shot triggers Troll rally; authored enemy stats and placements",
+            "largest_camp":distribution(camp_samples),"rally":distribution(rally_samples),
+            "issued_rally":issued,"final_rally":session.expedition_rally_status(),
+            "moved_forest_parties":moved_parties.len(),"peak_active_parties":peak_active,
+            "peak_projectiles":peak_projectiles,"terrain_publication_ticks":publication_ticks,
+            "remaining_enemies":session.encounter_summary().living_enemies,
+        })
+    );
+    assert_eq!(
+        moved_parties.len(),
+        14,
+        "every ordered forest party must begin travel"
+    );
+}
