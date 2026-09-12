@@ -38,7 +38,9 @@ impl Preparation {
             match std::thread::Builder::new()
                 .name("forest-preparation".into())
                 .spawn(move || {
-                    let _ = send.send(prepare_default(ArenaMap::ForestMassif));
+                    // Closing the app can drop the receiver while the reusable
+                    // package finishes; there is then no menu to notify.
+                    drop(send.send(prepare_default(ArenaMap::ForestMassif)));
                 }) {
                 Ok(_) => self.completion = Some(Mutex::new(receive)),
                 Err(error) => {
