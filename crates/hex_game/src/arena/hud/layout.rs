@@ -10,6 +10,13 @@ fn column() -> Node {
         ..default()
     }
 }
+// Bevy 0.19 pointer clipping stops at the first visible-overflow parent.
+// Keep every intermediate scroll-content wrapper clip-aware, so invisible
+// controls cannot intercept header/footer clicks outside the scroll viewport.
+fn scroll_content(mut node: Node) -> Node {
+    node.overflow = Overflow::clip();
+    node
+}
 fn button(parent: &mut ChildSpawnerCommands, label: &str, action: impl Bundle) -> Entity {
     parent
         .spawn((
@@ -24,6 +31,7 @@ fn button(parent: &mut ChildSpawnerCommands, label: &str, action: impl Bundle) -
                 justify_content: JustifyContent::Center,
                 border_radius: BorderRadius::all(px(6)),
                 flex_shrink: 0.0,
+                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgb(0.12, 0.24, 0.29)),
@@ -317,22 +325,22 @@ pub(crate) fn setup(
         overlay.spawn((panel(),BackgroundColor(PANEL),ux::MenuPanel)).with_children(|p| {
             p.spawn(text("BATTLE MODE",36.0,INK));
             p.spawn(scroll()).with_children(|p| {
-                p.spawn(row()).with_children(|r| {
+                p.spawn(scroll_content(row())).with_children(|r| {
                     button(r,"PLAY",Action::Control(ArenaControl::Player));
                     button(r,"SPECTATE BATTLE",Action::Control(ArenaControl::Spectator));
                 });
                 p.spawn(text("Choose your map",26.0,INK));
-                p.spawn(row()).with_children(|r| {
+                p.spawn(scroll_content(row())).with_children(|r| {
                     for map in [ArenaMap::ForestMassif,ArenaMap::Duel,ArenaMap::Fort,ArenaMap::SevenRegions] { button(r,crate::arena::map_name(map),Action::Map(map)); }
                 });
-                p.spawn((column(),ModeContent(ArenaControl::Player))).with_children(|p| {
+                p.spawn((scroll_content(column()),ModeContent(ArenaControl::Player))).with_children(|p| {
                     p.spawn(text("Enemy party",26.0,INK));
-                    p.spawn(row()).with_children(|r| {
+                    p.spawn(scroll_content(row())).with_children(|r| {
                         for (name,action) in [("Dragon",Action::Encounter(ArenaEncounter::Dragon)),("Goblins",Action::Encounter(ArenaEncounter::Goblins)),("Shaman party",Action::Encounter(ArenaEncounter::ShamanParty)),("Shadow",Action::Encounter(ArenaEncounter::Shadow)),("Golem",Action::PlayerRecipe(BattlePreset::Golem)),("Wisps",Action::PlayerRecipe(BattlePreset::Wisps4)),("Worm",Action::PlayerRecipe(BattlePreset::Worm))] {button(r,name,action);}
                     });
                 });
-                p.spawn((column(),ModeContent(ArenaControl::Spectator))).with_children(|p| {
-                    for slot in 0..2 { p.spawn(row()).with_children(|r| {
+                p.spawn((scroll_content(column()),ModeContent(ArenaControl::Spectator))).with_children(|p| {
+                    for slot in 0..2 { p.spawn(scroll_content(row())).with_children(|r| {
                         r.spawn((text("",26.0,INK),Label::Team(slot)));
                         button(r,"Previous",Action::Roster(slot,-1));button(r,"Next",Action::Roster(slot,1));
                     }); }
@@ -358,7 +366,7 @@ pub(crate) fn setup(
             p.spawn(row()).with_children(|r| { for page in Page::ALL {button(r,page.name(),UxAction::Page(page));} });
             p.spawn(scroll()).with_children(|body| {
                 for page in Page::ALL {
-                    body.spawn((Node { display:if page==Page::Overview {Display::Flex}else{Display::None},..column() },ux::PageBody(page))).with_children(|p| {
+                    body.spawn((Node { display:if page==Page::Overview {Display::Flex}else{Display::None},..scroll_content(column()) },ux::PageBody(page))).with_children(|p| {
                         match page {
                             Page::Overview => {
                                 p.spawn((text("",28.0,INK),Label::Health));
@@ -370,9 +378,9 @@ pub(crate) fn setup(
                                 p.spawn((text("",24.0,INK),UxLabel::RecorderFull));
                             }
                             Page::Map => {
-                                p.spawn(Node {width:percent(100),column_gap:px(18),align_items:AlignItems::Start,flex_shrink:0.0,..default()}).with_children(|row| {
+                                p.spawn(Node {width:percent(100),column_gap:px(18),align_items:AlignItems::Start,flex_shrink:0.0,overflow:Overflow::clip(),..default()}).with_children(|row| {
                                     ux::spawn_map(row,true,480.0);
-                                    row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..column()}).with_children(|details| {
+                                    row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..scroll_content(column())}).with_children(|details| {
                                         details.spawn((text("",24.0,INK),UxLabel::MapSelection));
                                         button(details,"CLEAR DESTINATION",UxAction::ClearPin);
                                         details.spawn(text("D  Dragon     S  Shadow     T  Troll\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
@@ -381,7 +389,7 @@ pub(crate) fn setup(
                             }
                             Page::Upgrades => {
                                 p.spawn(text("Each level earns one upgrade point. Disabled upgrades cost nothing.",26.0,INK));
-                                for index in 0..12 { p.spawn(Node { min_height:px(58),width:percent(100),align_items:AlignItems::Center,column_gap:px(10),flex_shrink:0.0,..default() }).with_children(|r| {
+                                for index in 0..12 { p.spawn(Node { min_height:px(58),width:percent(100),align_items:AlignItems::Center,column_gap:px(10),flex_shrink:0.0,overflow:Overflow::clip(),..default() }).with_children(|r| {
                                     r.spawn((Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..default()},text("",26.0,INK),Label::Parameter(index)));
                                     button(r,"−",Action::Change(index,-1.0));button(r,"+",Action::Change(index,1.0));
                                 }); }
@@ -389,7 +397,7 @@ pub(crate) fn setup(
                             Page::Settings => {
                                 p.spawn((text("",26.0,INK),UxLabel::Scale));
                                 button(p,"CHANGE UI SIZE",UxAction::Scale);
-                                p.spawn((Button, Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),border:UiRect::all(px(2)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,..default() }, BackgroundColor(Color::srgb(0.12, 0.24, 0.29)), BorderColor::all(Color::NONE), Action::Fullscreen)).with_children(|b| {b.spawn((text("Fullscreen",26.0,INK),Label::WindowMode));});
+                                p.spawn((Button, Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),border:UiRect::all(px(2)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,overflow:Overflow::clip(),..default() }, BackgroundColor(Color::srgb(0.12, 0.24, 0.29)), BorderColor::all(Color::NONE), Action::Fullscreen)).with_children(|b| {b.spawn((text("Fullscreen",26.0,INK),Label::WindowMode));});
                                 p.spawn(text("C switches first / third person.\nUI preferences persist; Restart resets only your run.",26.0,INK));
                             }
                             Page::Controls => {p.spawn(text("WASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nEsc / Tab   Pause / resume\nR   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls",26.0,INK));}
