@@ -152,7 +152,7 @@ pub(super) fn present(
                         color: reward_color(milestone.reward),
                         intensity: 170.0,
                         range: 4.0,
-                        shadows_enabled: false,
+                        shadow_maps_enabled: false,
                         ..default()
                     },
                     Transform::default(),
