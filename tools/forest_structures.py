@@ -272,31 +272,44 @@ def _world_piece(name, voxels, foundations, *, raw, clear_columns=()):
     return placed
 
 
-def bridge_assembly(surfaces, *, raw):
+def bridge_assembly(surfaces, *, raw, clear_columns=()):
     """Two open portal gates and graded parapets on the nontravel bridge ledges.
 
     ``surfaces`` must come from the compiled bridge, including q=-27..27,
     r=-5..5. The V4 deck has half_width5 and walkway_half_width4. No geometry
     occupies the four-level movement ribbon; no support enters the river.
+    Additional route columns open gaps in the rails, including side departures.
+    Portal piers are never clipped; conflicting routes there reject admission.
     """
     travel = {(q, r) for q in range(-27, 28) for r in range(-4, 5)}
     required = travel | {(q, r) for q in range(-27, 28) for r in (-5, 5)}
     if not required <= surfaces.keys():
         raise ValueError("bridge assembly requires the final deck support survey")
     pieces = []
+    route_clear = {tuple(p) for p in clear_columns}
+    clear = travel | route_clear
     # Each rail fits the radius32 artifact bound and stops at the portal piers.
     segments = ((-27, -25), (-21, -1), (0, 21), (25, 27))
     for side in (-5, 5):
         for index, (start, end) in enumerate(segments):
-            voxels, footings = {}, {}
+            groups = []
             for q in range(start, end + 1):
-                support = surfaces[q, side]
-                footings[q, side] = support
-                height = 7 if q % 4 == 0 else 4
-                for z in range(support + 1, support + 1 + height):
-                    voxels[q, side, z] = EDGE if z in (support + 1, support + 4) else STONE
-            pieces.append(_world_piece(f"bridge-rail-{side:+}-{index}", voxels, footings,
-                                       raw=raw, clear_columns=travel))
+                if (q, side) in route_clear:
+                    continue
+                if not groups or groups[-1][-1] != q - 1:
+                    groups.append([])
+                groups[-1].append(q)
+            for group_index, group in enumerate(groups):
+                voxels, footings = {}, {}
+                for q in group:
+                    support = surfaces[q, side]
+                    footings[q, side] = support
+                    height = 7 if q % 4 == 0 else 4
+                    for z in range(support + 1, support + 1 + height):
+                        voxels[q, side, z] = EDGE if z in (support + 1, support + 4) else STONE
+                suffix = f"-part{group_index}" if len(groups) > 1 else ""
+                pieces.append(_world_piece(f"bridge-rail-{side:+}-{index}{suffix}", voxels, footings,
+                                           raw=raw, clear_columns=clear))
     for gate in (-23, 23):
         voxels = {}
         footings = {(q, r): surfaces[q, r] for q in range(gate - 1, gate + 2) for r in (-5, 5)}
@@ -311,7 +324,7 @@ def bridge_assembly(surfaces, *, raw):
                 for z in range(bottom, crown):
                     voxels[q, r, z] = EDGE if z == bottom or r == 0 else STONE
         pieces.append(_world_piece(f"bridge-portal-{gate:+}", voxels, footings,
-                                   raw=raw, clear_columns=travel))
+                                   raw=raw, clear_columns=clear))
     validate_assembly(pieces, surfaces=surfaces, clearance=4)
     return pieces
 

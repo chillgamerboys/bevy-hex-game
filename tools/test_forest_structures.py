@@ -108,6 +108,17 @@ class StructureContracts(unittest.TestCase):
                     self.assertIn(r, (-5, 5))
         structures.validate_assembly(pieces, surfaces=surfaces, clearance=4)
 
+    def test_bridge_side_departures_open_rails_without_removing_portal_supports(self):
+        surfaces = self.bridge_surfaces()
+        clear = {(27, 5), (10, -5)}
+        pieces = structures.bridge_assembly(surfaces, raw=Raw, clear_columns=clear)
+        self.assertFalse({(q, r) for p in pieces for q, r, _ in p["occupied_world"]} & clear)
+        self.assertEqual(sum("portal" in p["id"] for p in pieces), 2)
+        self.assertTrue(any("part1" in p["id"] for p in pieces), "mid-rail gaps split into connected artifacts")
+        self.assertTrue(any((26, 5) in p["foundation_levels"] for p in pieces))
+        with self.assertRaisesRegex(ValueError, "movement clearance"):
+            structures.bridge_assembly(surfaces, raw=Raw, clear_columns={(23, 5)})
+
     def test_arena_ornaments_preserve_radius12_floor_and_an_open_massive_gate(self):
         center, walls, gate, surfaces = self.arena_fixture()
         pieces = structures.arena_assembly(center, walls, gate, 92, surfaces, raw=Raw)
