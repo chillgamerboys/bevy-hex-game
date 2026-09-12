@@ -223,7 +223,7 @@ def documents():
                             "half_width": 13, "depth": 12, "material": "water", "bed_material": "sand", "bank_width": 6}],
               "routes": routes,
               "bridges": [{"id": "central-crossing", "points": [grade(ANCHORS["bridge_west"]), grade(ANCHORS["bridge_east"])],
-                           "half_width": 3, "thickness": 2, "material": "timber"}],
+                           "half_width": 3, "thickness": 2, "material": "stone"}],
               "features": features,
               "overrides": [{"id": f"clearing-{key}", "mask": disk(value[:2], 9 if key.startswith("dragon") else 7),
                              "surface_level": Raw(f"Some({value[2]})"), "material": Raw('Some("limestone")') if key.startswith("dragon") else None}
@@ -305,7 +305,7 @@ def verify_package(target, package):
         assert any(water["body_id"] == "forest/great-river" and water["top"] == 35 for water in value["liquids"]), f"river gap at {r}"
         dry = [s for s in value["surfaces"] if s["position"]["level"] >= 34]
         if dry:
-            assert all(s["material"] == "timber" and s["position"]["level"] == 48 for s in dry), (r, dry)
+            assert all(s["material"] == "stone" and s["position"]["level"] == 48 for s in dry), (r, dry)
             bridge_rows.append(r)
     assert bridge_rows == list(range(-3, 4)), bridge_rows
     heart = probes[GIANT]["root_objects"]

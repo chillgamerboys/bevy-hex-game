@@ -14,7 +14,7 @@ require the shared blueprint height limit of 192 levels while remaining within
 the existing radius-12 and 8,192-voxel limits.
 
 The north–south river reaches both map edges. Its water surface is level 34 with
-12 occupied liquid levels. One 49-column-long, seven-column-wide timber bridge
+12 occupied liquid levels. One 49-column-long, seven-column-wide stone bridge
 crosses at level 48; water and air remain below its two-level deck. The eastern
 massif has three limestone combat shelves at levels 80, 130 and 190, joined by
 graded trails. Forest clearings and routes remain free of tree occupancy.

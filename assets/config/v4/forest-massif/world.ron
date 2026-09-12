@@ -89,7 +89,7 @@
 (id:"central-crossing",points:[
 (column:(q:-24,r:0),level:48),
 (column:(q:24,r:0),level:48),
-],half_width:3,thickness:2,material:"timber"),
+],half_width:3,thickness:2,material:"stone"),
 ],features:[
 (id:"forest-broadleaf-1",kind:"tree",asset:"plant/forest-broadleaf-1",provenance:Some((source_path:"assets/art/objects/plant/forest-broadleaf-1.ron",source_revision:"18493cea8201d80c1d85f5aaf82ff85b0ea6c0ad",style_materials:{"plant/trunk":"timber","plant/foliage-dark":"foliage","plant/foliage-mid":"foliage","plant/foliage-light":"foliage"})),mask:(center:(q:0,r:0),radius:187),density:0,roots:[
 (q:-171,r:90),
