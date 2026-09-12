@@ -66,8 +66,12 @@ pub(crate) fn tick_with_lunge(
         if actor.species == Species::Human && actor.expedition_player {
             profile.height = actor.dimensions.y;
             profile.radius = actor.dimensions.x * 0.5;
-            profile.walk *= 1.05;
-            profile.run *= 1.05;
+            profile.walk = actor.walking_speed;
+            profile.run = actor.walking_speed;
+            if actor.glider.open {
+                crate::glider::tick(actor, world, profile);
+                return;
+            }
         }
         actor
             .body

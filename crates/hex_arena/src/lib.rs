@@ -35,7 +35,9 @@ mod encounters;
 mod expedition;
 pub use encounters::ExpeditionRallySnapshot;
 pub use expedition::{DragonTier, ExpeditionRole};
+mod glider;
 mod hex_prisms;
+pub use glider::GliderSnapshot;
 mod motion;
 mod player_observation;
 pub use player_observation::{
@@ -136,6 +138,10 @@ pub struct ActorIntent {
     pub jump: bool,
     /// Independent High Jump press edge; never changes the selected projectile.
     pub high_jump: bool,
+    /// Single G press edge to open or fold the expedition glider.
+    pub glider_toggle: bool,
+    /// Raw camera look direction for flight steering, before aim correction.
+    pub glider_look: Vec3,
     /// Press edge, retained until the next fixed tick even for a quick tap.
     pub cast_pressed: bool,
     /// Release edge. Only an armed press can release a spell.
@@ -154,6 +160,8 @@ impl Default for ActorIntent {
             run: false,
             jump: false,
             high_jump: false,
+            glider_toggle: false,
+            glider_look: Vec3::NEG_Z,
             cast_pressed: false,
             cast_released: false,
             cast_held: false,
@@ -417,6 +425,8 @@ pub struct Actor {
     charge: Option<ChargeState>,
     cast_needs_release: bool,
     body: Body,
+    glider: glider::GliderState,
+    walking_speed: f32,
     dimensions: Vec3,
     expedition_role: Option<ExpeditionRole>,
     dragon_tier: DragonTier,
@@ -460,6 +470,8 @@ impl Actor {
             charge: None,
             cast_needs_release: false,
             body: Body::default(),
+            glider: glider::GliderState::default(),
+            walking_speed: 4.725,
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             expedition_role: None,
             dragon_tier: DragonTier::Standard,
@@ -472,6 +484,23 @@ impl Actor {
             last_damage_tick: None,
             last_activity_tick: 0,
         }
+    }
+
+    /// Current expedition glider facts; legacy actors have no player glider.
+    #[must_use]
+    pub fn glider(&self) -> Option<GliderSnapshot> {
+        (self.expedition_player && self.species == Species::Human).then(|| {
+            if self.hp <= 0.0 {
+                glider::GliderState::default().snapshot()
+            } else {
+                self.glider.snapshot()
+            }
+        })
+    }
+
+    pub(crate) fn clear_glider(&mut self) {
+        self.glider = glider::GliderState::default();
+        self.body.airborne_momentum = None;
     }
 
     /// Reserved hover layer for a flying swarm; other profiles return None.
@@ -827,6 +856,9 @@ impl ArenaSession {
     pub fn cancel_charges(&mut self) {
         for actor in &mut self.actors {
             actor.cancel_charge();
+            if actor.hp <= 0.0 {
+                actor.clear_glider();
+            }
         }
         self.bot.cancel_all();
         self.encounter.cancel_charges();
@@ -947,6 +979,9 @@ impl ArenaSession {
             effect.age += STEP;
         }
         self.effects.retain(|effect| effect.age < effect.lifetime);
+        for actor in self.actors.iter_mut().filter(|actor| actor.hp <= 0.0) {
+            actor.clear_glider();
+        }
         if self.is_finished() {
             return commands;
         }
@@ -1205,6 +1240,8 @@ fn simulate(
         input.human.cast_held = false;
         input.human.jump = false;
         input.human.high_jump = false;
+        input.human.glider_toggle = false;
+        input.human.glider_look = input.human.aim;
     }
     session.install_burrow_policy(&burrow_policy);
     for outcome in burrow_outcomes.read() {
@@ -1218,6 +1255,7 @@ fn simulate(
     input.human.cast_released = false;
     input.human.jump = false;
     input.human.high_jump = false;
+    input.human.glider_toggle = false;
     input.human.selected = None;
     if let Err(reason) = tuning.validate() {
         session.notice = reason;

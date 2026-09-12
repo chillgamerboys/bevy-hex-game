@@ -7,7 +7,7 @@ use bevy_math::{Vec3, Vec3Swizzles};
 use crate::collision::{slide_with_contacts, CollisionWorld, SKIN};
 use crate::{BODY_HEIGHT, BODY_RADIUS, STEP};
 
-const GRAVITY: f32 = 17.333_334;
+pub(crate) const GRAVITY: f32 = 17.333_334;
 const WALK: f32 = 4.5;
 const RUN: f32 = 4.5;
 const STEP_HEIGHT: f32 = 0.4;
@@ -19,6 +19,10 @@ pub(crate) struct Body {
     pub impulse_velocity: Vec3,
     pub grounded: bool,
     pub step_rise: f32,
+    /// Voluntary horizontal motion from the last accepted controller sample.
+    pub(crate) control_velocity: Vec3,
+    /// Momentum retained after folding the player glider, separate from knockback.
+    pub(crate) airborne_momentum: Option<Vec3>,
     coyote: f32,
     jump_buffer: f32,
 }
@@ -83,6 +87,8 @@ impl Body {
         if !world.clear(*feet, profile.height, profile.radius) {
             self.vertical_velocity = 0.0;
             self.impulse_velocity = Vec3::ZERO;
+            self.control_velocity = Vec3::ZERO;
+            self.airborne_momentum = None;
             return;
         }
         self.jump_buffer = (self.jump_buffer - STEP).max(0.0);
@@ -115,9 +121,22 @@ impl Body {
         }
         self.impulse_velocity.y = 0.0;
         let direction = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero();
-        let horizontal = (direction * (if run { profile.run } else { profile.walk })
-            + self.impulse_velocity)
-            * STEP;
+        let requested = direction * (if run { profile.run } else { profile.walk });
+        if self.grounded {
+            self.airborne_momentum = None;
+        }
+        self.control_velocity = if let Some(momentum) = &mut self.airborne_momentum {
+            // Folding supplies neither a walking-speed boost nor an abrupt brake.
+            // Small airborne steering becomes available again at walking speed.
+            if momentum.length() < profile.walk {
+                *momentum += (requested - *momentum).clamp_length_max(6.0 * STEP);
+            }
+            *momentum *= (-0.18 * STEP).exp();
+            *momentum
+        } else {
+            requested
+        };
+        let horizontal = (self.control_velocity + self.impulse_velocity) * STEP;
         let vertical = if !self.grounded || self.vertical_velocity > 0.0 {
             let delta = self.vertical_velocity * STEP - 0.5 * GRAVITY * STEP * STEP;
             self.vertical_velocity -= GRAVITY * STEP;
@@ -169,6 +188,10 @@ impl Body {
         // clipped by actual contact normals. Opposing input cannot be discarded
         // at a wall before an outward impulse gets applied.
         for normal in contacts {
+            self.control_velocity -= normal * self.control_velocity.dot(normal).min(0.0);
+            if let Some(momentum) = &mut self.airborne_momentum {
+                *momentum -= normal * momentum.dot(normal).min(0.0);
+            }
             self.impulse_velocity -= normal * self.impulse_velocity.dot(normal).min(0.0);
             if normal.y.abs() > 0.5 && self.vertical_velocity * normal.y < 0.0 {
                 self.vertical_velocity = 0.0;

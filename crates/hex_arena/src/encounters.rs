@@ -781,6 +781,7 @@ impl ArenaSession {
             actor.attack = None;
             actor.beam = None;
             if actor.hp <= 0.0 {
+                actor.clear_glider();
                 actor.attack = None;
                 actor.cancel_charge();
                 continue;
@@ -814,6 +815,7 @@ impl ArenaSession {
             } else {
                 &profile_tuning
             };
+            crate::glider::prepare(actor, intent, &self.collision, world, geometry);
             let boosted = intent.high_jump && actor.high_jump(actor_tuning);
             if boosted {
                 boosts.push((actor.id, actor.feet));
@@ -842,6 +844,7 @@ impl ArenaSession {
                 actor.hp = 0.0;
                 actor.cancel_charge();
             }
+            crate::glider::finish(actor, world, geometry);
             if actor.hp > 0.0 {
                 if let Some((spell, speed)) = actor.casting(intent, actor_tuning) {
                     casts.push((actor.id, spell, speed));
