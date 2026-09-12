@@ -1,6 +1,6 @@
 # Forest–Massif Battle
 
-Status: integrated local candidate; logic validated; final native visual review in progress. Coordinator: root. Branch: wave/forest-massif-battle.
+Status: integrated local candidate; logic and static visuals validated; native controls review pending. Coordinator: root. Branch: wave/forest-massif-battle.
 User-approved local implementation; no dev/main merge or remote publication in this delivery.
 Source: battle 99d56c7 and V4 45f689b, common base 495a73d, composed in 98f68fb.
 The explicit user source checkpoints supersede the ordinary dev-first landing sequence for this local experiment. Shared changes remain reviewable in the candidate.
@@ -72,7 +72,7 @@ Focused world compile/geometry/roster tests; contact-only vs explosion, reward, 
 
 The runtime-loaded stone-bridge package is `987d396f3972feb5`. Source generation, exact tree spacing/height/stock checks and 388 runtime column probes pass. The source has 105,469 columns, 444 storage chunks, 275 exact-voxel trees and thirteen named gameplay anchors.
 
-Gameplay lane validation passed all 334 `hex_arena` library tests, eight final focused progression/contact/liquid checks, and strict arena Clippy. Python arena helper checks passed; combined game, runtime terrain edits, environment captures and native playtest remain the coordinator’s final gate. The ignored combined fixture measures ArenaTick CPU time only, with synthetic player camp visits; it makes no renderer or FPS claim.
+Gameplay lane validation passed all 338 `hex_arena` library tests, eight final focused progression/contact/liquid checks, and strict arena Clippy. Python arena helper checks passed; combined game, runtime terrain edits, environment captures and native playtest remain the coordinator’s final gate. The ignored combined fixture measures ArenaTick CPU time only, with synthetic player camp visits; it makes no renderer or FPS claim.
 
 Combined validation: 108 arena app tests pass; actual V4 world edit roundtrip passes; full authored spawn/contact-kill/reset fixture passes with 26 actors and eight parties. The bounded three-second CPU fixture recorded all eight parties active for all 360 measured ticks (median 2.867 ms; p95 7.637 ms; no renderer/FPS claim). Eighteen land routes passed 750 runtime column probes; grades remain at most .35 units per hex, below .4 automatic step. All eleven final progression tests pass, including both clear orders, prior purchases plus the 25-point reward beyond the normal cap, protected-tree contacts, and launch-time payloads. Contact hit presentation now has a separate spark kind with no explosion sphere. Final windowless captures and native controls review follow.
 
@@ -90,3 +90,24 @@ occupancy must remain disjoint. Anchors, trunk centers and gameplay remain fixed
 The shared blueprint boundary suite passes all 15 tests. Revised content compile,
 traversal, combined spawn/reset and windowless review are in progress. Native
 interactive validation is blocked by the locked Mac; no native feel claim is made.
+
+## Revised candidate evidence
+
+Current package: `a9742c44b760e05c`; capture source: `ef6874c`. All 275 trunk
+positions, 13 anchors, 25 authored enemies and original route grades remain fixed.
+Compiled exact foliage union covers 69.1856% of the planted forest and 51.8640% of
+all western land (including border). Zero solid voxel overlaps; four companion
+peaks and 20% more main massif relief are present. Two compiler admission tests,
+source determinism/spacing checks, 662 content probes and 750 route probes pass.
+The asset catalog and hidden-mesh geometry regression pass. The complete 26-actor
+spawn/contact-kill/reset fixture passes; active-camp CPU median 2.890 ms and p95
+7.859 ms remain simulation-only measurements, with no renderer/FPS claim.
+
+All ten revised windowless views were inspected and pass static geometry/HUD
+review. The first native compilation exceeded the capture helper's 600-second
+limit; a warm retry with 1200 seconds completed all ten views. Native Cargo launch
+succeeds without asset errors. The Mac was initially locked, then accessible;
+computer-use still rejects the unbundled game executable by path and process name.
+Native aiming, movement and progression playthrough remain unverified. The updated
+native game is left running for the user's manual playtest. Deliverables and logs
+are in the task's outputs directory. No dev/main merge or remote publication.
