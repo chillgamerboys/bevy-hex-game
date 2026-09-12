@@ -100,9 +100,11 @@ impl ProbeCache {
         if !self.active.load(Ordering::Relaxed) {
             return Lookup::Inactive;
         }
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(state) = self.state.lock() else {
             return Lookup::Inactive;
         };
+        #[cfg(any(test, feature = "test-support"))]
+        let mut state = state;
         if state.depth == 0 {
             return Lookup::Inactive;
         }
