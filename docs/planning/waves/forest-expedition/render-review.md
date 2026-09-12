@@ -30,7 +30,7 @@ one whole-matrix contact sheet have specific independent review notes.
 | forest-fountain, mountain-fountain | Recessed discoverable pools, visible charged water, supported rim and entry; no opaque surface replacing water physics. |
 | troll-reward-orb, dragon-reward-orb, shadow-reward-orb | Gold, blue and violet spheres visibly hover near valid ground with restrained light/halo. Explicit synthetic defeat fixtures. |
 | shadow-reward-collected | Sphere absent after collection; HUD shows60/125 without healing. Explicit synthetic pickup fixture. |
-| fountain-spent | Charged overlay absent but the physical water/rim remains. Explicit synthetic wounded-player placement. |
+| fountain-spent | Charged material/glimmers absent but the physical water/rim remains. Explicit synthetic wounded-player placement. |
 
 Landmark/ground/reward views use external composition cameras and are not evidence
 of native player movement or camera comfort. Reward and spent-pool states are
@@ -102,3 +102,16 @@ The next candidate widens the river-centered bridge view and repairs charged-wat
 Foundation **6a68252**, game integration **5595b9d** and map repair **74ac687** remove the competing pool cap and style actual liquid cap/curtain batches from the disposable charged-name snapshot. Existing geometry, UVs, alpha and animation remain unchanged. Charged pools share turquoise surface/fall materials with restrained extension emission; spent or stale-generation bindings select ordinary water. Glimmers retain the gameplay consumption parent. The bridge review eye now uses river-row centering at offset62 instead of50.
 
 Composed25 liquid tests, the actual a538 charged/spent/reset game fixture, and strict game Clippy pass. An independent source review found no concrete issue. These checks do not validate pixels; a fresh six-view subset and then the full26 matrix remain pending. No package geometry changed.
+
+
+## Final static review, September 12
+
+Exact clean source **e0746f33edd80c67c54854c5b2edd740157db2a3**, runtime **74ac687**, package **a538263d612e891f**, produced a fresh six-view repaired subset and then the complete **26-view** matrix. Both packs completed successfully with unchanged source and package. Root and independent `actor_broadphase` inspected every original at full resolution and each whole contact sheet. The subset passes **6/6**; the final matrix is **26 PASS / 0 FAIL / 0 BLOCKED** for the static criteria above.
+
+Full evidence: `.context/expedition-final-static/e0746f33edd80c67c54854c5b2edd740157db2a3-forest-expedition-v2-rewards`, including `receipt.json`, `source-state.json`, per-frame PNG/state/log/receipt files, `root-static-review.md`, `independent-review-actor-broadphase.md`, the sibling JSON and complete contact sheet. Independent checks verified clean before/after source, all 26 PNG/state/log hashes, a538 manifest/companion identities and all 899 recorded package files. The actual helper command uses Cargo `dev,arena-prototype` with one build job, 1600×900 output, scale 1, 15:00 and water phase 0.
+
+The paired low bridge views now include the formerly cropped east portal and a readable complete span; forest-side foliage remains environmental context. Charged fountain water no longer has alternating flat cyan/dark-blue hex patches: the physical water surface retains its ripple detail with a coherent turquoise material and small glimmers. The consumed pool retains blue physical water and loses the glimmers. The elevated mountain-pool composition shows its whole recessed basin and cliff pocket; it is not evidence of player approach comfort. All three reward colors are distinct, and the collected Shadow state visibly reads **60/125 HP** with the sphere absent. The initial upgrades screen contains the correct 45/12/15/12/0.50 start, locked explosions, all three milestone rewards and fountains-only healing.
+
+The complete contact sheet confirms consistent afternoon palette and readable shaded ground across the forest, connected mountain shoulders and separate shelf elevations, coherent architecture and legible HUD. No further concrete static defect was identified. Earlier failed packs remain historical evidence of the repairs and are superseded for the current static verdict.
+
+**Native review remains HUMAN-MOTION-PENDING.** CUA still reports the Mac locked after this review, and the existing manual-unlock request remains unanswered. No FPS, continuous movement, contact-shot aiming or live combat acceptance is inferred from these windowless images or the separate ArenaTick CPU profiles. No native process is left running.
