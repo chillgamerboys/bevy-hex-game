@@ -2,7 +2,7 @@
 
 Status: dispatching. Branch: `wave/forest-expedition`. Coordinator: root.
 Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
-Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 107 enemies, physical reward pickups and finite healing.
+Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 114 enemies, physical milestone pickups and finite healing.
 User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
 
 ## Why this wave exists
@@ -127,7 +127,7 @@ Read-only GitHub sweep 2026-09-11: #220 V4 on #219 Grand, #219 Grand on dev, #21
 Root commits shared passive contracts; L1 and L2's broadphase can run independently. Merge L1 then world content/publication; merge L2 gameplay; finish presentation on combined snapshots. Maintain current supported baseline until package regeneration and composed acceptance succeed. One coordinator writes integration branch. Keep source branches.
 
 ## Combined acceptance
-Deterministic terrain/curved continuous river/exactly one bridge; complete graded route ribbons and support/body-clearance validation; exact 108 roster and camp totals; final rotated voxel intersections/root support and full-forest canopy >=50%; Heart clearing and landmarks. Shield under canopies, cross-chunk edits, roots/anchors/objects protected, atomic rejection/reset. Profile exploration/largest camp/full rally with actual 108 actors (CPU claims distinct from FPS). Test baby/Troll profiles, aura/rally, no enemy upgrades, pickup/progression orders, XP credit/rollover, final kill/duplicates/in-flight payloads, full-HP orbs/pools, pause/victory/reset. Regression Duel/Fort. Windowless ground-level forest, full-footprint, bridge, mountain openings, Shadow arena, orb/pool and HUD captures inspected individually. Native aiming/traversal/combat/readability pass remains required; record unverified controls honestly if CUA cannot address the native game. Cargo-based launcher/guide and outputs evidence. Full selector-chosen merge gate before future dev integration; local candidate reports exact checks only.
+Deterministic terrain/curved continuous river/exactly one bridge; complete graded route ribbons and support/body-clearance validation; exact 115 roster and camp totals; final rotated voxel intersections/root support and full-forest canopy >=50%; Heart clearing and landmarks. Shield under canopies, cross-chunk edits, roots/anchors/objects protected, atomic rejection/reset. Profile exploration/largest camp/full rally with actual 115 actors (CPU claims distinct from FPS). Test baby/Troll profiles, aura/rally, no enemy upgrades, pickup/progression orders, XP credit/rollover, final kill/duplicates/in-flight payloads, full-HP orbs/pools, pause/victory/reset. Regression Duel/Fort. Windowless ground-level forest, full-footprint, bridge, mountain openings, Shadow arena, orb/pool and HUD captures inspected individually. Native aiming/traversal/combat/readability pass remains required; record unverified controls honestly if CUA cannot address the native game. Cargo-based launcher/guide and outputs evidence. Full selector-chosen merge gate before future dev integration; local candidate reports exact checks only.
 
 ## Stop conditions
 Unknown owner facts, object/support policy mismatch, malformed anchors/routes, overlapping ownership, unable-to-validate destructive change. At live <=3% remaining pause new development, gather all agent checkpoints, commit durable state and start hourly reset heartbeat. Do not consume reset credits. No automatic claim that the reset happened at its predicted time.
@@ -138,3 +138,13 @@ Unknown owner facts, object/support policy mismatch, malformed anchors/routes, o
 
 ## Close-out
 In progress. Current playable launcher still targets old validated build. All expanded map/gameplay/presentation and combined validation remain to be completed; no new visuals delivered yet.
+
+## Checkpoint 2026-09-12, foundation combined
+
+Candidate `b3623ff` combines passive expedition sites, deterministic actor broadphase, exact tapered tree generator, explicit V4 grounding with matching under-canopy edit guards, atomic arched bridge cross-sections and provisional softer 15:00 lighting. None of the expanded map is published to the user's launcher yet.
+
+Focused evidence: world lane 186 tests pass with one pre-existing ignored release test; broadphase 344 arena tests pass and one manual benchmark passes; tree generator 8 tests/39 preset-seed pairs; final bridge6tests pass including reversal, six orientations, conflicting retrace and atomic refusal. Initial bridge reversal test correctly failed due directional integer truncation; bridge-only weighted interpolation fixed it without changing channels. Root combined map/game tests are compiling. Site review identified route clearance/aperture, camp-entry geometry and fake-liquid acceptance gaps; L4 follow-up fixes them before product integration.
+
+Shared Cargo targets reused stale dependency artifacts across isolated source worktrees. One bridge invocation discovered zero tests; another reused new world contracts against old compiler source and failed a field initializer. Neither counts as evidence. Touch changed crate roots on checkout switches, serialize builds sharing a target, and require positive expected test counts. Rebuilt combined compiler executed all6bridge tests successfully.
+
+Next: finish/test115actor roster profiles, harden site validation, compile exact-radius terrain/path proxy, integrate tree distribution/grounding and canopy target, then milestones/fountains/Troll rally and presentation. Current source branches retain work; no remote changes. Quota at6%remaining; user's3%floor applies. No reset monitor created yet because active development has not reached checkpoint floor. Optional OpenAI practice audit remains conditional on game completion and >=20%remaining after reset.
