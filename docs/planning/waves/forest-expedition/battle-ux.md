@@ -98,12 +98,33 @@ changed in the Battle UX diff. The candidate-validation workflow stops the full
 gate at this first substantive failure; subsequent broad concerns and the shipping
 release build are not claimed passed. This candidate is not merge-ready.
 
-Native launch reached the ready screen without asset errors. The Mac was initially
-locked; after user unlock, the computer-use tool could not address the unbundled
-Cargo process. Authorization for the game-specific input driver is pending.
-No focused active-play telemetry or completed video exists yet, so the <1 ms
-additional UI and <10% recording frame-time targets remain unverified. Short
-windowless timing samples are diagnostic wall spans, not exclusive UI CPU evidence.
+Native input was explicitly authorized after the Mac was unlocked. The controlled
+checks exercised Enter/Esc/M, native pointer menus and scrolling at 720/900/1080,
+scaling through 200%, destination placement, held Fireball, movement, camera mode,
+repeated Restart clicks and normal Quit. The user took over native play on
+September 12; automated input and heavy builds stopped immediately. Do not infer
+combat/discovery correctness or complete control-feel acceptance from those clips.
+
+Two recordings from clean `2545621` passed independent full decode and metadata
+checks (21 and 26 checks). They are video-only H.264 SDR, nominal 30 fps with
+variable timestamps, fixed output dimensions through resizing. The second clip
+retained Restart, bookmarks and graceful Quit, then finalized successfully.
+Permission denial, disk exhaustion and native helper interruption remain untested;
+focused lifecycle tests cover the corresponding controller failures.
+
+Native review found and repaired REC/header overlap at 200% (`70de964`): the
+regression passes at three viewports/two scales and four fresh native stills passed
+independent inspection. Strict game-only Clippy and the Cargo native build pass.
+A separate scrolled Settings control intercepts tab clicks at 200%; regression
+`c20fd423` is isolated on `fix/battle-menu-clipped-pointer`, awaiting APP execution
+and integration. Use 100% while testing the currently open candidate.
+
+Corrected schema-3 telemetry separates HUD and observation. The bridge sample at
+1600x900 measured approximately 0.15 ms HUD-only p95 and 4.9 ms observation p95.
+The redundant reticle ray is removed in integrated `87d058f`; ten observation tests
+(including 510 old/new targeting comparisons) and strict arena Clippy pass. This
+optimization is not yet in the open game, and its native performance is unmeasured.
+The <1 ms additional UI CPU and <10% recording regression targets remain unverified.
 Recorder review additionally identified saturated-command-queue Quit and a blocking
 folder-open call. Follow-up `be62a96` retries a full Quit queue with one five-second
 deadline and opens folders in a separate bounded job; all 11 recorder tests pass,

@@ -65,10 +65,31 @@ Logs and JSON receipts live at `/Users/alberto/Documents/Codex/2026-09-11/i-w/ou
 
 ## Immediate next work and target ownership
 
-1. All 11 focused recorder lifecycle tests pass for the integrated shutdown fixes. Strict game-library Clippy also passes. Complete the Cargo rebuild, then native acceptance. Keep the full selector gate's inherited 517 map lint failures explicit.
-2. Ten Battle UX frames at clean `a7013698` passed independent static review; the recorder follow-up changes lifecycle only. Do not repeat unchanged map or gameplay suites without a new issue.
-3. Native candidate PID 92872 was launched separately at the ready screen. The user unlocked the Mac, but CUA cannot address the unbundled Cargo application; explicit authorization for the game-specific CGEvent driver is pending. Preserve original user PID 71141. Complete real pointer/motion, recording playback/lifecycle and stable map/recording performance measurements when native control is available.
-4. The requested official OpenAI guidance review remains pending after game validation, provided quota remains at least 20%. No global settings/instruction changes are authorized. **Timer remains paused.**
+1. The user took over native play on September 12. **No automated native input,
+   recording changes, game shutdown/relaunch or heavy Cargo work while they play.**
+   The open game is PID 1608/window 17025, clean runtime `70de964`; source is
+   `87d058f` plus this documentation checkpoint. The game is recording to
+   `~/Movies/Hex Game/Recordings/battle-1789247553941-1608.mp4` (partial until Stop).
+   Esc resumes/pauses; the user owns controls. The CGEvent driver is authorized,
+   but that does not override their current play session.
+2. Integrate the isolated scrolled-menu pointer repair only after its typed
+   regression is run. Agent branch `fix/battle-menu-clipped-pointer`, regression
+   `c20fd423`, lives in sibling `ux-ui-tests`. At UI200%, a clipped Settings child
+   can intercept header tabs; 100% avoids the reproduced overlap. No fix is yet
+   claimed verified or in the open game.
+3. The observation optimization `87d058f` is integrated and pure tests/Clippy pass;
+   rebuild with the pointer repair after user play. Retest corrected native
+   observation cost, stable recording OFF/ON/OFF phases and affected pointer path.
+   Use explicit `RUST_LOG=info` with `--ux-performance` (host defaults to warn).
+4. Independent recorder reports validate two saved `2545621` clips, including
+   fixed dimensions across resize, Restart, bookmarks and graceful Quit. REC badge
+   fix `70de964` has a passing layout regression, four inspected native200% stills,
+   strict game-only Clippy and Cargo build. Preserve the earlier ten reviewed
+   windowless frames. Native denial/disk/helper failures and complete combat/feel
+   route remain pending; do not broaden unchanged checks.
+5. Full selector gate retains 517 inherited map Clippy failures. No merge-ready
+   claim. Official OpenAI guidance review remains deferred until game work is done.
+   **Timer remains paused.**
 
 APP_TARGET: `/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore`.
 PURE_TARGET: `/Users/alberto/Documents/Codex/2026-09-04/i/work/cargo-v4-pure` (free).
