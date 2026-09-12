@@ -1579,6 +1579,9 @@ struct TerrainRawMesh {
     indices: Vec<u32>,
     edge_treatment: ReviewEdgeTreatment,
     geometric_bevel: Option<TerrainGeometricBevel>,
+    strata: bool,
+    tint: Option<[f32; 4]>,
+    colors: Vec<[f32; 4]>,
 }
 
 impl TerrainRawMesh {
@@ -1599,6 +1602,9 @@ impl TerrainRawMesh {
         self.positions.push(position.to_array());
         self.normals.push(normal.to_array());
         self.uvs.push(uv);
+        if self.strata {
+            self.colors.push(self.tint.unwrap_or([1.0; 4]));
+        }
         Ok(index)
     }
 
@@ -1819,14 +1825,18 @@ impl TerrainRawMesh {
         {
             return Err("terrain batch produced non-finite geometry".to_owned());
         }
-        Ok(Mesh::new(
+        let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
-        .with_inserted_indices(Indices::U32(self.indices)))
+        .with_inserted_indices(Indices::U32(self.indices));
+        if self.strata {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
+        }
+        Ok(mesh)
     }
 }
 
@@ -1993,6 +2003,7 @@ fn combined_terrain_mesh_with_edge(
         level_height,
         edge_treatment,
         false,
+        false,
     )
 }
 
@@ -2021,6 +2032,24 @@ pub(crate) fn resident_terrain_mesh(
         level_height,
         ReviewEdgeTreatment::Current,
         true,
+        false,
+    )
+}
+
+/// Forest-only exposed strata, with actual level seams and restrained vertex tint.
+#[cfg(feature = "arena-prototype")]
+pub(crate) fn resident_terrain_mesh_with_strata(
+    runs: &[TerrainMeshRun],
+    columns: &BTreeMap<HexCoord, Vec<ProjectedRun>>,
+    level_height: f32,
+) -> Result<Mesh, String> {
+    terrain_mesh_from_runs(
+        runs.iter().copied(),
+        columns,
+        level_height,
+        ReviewEdgeTreatment::MicroBevel04,
+        true,
+        true,
     )
 }
 
@@ -2030,8 +2059,10 @@ fn terrain_mesh_from_runs(
     level_height: f32,
     edge_treatment: ReviewEdgeTreatment,
     resident: bool,
+    strata: bool,
 ) -> Result<Mesh, String> {
     let mut combined = TerrainRawMesh::with_edge_treatment(edge_treatment, level_height)?;
+    combined.strata = strata;
     for run in runs {
         // Retaining each run's top cap preserves material boundaries and guarantees
         // every logical run has one exact pick surface in its bounded batch. Buried
@@ -2068,6 +2099,45 @@ fn terrain_mesh_from_runs(
             };
             for (bottom, top) in exposed_intervals(run.bottom, run.top, neighbour_runs, run.cutaway)
             {
+                if strata {
+                    for level in bottom..top {
+                        #[expect(
+                            clippy::cast_precision_loss,
+                            reason = "bounded resident voxel levels"
+                        )]
+                        let low = level as f32 * level_height;
+                        let seam = level_height * 0.045;
+                        let value = if level.rem_euclid(4) == 0 { 0.74 } else { 0.86 };
+                        combined.tint = Some([value, value, value, 1.0]);
+                        combined.side(
+                            run.position.coord,
+                            side_corners,
+                            side_normal,
+                            low,
+                            low + seam,
+                            false,
+                            false,
+                        )?;
+                        let value = match level.rem_euclid(4) {
+                            0 => 1.00,
+                            1 => 0.98,
+                            2 => 0.95,
+                            _ => 1.02,
+                        };
+                        combined.tint = Some([value, value * 0.99, value * 0.98, 1.0]);
+                        combined.side(
+                            run.position.coord,
+                            side_corners,
+                            side_normal,
+                            low + seam,
+                            low + level_height,
+                            false,
+                            false,
+                        )?;
+                    }
+                    combined.tint = None;
+                    continue;
+                }
                 let trim_bottom = bottom_exposed && bottom == run.bottom;
                 let trim_top = top == run.top;
                 #[expect(

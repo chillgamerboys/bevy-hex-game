@@ -386,7 +386,12 @@ fn apply_terrain(
             TerrainEdit::Clear { .. } => SubstanceId::AIR,
         };
         if current == replacement
-            || (!current.is_air() && !substances.is_diggable(current))
+            || (!current.is_air()
+                && if state.forest.as_ref().is_some_and(|f| f.finite.is_some()) {
+                    !substances.is_solid(current)
+                } else {
+                    !substances.is_diggable(current)
+                })
             || substances.get(replacement).is_none()
         {
             continue;
@@ -419,18 +424,55 @@ fn apply_terrain(
             });
             continue;
         }
-        let resolved = damage.apply(
-            impact,
-            &mut map,
-            &substances,
-            &damage_table,
-            &mut damaged,
-            |pos| {
-                !geometry.contains_column(pos.coord)
-                    || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
-                    || protected(&state, pos)
-            },
-        );
+        let resolved = if let Some(forest) = state.forest.as_ref().filter(|f| f.finite.is_some()) {
+            damage.apply_finite(
+                impact,
+                |pos| {
+                    if forest.pending_carves.contains(&pos) {
+                        return SubstanceId::AIR;
+                    }
+                    // Terrain edits earlier in this tick override the immutable source.
+                    let terrain = map.get(pos);
+                    if !terrain.is_air() {
+                        return terrain;
+                    }
+                    forest
+                        .finite
+                        .as_ref()
+                        .and_then(|session| session.object_at(forest::world_position(pos)))
+                        .and_then(|name| forest::material_id(name, &substances).ok())
+                        .unwrap_or(SubstanceId::AIR)
+                },
+                &substances,
+                &damage_table,
+                &mut damaged,
+                |pos| {
+                    !geometry.contains_column(pos.coord)
+                        || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
+                },
+            )
+        } else {
+            damage.apply(
+                impact,
+                &mut map,
+                &substances,
+                &damage_table,
+                &mut damaged,
+                |pos| {
+                    !geometry.contains_column(pos.coord)
+                        || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
+                        || protected(&state, pos)
+                },
+            )
+        };
+        if let Some(forest) = state.forest.as_mut().filter(|f| f.finite.is_some()) {
+            for pos in &resolved.destroyed {
+                map.set(*pos, SubstanceId::AIR);
+            }
+            forest
+                .pending_carves
+                .extend(resolved.destroyed.iter().copied());
+        }
         state
             .changed
             .extend(resolved.destroyed.iter().map(|pos| pos.coord));
@@ -480,7 +522,7 @@ fn apply_terrain(
     if !state.changed.is_empty() {
         let changed = state.changed.clone();
         if let Some(forest) = &mut state.forest {
-            if let Err(error) = forest.commit_projection(&map, &changed, &substances) {
+            if let Err(error) = forest.commit_projection(&map, &changed, &substances, &art) {
                 // Never publish a staging projection whose authoritative transaction failed.
                 outcomes.clear();
                 state.changed.clear();
@@ -490,13 +532,15 @@ fn apply_terrain(
             }
         }
         let before = presentation.features().len();
+        let finite = state.forest.as_ref().is_some_and(|f| f.finite.is_some());
         presentation.retain_features(|feature| {
-            feature.kind == crate::procedural_v3::FeatureKind::Tree
+            finite
+                || feature.kind == crate::procedural_v3::FeatureKind::Tree
                 || !state.changed.contains(&feature.root.coord)
                 || (substances.is_solid(map.get(feature.root))
                     && map.get(feature.root.above()).is_air())
         });
-        state.presentation_dirty |= presentation.features().len() != before;
+        state.presentation_dirty |= finite || presentation.features().len() != before;
     }
 }
 
@@ -545,6 +589,13 @@ fn publish_terrain(
                 publish_column(&mut view, *coord, column, &substances);
             }
         }
+    }
+    if let Some(finite) = state
+        .forest
+        .as_ref()
+        .and_then(|forest| forest.finite.as_ref())
+    {
+        forest::publish_carves(&mut view, finite, &changed);
     }
     view.revision = revision;
     view.dirty_columns.clone_from(&changed);

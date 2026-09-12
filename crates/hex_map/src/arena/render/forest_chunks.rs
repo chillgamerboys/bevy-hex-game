@@ -1,7 +1,7 @@
 //! Bounded terrain mesh publication for the finite V4 battle region.
 
 use super::*;
-use crate::grid::{resident_terrain_mesh, ProjectedRun, TerrainMeshRun};
+use crate::grid::{resident_terrain_mesh_with_strata, ProjectedRun, TerrainMeshRun};
 use hex_core::{arena::ArenaRenderStatus, HexSpan};
 use hex_world_contracts::{ChunkId, WorldHex};
 
@@ -78,6 +78,11 @@ pub(super) fn refresh(
                     })
                 });
             }
+            let current = backend
+                .finite
+                .as_ref()
+                .and_then(|finite| finite.terrain_column(column.position));
+            let column = current.as_ref().unwrap_or(column);
             for run in &column.runs {
                 let Some(material) = backend
                     .runtime
@@ -109,7 +114,7 @@ pub(super) fn refresh(
         let mut prepared = Vec::new();
         let mut failed = false;
         for (name, runs) in grouped {
-            match resident_terrain_mesh(&runs, &occluders, geometry.level_height) {
+            match resident_terrain_mesh_with_strata(&runs, &occluders, geometry.level_height) {
                 Ok(mesh) => prepared.push((name, mesh)),
                 Err(error) => {
                     error!("Forest terrain mesh: {error}");
@@ -139,6 +144,7 @@ pub(super) fn refresh(
                     let [r, g, b, _] = spec.color;
                     materials.add(StandardMaterial {
                         base_color: Color::srgb_u8(r, g, b),
+                        emissive: Color::srgb_u8(r, g, b).to_linear() * 0.08,
                         perceptual_roughness: 0.95,
                         reflectance: 0.08,
                         ..default()

@@ -54,7 +54,7 @@ fn finite_mixed_carve_is_atomic_sparse_idempotent_and_leaves_source_unchanged() 
     for at in positions {
         assert_eq!(finite.material_at(at), None);
     }
-    assert!(finite.object_removed(positions[2]));
+    assert!(finite.object_removed(voxel(point(0, 0), 1)));
     assert_eq!(
         finite.material_at(voxel(point(0, 0), 2)),
         Some("stone"),
@@ -67,8 +67,8 @@ fn finite_mixed_carve_is_atomic_sparse_idempotent_and_leaves_source_unchanged() 
         "source immutable"
     );
     let reset = FiniteWorldSession::new(&runtime, -4, 100).expect("reset");
-    assert_eq!(reset.material_at(positions[0]), Some("bedrock"));
-    assert_eq!(reset.material_at(positions[2]), Some("stone"));
+    assert_eq!(reset.material_at(voxel(point(0, 0), -4)), Some("bedrock"));
+    assert_eq!(reset.material_at(voxel(point(0, 0), 1)), Some("stone"));
 }
 
 #[test]

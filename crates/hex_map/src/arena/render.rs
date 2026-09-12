@@ -41,6 +41,7 @@ pub(super) fn plugin(app: &mut App) {
             crate::liquid_render::sync_fountain_materials,
         )
             .chain()
+            .in_set(hex_core::PresentationSystems::PublishObjects)
             .before(TransformSystems::Propagate)
             .run_if(resource_exists::<VoxelMap>),
     );
@@ -162,6 +163,13 @@ fn refresh_presentations(
         return;
     }
     if cache.generation == Some(state.generation) {
+        if let Some(forest) = &state.forest {
+            for (id, mask) in &forest.masks {
+                if let Some(entity) = cache.features.get(id) {
+                    commands.entity(*entity).insert(mask.clone());
+                }
+            }
+        }
         // Only nonblocking decorations can lose support. Keep every unaffected
         // object and liquid mesh, material, and root stable during a local edit.
         cache.features.retain(|id, entity| {
@@ -232,6 +240,17 @@ fn refresh_presentations(
             return;
         }
     };
+    if state
+        .forest
+        .as_ref()
+        .is_some_and(|forest| forest.finite.is_some())
+    {
+        for entity in &features {
+            commands
+                .entity(*entity)
+                .insert(hex_assets::ObjectCarveMask::default());
+        }
+    }
     roots.extend(crate::crystal_render::spawn_prepared(
         &mut commands,
         prepared,

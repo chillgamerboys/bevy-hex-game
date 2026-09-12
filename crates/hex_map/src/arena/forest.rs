@@ -11,7 +11,9 @@ use hex_assets::{HexObjectRotation, ObjectAssetId};
 use hex_world_contracts::{
     LiquidKind, ResidencyRequest, VoxelEdit, VoxelPosition, WorldEditTransaction, WorldHex,
 };
-use hex_world_runtime::{FileChunkSource, IoLimits, RuntimeConfig, WorldRuntime};
+use hex_world_runtime::{
+    FileChunkSource, FiniteWorldSession, IoLimits, RuntimeConfig, WorldRuntime,
+};
 
 use super::*;
 use crate::procedural_v3::{
@@ -31,6 +33,11 @@ pub(super) fn asset_root() -> PathBuf {
 pub(super) struct ForestRuntime {
     pub runtime: WorldRuntime,
     next_edit: u64,
+    pub finite: Option<FiniteWorldSession>,
+    pub pending_carves: BTreeSet<TilePos>,
+    pub masks: BTreeMap<FeatureId, hex_assets::ObjectCarveMask>,
+    object_ids: BTreeMap<WorldHex, BTreeSet<FeatureId>>,
+    objects: BTreeMap<FeatureId, hex_world_contracts::ObjectInstance>,
 }
 
 impl ForestRuntime {
@@ -71,9 +78,38 @@ impl ForestRuntime {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+        let mut objects = BTreeMap::new();
+        let mut object_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        let mut max_level = 128;
+        for product in runtime.resident_chunks() {
+            for column in &product.package.columns {
+                for run in &column.runs {
+                    max_level = max_level.max(run.top + 32);
+                }
+            }
+            for object in &product.package.semantics.objects {
+                let id = FeatureId(u32::try_from(objects.len()).map_err(|e| e.to_string())?);
+                for column in &object.occupancy {
+                    object_ids.entry(column.position).or_default().insert(id);
+                    for run in &column.runs {
+                        max_level = max_level.max(run.top + 32);
+                    }
+                }
+                objects.insert(id, object.clone());
+            }
+        }
+        let finite = (runtime.manifest().world_id == "forest-massif-expedition")
+            .then(|| FiniteWorldSession::new(&runtime, 0, max_level))
+            .transpose()
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             runtime,
             next_edit: 0,
+            finite,
+            pending_carves: BTreeSet::new(),
+            masks: BTreeMap::new(),
+            object_ids,
+            objects,
         })
     }
 
@@ -82,8 +118,9 @@ impl ForestRuntime {
         map: &VoxelMap,
         changed: &BTreeSet<HexCoord>,
         substances: &SubstanceTable,
+        art: &RuntimeArtCatalog,
     ) -> Result<(), String> {
-        let mut edits = Vec::new();
+        let mut edits = BTreeMap::new();
         let mut revisions = BTreeMap::new();
         for coord in changed {
             let global = WorldHex::new(i64::from(coord.x()), i64::from(coord.y()));
@@ -91,12 +128,17 @@ impl ForestRuntime {
                 .runtime
                 .resident_chunk(global.chunk())
                 .ok_or("Unloaded forest edit")?;
-            let column = product
-                .package
-                .columns
-                .iter()
-                .find(|column| column.position == global)
-                .ok_or("Forest edit outside package")?;
+            let column = if let Some(finite) = &self.finite {
+                finite.terrain_column(global)
+            } else {
+                product
+                    .package
+                    .columns
+                    .iter()
+                    .find(|column| column.position == global)
+                    .cloned()
+            }
+            .ok_or("Forest edit outside package")?;
             let old_top = column.runs.iter().map(|run| run.top).max().unwrap_or(0);
             let new_top = map.column(*coord).map_or(0, Column::top);
             for level in 0..old_top.max(new_top) {
@@ -123,30 +165,104 @@ impl ForestRuntime {
                         .to_owned(),
                     )
                 };
-                edits.push(VoxelEdit {
-                    position: VoxelPosition {
+                edits.insert(
+                    VoxelPosition {
                         column: global,
                         level,
                     },
                     material,
-                });
-                revisions.insert(global.chunk(), product.revision);
+                );
+                revisions.insert(
+                    global.chunk(),
+                    self.finite
+                        .as_ref()
+                        .and_then(|finite| finite.revision(global.chunk()))
+                        .unwrap_or(product.revision),
+                );
             }
+        }
+        for pos in &self.pending_carves {
+            let at = world_position(*pos);
+            edits.insert(at, None);
+            revisions.insert(
+                at.column.chunk(),
+                self.finite
+                    .as_ref()
+                    .and_then(|finite| finite.revision(at.column.chunk()))
+                    .ok_or("Carve requires finite session")?,
+            );
         }
         if edits.is_empty() {
             return Ok(());
         }
-        edits.sort_by_key(|edit| edit.position);
+        let edits = edits
+            .into_iter()
+            .map(|(position, material)| VoxelEdit { position, material })
+            .collect();
         self.next_edit = self.next_edit.saturating_add(1);
-        self.runtime
-            .apply_transaction(&WorldEditTransaction {
-                id: format!("battle-edit-{}", self.next_edit),
-                expected_revisions: revisions,
-                edits,
-            })
-            .map_err(|error| error.to_string())?;
-        self.runtime.pump();
+        let transaction = WorldEditTransaction {
+            id: format!("battle-edit-{}", self.next_edit),
+            expected_revisions: revisions,
+            edits,
+        };
+        if let Some(finite) = &mut self.finite {
+            finite
+                .apply_transaction(&transaction)
+                .map_err(|error| error.to_string())?;
+            for pos in std::mem::take(&mut self.pending_carves) {
+                let at = world_position(pos);
+                for id in self.object_ids.get(&at.column).into_iter().flatten() {
+                    let Some(object) = self.objects.get(id) else {
+                        continue;
+                    };
+                    if object
+                        .occupancy
+                        .binary_search_by_key(&at.column, |column| column.position)
+                        .ok()
+                        .and_then(|index| object.occupancy.get(index))
+                        .and_then(|column| column.material_at(at.level))
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    let object_id =
+                        ObjectAssetId::new(object.asset.clone()).map_err(|e| e.to_string())?;
+                    let blueprint = art
+                        .object(&object_id)
+                        .ok_or("Carved object lacks blueprint")?;
+                    let unturned = hex_assets::LocalVoxelCoord {
+                        q: i32::try_from(at.column.q - object.origin.column.q)
+                            .map_err(|e| e.to_string())?
+                            + blueprint.origin.q,
+                        r: i32::try_from(at.column.r - object.origin.column.r)
+                            .map_err(|e| e.to_string())?
+                            + blueprint.origin.r,
+                        level: at.level - object.origin.level + blueprint.origin.level,
+                    };
+                    let inverse = HexObjectRotation::new((6 - object.rotation) % 6)
+                        .map_err(|e| e.to_string())?;
+                    let cell = inverse
+                        .rotate_voxel(unturned, blueprint.origin)
+                        .ok_or("Carve inverse rotation overflow")?;
+                    let mask = self.masks.entry(*id).or_default();
+                    mask.removed.insert(cell);
+                    mask.revision = self.next_edit;
+                }
+            }
+        } else {
+            self.runtime
+                .apply_transaction(&transaction)
+                .map_err(|error| error.to_string())?;
+            self.runtime.pump();
+        }
         Ok(())
+    }
+}
+
+pub(super) fn world_position(pos: TilePos) -> VoxelPosition {
+    VoxelPosition {
+        column: WorldHex::new(i64::from(pos.coord.x()), i64::from(pos.coord.y())),
+        level: pos.level,
     }
 }
 
@@ -367,69 +483,103 @@ pub(super) fn build(
             }
         }
     }
-    // Preserve V4's material admission even where several names share one battle
-    // durability class. The projection must never offer an edit V4 forbids.
-    for product in backend.runtime.resident_chunks() {
-        // Publish the same world-owned exclusions used by V4 edit admission.
-        // Exact grounded crowns leave their understorey air available to Shield;
-        // old packages retain whole-column exclusions until regenerated.
-        for object in &product.package.semantics.object_influences {
-            for (position, ranges) in object.terrain_edit_protection() {
-                if position.chunk() != product.coordinate {
-                    continue;
+    if !expedition {
+        // Preserve V4's material admission even where several names share one battle
+        // durability class. The projection must never offer an edit V4 forbids.
+        for product in backend.runtime.resident_chunks() {
+            // Publish the same world-owned exclusions used by V4 edit admission.
+            // Exact grounded crowns leave their understorey air available to Shield;
+            // old packages retain whole-column exclusions until regenerated.
+            for object in &product.package.semantics.object_influences {
+                for (position, ranges) in object.terrain_edit_protection() {
+                    if position.chunk() != product.coordinate {
+                        continue;
+                    }
+                    for (bottom, top) in ranges {
+                        let clipped = (bottom.max(geometry.min_level), top.min(geometry.max_level));
+                        if clipped.0 <= clipped.1 {
+                            view.edit_protected
+                                .entry(local(position)?)
+                                .or_default()
+                                .push(clipped);
+                        }
+                    }
                 }
-                for (bottom, top) in ranges {
-                    let clipped = (bottom.max(geometry.min_level), top.min(geometry.max_level));
-                    if clipped.0 <= clipped.1 {
+            }
+            for anchor in &product.package.semantics.anchors {
+                if anchor.role != hex_world_contracts::AnchorRole::Observation {
+                    view.edit_protected
+                        .entry(local(anchor.position.column)?)
+                        .or_default()
+                        .push((anchor.position.level, anchor.position.level + 2));
+                }
+            }
+            for column in &product.package.columns {
+                let coord = local(column.position)?;
+                for run in &column.runs {
+                    let immutable = backend
+                        .runtime
+                        .manifest()
+                        .materials
+                        .iter()
+                        .find(|material| material.id == run.material)
+                        .is_some_and(|material| !material.diggable);
+                    if immutable {
                         view.edit_protected
-                            .entry(local(position)?)
+                            .entry(coord)
                             .or_default()
-                            .push(clipped);
+                            .push((run.bottom, run.top - 1));
                     }
                 }
             }
         }
-        for anchor in &product.package.semantics.anchors {
-            if anchor.role != hex_world_contracts::AnchorRole::Observation {
+        // The one built crossing is an authored reservation: explosions cannot remove
+        // its only support and strand the run. Ordinary bank/bed physics is unchanged.
+        for (coord, column) in map.columns() {
+            if coord.y().abs() <= 4 && coord.x().abs() <= 26 {
                 view.edit_protected
-                    .entry(local(anchor.position.column)?)
+                    .entry(coord)
                     .or_default()
-                    .push((anchor.position.level, anchor.position.level + 2));
-            }
-        }
-        for column in &product.package.columns {
-            let coord = local(column.position)?;
-            for run in &column.runs {
-                let immutable = backend
-                    .runtime
-                    .manifest()
-                    .materials
-                    .iter()
-                    .find(|material| material.id == run.material)
-                    .is_some_and(|material| !material.diggable);
-                if immutable {
-                    view.edit_protected
-                        .entry(coord)
-                        .or_default()
-                        .push((run.bottom, run.top - 1));
-                }
+                    .push((0, column.top().saturating_sub(1)));
             }
         }
     }
-    // The one built crossing is an authored reservation: explosions cannot remove
-    // its only support and strand the run. Ordinary bank/bed physics is unchanged.
-    for (coord, column) in map.columns() {
-        if coord.y().abs() <= 4 && coord.x().abs() <= 26 {
+    if expedition {
+        // Legacy projection reserves supports and whole water columns. Expedition
+        // live play protects only the actual liquid cells; all solid contributors
+        // and supports are eligible for the finite carve transaction.
+        view.edit_protected.clear();
+        for liquid in &view.liquids {
             view.edit_protected
-                .entry(coord)
+                .entry(liquid.bottom.coord)
                 .or_default()
-                .push((0, column.top().saturating_sub(1)));
+                .push((liquid.bottom.level, liquid.top_level));
+        }
+        for product in backend.runtime.resident_chunks() {
+            for column in &product.package.semantics.occupancy {
+                let coord = local(column.position)?;
+                let spans = column
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        Ok(ArenaSolidSpan {
+                            bottom: TilePos::new(coord, run.bottom),
+                            top_level: run.top - 1,
+                            substance: material_id(&run.material, substances)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                view.object_columns.insert(coord, spans);
+            }
         }
     }
     // Forest FeatureVoxels declares opaque foliage solid in the V4 package.
     // Continuous collision must preserve that exact exported canopy occupancy.
     for span in &mut view.static_spans {
         span.blocks_movement |= span.blocks_sight;
+        if expedition {
+            span.blocks_projectiles |= span.blocks_sight;
+        }
     }
     compact_static(&mut view);
     super::expedition::validate(&view, geometry, substances)?;
@@ -832,6 +982,7 @@ mod tests {
                 &recipe.map,
                 &BTreeSet::from([pos.coord]),
                 &content.substances,
+                &content.art,
             )
             .expect("V4 shield assignment");
         let query = VoxelPosition {
@@ -848,8 +999,67 @@ mod tests {
                 &recipe.map,
                 &BTreeSet::from([pos.coord]),
                 &content.substances,
+                &content.art,
             )
             .expect("V4 destruction");
         assert_eq!(backend.runtime.voxel(query), QueryResult::Ready(None));
     }
+}
+
+/// Cut spans only in dirty columns. Occupancy and damage queries use the same mask.
+pub(super) fn publish_carves(
+    view: &mut ArenaTerrainView,
+    finite: &FiniteWorldSession,
+    changed: &BTreeSet<HexCoord>,
+) {
+    for coord in changed {
+        if let Some(spans) = view.object_columns.get_mut(coord) {
+            let mut next = Vec::new();
+            for span in spans.iter() {
+                let mut begin = None;
+                for level in span.bottom.level..=span.top_level.saturating_add(1) {
+                    let survives = level <= span.top_level
+                        && !finite.object_removed(world_position(TilePos::new(*coord, level)));
+                    if survives && begin.is_none() {
+                        begin = Some(level);
+                    }
+                    if !survives {
+                        if let Some(bottom) = begin.take() {
+                            next.push(ArenaSolidSpan {
+                                bottom: TilePos::new(*coord, bottom),
+                                top_level: level - 1,
+                                substance: span.substance,
+                            });
+                        }
+                    }
+                }
+            }
+            *spans = next;
+        }
+    }
+    let mut next = Vec::with_capacity(view.static_spans.len());
+    for span in &view.static_spans {
+        if !changed.contains(&span.bottom.coord) {
+            next.push(*span);
+            continue;
+        }
+        let mut begin = None;
+        for level in span.bottom.level..=span.top_level.saturating_add(1) {
+            let survives = level <= span.top_level
+                && !finite.object_removed(world_position(TilePos::new(span.bottom.coord, level)));
+            if survives && begin.is_none() {
+                begin = Some(level);
+            }
+            if !survives {
+                if let Some(bottom) = begin.take() {
+                    next.push(hex_core::arena::ArenaStaticSpan {
+                        bottom: TilePos::new(span.bottom.coord, bottom),
+                        top_level: level - 1,
+                        ..*span
+                    });
+                }
+            }
+        }
+    }
+    view.static_spans = next;
 }
