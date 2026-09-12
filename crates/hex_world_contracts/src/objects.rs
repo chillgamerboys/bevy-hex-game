@@ -56,7 +56,8 @@ impl ObjectInfluence {
 
     /// Inclusive terrain edit exclusions, independent of root-chunk residency.
     /// Legacy objects protect whole occupied/root columns. Grounded objects protect
-    /// their exact occupied intervals and every level at or below each contact.
+    /// their occupied intervals, the one-voxel underside that must not acquire new
+    /// undeclared contacts, and every level at or below each existing contact.
     pub fn terrain_edit_protection(&self) -> BTreeMap<WorldHex, Vec<(i32, i32)>> {
         let mut ranges: BTreeMap<WorldHex, Vec<(i32, i32)>> = BTreeMap::new();
         for column in &self.occupancy {
@@ -64,7 +65,12 @@ impl ObjectInfluence {
             if self.grounding.is_none() {
                 target.push((i32::MIN, i32::MAX));
             } else {
-                target.extend(column.runs.iter().map(|run| (run.bottom, run.top - 1)));
+                target.extend(
+                    column
+                        .runs
+                        .iter()
+                        .map(|run| (run.bottom.saturating_sub(1), run.top - 1)),
+                );
             }
         }
         if let Some(contacts) = &self.grounding {

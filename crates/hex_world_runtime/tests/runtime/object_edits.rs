@@ -749,3 +749,164 @@ fn compiled_source_cannot_smuggle_reserved_ids_through_a_foreign_projection() {
         QueryResult::Unloaded(point(16, 0).chunk())
     );
 }
+
+fn grounded_canopy() -> WorldPackage {
+    let root = point(14, 0);
+    let mut source = world(&[(root, 4)]);
+    for column in source
+        .chunks
+        .values_mut()
+        .flat_map(|chunk| &mut chunk.columns)
+    {
+        column.runs.retain(|run| run.bottom < 1);
+    }
+    let tree = ObjectInstance {
+        id: "authored/grounded-tree".into(),
+        region_id: "region-0000".into(),
+        asset: "tree.oak".into(),
+        origin: voxel(root, 1),
+        rotation: 0,
+        occupancy: vec![
+            ColumnData {
+                position: root,
+                runs: vec![run(1, 12, "stone")],
+            },
+            ColumnData {
+                position: point(15, 0),
+                runs: vec![run(10, 12, "stone")],
+            },
+            ColumnData {
+                position: point(16, 0),
+                runs: vec![run(10, 12, "stone")],
+            },
+            ColumnData {
+                position: point(16, 1),
+                runs: vec![run(1, 12, "stone")],
+            },
+        ],
+        grounding: Some(vec![voxel(root, 0), voxel(point(16, 1), 0)]),
+    };
+    source
+        .chunks
+        .get_mut(&root.chunk())
+        .expect("root")
+        .semantics
+        .objects
+        .push(tree);
+    source.seal().expect("grounded canopy");
+    source
+}
+
+#[test]
+fn grounded_canopy_allows_cross_chunk_air_edits_and_keeps_foundations_atomic() {
+    let source = grounded_canopy();
+    let mut runtime = loaded(source.clone());
+    let left = point(15, 0);
+    let right = point(16, 0);
+    let tx = WorldEditTransaction {
+        id: "shield-under-canopy".into(),
+        expected_revisions: BTreeMap::from([(left.chunk(), 0), (right.chunk(), 0)]),
+        edits: vec![
+            VoxelEdit {
+                position: voxel(left, 2),
+                material: Some("stone".into()),
+            },
+            VoxelEdit {
+                position: voxel(right, 2),
+                material: Some("stone".into()),
+            },
+        ],
+    };
+    runtime
+        .apply_transaction(&tx)
+        .expect("free air under exact crowns");
+    assert_eq!(
+        runtime.voxel(voxel(right, 2)),
+        QueryResult::Ready(Some("stone".into()))
+    );
+    let before = snapshot(&runtime);
+    for (index, blocked) in [
+        voxel(point(14, 0), 0),
+        voxel(point(16, 1), -1),
+        voxel(left, 10),
+        voxel(right, 9),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut attempt = WorldEditTransaction {
+            id: format!("blocked-{index}"),
+            expected_revisions: BTreeMap::from([(left.chunk(), 1), (right.chunk(), 1)]),
+            edits: vec![
+                VoxelEdit {
+                    position: voxel(
+                        if blocked.column.chunk() == left.chunk() {
+                            right
+                        } else {
+                            left
+                        },
+                        3,
+                    ),
+                    material: Some("stone".into()),
+                },
+                VoxelEdit {
+                    position: blocked,
+                    material: if blocked.level == 9 {
+                        Some("stone".into())
+                    } else {
+                        None
+                    },
+                },
+            ],
+        };
+        attempt.edits.sort_by_key(|edit| edit.position);
+        attempt
+            .validate()
+            .expect("canonical cross-chunk refusal probe");
+        assert!(
+            runtime.apply_transaction(&attempt).is_err(),
+            "roots, buttresses, objects and new canopy contact reject"
+        );
+        assert_eq!(
+            snapshot(&runtime),
+            before,
+            "no other chunk publishes on refusal"
+        );
+    }
+    runtime.set_interests(Vec::new()).expect("unload");
+    load(&mut runtime, vec![interest("near", point(15, 0), 3, 3)]);
+    assert_eq!(
+        snapshot(&runtime),
+        before,
+        "overlay reload retains exact geometry and contacts"
+    );
+    let reset = loaded(source);
+    assert_eq!(reset.voxel(voxel(right, 2)), QueryResult::Ready(None));
+}
+
+#[test]
+fn foreign_grounding_protects_buttress_with_root_unloaded_and_legacy_stays_conservative() {
+    let mut runtime = make_runtime(grounded_canopy());
+    let crown = point(16, 0);
+    load(&mut runtime, vec![interest("near", crown, 0, 0)]);
+    assert_eq!(runtime.revision(point(14, 0).chunk()), None);
+    runtime
+        .apply_transaction(&edit("air", voxel(crown, 2), 0, Some("stone")))
+        .expect("root-independent air");
+    assert!(runtime
+        .apply_transaction(&edit("buttress", voxel(point(16, 1), 0), 1, None))
+        .is_err());
+    let mut legacy = grounded_canopy();
+    for object in legacy
+        .chunks
+        .values_mut()
+        .flat_map(|chunk| &mut chunk.semantics.objects)
+    {
+        object.grounding = None;
+    }
+    legacy.seal().expect("legacy source");
+    let mut old = loaded(legacy);
+    assert!(old
+        .apply_transaction(&edit("old-air", voxel(crown, 2), 0, Some("stone")))
+        .is_err());
+}

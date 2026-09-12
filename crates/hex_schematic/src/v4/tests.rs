@@ -733,6 +733,15 @@ fn overhead_canopies_preserve_reserved_ground_and_disjoint_object_identities() {
     let (recipe, mut build) = overhead_fixture(Some(6));
     operators::decorate(&mut build, &recipe, "grove", 7).expect("separate vertical crowns");
     assert_eq!(build.semantics.objects.len(), 2);
+    for object in &build.semantics.objects {
+        assert_eq!(
+            object.grounding,
+            Some(vec![VoxelPosition {
+                column: object.origin.column,
+                level: 10
+            }])
+        );
+    }
     assert_ne!(build.semantics.objects[0].id, build.semantics.objects[1].id);
     assert_eq!(
         build.columns[&WorldHex::new(0, 0)],
@@ -773,4 +782,45 @@ fn overhead_placement_rejects_low_crowns_voxel_overlap_and_legacy_reserved_colum
         operators::decorate(&mut build, &recipe, "grove", 7).is_err(),
         "legacy placement policy is unchanged"
     );
+}
+
+#[test]
+fn feature_grounding_uses_rotated_buttresses_and_each_columns_actual_surface() {
+    let (mut recipe, mut build) = overhead_fixture(None);
+    let rule = recipe.features.first_mut().expect("tree rule");
+    let root = *rule.roots.first().expect("root");
+    rule.voxels.push(FeatureVoxel {
+        offset: WorldHex::new(1, 0),
+        bottom: 1,
+        top: 2,
+        material: "timber".into(),
+    });
+    for turn in 0..6 {
+        let offset = WorldHex::new(1, 0).rotate_60(turn).expect("rotation");
+        let neighbor = root.checked_add(offset).expect("neighbor");
+        build
+            .columns
+            .insert(neighbor, vec![run(0, 12, "limestone")]);
+    }
+    operators::decorate(&mut build, &recipe, "grove", 7).expect("grounded irregular tree");
+    let object = build.semantics.objects.first().expect("tree");
+    let rotated_buttress = root
+        .checked_add(
+            WorldHex::new(1, 0)
+                .rotate_60(object.rotation)
+                .expect("rotation"),
+        )
+        .expect("buttress");
+    let mut expected = vec![
+        VoxelPosition {
+            column: root,
+            level: 10,
+        },
+        VoxelPosition {
+            column: rotated_buttress,
+            level: 11,
+        },
+    ];
+    expected.sort();
+    assert_eq!(object.grounding, Some(expected));
 }

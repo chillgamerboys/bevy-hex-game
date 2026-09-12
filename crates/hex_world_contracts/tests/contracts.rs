@@ -1396,7 +1396,7 @@ fn grounding_contacts_preserve_legacy_wire_and_clip_foundations_across_chunks() 
     assert_eq!(root_projection.grounding, object.grounding);
     assert_eq!(
         root_projection.terrain_edit_protection().get(&root),
-        Some(&vec![(1, 3), (i32::MIN, 0)])
+        Some(&vec![(0, 3), (i32::MIN, 0)])
     );
     let crown_projection = object
         .influence(crown.chunk())
@@ -1405,7 +1405,7 @@ fn grounding_contacts_preserve_legacy_wire_and_clip_foundations_across_chunks() 
     assert_eq!(crown_projection.grounding, Some(vec![]));
     assert_eq!(
         crown_projection.terrain_edit_protection().get(&crown),
-        Some(&vec![(2, 4)])
+        Some(&vec![(1, 4)])
     );
     object.grounding = Some(vec![]);
     assert!(

@@ -334,14 +334,24 @@ pub(super) fn build(
     // Preserve V4's material admission even where several names share one battle
     // durability class. The projection must never offer an edit V4 forbids.
     for product in backend.runtime.resident_chunks() {
-        // V4 terrain transactions currently retain static semantics unchanged.
-        // A column carrying authored object occupancy is therefore immutable as a
-        // whole, not only at the occupied heights. Publish that exact restriction.
-        for column in &product.package.semantics.occupancy {
-            view.edit_protected
-                .entry(local(column.position)?)
-                .or_default()
-                .push((geometry.min_level, geometry.max_level));
+        // Publish the same world-owned exclusions used by V4 edit admission.
+        // Exact grounded crowns leave their understorey air available to Shield;
+        // old packages retain whole-column exclusions until regenerated.
+        for object in &product.package.semantics.object_influences {
+            for (position, ranges) in object.terrain_edit_protection() {
+                if position.chunk() != product.coordinate {
+                    continue;
+                }
+                for (bottom, top) in ranges {
+                    let clipped = (bottom.max(geometry.min_level), top.min(geometry.max_level));
+                    if clipped.0 <= clipped.1 {
+                        view.edit_protected
+                            .entry(local(position)?)
+                            .or_default()
+                            .push(clipped);
+                    }
+                }
+            }
         }
         for anchor in &product.package.semantics.anchors {
             if anchor.role != hex_world_contracts::AnchorRole::Observation {

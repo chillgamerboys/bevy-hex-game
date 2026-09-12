@@ -895,8 +895,20 @@ pub(super) fn decorate(
                 },
                 asset: Some(rule.asset.clone()),
             });
+            // Derive foundations from final rotated occupied geometry and exact
+            // terrain, including every multi-column trunk/buttress contact.
+            let mut contacts = Vec::new();
+            for column in &object_columns {
+                let (surface, _) = terrain(build, column.position)?;
+                if column.runs.iter().any(|run| run.bottom == surface + 1) {
+                    contacts.push(VoxelPosition {
+                        column: column.position,
+                        level: surface,
+                    });
+                }
+            }
             build.semantics.objects.push(ObjectInstance {
-                grounding: None,
+                grounding: (!contacts.is_empty()).then_some(contacts),
                 id,
                 region_id: region_id.into(),
                 asset: rule.asset.clone(),

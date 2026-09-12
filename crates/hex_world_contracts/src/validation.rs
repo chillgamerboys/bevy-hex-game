@@ -1031,14 +1031,15 @@ impl ChunkPackage {
                         ));
                     }
                     for run in occupied.runs.iter().rev() {
-                        if let Some(level) = run.bottom.checked_sub(1) {
-                            if solid_at(terrain, level, manifest)? {
-                                actual.push(VoxelPosition {
-                                    column: occupied.position,
-                                    level,
-                                });
-                                break;
-                            }
+                        let Some(level) = run.bottom.checked_sub(1) else {
+                            continue;
+                        };
+                        if solid_at(terrain, level, manifest)? {
+                            actual.push(VoxelPosition {
+                                column: occupied.position,
+                                level,
+                            });
+                            break;
                         }
                     }
                 }

@@ -1404,6 +1404,11 @@ fn assemble(
             let mut object = object.clone();
             object.origin = transform(object.origin)?;
             object.rotation = (object.rotation + region.rotation) % 6;
+            if let Some(contacts) = &mut object.grounding {
+                for contact in contacts {
+                    *contact = transform(*contact)?;
+                }
+            }
             for column in &mut object.occupancy {
                 column.position =
                     contextual(&region.id, "transform", world(region, column.position))?;

@@ -453,17 +453,34 @@ impl WorldRuntime {
             if changed.is_empty() && !objects_changed {
                 continue;
             }
+            let mut object_protection: BTreeMap<WorldHex, Vec<(i32, i32)>> = BTreeMap::new();
+            for object in &package.semantics.object_influences {
+                for (position, ranges) in object.terrain_edit_protection() {
+                    object_protection
+                        .entry(position)
+                        .or_default()
+                        .extend(ranges);
+                }
+            }
             for column in &changed {
-                if package
-                    .semantics
-                    .occupancy
+                let before = resident
+                    .product
+                    .package
+                    .columns
                     .iter()
-                    .any(|object| object.position == column.position)
-                    || package
-                        .semantics
-                        .objects
-                        .iter()
-                        .any(|object| object.origin.column == column.position)
+                    .find(|old| old.position == column.position)
+                    .ok_or_else(|| {
+                        RuntimeError::invalid("changed column lacks original terrain")
+                    })?;
+                let protected_object_change =
+                    object_protection
+                        .get(&column.position)
+                        .is_some_and(|ranges| {
+                            ranges.iter().any(|(bottom, top)| {
+                                columns_differ_between(before, column, *bottom, *top)
+                            })
+                        });
+                if protected_object_change
                     || self
                         .manifest_index
                         .boundary_samples_at(column.position)
@@ -723,4 +740,22 @@ fn protect_materials(
         }
     }
     Ok(())
+}
+
+// Compare only material transition boundaries, including unbounded legacy ranges.
+// This also validates received multi-voxel deltas without scanning every level.
+fn columns_differ_between(before: &ColumnData, after: &ColumnData, bottom: i32, top: i32) -> bool {
+    let probes = std::iter::once(bottom)
+        .chain(
+            before
+                .runs
+                .iter()
+                .chain(&after.runs)
+                .flat_map(|run| [run.bottom, run.top]),
+        )
+        .filter(|level| *level >= bottom && *level <= top)
+        .collect::<BTreeSet<_>>();
+    probes
+        .into_iter()
+        .any(|level| before.material_at(level) != after.material_at(level))
 }
