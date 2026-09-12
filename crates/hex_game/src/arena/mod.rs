@@ -2,6 +2,7 @@
 
 mod cast_input;
 mod encounter;
+mod expedition;
 #[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
 #[cfg(feature = "test-support")]
@@ -440,6 +441,7 @@ pub fn run() -> AppExit {
                 setup,
                 hud::setup,
                 presentation::setup_effects,
+                expedition::setup,
                 encounter::setup,
                 golem::setup,
                 wisp::setup,
@@ -484,6 +486,7 @@ pub fn run() -> AppExit {
                 presentation::effects,
                 presentation::solid_effects,
                 encounter::effects,
+                expedition::present,
                 hud::update,
                 log_round,
             )
@@ -1702,6 +1705,7 @@ fn capture_frame(
         ("started", serde_json::json!(state.started)),
         ("paused", serde_json::json!(state.paused)),
         ("progress", serde_json::json!(session.progress())),
+        ("expedition", serde_json::json!(session.expedition_progress())),
         ("player_tuning", serde_json::json!(session.player_tuning(&tuning))),
         ("terminal_menu_fixture", serde_json::json!(matches!(state.capture_view.as_str(), "terminal-win" | "terminal-defeat").then_some("synthetic-knockout-for-menu-presentation"))),
         ("terminal_menu_outcome", serde_json::json!(session.outcome.map(|outcome| match outcome {

@@ -5,13 +5,31 @@ use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
 use hex_arena::{
     ActorIntent, ArenaBattleSetup, ArenaControl, ArenaInput, ArenaOutcome, ArenaSession,
-    ArenaTuning, BattlePreset, Spell, UpgradeStat,
+    ArenaTuning, BattlePreset, ExpeditionReward, ExpeditionSnapshot, Spell, UpgradeStat,
 };
 use hex_core::arena::{ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection};
 
 const INK: Color = Color::srgb(0.91, 0.94, 0.96);
 const MUTED: Color = Color::srgb(0.57, 0.66, 0.73);
 const PANEL: Color = Color::srgba(0.035, 0.055, 0.075, 0.94);
+
+fn milestone_status(expedition: &ExpeditionSnapshot, reward: ExpeditionReward) -> &'static str {
+    expedition
+        .milestones
+        .iter()
+        .find(|milestone| milestone.reward == reward)
+        .map_or("locked", |milestone| {
+            if milestone.collected {
+                "collected"
+            } else if milestone.available_position.is_some() {
+                "orb ready to collect"
+            } else if milestone.defeated {
+                "defeated"
+            } else {
+                "locked"
+            }
+        })
+}
 
 #[derive(Component)]
 pub(super) enum Label {
@@ -275,7 +293,7 @@ pub(super) fn setup(mut commands: Commands) {
                     }
                     panel.spawn((
                         Node {
-                            height: px(32),
+                            height: px(52),
                             flex_shrink: 0.0,
                             ..default()
                         },
@@ -587,6 +605,7 @@ pub(super) fn update(
     let pending = render.map_or(0, |status| status.pending_chunks);
     let tuning = session.player_tuning(&tuning);
     let run = session.progress();
+    let expedition = session.expedition_progress();
     let selection = selection.as_deref().copied().unwrap_or_default();
     let battle = battle.as_deref().cloned().unwrap_or_default();
     let observing = spectator::active(&session);
@@ -734,11 +753,13 @@ The first button pressed owns the charge.
 High Jump keeps your charge. Movement speed is 4.5 units/s.".into(),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
+            Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains.\nStart on the bridge. Hidden fountains are your only healing.".into(),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
                 ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),
             },
+            Label::Encounter if expedition.is_some() => expedition.as_ref().zip(run).map_or_else(String::new, |(e, p)| format!("FOREST {}/{}  /  DRAGONS {}/3  /  ALL {}/{}\nLEVEL {}  /  XP {} of {}  /  {} upgrade points", e.forest_defeated, e.forest_total, e.dragons_defeated, e.enemies_defeated, e.enemies_total, p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::Encounter if run.is_some() => run.map_or_else(String::new, |p| format!("FOREST {}/22  /  DRAGONS {}/3\nLEVEL {}  /  XP {} of {}  /  {} upgrade points", p.forest_defeated, p.dragons_defeated, p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::Encounter => {
                 let summary = session.encounter_summary();
@@ -766,6 +787,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     "FULLSCREEN".into()
                 }
             }
+            Label::Health if expedition.is_some() => actor.map_or_else(String::new, |a| format!("{:.0} / {:.0} HP", a.hp, a.max_hp)),
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
             Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nR to restart from level 1.".into(),
             Label::Status if session.completed_run() => "VICTORY - THE MAP IS CLEAR\nKeep exploring and casting. R restarts your run.".into(),
@@ -820,10 +842,14 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     }
                 )
             }
+            Label::MenuRules if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Shadow: +25 maximum HP, no healing / {}\nHidden fountains heal up to 40 HP once. Enemies give XP, never HP.\nEach level grants one + upgrade; cooldown + makes it faster.", milestone_status(e, ExpeditionReward::ShadowVitality))),
             Label::MenuRules if run.is_some() => "Each level grants one + upgrade; cooldown + makes it faster.\nClear forest: +25 damage. Slay 3 Dragons: explosions. Reset clears upgrades.".into(),
             Label::MenuRules => "Splash passes through walls. Fireballs can hurt their caster.\nShield walls remain until destroyed; restart restores all terrain.".into(),
+            Label::Parameter(1) if expedition.is_some() && run.is_some_and(|p| !p.explosions_unlocked) => "Contact only / collect the Dragon orb".into(),
             Label::Parameter(1) if run.is_some_and(|p| !p.explosions_unlocked) => "Fireball impact only - slay 3 Dragons".into(),
             Label::Parameter(4) if run.is_some() => "Gravity (fixed)           12 units/s^2".into(),
+            Label::Parameter(10) if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Troll: +25 damage / {}", milestone_status(e, ExpeditionReward::TrollDamage))),
+            Label::Parameter(11) if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Dragons {}/3: explosions / {}", e.dragons_defeated, milestone_status(e, ExpeditionReward::DragonExplosions))),
             Label::Parameter(10) if run.is_some() => run.map_or_else(String::new, |p| format!("Forest {}/22    +25 damage {}", p.forest_defeated, if p.forest_cleared { "earned" } else { "reward" })),
             Label::Parameter(11) if run.is_some() => run.map_or_else(String::new, |p| format!("Dragons {}/3    Explosions {}", p.dragons_defeated, if p.explosions_unlocked { "unlocked" } else { "locked" })),
             Label::Parameter(index) => match index {
