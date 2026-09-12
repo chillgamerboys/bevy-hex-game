@@ -8,17 +8,23 @@ use std::{
 };
 
 use hex_core::{
+    HexCoord, TilePos,
     arena::{
         ArenaDeploymentRegion, ArenaEncounterSite, ArenaExpeditionRoute, ArenaExpeditionSites,
-        ArenaFountainVolume, ArenaVoxelGeometry,
+        ArenaFountainVolume, ArenaPackageIdentity, ArenaVoxelGeometry,
     },
-    HexCoord, TilePos,
 };
 use hex_world_contracts::{VoxelPosition, WorldHex, WorldManifest};
 use serde::Deserialize;
 
 const WORLD_ID: &str = "forest-massif-expedition";
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug)]
+pub(super) struct LoadedCompanion {
+    pub sites: Option<ArenaExpeditionSites>,
+    pub identity: ArenaPackageIdentity,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,7 +72,7 @@ pub(super) fn load(
     directory: &Path,
     manifest: &WorldManifest,
     geometry: ArenaVoxelGeometry,
-) -> Result<Option<ArenaExpeditionSites>, String> {
+) -> Result<LoadedCompanion, String> {
     load_identity(
         directory,
         &manifest.world_id,
@@ -80,9 +86,17 @@ fn load_identity(
     world_id: &str,
     fingerprint: u64,
     geometry: ArenaVoxelGeometry,
-) -> Result<Option<ArenaExpeditionSites>, String> {
+) -> Result<LoadedCompanion, String> {
+    let mut identity = ArenaPackageIdentity {
+        world_id: world_id.to_owned(),
+        manifest_fingerprint: fingerprint,
+        sites_fingerprint: None,
+    };
     if world_id == "forest-massif-battle" {
-        return Ok(None);
+        return Ok(LoadedCompanion {
+            sites: None,
+            identity,
+        });
     }
     if world_id != WORLD_ID {
         return Err("unsupported Forest world identity".into());
@@ -102,7 +116,14 @@ fn load_identity(
     if bytes.len() as u64 > MAX_BYTES {
         return Err("expedition companion exceeds 16 MiB".into());
     }
-    decode(&bytes, world_id, fingerprint, geometry).map(Some)
+    let sites = decode(&bytes, world_id, fingerprint, geometry)?;
+    // Hash the very bytes admitted above, never a second pathname read that
+    // could observe a newer companion during a concurrent package rebuild.
+    identity.sites_fingerprint = Some(xxhash_rust::xxh3::xxh3_64(&bytes));
+    Ok(LoadedCompanion {
+        sites: Some(sites),
+        identity,
+    })
 }
 
 fn named<T>(map: &mut BTreeMap<String, T>, id: String, value: T) -> Result<(), String> {
@@ -260,14 +281,16 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
     }
     #[test]
     fn companion_size_limit_precedes_parsing() {
-        assert!(decode(
-            &vec![b' '; usize::try_from(MAX_BYTES).expect("16 MiB fits usize") + 1],
-            WORLD_ID,
-            42,
-            ArenaVoxelGeometry::default()
-        )
-        .expect_err("bounded read")
-        .contains("16 MiB"));
+        assert!(
+            decode(
+                &vec![b' '; usize::try_from(MAX_BYTES).expect("16 MiB fits usize") + 1],
+                WORLD_ID,
+                42,
+                ArenaVoxelGeometry::default()
+            )
+            .expect_err("bounded read")
+            .contains("16 MiB")
+        );
     }
 
     #[test]
@@ -276,14 +299,80 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
             .join(format!("hex-sites-not-created-{}", std::process::id()))
             .join("package");
         let geometry = ArenaVoxelGeometry::default();
-        assert!(load_identity(&missing, WORLD_ID, 42, geometry)
-            .expect_err("new world needs companion")
-            .contains("Required expedition companion"));
+        assert!(
+            load_identity(&missing, WORLD_ID, 42, geometry)
+                .expect_err("new world needs companion")
+                .contains("Required expedition companion")
+        );
         assert_eq!(
             load_identity(&missing, "forest-massif-battle", 42, geometry)
-                .expect("legacy unaffected"),
+                .expect("legacy unaffected")
+                .sites,
             None
         );
+        let legacy = load_identity(&missing, "forest-massif-battle", 42, geometry)
+            .expect("legacy keeps package provenance without requiring a companion");
+        assert_eq!(legacy.identity.world_id, "forest-massif-battle");
+        assert_eq!(legacy.identity.manifest_fingerprint, 42);
+        assert_eq!(legacy.identity.sites_fingerprint, None);
         assert!(load_identity(&missing, "unknown-world", 42, geometry).is_err());
+    }
+
+    #[test]
+    fn companion_identity_hashes_the_exact_accepted_bytes_and_stays_bound_to_loaded_sites() {
+        let directory = std::env::temp_dir().join(format!(
+            "hex-sites-identity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("unique temporary directory");
+        let path = directory.join("arena-sites.ron");
+        let original = fixture();
+        std::fs::write(&path, &original).expect("fixture write");
+        let first = load_identity(&directory, WORLD_ID, 42, ArenaVoxelGeometry::default())
+            .expect("accepted bytes");
+        assert_eq!(first.identity.world_id, WORLD_ID);
+        assert_eq!(first.identity.manifest_fingerprint, 42);
+        assert_eq!(
+            first.identity.sites_fingerprint,
+            Some(xxhash_rust::xxh3::xxh3_64(original.as_bytes()))
+        );
+        assert_eq!(
+            first
+                .sites
+                .as_ref()
+                .expect("expedition geometry")
+                .encounters
+                .len(),
+            1
+        );
+        // Equivalent geometry in a different byte file is still different capture
+        // provenance; the already loaded identity must not change with the path.
+        let changed = format!("{original}\n");
+        std::fs::write(&path, &changed).expect("new file bytes");
+        let second = load_identity(&directory, WORLD_ID, 42, ArenaVoxelGeometry::default())
+            .expect("equivalent valid geometry");
+        assert_eq!(first.sites, second.sites);
+        assert_ne!(
+            first.identity.sites_fingerprint,
+            second.identity.sites_fingerprint
+        );
+        assert_eq!(
+            second.identity.sites_fingerprint,
+            Some(xxhash_rust::xxh3::xxh3_64(changed.as_bytes()))
+        );
+        assert!(
+            load_identity(&directory, WORLD_ID, 43, ArenaVoxelGeometry::default()).is_err(),
+            "manifest binding still rejects a different package"
+        );
+        assert!(
+            hex_core::arena::ArenaTerrainView::default()
+                .package_identity
+                .is_none()
+        );
+        std::fs::remove_dir_all(directory).expect("remove owned fixture directory");
     }
 }

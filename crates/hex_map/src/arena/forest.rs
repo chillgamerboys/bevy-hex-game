@@ -285,7 +285,8 @@ pub(super) fn build(
         .into_iter()
         .map(|(name, pos)| (name, pos.coord.to_world(geometry.top(pos))))
         .collect();
-    let sites = expedition_file::load(&path, source.manifest(), geometry)?;
+    let companion = expedition_file::load(&path, source.manifest(), geometry)?;
+    let sites = companion.sites;
     let required: &[&str] = if expedition {
         &["party_start", "bridge_center", "bridge_west", "bridge_east"]
     } else {
@@ -328,6 +329,7 @@ pub(super) fn build(
             hostile_start,
         ],
         anchors,
+        package_identity: Some(companion.identity),
         expedition: sites,
         full_rebuild: true,
         ..default()

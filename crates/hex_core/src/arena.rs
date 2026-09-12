@@ -223,6 +223,20 @@ pub struct ArenaDeploymentRegion {
     pub surfaces: BTreeSet<TilePos>,
 }
 
+/// Identity of the accepted runtime package behind an arena publication.
+/// This is passive provenance; material edits change the view revision, not its
+/// original source identity. Legacy non-package arenas publish no identity.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ArenaPackageIdentity {
+    /// Stable identity from the loaded, validated world manifest.
+    pub world_id: String,
+    /// Canonical fingerprint from that exact accepted manifest.
+    pub manifest_fingerprint: u64,
+    /// XXH3-64 of the exact bounded arena-sites.ron bytes decoded for this world.
+    /// Absent for legacy packages without an expedition companion.
+    pub sites_fingerprint: Option<u64>,
+}
+
 /// Complete immutable-by-convention occupancy projection; only the map producer writes it.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ArenaTerrainView {
@@ -234,6 +248,9 @@ pub struct ArenaTerrainView {
     pub spawns: [Vec3; 2],
     /// Recipe belonging to this publication, never an uncommitted menu choice.
     pub selection: ArenaSelection,
+    /// Accepted runtime package identity, retained across edits and cached resets.
+    /// None for arena recipes that do not load a V4 runtime package.
+    pub package_identity: Option<ArenaPackageIdentity>,
     /// Authored region and encounter sites in the published world coordinate space.
     pub anchors: BTreeMap<String, Vec3>,
     /// Optional authored expedition geometry. World validates all supporting
