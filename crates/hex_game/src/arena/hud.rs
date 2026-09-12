@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
 use hex_arena::{
     ActorIntent, ArenaBattleSetup, ArenaControl, ArenaInput, ArenaOutcome, ArenaSession,
-    ArenaTuning, BattlePreset, ExpeditionReward, ExpeditionSnapshot, Spell, UpgradeStat,
+    ArenaTuning, BattlePreset, ExpeditionReward, ExpeditionSnapshot, UpgradeStat,
 };
 use hex_core::arena::{ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection};
 
@@ -34,11 +34,10 @@ fn milestone_status(expedition: &ExpeditionSnapshot, reward: ExpeditionReward) -
 #[derive(Component)]
 pub(super) enum Label {
     Health,
+    Rewards,
     Status,
     Spell(usize),
     Parameter(usize),
-    WindowMode,
-    Charge,
     Encounter,
     Selection,
     Help,
@@ -62,12 +61,6 @@ pub(super) struct ObserverHud;
 pub(super) struct ModeContent(ArenaControl);
 #[derive(Component)]
 pub(super) struct SpellCard(usize);
-#[derive(Component)]
-pub(super) enum ChargeNode {
-    Panel,
-    Track,
-    Fill,
-}
 #[derive(Component, Clone, Copy)]
 pub(super) enum Action {
     Start,
@@ -83,7 +76,11 @@ pub(super) enum Action {
     PlayerRecipe(BattlePreset),
 }
 
-fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, TextColor) {
+pub(super) fn text(
+    value: impl Into<String>,
+    size: f32,
+    color: Color,
+) -> (Text, TextFont, TextColor) {
     (
         Text::new(value),
         TextFont {
@@ -94,283 +91,8 @@ fn text(value: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, T
     )
 }
 
-pub(super) fn setup(mut commands: Commands) {
-    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(10), CombatHud))
-        .with_children(|root| {
-            root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), flex_direction: FlexDirection::Column, row_gap: px(5), ..default() }, BackgroundColor(PANEL)))
-                .with_children(|area| {
-                    area.spawn(text("SPELL ARENA", 25.0, INK));
-                    area.spawn((text("", 12.0, MUTED), Label::Encounter));
-                    area.spawn((text("100 HP", 32.0, Color::srgb(0.36, 0.90, 0.78)), Label::Health));
-                });
-            root.spawn((Node { position_type: PositionType::Absolute, right: px(18), top: px(14), max_width: px(474), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 15.0, INK), Label::Status));
-            root.spawn((Node { position_type: PositionType::Absolute, top: percent(50), left: percent(50), margin: UiRect { left: px(-7), top: px(-15), ..default() }, ..default() }, text("+", 24.0, INK), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }));
-            root.spawn((Node { position_type: PositionType::Absolute, top: percent(50), left: percent(50), width: px(236), margin: UiRect { left: px(-118), top: px(28), ..default() }, padding: UiRect::all(px(8)), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(6), border_radius: BorderRadius::all(px(5)), display: Display::None, ..default() }, BackgroundColor(PANEL), ChargeNode::Panel, Name::new("Charge panel")))
-                .with_children(|charge| {
-                    charge.spawn((Node { width: percent(100), height: px(8), flex_shrink: 0.0, border_radius: BorderRadius::all(px(4)), overflow: Overflow::clip(), ..default() }, BackgroundColor(Color::srgb(0.18, 0.26, 0.31)), ChargeNode::Track, Name::new("Charge track")))
-                        .with_children(|track| { track.spawn((Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(Color::srgb(0.35, 0.94, 0.79)), ChargeNode::Fill, Name::new("Charge fill"))); });
-                    charge.spawn((text("", 14.0, INK), Label::Charge, Name::new("Charge guidance")));
-                });
-            root.spawn(Node { position_type: PositionType::Absolute, bottom: px(52), width: percent(100), justify_content: JustifyContent::Center, column_gap: px(10), ..default() })
-                .with_children(|bar| {
-                    for (index, name) in ["RMB  SHIELD", "LMB  FIREBALL", "E  HIGH JUMP"].into_iter().enumerate() {
-                        bar.spawn((Node { width: px(190), min_height: px(64), padding: UiRect::all(px(14)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(7)), ..default() },
-                            BackgroundColor(PANEL), BorderColor::all(MUTED), SpellCard(index)))
-                            .with_children(|card| { card.spawn((text(format!("{name}\nREADY"), 15.0, INK), Label::Spell(index))); });
-                    }
-                });
-            root.spawn(Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), height: px(28), justify_content: JustifyContent::Center, ..default() })
-                .with_children(|footer| { footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL),
-                    text("WASD move   SPACE jump   E high jump   LMB fireball   RMB shield   C camera   T preview   ESC / TAB pause   R reset", 12.0, INK))); });
-        });
-    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), display: Display::None, ..default() }, GlobalZIndex(10), ObserverHud))
-        .with_children(|root| {
-            root.spawn((Node { position_type: PositionType::Absolute, top: px(14), left: px(18), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 17.0, INK), Label::ObserverTeams));
-            root.spawn((Node { position_type: PositionType::Absolute, top: px(14), right: px(18), max_width: px(450), padding: UiRect::all(px(12)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(PANEL), text("", 17.0, INK), Label::ObserverStatus));
-            root.spawn((Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), padding: UiRect::horizontal(px(18)), justify_content: JustifyContent::Center, ..default() }, Name::new("Observer footer container"))).with_children(|footer| {
-                footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), max_width: percent(100), ..default() }, BackgroundColor(PANEL), Name::new("Observer footer panel"))).with_children(|panel| {
-                    panel.spawn((text("WASD pan / move   Q / E down / up   SHIFT fast   MOUSE look   WHEEL orbit zoom   C orbit / free   ESC / TAB pause   R reset", 12.0, INK), Name::new("Observer footer text")));
-                });
-            });
-        });
-    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
-        BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.78)), GlobalZIndex(20), StartPanel))
-        .with_children(|overlay| {
-            overlay.spawn((Node { width: px(600), max_width: percent(95), padding: UiRect::all(px(22)), flex_direction: FlexDirection::Column, row_gap: px(10), border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
-                .with_children(|panel| {
-                    panel.spawn(text("SPELL ARENA", 30.0, INK));
-                    panel.spawn(Node { height: px(34), column_gap: px(8), ..default() }).with_children(|row| {
-                        for (label, control) in [("PLAY", ArenaControl::Player), ("SPECTATE BATTLE", ArenaControl::Spectator)] {
-                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(34), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Control(control))).with_children(|button| { button.spawn(text(label, 14.0, INK)); });
-                        }
-                    });
-                    panel.spawn(text("MAP", 12.0, MUTED));
-                    panel.spawn(Node { height: px(38), column_gap: px(8), ..default() }).with_children(|row| {
-                        for map in [ArenaMap::ForestMassif, ArenaMap::Duel, ArenaMap::Fort, ArenaMap::SevenRegions] {
-                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Map(map)))
-                                .with_children(|button| { button.spawn(text(super::map_name(map), 14.0, INK)); });
-                        }
-                    });
-                    panel.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }, ModeContent(ArenaControl::Player))).with_children(|panel| {
-                    panel.spawn(text("ENEMY PARTY", 12.0, MUTED));
-                    let choices = [
-                        ("Dragon",Action::Encounter(ArenaEncounter::Dragon)),
-                        ("Goblins",Action::Encounter(ArenaEncounter::Goblins)),
-                        ("Shaman party",Action::Encounter(ArenaEncounter::ShamanParty)),
-                        ("Shadow",Action::Encounter(ArenaEncounter::Shadow)),
-                        (BattlePreset::Golem.label(),Action::PlayerRecipe(BattlePreset::Golem)),
-                        (BattlePreset::Wisps4.label(),Action::PlayerRecipe(BattlePreset::Wisps4)),
-                        (BattlePreset::Worm.label(),Action::PlayerRecipe(BattlePreset::Worm)),
-                    ];
-                    for group in choices.chunks(4) {
-                        panel.spawn(Node { height: px(38), column_gap: px(6), ..default() }).with_children(|row| {
-                            for &(label, action) in group {
-                                row.spawn((Button, Node { flex_grow:1.0, flex_basis:px(0), min_width:px(0), height:px(38), align_items:AlignItems::Center, justify_content:JustifyContent::Center, border_radius:BorderRadius::all(px(4)), ..default() },BackgroundColor(PANEL),action))
-                                    .with_children(|button| {button.spawn(text(label,13.0,INK));});
-                            }
-                        });
-                    }
-
-                    });
-                    panel.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), display: Display::None, ..default() }, ModeContent(ArenaControl::Spectator))).with_children(|panel| {
-                        for slot in 0..2 {
-                            panel.spawn(Node { min_height: px(38), align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
-                                row.spawn((Node { flex_grow: 1.0, flex_basis:px(0), min_width:px(0), ..default() }, text("", 15.0, if slot == 0 { Color::srgb(0.24,0.82,1.0) } else { Color::srgb(1.0,0.62,0.20) }), Label::Team(slot)));
-                                for (label, step) in [("<", -1), (">", 1)] {
-                                    row.spawn((Button, Node { width: px(46), height: px(34), flex_shrink:0.0, align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Roster(slot, step))).with_children(|button| { button.spawn(text(label, 18.0, INK)); });
-                                }
-                            });
-                        }
-                    });
-                    panel.spawn((text("", 13.0, INK), Label::Selection));
-                    panel.spawn((text("", 14.0, INK), Label::Help));
-                    panel.spawn(text("ESC or TAB pauses combat and frees the mouse.\nUse the paused menu for fullscreen, tuning, or quitting.", 16.0, Color::srgb(0.36, 0.90, 0.78)));
-                    panel.spawn(text("Combat waits until you start.", 15.0, INK));
-                    panel.spawn(Node { height: px(42), column_gap: px(12), ..default() }).with_children(|row| {
-                        for (label, action) in [("FULLSCREEN", Action::Fullscreen), ("QUIT GAME", Action::Quit)] {
-                            row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(42), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), action))
-                                .with_children(|button| {
-                                    let mut label_entity = button.spawn(text(label, 15.0, INK));
-                                    if matches!(action, Action::Fullscreen) { label_entity.insert(Label::WindowMode); }
-                                });
-                        }
-                    });
-                    // Restart reveals this panel under the pointer. Keep the primary
-                    // action last so a repeated click cannot land on Quit.
-                    panel.spawn((Button, Node { width: percent(100), height: px(46), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), Action::Start))
-                        .with_children(|button| { button.spawn(text("START  /  ENTER", 17.0, INK)); });
-                });
-        });
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100),
-                height: percent(100),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                display: Display::None,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)),
-            GlobalZIndex(20),
-            PausePanel,
-        ))
-        .with_children(|overlay| {
-            overlay
-                .spawn((
-                    Node {
-                        width: px(600),
-                        height: px(650),
-                        max_height: percent(95),
-                        max_width: percent(95),
-                        padding: UiRect::all(px(20)),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(5),
-                        flex_shrink: 0.0,
-                        border_radius: BorderRadius::all(px(12)),
-                        ..default()
-                    },
-                    BackgroundColor(PANEL),
-                ))
-                .with_children(|panel| {
-                    panel.spawn((
-                        Node {
-                            height: px(30),
-                            flex_shrink: 0.0,
-                            ..default()
-                        },
-                        text("", 24.0, INK),
-                        Label::MenuTitle,
-                    ));
-                    panel.spawn((
-                        Node {
-                            height: px(18),
-                            flex_shrink: 0.0,
-                            ..default()
-                        },
-                        text("", 13.0, INK),
-                        Label::MenuHelp,
-                    ));
-                    for index in 0..12 {
-                        panel
-                            .spawn(Node {
-                                width: percent(100),
-                                height: px(26),
-                                flex_shrink: 0.0,
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::SpaceBetween,
-                                ..default()
-                            })
-                            .with_children(|row| {
-                                row.spawn((
-                                    Node {
-                                        width: px(375),
-                                        height: px(20),
-                                        flex_shrink: 0.0,
-                                        ..default()
-                                    },
-                                    text("", 15.0, INK),
-                                    Label::Parameter(index),
-                                ));
-                                for (label, amount) in [("-", -1.0), ("+", 1.0)] {
-                                    row.spawn((
-                                        Button,
-                                        Node {
-                                            width: px(48),
-                                            height: px(26),
-                                            border_radius: BorderRadius::all(px(4)),
-                                            justify_content: JustifyContent::Center,
-                                            align_items: AlignItems::Center,
-                                            ..default()
-                                        },
-                                        BackgroundColor(Color::srgb(0.14, 0.21, 0.26)),
-                                        Action::Change(index, amount),
-                                    ))
-                                    .with_children(|button| {
-                                        button.spawn(text(label, 20.0, INK));
-                                    });
-                                }
-                            });
-                    }
-                    panel.spawn((
-                        Node {
-                            height: px(52),
-                            flex_shrink: 0.0,
-                            ..default()
-                        },
-                        text("", 12.0, MUTED),
-                        Label::MenuRules,
-                    ));
-                    panel
-                        .spawn(Node {
-                            height: px(42),
-                            flex_shrink: 0.0,
-                            column_gap: px(12),
-                            margin: UiRect::top(px(8)),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            for (label, action) in
-                                [("RESUME", Action::Resume), ("RESET ARENA", Action::Restart)]
-                            {
-                                row.spawn((
-                                    Button,
-                                    Node {
-                                        width: px(260),
-                                        height: px(42),
-                                        border_radius: BorderRadius::all(px(5)),
-                                        justify_content: JustifyContent::Center,
-                                        align_items: AlignItems::Center,
-                                        ..default()
-                                    },
-                                    BackgroundColor(Color::srgb(0.16, 0.37, 0.41)),
-                                    action,
-                                ))
-                                .with_children(|button| {
-                                    let mut text = button.spawn(text(label, 15.0, INK));
-                                    if matches!(action, Action::Resume) {
-                                        text.insert(Label::Resume);
-                                    }
-                                });
-                            }
-                        });
-                    panel
-                        .spawn(Node {
-                            height: px(42),
-                            flex_shrink: 0.0,
-                            column_gap: px(12),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            for (label, action) in [
-                                ("FULLSCREEN", Action::Fullscreen),
-                                ("QUIT GAME", Action::Quit),
-                            ] {
-                                row.spawn((
-                                    Button,
-                                    Node {
-                                        width: px(260),
-                                        height: px(42),
-                                        border_radius: BorderRadius::all(px(5)),
-                                        justify_content: JustifyContent::Center,
-                                        align_items: AlignItems::Center,
-                                        ..default()
-                                    },
-                                    BackgroundColor(Color::srgb(0.14, 0.21, 0.26)),
-                                    action,
-                                ))
-                                .with_children(|button| {
-                                    let mut label_entity = button.spawn(text(label, 15.0, INK));
-                                    if matches!(action, Action::Fullscreen) {
-                                        label_entity.insert(Label::WindowMode);
-                                    }
-                                });
-                            }
-                        });
-                });
-        });
-}
+mod layout;
+pub(super) use layout::setup;
 
 pub(super) fn buttons(
     interactions: Query<(&Interaction, &Action), Changed<Interaction>>,
@@ -383,20 +105,31 @@ pub(super) fn buttons(
     mut session: ResMut<ArenaSession>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
+    recorder: Option<ResMut<super::recording::Recorder>>,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
 ) {
+    let mut recorder = recorder;
     let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     let chooses_something_else = state.paused
         && windows.iter().all(|window| window.focused)
         && interactions.iter().any(|(interaction, action)| {
             *interaction == Interaction::Pressed
-                && !matches!(action, Action::Map(ArenaMap::ForestMassif) | Action::Fullscreen)
+                && !matches!(
+                    action,
+                    Action::Map(ArenaMap::ForestMassif) | Action::Fullscreen
+                )
         });
     if state.started || battle.control == ArenaControl::Spectator || chooses_something_else {
         state.forest_preparation.cancel_selection();
     }
     if state.forest_preparation.poll() {
-        apply_map_selection(ArenaMap::ForestMassif, &mut state, &mut reset, &mut selection, &mut battle);
+        apply_map_selection(
+            ArenaMap::ForestMassif,
+            &mut state,
+            &mut reset,
+            &mut selection,
+            &mut battle,
+        );
         // A new map needs its own publication before any Start event can apply.
         return;
     }
@@ -407,7 +140,10 @@ pub(super) fn buttons(
         {
             continue;
         }
-        if !matches!(action, Action::Map(ArenaMap::ForestMassif) | Action::Fullscreen) {
+        if !matches!(
+            action,
+            Action::Map(ArenaMap::ForestMassif) | Action::Fullscreen
+        ) {
             state.forest_preparation.cancel_selection();
         }
         match *action {
@@ -504,7 +240,11 @@ pub(super) fn buttons(
                 }
             }
             Action::Quit => {
-                exit.write(AppExit::Success);
+                if let Some(recorder) = recorder.as_mut() {
+                    recorder.request_quit();
+                } else {
+                    exit.write(AppExit::Success);
+                }
             }
             Action::Change(index, direction) if state.started => {
                 if session.is_forest_run() {
@@ -535,15 +275,22 @@ fn apply_map_selection(
     selection: &mut ArenaSelection,
     battle: &mut ArenaBattleSetup,
 ) {
-    let previous = (!matches!(selection.map, ArenaMap::SevenRegions | ArenaMap::ForestMassif))
-        .then(|| super::player_preset(*selection, battle));
+    let previous = (!matches!(
+        selection.map,
+        ArenaMap::SevenRegions | ArenaMap::ForestMassif
+    ))
+    .then(|| super::player_preset(*selection, battle));
     selection.map = map;
     if matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)
         || battle.control == ArenaControl::Spectator
     {
         battle.player_recipe = None;
     } else {
-        let preset = previous.unwrap_or(if map == ArenaMap::Duel { BattlePreset::Shadow } else { BattlePreset::Dragon });
+        let preset = previous.unwrap_or(if map == ArenaMap::Duel {
+            BattlePreset::Shadow
+        } else {
+            BattlePreset::Dragon
+        });
         super::choose_player_preset(selection, battle, preset);
     }
     reset.generation = reset.generation.saturating_add(1);
@@ -610,7 +357,6 @@ pub(super) fn update(
             Has<StartPanel>,
             Has<CombatHud>,
             Has<ObserverHud>,
-            Option<&ChargeNode>,
         ),
         (
             Without<ModeContent>,
@@ -620,11 +366,9 @@ pub(super) fn update(
                 With<StartPanel>,
                 With<CombatHud>,
                 With<ObserverHud>,
-                With<ChargeNode>,
             )>,
         ),
     >,
-    windows: Query<&Window, With<PrimaryWindow>>,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
 ) {
     let pending = render.map_or(0, |status| status.pending_chunks);
@@ -709,27 +453,10 @@ pub(super) fn update(
         .and_then(|id| session.actors.iter().find(|actor| actor.id == id));
     let forest_knocked_out =
         run.is_some() && session.is_finished() && actor.is_some_and(|actor| actor.hp <= 0.0);
-    let charge = actor.and_then(|actor| actor.charge());
-    let progress = charge.map_or(0.0, |charge| {
-        (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0)
-    });
-    for (mut node, pause, start, combat, observer, charge_node) in &mut panels {
-        if let Some(kind) = charge_node {
-            let visible =
-                state.started && !state.paused && !session.is_finished() && charge.is_some();
-            node.display = if visible {
-                Display::Flex
-            } else {
-                Display::None
-            };
-            if matches!(kind, ChargeNode::Fill) {
-                node.width = percent(progress * 100.0);
-            }
-            continue;
-        }
+    for (mut node, pause, start, combat, observer) in &mut panels {
         node.display = if (pause && state.paused && state.started)
             || (start && !state.started)
-            || (combat && state.started && !observing)
+            || (combat && state.started && !state.paused && !observing)
             || (observer && state.started && observing)
         {
             Display::Flex
@@ -758,7 +485,7 @@ pub(super) fn update(
                 }
             },
             Label::MenuTitle => "PAUSED / COMBAT MENU".into(),
-            Label::MenuHelp if forest_knocked_out => "Reset Arena starts a new run from level 1. Milestones are shown below.".into(),
+            Label::MenuHelp if forest_knocked_out => "Restart begins a fresh run. Your discoveries remain available on the Map until then.".into(),
             Label::MenuHelp if pending > 0 => format!("Preparing terrain: {pending} chunks remaining"),
             Label::MenuHelp if run.is_some() => run.map_or_else(String::new, |p| format!("Level {}  /  XP {} of {}  /  {} upgrade points", p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::MenuHelp if session.is_finished() => "Mouse is free. Reset Arena returns to the start screen.".into(),
@@ -799,20 +526,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     format!("{}  /  {} / {} parties cleared", super::map_name(selection.map), summary.defeated_parties, session.parties().len())
                 }
             },
-            Label::Charge => match charge {
-                Some(_) => format!("{:.0}% / Release to cast", progress * 100.0),
-                None => String::new(),
-            },
-            Label::WindowMode => {
-                if windows
-                    .iter()
-                    .any(|window| window.mode != WindowMode::Windowed)
-                {
-                    "WINDOWED".into()
-                } else {
-                    "FULLSCREEN".into()
-                }
-            }
+            Label::Rewards => expedition.as_ref().map_or(String::new(), |e| format!("Troll: +25 damage / {}\nDragons {}/3: explosions / {}", milestone_status(e, ExpeditionReward::TrollDamage), e.dragons_defeated, milestone_status(e, ExpeditionReward::DragonExplosions))),
             Label::Health if expedition.is_some() => actor.map_or_else(String::new, |a| format!("{:.0} / {:.0} HP", a.hp, a.max_hp)),
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
             Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nR to restart from level 1.".into(),
@@ -845,28 +559,14 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 }
             }
             Label::Spell(index) => {
-                let spell = [Spell::Shield, Spell::Fireball, Spell::HighJump]
-                    .get(*index)
-                    .copied()
-                    .unwrap_or(Spell::Shield);
-                let cooldown = actor
-                    .and_then(|a| a.cooldowns.get(*index))
-                    .copied()
-                    .unwrap_or(0.0);
-                format!(
-                    "{}  {}\n{}",
-                    match spell {
-                        Spell::Shield => "RMB",
-                        Spell::Fireball => "LMB",
-                        Spell::HighJump => "E",
-                    },
-                    spell.name().to_uppercase(),
-                    if cooldown > 0.0 {
-                        format!("{cooldown:.1}s")
-                    } else {
-                        "READY".into()
-                    }
-                )
+                let feedback = session.combat_feedback(&tuning);
+                let spell = feedback.spells[*index];
+                match spell.state {
+                    hex_arena::SpellAvailabilityState::Ready => "✓ READY".into(),
+                    hex_arena::SpellAvailabilityState::CoolingDown => format!("{:.1}s", (spell.cooldown_remaining * 10.0).ceil() / 10.0),
+                    hex_arena::SpellAvailabilityState::Charging => format!("CHARGE {:.0}%", spell.charge_fraction * 100.0),
+                    hex_arena::SpellAvailabilityState::Unavailable => "UNAVAILABLE".into(),
+                }
             }
             Label::MenuRules if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Shadow: +25 maximum HP, no healing / {}\nHidden fountains heal up to 40 HP once. Enemies give XP, never HP.\nEach level grants one + upgrade; cooldown + makes it faster.", milestone_status(e, ExpeditionReward::ShadowVitality))),
             Label::MenuRules if run.is_some() => "Each level grants one + upgrade; cooldown + makes it faster.\nClear forest: +25 damage. Slay 3 Dragons: explosions. Reset clears upgrades.".into(),
@@ -911,12 +611,12 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             },
         };
     }
+    let feedback = session.combat_feedback(&tuning);
     for (card, mut border) in &mut cards {
-        let charging = charge.is_some_and(|charge| charge.spell.index() == card.0);
-        *border = BorderColor::all(if charging {
-            Color::srgb(0.35, 0.94, 0.79)
-        } else {
-            Color::srgb(0.19, 0.27, 0.32)
+        *border = BorderColor::all(match feedback.spells[card.0].state {
+            hex_arena::SpellAvailabilityState::Ready => Color::srgb(0.4, 0.9, 0.8),
+            hex_arena::SpellAvailabilityState::Charging => Color::srgb(1.0, 0.75, 0.32),
+            _ => MUTED,
         });
     }
 }

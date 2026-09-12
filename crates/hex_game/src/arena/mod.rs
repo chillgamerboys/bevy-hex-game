@@ -10,13 +10,15 @@ mod expedition_route_tests;
 #[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
 #[cfg(feature = "test-support")]
-pub use encounter::{STRESS_VISIT_TICKS, configure_encounter_stress_tuning, stress_target_pose};
+pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
 mod hud;
 mod presentation;
+mod recording;
 mod spectator;
 #[cfg(test)]
 mod tests;
+mod ux;
 mod wisp;
 mod worm;
 mod worm_capture;
@@ -390,6 +392,7 @@ pub fn run() -> AppExit {
     }
     let mut app = App::new();
     let plugins = DefaultPlugins.set(WindowPlugin {
+        close_when_requested: false,
         primary_window: Some(Window {
             title: "Hex — Spell Arena".into(),
             resolution: bevy::window::WindowResolution::new(WIDTH, HEIGHT)
@@ -412,6 +415,8 @@ pub fn run() -> AppExit {
     } else {
         app.add_plugins(plugins);
     }
+    recording::install(&mut app);
+    ux::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
         .insert_resource(selection)
@@ -468,6 +473,8 @@ pub fn run() -> AppExit {
             (
                 worm_capture::inject_reset_key,
                 input,
+                ux::keyboard,
+                ux::controls,
                 hud::buttons,
                 sync_cursor,
             )
@@ -729,6 +736,7 @@ fn input(
     mut intent: ResMut<ArenaInput>,
     mut reset: ResMut<ArenaReset>,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
+    ui: Option<Res<ux::UxState>>,
 ) {
     let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     let mouse_events = buttons.read().copied().collect::<Vec<_>>();
@@ -765,7 +773,12 @@ fn input(
     if !window.focused {
         state.pause();
     }
-    if terrain_ready && window.focused && !state.started && keys.just_pressed(KeyCode::Enter) {
+    if terrain_ready
+        && window.focused
+        && !state.started
+        && keys.just_pressed(KeyCode::Enter)
+        && ui.is_none_or(|ui| !ui.has_menu_focus())
+    {
         session.cancel_charges();
         intent.human = ActorIntent::default();
         state.begin_play();
