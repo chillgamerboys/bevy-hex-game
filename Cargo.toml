@@ -185,6 +185,12 @@ debug = false
 [profile.dev.package.wgpu-types]
 debug-assertions = false
 
+# Rust 1.97 debug stripping can misalign a Mach-O dylib string table.
+# Keep the Bevy development dylib intact for current Apple linkers; static
+# shipping builds do not include it. https://github.com/rust-lang/rust/issues/157750
+[profile.dev.package.bevy_dylib]
+strip = "none"
+
 [profile.release]
 # Whole-program optimization. Costs compile time; this is the profile we ship,
 # so that trade is the right way round.
