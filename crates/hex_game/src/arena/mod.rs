@@ -650,21 +650,28 @@ fn update_map_lighting(
     }
     *was_forest = forest;
     ambient.color = if forest {
-        Color::WHITE
+        Color::srgb(0.90, 0.94, 1.0)
     } else {
         Color::srgb(0.77, 0.85, 1.0)
     };
-    ambient.brightness = if forest { 80.0 } else { 420.0 };
+    ambient.brightness = if forest { 240.0 } else { 420.0 };
     clear.0 = if forest {
-        Color::srgb(0.55, 0.80, 0.95)
+        Color::srgb(0.54, 0.75, 0.90)
     } else {
         Color::srgb(0.10, 0.16, 0.22)
     };
     for (mut light, mut transform) in &mut lights {
-        light.illuminance = if forest { 10_000.0 } else { 18_000.0 };
+        light.illuminance = if forest { 7_400.0 } else { 18_000.0 };
+        light.color = if forest {
+            Color::srgb(1.0, 0.92, 0.80)
+        } else {
+            Color::WHITE
+        };
         let origin = if forest {
-            let elevation = 61.434_143_f32.to_radians();
-            let azimuth = 38.172_066_f32.to_radians();
+            // 15:00 between the accepted noon and 16:30 Grand sun anchors.
+            // Stronger cool ambient fill keeps the understory readable.
+            let elevation = 37.145_f32.to_radians();
+            let azimuth = 76.057_f32.to_radians();
             Vec3::new(
                 azimuth.sin() * elevation.cos(),
                 elevation.sin(),
@@ -678,7 +685,7 @@ fn update_map_lighting(
     for entity in &cameras {
         if forest {
             commands.entity(entity).insert((
-                bevy::camera::Exposure { ev100: 9.7 },
+                bevy::camera::Exposure { ev100: 9.5 },
                 DistanceFog {
                     color: Color::srgb(0.62, 0.72, 0.82),
                     directional_light_color: Color::srgb(1.0, 0.78, 0.50),
