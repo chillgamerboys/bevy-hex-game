@@ -1,0 +1,14 @@
+{
+  "tool": "worldc",
+  "tool_version": "0.4.0",
+  "source": ".context/expedition-final-v2/world.ron",
+  "source_fingerprint": "e84db5e35a986b03",
+  "package_fingerprint": "f06ba29a0bdfa9b0",
+  "regions": 1,
+  "chunks": 444,
+  "columns": 105469,
+  "runs": 432514,
+  "elapsed_seconds": 12.798610374999999,
+  "strict": true,
+  "presentation_reviewed": false
+}
