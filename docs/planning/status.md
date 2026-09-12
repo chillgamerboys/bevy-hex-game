@@ -9,6 +9,19 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Forest–Massif Battle UX — local candidate, 2026-09-12.** The unmerged
+`wave/forest-expedition` candidate now defaults Battle Mode and `cargo battle` to
+the V4 expedition with accepted Grand visuals, 115 actors and run-local progression.
+Navigation adds remembered discoveries, an optional minimap and one destination;
+combat adds larger spell cards, contextual health cues and the taller expedition
+player. Esc has readable, scalable pages and a bundled macOS recording backend.
+Focused gameplay, world, UI and actual-route checks and ten independently reviewed
+windowless frames pass. Recorder shutdown follow-ups and native input, recording
+playback and performance acceptance remain in progress. The complete selector gate
+stops at inherited map-library lint failures. This is a local implementation
+checkpoint, not delivery on `dev`; the older checkpoints below retain their original
+scope. See the [Battle UX record](waves/forest-expedition/battle-ux.md).
+
 **Spell Combat Arena — experimental PR candidate, 2026-09-08.** The user playtested
 and accepted the stronger Shadow opponent at `127d1ce`. The
 [encounter wave](waves/arena-encounters/manifest.md) and

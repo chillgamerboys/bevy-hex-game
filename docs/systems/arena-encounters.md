@@ -107,7 +107,7 @@ fresh press afterward.
 
 The paused menu contains existing spell tuning, resume/reset, window mode and
 quit. A win, death, draw or spectator timeout automatically opens the paused result
-menu and releases the cursor. A completed Fort/Duel/Seven Regions round cannot resume; choose Reset Arena
+menu and releases the cursor. A completed Fort/Duel/Seven Regions round cannot resume; choose RESTART
 to return to the ready screen or quit. There is no live HUD menu button. Menu
 clicks never become casts.
 
@@ -362,7 +362,9 @@ how much prioritizing the Shaman changes the fight.
 Water remains non-solid with no swimming or drowning; required approaches are dry.
 Static authored map objects remain indestructible. Ground enemies use bounded
 local steering, so heavy destruction and unusual traps can defeat their routes.
-Grand V3, multiplayer, progression and persistent saves are deferred.
+The Forest–Massif expedition uses the accepted Grand visuals and has run-local
+XP, upgrades and encounter rewards. Multiplayer and cross-launch progression saves
+remain deferred.
 
 ## Deferred playtest issues — 2026-09-08
 

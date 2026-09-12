@@ -1,6 +1,7 @@
 # Battle navigation, readability and recording
 
-Status: implementing the user-approved September 12 plan on the existing local
+Status: integrated local candidate with recorder shutdown follow-ups and native
+acceptance in progress for the user-approved September 12 plan on the existing
 `wave/forest-expedition` candidate, base `4b697e90be6ee52c00b1b0f7b984abb8b88a4024`.
 The hourly automation remains paused. No remote publication or dev/main merge.
 
@@ -69,3 +70,43 @@ routes must be rerun for new dimensions. Use true UI pointer/layout tests at
 captures. Native input, motion and recording require the named native playtest.
 Measure UI p95 (<1ms target), recording on/off frame-time delta (<10% target), and
 record limitations accurately. No static image substitutes for logical hooks.
+
+### September 12 local validation checkpoint
+
+At `a7013698fed80c18b87e7d346db864e7958a194d`, the combined candidate has:
+
+- 401 pure arena tests, 138 Battle application tests and nine overview tests
+  passing. Explicitly ignored tests are recorded separately, not counted as passed.
+- Seven actual expedition checks passing, including admission of all 115 actors,
+  taller-player route/bridge probes, fountain and reward access, full reset and
+  the large encounter checks. The final defeat/Restart pointer regression also
+  passes after the menu layout fixes.
+- Pointer, keyboard, text bounds, full-map fit, pin clearing and overflow cues
+  covered at 1280x720, 1600x900 and 1920x1080 with 100% and 200% scaling.
+- Ten clean-source windowless frames individually inspected, followed by a full
+  contact sheet and independent review. HP clipping, the 200% expanded map,
+  scroll discoverability, V4 overview colors and partial/full charge captures
+  were corrected and rechecked. This clears the named static surfaces only.
+- Format, dependency policy, tracked Markdown links, 116 selector tests, 55
+  launcher tests and strict game-library Clippy passing. The native Cargo build
+  and Swift helper compile/protocol checks pass.
+
+The exact canonical selector Clippy command executed for 205 seconds and failed
+with 517 inherited `hex_map` library diagnostics. None of its diagnostic files
+changed in the Battle UX diff. The candidate-validation workflow stops the full
+gate at this first substantive failure; subsequent broad concerns and the shipping
+release build are not claimed passed. This candidate is not merge-ready.
+
+Native launch reached the ready screen without asset errors. The Mac was initially
+locked; after user unlock, the computer-use tool could not address the unbundled
+Cargo process. Authorization for the game-specific input driver is pending.
+No focused active-play telemetry or completed video exists yet, so the <1 ms
+additional UI and <10% recording frame-time targets remain unverified. Short
+windowless timing samples are diagnostic wall spans, not exclusive UI CPU evidence.
+Recorder review additionally identified saturated-command-queue Quit and a blocking
+folder-open call; their bounded lifecycle fixes and regressions are in progress.
+
+Logs, capture receipts, independent static review and the reusable native telemetry
+analyzer are in the local `outputs/expedition-validation` artifact directory. The
+hourly timer remains paused. No PR, `dev` merge or Linear mutation is part of this
+local checkpoint.
