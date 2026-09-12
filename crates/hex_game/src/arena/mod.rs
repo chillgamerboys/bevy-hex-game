@@ -1551,11 +1551,13 @@ fn capture_frame(
     if state.frames < frame || state.requested {
         return;
     }
-    if state.capture_view == "encounter-landmark"
-        && !state
-            .capture_focus
-            .as_ref()
-            .is_some_and(|name| view.anchors.contains_key(name))
+    if matches!(
+        state.capture_view.as_str(),
+        "encounter-landmark" | "forest-landmark"
+    ) && !state
+        .capture_focus
+        .as_ref()
+        .is_some_and(|name| view.anchors.contains_key(name))
     {
         error!("Encounter capture requires a published focus anchor");
         state.requested = true;
