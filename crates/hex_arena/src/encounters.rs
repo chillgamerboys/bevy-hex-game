@@ -688,7 +688,7 @@ impl ArenaSession {
         self.collision.sync_barriers(&self.encounter.barriers);
         self.prepare_worms(world, geometry);
         self.observe_parties(tuning);
-        self.advance_rally();
+        self.advance_rally(world, geometry, tuning);
         let mut brains = std::mem::take(&mut self.encounter.brains);
         let mut intents = BTreeMap::new();
         let mut plans = Vec::new();

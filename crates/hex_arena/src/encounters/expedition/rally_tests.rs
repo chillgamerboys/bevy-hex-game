@@ -80,7 +80,7 @@ fn troll_rally_requires_positive_player_damage_orders_survivors_once_and_dies_wi
     session.record_player_hit(0, troll);
     assert!(!session.expedition_rally_status().expect("status").triggered);
     session.record_damage(0, troll, 1.0);
-    session.advance_rally();
+    session.advance_rally(&view, geometry, &tuning);
     let status = session.expedition_rally_status().expect("status");
     assert!(status.triggered && status.active);
     assert_eq!((status.ordered_parties, status.ordered_actors), (14, 108));
@@ -99,7 +99,6 @@ fn troll_rally_requires_positive_player_damage_orders_survivors_once_and_dies_wi
         .map(|(id, b)| (*id, b.rally_goal))
         .collect();
     session.record_damage(0, troll, 7.0);
-    session.advance_rally();
     assert_eq!(
         status,
         session.expedition_rally_status().expect("same orders")
@@ -118,7 +117,7 @@ fn troll_rally_requires_positive_player_damage_orders_survivors_once_and_dies_wi
     defeat(&mut session, adult, false);
     assert_eq!(session.progress().expect("progress").total_xp, 0);
     defeat(&mut session, troll, false);
-    session.advance_rally();
+    session.advance_rally(&view, geometry, &tuning);
     let ended = session.expedition_rally_status().expect("ended");
     assert!(ended.triggered && !ended.active);
     assert_eq!(ended.ordered_actors, 108);
@@ -141,7 +140,11 @@ fn rally_travel_is_identical_when_an_unseen_player_moves_and_does_not_reveal_tar
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
     let troll = id_for(&session, ExpeditionRole::Troll);
     session.record_damage(0, troll, 1.0);
-    session.advance_rally();
+    session.advance_rally(&view, geometry, &tuning);
+    for _ in 0..120 {
+        session.tick += 1;
+        session.advance_rally(&view, geometry, &tuning);
+    }
     let actor = session
         .actors
         .iter()
@@ -160,6 +163,7 @@ fn rally_travel_is_identical_when_an_unseen_player_moves_and_does_not_reveal_tar
         .get(&actor.id)
         .expect("brain")
         .rally_goal;
+    assert!(goal.is_some_and(|point| point.distance(actor.feet) > 0.8));
     let mut a = brain::Brain::new(actor.id, actor.feet);
     let mut b = brain::Brain::new(actor.id, actor.feet);
     a.rally_goal = goal;
