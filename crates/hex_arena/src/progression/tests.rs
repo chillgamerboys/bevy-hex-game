@@ -1,6 +1,6 @@
 use super::*;
 use crate::*;
-use hex_core::arena::{ArenaMap, ArenaSelection, ArenaSolidSpan};
+use hex_core::arena::{ArenaMap, ArenaSelection, ArenaSolidSpan, ArenaStaticSpan};
 use hex_core::{ElementId, HexCoord, SubstanceId};
 
 struct Fixture {
@@ -256,6 +256,105 @@ fn forest_and_dragon_rewards_are_separate_once_only_and_clear_still_moves() {
 }
 
 #[test]
+fn dragon_first_completion_waits_for_every_forest_enemy_and_keeps_casting() {
+    let mut f = fixture();
+    let dragons: Vec<_> = f
+        .session
+        .actors
+        .iter()
+        .filter(|actor| actor.species == Species::Dragon)
+        .map(|actor| actor.id)
+        .collect();
+    for id in dragons.iter().take(2) {
+        f.kill(*id, true);
+    }
+    assert_eq!(f.session.progress().expect("progress").dragons_defeated, 2);
+    assert!(!f.session.progress().expect("progress").explosions_unlocked);
+    f.kill(*dragons.last().expect("third Dragon"), true);
+    let unlocked = f.session.progress().expect("progress");
+    assert!(unlocked.explosions_unlocked && !unlocked.forest_cleared && !unlocked.completed);
+    assert_eq!(unlocked.forest_defeated, 0);
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 15.0).abs() < SKIN);
+    f.kill_species(&[Species::Goblin]);
+    assert!(!f.session.completed_run());
+    f.kill_species(&[Species::Shaman]);
+    let completed = f.session.progress().expect("progress");
+    assert!(completed.completed && completed.forest_cleared && completed.explosions_unlocked);
+    assert_eq!(
+        (completed.total_xp, completed.level, completed.xp),
+        (90, 5, 8)
+    );
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 40.0).abs() < SKIN);
+    f.session.advance(
+        ActorIntent {
+            aim: Vec3::Y,
+            selected: Some(Spell::Fireball),
+            cast_pressed: true,
+            cast_released: true,
+            ..Default::default()
+        },
+        &f.world,
+        f.geometry,
+        f.materials,
+        &f.tuning,
+    );
+    assert!(!f.session.is_finished() && f.session.outcome.is_none());
+    assert_eq!(f.session.progress(), Some(completed));
+    assert_eq!(
+        f.session
+            .projectiles
+            .first()
+            .expect("victory exploration cast")
+            .fireball_mode(),
+        FireballMode::Explosive
+    );
+}
+
+#[test]
+fn bought_damage_stacks_with_forest_reward_even_at_normal_upgrade_cap() {
+    let mut f = fixture();
+    let first_ten: Vec<_> = f
+        .session
+        .actors
+        .iter()
+        .filter(|actor| actor.species == Species::Goblin)
+        .take(10)
+        .map(|actor| actor.id)
+        .collect();
+    for id in first_ten {
+        f.kill(id, true);
+    }
+    assert!(f.session.spend_upgrade(UpgradeStat::FireballDamage));
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 20.0).abs() < SKIN);
+    assert!(!f.session.progress().expect("progress").forest_cleared);
+    // This one-map roster cannot fund seventeen damage purchases. Extra credits
+    // explicitly exercise the normal stat ceiling; purchases still use the API.
+    f.session
+        .progression
+        .as_mut()
+        .expect("state")
+        .snapshot
+        .available_upgrades = 20;
+    for _ in 0..16 {
+        assert!(f.session.spend_upgrade(UpgradeStat::FireballDamage));
+    }
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 100.0).abs() < SKIN);
+    let capped = f.session.progress().expect("progress");
+    assert!(!f.session.spend_upgrade(UpgradeStat::FireballDamage));
+    assert_eq!(f.session.progress(), Some(capped));
+    f.kill_species(&[Species::Goblin, Species::Shaman]);
+    let rewarded = f.session.progress().expect("progress");
+    assert!(rewarded.forest_cleared && !rewarded.explosions_unlocked);
+    assert!((rewarded.damage_bonus - 25.0).abs() < SKIN);
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 125.0).abs() < SKIN);
+    assert!(!f.session.can_upgrade(UpgradeStat::FireballDamage));
+    assert!(!f.session.spend_upgrade(UpgradeStat::FireballDamage));
+    f.session.reconcile_progression();
+    assert_eq!(f.session.progress(), Some(rewarded));
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 125.0).abs() < SKIN);
+}
+
+#[test]
 fn xp_credits_recent_knockback_but_not_unrelated_or_expired_deaths() {
     let mut f = fixture();
     f.session.record_player_hit(0, 1);
@@ -357,6 +456,75 @@ fn contact_terrain_damages_exactly_one_voxel_and_barrier_does_not_splash() {
     assert!(f.resolve().impacts.is_empty());
     assert!((f.session.barriers().first().expect("barrier").hp - 45.0).abs() < SKIN);
     assert!((f.session.actors.get(1).expect("target").hp - 50.0).abs() < SKIN);
+}
+
+#[test]
+fn protected_static_tree_contact_cannot_damage_nearby_terrain_or_actors() {
+    let mut f = fixture();
+    let coord = HexCoord::from_world(Vec3::new(-3.0, 0.0, -30.0));
+    let root = coord.to_world(SKIN);
+    f.world.static_spans.push(ArenaStaticSpan {
+        bottom: TilePos::new(coord, 1),
+        top_level: 6,
+        blocks_movement: true,
+        blocks_projectiles: true,
+        blocks_sight: true,
+    });
+    f.world.edit_protected.insert(coord, vec![(0, 6)]);
+    f.world.revision += 1;
+    f.world.full_rebuild = true;
+    f.session.collision.refresh(&f.world, f.geometry);
+    for (id, offset) in [
+        (0, Vec3::NEG_X * 4.0),
+        (1, Vec3::Z * 1.6),
+        (2, Vec3::X * 2.2),
+    ] {
+        let actor = f
+            .session
+            .actors
+            .iter_mut()
+            .find(|actor| actor.id == id)
+            .expect("actor");
+        actor.feet = root + offset;
+        actor.previous_feet = actor.feet;
+    }
+    let health: Vec<_> = f
+        .session
+        .actors
+        .iter()
+        .map(|actor| (actor.id, actor.hp))
+        .collect();
+    f.launch(0, Vec3::X);
+    let commands = f.resolve();
+    assert!(commands.impacts.is_empty() && commands.edits.is_empty());
+    assert_eq!(
+        f.session
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.hp))
+            .collect::<Vec<_>>(),
+        health
+    );
+    let hit = f
+        .session
+        .effects
+        .last()
+        .expect("actual tree collision, not an expired miss");
+    assert!(hit.center.with_y(root.y).distance(root) < 1.1);
+    assert!((hit.radius - 0.16).abs() < SKIN);
+    assert!(
+        f.session
+            .actors
+            .get(1)
+            .expect("nearby actor")
+            .center()
+            .distance(hit.center)
+            < 2.5
+    );
+    assert!(
+        f.world.voxels.contains_key(&TilePos::new(coord, 0)),
+        "protected ground is still present"
+    );
 }
 
 #[test]
