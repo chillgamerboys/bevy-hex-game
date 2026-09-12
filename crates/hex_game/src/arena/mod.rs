@@ -1,5 +1,6 @@
 //! Native composition for isolated Battle Mode, launched through the menu or `--arena`.
 
+mod cast_input;
 mod encounter;
 #[cfg(feature = "test-support")]
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
@@ -14,7 +15,7 @@ mod worm;
 mod worm_capture;
 
 use bevy::camera::RenderTarget;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::{CursorGrabMode, CursorMoved, CursorOptions, PrimaryWindow};
@@ -153,6 +154,7 @@ struct ViewState {
     initialized: bool,
     previews: [bool; 2],
     suppress_click: bool,
+    casts: cast_input::CastInput,
     suppress_high_jump: bool,
     capture: Option<PathBuf>,
     capture_view: String,
@@ -204,6 +206,7 @@ impl Default for ViewState {
             initialized: false,
             previews: [true, false],
             suppress_click: true,
+            casts: Default::default(),
             suppress_high_jump: true,
             capture,
             capture_view,
@@ -258,6 +261,7 @@ impl ViewState {
         self.started = true;
         self.paused = false;
         self.suppress_click = true;
+        self.casts.clear();
         self.suppress_high_jump = true;
         self.accumulator = 0.0;
     }
@@ -265,12 +269,14 @@ impl ViewState {
     fn pause(&mut self) {
         self.paused = true;
         self.suppress_click = true;
+        self.casts.clear();
         self.suppress_high_jump = true;
         self.accumulator = 0.0;
     }
 
     fn prepare_round(&mut self) {
         self.started = false;
+        self.casts = Default::default();
         self.initialized = false;
         self.observer.generation = None;
         self.capture_event_frame = None;
@@ -598,7 +604,7 @@ fn setup(
         Transform::from_xyz(-15.0, 30.0, 18.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     info!(
-        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold LMB to charge Shield/Fireball; release LMB to cast. Press 3 for High Jump without changing selection. Controls WASD mouse Space Shift 1/2/3 C T R."
+        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold/release LMB for Fireball or RMB for Shield. E triggers High Jump. Controls WASD mouse Space E C T R; no sprint."
     );
 }
 
@@ -621,6 +627,7 @@ fn reset_from_input(
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    mut buttons: MessageReader<MouseButtonInput>,
     mut moved: MessageReader<CursorMoved>,
     mut wheel: MessageReader<MouseWheel>,
     time: Res<Time>,
@@ -630,6 +637,7 @@ fn input(
     mut intent: ResMut<ArenaInput>,
     mut reset: ResMut<ArenaReset>,
 ) {
+    let mouse_events = buttons.read().copied().collect::<Vec<_>>();
     if state.capture.is_some() {
         if state.capture_view == "encounter-worm-reset"
             && state.started
@@ -774,47 +782,28 @@ fn input(
         axis(KeyCode::KeyD, KeyCode::KeyA),
         axis(KeyCode::KeyW, KeyCode::KeyS),
     );
-    intent.human.run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    intent.human.run = false;
     intent.human.jump |= keys.just_pressed(KeyCode::Space);
-    intent.human.high_jump |= keys.just_pressed(KeyCode::Digit3) && !state.suppress_high_jump;
-    if !keys.pressed(KeyCode::Digit3) {
+    intent.human.high_jump |= keys.just_pressed(KeyCode::KeyE) && !state.suppress_high_jump;
+    if !keys.pressed(KeyCode::KeyE) {
         state.suppress_high_jump = false;
     }
-    for (key, spell) in [
-        (KeyCode::Digit1, Spell::Shield),
-        (KeyCode::Digit2, Spell::Fireball),
-    ] {
-        if keys.just_pressed(key) {
-            if session
-                .actors
-                .first()
-                .is_some_and(|actor| actor.selected != spell)
-            {
-                // Selection cancels the old spell in authority. Discard old queued
-                // edges here as well, including when this render frame has no tick.
-                let existing_hold = intent.human.cast_pressed
-                    || intent.human.cast_held
-                    || session
-                        .actors
-                        .first()
-                        .is_some_and(|actor| actor.charge().is_some());
-                intent.human.cast_pressed = false;
-                intent.human.cast_released = false;
-                if existing_hold {
-                    state.suppress_click = true;
-                }
-            }
-            intent.human.selected = Some(spell);
+    intent.human.aim = current_aim;
+    if state.suppress_click {
+        state.casts.clear();
+        if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {
+            state.suppress_click = false;
         }
+        intent.human.cast_pressed = false;
+        intent.human.cast_released = false;
+        intent.human.cast_held = false;
+    } else {
+        state.casts.observe(&mouse, &mouse_events, current_aim);
+        state.casts.write(&mut intent.human);
     }
-    // A queued release owns its release-frame aim until physics consumes it.
-    // Selection and menu cancellation clear the edge, restoring current aim.
+    // Assistance follows the gesture sampled above, even before a physics tick.
     if window.focused && state.started && !state.paused && keys.just_pressed(KeyCode::KeyT) {
-        let spell = intent
-            .human
-            .selected
-            .or_else(|| session.actors.first().map(|actor| actor.selected))
-            .unwrap_or(Spell::Shield);
+        let spell = state.casts.spell();
         let slot = match spell {
             Spell::Shield => Some(0),
             Spell::Fireball => Some(1),
@@ -823,17 +812,6 @@ fn input(
         if let Some(enabled) = slot.and_then(|slot| state.previews.get_mut(slot)) {
             *enabled = !*enabled;
         }
-    }
-    if !intent.human.cast_released {
-        intent.human.aim = current_aim;
-    }
-    // A press and release can both arrive before the next 120 Hz tick. Preserve
-    // both edges while replacing only the current held sample each render frame.
-    intent.human.cast_pressed |= mouse.just_pressed(MouseButton::Left) && !state.suppress_click;
-    intent.human.cast_released |= mouse.just_released(MouseButton::Left) && !state.suppress_click;
-    intent.human.cast_held = mouse.pressed(MouseButton::Left) && !state.suppress_click;
-    if !mouse.pressed(MouseButton::Left) {
-        state.suppress_click = false;
     }
 }
 
@@ -862,6 +840,13 @@ fn drive_simulation(world: &mut World) {
     let reset_this_frame = world.resource::<ViewState>().reset_seen != generation;
     let capture = world.resource::<ViewState>().capture.is_some();
     let needs_initialization = world.resource::<ViewState>().frames == 0;
+    if reset_this_frame && !capture {
+        let mut state = world.resource_mut::<ViewState>();
+        state.casts = Default::default();
+        state.suppress_click = true;
+        state.suppress_high_jump = true;
+        world.resource_mut::<ArenaInput>().human = ActorIntent::default();
+    }
     let (steps, frame, view) = {
         let mut state = world.resource_mut::<ViewState>();
         state.frames = state.frames.saturating_add(1);
@@ -964,6 +949,7 @@ fn drive_simulation(world: &mut World) {
     let frozen = world.resource::<ViewState>().paused || !world.resource::<ViewState>().started;
     let bot_enabled = world.resource::<ArenaSession>().bot_enabled;
     if frozen {
+        world.resource_mut::<ViewState>().casts.clear();
         // A single setup/reset tick publishes the complete world and actors.
         // It must not consume player input or advance the bot's reaction clock.
         world.resource_mut::<ArenaInput>().human = ActorIntent::default();
@@ -979,8 +965,20 @@ fn drive_simulation(world: &mut World) {
         let before = world.resource::<ArenaTerrainView>().revision;
         let voxels_before = world.resource::<ArenaTerrainView>().voxels.len();
         let outcomes_before = world.resource::<ArenaSession>().terrain_outcomes;
+        let managed = !capture
+            && !frozen
+            && !spectator::active(world.resource::<ArenaSession>())
+            && world.resource::<ViewState>().casts.managed;
+        if managed {
+            let mut sample = world.resource::<ArenaInput>().human;
+            world.resource::<ViewState>().casts.write(&mut sample);
+            world.resource_mut::<ArenaInput>().human = sample;
+        }
         let started = std::time::Instant::now();
         world.run_schedule(ArenaTick);
+        if managed {
+            world.resource_mut::<ViewState>().casts.consume();
+        }
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         let changed = before != world.resource::<ArenaTerrainView>().revision;
         let tick = world.resource::<ArenaSession>().tick;

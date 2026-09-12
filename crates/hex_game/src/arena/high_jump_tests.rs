@@ -20,10 +20,9 @@ fn human(app: &App) -> &hex_arena::Actor {
 #[test]
 fn high_jump_key_preserves_selected_fireball_and_held_charge() {
     let mut app = ready();
-    tap_key(&mut app, KeyCode::Digit2);
     charge_with_mouse(&mut app);
     let before = human(&app).charge().expect("charging").elapsed;
-    tap_key(&mut app, KeyCode::Digit3);
+    tap_key(&mut app, KeyCode::KeyE);
     let actor = human(&app);
     assert_eq!(actor.selected, Spell::Fireball);
     assert!(actor.charge().is_some_and(|charge| charge.elapsed > before));
@@ -51,7 +50,7 @@ fn high_jump_press_between_ticks_is_consumed_once_without_mouse_input() {
     let before = app.world().resource::<ArenaSession>().tick;
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::Digit3);
+        .press(KeyCode::KeyE);
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -60,7 +59,7 @@ fn high_jump_press_between_ticks_is_consumed_once_without_mouse_input() {
     assert!(app.world().resource::<ArenaInput>().human.high_jump);
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::Digit3);
+        .release(KeyCode::KeyE);
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -85,7 +84,7 @@ fn high_jump_and_fireball_release_share_a_frame_without_cancelling_each_other() 
     let eye_before = human(&app).eye();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::Digit3);
+        .press(KeyCode::KeyE);
     app.world_mut()
         .resource_mut::<ButtonInput<MouseButton>>()
         .release(MouseButton::Left);
@@ -116,7 +115,7 @@ fn high_jump_holding_during_cooldown_does_not_buffer_or_repeat() {
         .expect("High Jump slot") = 0.2;
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::Digit3);
+        .press(KeyCode::KeyE);
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -128,12 +127,12 @@ fn high_jump_holding_during_cooldown_does_not_buffer_or_repeat() {
     assert!((human(&app).feet.y - 3.2).abs() < 0.01);
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::Digit3);
+        .release(KeyCode::KeyE);
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .clear();
-    tap_key(&mut app, KeyCode::Digit3);
+    tap_key(&mut app, KeyCode::KeyE);
     assert!(human(&app).cooldowns.get(2).is_some_and(|cd| *cd > 6.9));
 }
 
@@ -152,7 +151,7 @@ fn high_jump_held_across_pause_focus_and_reset_requires_a_fresh_press() {
         }
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Digit3);
+            .press(KeyCode::KeyE);
         app.update();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -179,12 +178,12 @@ fn high_jump_held_across_pause_focus_and_reset_requires_a_fresh_press() {
         );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .release(KeyCode::Digit3);
+            .release(KeyCode::KeyE);
         app.update();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
-        tap_key(&mut app, KeyCode::Digit3);
+        tap_key(&mut app, KeyCode::KeyE);
         assert!(
             human(&app).cooldowns.get(2).is_some_and(|cd| *cd > 6.9),
             "{cancel}"

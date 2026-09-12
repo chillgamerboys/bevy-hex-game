@@ -89,7 +89,7 @@ mod tests {
         let world = floor(false);
         for (feet, vertical) in [(0.3, 5.0), (1.3, 0.0), (0.5, -4.0)] {
             let start = Vec3::Y * feet;
-            let path = ForecastMotion::human(0, start, Vec3::new(3.5, vertical, 0.0), 0.5, &world);
+            let path = ForecastMotion::human(0, start, Vec3::new(4.5, vertical, 0.0), 0.5, &world);
             let mut body = Body::default();
             body.vertical_velocity = vertical;
             let mut actual = start;

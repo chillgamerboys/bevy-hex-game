@@ -3,6 +3,7 @@
 The original Duel in the local `arena-prototype` experiment uses one fixed-strength
 Shadow Player. Other [encounters](arena-encounters.md) have separate profiles. Both
 actors share movement, charge, release, cooldown, damage, and terrain rules.
+Human and Shadow move at **4.5 world units/second**, with no separate sprint speed.
 Maximum charge takes **0.75 seconds**. Tap and full launch speeds remain about
 18.5 and 36.5 world units/second at the default reference speed of 32.
 
@@ -27,7 +28,10 @@ concealment and movement, then rechecks the current trajectory before release.
 Ordinary spell and cancellation authority admits every cast. Defensive Shield can
 interrupt preparation; its adapter cancels the old hold before submitting a fresh
 press. High Jump is an independent movement ability and preserves a held projectile
-charge and the selected spell.
+charge. Human controls are hold/release **LMB for Fireball**, hold/release **RMB for
+Shield**, and **E for High Jump**. Only one projectile charges at a time: the first
+mouse button pressed owns that gesture. The HUD highlights the actual active
+charge, without a persistent selected-spell highlight.
 
 New visual acquisition, reacquisition and target changes add a **150 ms**
 simulation-time reaction delay before offensive Fireball releases. Charge preparation
@@ -50,8 +54,8 @@ interrupt waiting.
 ## Positioning and limits
 
 The preferred fighting distance is six to ten world units, adjusted for configured
-self-splash safety. The bot strafes, approaches, backs away, and sprints on safe
-open routes. Short left/right routes around blocking cover use clones of the real
+self-splash safety. The bot strafes, approaches and backs away using the shared
+4.5-unit movement speed. Short left/right routes around blocking cover use clones of the real
 movement controller. Planning is bounded to two two-second walking rollouts, at
 most twice per second. Committed sides and stuck recovery prevent constant
 left/right switching. Unsupported paths are rejected; terrain changes and knockback
@@ -72,6 +76,7 @@ while airborne and revalidates after terrain changes or knockback. An attempt la
 at most six seconds; repeated failures against unchanged nearby terrain are
 suppressed. Recovery does not excavate with Fireballs, raise Shield platforms,
 teleport, or modify terrain.
+
 This is local steering, not a navigation mesh or general planner. Deeply concave
 cover, extensive destruction, and complex stacked obstacles can defeat it.
 Shield placement remains a forecast: moving bodies and destruction can change

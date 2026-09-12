@@ -694,7 +694,10 @@ fn run_round(kind: ScriptKind, seed: u16, baseline: bool, max_seconds: u32) -> E
                 .is_some_and(|latency| latency > 0.0));
         }
     }
-    if matches!(kind, ScriptKind::StationaryTarget) {
+    // The frozen comparison brain can walk behind cover before releasing at the
+    // new movement speed. Record that baseline outcome; only the shipped brain
+    // is required to engage this target within the short smoke-test window.
+    if matches!(kind, ScriptKind::StationaryTarget) && !baseline {
         assert!(
             row.summary
                 .actors
@@ -704,7 +707,8 @@ fn run_round(kind: ScriptKind, seed: u16, baseline: bool, max_seconds: u32) -> E
                 .iter()
                 .sum::<u32>()
                 > 0,
-            "an enabled brain must release a spell at the open stationary target"
+            "an enabled brain must release a spell at the open stationary target: {}",
+            serde_json::to_string(&row).expect("diagnostic row")
         );
     }
     row

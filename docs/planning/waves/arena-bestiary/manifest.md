@@ -540,3 +540,28 @@ Validation complete for the High Jump amendment: 326 arena tests, 99 application
 checks (2 existing ignored), strict arena lint and workspace formatting pass.
 See [shadow-experiment.md](shadow-experiment.md) for scope, measurements and native
 playtest limits. Usage remains above the 16% checkpoint threshold.
+
+### Direct spell controls and fixed walking speed — 2026-09-11 continuation
+
+Approved continuation from `68df079` on `fix/arena-golem-worm-response`.
+The sprint/stamina proposal is superseded: Human and Shadow use 4.5 units/s for
+all movement requests; creature movement and spectator camera speed remain intact.
+LMB owns Fireball, RMB owns Shield, first button wins until release, and E triggers
+High Jump. One authoritative charge remains; no new world or networking contract.
+
+Reuse this local combined wave and its shared-checkout exception. Root owns native
+input/gesture queue, application integration/tests and final validation/commit.
+The gameplay worker owns controller defaults and focused arena movement/escape
+regressions only. The presentation worker owns HUD labels/highlighting, current
+controls guides, and the scoped direct-control application fixtures. No worker Cargo runs or commits; root is the sole Cargo
+runner. No new shared foundation is required. Keep changes local, check usage
+between stages, and stop/checkpoint at 16% remaining.
+
+Acceptance: focused controller/escape and native gesture tests, layout and Fort/Duel
+application regressions, strict arena lint and formatting. Native control feel
+remains a human playtest. No stamina, enemy rebalance, visual redesign or remote PR.
+
+Direct-controls validation complete: 327 arena tests, 107 application checks
+(two existing ignored), strict arena lint and workspace formatting pass.
+See [direct-controls.md](direct-controls.md) for fixture corrections and native
+playtest limits. Usage reports 19% remaining; commit remains local.

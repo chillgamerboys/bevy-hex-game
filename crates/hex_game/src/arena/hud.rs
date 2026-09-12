@@ -94,7 +94,7 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(52), width: percent(100), justify_content: JustifyContent::Center, column_gap: px(10), ..default() })
                 .with_children(|bar| {
-                    for (index, name) in ["1  SHIELD", "2  FIREBALL", "3  HIGH JUMP"].into_iter().enumerate() {
+                    for (index, name) in ["RMB  SHIELD", "LMB  FIREBALL", "E  HIGH JUMP"].into_iter().enumerate() {
                         bar.spawn((Node { width: px(190), min_height: px(64), padding: UiRect::all(px(14)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(7)), ..default() },
                             BackgroundColor(PANEL), BorderColor::all(MUTED), SpellCard(index)))
                             .with_children(|card| { card.spawn((text(format!("{name}\nREADY"), 15.0, INK), Label::Spell(index))); });
@@ -102,7 +102,7 @@ pub(super) fn setup(mut commands: Commands) {
                 });
             root.spawn(Node { position_type: PositionType::Absolute, bottom: px(14), width: percent(100), height: px(28), justify_content: JustifyContent::Center, ..default() })
                 .with_children(|footer| { footer.spawn((Node { padding: UiRect::axes(px(12), px(6)), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL),
-                    text("WASD move   SHIFT sprint   SPACE jump   3 high jump   HOLD / RELEASE cast   C camera   T preview   ESC / TAB pause   R reset", 12.0, INK))); });
+                    text("WASD move   SPACE jump   E high jump   LMB fireball   RMB shield   C camera   T preview   ESC / TAB pause   R reset", 12.0, INK))); });
         });
     commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), display: Display::None, ..default() }, GlobalZIndex(10), ObserverHud))
         .with_children(|root| {
@@ -509,10 +509,10 @@ pub(super) fn update(
             Label::Help if battle.control == ArenaControl::Spectator => "WASD pan / move / Q and E down and up / Shift fast
 Mouse look / Wheel orbit zoom / C orbit or free camera
 Camera movement never controls a creature.".into(),
-            Label::Help => "WASD move / mouse look / Space jump / Shift sprint
-1 Shield / 2 Fireball / 3 High Jump
-Hold mouse to charge Shield or Fireball. Release to cast.
-Press 3 to jump high; keeps your selected spell and charge.".into(),
+            Label::Help => "WASD move / mouse look / Space jump / E High Jump
+Hold LMB for Fireball or RMB for Shield; release to cast.
+The first button pressed owns the charge.
+High Jump keeps your charge. Movement speed is 4.5 units/s.".into(),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection => match selection.map {
@@ -584,7 +584,11 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     .unwrap_or(0.0);
                 format!(
                     "{}  {}\n{}",
-                    index + 1,
+                    match spell {
+                        Spell::Shield => "RMB",
+                        Spell::Fireball => "LMB",
+                        Spell::HighJump => "E",
+                    },
                     spell.name().to_uppercase(),
                     if cooldown > 0.0 {
                         format!("{cooldown:.1}s")
@@ -627,8 +631,8 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
         };
     }
     for (card, mut border) in &mut cards {
-        let selected = actor.is_some_and(|a| a.selected.index() == card.0);
-        *border = BorderColor::all(if selected {
+        let charging = charge.is_some_and(|charge| charge.spell.index() == card.0);
+        *border = BorderColor::all(if charging {
             Color::srgb(0.35, 0.94, 0.79)
         } else {
             Color::srgb(0.19, 0.27, 0.32)

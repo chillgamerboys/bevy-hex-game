@@ -43,25 +43,29 @@ The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel p
 
 | Input | Action |
 |---|---|
-| WASD / mouse | Move / look |
-| Space / Shift | Jump / sprint |
-| 1 / 2 | Select Shield / Fireball |
-| 3 | Immediate High Jump; preserves the selected spell and held charge |
-| Hold then release left mouse | Charge and cast the selected projectile |
+| WASD / mouse | Move at 4.5 units/second / look |
+| Space | Ordinary jump |
+| E | Immediate High Jump; preserves a held projectile charge |
+| Hold then release left mouse (LMB) | Charge and cast Fireball |
+| Hold then release right mouse (RMB) | Charge and cast Shield |
 | C | Switch first person / close third person |
-| T | Toggle assistance for the selected projectile |
+| T | Toggle assistance for the active gesture, or the last-used projectile (initially Fireball) |
 | Escape or Tab | Pause combat, release the cursor and open the menu |
 | R | Restore the whole selected encounter and return to the ready screen |
 
 Maximum projectile charge takes 0.75 seconds. Holding longer does not auto-fire.
 A tap has one-third of the old reference range; full charge has 130%, measured for
 a same-height 45-degree shot. Actual range follows aim, gravity and elevation.
-Pausing, changing projectile spells, focus loss, death and resetting cancel a charge.
-Pressing **3** does not cancel charging: you can jump high while preparing or releasing
+The first mouse button pressed owns the charge. Pressing the other button during
+that hold neither switches spells nor queues another cast; release and press it
+again to begin a new gesture. Only the actively charging spell is highlighted.
+Pausing, focus loss, death and resetting cancel a charge.
+Human and Shadow share the 4.5-unit movement speed; Shift does not add sprinting.
+Pressing **E** does not cancel charging: you can jump high while preparing or releasing
 Shield or Fireball. High Jump replaces Area Blast. It is an immediate upward boost,
 usable on the ground or in the air, with **four world units** of rise from rest and a
 **seven-second cooldown**. Ceilings still block it. It deals no damage or terrain
-damage. Holding 3 does not repeat, and pressing during cooldown does not queue a
+damage. Holding E does not repeat, and pressing during cooldown does not queue a
 future jump. Pausing, focus loss and reset discard pending presses and require a
 fresh press afterward.
 
@@ -193,7 +197,7 @@ damage. It excludes the Shaman; leaving range or sight stops support, and killin
 the Shaman ends the aura. Support does not stack or revive enemies.
 
 The Golem has a seven-hex footprint and is five levels (2 units) tall. It walks at
-3.2 units/second (below the player's 3.5-unit walk) and cannot jump or pass Fort's
+3.2 units/second (below the player's 4.5-unit movement) and cannot jump or pass Fort's
 low gate. Its .8-second slam windup
 precedes a 35-damage sphere of about four horizontal hexes (6.93 units), with
 knockback and terrain damage. Its laser charges for two seconds, then fires for

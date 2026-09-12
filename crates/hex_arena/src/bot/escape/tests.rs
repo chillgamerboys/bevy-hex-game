@@ -65,8 +65,11 @@ fn apply_movement(
 
 #[test]
 fn shadow_escape_normal_and_high_jumps_land_without_overshooting() {
-    for (height, wants_high) in [(3, false), (8, true)] {
+    // At the shared 4.5 speed a normal jump needs a closer starting point to
+    // reach the 1.2-unit ledge before descending; the higher rim needs High Jump.
+    for (height, offset, wants_high) in [(3, 0.5, false), (8, 0.0, true)] {
         let (mut bot, world, collision, geometry) = crater(height);
+        bot.feet.x = offset;
         let tuning = ArenaTuning::default();
         let mut recovery = EscapeRecovery::default();
         let mut normal = false;

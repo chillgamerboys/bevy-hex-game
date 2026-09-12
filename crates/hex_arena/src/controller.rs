@@ -1,4 +1,4 @@
-//! Accepted M01 walk/jump/step behavior, extracted from lab revision 9ffc6bf.
+//! M01 jump/step/collision behavior with one Human/Shadow movement speed.
 //! The arena combines input and persistent impulse velocity before sweeping and
 //! removes the inspection controller's fly/recovery behavior.
 
@@ -8,8 +8,8 @@ use crate::collision::{slide_with_contacts, CollisionWorld, SKIN};
 use crate::{BODY_HEIGHT, BODY_RADIUS, STEP};
 
 const GRAVITY: f32 = 17.333_334;
-const WALK: f32 = 3.5;
-const RUN: f32 = 7.0;
+const WALK: f32 = 4.5;
+const RUN: f32 = 4.5;
 const STEP_HEIGHT: f32 = 0.4;
 const JUMP_HEIGHT: f32 = 3.25 * 0.4;
 
@@ -207,19 +207,60 @@ mod tests {
     }
 
     #[test]
-    fn walking_running_and_diagonals_preserve_m01_speed() {
+    fn default_walk_run_and_diagonals_share_four_point_five_speed() {
         let world = floor(30);
-        for (direction, run, expected) in [
-            (Vec3::X, false, WALK),
-            (Vec3::X + Vec3::Z, false, WALK),
-            (Vec3::X, true, RUN),
+        for (direction, run) in [
+            (Vec3::X, false),
+            (Vec3::X + Vec3::Z, false),
+            (Vec3::X, true),
+            (Vec3::X + Vec3::Z, true),
         ] {
             let mut body = Body::default();
             let mut feet = Vec3::ZERO;
             for _ in 0..120 {
                 body.tick(&mut feet, direction, run, false, &world);
             }
-            assert!((feet.xz().length() - expected).abs() < 0.001);
+            assert!((feet.xz().length() - 4.5).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn human_shadow_share_one_speed_and_creatures_keep_movement_profiles() {
+        let world = floor(30);
+        let tuning = crate::EncounterTuning::default();
+        for (species, walk, run) in [
+            (crate::Species::Human, 4.5, 4.5),
+            (crate::Species::Shadow, 4.5, 4.5),
+            (
+                crate::Species::Goblin,
+                tuning.goblin_walk,
+                tuning.goblin_run,
+            ),
+            (
+                crate::Species::Shaman,
+                tuning.shaman_walk,
+                tuning.shaman_run,
+            ),
+        ] {
+            for (request_run, expected) in [(false, walk), (true, run)] {
+                let mut actor = crate::Actor::spawn(1, Vec3::ZERO, Vec3::X);
+                actor.species = species;
+                for _ in 0..120 {
+                    crate::motion::tick(
+                        &mut actor,
+                        Vec3::X,
+                        request_run,
+                        false,
+                        false,
+                        &world,
+                        &tuning,
+                    );
+                }
+                assert!(
+                    (actor.feet.x - expected).abs() < 0.001,
+                    "{species:?}, run={request_run}"
+                );
+            }
         }
     }
 

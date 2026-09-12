@@ -181,6 +181,7 @@ fn menu_app_at(frame_hz: u32) -> (App, Entity) {
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
+        .add_message::<MouseButtonInput>()
         .add_message::<MouseWheel>()
         .add_message::<AppExit>()
         .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
@@ -667,6 +668,10 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
     let mut positions = Vec::new();
     for hz in [30, 60, 144] {
         let mut app = app(hz);
+        // Exclude bootstrap's partial render interval. Distribute nanosecond
+        // rounding so every cadence supplies exactly one measured second.
+        app.world_mut().resource_mut::<ViewState>().accumulator = 0.0;
+        let initial_tick = app.world().resource::<ArenaSession>().tick;
         app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
             movement: Vec2::Y,
             aim: Vec3::X,
@@ -675,10 +680,26 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
             cast_released: true,
             ..default()
         };
-        for _ in 0..hz {
+        for frame in 0..u64::from(hz) {
+            let nanos =
+                (frame + 1) * 1_000_000_000 / u64::from(hz) - frame * 1_000_000_000 / u64::from(hz);
+            app.world_mut()
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::from_nanos(nanos),
+                ));
             app.update();
         }
         let session = app.world().resource::<ArenaSession>();
+        assert_eq!(session.tick - initial_tick, 120, "{hz} Hz");
+        assert_eq!(
+            session
+                .round_summary()
+                .actors
+                .first()
+                .and_then(|actor| actor.casts.get(1))
+                .copied(),
+            Some(1),
+        );
         positions.push(session.actors.first().map_or(Vec3::ZERO, |a| a.feet));
         assert!(session
             .actors
@@ -688,7 +709,10 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
     }
     for pair in positions.windows(2) {
         if let [a, b] = pair {
-            assert!(a.distance(*b) < 0.06);
+            assert!(
+                a.distance(*b) < 0.001,
+                "equal simulation durations: {a:?} vs {b:?}"
+            );
         }
     }
 }
@@ -699,6 +723,7 @@ fn focus_loss_clears_edges_and_resume_click_cannot_cast() {
     app.init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
+        .add_message::<MouseButtonInput>()
         .add_message::<MouseWheel>()
         .add_systems(PreUpdate, (input, sync_cursor).chain());
     let window = app
@@ -937,8 +962,8 @@ fn release_frame_aim_survives_camera_motion_before_the_next_fixed_tick() {
 }
 
 #[test]
-fn selection_and_pause_discard_queued_release_aim_before_a_fixed_tick() {
-    for key in [KeyCode::Digit1, KeyCode::Escape] {
+fn pause_keys_discard_queued_release_aim_before_a_fixed_tick() {
+    for key in [KeyCode::Tab, KeyCode::Escape] {
         let (mut app, _) = menu_app_at(480);
         app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
         {
@@ -963,9 +988,7 @@ fn selection_and_pause_discard_queued_release_aim_before_a_fixed_tick() {
         tap_key(&mut app, key);
         let input = &app.world().resource::<ArenaInput>().human;
         assert!(!input.cast_pressed && !input.cast_released);
-        if key == KeyCode::Escape {
-            tap_key(&mut app, KeyCode::Escape);
-        }
+        tap_key(&mut app, key);
         assert!(
             app.world()
                 .resource::<ArenaInput>()
@@ -1038,14 +1061,15 @@ fn held_charge_progress_uses_physics_time_at_all_render_rates() {
 }
 
 #[test]
-fn fresh_press_can_arm_a_spell_selected_in_the_same_render_frame() {
+fn fresh_right_press_arms_shield_without_a_selection_key() {
     let (mut app, _) = menu_app();
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
     tap_key(&mut app, KeyCode::Enter);
     app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::Digit1);
-    charge_with_mouse(&mut app);
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Right);
+    app.update();
+    clear_mouse_edges(&mut app);
     let charge = app
         .world()
         .resource::<ArenaSession>()
@@ -1062,8 +1086,8 @@ fn fresh_press_can_arm_a_spell_selected_in_the_same_render_frame() {
 }
 
 #[test]
-fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
-    for cancellation in ["escape", "tab", "focus", "reset", "selection", "knockout"] {
+fn active_holds_cancel_for_pause_focus_reset_and_knockout() {
+    for cancellation in ["escape", "tab", "focus", "reset", "knockout"] {
         let (mut app, window) = menu_app();
         app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
         tap_key(&mut app, KeyCode::Enter);
@@ -1072,7 +1096,6 @@ fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
             "escape" => tap_key(&mut app, KeyCode::Escape),
             "tab" => tap_key(&mut app, KeyCode::Tab),
             "reset" => tap_key(&mut app, KeyCode::KeyR),
-            "selection" => tap_key(&mut app, KeyCode::Digit1),
             "focus" => {
                 app.world_mut()
                     .get_mut::<Window>(window)
@@ -1118,16 +1141,6 @@ fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
                 .is_empty(),
             "release after {cancellation} must stay cancelled"
         );
-        if cancellation == "selection" {
-            charge_with_mouse(&mut app);
-            assert!(app
-                .world()
-                .resource::<ArenaSession>()
-                .actors
-                .first()
-                .and_then(|actor| actor.charge())
-                .is_some_and(|charge| charge.spell == Spell::Shield));
-        }
     }
 }
 
@@ -1755,15 +1768,16 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
 mod terrain_preservation_tests;
 
 #[test]
-fn trajectory_toggle_uses_new_selection_before_its_physics_tick() {
+fn trajectory_toggle_uses_same_frame_right_gesture_before_its_physics_tick() {
     let (mut app, _) = menu_app_at(480);
     tap_key(&mut app, KeyCode::Enter);
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
-    {
-        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keys.press(KeyCode::Digit1);
-        keys.press(KeyCode::KeyT);
-    }
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Right);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyT);
     app.update();
     assert_eq!(app.world().resource::<ViewState>().previews, [false, false]);
 }
@@ -2327,3 +2341,6 @@ mod terminal_menu_tests;
 
 #[path = "high_jump_tests.rs"]
 mod high_jump_tests;
+
+#[path = "direct_controls_tests.rs"]
+mod direct_controls_tests;
