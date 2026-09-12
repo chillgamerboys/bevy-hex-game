@@ -192,6 +192,13 @@ OBSERVER_PERFORMANCE_VIEWS = tuple(
 )
 
 
+def player_capture_entries(views, arena_map: str | None, encounter: str | None):
+    """Resolve ordinary captures without replacing a fixed map's authored roster."""
+    selected_map = arena_map or "duel"
+    selected_encounter = encounter or ("dragon" if selected_map == "forest-massif" else "shadow")
+    return [(view, view, selected_map, selected_encounter, None) for view in views]
+
+
 def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool = False, result: bool = False) -> dict[str, str]:
     if arena_map == "forest-massif" and args.encounter is not None:
         raise RuntimeError("Forest Massif has a fixed Human, 20 Goblins, 2 Shamans and 3 Dragons; omit --encounter.")
@@ -876,7 +883,7 @@ def capture(args: argparse.Namespace) -> int:
         raise RuntimeError("Player encounter matrices do not accept observer options.")
     if (args.encounter_review or args.performance_review) and (args.map or args.encounter):
         raise RuntimeError("Encounter/performance matrices define each recipe; use --view to select entries.")
-    entries = list(PERFORMANCE_VIEWS) if args.performance_review else list(ENCOUNTER_VIEWS) if args.encounter_review else [(view, view, args.map or "duel", args.encounter or "shadow", None) for view in views]
+    entries = list(PERFORMANCE_VIEWS) if args.performance_review else list(ENCOUNTER_VIEWS) if args.encounter_review else player_capture_entries(views, args.map, args.encounter)
     if observer_matrix or args.spectator:
         if args.bot_review or args.charge_review or args.menu_review:
             raise RuntimeError("Use --spectator-review for the observer menu/camera matrix.")
