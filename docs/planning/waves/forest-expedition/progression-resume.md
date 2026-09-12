@@ -46,8 +46,8 @@ is a separate milestone and is excluded from that minion count.
 
 Gameplay owns the exact encounter names `forest_camp_01` through
 `forest_camp_14`, `forest_troll`, `dragon_lower`, `dragon_middle`, `dragon_upper`
-and `mountain_shadow`. The six fountains are `forest_spring_01` through
-`forest_spring_04` and `mountain_spring_01` through `mountain_spring_02`.
+and `mountain_shadow`. The six fountains are `forest_fountain_01` through
+`forest_fountain_04` and `mountain_fountain_01` through `mountain_fountain_02`.
 
 | Defeat condition | Proximity-pickup reward |
 | --- | --- |

@@ -55,8 +55,8 @@ impl ArenaSession {
             );
         }
         let fountains: Vec<_> = (1..=4)
-            .map(|i| format!("forest_spring_{i:02}"))
-            .chain((1..=2).map(|i| format!("mountain_spring_{i:02}")))
+            .map(|i| format!("forest_fountain_{i:02}"))
+            .chain((1..=2).map(|i| format!("mountain_fountain_{i:02}")))
             .collect();
         if sites.fountains.len() != fountains.len()
             || fountains.iter().any(|name| {

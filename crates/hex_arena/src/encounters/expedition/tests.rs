@@ -54,7 +54,7 @@ fn fixture() -> (
     for (prefix, count) in [("forest", 4), ("mountain", 2)] {
         for i in 1..=count {
             sites.fountains.insert(
-                format!("{prefix}_spring_{i:02}"),
+                format!("{prefix}_fountain_{i:02}"),
                 ArenaFountainVolume {
                     cells: [TilePos::new(HexCoord::from_axial(i, 70), 1)].into(),
                 },
@@ -155,7 +155,7 @@ fn expedition_missing_extra_or_unfit_site_refuses_the_entire_roster() {
                 site.deployment.surfaces = [site.deployment.preferred].into();
             }
             _ => {
-                sites.fountains.remove("forest_spring_01");
+                sites.fountains.remove("forest_fountain_01");
             }
         }
         session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
