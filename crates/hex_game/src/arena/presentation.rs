@@ -3,7 +3,7 @@
 use super::{ArenaCamera, ViewState};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use hex_arena::{preview, ArenaSession, ArenaTuning, Species, Spell};
+use hex_arena::{preview, ArenaSession, ArenaTuning, ExpeditionRole, Species, Spell};
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 
 #[derive(Component)]
@@ -122,7 +122,7 @@ pub(super) fn actors(
             *visibility = actor_visibility;
             continue;
         }
-        let (cloth, skin) = match actor.species {
+        let (mut cloth, mut skin) = match actor.species {
             Species::Human => (Color::srgb(0.12, 0.57, 0.68), Color::srgb(0.83, 0.67, 0.48)),
             Species::Shadow => (Color::srgb(0.83, 0.22, 0.16), Color::srgb(0.83, 0.67, 0.48)),
             Species::Dragon => (
@@ -135,6 +135,21 @@ pub(super) fn actors(
             Species::Wisp => (Color::srgb(1.0, 0.45, 0.1), Color::srgb(1.0, 0.85, 0.4)),
             Species::Worm => (Color::srgb(0.69, 0.43, 0.27), Color::srgb(0.60, 0.36, 0.24)),
         };
+        match actor.expedition_role() {
+            Some(ExpeditionRole::BabyGoblin) => {
+                cloth = Color::srgb(0.47, 0.37, 0.19);
+                skin = Color::srgb(0.54, 0.70, 0.29);
+            }
+            Some(ExpeditionRole::Troll) => {
+                cloth = Color::srgb(0.39, 0.16, 0.10);
+                skin = Color::srgb(0.24, 0.38, 0.19);
+            }
+            Some(ExpeditionRole::MountainShadow) => {
+                cloth = Color::srgb(0.24, 0.16, 0.36);
+                skin = Color::srgb(0.50, 0.42, 0.61);
+            }
+            _ => {}
+        }
         let palette = [
             if super::spectator::active(&session) {
                 super::spectator::team_color(&session, actor.team)

@@ -93,6 +93,93 @@ fn distribution(mut samples: Vec<f64>) -> serde_json::Value {
     })
 }
 
+/// Geometry/roster proxy checkpoint only. Rewards, populated forest performance
+/// and final visual/native acceptance have separate, still-pending gates.
+#[test]
+#[ignore = "requires HEX_FOREST_WORLD pointing at the compiled expedition and companion"]
+fn authored_expedition_proxy_has_115_supported_actors_and_resets() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .insert_resource(ArenaSelection {
+            map: ArenaMap::ForestMassif,
+            ..default()
+        })
+        .add_plugins((hex_map::arena::plugin, hex_arena::plugin));
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    let setup = Instant::now();
+    app.update();
+    assert!(
+        app.world().contains_resource::<ArenaTerrainView>(),
+        "expedition world/companion rejected"
+    );
+    tick(&mut app);
+    let setup_ms = setup.elapsed().as_secs_f64() * 1000.0;
+    let inspect = |app: &App| {
+        let world = app.world().resource::<ArenaTerrainView>();
+        let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+        let session = app.world().resource::<ArenaSession>();
+        assert!(
+            world.expedition.is_some(),
+            "fixture needs the expedition package"
+        );
+        assert_eq!(world.columns.len(), 105_469);
+        assert_eq!(session.actors.len(), 115, "{}", session.notice);
+        assert_eq!(session.parties().len(), 19);
+        assert_eq!(
+            session
+                .parties()
+                .iter()
+                .map(|party| party.living)
+                .collect::<Vec<_>>(),
+            [3, 3, 3, 3, 3, 5, 5, 5, 9, 9, 11, 14, 16, 20, 1, 1, 1, 1, 1]
+        );
+        let mut roles = BTreeMap::<String, usize>::new();
+        for actor in &session.actors {
+            assert!(
+                session.actor_pose_valid(actor.id, world, geometry),
+                "unsupported {} at {:?}",
+                actor.id,
+                actor.feet
+            );
+            if let Some(role) = actor.expedition_role() {
+                *roles.entry(format!("{role:?}")).or_default() += 1;
+            }
+        }
+        assert_eq!(roles.get("BabyGoblin"), Some(&15));
+        assert_eq!(roles.get("Goblin"), Some(&92));
+        assert_eq!(roles.get("Shaman"), Some(&2));
+        assert_eq!(roles.get("Troll"), Some(&1));
+        assert_eq!(roles.get("Dragon"), Some(&3));
+        assert_eq!(roles.get("MountainShadow"), Some(&1));
+        assert!(!session.is_finished());
+        session
+            .actors
+            .iter()
+            .map(|actor| (actor.id, actor.species, actor.feet))
+            .collect::<Vec<_>>()
+    };
+    let initial = inspect(&app);
+    let mut samples = Vec::new();
+    for _ in 0..120 {
+        let start = Instant::now();
+        tick(&mut app);
+        samples.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let reset = Instant::now();
+    app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    tick(&mut app);
+    assert_eq!(inspect(&app), initial);
+    println!(
+        "EXPEDITION_PROXY_RECEIPT {}",
+        serde_json::json!({
+            "actors": 115, "parties": 19, "setup_ms": setup_ms,
+            "reset_ms": reset.elapsed().as_secs_f64() * 1000.0,
+            "bridge_start_ticks": distribution(samples),
+            "scope": "terrain-only proxy spawn/reset and idle simulation CPU; no forest/rally/renderer/FPS claim"
+        })
+    );
+}
+
 /// Load the operator's compiled package (HEX_FOREST_WORLD or the default compiled
 /// directory), prove real spawn/reset composition, then measure a bounded synthetic
 /// workload. Only the human receives extra HP and moves among validated camp poses;

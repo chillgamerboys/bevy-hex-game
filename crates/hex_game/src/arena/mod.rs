@@ -1632,7 +1632,7 @@ fn capture_frame(
             "end": beam.end.to_array(), "radius": beam.radius, "tracking": beam.tracking
         }));
         serde_json::json!({
-            "id": actor.id, "species": actor.species, "team": actor.team,
+            "id": actor.id, "species": actor.species, "expedition_role": actor.expedition_role(), "team": actor.team,
             "party": actor.party, "hp": actor.hp, "max_hp": actor.max_hp,
             "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
             "body_center": actor.center().to_array(), "worm": actor.worm(),
