@@ -18,10 +18,10 @@ pub(super) struct ExpeditionVisualAssets {
 }
 
 #[derive(Component)]
-struct RewardVisual(ExpeditionReward, u64);
+pub(super) struct RewardVisual(ExpeditionReward, u64);
 
 #[derive(Component)]
-struct PoolVisual {
+pub(super) struct PoolVisual {
     name: String,
     generation: u64,
 }
