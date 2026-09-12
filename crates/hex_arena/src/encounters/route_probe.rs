@@ -209,7 +209,7 @@ mod tests {
         };
         let mut view = ArenaTerrainView::default();
         for coord in HexCoord::ORIGIN.within_radius(4) {
-            let level = i32::from(coord.x <= 0);
+            let level = i32::from(coord.x() <= 0);
             view.voxels
                 .insert(TilePos::new(coord, level), SubstanceId(1));
         }
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn endpoint_settlement_does_not_accept_missing_support_or_excess_waypoints() {
         let (mut session, mut view, geometry, points) = descending_tread(Species::Human);
-        view.voxels.retain(|pos, _| pos.coord.x <= 0);
+        view.voxels.retain(|pos, _| pos.coord.x() <= 0);
         view.revision += 1;
         session.collision.refresh(&view, geometry);
         let result =

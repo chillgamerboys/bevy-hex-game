@@ -1850,8 +1850,8 @@ mod tests {
             ),
             (
                 9_966_260_057_205_757_992,
-                7_928_903_692_716_951_412,
-                16_690_941_040_798_035_421,
+                17_319_223_087_185_095_027,
+                16_357_189_345_045_999_986,
             )
         );
         // Explicit authored roster: the 25 legacy blueprints remain byte-semantically
@@ -1866,31 +1866,31 @@ mod tests {
             (id("plant/forest-broadleaf-3"), 2_283_163_377_877_197_961),
             (
                 id("plant/forest-expedition-ancient-1"),
-                10_248_136_203_936_808_091,
+                1_858_439_021_045_733_138,
             ),
             (
                 id("plant/forest-expedition-ancient-2"),
-                16_203_574_125_959_892_247,
+                8_298_335_089_602_804_634,
             ),
             (
                 id("plant/forest-expedition-ancient-3"),
-                18_095_867_062_456_779_917,
+                17_283_025_157_237_757_730,
             ),
             (
                 id("plant/forest-expedition-heart"),
-                2_143_223_413_901_772_906,
+                16_890_608_362_553_751_209,
             ),
             (
                 id("plant/forest-expedition-landmark-1"),
-                13_423_405_750_920_239_925,
+                9_913_278_377_727_603_037,
             ),
             (
                 id("plant/forest-expedition-landmark-2"),
-                2_141_223_339_959_681_076,
+                1_891_893_116_683_024_562,
             ),
             (
                 id("plant/forest-expedition-landmark-3"),
-                10_350_179_044_564_882_206,
+                4_663_744_922_505_567_101,
             ),
             (
                 id("plant/forest-expedition-understory-broadleaf-1"),

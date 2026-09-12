@@ -357,7 +357,8 @@ mod tests {
             );
             let target = step.to_world(geometry.top(TilePos::new(step, 46)));
             for _ in 0..40 {
-                body.tick(&mut feet, (target - feet).with_y(0.0), true, false, &world);
+                let direction = (target - feet).with_y(0.0);
+                body.tick(&mut feet, direction, true, false, &world);
                 assert!(
                     world.clear(feet, BODY_HEIGHT, BODY_RADIUS),
                     "later stride embedded: {feet:?}"

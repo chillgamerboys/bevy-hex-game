@@ -63,3 +63,11 @@ and branching reference, not a complete silhouette or measurable size reference.
 The expedition keeps its own voxel blueprints, tapered roots and taller crown form;
 no reference asset or distinctive exact tree shape is copied. This observation
 supersedes the earlier unsuccessful wiki/reference-search notes.
+
+## First composed pack and repair candidate, September12
+
+Exact source `ccc5847b7d68cb4d0c3c51af46e15bc126872358`, package f06, produced all26 frames. Root and an independent reviewer inspected every full-resolution original and the contact sheet. Static verdict: **FAIL (13PASS,10FAIL,3BLOCKED)**. The full review and hashes are in `.context/expedition-review-ccc5847-first/ccc5847b7d68cb4d0c3c51af46e15bc126872358-forest-expedition-v2-rewards/independent-static-review.md` and the sibling JSON/receipt.
+
+Failures include near-black canopy floors, large-tree trunk/crown regularity, opaque mint fountain caps and clipped feature cameras. Source `028894e` increases forest ambient from240 to1100, reduces directional light7400 to6000, replaces the closed cap prism with one translucent hex surface per water column and revises bridge/arena/fountain cameras. Seven large-tree assets now have taper, staggered bark, flared roots, exposed rising limbs and asymmetric lobed crowns; package **a538263d612e891f** retains67.0088% canopy. These repairs are **unrendered**, and old frames do not validate them.
+
+Bridge deck slashes align with actual one-level tread shadows; source audit found one terrain owner and no duplicate deck faces. Do not change arch geometry or blanket-remove legitimate faces without new evidence. Low bridge compositions and brighter fill must be inspected first. Native review remains HUMAN-MOTION-PENDING because the Mac is locked.
