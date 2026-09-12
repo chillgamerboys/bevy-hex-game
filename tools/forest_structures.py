@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Callable, Iterable
+from typing import Callable
 
 DIRECTIONS = ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))
 STONE = "expedition/stone"
@@ -252,6 +252,146 @@ def placement(shape, id, anchor, *, raw, rotation=0, clear_columns=()):
             "occupied_world": tuple(occupied), "reserved_columns": tuple(sorted(lowest)),
             "clear_columns": tuple(sorted(clear_columns)), "foundation_levels": foundations,
             "overhead_clearance": 4}
+
+
+def _world_piece(name, voxels, foundations, *, raw, clear_columns=()):
+    """Normalize an exact world assembly without flattening its graded footings."""
+    floor = min(p[2] for p in voxels)
+    origin = min(p for p in voxels if p[2] == floor)
+    local = {(q - origin[0], r - origin[1], z - floor): style
+             for (q, r, z), style in voxels.items()}
+    shape = Shape.create(name, local, (0, 0, 0))
+    placed = placement(shape, name, (*origin[:2], floor - 1), raw=raw,
+                       clear_columns=clear_columns)
+    for (q, r), level in foundations.items():
+        if (q, r, level + 1) not in voxels or (q, r, level) in voxels:
+            raise ValueError(f"{name}: declared footing is not immediately below geometry")
+    if origin[:2] not in foundations or foundations[origin[:2]] != floor - 1:
+        raise ValueError(f"{name}: origin requires a real terrain footing")
+    placed["foundation_levels"] = dict(sorted(foundations.items()))
+    return placed
+
+
+def bridge_assembly(surfaces, *, raw):
+    """Two open portal gates and graded parapets on the nontravel bridge ledges.
+
+    ``surfaces`` must come from the compiled bridge, including q=-27..27,
+    r=-5..5. The V4 deck has half_width5 and walkway_half_width4. No geometry
+    occupies the four-level movement ribbon; no support enters the river.
+    """
+    travel = {(q, r) for q in range(-27, 28) for r in range(-4, 5)}
+    required = travel | {(q, r) for q in range(-27, 28) for r in (-5, 5)}
+    if not required <= surfaces.keys():
+        raise ValueError("bridge assembly requires the final deck support survey")
+    pieces = []
+    # Each rail fits the radius32 artifact bound and stops at the portal piers.
+    segments = ((-27, -25), (-21, -1), (0, 21), (25, 27))
+    for side in (-5, 5):
+        for index, (start, end) in enumerate(segments):
+            voxels, footings = {}, {}
+            for q in range(start, end + 1):
+                support = surfaces[q, side]
+                footings[q, side] = support
+                height = 7 if q % 4 == 0 else 4
+                for z in range(support + 1, support + 1 + height):
+                    voxels[q, side, z] = EDGE if z in (support + 1, support + 4) else STONE
+            pieces.append(_world_piece(f"bridge-rail-{side:+}-{index}", voxels, footings,
+                                       raw=raw, clear_columns=travel))
+    for gate in (-23, 23):
+        voxels = {}
+        footings = {(q, r): surfaces[q, r] for q in range(gate - 1, gate + 2) for r in (-5, 5)}
+        top = max(footings.values()) + 27
+        for (q, r), support in footings.items():
+            for z in range(support + 1, top):
+                voxels[q, r, z] = EDGE if z % 7 == 0 else (DARK if q == gate - 1 else STONE)
+        for q in range(gate - 1, gate + 2):
+            for r in range(-5, 6):
+                bottom = top - 9 + (5 - abs(r)) // 2
+                crown = top + (3 if abs(r) in (0, 5) else 0)
+                for z in range(bottom, crown):
+                    voxels[q, r, z] = EDGE if z == bottom or r == 0 else STONE
+        pieces.append(_world_piece(f"bridge-portal-{gate:+}", voxels, footings,
+                                   raw=raw, clear_columns=travel))
+    validate_assembly(pieces, surfaces=surfaces, clearance=4)
+    return pieces
+
+
+def arena_assembly(center, walls, gate, wall_top, surfaces, *, raw, clear_columns=()):
+    """Crenellated wall crown, open arched gate and surveyed exposed buttresses.
+
+    ``walls`` and ``gate`` are the exact terrain footprints from the global plan.
+    The accepted arena keeps interior radius12 and a western gate at offset(-14,7).
+    Its terrain jambs remain the load-bearing supports for the elevated arch.
+    """
+    center = center[:2]
+    walls, gate = set(walls), set(gate)
+    interior = disk(center, 12)
+    clear = set(clear_columns) | interior | gate
+    q0, r0 = center
+    jambs = {(q0 + q, r0 + r) for q in range(-15, -12) for r in (2, 12)}
+    if not jambs <= walls or any(surfaces.get(p) != wall_top for p in walls):
+        raise ValueError("arena ornament requires the published wall and jamb supports")
+    voxels = {}
+    crown_columns = walls - jambs
+    for q, r in sorted(crown_columns):
+        top = wall_top + (8 if (q - q0 + 2 * (r - r0)) % 4 == 0 else 3)
+        for z in range(wall_top + 1, top + 1):
+            voxels[q, r, z] = EDGE if z == wall_top + 1 else (MOSS if z == top and (q + r) % 5 == 0 else STONE)
+    pieces = [_world_piece("arena-wall-crown", voxels, {p: wall_top for p in crown_columns},
+                           raw=raw, clear_columns=clear)]
+    voxels = {}
+    for q in range(q0 - 15, q0 - 12):
+        for r in range(r0 + 2, r0 + 13):
+            arch = min(r - (r0 + 2), (r0 + 12) - r)
+            bottom = wall_top + 1 + arch
+            top = wall_top + 12 + (3 if r == r0 + 7 else 0)
+            for z in range(bottom, top):
+                voxels[q, r, z] = EDGE if z == bottom or r == r0 + 7 else STONE
+    pieces.append(_world_piece("arena-open-gate", voxels, {p: wall_top for p in jambs},
+                               raw=raw, clear_columns=clear))
+    for index, (dq, dr) in enumerate(DIRECTIONS):
+        footing = {p for p in disk((q0 + 16 * dq, r0 + 16 * dr), 1)
+                   if distance(p, center) > 15}
+        if footing & clear:
+            continue
+        if not footing <= surfaces.keys():
+            raise ValueError(f"arena buttress {index} requires a final terrain support survey")
+        top = wall_top + 7
+        if any(surfaces[p] >= top - 3 for p in footing):
+            # A mountain can already support this corner up to its wall crest.
+            # Do not manufacture a tall pedestal or cut that terrain for ornament.
+            continue
+        voxels = {}
+        for q, r in sorted(footing):
+            support = surfaces[q, r]
+            for z in range(support + 1, top):
+                outer = distance((q, r), center) == 17
+                if outer and z > top - 9:
+                    continue
+                voxels[q, r, z] = EDGE if z in (support + 1, top - 10, top - 2) else (DARK if outer else STONE)
+        pieces.append(_world_piece(f"arena-buttress-{index}", voxels,
+                                   {p: surfaces[p] for p in footing}, raw=raw, clear_columns=clear))
+    validate_assembly(pieces, surfaces=surfaces, clearance=4)
+    return pieces
+
+
+def validate_assembly(pieces, *, surfaces, clearance):
+    """Reject overlaps, floating footings and terrain/declared-route collisions."""
+    occupied = set()
+    for piece in pieces:
+        for p, level in piece["foundation_levels"].items():
+            if surfaces.get(p) != level:
+                raise ValueError(f'{piece["id"]}: footing differs from authoritative surface')
+        clear = set(piece["clear_columns"])
+        for q, r, z in piece["occupied_world"]:
+            voxel, p = (q, r, z), (q, r)
+            if voxel in occupied:
+                raise ValueError(f'{piece["id"]}: overlapping assembly geometry')
+            occupied.add(voxel)
+            if p not in surfaces:
+                raise ValueError(f'{piece["id"]}: occupied column lacks a surface survey')
+            if z <= surfaces[p] or (p in clear and z <= surfaces[p] + clearance):
+                raise ValueError(f'{piece["id"]}: geometry blocks terrain or required movement clearance')
 
 
 def catalog(*, raw):
