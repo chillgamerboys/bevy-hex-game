@@ -1,4 +1,5 @@
 """Structural acceptance for expedition tree authoring, independent of rendering."""
+from collections import Counter
 import random
 import unittest
 
@@ -77,6 +78,33 @@ class ForestTrees(unittest.TestCase):
                     upper = sum(c.level == int(geometry.height * .40) and c.part == "Trunk"
                                 for c in geometry.cells)
                     self.assertGreater(bottom, upper)
+
+    def test_large_boles_have_staggered_contours_instead_of_long_stacked_cylinders(self):
+        for key, geometry in self.corpus.items():
+            if geometry.height <= 34:
+                continue
+            with self.subTest(tree=key):
+                area = Counter(c.level for c in geometry.cells if c.part != "Foliage")
+                # Inspect the bare lower bole, before any major branch begins.
+                # Several distinct contours are needed for a visible gradual
+                # flare; the former integer-radius cylinders fail this check.
+                contours = {area[level] for level in range(2, round(geometry.height * .23))}
+                minimum = 4 if geometry.height < 80 else (8 if geometry.height < 150 else 16)
+                self.assertGreaterEqual(len(contours), minimum)
+                root_bound = 3 if geometry.height < 80 else (5 if geometry.height < 150 else 7)
+                self.assertTrue(all(max(abs(q), abs(r), abs(q+r)) <= root_bound
+                                    for q,r in geometry.roots))
+
+    def test_large_structural_boughs_are_exposed_below_the_foliage(self):
+        for key, geometry in self.corpus.items():
+            if geometry.height <= 34:
+                continue
+            with self.subTest(tree=key):
+                leaf_floor = min(c.level for c in geometry.cells if c.part == "Foliage")
+                exposed = [c for c in geometry.cells if c.part == "Branch" and c.level < leaf_floor - 2]
+                minimum = 4 if geometry.height < 80 else (30 if geometry.height < 150 else 100)
+                self.assertGreaterEqual(len(exposed), minimum)
+                self.assertGreater(len({(c.q,c.r) for c in exposed}), 1)
 
     def test_heart_is_uniquely_tall_with_a_narrower_deeper_crown(self):
         heart = self.corpus["heart", 0]
