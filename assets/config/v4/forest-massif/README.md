@@ -11,13 +11,31 @@ root separations of 10, 18 and 30 units. The central Heart Tree is 60.2 units ta
 (172 exact .35-unit voxel levels) and reserves 48 units from other roots. The ten
 catalog blueprints contain actual occupied voxels, not render-only scaling. They
 require the shared blueprint height limit of 192 levels while remaining within
-the existing radius-12 and 8,192-voxel limits.
+the shared radius-32 and 65,536-voxel limits. Crown radii are 4, 7, 13 and
+24 hex columns; all 275 original trunk positions remain fixed. Overlapping crown
+footprints use disjoint height bands, never overlapping solid voxels.
 
 The north–south river reaches both map edges. Its water surface is level 34 with
 12 occupied liquid levels. One 49-column-long, seven-column-wide stone bridge
 crosses at level 48; water and air remain below its two-level deck. The eastern
 massif has three limestone combat shelves at levels 80, 130 and 190, joined by
-graded trails. Forest clearings and routes remain free of tree occupancy.
+graded trails. Its main body and crown relief are 20% taller, with offset ridge
+centers, two carved valleys and four companion peaks to the north, east,
+southeast and south. Shelf heights and every original route grade are unchanged.
+Forest clearings and routes remain free of ground tree occupancy; the explicit
+`overhead_clearance: Some(8)` authoring policy allows crowns at least eight clear
+levels (2.8 world units) overhead while refusing actual object voxel overlaps.
+
+The reproducible forest planting/coverage domain is q in [-171,19], r in
+[-122,162], axial hex distance at most 171, and q+r/2 < -28: 30,291 land columns,
+including all camps, trails and clearings within it. It covers the three planted
+forest biomes; it is not the whole western grass border. `authoring.json` reports
+actual union coverage from exact foliage voxels: 20,957 / 30,291 = 69.1856%,
+with no overlap-area double counting. It also records the secondary coverage of
+all western land at q+r/2 < -28 within radius187, including unplanted border:
+21,856 / 42,141 = 51.8640%.
+`trunk-layout.json` preserves the accepted horizontal root layout. The generator
+independently rejects all exact voxel overlaps and requires primary coverage >=50%.
 
 ## Build and verify
 
@@ -38,11 +56,13 @@ validates final stacked geometry and protected constraints before publishing.
 `verify-package` uses the verified compiler's real runtime query command for all
 375 river centerline rows, every named supported anchor and the complete Heart
 Tree occupancy. It requires a single seven-row bridge crossing and writes
-`compiled/content-verification.json`.
+`compiled/content-verification.json`. It also queries every tree root and unions
+the actual compiled foliage columns, verifies both coverage domains and rejects
+any occupied voxel overlap; the receipt is `compiled/canopy-verification.json`.
 
 `check` independently checks emitted voxel connectivity, exact stock provenance,
 deterministic generated files and pairwise root spacing. Stock exports reference
-blueprint commit `18493cea8201d80c1d85f5aaf82ff85b0ea6c0ad`. If tree geometry is edited,
+blueprint commit `9233a82e9a80aa32c4d2856dde6c021b89006245`. If tree geometry is edited,
 commit the blueprints first, update `BLUEPRINT_SOURCE_REV` in the authoring helper,
 and regenerate the source so provenance remains truthful. Ordinary map root,
 biome, route, landmark or material changes do not need a compiler rebuild.
@@ -77,7 +97,7 @@ authority and are not duplicated in the map source.
 
 All materials except `water` are solid; `bedrock` and `water` are not diggable.
 The terrain registry includes `stone` for gameplay-created shields even though
-the base recipe uses basalt/limestone. Tree trunk/branch styles map to `timber`;
+the base terrain uses basalt/limestone and the bridge uses stone. Tree trunk/branch styles map to `timber`;
 all three foliage styles map to solid `foliage`. Rendering uses the original
 style colors and exact geometry; gameplay must not silently turn canopy into air.
 

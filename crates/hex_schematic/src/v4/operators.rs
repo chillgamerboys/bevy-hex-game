@@ -758,6 +758,16 @@ pub(super) fn decorate(
     region_id: &str,
     seed: u64,
 ) -> OpResult<()> {
+    let ground_reserved = build.reserved.clone();
+    let mut occupied: BTreeMap<WorldHex, Vec<VoxelRun>> = BTreeMap::new();
+    for object in &build.semantics.objects {
+        for column in &object.occupancy {
+            occupied
+                .entry(column.position)
+                .or_default()
+                .extend(column.runs.clone());
+        }
+    }
     for rule in &recipe.features {
         let mut roots: BTreeSet<_> = rule.roots.iter().copied().collect();
         for p in geometry::disk(rule.mask.center, rule.mask.radius)? {
@@ -769,7 +779,12 @@ pub(super) fn decorate(
         }
         for root in roots {
             let explicit = rule.roots.contains(&root);
-            if build.reserved.contains(&root) || !build.columns.contains_key(&root) {
+            let root_reserved = if rule.overhead_clearance.is_some() {
+                ground_reserved.contains(&root)
+            } else {
+                build.reserved.contains(&root)
+            };
+            if root_reserved || !build.columns.contains_key(&root) {
                 if explicit {
                     return Err(format!(
                         "explicit feature {} root is reserved/outside at {root:?}",
@@ -800,7 +815,20 @@ pub(super) fn decorate(
                     rejected = true;
                     break;
                 };
-                if build.reserved.contains(&p)
+                let reserved = match rule.overhead_clearance {
+                    Some(clearance) if ground_reserved.contains(&p) => {
+                        let (surface, _) = terrain(build, p)?;
+                        i64::from(candidate.bottom) < i64::from(surface) + 1 + i64::from(clearance)
+                    }
+                    Some(_) => false,
+                    None => build.reserved.contains(&p),
+                };
+                let intersects_object = occupied.get(&p).is_some_and(|runs| {
+                    runs.iter()
+                        .any(|old| old.bottom < candidate.top && candidate.bottom < old.top)
+                });
+                if reserved
+                    || intersects_object
                     || existing
                         .iter()
                         .any(|old| old.bottom < candidate.top && candidate.bottom < old.top)
@@ -823,6 +851,7 @@ pub(super) fn decorate(
             let mut object_columns = Vec::new();
             for (p, runs) in occupancy {
                 let canonical = volume::canonicalize(runs)?;
+                occupied.entry(p).or_default().extend(canonical.clone());
                 object_columns.push(ColumnData {
                     position: p,
                     runs: canonical,

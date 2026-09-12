@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "assets/config/v4/forest-massif"
 SOURCE = CONTENT / "world.ron"
 LEVEL_HEIGHT = .35
-BLUEPRINT_SOURCE_REV = "18493cea8201d80c1d85f5aaf82ff85b0ea6c0ad"
+BLUEPRINT_SOURCE_REV = "9233a82e9a80aa32c4d2856dde6c021b89006245"
 SEED = 20260911
 RADIUS = 187
 GIANT = (-143, 5)
@@ -88,7 +88,7 @@ def tree(name, height, radius, pine=False):
     """Connected solid voxel crowns and branches over a walkable open understory."""
     voxels = {}
     trunk_radius = 2 if name.endswith("heart") else (1 if height >= 80 else 0)
-    crown_depth = 18 if height >= 150 else (22 if height >= 80 else max(8, height // 3))
+    crown_depth = 13 if height >= 80 else (9 if pine else 5)
     crown_start = height - crown_depth
     for q in range(-radius, radius + 1):
         for r in range(-radius, radius + 1):
@@ -98,19 +98,14 @@ def tree(name, height, radius, pine=False):
                     voxels[q, r, level] = ("plant/trunk", "Root" if level == 0 else "Trunk")
             if d > radius:
                 continue
-            # Slightly asymmetric tiers keep the silhouette authored and legible.
+            # Layered crown tiers keep the silhouette authored and legible.
             for level in range(crown_start, height):
                 t = (level - crown_start) / max(1, crown_depth - 1)
                 width = radius * (1 - t * .8) if pine else radius * math.sqrt(max(0, 1 - (2 * t - 1) ** 2))
                 if d <= max(.1, width):
                     color = "dark" if t < .3 else ("mid" if t < .72 else "light")
                     voxels.setdefault((q, r, level), (f"plant/foliage-{color}", "Foliage"))
-    # A connected wooden branch tier gives every crown column a grounded path.
-    branch_level = crown_start + crown_depth // 2
-    for (q, r, level), (_, part) in list(voxels.items()):
-        if level == branch_level and dist((q, r)) <= max(1, radius - 1):
-            voxels[q, r, level] = ("plant/trunk", "Branch")
-    assert len(voxels) <= 8192, (name, len(voxels))
+    assert len(voxels) <= 65536, (name, len(voxels))
     placements = [{"position": {"q": q, "r": r, "level": level}, "style": style,
                    "part": Raw(f"Plant({part})")} for (q, r, level), (style, part) in sorted(voxels.items())]
     blueprint = {"schema_version": 1, "id": f"plant/{name}",
@@ -151,11 +146,11 @@ def point_segment_distance(point, start, end):
 
 def documents():
     trees = {}
-    for band, heights, radius in [("broadleaf", (18, 23, 28), 2), ("pine", (40, 51, 62), 3), ("ancient", (80, 97, 114), 6)]:
+    for band, heights, radius in [("broadleaf", (18, 23, 28), 4), ("pine", (40, 51, 62), 7), ("ancient", (80, 97, 114), 13)]:
         for index, height in enumerate(heights):
             name = f"forest-{band}-{index + 1}"
             trees[name] = tree(name, height, radius, pine=band == "pine")
-    trees["forest-heart"] = tree("forest-heart", 172, 12)
+    trees["forest-heart"] = tree("forest-heart", 172, 24)
     forest_routes = [route("forest-spine", [ANCHORS[key] for key in ("party_start", "forest_outer_a", "forest_middle", "forest_deep_a")], 2, "moss"),
                      route("outer-clearing-trail", [ANCHORS["forest_outer_a"], ANCHORS["forest_outer_b"]], 2, "grass"),
                      route("ancient-trail", [ANCHORS["forest_middle"], ANCHORS["forest_deep_b"], (-125, -5, 40)], 2, "moss"),
@@ -167,30 +162,26 @@ def documents():
         route("massif-middle-shelf", [(106, -25, 130), (130, -25, 130)], material="limestone"),
         route("massif-upper-ascent", [(130, -25, 130), (162, -59, 160), (125, -77, 190)]),
         route("massif-upper-shelf", [(125, -77, 190), (101, -77, 190)], material="limestone")]
-    candidates = [(q, r) for q in range(-171, 20) for r in range(-122, 163)
-                  if dist((q, r)) <= 171 and q + r / 2 < -28]
-    random.Random(SEED).shuffle(candidates)
+    # Trunks are frozen authoring inputs. Color overlapping crown footprints
+    # into disjoint height bands; no two objects occupy the same voxel.
+    layout = json.loads((CONTENT / "trunk-layout.json").read_text())
     roots = {name: [] for name in trees}
+    for band, radius in [("broadleaf", 4), ("pine", 7), ("ancient", 13)]:
+        points = sorted(tuple(p) for p in layout[band])
+        adjacent = {a: {b for b in points if a != b and dist(a, b) <= radius * 2} for a in points}
+        colors = {}
+        while len(colors) < len(points):
+            point = max((p for p in points if p not in colors), key=lambda p: (
+                len({colors[n] for n in adjacent[p] if n in colors}), len(adjacent[p]), p))
+            used = {colors[n] for n in adjacent[point] if n in colors}
+            colors[point] = next(c for c in range(3) if c not in used)
+        if band == "ancient":
+            colors[min(points)] = 2  # Keep the tallest ordinary ancient variant present.
+        for point, color in colors.items():
+            roots[f"forest-{band}-{color + 1}"].append(point)
     roots["forest-heart"] = [GIANT]
-    selected = [(GIANT, 48, "forest-heart")]
-    segments = [(tuple(p["column"].values()), tuple(n["column"].values()))
-                for road in forest_routes for p, n in zip(road["points"], road["points"][1:])]
-    for p in candidates:
-        band = "ancient" if min(dist(p, (-132, 30)), dist(p, (-123, -9)) + 10) <= 45 else ("pine" if dist(p, (-83, 25)) <= 60 else "broadleaf")
-        spacing = {"broadleaf": 10, "pine": 18, "ancient": 30}[band]
-        radius = {"broadleaf": 2, "pine": 3, "ancient": 6}[band]
-        if any(worlddist(p, anchor) < 15 + radius * 1.74 for anchor in ANCHORS.values() if anchor[0] < 0):
-            continue
-        if any(point_segment_distance(p, a, b) < 10 + radius * 1.74 for a, b in segments):
-            continue
-        if point_segment_distance(p, (-54, 0), (-24, 0)) < 15 + radius * 1.74:
-            continue
-        if any(worlddist(p, other) < max(spacing, other_spacing) for other, other_spacing, _ in selected):
-            continue
-        index = int(hashlib.sha256(f"{p}/{SEED}".encode()).hexdigest()[:8], 16) % 3 + 1
-        name = f"forest-{band}-{index}"
-        roots[name].append(p)
-        selected.append((p, spacing, name))
+    selected = [(p, {"broadleaf": 10, "pine": 18, "ancient": 30, "heart": 48}[name.split("-")[1]], name)
+                for name, positions in roots.items() for p in positions]
     features = []
     outputs = {}
     for name, (blueprint, intervals) in trees.items():
@@ -200,7 +191,7 @@ def documents():
         features.append({"id": name, "kind": "tree", "asset": f"plant/{name}",
                          "provenance": Raw("Some(" + ron({"source_path": path, "source_revision": BLUEPRINT_SOURCE_REV, "style_materials": mapping(STYLES)}) + ")"),
                          "mask": disk((0, 0), 187), "density": 0,
-                         "roots": [hexpos(*p) for p in sorted(roots[name])], "voxels": intervals})
+                         "roots": [hexpos(*p) for p in sorted(roots[name])], "overhead_clearance": Raw("Some(8)"), "voxels": intervals})
     colors = {"bedrock": (33, 38, 42, 255), "basalt": (76, 88, 101, 255), "soil": (98, 76, 49, 255),
               "grass": (105, 141, 72, 255), "moss": (49, 91, 57, 255), "pine-floor": (78, 98, 60, 255),
               "sand": (160, 155, 113, 255), "snow": (219, 231, 235, 255), "gravel": (126, 131, 120, 255),
@@ -210,15 +201,25 @@ def documents():
     recipe = {"base_level": 40,
               "strata": {"bedrock": "bedrock", "rock": "basalt", "soil": "soil", "soil_depth": 4, "surface": "grass"},
               "landforms": [
-                  {"id": "massif-body", "centers": [hexpos(120, -55)], "radius": 83, "plateau_radius": 12, "rise": 175, "relief": 4},
-                  {"id": "massif-crown", "centers": [hexpos(132, -93), hexpos(145, -90)], "radius": 42, "plateau_radius": 3, "rise": 110, "relief": 7},
-                  {"id": "dragon-lower-buttress", "centers": [hexpos(68, 25)], "radius": 34, "plateau_radius": 12, "rise": 40, "relief": 0}],
+                  {"id": "massif-body", "centers": [hexpos(120, -55)], "radius": 83, "plateau_radius": 12, "rise": 210, "relief": 7},
+                  {"id": "massif-crown", "centers": [hexpos(132, -93), hexpos(143, -101), hexpos(149, -86)], "radius": 42, "plateau_radius": 3, "rise": 132, "relief": 9},
+                  {"id": "dragon-lower-buttress", "centers": [hexpos(68, 25)], "radius": 34, "plateau_radius": 12, "rise": 40, "relief": 0},
+                  {"id": "north-companion", "centers": [hexpos(108, -136), hexpos(113, -137)], "radius": 33, "plateau_radius": 2, "rise": 85, "relief": 6},
+                  {"id": "east-companion", "centers": [hexpos(164, -46)], "radius": 22, "plateau_radius": 1, "rise": 95, "relief": 5},
+                  {"id": "southeast-companion", "centers": [hexpos(127, 36)], "radius": 22, "plateau_radius": 2, "rise": 85, "relief": 7},
+                  {"id": "south-companion", "centers": [hexpos(55, 100), hexpos(61, 94)], "radius": 30, "plateau_radius": 2, "rise": 105, "relief": 8},
+                  {"id": "western-ravine", "centers": [hexpos(96, -65), hexpos(103, -77)], "radius": 24, "plateau_radius": 0, "rise": -45, "relief": 2},
+                  {"id": "crown-cleft", "centers": [hexpos(147, -103)], "radius": 21, "plateau_radius": 0, "rise": -35, "relief": 3}],
               "biomes": [
                   {"id": "pine-uplands", "mask": disk((-83, 25), 60), "priority": 2, "material": "pine-floor"},
                   {"id": "ancient-mosswood", "mask": disk((-132, 30), 45), "priority": 3, "material": "moss"},
                   {"id": "ancient-fernwood", "mask": disk((-123, -9), 35), "priority": 3, "material": "moss"},
                   {"id": "massif-stone", "mask": disk((100, -38), 83), "priority": 4, "material": "basalt"},
-                  {"id": "massif-snow", "mask": disk((132, -93), 42), "priority": 5, "material": "snow"}],
+                  {"id": "massif-snow", "mask": disk((132, -93), 42), "priority": 5, "material": "snow"},
+                  {"id": "north-stone", "mask": disk((108, -136), 33), "priority": 4, "material": "basalt"},
+                  {"id": "east-stone", "mask": disk((164, -46), 22), "priority": 4, "material": "basalt"},
+                  {"id": "southeast-stone", "mask": disk((127, 36), 22), "priority": 4, "material": "basalt"},
+                  {"id": "south-stone", "mask": disk((55, 100), 30), "priority": 4, "material": "basalt"}],
               "channels": [{"id": "great-river", "points": [grade((87, -174, 34)), grade((-87, 174, 34))],
                             "half_width": 13, "depth": 12, "material": "water", "bed_material": "sand", "bank_width": 6}],
               "routes": routes,
@@ -240,6 +241,39 @@ def documents():
               "tree_count": len(selected), "trees": [{"asset": f"plant/{name}", "height_units": tree_data[0]["bounds"]["height"] * LEVEL_HEIGHT,
                     "voxel_count": len(tree_data[0]["placements"]), "roots": sorted(roots[name])} for name, tree_data in trees.items()],
               "minimum_spacing_units": {"broadleaf": 10, "pine": 18, "ancient": 30, "heart": 48}}
+    mask = {(q, r) for q in range(-171, 20) for r in range(-122, 163)
+            if dist((q, r)) <= 171 and q + r / 2 < -28}
+    canopy = set()
+    occupied = {}
+    for name, (blueprint, _) in trees.items():
+        for root in roots[name]:
+            for placement in blueprint["placements"]:
+                p = placement["position"]
+                # Crowns/cores are sixfold symmetric; compiler root rotations
+                # preserve this occupied-column footprint and interval schedule.
+                position = (root[0] + p["q"], root[1] + p["r"], p["level"])
+                if position in occupied:
+                    raise ValueError(f"overlapping exact object voxels: {position}, {name}, {occupied[position]}")
+                occupied[position] = name
+                if str(placement["part"]) == "Plant(Foliage)":
+                    canopy.add(position[:2])
+    covered = canopy & mask
+    report["canopy_coverage"] = {
+        "mask": {"q_min": -171, "q_max": 19, "r_min": -122, "r_max": 162,
+                 "hex_radius": 171, "q_plus_half_r_exclusive_max": -28},
+        "includes_camps_trails_and_clearings": True,
+        "forest_land_columns": len(mask), "unique_canopy_columns": len(covered),
+        "fraction": len(covered) / len(mask), "minimum_required_fraction": .5,
+        "exact_object_voxels": len(occupied), "actual_voxel_overlaps": 0}
+    western_land = {(q, r) for q in range(-RADIUS, RADIUS + 1)
+                    for r in range(-RADIUS, RADIUS + 1)
+                    if dist((q, r)) <= RADIUS and q + r / 2 < -28}
+    report["canopy_coverage"]["all_western_land_secondary"] = {
+        "mask": {"hex_radius": RADIUS, "q_plus_half_r_exclusive_max": -28},
+        "land_columns": len(western_land),
+        "unique_canopy_columns": len(canopy & western_land),
+        "fraction": len(canopy & western_land) / len(western_land)}
+    assert len(covered) >= len(mask) * .5, report["canopy_coverage"]
     outputs[CONTENT / "authoring.json"] = json.dumps(report, indent=2) + "\n"
     return outputs, report
 
@@ -254,7 +288,7 @@ def check():
             positions = [tuple(map(int, row)) for row in re.findall(
                 r"position:\(q:(-?\d+),r:(-?\d+),level:(\d+)\)", content)]
             occupied = set(positions)
-            assert len(occupied) == len(positions) <= 8192, path.name
+            assert len(occupied) == len(positions) <= 65536, path.name
             reached, frontier = {(0, 0, 0)}, [(0, 0, 0)]
             steps = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0),
                      (1, -1, 0), (-1, 1, 0), (0, 0, 1), (0, 0, -1)]
@@ -283,8 +317,10 @@ def verify_package(target, package):
     """Inspect independently loaded runtime queries across the full river barrier."""
     import world
     binary, identity = world.checked_binary(target.resolve())
+    authoring = json.loads((CONTENT / "authoring.json").read_text())
+    tree_roots = {tuple(p) for tree in authoring["trees"] for p in tree["roots"]}
     points = sorted({point[:2] for point in ANCHORS.values()} |
-                    {(round(-r / 2), r) for r in range(-187, 188)} | {GIANT})
+                    {(round(-r / 2), r) for r in range(-187, 188)} | tree_roots)
 
     def probe(point):
         output = subprocess.check_output([str(binary), "probe", "--package", str(package.resolve()),
@@ -311,6 +347,32 @@ def verify_package(target, package):
     heart = probes[GIANT]["root_objects"]
     assert len(heart) == 1 and heart[0]["asset"] == "plant/forest-heart"
     assert max(run["top"] for column in heart[0]["occupancy"] for run in column["runs"]) == 213
+    objects = {obj["id"]: obj for p in tree_roots for obj in probes[p]["root_objects"]}
+    assert len(objects) == authoring["tree_count"], "compiled tree identity count differs"
+    canopy, occupied = set(), set()
+    for obj in objects.values():
+        for column in obj["occupancy"]:
+            p = column["position"]
+            for run in column["runs"]:
+                cells = {(p["q"], p["r"], level) for level in range(run["bottom"], run["top"])}
+                assert not occupied & cells, f"actual compiled object overlap: {obj['id']}"
+                occupied.update(cells)
+                if run["material"] == "foliage":
+                    canopy.add((p["q"], p["r"]))
+    primary = {(q, r) for q in range(-171, 20) for r in range(-122, 163)
+               if dist((q, r)) <= 171 and q + r / 2 < -28}
+    western = {(q, r) for q in range(-RADIUS, RADIUS + 1) for r in range(-RADIUS, RADIUS + 1)
+               if dist((q, r)) <= RADIUS and q + r / 2 < -28}
+    coverage = authoring["canopy_coverage"]
+    assert len(canopy & primary) == coverage["unique_canopy_columns"]
+    assert len(canopy & western) == coverage["all_western_land_secondary"]["unique_canopy_columns"]
+    assert len(occupied) == coverage["exact_object_voxels"]
+    assert len(canopy & primary) / len(primary) >= .5
+    coverage_receipt = {"status": "PASS", "package_fingerprint": next(iter(fingerprints)),
+                        "source_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
+                        "compiled_objects": len(objects), "method": "Union of exact compiled foliage occupancy queried at every tree root; no summed overlap area.",
+                        **coverage}
+    (package / "canopy-verification.json").write_text(json.dumps(coverage_receipt, indent=2) + "\n")
     assert world.checked_binary(target.resolve())[1] == identity
     receipt = {"world_id": "forest-massif-battle", "package_fingerprint": next(iter(fingerprints)),
                "runtime_column_probes": len(probes), "river_rows": 375,
@@ -318,7 +380,7 @@ def verify_package(target, package):
                "giant_top_exclusive": 213, "compiler": identity,
                "scope": "Exact runtime geometry and authored assets; no aesthetic, motion, or performance approval."}
     (package / "content-verification.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    print(f"Verified {len(probes)} runtime columns: 375-row river barrier, one seven-row bridge, every named support, exact giant occupancy.")
+    print(f"Verified {len(probes)} runtime columns: 375-row river barrier, one seven-row bridge, every named support, exact giant occupancy, and both exact canopy union domains.")
 
 
 def main():

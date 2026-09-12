@@ -675,3 +675,102 @@ fn later_low_lintel_reports_the_invalidating_operator_and_protected_route() {
     operators::check_constraints(&build, &recipe, "raised-vault-lintel")
         .expect("exactly two shared clear levels preserve the protected route");
 }
+
+fn overhead_fixture(second_bottom: Option<i32>) -> (RegionRecipe, operators::RegionBuild) {
+    let source = fixture("rich-region");
+    let mut recipe = source.recipes["caldera"].clone();
+    recipe.features.clear();
+    for (index, root, bottom) in [(0, WorldHex::new(-3, 0), 5)]
+        .into_iter()
+        .chain(second_bottom.map(|bottom| (1, WorldHex::new(3, 0), bottom)))
+    {
+        let mut voxels = vec![FeatureVoxel {
+            offset: WorldHex::new(0, 0),
+            bottom: 0,
+            top: 1,
+            material: "timber".into(),
+        }];
+        voxels.extend(
+            geometry::disk(WorldHex::new(0, 0), 3)
+                .expect("small crown")
+                .into_iter()
+                .map(|offset| FeatureVoxel {
+                    offset,
+                    bottom,
+                    top: bottom + 1,
+                    material: "foliage".into(),
+                }),
+        );
+        recipe.features.push(FeatureRule {
+            id: format!("tree-{index}"),
+            kind: "tree".into(),
+            asset: "procedural/tree".into(),
+            provenance: None,
+            mask: DiskMask {
+                center: root,
+                radius: 0,
+            },
+            density: 0,
+            roots: vec![root],
+            overhead_clearance: Some(4),
+            voxels,
+        });
+    }
+    let mut build = operators::RegionBuild::default();
+    for p in geometry::disk(WorldHex::new(0, 0), 8).expect("small land") {
+        build.columns.insert(p, vec![run(0, 11, "limestone")]);
+    }
+    build.reserved.insert(WorldHex::new(0, 0));
+    build.routes.insert(
+        "walkway".into(),
+        BTreeMap::from([(WorldHex::new(0, 0), 10)]),
+    );
+    (recipe, build)
+}
+
+#[test]
+fn overhead_canopies_preserve_reserved_ground_and_disjoint_object_identities() {
+    let (recipe, mut build) = overhead_fixture(Some(6));
+    operators::decorate(&mut build, &recipe, "grove", 7).expect("separate vertical crowns");
+    assert_eq!(build.semantics.objects.len(), 2);
+    assert_ne!(build.semantics.objects[0].id, build.semantics.objects[1].id);
+    assert_eq!(
+        build.columns[&WorldHex::new(0, 0)],
+        vec![run(0, 11, "limestone")]
+    );
+    let spans: Vec<_> = build
+        .semantics
+        .objects
+        .iter()
+        .flat_map(|object| &object.occupancy)
+        .filter(|column| column.position == WorldHex::new(0, 0))
+        .flat_map(|column| column.runs.clone())
+        .collect();
+    assert_eq!(spans, vec![run(16, 17, "foliage"), run(17, 18, "foliage")]);
+}
+
+#[test]
+fn overhead_placement_rejects_low_crowns_voxel_overlap_and_legacy_reserved_columns() {
+    let (recipe, mut build) = overhead_fixture(Some(5));
+    assert!(
+        operators::decorate(&mut build, &recipe, "grove", 7).is_err(),
+        "actual equal-material overlap is refused"
+    );
+    let (mut recipe, mut build) = overhead_fixture(None);
+    for voxel in &mut recipe.features[0].voxels {
+        if voxel.material == "foliage" {
+            voxel.bottom = 3;
+            voxel.top = 4;
+        }
+    }
+    assert!(
+        operators::decorate(&mut build, &recipe, "grove", 7).is_err(),
+        "route clearance is preserved"
+    );
+    let (mut recipe, mut build) = overhead_fixture(None);
+    recipe.features[0].overhead_clearance = None;
+    assert!(
+        operators::decorate(&mut build, &recipe, "grove", 7).is_err(),
+        "legacy placement policy is unchanged"
+    );
+}

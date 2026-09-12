@@ -323,6 +323,11 @@ pub struct FeatureRule {
     /// Exact local roots always requested, independently of density.
     #[serde(default)]
     pub roots: Vec<WorldHex>,
+    /// Opt into exact vertical placement over reserved ground, retaining this
+    /// many clear levels above each protected terrain surface. Roots still
+    /// cannot occupy reserved ground, and occupied object voxels never overlap.
+    #[serde(default)]
+    pub overhead_clearance: Option<u32>,
     /// Reusable occupied offsets above the supporting ground surface.
     pub voxels: Vec<FeatureVoxel>,
 }

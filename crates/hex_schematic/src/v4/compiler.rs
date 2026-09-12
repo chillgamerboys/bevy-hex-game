@@ -13,7 +13,7 @@ use std::{
     time::Instant,
 };
 
-const COMPILER_VERSION: &str = "hex-authoring/3";
+const COMPILER_VERSION: &str = "hex-authoring/4";
 
 /// One contextual, actionable authoring/compiler rejection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,6 +422,12 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             }
         }
         for feature in &recipe.features {
+            if feature
+                .overhead_clearance
+                .is_some_and(|value| !(2..=1024).contains(&value))
+            {
+                issue(&feature.id, "overhead clearance must be in 2..=1024".into());
+            }
             if feature.voxels.is_empty()
                 || feature.density > 10_000
                 || feature.kind.is_empty()
