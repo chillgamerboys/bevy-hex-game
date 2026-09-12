@@ -1395,12 +1395,10 @@ fn capture_charge_waits_for_authority_and_survives_delayed_render_readiness() {
                 .count(),
             1
         );
-        assert!(
-            state
-                .capture_inputs
-                .iter()
-                .all(|(_, intent)| !intent.cast_released)
-        );
+        assert!(state
+            .capture_inputs
+            .iter()
+            .all(|(_, intent)| !intent.cast_released));
     }
 }
 
