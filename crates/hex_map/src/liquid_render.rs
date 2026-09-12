@@ -26,6 +26,12 @@ use hex_core::{HexCoord, Level, PausableSystems, Screen, SubstanceId, TilePos};
 use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresentationProjection};
 use crate::voxel::{runs, terrain_chunk_coord, SubstanceRun, TerrainChunkCoord, VoxelMap};
 
+mod fountains;
+
+#[cfg(feature = "arena-prototype")]
+pub(crate) use fountains::sync_fountain_materials;
+pub(crate) use fountains::FountainWater;
+
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
 /// Grand's accepted water opacity, used by the Forest arena presentation.
 const TRANSLUCENT_WATER_ALPHA: f32 = 0.85;
@@ -371,12 +377,14 @@ struct LiquidSurface {
 struct LiquidCapBatchKey {
     chunk: TerrainChunkCoord,
     role: FillMaterialRole,
+    fountain: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct LiquidCurtainBatchKey {
     role: FillMaterialRole,
     style: MaterialStyle,
+    fountain: Option<usize>,
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -406,13 +414,14 @@ pub(crate) fn spawn_presentations(
     phase_seconds: f32,
     water_style: WaterSurfaceStyle,
     projection: Option<&MapPresentationProjection>,
+    fountains: &FountainWater,
 ) -> Result<Vec<Entity>, LiquidPresentationError> {
-    let plan = build_presentation_plan(map, table, level_height, projection)?;
+    let plan = build_presentation_plan(map, table, level_height, projection, fountains)?;
     if plan.surfaces.is_empty() {
         clear_material_cache(commands);
         return Ok(Vec::new());
     }
-    let cap_batches = batch_liquid_caps(&plan.surfaces)
+    let cap_batches = batch_liquid_caps(&plan.surfaces, fountains)
         .into_iter()
         .map(|(key, surfaces)| {
             cap_batch_geometry(&surfaces, level_height).map(|geometry| (key, surfaces, geometry))
@@ -439,6 +448,14 @@ pub(crate) fn spawn_presentations(
         material_sets.push(set);
     }
 
+    let charged_materials = cap_batches
+        .iter()
+        .any(|(key, _, _)| key.fountain.is_some())
+        .then(|| fountains::charged_materials(foam, phase_seconds, water_style, materials));
+    if let Some(charged) = &charged_materials {
+        charged.extend_registry(&mut registered_handles);
+    }
+
     let mut entities = Vec::with_capacity(cap_batches.len().saturating_add(plan.curtains.len()));
     for (key, surfaces, geometry) in cap_batches {
         let mesh = meshes.add(geometry.into_mesh());
@@ -454,6 +471,14 @@ pub(crate) fn spawn_presentations(
                 Name::new("LiquidCap"),
             ))
             .id();
+        fountains.attach(
+            commands,
+            entity,
+            key.fountain,
+            MaterialStyle::Surface,
+            &material_sets,
+            charged_materials.as_ref(),
+        );
         entities.push(entity);
     }
 
@@ -474,6 +499,14 @@ pub(crate) fn spawn_presentations(
                 Name::new(name),
             ))
             .id();
+        fountains.attach(
+            commands,
+            entity,
+            key.fountain,
+            key.style,
+            &material_sets,
+            charged_materials.as_ref(),
+        );
         entities.push(entity);
     }
 
@@ -488,6 +521,7 @@ fn build_presentation_plan(
     table: &SubstanceTable,
     level_height: f32,
     projection: Option<&MapPresentationProjection>,
+    fountains: &FountainWater,
 ) -> Result<PresentationPlan, LiquidPresentationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(LiquidPresentationError::InvalidLevelHeight);
@@ -529,7 +563,7 @@ fn build_presentation_plan(
     }
 
     validate_surface_directions(&surfaces)?;
-    let curtains = build_curtain_meshes(&surfaces, level_height)?;
+    let curtains = build_curtain_meshes(&surfaces, level_height, fountains)?;
     let roles = surfaces.iter().map(|surface| surface.role).collect();
     Ok(PresentationPlan {
         surfaces,
@@ -540,6 +574,7 @@ fn build_presentation_plan(
 
 fn batch_liquid_caps(
     surfaces: &[LiquidSurface],
+    fountains: &FountainWater,
 ) -> BTreeMap<LiquidCapBatchKey, Vec<LiquidSurface>> {
     let mut batches = BTreeMap::<LiquidCapBatchKey, Vec<LiquidSurface>>::new();
     for &surface in surfaces {
@@ -547,6 +582,7 @@ fn batch_liquid_caps(
             .entry(LiquidCapBatchKey {
                 chunk: terrain_chunk_coord(surface.position.coord),
                 role: surface.role,
+                fountain: fountains.group(surface),
             })
             .or_default()
             .push(surface);
@@ -637,8 +673,9 @@ fn validate_surface_directions(surfaces: &[LiquidSurface]) -> Result<(), LiquidP
 fn build_curtain_meshes(
     surfaces: &[LiquidSurface],
     level_height: f32,
+    fountains: &FountainWater,
 ) -> Result<BTreeMap<LiquidCurtainBatchKey, RawMesh>, LiquidPresentationError> {
-    curtain_strips(surfaces)?
+    curtain_strips(surfaces, fountains)?
         .into_iter()
         .map(|(key, strips)| {
             let mut geometry = curtain_geometry(&strips, level_height)?;
@@ -659,6 +696,7 @@ fn build_curtain_meshes(
 /// second flow direction.
 fn curtain_strips(
     surfaces: &[LiquidSurface],
+    fountains: &FountainWater,
 ) -> Result<BTreeMap<LiquidCurtainBatchKey, Vec<CurtainStrip>>, LiquidPresentationError> {
     let surface_by_position: BTreeMap<_, _> = surfaces
         .iter()
@@ -710,6 +748,7 @@ fn curtain_strips(
             .entry(LiquidCurtainBatchKey {
                 role: source.role,
                 style: MaterialStyle::Fall,
+                fountain: fountains.group(*source),
             })
             .or_default()
             .insert(strip);
@@ -748,6 +787,7 @@ fn curtain_strips(
                 .entry(LiquidCurtainBatchKey {
                     role: source.role,
                     style,
+                    fountain: fountains.group(source),
                 })
                 .or_default()
                 .insert(CurtainStrip {
@@ -1247,7 +1287,7 @@ mod tests {
         assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
     }
 
-    fn liquid_table() -> SubstanceTable {
+    pub(super) fn liquid_table() -> SubstanceTable {
         let swatches = [
             ("terrain/stone", "Stone", (0.5, 0.5, 0.5)),
             ("liquid/water", "Water", (0.08, 0.32, 0.65)),
@@ -1438,7 +1478,7 @@ mod tests {
             still(6, FillMaterialRole::Lava),
         ];
 
-        let batches = batch_liquid_caps(&surfaces);
+        let batches = batch_liquid_caps(&surfaces, &FountainWater::default());
         assert_eq!(batches.len(), 4);
         assert_eq!(
             batches
@@ -1455,6 +1495,7 @@ mod tests {
         assert_eq!(
             batches
                 .get(&LiquidCapBatchKey {
+                    fountain: None,
                     chunk: TerrainChunkCoord { q: 0, r: 0 },
                     role: FillMaterialRole::Water,
                 })
@@ -1593,6 +1634,7 @@ mod tests {
                 0.0,
                 WaterSurfaceStyle::Opaque,
                 None,
+                &FountainWater::default(),
             )
             .expect("valid liquid batches should spawn")
         };
@@ -1759,10 +1801,12 @@ mod tests {
             },
         ];
 
-        let strips = curtain_strips(&surfaces).expect("valid exposed liquid sides");
+        let strips = curtain_strips(&surfaces, &FountainWater::default())
+            .expect("valid exposed liquid sides");
         assert_eq!(strips.len(), 2);
         assert_eq!(
             strips[&LiquidCurtainBatchKey {
+                fountain: None,
                 role: FillMaterialRole::Water,
                 style: MaterialStyle::Surface,
             }],
@@ -1774,6 +1818,7 @@ mod tests {
         );
         assert_eq!(
             strips[&LiquidCurtainBatchKey {
+                fountain: None,
                 role: FillMaterialRole::Water,
                 style: MaterialStyle::Fall,
             }],
@@ -1784,7 +1829,7 @@ mod tests {
             }]
         );
 
-        let meshes = build_curtain_meshes(&surfaces, 0.4)
+        let meshes = build_curtain_meshes(&surfaces, 0.4, &FountainWater::default())
             .expect("every exact exposed edge should materialize");
         assert!(meshes
             .values()
@@ -1907,10 +1952,15 @@ mod tests {
             ]
         };
 
-        let water = build_curtain_meshes(&surfaces(FillMaterialRole::Water), 0.4)
-            .expect("water curtain should remain valid");
+        let water = build_curtain_meshes(
+            &surfaces(FillMaterialRole::Water),
+            0.4,
+            &FountainWater::default(),
+        )
+        .expect("water curtain should remain valid");
         let water = water
             .get(&LiquidCurtainBatchKey {
+                fountain: None,
                 role: FillMaterialRole::Water,
                 style: MaterialStyle::Fall,
             })
@@ -1918,13 +1968,22 @@ mod tests {
         assert_eq!(water.positions.len(), 4);
         assert_eq!(water.indices.len(), 6);
 
-        let first = build_curtain_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
-            .expect("lava fall effect should be valid");
-        let second = build_curtain_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
-            .expect("lava fall effect should be repeatable");
+        let first = build_curtain_meshes(
+            &surfaces(FillMaterialRole::Lava),
+            0.4,
+            &FountainWater::default(),
+        )
+        .expect("lava fall effect should be valid");
+        let second = build_curtain_meshes(
+            &surfaces(FillMaterialRole::Lava),
+            0.4,
+            &FountainWater::default(),
+        )
+        .expect("lava fall effect should be repeatable");
         assert_eq!(first, second);
         let lava = first
             .get(&LiquidCurtainBatchKey {
+                fountain: None,
                 role: FillMaterialRole::Lava,
                 style: MaterialStyle::Fall,
             })
@@ -1954,7 +2013,7 @@ mod tests {
             downstream: Some(TilePos::new(coord(1, 0, -1), 4)),
         };
         assert!(matches!(
-            build_curtain_meshes(&[source], 0.4),
+            build_curtain_meshes(&[source], 0.4, &FountainWater::default()),
             Err(LiquidPresentationError::MissingFallLanding { .. })
         ));
     }
@@ -1969,7 +2028,7 @@ mod tests {
         map.set(TilePos::new(HexCoord::ORIGIN, 0), water);
         map.set(TilePos::new(HexCoord::ORIGIN, 1), water);
 
-        let plan = build_presentation_plan(&map, &table, 0.4, None)
+        let plan = build_presentation_plan(&map, &table, 0.4, None, &FountainWater::default())
             .expect("legacy liquid presentation should be valid");
         assert_eq!(
             plan.surfaces,
@@ -1995,8 +2054,14 @@ mod tests {
         let projection = MapPresentationProjection::default();
 
         assert_eq!(
-            build_presentation_plan(&map, &table, 0.4, Some(&projection))
-                .expect_err("empty V3 projection must not synthesize legacy metadata"),
+            build_presentation_plan(
+                &map,
+                &table,
+                0.4,
+                Some(&projection),
+                &FountainWater::default()
+            )
+            .expect_err("empty V3 projection must not synthesize legacy metadata"),
             LiquidPresentationError::MissingProjectionVoxel { position }
         );
     }

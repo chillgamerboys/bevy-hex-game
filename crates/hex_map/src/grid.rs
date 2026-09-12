@@ -828,6 +828,7 @@ fn build_grid(
         liquid_phase_seconds,
         liquid_render::WaterSurfaceStyle::Opaque,
         presentation,
+        &liquid_render::FountainWater::default(),
     )
     .map_err(MapPresentationError::Liquid)?;
     children.extend(

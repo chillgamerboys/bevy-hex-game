@@ -31,10 +31,15 @@ pub(super) fn plugin(app: &mut App) {
     if app.world().contains_resource::<AssetServer>() {
         app.add_plugins(crate::liquid_render::arena_plugin);
     }
-    app.init_resource::<hex_core::arena::ArenaRenderStatus>();
+    app.init_resource::<hex_core::arena::ArenaRenderStatus>()
+        .init_resource::<hex_core::arena::ArenaFountainVisuals>();
     app.init_resource::<RenderCache>().add_systems(
         PostUpdate,
-        (refresh, refresh_presentations)
+        (
+            refresh,
+            refresh_presentations,
+            crate::liquid_render::sync_fountain_materials,
+        )
             .chain()
             .before(TransformSystems::Propagate)
             .run_if(resource_exists::<VoxelMap>),
@@ -148,6 +153,7 @@ fn refresh_presentations(
     substances: Res<SubstanceTable>,
     catalog: Res<RuntimeArtCatalog>,
     projection: Res<crate::procedural_v3::MapPresentationProjection>,
+    view: Res<ArenaTerrainView>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     liquid_materials: Option<ResMut<Assets<crate::liquid_render::LiquidMaterial>>>,
     phase: Option<Res<crate::liquid_render::LiquidVisualTime>>,
@@ -204,6 +210,7 @@ fn refresh_presentations(
                 crate::liquid_render::WaterSurfaceStyle::Opaque
             },
             Some(&projection),
+            &crate::liquid_render::FountainWater::from_view(state.generation, &view),
         ) {
             Ok(roots) => roots,
             Err(error) => {
