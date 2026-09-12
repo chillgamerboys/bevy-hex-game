@@ -2812,3 +2812,6 @@ fn successful_load_timing_includes_delayed_source_and_admission_queue_without_sa
         .expect("new timing epoch");
     assert_eq!(runtime.load_timing(), LoadTiming::default());
 }
+
+#[path = "runtime/finite.rs"]
+mod finite;

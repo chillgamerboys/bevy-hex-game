@@ -8,6 +8,7 @@
 mod attachments;
 mod disclosure;
 mod edits;
+mod finite;
 mod history;
 mod knowledge;
 mod object_edits;
@@ -22,6 +23,7 @@ pub use disclosure::{
     KnowledgeReplay, SequencedKnowledgeBatch,
 };
 pub use edits::{ChunkDelta, WorldDelta};
+pub use finite::FiniteWorldSession;
 pub use history::HistoryCounts;
 pub use knowledge::{
     KnowledgeConfig, KnowledgePartition, KnowledgeReceipt, KnowledgeStore, ObservedLandmark,
