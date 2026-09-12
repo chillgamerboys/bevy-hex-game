@@ -146,6 +146,7 @@ pub(crate) struct PlayerKnowledge {
     last_hit: Option<(ActorId, f32)>,
     hit_sequence: u64,
     health_announcements: BTreeMap<ActorId, HealthAnnouncement>,
+    pending_first_hits: BTreeSet<ActorId>,
 }
 
 impl PlayerKnowledge {
@@ -154,6 +155,7 @@ impl PlayerKnowledge {
             Some(ExpeditionRole::Dragon) => LandmarkKind::Dragon,
             Some(ExpeditionRole::Troll) => LandmarkKind::Troll,
             Some(ExpeditionRole::MountainShadow) => LandmarkKind::Shadow,
+            Some(ExpeditionRole::PlainGolem) => LandmarkKind::Golem,
             _ => return,
         };
         self.actors.insert(actor.id, (name.into(), kind));
@@ -198,6 +200,7 @@ impl ArenaSession {
             self.player_knowledge.dwell.clear();
             self.player_knowledge.visible_last_sample.clear();
             self.player_knowledge.target = None;
+            self.player_knowledge.pending_first_hits.clear();
             for announcement in self.player_knowledge.health_announcements.values_mut() {
                 announcement.visible = None;
             }
@@ -213,6 +216,97 @@ impl ArenaSession {
         }
         for announcement in self.player_knowledge.health_announcements.values_mut() {
             announcement.remaining = (announcement.remaining - dt).max(0.0);
+        }
+        // First-hit visibility uses this frame's actual camera, not a potentially
+        // 100ms-old discovery sample. Hidden first hits are consumed without a cue.
+        let live: BTreeSet<_> = self
+            .actors
+            .iter()
+            .filter(|actor| actor.hp > 0.0)
+            .map(|actor| actor.id)
+            .collect();
+        self.player_knowledge
+            .health_announcements
+            .retain(|id, _| live.contains(id));
+        let pending = std::mem::take(&mut self.player_knowledge.pending_first_hits);
+        if !pending.is_empty() {
+            self.collision.refresh(world, geometry);
+        }
+        let direction = observation.direction.normalize();
+        let right = direction.cross(Vec3::Y).normalize_or(Vec3::X);
+        let up = right.cross(direction).normalize();
+        for id in pending {
+            let Some(actor) = self
+                .actors
+                .iter()
+                .find(|actor| actor.id == id && actor.hp > 0.0)
+            else {
+                continue;
+            };
+            let rotation = actor.body_rotation().inverse();
+            let diameter = (rotation * right)
+                .abs()
+                .dot(actor.dimensions)
+                .max((rotation * up).abs().dot(actor.dimensions));
+            let visible = [actor.center(), actor.eye()].into_iter().any(|point| {
+                observation.contains(point, diameter)
+                    && self.collision.sight_clear(observation.origin, point)
+            });
+            if visible {
+                let pips = target_snapshot(actor).health_pips;
+                self.player_knowledge
+                    .health_announcements
+                    .entry(id)
+                    .or_insert(HealthAnnouncement {
+                        shown_band: Some(pips),
+                        remaining: 1.0,
+                        visible: Some(EnemyHealthCueSnapshot {
+                            actor_id: id,
+                            position: actor.center() + Vec3::Y * (actor.dimensions.y * 0.5 + 0.35),
+                            health_pips: pips,
+                        }),
+                    });
+            }
+        }
+        // Refresh the handful of active announcements every rendered frame.
+        // Landmark acquisition remains10Hz; moving bodies and occluders cannot
+        // leave a live cue behind between those samples.
+        if self
+            .player_knowledge
+            .health_announcements
+            .values()
+            .any(|cue| cue.remaining > 0.0)
+        {
+            self.collision.refresh(world, geometry);
+        }
+        for (id, announcement) in &mut self.player_knowledge.health_announcements {
+            if announcement.remaining <= 0.0 {
+                continue;
+            }
+            let Some(actor) = self.actors.iter().find(|actor| actor.id == *id) else {
+                continue;
+            };
+            let rotation = actor.body_rotation().inverse();
+            let diameter = (rotation * right)
+                .abs()
+                .dot(actor.dimensions)
+                .max((rotation * up).abs().dot(actor.dimensions));
+            let visible = [actor.center(), actor.eye()].into_iter().any(|point| {
+                observation.contains(point, diameter)
+                    && self.collision.sight_clear(observation.origin, point)
+            });
+            announcement.visible = visible.then(|| {
+                let band = target_snapshot(actor).health_pips;
+                if announcement.shown_band != Some(band) {
+                    announcement.shown_band = Some(band);
+                    announcement.remaining = 1.0;
+                }
+                EnemyHealthCueSnapshot {
+                    actor_id: *id,
+                    position: actor.center() + Vec3::Y * (actor.dimensions.y * 0.5 + 0.35),
+                    health_pips: band,
+                }
+            });
         }
         self.player_knowledge.sample_elapsed += dt;
         if self.player_knowledge.sample_elapsed + 0.00001 < 0.1 {
@@ -322,9 +416,18 @@ impl ArenaSession {
         {
             let states = self.expedition_progress();
             for (id, pool) in &sites.fountains {
-                let points: Vec<_> = pool
-                    .cells
-                    .iter()
+                let mut tops = BTreeMap::new();
+                for cell in &pool.cells {
+                    tops.entry(cell.coord)
+                        .and_modify(|top: &mut hex_core::TilePos| {
+                            if cell.level > top.level {
+                                *top = *cell;
+                            }
+                        })
+                        .or_insert(*cell);
+                }
+                let points: Vec<_> = tops
+                    .values()
                     .map(|at| at.coord.to_world(geometry.top(*at) + 0.01))
                     .collect();
                 let Some(first) = points.first().copied() else {
@@ -458,12 +561,12 @@ impl ArenaSession {
                 self.player_knowledge.hit_sequence.saturating_add(1);
             self.player_knowledge.last_hit = Some((victim, 0.0));
             if self.player_knowledge.active
-                && self.player_knowledge.visible_last_sample.contains(&victim)
-            {
-                self.player_knowledge
+                && !self
+                    .player_knowledge
                     .health_announcements
-                    .entry(victim)
-                    .or_default();
+                    .contains_key(&victim)
+            {
+                self.player_knowledge.pending_first_hits.insert(victim);
             }
         }
     }

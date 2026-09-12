@@ -735,3 +735,142 @@ fn landmark_distance_is_euclidean_and_projected_size_is_resolution_independent()
         assert!(observation.landmark_contains(Vec3::X * 34.0, 1.0, LandmarkKind::Fountain));
     }
 }
+
+#[test]
+fn first_hit_uses_current_frame_visibility_before_next_discovery_sample() {
+    let (mut session, view, geometry, observation) = fixture();
+    session.observe_player(&view, geometry, observation, 0.016);
+    assert!(session.player_knowledge.visible_last_sample.is_empty());
+    session.record_damage(0, 1, 1.0);
+    session.observe_player(&view, geometry, observation, 0.016);
+    assert_eq!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .len(),
+        1
+    );
+    assert!(session.discovered_landmarks().is_empty());
+    session.player_knowledge.health_announcements.clear();
+    session.record_damage(0, 1, 1.0);
+    session.observe_player(
+        &view,
+        geometry,
+        PlayerObservation {
+            direction: Vec3::NEG_X,
+            ..observation
+        },
+        0.016,
+    );
+    sample(&mut session, &view, geometry, observation, 1);
+    assert!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .is_empty(),
+        "unseen hit must not replay on return"
+    );
+}
+
+#[test]
+fn active_health_dots_hide_and_clear_between_discovery_samples() {
+    let (mut session, view, geometry, observation) = fixture();
+    sample(&mut session, &view, geometry, observation, 1);
+    session.record_damage(0, 1, 1.0);
+    session.observe_player(&view, geometry, observation, 0.016);
+    assert_eq!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .len(),
+        1
+    );
+    session.observe_player(
+        &view,
+        geometry,
+        PlayerObservation {
+            direction: Vec3::NEG_X,
+            ..observation
+        },
+        0.016,
+    );
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+    session.observe_player(&view, geometry, observation, 0.016);
+    assert_eq!(
+        session
+            .combat_feedback(&ArenaTuning::default())
+            .health_cues
+            .len(),
+        1
+    );
+    session.actors.get_mut(1).expect("enemy").hp = 0.0;
+    session.observe_player(&view, geometry, observation, 0.016);
+    assert!(session
+        .combat_feedback(&ArenaTuning::default())
+        .health_cues
+        .is_empty());
+}
+
+#[test]
+fn fountain_discovery_uses_the_central_exposed_top_not_a_visible_edge() {
+    let (mut session, mut view, geometry, observation) = fixture();
+    let center = HexCoord::from_axial(4, 0);
+    let mut sites = ArenaExpeditionSites::default();
+    let cells = [
+        center,
+        HexCoord::from_axial(3, 2),
+        HexCoord::from_axial(5, -2),
+    ]
+    .into_iter()
+    .flat_map(|coord| [TilePos::new(coord, 1), TilePos::new(coord, 2)])
+    .collect();
+    sites
+        .fountains
+        .insert("forest_fountain_01".into(), ArenaFountainVolume { cells });
+    session.register_expedition_sites(&sites);
+    view.expedition = Some(sites);
+    let observation = PlayerObservation {
+        direction: (center.to_world(geometry.top(TilePos::new(center, 2)) + 0.01)
+            - observation.origin)
+            .normalize(),
+        ..observation
+    };
+    sample(&mut session, &view, geometry, observation, 5);
+    let pool = session
+        .discovered_landmarks()
+        .into_iter()
+        .find(|landmark| landmark.kind == LandmarkKind::Fountain)
+        .expect("pool");
+    assert!((pool.position.y - geometry.top(TilePos::new(center, 2)) - 0.01).abs() < 0.0001);
+    session.player_knowledge.landmarks.clear();
+    session.player_knowledge.dwell.clear();
+    view.static_spans.push(hex_core::arena::ArenaStaticSpan {
+        bottom: TilePos::new(HexCoord::from_axial(2, 0), 1),
+        top_level: 8,
+        blocks_sight: true,
+        blocks_movement: true,
+        blocks_projectiles: true,
+    });
+    view.revision += 1;
+    view.full_rebuild = true;
+    session.collision.refresh(&view, geometry);
+    let edge = HexCoord::from_axial(3, 2).to_world(pool.position.y);
+    assert!(
+        session.collision.sight_clear(observation.origin, edge),
+        "test requires a visible edge"
+    );
+    assert!(
+        !session
+            .collision
+            .sight_clear(observation.origin, pool.position),
+        "central patch must be blocked"
+    );
+    sample(&mut session, &view, geometry, observation, 5);
+    assert!(!session
+        .discovered_landmarks()
+        .iter()
+        .any(|landmark| landmark.kind == LandmarkKind::Fountain));
+}
