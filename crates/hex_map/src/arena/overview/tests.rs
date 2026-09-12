@@ -312,7 +312,7 @@ fn cache_ignores_dirty_terrain_and_refreshes_on_reset_package_or_selection() {
 fn v4_overview_preserves_package_colors_after_collision_material_aliasing() {
     use hex_world_contracts::{
         ChunkDescriptor, ChunkPackage, ChunkSemantics, ColumnData, MaterialSpec, RegionDescriptor,
-        Seal, VoxelRun, WorldHex, WorldManifest, WorldPackage, SCHEMA_VERSION,
+        VoxelRun, WorldHex, WorldManifest, WorldPackage, SCHEMA_VERSION,
     };
     use hex_world_runtime::MemoryChunkSource;
 
@@ -330,6 +330,7 @@ fn v4_overview_preserves_package_colors_after_collision_material_aliasing() {
     let origin = WorldHex::new(8, 8);
     let expected: BTreeMap<_, _> = HexCoord::from_axial(8, 8)
         .within_radius(1)
+        .into_iter()
         .zip(palette)
         .collect();
     let mut package = WorldPackage {
