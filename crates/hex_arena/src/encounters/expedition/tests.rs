@@ -218,6 +218,9 @@ fn expedition_player_moves_five_percent_faster_without_stacking_on_reset() {
         session.reset(generation, &view, geometry);
         session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
         let player = session.actors.first().expect("player").clone();
+        assert!((player.dimensions.y - 1.2).abs() < 0.0001);
+        assert!((player.eye().y - player.feet.y - 1.02).abs() < 0.0001);
+        assert!((player.dimensions.x - 0.5).abs() < 0.0001);
         assert!(session
             .actors
             .iter()
@@ -245,6 +248,51 @@ fn expedition_player_moves_five_percent_faster_without_stacking_on_reset() {
             }
         }
     }
+}
+
+#[test]
+fn taller_player_movement_hits_and_reward_admission_use_the_complete_body() {
+    let geometry = ArenaVoxelGeometry {
+        level_height: 0.35,
+        ..Default::default()
+    };
+    let mut view = ArenaTerrainView::default();
+    for coord in HexCoord::ORIGIN.within_radius(12) {
+        view.voxels.insert(TilePos::new(coord, 0), SubstanceId(1));
+        if coord.to_world(0.0).x > 2.0 {
+            view.voxels.insert(TilePos::new(coord, 4), SubstanceId(1));
+        }
+    }
+    let mut collision = CollisionWorld::default();
+    collision.refresh(&view, geometry);
+    let mut short = Actor::spawn(0, Vec3::Y * SKIN, Vec3::X);
+    let mut tall = short.clone();
+    tall.configure_expedition_player();
+    let across = Vec3::new(-2.0, 1.02, 0.0);
+    assert!(shapes::sweep_actor(across, Vec3::X * 4.0, &tall, false, 0.0).is_some());
+    assert!(shapes::sweep_actor(across, Vec3::X * 4.0, &short, false, 0.0).is_none());
+    for _ in 0..120 {
+        for actor in [&mut short, &mut tall] {
+            motion::tick(
+                actor,
+                Vec3::X,
+                false,
+                false,
+                false,
+                &collision,
+                &EncounterTuning::default(),
+            );
+        }
+    }
+    assert!(short.feet.x > 4.0);
+    assert!(tall.feet.x < short.feet.x - 1.0);
+    assert!(shapes::clear(&collision, &tall, tall.feet, tall.body_yaw));
+    let session = ArenaSession {
+        collision,
+        ..Default::default()
+    };
+    assert!(!session.reward_standing_pose(short.feet, &view, geometry));
+    assert!(session.reward_standing_pose(tall.feet, &view, geometry));
 }
 
 #[test]

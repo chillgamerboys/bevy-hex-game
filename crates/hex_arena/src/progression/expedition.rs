@@ -224,6 +224,7 @@ impl ArenaSession {
         geometry: ArenaVoxelGeometry,
     ) -> Option<Vec3> {
         let state = self.progression.as_ref()?;
+        let player = self.actors.iter().find(|actor| actor.expedition_player)?;
         let origin = if origin.is_finite() {
             origin
         } else {
@@ -244,8 +245,8 @@ impl ArenaSession {
             .collision
             .ground(
                 origin + Vec3::Y * SKIN * 8.0,
-                crate::BODY_HEIGHT,
-                crate::BODY_RADIUS,
+                player.dimensions.y,
+                player.dimensions.x * 0.5,
                 drop.max(1.0),
             )
             .filter(|ground| {

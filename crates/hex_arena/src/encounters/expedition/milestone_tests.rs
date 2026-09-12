@@ -274,6 +274,16 @@ fn pickup_keeps_the_damage_and_mode_of_an_already_flying_contact_shot() {
         actor.max_hp = 100.0;
         actor.aim = Vec3::X;
     }
+    let player = session.actors.first().expect("player");
+    let target = session.actors.iter().find(|a| a.id == 1).expect("target");
+    let (aim, _) = crate::bot::ballistic_aim(
+        player.eye(),
+        target.center(),
+        &session.player_tuning(&tuning),
+        45.0,
+    )
+    .expect("physical launch reaches the short target");
+    session.actors.first_mut().expect("player").aim = aim;
     session.release(
         0,
         Spell::Fireball,
@@ -328,7 +338,7 @@ fn pickup_keeps_the_damage_and_mode_of_an_already_flying_contact_shot() {
     let player = session.actors.first_mut().expect("player");
     player.feet = bridge + Vec3::NEG_X * 4.0;
     player.previous_feet = player.feet;
-    player.aim = Vec3::X;
+    player.aim = aim;
     session.release(
         0,
         Spell::Fireball,

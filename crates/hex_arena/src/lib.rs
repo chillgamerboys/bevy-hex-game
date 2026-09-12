@@ -37,6 +37,11 @@ pub use encounters::ExpeditionRallySnapshot;
 pub use expedition::ExpeditionRole;
 mod hex_prisms;
 mod motion;
+mod player_observation;
+pub use player_observation::{
+    CombatFeedbackSnapshot, DiscoveredLandmark, HitConfirmationSnapshot, LandmarkKind,
+    PlayerObservation, SpellAvailability, SpellAvailabilityState, TargetHealthSnapshot,
+};
 mod progression;
 pub use progression::{
     ExpeditionReward, ExpeditionSnapshot, FireballMode, FountainSnapshot, MilestoneSnapshot,
@@ -387,6 +392,11 @@ pub struct Actor {
 }
 
 impl Actor {
+    fn configure_expedition_player(&mut self) {
+        self.expedition_player = true;
+        self.dimensions.y = 1.2;
+    }
+
     fn spawn(id: u8, feet: Vec3, aim: Vec3) -> Self {
         Self {
             id,
@@ -445,6 +455,8 @@ impl Actor {
             self.center() + self.body_rotation() * Vec3::NEG_Z * (self.dimensions.z * 0.5 - 0.05)
         } else if self.species == Species::Goblin {
             self.feet + Vec3::Y * (self.dimensions.y * 0.775)
+        } else if self.species == Species::Human && self.expedition_player {
+            self.feet + Vec3::Y * 1.02
         } else {
             self.feet + Vec3::Y * EYE_HEIGHT
         }
@@ -666,6 +678,7 @@ pub struct ArenaSession {
     /// Number of shield impacts that added at least one safe cell since reset.
     pub shields_raised: u64,
     progression: Option<progression::ProgressState>,
+    player_knowledge: player_observation::PlayerKnowledge,
     collision: CollisionWorld,
     generation: Option<u64>,
     bot: Bot,
@@ -704,6 +717,7 @@ impl Default for ArenaSession {
             terrain_outcomes: 0,
             shields_raised: 0,
             progression: None,
+            player_knowledge: player_observation::PlayerKnowledge::default(),
             collision: CollisionWorld::default(),
             generation: None,
             bot: Bot::default(),

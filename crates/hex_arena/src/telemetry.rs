@@ -166,6 +166,7 @@ impl ArenaSession {
 
     pub(super) fn record_damage(&mut self, owner: u8, victim: u8, amount: f32) {
         if amount > 0.0 {
+            self.confirm_player_damage(owner, victim);
             self.record_player_hit(owner, victim);
             if let Some(actor) = self.actors.iter_mut().find(|a| a.id == victim) {
                 actor.last_damage_tick = Some(self.tick);

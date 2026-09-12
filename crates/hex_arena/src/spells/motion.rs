@@ -11,6 +11,7 @@ pub(crate) struct ForecastMotion {
     pub id: u8,
     initial: Vec3,
     samples: Vec<(f32, Vec3)>,
+    dimensions: Vec3,
 }
 
 impl ForecastMotion {
@@ -21,15 +22,40 @@ impl ForecastMotion {
         prediction: f32,
         collision: &CollisionWorld,
     ) -> Self {
+        Self::with_dimensions(
+            id,
+            feet,
+            velocity,
+            prediction,
+            collision,
+            Vec3::new(
+                crate::BODY_RADIUS * 2.0,
+                crate::BODY_HEIGHT,
+                crate::BODY_RADIUS * 2.0,
+            ),
+        )
+    }
+
+    pub fn with_dimensions(
+        id: u8,
+        feet: Vec3,
+        velocity: Vec3,
+        prediction: f32,
+        collision: &CollisionWorld,
+        dimensions: Vec3,
+    ) -> Self {
         let mut result = Self {
             id,
             initial: feet,
             samples: vec![(0.0, feet)],
+            dimensions,
         };
         let horizon = prediction.clamp(0.0, 0.5);
         let horizontal = velocity.with_y(0.0);
         let speed = horizontal.length();
         let profile = GroundProfile {
+            height: dimensions.y,
+            radius: dimensions.x * 0.5,
             walk: speed,
             run: speed,
             ..Default::default()
@@ -51,6 +77,12 @@ impl ForecastMotion {
         result
     }
 
+    pub fn distance(&self, point: Vec3, seconds: f32) -> f32 {
+        let mut actor = crate::Actor::spawn(self.id, self.feet_at(seconds), Vec3::NEG_Z);
+        actor.dimensions = self.dimensions;
+        crate::shapes::distance(point, &actor)
+    }
+
     pub fn feet_at(&self, seconds: f32) -> Vec3 {
         let seconds = seconds.max(0.0);
         for pair in self.samples.windows(2) {
@@ -70,6 +102,30 @@ mod tests {
     use super::*;
     use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
     use hex_core::{HexCoord, SubstanceId, TilePos};
+
+    #[test]
+    fn observed_tall_player_prediction_uses_its_actual_ceiling_and_hit_shape() {
+        let collision = floor(true);
+        let dimensions = Vec3::new(0.5, 1.2, 0.5);
+        let start = Vec3::Y * crate::collision::SKIN;
+        let path =
+            ForecastMotion::with_dimensions(0, start, Vec3::Y * 6.0, 0.5, &collision, dimensions);
+        let mut body = Body::default();
+        body.vertical_velocity = 6.0;
+        let mut feet = start;
+        let profile = GroundProfile {
+            height: dimensions.y,
+            radius: 0.25,
+            walk: 0.0,
+            run: 0.0,
+            ..Default::default()
+        };
+        for tick in 1..=60_u16 {
+            body.tick_profile(&mut feet, Vec3::ZERO, false, false, &collision, profile);
+            assert!(feet.distance(path.feet_at(f32::from(tick) * STEP)) < 0.0001);
+        }
+        assert!(path.distance(start + Vec3::Y * 1.0, 0.0) < 0.0001);
+    }
 
     fn floor(ceiling: bool) -> CollisionWorld {
         let mut view = ArenaTerrainView::default();

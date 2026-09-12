@@ -309,6 +309,7 @@ impl ArenaSession {
                 .is_some_and(|tick| self.tick.saturating_sub(*tick) <= 1200)
             {
                 let xp = entry.xp();
+                self.player_knowledge.credited_defeat(actor.id);
                 state.snapshot.xp += xp;
                 state.snapshot.total_xp += xp;
                 while state.snapshot.xp >= state.snapshot.xp_to_next {

@@ -182,6 +182,7 @@ pub(super) struct Bot {
     safe_expected: Option<(Vec3, Vec3)>,
     safe_run: bool,
     battle: Option<BattlePerception>,
+    player_profile: Option<crate::targeting::ObservedTarget>,
     acquired_at: Option<u64>,
     acquisition_wait_ticks: u16,
     escape: escape::EscapeRecovery,
@@ -231,6 +232,7 @@ impl Default for Bot {
             safe_expected: None,
             safe_run: false,
             battle: None,
+            player_profile: None,
             acquired_at: None,
             acquisition_wait_ticks: 0,
             escape: Default::default(),
@@ -420,6 +422,28 @@ impl Bot {
                                     (a.feet - m.feet) / age(tick, m.tick),
                                 )
                             });
+                        if a.expedition_player {
+                            self.player_profile = Some(crate::targeting::ObservedTarget {
+                                body: ForecastBody {
+                                    id: a.id,
+                                    feet: a.feet,
+                                    velocity,
+                                    predict_seconds: tuning.bot.prediction_seconds,
+                                    species: a.species,
+                                    team: a.team,
+                                    dimensions: a.dimensions,
+                                    yaw: a.body_yaw,
+                                    yaw_velocity: 0.0,
+                                    prisms: None,
+                                },
+                                tick,
+                                sight_point: if visible_from(collision, bot.eye(), a.center()) {
+                                    a.center()
+                                } else {
+                                    a.eye()
+                                },
+                            });
+                        }
                         Memory {
                             feet: a.feet,
                             velocity,
@@ -655,7 +679,11 @@ impl Bot {
                 velocity: if visible { m.velocity } else { Vec3::ZERO },
                 visible,
                 uncertainty: if visible { 0.1 } else { 0.4 + elapsed * 1.5 },
-                profile: self.battle.as_ref().and_then(|b| b.target),
+                profile: self
+                    .battle
+                    .as_ref()
+                    .and_then(|b| b.target)
+                    .or(self.player_profile),
             });
         }
         cue.map(|c| {
@@ -1146,7 +1174,7 @@ impl Bot {
             };
             let target_distance = motion.as_ref().map_or_else(
                 || belief.distance(impact.point, impact.time, tuning.bot.prediction_seconds),
-                |path| capsule_distance(impact.point, path.feet_at(impact.time)),
+                |path| path.distance(impact.point, impact.time),
             );
             if capsule_distance(impact.point, bot.feet) > tuning.fireball_radius() + 0.5
                 && target_distance <= tuning.fireball_radius() * 0.6
@@ -1183,6 +1211,16 @@ fn shadow_motion(
             .profile
             .is_none_or(|target| target.body.species == crate::Species::Human))
     .then(|| {
+        if let Some(target) = belief.profile {
+            return ForecastMotion::with_dimensions(
+                target.body.id,
+                belief.feet,
+                belief.velocity,
+                tuning.bot.prediction_seconds,
+                collision,
+                target.body.dimensions,
+            );
+        }
         ForecastMotion::human(
             belief.profile.map_or(0, |target| target.body.id),
             belief.feet,
@@ -1196,6 +1234,9 @@ fn shadow_motion(
 fn forecast_bodies(belief: Belief, tuning: &ArenaTuning) -> Vec<ForecastBody> {
     // A memory/cue is an aiming hypothesis, never a phantom collision body.
     if belief.visible {
+        if let Some(target) = belief.profile {
+            return vec![target.body];
+        }
         vec![ForecastBody::human(
             0,
             belief.feet,

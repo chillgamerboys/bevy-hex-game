@@ -48,7 +48,8 @@ impl ArenaSession {
         world: &ArenaTerrainView,
         geometry: ArenaVoxelGeometry,
     ) -> bool {
-        let body = Actor::spawn(0, feet, Vec3::NEG_Z);
+        let mut body = Actor::spawn(0, feet, Vec3::NEG_Z);
+        body.configure_expedition_player();
         feet.is_finite()
             && steering::contained(&body, geometry)
             && shapes::clear(&self.collision, &body, feet, body.body_yaw)
@@ -93,7 +94,7 @@ impl ArenaSession {
             world.spawns.first().copied().unwrap_or(Vec3::ZERO),
             Vec3::NEG_Z,
         );
-        human.expedition_player = true;
+        human.configure_expedition_player();
         if !human.feet.is_finite()
             || !shapes::clear(&self.collision, &human, human.feet, human.body_yaw)
             || !dry(&human, world, geometry)
@@ -104,6 +105,7 @@ impl ArenaSession {
             );
         }
         let mut actors = vec![human];
+        let mut landmarks = Vec::new();
         let mut encounter = EncounterState {
             initialized: true,
             ..Default::default()
@@ -144,6 +146,7 @@ impl ArenaSession {
                 actor.previous_feet = feet;
                 actor.body.grounded = true;
                 actor.grounded = true;
+                landmarks.push((id, name.clone()));
                 encounter.brains.insert(id, brain::Brain::new(id, feet));
                 encounter.stats.insert(id, ActorCombatStats::default());
                 actors.push(actor);
@@ -183,6 +186,11 @@ impl ArenaSession {
         encounter.expedition = Some(Control::new(sites, &actors, geometry));
         encounter.shadow_arena = ShadowArena::new(sites, &actors);
         self.actors = actors;
+        for (id, name) in landmarks {
+            if let Some(actor) = self.actors.iter().find(|actor| actor.id == id) {
+                self.player_knowledge.register_actor(actor, &name);
+            }
+        }
         self.encounter = encounter;
         self.register_forest_roster();
         self.register_expedition_sites(sites);
