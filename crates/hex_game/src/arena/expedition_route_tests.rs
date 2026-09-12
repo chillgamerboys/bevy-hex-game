@@ -138,6 +138,7 @@ fn bridge_supports(
             .columns
             .get(&coord)
             .into_iter()
+            .chain(view.object_columns.get(&coord))
             .flatten()
             .map(|run| TilePos::new(coord, run.top_level))
             .min_by(|a, b| {
@@ -182,12 +183,22 @@ fn published_expedition_routes_and_bridge_pass_segmented_controller_probes() {
                 .expedition
                 .as_ref()
                 .expect("fixture needs admitted expedition sites");
-            assert_eq!(session.actors.len(), 115, "{}", session.notice);
+            assert_eq!(session.actors.len(), 128, "{}", session.notice);
             assert_eq!(
                 sites.routes.len(),
-                42,
+                49,
                 "fixture targets the complete authored route graph"
             );
+            assert_eq!(sites.encounters.len(), 25);
+            assert_eq!(session.parties().len(), 25);
+            for actor in &session.actors {
+                assert!(
+                    session.actor_pose_valid(actor.id, view, geometry),
+                    "initial full body/flight clearance for actor{} {:?}",
+                    actor.id,
+                    actor.expedition_role()
+                );
+            }
             let player = session
                 .actors
                 .iter()
@@ -253,6 +264,9 @@ fn published_expedition_routes_and_bridge_pass_segmented_controller_probes() {
         "EXPEDITION_SEGMENTED_CONTROLLER_PROBES {}",
         serde_json::json!({
             "evidence": "Synthetic standing starts with public pose validation; actual probe_dry_route controller/collision/support checks; overlapping slices preserve every published point and bend in both directions. No native traversal, continuous long-route momentum, crowd, combat, or FPS claim.",
+            "package_identity":app.world().resource::<ArenaTerrainView>().package_identity,
+            "actors_at_admission":128,
+            "enemies_at_admission":127,
             "max_waypoints_per_segment": WAYPOINT_LIMIT,
             "max_ticks_per_segment": 3600,
             "enemy_stats_modified": false,

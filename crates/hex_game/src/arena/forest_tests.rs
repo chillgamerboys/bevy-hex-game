@@ -9,11 +9,15 @@ fn tick(app: &mut App) {
     app.world_mut().run_schedule(ArenaTick);
 }
 
-fn roster(app: &App) -> Vec<(ActorId, Species, Vec3)> {
+fn legacy_roster(app: &App) -> Vec<(ActorId, Species, Vec3)> {
     let view = app.world().resource::<ArenaTerrainView>();
     let geometry = *app.world().resource::<ArenaVoxelGeometry>();
     let session = app.world().resource::<ArenaSession>();
     assert_eq!(view.selection.map, ArenaMap::ForestMassif);
+    assert!(
+        view.expedition.is_none(),
+        "this fixture targets the original 26-actor package"
+    );
     assert_eq!(view.columns.len(), 105_469);
     assert_eq!(session.actors.len(), 26, "{}", session.notice);
     assert_eq!(session.parties().len(), 8);
@@ -284,7 +288,7 @@ fn phase_distributions(samples: &[TickPhaseSample]) -> serde_json::Value {
 /// and final visual/native acceptance have separate, still-pending gates.
 #[test]
 #[ignore = "requires HEX_FOREST_WORLD pointing at the compiled expedition and companion"]
-fn authored_expedition_proxy_has_115_supported_actors_and_resets() {
+fn authored_expedition_has_128_supported_actors_and_resets() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .insert_resource(ArenaSelection {
@@ -301,50 +305,70 @@ fn authored_expedition_proxy_has_115_supported_actors_and_resets() {
     );
     tick(&mut app);
     let setup_ms = setup.elapsed().as_secs_f64() * 1000.0;
-    let inspect = |app: &App| {
-        let world = app.world().resource::<ArenaTerrainView>();
-        let geometry = *app.world().resource::<ArenaVoxelGeometry>();
-        let session = app.world().resource::<ArenaSession>();
-        assert!(
-            world.expedition.is_some(),
-            "fixture needs the expedition package"
-        );
-        assert_eq!(world.columns.len(), 105_469);
-        assert_eq!(session.actors.len(), 115, "{}", session.notice);
-        assert_eq!(session.parties().len(), 19);
-        assert_eq!(
-            session
-                .parties()
-                .iter()
-                .map(|party| party.living)
-                .collect::<Vec<_>>(),
-            [3, 3, 3, 3, 3, 5, 5, 5, 9, 9, 11, 14, 16, 20, 1, 1, 1, 1, 1]
-        );
-        let mut roles = BTreeMap::<String, usize>::new();
-        for actor in &session.actors {
+    let inspect =
+        |app: &App| {
+            let world = app.world().resource::<ArenaTerrainView>();
+            let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+            let session = app.world().resource::<ArenaSession>();
             assert!(
-                session.actor_pose_valid(actor.id, world, geometry),
-                "unsupported {} at {:?}",
-                actor.id,
-                actor.feet
+                world.expedition.is_some(),
+                "fixture needs the expedition package"
             );
-            if let Some(role) = actor.expedition_role() {
-                *roles.entry(format!("{role:?}")).or_default() += 1;
+            assert_eq!(world.columns.len(), 105_469);
+            assert_eq!(session.actors.len(), 128, "{}", session.notice);
+            assert_eq!(session.parties().len(), 25);
+            assert_eq!(
+                session
+                    .parties()
+                    .iter()
+                    .map(|party| party.living)
+                    .collect::<Vec<_>>(),
+                [3, 3, 3, 3, 3, 5, 5, 5, 9, 9, 11, 14, 16, 20, 1, 1, 1, 1, 1, 1, 1, 1, 3, 3, 4]
+            );
+            let mut roles = BTreeMap::<String, usize>::new();
+            for actor in &session.actors {
+                assert!(
+                    session.actor_pose_valid(actor.id, world, geometry),
+                    "unsupported {} at {:?}",
+                    actor.id,
+                    actor.feet
+                );
+                if let Some(role) = actor.expedition_role() {
+                    *roles.entry(format!("{role:?}")).or_default() += 1;
+                }
             }
-        }
-        assert_eq!(roles.get("BabyGoblin"), Some(&15));
-        assert_eq!(roles.get("Goblin"), Some(&92));
-        assert_eq!(roles.get("Shaman"), Some(&2));
-        assert_eq!(roles.get("Troll"), Some(&1));
-        assert_eq!(roles.get("Dragon"), Some(&3));
-        assert_eq!(roles.get("MountainShadow"), Some(&1));
-        assert!(!session.is_finished());
-        session
-            .actors
-            .iter()
-            .map(|actor| (actor.id, actor.species, actor.feet))
-            .collect::<Vec<_>>()
-    };
+            assert_eq!(roles.get("BabyGoblin"), Some(&15));
+            assert_eq!(roles.get("Goblin"), Some(&92));
+            assert_eq!(roles.get("Shaman"), Some(&2));
+            assert_eq!(roles.get("Troll"), Some(&1));
+            assert_eq!(roles.get("Dragon"), Some(&3));
+            assert_eq!(roles.get("MountainShadow"), Some(&1));
+            assert_eq!(roles.get("PlainGolem"), Some(&3));
+            assert_eq!(roles.get("PlainWisp"), Some(&10));
+            assert_eq!(
+                session
+                    .actors
+                    .iter()
+                    .filter(|actor| actor.dragon_tier() == hex_arena::DragonTier::Summit)
+                    .count(),
+                1
+            );
+            for actor in session.actors.iter().filter(|actor| {
+                actor.expedition_role() == Some(hex_arena::ExpeditionRole::PlainWisp)
+            }) {
+                assert!(
+                    actor.flying && actor.flight_layer().is_some(),
+                    "authored Wisp uses validated flight deployment"
+                );
+            }
+            assert_lowland_sites(session, world);
+            assert!(!session.is_finished());
+            session
+                .actors
+                .iter()
+                .map(|actor| (actor.id, actor.species, actor.feet))
+                .collect::<Vec<_>>()
+        };
     let initial = inspect(&app);
     let mut samples = Vec::new();
     for _ in 0..120 {
@@ -359,7 +383,8 @@ fn authored_expedition_proxy_has_115_supported_actors_and_resets() {
     println!(
         "EXPEDITION_ADMISSION_RECEIPT {}",
         serde_json::json!({
-            "actors": 115, "parties": 19, "setup_ms": setup_ms,
+            "actors": 128, "enemies":127, "parties": 25,
+            "package_identity":app.world().resource::<ArenaTerrainView>().package_identity, "setup_ms": setup_ms,
             "reset_ms": reset.elapsed().as_secs_f64() * 1000.0,
             "bridge_start_ticks": distribution(samples),
             "scope": "selected compiled expedition package: spawn/reset and bridge-idle simulation CPU; no active combat, rally, renderer or FPS claim"
@@ -372,8 +397,8 @@ fn authored_expedition_proxy_has_115_supported_actors_and_resets() {
 /// workload. Only the human receives extra HP and moves among validated camp poses;
 /// enemy bodies, stats, leashes, terrain and normal decision rules stay authored.
 #[test]
-#[ignore = "requires compiled Forest V4 package; explicit full-map CPU timing fixture"]
-fn authored_forest_spawn_reset_and_three_second_active_tick_profile() {
+#[ignore = "requires original 26-actor Forest V4 package without expedition companion; explicit legacy CPU fixture"]
+fn legacy_forest_spawn_reset_and_three_second_active_tick_profile() {
     let setup_start = Instant::now();
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
@@ -390,7 +415,7 @@ fn authored_forest_spawn_reset_and_three_second_active_tick_profile() {
     );
     tick(&mut app);
     let setup_ms = setup_start.elapsed().as_secs_f64() * 1000.0;
-    let initial = roster(&app);
+    let initial = legacy_roster(&app);
     let original_progress = app
         .world()
         .resource::<ArenaSession>()
@@ -454,7 +479,7 @@ fn authored_forest_spawn_reset_and_three_second_active_tick_profile() {
     let reset_start = Instant::now();
     tick(&mut app);
     let reset_ms = reset_start.elapsed().as_secs_f64() * 1000.0;
-    assert_eq!(roster(&app), initial);
+    assert_eq!(legacy_roster(&app), initial);
     assert_eq!(
         app.world().resource::<ArenaSession>().progress(),
         Some(original_progress)
@@ -573,8 +598,9 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
         let world = app.world().resource::<ArenaTerrainView>();
         let geometry = *app.world().resource::<ArenaVoxelGeometry>();
         assert!(world.expedition.is_some());
-        assert_eq!(session.actors.len(), 115, "{}", session.notice);
-        assert_eq!(session.parties().len(), 19);
+        assert_eq!(session.actors.len(), 128, "{}", session.notice);
+        assert_eq!(session.parties().len(), 25);
+        assert_lowland_sites(session, world);
         for actor in &session.actors {
             assert!(session.actor_pose_valid(actor.id, world, geometry));
         }
@@ -736,7 +762,8 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
     println!(
         "EXPEDITION_ACTIVE_RECEIPT {}",
         serde_json::json!({
-            "actors_at_reset":115,"parties":19,
+            "actors_at_reset":128,"enemies_at_reset":127,"parties":25,
+            "package_identity":app.world().resource::<ArenaTerrainView>().package_identity,
             "scope":"ArenaTick CPU wall time; no renderer, GPU, FPS or native traversal claim",
             "synthetic_changes":"extra player HP and two validated player visits; ordinary single contact shot triggers Troll rally; authored enemy stats and placements",
             "largest_camp":distribution(camp_samples),"rally":distribution(rally_samples),
@@ -759,3 +786,60 @@ fn authored_expedition_largest_camp_and_full_rally_tick_profile() {
         "every ordered forest party must begin travel"
     );
 }
+
+/// Match gameplay party homes and full admitted rosters to public world sites.
+#[expect(
+    clippy::expect_used,
+    reason = "Missing admitted sites or party bindings fail this actual package fixture."
+)]
+fn assert_lowland_sites(session: &ArenaSession, view: &ArenaTerrainView) {
+    use hex_arena::ExpeditionRole;
+    use hex_core::HexCoord;
+    let sites = view.expedition.as_ref().expect("admitted expedition");
+    assert_eq!(sites.encounters.len(), 25);
+    assert_eq!(sites.routes.len(), 49);
+    for (name, q, r, role, count) in [
+        ("plain_golem_01", 15, 72, ExpeditionRole::PlainGolem, 1),
+        ("plain_golem_02", 5, 115, ExpeditionRole::PlainGolem, 1),
+        ("plain_golem_03", 35, 137, ExpeditionRole::PlainGolem, 1),
+        ("plain_wisp_01", 35, 60, ExpeditionRole::PlainWisp, 3),
+        ("plain_wisp_02", 20, 95, ExpeditionRole::PlainWisp, 3),
+        ("plain_wisp_03", 0, 145, ExpeditionRole::PlainWisp, 4),
+    ] {
+        let site = sites.encounters.get(name).expect("named lowland site");
+        assert_eq!(
+            site.deployment.preferred.coord,
+            HexCoord::from_axial(q, r),
+            "{name}"
+        );
+        let anchor = view.anchors.get(name).expect("published lowland anchor");
+        assert_eq!(
+            HexCoord::from_world(*anchor),
+            site.deployment.preferred.coord
+        );
+        let party = session
+            .parties()
+            .iter()
+            .find(|party| HexCoord::from_world(party.home) == site.deployment.preferred.coord)
+            .expect("admitted lowland party");
+        let members: Vec<_> = session
+            .actors
+            .iter()
+            .filter(|actor| actor.party == Some(party.id))
+            .collect();
+        assert_eq!(members.len(), count, "{name}");
+        assert!(
+            members
+                .iter()
+                .all(|actor| actor.expedition_role() == Some(role)),
+            "{name}"
+        );
+        assert!(site
+            .deployment
+            .surfaces
+            .contains(&site.deployment.preferred));
+    }
+}
+
+#[path = "forest_tests/destructive_profile.rs"]
+mod destructive_profile;
