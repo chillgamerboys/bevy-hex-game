@@ -5,7 +5,7 @@ mod backend;
 mod macos;
 
 use std::sync::{mpsc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowCloseRequested};
@@ -14,6 +14,8 @@ use hex_core::arena::{ArenaReset, ArenaTerrainView};
 use serde_json::{json, Value};
 
 use super::{ArenaFrame, ViewState};
+
+const QUIT_QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Local recording control and read-only HUD state; filesystem work runs elsewhere.
 #[derive(Resource)]
@@ -29,6 +31,7 @@ pub(super) struct Recorder {
     open_folder: bool,
     quit: bool,
     quit_sent: bool,
+    quit_requested: Option<Instant>,
     last_run: Option<RunMarker>,
 }
 
@@ -43,6 +46,7 @@ impl Recorder {
     }
     pub(super) fn request_quit(&mut self) {
         self.quit = true;
+        self.quit_requested.get_or_insert_with(Instant::now);
     }
     pub(super) fn status_text(&self) -> &str {
         &self.status
@@ -70,6 +74,38 @@ impl Recorder {
             Err(error) => {
                 self.status = format!("Recorder unavailable: {error}");
                 false
+            }
+        }
+    }
+
+    fn dispatch_quit(&mut self, now: Instant) -> Option<AppExit> {
+        if self.quit_sent {
+            return None;
+        }
+        self.finalizing = self.active;
+        match self.commands.try_send(backend::Command::Quit) {
+            Ok(()) => {
+                self.quit_sent = true;
+                self.status = "Finalizing recording before quitting…".into();
+                None
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                let requested = *self.quit_requested.get_or_insert(now);
+                if now.saturating_duration_since(requested) < QUIT_QUEUE_TIMEOUT {
+                    self.status = "Waiting for the recorder before quitting…".into();
+                    None
+                } else {
+                    self.status =
+                        "Recorder quit queue timed out; recording may be incomplete.".into();
+                    error!("{}", self.status);
+                    Some(AppExit::error())
+                }
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                self.status =
+                    "Recorder disconnected before quit; recording may be incomplete.".into();
+                error!("{}", self.status);
+                Some(AppExit::error())
             }
         }
     }
@@ -116,6 +152,7 @@ pub(super) fn install(app: &mut App) {
         open_folder: false,
         quit: false,
         quit_sent: false,
+        quit_requested: None,
         last_run: None,
     })
     .add_systems(
@@ -187,12 +224,8 @@ fn update(
         recorder.request_quit();
     }
     if recorder.quit && !recorder.quit_sent {
-        recorder.finalizing = recorder.active;
-        recorder.quit_sent = recorder.send(backend::Command::Quit);
-        recorder.status = "Finalizing recording before quitting…".into();
-        // A disconnected worker cannot finalize; report the failure, then exit.
-        if !recorder.quit_sent {
-            exit.write(AppExit::error());
+        if let Some(outcome) = recorder.dispatch_quit(Instant::now()) {
+            exit.write(outcome);
         }
         return;
     }
@@ -364,11 +397,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn recording_state_waits_for_native_start_and_toggle_only_requests_work() {
-        let (sender, receiver) = mpsc::sync_channel(8);
+    fn queued_recorder(sender: mpsc::SyncSender<backend::Command>) -> Recorder {
         let (_, responses) = mpsc::channel();
-        let mut recorder = Recorder {
+        Recorder {
             commands: sender,
             responses: Mutex::new(responses),
             supported: true,
@@ -380,13 +411,72 @@ mod tests {
             open_folder: false,
             quit: false,
             quit_sent: false,
+            quit_requested: None,
             last_run: None,
-        };
+        }
+    }
+
+    #[test]
+    fn recording_state_waits_for_native_start_and_toggle_only_requests_work() {
+        let (sender, receiver) = mpsc::sync_channel(8);
+        let mut recorder = queued_recorder(sender);
         recorder.request_toggle();
         assert!(recorder.toggle);
         assert!(!recorder.is_recording());
         assert!(receiver.try_recv().is_err());
         recorder.request_quit();
         assert!(!recorder.can_record());
+    }
+
+    #[test]
+    fn full_quit_queue_retries_without_exiting_then_sends_exactly_once() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        assert!(sender.try_send(backend::Command::Stop).is_ok());
+        let mut recorder = queued_recorder(sender);
+        recorder.active = true;
+        recorder.request_quit();
+        let requested = recorder.quit_requested.expect("quit request time");
+        assert_eq!(recorder.dispatch_quit(requested), None);
+        assert!(recorder.finalizing);
+        assert!(!recorder.quit_sent);
+        recorder.request_quit();
+        assert_eq!(recorder.quit_requested, Some(requested));
+        assert!(matches!(receiver.try_recv(), Ok(backend::Command::Stop)));
+        assert_eq!(
+            recorder.dispatch_quit(requested + Duration::from_secs(1)),
+            None
+        );
+        assert!(recorder.quit_sent);
+        assert!(matches!(receiver.try_recv(), Ok(backend::Command::Quit)));
+        assert_eq!(
+            recorder.dispatch_quit(requested + Duration::from_secs(2)),
+            None
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn full_quit_queue_has_a_fixed_deadline_and_disconnection_fails_immediately() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        assert!(sender.try_send(backend::Command::Stop).is_ok());
+        let mut recorder = queued_recorder(sender);
+        recorder.request_quit();
+        let requested = recorder.quit_requested.expect("quit request time");
+        assert_eq!(
+            recorder.dispatch_quit(requested + QUIT_QUEUE_TIMEOUT - Duration::from_nanos(1)),
+            None
+        );
+        recorder.request_quit();
+        assert_eq!(
+            recorder.dispatch_quit(requested + QUIT_QUEUE_TIMEOUT),
+            Some(AppExit::error())
+        );
+        assert!(!recorder.quit_sent);
+        drop(receiver);
+        assert_eq!(recorder.dispatch_quit(requested), Some(AppExit::error()));
+        assert!(recorder.status.contains("disconnected"));
     }
 }

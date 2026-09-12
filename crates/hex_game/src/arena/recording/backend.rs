@@ -75,7 +75,17 @@ fn supported() -> bool {
 }
 
 fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
-    let available = supported();
+    worker_with_folder_task(requests, responses, supported(), open_folder);
+}
+
+fn worker_with_folder_task<F>(
+    requests: Receiver<Command>,
+    responses: SyncSender<Response>,
+    available: bool,
+    open_folder: F,
+) where
+    F: Fn() -> Result<(), String> + Clone + Send + 'static,
+{
     if responses
         .send(Response::Supported(
             available,
@@ -93,6 +103,7 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
     let mut active: Option<Clip> = None;
     let mut quitting = false;
     let mut last_failure = None;
+    let mut folder_job = None;
     loop {
         match requests.recv_timeout(Duration::from_millis(25)) {
             Ok(Command::Start {
@@ -135,24 +146,11 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
                 }
             }
             Ok(Command::OpenFolder) => {
-                let result = folder().and_then(|path| {
-                    if !cfg!(target_os = "macos") {
-                        return Err("Recording folders are available on macOS.".into());
+                if !quitting && folder_job.is_none() {
+                    match launch_folder_task(open_folder.clone()) {
+                        Ok(job) => folder_job = Some(job),
+                        Err(error) => drop(responses.send(Response::Status(error))),
                     }
-                    Process::new("/usr/bin/open")
-                        .arg(path)
-                        .status()
-                        .map_err(|error| error.to_string())
-                        .and_then(|status| {
-                            if status.success() {
-                                Ok(())
-                            } else {
-                                Err("The recording folder could not be opened.".into())
-                            }
-                        })
-                });
-                if let Err(error) = result {
-                    drop(responses.send(Response::Status(error)));
                 }
             }
             Ok(Command::Event { kind, snapshot }) => {
@@ -178,11 +176,72 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
                 active = None;
             }
         }
+        if let Some(Err(error)) = poll_folder_task(&mut folder_job) {
+            drop(responses.send(Response::Status(error)));
+        }
         if quitting && active.is_none() {
             drop(responses.send(Response::Quit(last_failure.map_or(Ok(()), Err))));
             return;
         }
     }
+}
+
+// At most one folder job is outstanding. Launch Services and filesystem work
+// cannot block native clip polling or the recorder's stop/quit deadlines.
+fn launch_folder_task(
+    task: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<Receiver<Result<(), String>>, String> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("recording-folder".into())
+        .spawn(move || drop(sender.send(task())))
+        .map_err(|error| format!("Cannot open recording folder: {error}"))?;
+    Ok(receiver)
+}
+
+fn poll_folder_task(job: &mut Option<Receiver<Result<(), String>>>) -> Option<Result<(), String>> {
+    let result = match job.as_ref()?.try_recv() {
+        Ok(result) => result,
+        Err(TryRecvError::Empty) => return None,
+        Err(TryRecvError::Disconnected) => Err("Recording folder worker disconnected.".into()),
+    };
+    *job = None;
+    Some(result)
+}
+
+fn open_folder() -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("Recording folders are available on macOS.".into());
+    }
+    let mut child = Process::new("/usr/bin/open")
+        .arg(folder()?)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break if status.success() {
+                    Ok(())
+                } else {
+                    Err("The recording folder could not be opened.".into())
+                };
+            }
+            Err(error) => break Err(error.to_string()),
+            Ok(None) if Instant::now() >= deadline => {
+                break Err("Opening the recording folder timed out.".into());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+        }
+    };
+    if result.is_err() {
+        drop(child.kill());
+        drop(child.wait());
+    }
+    result
 }
 
 struct Clip {
@@ -528,6 +587,79 @@ fn prepare_helper() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocked_folder_job_does_not_delay_quit_or_launch_duplicates() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        };
+
+        let (commands, requests) = mpsc::sync_channel(8);
+        let (responses, received) = mpsc::sync_channel(8);
+        let (entered, started) = mpsc::sync_channel(1);
+        let (release, blocked) = mpsc::sync_channel(1);
+        let blocked = Arc::new(Mutex::new(blocked));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task_calls = Arc::clone(&calls);
+        let task = move || {
+            task_calls.fetch_add(1, Ordering::SeqCst);
+            entered.send(()).map_err(|error| error.to_string())?;
+            blocked
+                .lock()
+                .map_err(|error| error.to_string())?
+                .recv()
+                .map_err(|error| error.to_string())
+        };
+        let worker = std::thread::spawn(move || {
+            worker_with_folder_task(requests, responses, false, task);
+        });
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(5)),
+            Ok(Response::Supported(false, _))
+        ));
+        assert!(commands.send(Command::OpenFolder).is_ok());
+        started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("folder task reached the controlled wait");
+        assert!(commands.send(Command::OpenFolder).is_ok());
+        assert!(commands.send(Command::OpenFolder).is_ok());
+        assert!(commands.send(Command::Quit).is_ok());
+        let outcome = received.recv_timeout(Duration::from_secs(5));
+        let call_count = calls.load(Ordering::SeqCst);
+        // Release even if an assertion below fails. No OS folder process or
+        // recording is involved in this lifecycle regression.
+        drop(release);
+        worker.join().expect("recorder worker exits");
+        assert!(matches!(outcome, Ok(Response::Quit(Ok(())))));
+        assert_eq!(call_count, 1, "one outstanding folder task only");
+    }
+
+    #[test]
+    fn folder_job_failure_is_reported_without_failing_recorder_quit() {
+        let (commands, requests) = mpsc::sync_channel(8);
+        let (responses, received) = mpsc::sync_channel(8);
+        let worker = std::thread::spawn(move || {
+            worker_with_folder_task(requests, responses, false, || {
+                Err("Opening the recording folder timed out.".into())
+            });
+        });
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(5)),
+            Ok(Response::Supported(false, _))
+        ));
+        assert!(commands.send(Command::OpenFolder).is_ok());
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(5)),
+            Ok(Response::Status(message)) if message.contains("timed out")
+        ));
+        assert!(commands.send(Command::Quit).is_ok());
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(5)),
+            Ok(Response::Quit(Ok(())))
+        ));
+        worker.join().expect("recorder worker exits");
+    }
 
     #[test]
     #[cfg(unix)]
