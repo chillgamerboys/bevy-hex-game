@@ -8,11 +8,15 @@ private package files or changes the legacy Forest source.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import errno
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import time
 
 from forest_expedition import document, site_document
 from forest_finish import compose, final_source
@@ -23,6 +27,60 @@ import world as world_tool
 CONTENT = ROOT / "assets/config/v4/forest-massif/expedition"
 DEFAULT_OUTPUT = CONTENT / "compiled"
 DEFAULT_TARGET = ROOT / "target/v4-authoring"
+
+
+@contextmanager
+def preparation_lock(output: Path):
+    """Serialize launch preparations, including the ready-package recheck.
+
+    Keep the lock file inside the ignored package workspace and never unlink it:
+    waiting processes must keep referring to the same OS lock after publication.
+    Process exit releases the lock even when a compiler fails or is interrupted.
+    """
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / ".preparation.lock").open("a+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+            if os.fstat(lock.fileno()).st_size == 0:
+                lock.write(b"\0")
+                lock.flush()
+            while True:
+                try:
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as error:
+                    if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    time.sleep(.1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def atomic_text(path: Path, value: str) -> None:
+    """Publish the complete companion without exposing a truncated RON file."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def package_ready(output: Path, generation: dict) -> bool:
@@ -56,6 +114,13 @@ def ensure_package(target: Path, output: Path, scratch: Path) -> bool:
     Child Cargo always gets a separate authoring target, including cargo metadata;
     it must never inherit the running app's build target or lock.
     """
+    output = output.resolve()
+    with preparation_lock(output):
+        return _ensure_package(target, output, scratch)
+
+
+def _ensure_package(target: Path, output: Path, scratch: Path) -> bool:
+    # A preceding launcher may have completed while this process waited.
     generation = json.loads((CONTENT / "generation.json").read_text())
     if package_ready(output, generation):
         return False
@@ -67,8 +132,12 @@ def ensure_package(target: Path, output: Path, scratch: Path) -> bool:
     except (OSError, ValueError):
         subprocess.run([sys.executable, str(ROOT / "tools/world.py"), "--target-dir", str(target), "build"],
                        cwd=ROOT, env=env, check=True)
+    scratch.mkdir(parents=True, exist_ok=True)
+    # Retain each failed/successful preparation's evidence without sharing its
+    # intermediate files with another output or an explicit authoring command.
+    working = Path(tempfile.mkdtemp(prefix="prepare-", dir=scratch.resolve()))
     subprocess.run([sys.executable, str(ROOT / "tools/forest_package.py"), "compile",
-                    "--target-dir", str(target), "--output", str(output), "--scratch", str(scratch)],
+                    "--target-dir", str(target), "--output", str(output), "--scratch", str(working)],
                    cwd=ROOT, env=env, check=True)
     if not package_ready(output, generation):
         raise ValueError("Forest package preparation did not publish the reviewed expedition; launch stopped")
@@ -120,8 +189,9 @@ def main():
         raise ValueError("reproduced package fingerprint differs from reviewed source")
     sidecar=site_document(metadata,world_id=survey["world_id"],manifest_fingerprint=survey["manifest_fingerprint"],raw=Raw,ron=ron)
     if args.command=="compile":
-        (args.output/"arena-sites.ron").write_text(sidecar)
-        (args.output/"content-verification.json").write_text(json.dumps(evidence,indent=2)+"\n")
+        atomic_text(args.output/"arena-sites.ron", sidecar)
+        # Publish acceptance last, after the entire companion is visible.
+        world_tool.atomic_json(args.output/"content-verification.json", evidence)
     elif (args.output/"arena-sites.ron").read_text() != sidecar:
         raise ValueError("package companion differs from verified authoring")
     (args.scratch/"verification.json").write_text(json.dumps(evidence,indent=2)+"\n")

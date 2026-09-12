@@ -1,7 +1,10 @@
 """First launch builds missing content once; complete packages never invoke Cargo."""
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -37,6 +40,10 @@ class ExpeditionBootstrap(unittest.TestCase):
             def complete(command, **kwargs):
                 self.assertEqual(kwargs["env"]["CARGO_TARGET_DIR"], str(target.resolve()))
                 if "compile" in command:
+                    working = Path(command[command.index("--scratch") + 1])
+                    self.assertEqual(working.parent, (root / "scratch").resolve())
+                    self.assertNotEqual(working, root / "scratch")
+                    self.assertTrue(working.is_dir())
                     self.publish(output)
             with patch.object(package, "CONTENT", root), patch.object(package.world_tool, "checked_binary", side_effect=ValueError("missing")), patch.object(package.subprocess, "run", side_effect=complete) as run:
                 self.assertTrue(package.ensure_package(target, output, root / "scratch"))
@@ -70,6 +77,70 @@ class ExpeditionBootstrap(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "launch stopped"):
                     package.ensure_package(root / "compiler", root / "missing", root / "scratch")
                 self.assertEqual(run.call_count, 1, "verified compiler needs no rebuild")
+
+    def test_simultaneous_first_launches_compile_once_then_recheck_readiness(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "generation.json").write_text(json.dumps(self.generation))
+            output = root / "compiled"
+            entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
+            def complete(command, **kwargs):
+                entered.set()
+                self.assertTrue(release.wait(3), "release the bounded synthetic compiler")
+                self.publish(output)
+            def second():
+                second_started.set()
+                return package.ensure_package(root / "compiler", output, root / "scratch")
+            with patch.object(package, "CONTENT", root), patch.object(package.world_tool, "checked_binary"), patch.object(package.subprocess, "run", side_effect=complete) as run:
+                with ThreadPoolExecutor(max_workers=2) as workers:
+                    first = workers.submit(package.ensure_package, root / "compiler", output, root / "scratch")
+                    try:
+                        self.assertTrue(entered.wait(3))
+                        other = workers.submit(second)
+                        self.assertTrue(second_started.wait(3))
+                        time.sleep(.05)
+                        self.assertFalse(other.done(), "another launcher waits for publication")
+                    finally:
+                        release.set()
+                    self.assertTrue(first.result(timeout=3))
+                    self.assertFalse(other.result(timeout=3), "waiting launcher reuses the completed package")
+                self.assertEqual(run.call_count, 1)
+
+    def test_failed_preparation_releases_lock_and_next_attempt_gets_new_scratch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "generation.json").write_text(json.dumps(self.generation))
+            output = root / "compiled"
+            workspaces = []
+            def complete(command, **kwargs):
+                workspaces.append(command[command.index("--scratch") + 1])
+                if len(workspaces) == 1:
+                    raise OSError("compiler interrupted")
+                self.publish(output)
+            with patch.object(package, "CONTENT", root), patch.object(package.world_tool, "checked_binary"), patch.object(package.subprocess, "run", side_effect=complete):
+                with self.assertRaisesRegex(OSError, "interrupted"):
+                    package.ensure_package(root / "compiler", output, root / "scratch")
+                self.assertTrue(package.ensure_package(root / "compiler", output, root / "scratch"))
+            self.assertEqual(len(set(workspaces)), 2)
+
+    def test_companion_replacement_never_exposes_partial_text_and_failed_write_retains_old(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            destination = root / "arena-sites.ron"
+            destination.write_text("old complete companion")
+            replace = package.os.replace
+            def inspect_then_replace(source, target):
+                self.assertEqual(destination.read_text(), "old complete companion")
+                self.assertEqual(Path(source).read_text(), "new complete companion")
+                replace(source, target)
+            with patch.object(package.os, "replace", side_effect=inspect_then_replace):
+                package.atomic_text(destination, "new complete companion")
+            self.assertEqual(destination.read_text(), "new complete companion")
+            with patch.object(package.os, "replace", side_effect=OSError("publication interrupted")):
+                with self.assertRaisesRegex(OSError, "interrupted"):
+                    package.atomic_text(destination, "incomplete candidate")
+            self.assertEqual(destination.read_text(), "new complete companion")
+            self.assertEqual(list(root.iterdir()), [destination], "temporary writes are cleaned up")
 
 
 if __name__ == "__main__":
