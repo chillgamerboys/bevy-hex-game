@@ -786,6 +786,7 @@ pub(super) fn camera(
     state: Res<ViewState>,
     view: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
+    readability: Option<Res<super::readability_capture::ReadabilityCapture>>,
     mut cameras: Query<&mut Transform, With<ArenaCamera>>,
 ) {
     if !state.external_camera() {
@@ -795,6 +796,10 @@ pub(super) fn camera(
         return;
     };
     if let Some(pose) =
+        super::readability_capture::camera(readability.as_deref(), &state.capture_view)
+    {
+        *camera = pose;
+    } else if let Some(pose) =
         super::expedition_capture::camera(&session, &view, *geometry, &state.capture_view)
     {
         *camera = pose;

@@ -16,6 +16,7 @@ pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRES
 mod golem;
 mod hud;
 mod presentation;
+mod readability_capture;
 mod recording;
 mod spectator;
 #[cfg(test)]
@@ -1070,6 +1071,12 @@ fn drive_simulation(world: &mut World) {
             world.write_message(AppExit::error());
             return;
         }
+        if let Err(error) = readability_capture::stage(world, frame, &view) {
+            error!("World readability fixture failed: {error}");
+            world.resource_mut::<ViewState>().requested = true;
+            world.write_message(AppExit::error());
+            return;
+        }
         if frame == 80 && view.contains("partial-preview") {
             stage_partial_preview(world);
         }
@@ -1223,6 +1230,17 @@ fn drive_simulation(world: &mut World) {
             break;
         }
         if capture && expedition_capture::ready(world.resource::<ArenaSession>(), &view) {
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
+        if capture
+            && readability_capture::ready(
+                world.get_resource::<readability_capture::ReadabilityCapture>(),
+                &view,
+            )
+        {
             let mut state = world.resource_mut::<ViewState>();
             state.capture_event_frame = Some(frame);
             state.accumulator = 0.0;
@@ -1470,6 +1488,7 @@ fn capture_frame(
         Option<Res<hex_map::LiquidVisualTime>>,
         Option<Res<hex_core::arena::ArenaRenderStatus>>,
         Option<Res<ux::UxState>>,
+        Option<Res<readability_capture::ReadabilityCapture>>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1480,7 +1499,7 @@ fn capture_frame(
         Res<hex_core::DamagedVoxels>,
     ),
 ) {
-    let (liquid_clock, render, ui) = render_context;
+    let (liquid_clock, render, ui, readability) = render_context;
     let Some(path) = state.capture.clone() else {
         return;
     };
@@ -1622,6 +1641,17 @@ fn capture_frame(
     {
         if state.frames >= 180 || session.is_finished() {
             error!(snapshot = ?session.expedition_progress(), "Expedition synthetic capture failed: expected reward or fountain state was not reached");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    if readability_capture::fixture_view(&state.capture_view)
+        && (state.capture_event_frame.is_none()
+            || !readability_capture::ready(readability.as_deref(), &state.capture_view))
+    {
+        if state.frames >= 180 {
+            error!("World readability capture did not reach its verified publication and camera");
             state.requested = true;
             exit.write(AppExit::error());
         }
@@ -1834,6 +1864,8 @@ fn capture_frame(
         ("expedition", serde_json::json!(session.expedition_progress())),
         ("package_identity", serde_json::json!(view.package_identity)),
         ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
+        ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),
+        ("readability_state", readability_capture::receipt(readability.as_deref())),
         ("expedition_rally", serde_json::json!(session.expedition_rally_status())),
         ("player_tuning", serde_json::json!(session.player_tuning(&tuning))),
         ("terminal_menu_fixture", serde_json::json!(matches!(state.capture_view.as_str(), "terminal-win" | "terminal-defeat").then_some("synthetic-knockout-for-menu-presentation"))),
