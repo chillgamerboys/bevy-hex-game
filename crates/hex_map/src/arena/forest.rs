@@ -332,6 +332,28 @@ pub(super) fn build(
     let presentation =
         MapPresentationProjection::from_snapshot_parts(liquids, features, BTreeMap::new());
     worlds::project_static(&mut view, &presentation, geometry, art)?;
+    // Preserve V4's material admission even where several names share one battle
+    // durability class. The projection must never offer an edit V4 forbids.
+    for product in backend.runtime.resident_chunks() {
+        for column in &product.package.columns {
+            let coord = local(column.position)?;
+            for run in &column.runs {
+                let immutable = backend
+                    .runtime
+                    .manifest()
+                    .materials
+                    .iter()
+                    .find(|material| material.id == run.material)
+                    .is_some_and(|material| !material.diggable);
+                if immutable {
+                    view.edit_protected
+                        .entry(coord)
+                        .or_default()
+                        .push((run.bottom, run.top - 1));
+                }
+            }
+        }
+    }
     // The one built crossing is an authored reservation: explosions cannot remove
     // its only support and strand the run. Ordinary bank/bed physics is unchanged.
     for (coord, column) in map.columns() {
@@ -341,6 +363,11 @@ pub(super) fn build(
                 .or_default()
                 .push((0, column.top().saturating_sub(1)));
         }
+    }
+    // Forest FeatureVoxels declares opaque foliage solid in the V4 package.
+    // Continuous collision must preserve that exact exported canopy occupancy.
+    for span in &mut view.static_spans {
+        span.blocks_movement |= span.blocks_sight;
     }
     compact_static(&mut view);
     Ok(worlds::WorldRecipe {
@@ -378,4 +405,82 @@ fn compact_static(view: &mut ArenaTerrainView) {
         compact.push(span);
     }
     view.static_spans = compact;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_world_contracts::{QueryResult, WorldQuery};
+
+    /// Full authored fixture test is explicit so ordinary small arena checks do
+    /// not quietly depend on an operator's generated world workspace.
+    #[test]
+    #[ignore = "requires python3 tools/forest_world.py compile; run explicitly for delivery"]
+    fn authored_forest_publication_and_v4_edit_roundtrip() {
+        let content = load_content().expect("accepted content");
+        let selection = ArenaSelection {
+            map: hex_core::arena::ArenaMap::ForestMassif,
+            ..default()
+        };
+        let mut recipe =
+            build(selection, &content.substances, &content.art).expect("complete V4 map");
+        assert_eq!(recipe.map.columns().count(), 105_469);
+        assert_eq!(recipe.view.anchors.len(), 13);
+        assert!(recipe.geometry.max_level > 260);
+        assert!(recipe
+            .view
+            .liquids
+            .windows(2)
+            .all(|pair| pair.first().expect("pair").bottom <= pair.last().expect("pair").bottom));
+        for name in [
+            "party_start",
+            "forest_outer_a",
+            "forest_outer_b",
+            "forest_middle",
+            "forest_deep_a",
+            "forest_deep_b",
+            "dragon_lower",
+            "dragon_middle",
+            "dragon_upper",
+        ] {
+            let feet = recipe.view.anchors.get(name).expect("named support");
+            let support = recipe
+                .geometry
+                .voxel_at(*feet - Vec3::Y * 0.01)
+                .expect("inside map");
+            assert!(
+                content.substances.is_solid(recipe.map.get(support)),
+                "{name}"
+            );
+        }
+        let source = recipe.forest_source.clone().expect("V4 source");
+        let mut backend = ForestRuntime::new(source).expect("resident authority");
+        let pos = TilePos::new(HexCoord::from_axial(-5, 50), 100);
+        assert!(recipe.map.get(pos).is_air());
+        recipe.map.set(pos, content.materials.stone);
+        backend
+            .commit_projection(
+                &recipe.map,
+                &BTreeSet::from([pos.coord]),
+                &content.substances,
+            )
+            .expect("V4 shield assignment");
+        let query = VoxelPosition {
+            column: WorldHex::new(-5, 50),
+            level: 100,
+        };
+        assert_eq!(
+            backend.runtime.voxel(query),
+            QueryResult::Ready(Some("stone".into()))
+        );
+        recipe.map.set(pos, SubstanceId::AIR);
+        backend
+            .commit_projection(
+                &recipe.map,
+                &BTreeSet::from([pos.coord]),
+                &content.substances,
+            )
+            .expect("V4 destruction");
+        assert_eq!(backend.runtime.voxel(query), QueryResult::Ready(None));
+    }
 }
