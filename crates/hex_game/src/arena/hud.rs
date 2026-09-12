@@ -773,10 +773,10 @@ pub(super) fn update(
             Label::Help if battle.control == ArenaControl::Spectator => "WASD pan / move / Q and E down and up / Shift fast
 Mouse look / Wheel orbit zoom / C orbit or free camera
 Camera movement never controls a creature.".into(),
-            Label::Help => "WASD move / mouse look / Space jump / E High Jump
+            Label::Help => format!("WASD move / mouse look / Space jump / E High Jump
 Hold LMB for Fireball or RMB for Shield; release to cast.
 The first button pressed owns the charge.
-High Jump keeps your charge. Movement speed is 4.5 units/s.".into(),
+High Jump keeps your charge. Movement speed is {} units/s.", if expedition.is_some() { "4.725" } else { "4.5" }),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains.\nStart on the bridge. Hidden fountains are your only healing.".into(),

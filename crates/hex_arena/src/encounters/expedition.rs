@@ -88,11 +88,12 @@ impl ArenaSession {
         {
             return Err("Expedition requires six complete named fountain pools.".into());
         }
-        let human = Actor::spawn(
+        let mut human = Actor::spawn(
             0,
             world.spawns.first().copied().unwrap_or(Vec3::ZERO),
             Vec3::NEG_Z,
         );
+        human.expedition_player = true;
         if !human.feet.is_finite()
             || !shapes::clear(&self.collision, &human, human.feet, human.body_yaw)
             || !dry(&human, world, geometry)

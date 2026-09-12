@@ -212,6 +212,42 @@ fn expedition_profiles_drive_real_movement() {
 }
 
 #[test]
+fn expedition_player_moves_five_percent_faster_without_stacking_on_reset() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    for generation in [0, 1] {
+        session.reset(generation, &view, geometry);
+        session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+        let player = session.actors.first().expect("player").clone();
+        assert!(session
+            .actors
+            .iter()
+            .skip(1)
+            .all(|actor| !actor.expedition_player));
+        for run in [false, true] {
+            for (mut actor, expected) in [
+                (player.clone(), 4.725),
+                (Actor::spawn(0, player.feet, Vec3::NEG_Z), 4.5),
+                (Actor::spawn(1, player.feet, Vec3::NEG_Z), 4.5),
+            ] {
+                let start = actor.feet.x;
+                for _ in 0..120 {
+                    motion::tick(
+                        &mut actor,
+                        Vec3::X,
+                        run,
+                        false,
+                        false,
+                        &CollisionWorld::default(),
+                        &tuning.encounters,
+                    );
+                }
+                assert!((actor.feet.x - start - expected).abs() < 0.02);
+            }
+        }
+    }
+}
+
+#[test]
 fn forest_player_never_regenerates_without_a_fountain() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);

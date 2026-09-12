@@ -1,6 +1,6 @@
 # Forest–Massif Expedition
 
-Status: resumed after a live confirmed reset; implementation and validation in progress. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
+Status: candidate implemented and statically reviewed; native feedback repairs in progress. Hourly continuation paused at the user’s request. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
 Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
 Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 114 enemies, physical milestone pickups and finite healing.
 User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
@@ -27,6 +27,9 @@ World facts, gameplay rules and visible presentation must compose in one candida
 - A2, user 2026-09-11 follow-up: enemies drop **no health**, only kill XP plus the retained non-healing Troll/Dragon milestones. Remove all ordinary health-orb drops. **Hidden fountains distributed across the whole map are the only healing source.** The previously chosen Shadow +25 maximum-HP/25-heal reward is suspended pending the user's answer about keeping capacity only versus XP only; no Shadow healing may be implemented. Fountain pools remain finite 40-HP uses, unconsumed at full HP; Forest player passive regeneration stays disabled.
 
 - A3, user 2026-09-11 clarification: retain the Shadow milestone orb granting **+25 maximum HP only**, with **zero current-HP increase**. Fountains remain the only source of healing. This resolves A2’s pending Shadow decision.
+
+- A4, user 2026-09-12 native feedback: increase the expedition player's starting movement speed by **5%**, from **4.5 to 4.725 units/s**, without changing projectile speed, enemy movement or legacy maps. Restart restores the same bonus without stacking it. Native defeat→Restart feedback also authorizes correcting the ready-menu transition that placed Quit beneath the former Restart button.
+- A5, user 2026-09-12: stop the timer. The hourly follow-up is **PAUSED**; do not reactivate it without a new request. This supersedes Decision 12's automatic-continuation instruction, while retaining the requested conditional OpenAI guidance review.
 
 ## Shared foundation
 World authority owns named supported encounter areas, rally route graph and fountain volumes, exact object occupancy, root support footprints, bounded edit protections and map vertical bounds. Gameplay owns profiles, spawning/pose acceptance, spatial actor broadphase, progress/pickup/fountain state, upgrade spending and read-only HUD snapshots. Shared core holds passive data types only; app adapts publications. Existing ArenaTerrainView/Geometry/Systems remain the transport.

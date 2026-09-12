@@ -48,7 +48,7 @@ pub(crate) fn tick_with_lunge(
     }
     if actor.species != Species::Dragon {
         actor.body_yaw = (-actor.aim.x).atan2(-actor.aim.z);
-        let profile = match actor.species {
+        let mut profile = match actor.species {
             Species::Goblin => GroundProfile {
                 height: actor.dimensions.y,
                 radius: actor.dimensions.x * 0.5,
@@ -63,6 +63,10 @@ pub(crate) fn tick_with_lunge(
             },
             _ => GroundProfile::default(),
         };
+        if actor.species == Species::Human && actor.expedition_player {
+            profile.walk *= 1.05;
+            profile.run *= 1.05;
+        }
         actor
             .body
             .tick_profile(&mut actor.feet, direction, run, jump, world, profile);
