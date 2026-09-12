@@ -101,7 +101,7 @@
             dragon_length: 3.5,
             dragon_width: 1.732_050_8,
             dragon_ground_speed: 7.5,
-            dragon_flight_speed: 3.0,
+            dragon_flight_speed: 6.0,
             dragon_cruise_height: 2.0,
             dragon_turn_speed: 2.0,
             breath_damage: 45.0,

@@ -201,7 +201,6 @@ impl ArenaSession {
                 }
                 ExpeditionReward::DragonExplosions => {
                     state.snapshot.explosions_unlocked = true;
-                    state.player.fireball_size = 1;
                     notices.push("Dragon reward: Fireball explosions unlocked.");
                 }
                 ExpeditionReward::ShadowVitality => {

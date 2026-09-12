@@ -286,6 +286,7 @@ fn dragon_burst_requires_disclosed_pressure_and_preserves_destination_cooldown_a
     );
     assert!(!cooling.lunge);
     actor.last_damage_tick = Some(121);
+    actor.hp = actor.max_hp / 3.0;
     let (retreat, _) = brain.intent(
         &actor,
         &party,
@@ -575,4 +576,91 @@ fn high_goblin_jump_clears_a_six_level_crater_lip_and_lands() {
         "feet={:?}",
         actor.feet
     );
+}
+
+#[test]
+fn dragon_repositions_beneath_its_mouth_and_resumes_attacks() {
+    let (mut actor, mut target, party, view, geometry, collision, tuning) = scene(Species::Dragon);
+    actor.feet = Vec3::new(0.0, 3.0, 0.0);
+    actor.body_yaw = 0.0;
+    actor.flying = true;
+    target.feet = Vec3::new(0.0, SKIN, 0.0);
+    let mut brain = Brain::new(actor.id, actor.feet);
+    let mut moved = false;
+    let mut attacked = false;
+    for tick in 1..720 {
+        let (intent, request) = brain.intent(
+            &actor,
+            &party,
+            &[target.clone(), actor.clone()],
+            &[],
+            &[],
+            &collision,
+            &view,
+            geometry,
+            &tuning,
+            tick,
+        );
+        actor.aim = intent.input.aim;
+        moved |= intent.direction.with_y(0.0).length_squared() > 0.1;
+        if request.is_some_and(|request| {
+            matches!(
+                request.kind,
+                CreatureAbility::FireCone | CreatureAbility::Bite
+            )
+        }) {
+            attacked = true;
+            break;
+        }
+        motion::tick_with_lunge(
+            &mut actor,
+            intent.direction,
+            true,
+            intent.input.jump,
+            intent.flight,
+            intent.lunge,
+            &collision,
+            &tuning.encounters,
+        );
+    }
+    assert!(
+        moved,
+        "underfoot targeting must cause physical repositioning"
+    );
+    assert!(
+        attacked,
+        "reposition must lead to a legal mouth-origin attack"
+    );
+}
+
+#[test]
+fn dragon_retreat_threshold_includes_boundary_and_healing_restores_aggression() {
+    let (mut actor, target, party, view, geometry, collision, tuning) = scene(Species::Dragon);
+    let mut brain = Brain::new(actor.id, actor.feet);
+    for (fraction, retreat) in [
+        (1.0, false),
+        (0.34, false),
+        (1.0 / 3.0, true),
+        (0.2, true),
+        (0.4, false),
+    ] {
+        actor.hp = actor.max_hp * fraction;
+        actor.last_damage_tick = Some(10);
+        brain.intent(
+            &actor,
+            &party,
+            &[actor.clone(), target.clone()],
+            &[],
+            &[],
+            &collision,
+            &view,
+            geometry,
+            &tuning,
+            11,
+        );
+        assert_eq!(
+            brain.decision.as_ref().expect("decision").retreat_seconds > 0.0,
+            retreat
+        );
+    }
 }

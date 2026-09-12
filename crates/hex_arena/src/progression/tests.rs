@@ -325,20 +325,21 @@ fn bought_damage_stacks_with_forest_reward_even_at_normal_upgrade_cap() {
         f.kill(id, true);
     }
     assert!(f.session.spend_upgrade(UpgradeStat::FireballDamage));
-    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 20.0).abs() < SKIN);
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 17.25).abs() < SKIN);
     assert!(!f.session.progress().expect("progress").forest_cleared);
-    // This one-map roster cannot fund seventeen damage purchases. Extra credits
-    // explicitly exercise the normal stat ceiling; purchases still use the API.
+    // Fund all five ranks explicitly; this small legacy roster cannot do so.
     f.session
         .progression
         .as_mut()
         .expect("state")
         .snapshot
         .available_upgrades = 20;
-    for _ in 0..16 {
+    for _ in 0..4 {
         assert!(f.session.spend_upgrade(UpgradeStat::FireballDamage));
     }
-    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 100.0).abs() < SKIN);
+    assert!(
+        (f.session.player_tuning(&f.tuning).fireball_damage - 15.0 * 1.15_f32.powi(5)).abs() < SKIN
+    );
     let capped = f.session.progress().expect("progress");
     assert!(!f.session.spend_upgrade(UpgradeStat::FireballDamage));
     assert_eq!(f.session.progress(), Some(capped));
@@ -346,12 +347,16 @@ fn bought_damage_stacks_with_forest_reward_even_at_normal_upgrade_cap() {
     let rewarded = f.session.progress().expect("progress");
     assert!(rewarded.forest_cleared && !rewarded.explosions_unlocked);
     assert!((rewarded.damage_bonus - 25.0).abs() < SKIN);
-    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 125.0).abs() < SKIN);
+    assert!(
+        (f.session.player_tuning(&f.tuning).fireball_damage - 40.0 * 1.15_f32.powi(5)).abs() < SKIN
+    );
     assert!(!f.session.can_upgrade(UpgradeStat::FireballDamage));
     assert!(!f.session.spend_upgrade(UpgradeStat::FireballDamage));
     f.session.reconcile_progression();
     assert_eq!(f.session.progress(), Some(rewarded));
-    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 125.0).abs() < SKIN);
+    assert!(
+        (f.session.player_tuning(&f.tuning).fireball_damage - 40.0 * 1.15_f32.powi(5)).abs() < SKIN
+    );
 }
 
 #[test]
@@ -383,19 +388,31 @@ fn spend_is_beneficial_capped_locked_and_does_not_change_enemy_tuning() {
     assert!(!f.session.spend_upgrade(UpgradeStat::FireballSize));
     assert_eq!(f.session.progress(), Some(before));
     assert!(f.session.spend_upgrade(UpgradeStat::FireballCooldown));
-    assert!(!f.session.can_upgrade(UpgradeStat::FireballCooldown));
+    assert!(f
+        .session
+        .upgrade_preview(UpgradeStat::FireballCooldown)
+        .expect("rank")
+        .after
+        .is_some());
     let player = f.session.player_tuning(&f.tuning);
-    assert!((player.fireball_cooldown - 0.25).abs() < SKIN);
+    assert!((player.fireball_cooldown - 0.425).abs() < SKIN);
     assert!((player.projectile_speed - 45.0).abs() < SKIN);
     assert!((player.projectile_gravity - 12.0).abs() < SKIN);
     assert!((f.tuning.projectile_speed - 32.0).abs() < SKIN);
     assert!((f.tuning.fireball_cooldown - 1.25).abs() < SKIN);
     f.kill_species(&[Species::Shaman, Species::Dragon]);
     assert!(f.session.spend_upgrade(UpgradeStat::FireballDamage));
-    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 45.0).abs() < SKIN);
+    assert!((f.session.player_tuning(&f.tuning).fireball_damage - 46.0).abs() < SKIN);
     assert!(f.session.spend_upgrade(UpgradeStat::FireballSize));
-    assert!(!f.session.can_upgrade(UpgradeStat::FireballSize));
-    assert!((f.session.player_tuning(&f.tuning).fireball_radius() - 3.5).abs() < SKIN);
+    // More radius ranks remain available even if this fixture spent its points.
+    assert_eq!(
+        f.session
+            .upgrade_preview(UpgradeStat::FireballSize)
+            .expect("rank")
+            .rank,
+        1
+    );
+    assert!((f.session.player_tuning(&f.tuning).fireball_radius() - 2.65).abs() < SKIN);
 }
 
 #[test]
@@ -429,7 +446,7 @@ fn contact_hits_one_body_and_freezes_before_dragon_unlock() {
     f.resolve();
     let target = f.session.actors.get(1).expect("target");
     assert!(
-        target.hp >= 15.0 && target.hp < 16.0,
+        target.hp >= 17.75 && target.hp < 18.75,
         "one radial contribution: {}",
         target.hp
     );
@@ -606,5 +623,121 @@ fn indexed_liquid_queries_match_full_scan_for_bodies_and_stacked_water() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn all_rank_caps_are_beneficial_and_effective_profiles_validate() {
+    let mut f = fixture();
+    let state = f.session.progression.as_mut().expect("state");
+    state.snapshot.available_upgrades = 100;
+    state.snapshot.explosions_unlocked = true;
+    state.snapshot.damage_bonus = 25.0;
+    state.fireball_speed_bonus = 15.0;
+    state.shield_speed_bonus = 20.0;
+    state.shield_dimension_bonus = 2;
+    for stat in UpgradeStat::ALL {
+        for rank in 0..stat.max_ranks() {
+            let preview = f.session.upgrade_preview(stat).expect("preview");
+            assert_eq!(preview.rank, rank);
+            assert_ne!(preview.after, Some(preview.before));
+            assert!(f.session.spend_upgrade(stat));
+            assert_eq!(
+                f.session.upgrade_preview(stat).expect("after").before,
+                preview.after.expect("next")
+            );
+            f.session
+                .player_tuning(&f.tuning)
+                .validate()
+                .expect("effective values validate");
+        }
+        let points = f.session.progress().expect("progress").available_upgrades;
+        assert!(!f.session.spend_upgrade(stat));
+        assert_eq!(
+            f.session.progress().expect("progress").available_upgrades,
+            points
+        );
+        assert!(f
+            .session
+            .upgrade_preview(stat)
+            .expect("cap")
+            .after
+            .is_none());
+    }
+    let tuning = f.session.player_tuning(&f.tuning);
+    assert_eq!(tuning.shield_dimensions(), (9, 9));
+    assert!((tuning.fireball_radius() - 3.25).abs() < 0.0001);
+    assert!((tuning.high_jump_height - 8.0).abs() < 0.0001);
+    assert!((f.session.player_walking_speed() - 4.725 * 1.1_f32.powi(4)).abs() < 0.0001);
+}
+
+#[test]
+fn rewards_and_purchases_commute_and_spell_velocities_are_independent() {
+    let mut before = fixture();
+    let mut after = fixture();
+    for f in [&mut before, &mut after] {
+        f.session
+            .progression
+            .as_mut()
+            .expect("state")
+            .snapshot
+            .available_upgrades = 10;
+    }
+    for stat in [
+        UpgradeStat::FireballDamage,
+        UpgradeStat::ProjectileSpeed,
+        UpgradeStat::ShieldProjectileSpeed,
+        UpgradeStat::ShieldSize,
+    ] {
+        assert!(before.session.spend_upgrade(stat));
+    }
+    for f in [&mut before, &mut after] {
+        let state = f.session.progression.as_mut().expect("state");
+        state.snapshot.damage_bonus = 25.0;
+        state.fireball_speed_bonus = 15.0;
+        state.shield_speed_bonus = 20.0;
+        state.shield_dimension_bonus = 2;
+    }
+    for stat in [
+        UpgradeStat::FireballDamage,
+        UpgradeStat::ProjectileSpeed,
+        UpgradeStat::ShieldProjectileSpeed,
+        UpgradeStat::ShieldSize,
+    ] {
+        assert!(after.session.spend_upgrade(stat));
+    }
+    let a = before.session.player_tuning(&before.tuning);
+    let b = after.session.player_tuning(&after.tuning);
+    assert_eq!(a.player_profile, b.player_profile);
+    assert_eq!(a.fireball_damage.to_bits(), b.fireball_damage.to_bits());
+    assert_eq!(a.projectile_speed.to_bits(), b.projectile_speed.to_bits());
+    assert_eq!(a.shield_dimensions(), (8, 7));
+    assert!((a.fireball_damage - 46.0).abs() < 0.0001);
+    assert!((a.spell_projectile_speed(Spell::Shield) - 71.5).abs() < 0.0001);
+    assert!((a.spell_projectile_speed(Spell::Fireball) - 66.0).abs() < 0.0001);
+    for spell in [Spell::Fireball, Spell::Shield] {
+        let mut actor = before.session.actors.first().expect("player").clone();
+        actor.selected = spell;
+        let reference = a.spell_projectile_speed(spell);
+        actor.casting(
+            ActorIntent {
+                selected: Some(spell),
+                cast_pressed: true,
+                cast_held: true,
+                ..Default::default()
+            },
+            &a,
+        );
+        actor.charge.as_mut().expect("charging").elapsed = a.reference_charge_seconds();
+        let (_, speed) = actor
+            .casting(
+                ActorIntent {
+                    cast_released: true,
+                    ..Default::default()
+                },
+                &a,
+            )
+            .expect("release");
+        assert!((speed - reference).abs() < 0.0001);
     }
 }

@@ -588,6 +588,9 @@ impl ArenaSession {
             // A disclosed target takes priority over home/escort formation for
             // Goblin parties. Lost contact still uses the ordinary search rules.
             let goblin_pursuit = visible && members.iter().any(|a| a.species == Species::Goblin);
+            let dragon_party = members.iter().any(|a| a.species == Species::Dragon);
+            let dragon_pursuit = visible && dragon_party;
+            let dragon_search = dragon_party && elapsed(self.tick, p.last_sight) <= p.search;
             if visible {
                 let velocity = p
                     .knowledge
@@ -604,7 +607,7 @@ impl ArenaSession {
                     observed: None,
                 });
                 p.last_sight = self.tick;
-                if p.snapshot.phase == PartyPhase::Dormant || goblin_pursuit {
+                if p.snapshot.phase == PartyPhase::Dormant || goblin_pursuit || dragon_pursuit {
                     p.snapshot.phase = PartyPhase::Active;
                 }
                 if p.snapshot.phase == PartyPhase::Active {
@@ -649,6 +652,8 @@ impl ArenaSession {
                     .any(|a| a.feet.distance(p.snapshot.home) > p.leash);
                 if !worm_pursuit
                     && !goblin_pursuit
+                    && !dragon_pursuit
+                    && !dragon_search
                     && (exceeded || elapsed(self.tick, p.last_sight) > p.search)
                 {
                     p.snapshot.phase = PartyPhase::Returning;
@@ -1297,7 +1302,7 @@ pub struct CreatureDecisionSnapshot {
     pub direction: [f32; 3],
     /// Flight requested this tick.
     pub flying: bool,
-    /// Remaining damage-refreshed retreat time.
+    /// Compatibility escape indicator: one simulation step while critical, zero otherwise.
     pub retreat_seconds: f32,
     /// Following a jump with a previously verified landing.
     pub jump_recovery: bool,

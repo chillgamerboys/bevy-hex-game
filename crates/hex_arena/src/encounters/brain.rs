@@ -321,15 +321,7 @@ impl Brain {
         if let Some(target) = target {
             input.aim = (target - actor.eye()).normalize_or(actor.aim);
         }
-        let retreat = actor.species == Species::Dragon
-            && actor.last_damage_tick.is_some_and(|t| {
-                elapsed(tick, t)
-                    < if actor.hp < actor.max_hp * 0.5 {
-                        c.dragon_hurt_retreat_seconds
-                    } else {
-                        c.dragon_retreat_seconds
-                    }
-            });
+        let retreat = actor.species == Species::Dragon && actor.hp <= actor.max_hp / 3.0;
         let mut goal = match party.snapshot.phase {
             PartyPhase::Returning => self.home,
             PartyPhase::Dormant => {
@@ -347,7 +339,8 @@ impl Brain {
         }
         if actor.species == Species::Dragon {
             flight = party.snapshot.phase == PartyPhase::Dormant
-                || (party.snapshot.phase == PartyPhase::Active && sight.is_none())
+                || (party.snapshot.phase == PartyPhase::Active
+                    && (sight.is_none() || actor.flying))
                 || retreat;
             if retreat {
                 self.flight_recovery = None;
@@ -382,17 +375,31 @@ impl Brain {
                 if recovery_done {
                     self.flight_recovery = None;
                 }
+                // A mouth ahead of the body cannot face a target directly beneath
+                // its center by yaw alone. Back out to real firing clearance first.
+                let under_mouth = target.is_some_and(|point| {
+                    point.with_y(0.0).distance(actor.center().with_y(0.0))
+                        < actor.dimensions.z * 0.5 + 0.5
+                });
                 if sight.is_some()
-                    && self.steering.blocked_ticks(tick) >= 48
+                    && (under_mouth || self.steering.blocked_ticks(tick) >= 48)
                     && self.flight_recovery.is_none()
                 {
                     if let Some(target) = target {
-                        let away = (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z);
-                        let approach =
-                            target + away * (actor.dimensions.z * 0.5 + c.bite_range * 0.6);
-                        self.flight_recovery =
-                            steering::flight_goal(actor, approach, collision, world, geometry, c)
-                                .map(|point| (point, tick + 240));
+                        let away = (actor.center() - target)
+                            .with_y(0.0)
+                            .normalize_or(actor.body_rotation() * Vec3::Z);
+                        self.flight_recovery = [0.0, 0.8, -0.8, 1.6, -1.6]
+                            .into_iter()
+                            .find_map(|angle| {
+                                let direction = bevy_math::Quat::from_rotation_y(angle) * away;
+                                let approach =
+                                    target + direction * (actor.dimensions.z * 0.5 + 3.0);
+                                steering::flight_goal(
+                                    actor, approach, collision, world, geometry, c,
+                                )
+                            })
+                            .map(|point| (point, tick + 240));
                     }
                 }
                 if let Some((point, _)) = self.flight_recovery {
@@ -418,7 +425,11 @@ impl Brain {
                         .unwrap_or(actor.feet);
                 }
             }
-            if (hurt || threatened) && target.is_some() && self.ready(CreatureAbility::Barrier) {
+            if !retreat
+                && (hurt || threatened)
+                && target.is_some()
+                && self.ready(CreatureAbility::Barrier)
+            {
                 request = Some(Request {
                     kind: CreatureAbility::Barrier,
                     aim: input.aim,
@@ -430,19 +441,21 @@ impl Brain {
                 );
                 let facing = (actor.body_rotation() * Vec3::NEG_Z)
                     .dot(input.aim.with_y(0.0).normalize_or(Vec3::NEG_Z));
-                // A retreating dragon may stop to turn its physical mouth toward
-                // a visible close attacker. Damage still refreshes the retreat
-                // timer, and the fixed retreat destination survives this defense.
-                let turn_distance = sight.and_then(|seen| seen.observed).map_or_else(
-                    || actor.center().distance(target.unwrap_or(actor.center())),
-                    |seen| seen.distance(actor.center(), 0.0),
-                );
-                let mouth_offset = actor.eye().distance(actor.center());
-                if retreat
-                    && turn_distance <= c.breath_range + mouth_offset
+                let center_distance =
+                    target.map_or(f32::MAX, |point| point.distance(actor.center()));
+                let underneath = target.is_some_and(|point| {
+                    point.with_y(0.0).distance(actor.center().with_y(0.0))
+                        < actor.dimensions.z * 0.5 + 0.5
+                });
+                if !retreat
+                    && !underneath
+                    && center_distance <= c.breath_range + actor.eye().distance(actor.center())
                     && self.ready(CreatureAbility::FireCone)
                 {
+                    // Within prospective mouth reach, finish turning before
+                    // moving over the target and creating another blind spot.
                     goal = actor.feet;
+                    self.flight_recovery = None;
                 }
                 if !retreat
                     && distance <= c.bite_range + 0.2
@@ -453,7 +466,8 @@ impl Brain {
                         kind: CreatureAbility::Bite,
                         aim: input.aim,
                     });
-                } else if distance <= c.breath_range
+                } else if !retreat
+                    && distance <= c.breath_range
                     && facing >= (c.breath_angle.to_radians() * 0.5).cos()
                     && self.ready(CreatureAbility::FireCone)
                 {
@@ -935,18 +949,8 @@ impl Brain {
             goal: goal.to_array(),
             direction: direction.to_array(),
             flying: flight,
-            retreat_seconds: if retreat {
-                let duration = if actor.hp < actor.max_hp * 0.5 {
-                    c.dragon_hurt_retreat_seconds
-                } else {
-                    c.dragon_retreat_seconds
-                };
-                actor
-                    .last_damage_tick
-                    .map_or(0.0, |since| (duration - elapsed(tick, since)).max(0.0))
-            } else {
-                0.0
-            },
+            // Compatibility diagnostic: positive while health-based escape is active.
+            retreat_seconds: if retreat { STEP } else { 0.0 },
             jump_recovery: self.steering.jumping(),
             blocked_ticks: self.steering.blocked_ticks(tick),
             useful_shot: self.shooting_angle,

@@ -34,7 +34,7 @@ mod encounter_config;
 mod encounters;
 mod expedition;
 pub use encounters::ExpeditionRallySnapshot;
-pub use expedition::ExpeditionRole;
+pub use expedition::{DragonTier, ExpeditionRole};
 mod hex_prisms;
 mod motion;
 mod player_observation;
@@ -45,7 +45,7 @@ pub use player_observation::{
 mod progression;
 pub use progression::{
     ExpeditionReward, ExpeditionSnapshot, FireballMode, FountainSnapshot, MilestoneSnapshot,
-    ProgressSnapshot, UpgradeStat,
+    PlayerSpellProfile, ProgressSnapshot, UpgradePreview, UpgradeStat, UpgradeValue,
 };
 mod shapes;
 mod spells;
@@ -218,6 +218,9 @@ pub struct ArenaTuning {
 
     /// World-owned voxel HP damage per admitted blast.
     pub terrain_power: u8,
+    /// Runtime-only expedition values; authoring presets remain independent.
+    #[serde(skip)]
+    pub player_profile: Option<PlayerSpellProfile>,
 }
 
 impl Default for ArenaTuning {
@@ -242,6 +245,7 @@ impl Default for ArenaTuning {
             fireball_knockback: 8.0,
 
             terrain_power: 2,
+            player_profile: None,
         }
     }
 }
@@ -278,6 +282,19 @@ impl ArenaTuning {
                 return Err(format!("{name} must be finite and in (0, {max}]."));
             }
         }
+        if let Some(profile) = self.player_profile {
+            if !profile.shield_projectile_speed.is_finite()
+                || !(45.0..=110.0).contains(&profile.shield_projectile_speed)
+                || !profile.walking_speed.is_finite()
+                || !(4.725..=7.0).contains(&profile.walking_speed)
+                || !profile.fireball_radius.is_finite()
+                || !(2.5..=3.25).contains(&profile.fireball_radius)
+                || !(5..=9).contains(&profile.shield_dimensions.0)
+                || !(5..=9).contains(&profile.shield_dimensions.1)
+            {
+                return Err("Invalid effective expedition player profile.".into());
+            }
+        }
         if self.tap_range_multiplier > self.max_range_multiplier {
             return Err("Tap range must not exceed full-charge range.".into());
         }
@@ -305,6 +322,21 @@ impl ArenaTuning {
         self.projectile_speed * range.sqrt()
     }
 
+    /// Spell-specific reference velocity; legacy presets share one value.
+    #[must_use]
+    pub fn spell_projectile_speed(&self, spell: Spell) -> f32 {
+        match (spell, self.player_profile) {
+            (Spell::Shield, Some(profile)) => profile.shield_projectile_speed,
+            _ => self.projectile_speed,
+        }
+    }
+
+    /// Shared prediction/release charging rule with independent spell velocities.
+    #[must_use]
+    pub fn spell_launch_speed(&self, spell: Spell, elapsed: f32) -> f32 {
+        self.launch_speed(elapsed) * self.spell_projectile_speed(spell) / self.projectile_speed
+    }
+
     /// Charge duration closest to the original reference speed, useful for comparisons.
     #[must_use]
     pub fn reference_charge_seconds(&self) -> f32 {
@@ -319,6 +351,9 @@ impl ArenaTuning {
     /// Wall width in hex columns and height in voxel levels, thickness one column.
     #[must_use]
     pub fn shield_dimensions(&self) -> (i32, i32) {
+        if let Some(profile) = self.player_profile {
+            return profile.shield_dimensions;
+        }
         match self.shield_size {
             0 => (3, 4),
             2 => (7, 6),
@@ -329,6 +364,9 @@ impl ArenaTuning {
     /// Fireball radius in world units.
     #[must_use]
     pub fn fireball_radius(&self) -> f32 {
+        if let Some(profile) = self.player_profile {
+            return profile.fireball_radius;
+        }
         match self.fireball_size {
             0 => 1.5,
             2 => 3.5,
@@ -381,6 +419,7 @@ pub struct Actor {
     body: Body,
     dimensions: Vec3,
     expedition_role: Option<ExpeditionRole>,
+    dragon_tier: DragonTier,
     expedition_player: bool,
     body_yaw: f32,
     previous_yaw: f32,
@@ -423,6 +462,7 @@ impl Actor {
             body: Body::default(),
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             expedition_role: None,
+            dragon_tier: DragonTier::Standard,
             expedition_player: false,
             body_yaw: (-aim.x).atan2(-aim.z),
             previous_yaw: (-aim.x).atan2(-aim.z),
@@ -541,7 +581,10 @@ impl Actor {
             if self.hp > 0.0 && charge.spell == self.selected {
                 let cooldown = self.cooldowns.get(charge.spell.index())?;
                 if *cooldown <= STEP * 0.01 {
-                    return Some((charge.spell, tuning.launch_speed(charge.elapsed)));
+                    return Some((
+                        charge.spell,
+                        tuning.spell_launch_speed(charge.spell, charge.elapsed),
+                    ));
                 }
             }
         } else if intent.cast_held {

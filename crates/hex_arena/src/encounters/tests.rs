@@ -671,7 +671,7 @@ fn shaman_waits_for_reaction_charges_then_cancels_if_cover_closes_before_release
 }
 
 #[test]
-fn dragon_damage_triggers_retreat_flight_then_regeneration_and_landing() {
+fn dragon_critical_health_triggers_escape_flight_then_regeneration_and_landing() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
     pose(&mut session, 1, Vec3::ZERO, Vec3::NEG_Z);
     pose(&mut session, 0, Vec3::NEG_Z * 8.0, Vec3::Z);
@@ -689,7 +689,10 @@ fn dragon_damage_triggers_retreat_flight_then_regeneration_and_landing() {
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
     assert!(dragon.flying && dragon.feet.y > 0.3);
     assert!((dragon.hp - 70.0).abs() < 0.001);
-    assert!(!session.barriers().is_empty());
+    assert!(
+        session.barriers().is_empty(),
+        "critical escape keeps moving"
+    );
     session.bot_enabled = false;
     ticks(&mut session, 500, &view, geometry, materials, &tuning);
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");

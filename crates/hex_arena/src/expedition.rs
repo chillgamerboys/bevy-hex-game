@@ -36,6 +36,16 @@ impl ExpeditionRole {
     }
 }
 
+/// Actor-owned Dragon strength and visual identity.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum DragonTier {
+    /// Ordinary Dragon, retaining configurable encounter tuning.
+    #[default]
+    Standard,
+    /// Stronger expedition summit encounter.
+    Summit,
+}
+
 /// The owner identity is frozen while mutable allies consume a support field.
 #[derive(Clone, Copy)]
 pub(crate) struct SupportScope {
@@ -74,6 +84,18 @@ impl Actor {
         self.expedition_role
     }
 
+    /// Stable Dragon profile, shared by combat and presentation.
+    #[must_use]
+    pub const fn dragon_tier(&self) -> DragonTier {
+        self.dragon_tier
+    }
+
+    pub(crate) fn configure_summit_dragon(&mut self) {
+        self.dragon_tier = DragonTier::Summit;
+        self.max_hp = 330.0;
+        self.hp = self.max_hp;
+    }
+
     pub(crate) fn configure_expedition(&mut self, role: ExpeditionRole, tuning: &EncounterTuning) {
         self.configure_species(role.species(), tuning);
         self.expedition_role = Some(role);
@@ -97,7 +119,8 @@ impl Actor {
             Some(
                 ExpeditionRole::BabyGoblin | ExpeditionRole::Troll | ExpeditionRole::MountainShadow
             )
-        ) {
+        ) && self.dragon_tier != DragonTier::Summit
+        {
             return Cow::Borrowed(base);
         }
         let mut tuning = base.clone();
@@ -127,6 +150,13 @@ impl Actor {
                 tuning.fireball_size = 1;
             }
             _ => {}
+        }
+        if self.dragon_tier == DragonTier::Summit {
+            tuning.encounters.dragon_hp = 330.0;
+            tuning.encounters.breath_damage = 60.0;
+            tuning.encounters.bite_damage = 65.0;
+            tuning.encounters.breath_range = 7.0;
+            tuning.encounters.breath_angle = 60.0;
         }
         Cow::Owned(tuning)
     }

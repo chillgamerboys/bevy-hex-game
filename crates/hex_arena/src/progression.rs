@@ -18,26 +18,91 @@ pub enum FireballMode {
 }
 
 /// Beneficial player upgrades available in the Forest–Massif pause menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UpgradeStat {
-    /// Increase shield dimensions by one preset.
+    /// Advance one exact Shield footprint rank.
     ShieldSize,
-    /// Increase the unlocked explosion radius by one preset.
+    /// Add 0.15 units to an unlocked explosion radius.
     FireballSize,
-    /// Increase High Jump rise by half a unit.
+    /// Multiply High Jump rise by 1.15, up to eight units.
     HighJumpHeight,
-    /// Increase projectile reference speed by two units per second.
+    /// Multiply Fireball reference speed by 1.10.
     ProjectileSpeed,
-    /// Reduce Shield cooldown by half a second.
+    /// Multiply Shield reference speed by 1.10.
+    ShieldProjectileSpeed,
+    /// Multiply ordinary walking speed by 1.10.
+    WalkingSpeed,
+    /// Multiply Shield cooldown by 0.85.
     ShieldCooldown,
-    /// Reduce Fireball cooldown by a quarter second.
+    /// Multiply Fireball cooldown by 0.85.
     FireballCooldown,
-    /// Reduce High Jump cooldown by half a second.
+    /// Multiply High Jump cooldown by 0.85.
     HighJumpCooldown,
-    /// Increase base Fireball damage by five HP, independently of the forest bonus.
+    /// Multiply rewarded base Fireball damage by 1.15.
     FireballDamage,
-    /// Increase impact impulse by one unit per second.
+    /// Multiply impact impulse by 1.15.
     FireballKnockback,
+}
+
+impl UpgradeStat {
+    /// Stable presentation order; gravity has no purchase.
+    pub const ALL: [Self; 11] = [
+        Self::WalkingSpeed,
+        Self::FireballDamage,
+        Self::ProjectileSpeed,
+        Self::ShieldProjectileSpeed,
+        Self::FireballKnockback,
+        Self::FireballCooldown,
+        Self::ShieldCooldown,
+        Self::HighJumpCooldown,
+        Self::HighJumpHeight,
+        Self::FireballSize,
+        Self::ShieldSize,
+    ];
+
+    /// Maximum bankable purchases for this field.
+    #[must_use]
+    pub const fn max_ranks(self) -> u8 {
+        match self {
+            Self::WalkingSpeed | Self::ShieldSize => 4,
+            _ => 5,
+        }
+    }
+}
+
+/// A gameplay-derived menu value, before or after exactly one purchase.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpgradeValue {
+    /// A speed, damage, time, radius, or height in its ordinary units.
+    Scalar(f32),
+    /// Width in columns and height in voxel levels.
+    Dimensions(i32, i32),
+}
+
+/// Read-only rank and next-purchase values; unavailable purchases have no after value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UpgradePreview {
+    /// Purchased ranks for this field.
+    pub rank: u8,
+    /// Maximum permitted rank.
+    pub max_ranks: u8,
+    /// Current effective value, including collected rewards.
+    pub before: UpgradeValue,
+    /// Next effective value, absent for a capped or locked field.
+    pub after: Option<UpgradeValue>,
+}
+
+/// Effective expedition-only spell geometry and movement, separate from legacy presets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerSpellProfile {
+    /// Shield seed reference speed, independent of Fireball speed.
+    pub shield_projectile_speed: f32,
+    /// Exact width and height, including milestone bonuses.
+    pub shield_dimensions: (i32, i32),
+    /// Exact unlocked radial blast size.
+    pub fireball_radius: f32,
+    /// Ordinary walking speed, excluding impulses and gliding.
+    pub walking_speed: f32,
 }
 
 /// Read-only player progress, with no hidden enemy positions or party activity.
@@ -110,7 +175,10 @@ impl RosterEntry {
 #[derive(Debug)]
 pub(crate) struct ProgressState {
     snapshot: ProgressSnapshot,
-    player: ArenaTuning,
+    ranks: BTreeMap<UpgradeStat, u8>,
+    fireball_speed_bonus: f32,
+    shield_speed_bonus: f32,
+    shield_dimension_bonus: i32,
     roster: BTreeMap<ActorId, RosterEntry>,
     expedition: bool,
     fountains: BTreeMap<String, expedition::FountainState>,
@@ -138,14 +206,10 @@ impl Default for ProgressState {
                 damage_bonus: 0.0,
                 completed: false,
             },
-            player: ArenaTuning {
-                projectile_speed: 45.0,
-                projectile_gravity: 12.0,
-                fireball_damage: 15.0,
-                fireball_knockback: 12.0,
-                fireball_cooldown: 0.5,
-                ..Default::default()
-            },
+            ranks: BTreeMap::new(),
+            fireball_speed_bonus: 0.0,
+            shield_speed_bonus: 0.0,
+            shield_dimension_bonus: 0,
             roster: BTreeMap::new(),
             expedition: false,
             fountains: BTreeMap::new(),
@@ -184,19 +248,30 @@ impl ArenaSession {
         let Some(state) = &self.progression else {
             return base.clone();
         };
-        let mut value = base.clone();
-        let player = &state.player;
-        value.shield_size = player.shield_size;
-        value.fireball_size = player.fireball_size;
-        value.high_jump_height = player.high_jump_height;
-        value.projectile_speed = player.projectile_speed;
-        value.projectile_gravity = player.projectile_gravity;
-        value.shield_cooldown = player.shield_cooldown;
-        value.fireball_cooldown = player.fireball_cooldown;
-        value.high_jump_cooldown = player.high_jump_cooldown;
-        value.fireball_damage = player.fireball_damage + state.snapshot.damage_bonus;
-        value.fireball_knockback = player.fireball_knockback;
-        value
+        state.tuning(base)
+    }
+
+    /// Current ordinary expedition walking speed; legacy movement remains separately tuned.
+    #[must_use]
+    pub fn player_walking_speed(&self) -> f32 {
+        self.progression
+            .as_ref()
+            .map_or(4.5, |state| state.walking_speed())
+    }
+
+    /// Effective before/after values for one rank, independent of the current point balance.
+    #[must_use]
+    pub fn upgrade_preview(&self, stat: UpgradeStat) -> Option<UpgradePreview> {
+        let state = self.progression.as_ref()?;
+        let rank = state.rank(stat);
+        Some(UpgradePreview {
+            rank,
+            max_ranks: stat.max_ranks(),
+            before: state.upgrade_value(stat, rank),
+            after: state
+                .can_upgrade(stat)
+                .then(|| state.upgrade_value(stat, rank + 1)),
+        })
     }
 
     /// Whether one available level reward can improve this field now.
@@ -215,26 +290,7 @@ impl ArenaSession {
         let Some(state) = &mut self.progression else {
             return false;
         };
-        let player = &mut state.player;
-        match stat {
-            UpgradeStat::ShieldSize => player.shield_size += 1,
-            UpgradeStat::FireballSize => player.fireball_size += 1,
-            UpgradeStat::HighJumpHeight => player.high_jump_height += 0.5,
-            UpgradeStat::ProjectileSpeed => {
-                player.projectile_speed = (player.projectile_speed + 2.0).min(64.0)
-            }
-            UpgradeStat::ShieldCooldown => {
-                player.shield_cooldown = (player.shield_cooldown - 0.5).max(0.5)
-            }
-            UpgradeStat::FireballCooldown => {
-                player.fireball_cooldown = (player.fireball_cooldown - 0.25).max(0.25)
-            }
-            UpgradeStat::HighJumpCooldown => {
-                player.high_jump_cooldown = (player.high_jump_cooldown - 0.5).max(0.5)
-            }
-            UpgradeStat::FireballDamage => player.fireball_damage += 5.0,
-            UpgradeStat::FireballKnockback => player.fireball_knockback += 1.0,
-        }
+        *state.ranks.entry(stat).or_default() += 1;
         state.snapshot.available_upgrades -= 1;
         true
     }
@@ -345,21 +401,81 @@ impl ProgressState {
             .count()
     }
 
-    fn can_upgrade(&self, stat: UpgradeStat) -> bool {
-        let player = &self.player;
-        match stat {
-            UpgradeStat::ShieldSize => player.shield_size < 2,
-            UpgradeStat::FireballSize => {
-                self.snapshot.explosions_unlocked && player.fireball_size < 2
+    fn rank(&self, stat: UpgradeStat) -> u8 {
+        self.ranks.get(&stat).copied().unwrap_or(0)
+    }
+
+    fn walking_speed(&self) -> f32 {
+        4.725 * 1.10_f32.powi(i32::from(self.rank(UpgradeStat::WalkingSpeed)))
+    }
+
+    fn upgrade_value(&self, stat: UpgradeStat, rank: u8) -> UpgradeValue {
+        let r = i32::from(rank);
+        UpgradeValue::Scalar(match stat {
+            UpgradeStat::WalkingSpeed => 4.725 * 1.10_f32.powi(r),
+            UpgradeStat::FireballDamage => (15.0 + self.snapshot.damage_bonus) * 1.15_f32.powi(r),
+            UpgradeStat::ProjectileSpeed => (45.0 + self.fireball_speed_bonus) * 1.10_f32.powi(r),
+            UpgradeStat::ShieldProjectileSpeed => {
+                (45.0 + self.shield_speed_bonus) * 1.10_f32.powi(r)
             }
-            UpgradeStat::HighJumpHeight => player.high_jump_height < 8.0,
-            UpgradeStat::ProjectileSpeed => player.projectile_speed < 64.0,
-            UpgradeStat::ShieldCooldown => player.shield_cooldown > 0.5,
-            UpgradeStat::FireballCooldown => player.fireball_cooldown > 0.25,
-            UpgradeStat::HighJumpCooldown => player.high_jump_cooldown > 0.5,
-            UpgradeStat::FireballDamage => player.fireball_damage < 100.0,
-            UpgradeStat::FireballKnockback => player.fireball_knockback < 25.0,
+            UpgradeStat::FireballKnockback => 12.0 * 1.15_f32.powi(r),
+            UpgradeStat::FireballCooldown => 0.5 * 0.85_f32.powi(r),
+            UpgradeStat::ShieldCooldown => 5.0 * 0.85_f32.powi(r),
+            UpgradeStat::HighJumpCooldown => 7.0 * 0.85_f32.powi(r),
+            UpgradeStat::HighJumpHeight => (4.0 * 1.15_f32.powi(r)).min(8.0),
+            UpgradeStat::FireballSize => 2.5 + 0.15 * f32::from(rank),
+            UpgradeStat::ShieldSize => {
+                let (width, height) = match rank {
+                    1 => (6, 5),
+                    2 => (6, 6),
+                    3 => (7, 6),
+                    4.. => (7, 7),
+                    _ => (5, 5),
+                };
+                return UpgradeValue::Dimensions(
+                    width + self.shield_dimension_bonus,
+                    height + self.shield_dimension_bonus,
+                );
+            }
+        })
+    }
+
+    fn scalar(&self, stat: UpgradeStat) -> f32 {
+        match self.upgrade_value(stat, self.rank(stat)) {
+            UpgradeValue::Scalar(value) => value,
+            UpgradeValue::Dimensions(_, _) => 0.0,
         }
+    }
+
+    fn tuning(&self, base: &ArenaTuning) -> ArenaTuning {
+        let mut value = base.clone();
+        value.shield_size = 1;
+        value.fireball_size = 1;
+        value.high_jump_height = self.scalar(UpgradeStat::HighJumpHeight);
+        value.projectile_speed = self.scalar(UpgradeStat::ProjectileSpeed);
+        value.projectile_gravity = 12.0;
+        value.shield_cooldown = self.scalar(UpgradeStat::ShieldCooldown);
+        value.fireball_cooldown = self.scalar(UpgradeStat::FireballCooldown);
+        value.high_jump_cooldown = self.scalar(UpgradeStat::HighJumpCooldown);
+        value.fireball_damage = self.scalar(UpgradeStat::FireballDamage);
+        value.fireball_knockback = self.scalar(UpgradeStat::FireballKnockback);
+        let shield_dimensions =
+            match self.upgrade_value(UpgradeStat::ShieldSize, self.rank(UpgradeStat::ShieldSize)) {
+                UpgradeValue::Dimensions(width, height) => (width, height),
+                UpgradeValue::Scalar(_) => (5, 5),
+            };
+        value.player_profile = Some(PlayerSpellProfile {
+            shield_projectile_speed: self.scalar(UpgradeStat::ShieldProjectileSpeed),
+            shield_dimensions,
+            fireball_radius: self.scalar(UpgradeStat::FireballSize),
+            walking_speed: self.walking_speed(),
+        });
+        value
+    }
+
+    fn can_upgrade(&self, stat: UpgradeStat) -> bool {
+        self.rank(stat) < stat.max_ranks()
+            && (stat != UpgradeStat::FireballSize || self.snapshot.explosions_unlocked)
     }
 }
 

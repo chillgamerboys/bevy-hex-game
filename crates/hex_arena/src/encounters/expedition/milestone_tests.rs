@@ -222,7 +222,7 @@ fn uncollected_final_rewards_survive_victory_and_reset_restores_every_reward() {
     collect(&mut session, ExpeditionReward::TrollDamage, &view, geometry);
     assert_eq!(
         session.player_tuning(&tuning).fireball_damage.to_bits(),
-        45.0_f32.to_bits()
+        46.0_f32.to_bits()
     );
     collect(
         &mut session,
@@ -482,9 +482,9 @@ fn enemy_shaman_payload_is_unchanged_after_milestone_pickups_and_player_upgrades
                 assert!(session.spend_upgrade(stat));
             }
             let player = session.player_tuning(&tuning);
-            assert!((player.fireball_damage - 45.0).abs() < 0.001);
-            assert!((player.fireball_radius() - 3.5).abs() < 0.001);
-            assert!((player.projectile_speed - 47.0).abs() < 0.001);
+            assert!((player.fireball_damage - 46.0).abs() < 0.001);
+            assert!((player.fireball_radius() - 2.65).abs() < 0.001);
+            assert!((player.projectile_speed - 49.5).abs() < 0.001);
             assert!((player.projectile_gravity - 12.0).abs() < 0.001);
         }
         let bridge = view.spawns.first().copied().expect("bridge");
@@ -558,7 +558,7 @@ fn enemy_shaman_payload_is_unchanged_after_milestone_pickups_and_player_upgrades
             // Player tuning changes again while the enemy payload is in flight.
             assert!(session.spend_upgrade(UpgradeStat::FireballDamage));
             assert!(session.spend_upgrade(UpgradeStat::ProjectileSpeed));
-            assert!((session.player_tuning(&tuning).fireball_damage - 50.0).abs() < 0.001);
+            assert!((session.player_tuning(&tuning).fireball_damage - 52.9).abs() < 0.001);
         }
         for _ in 0..120 {
             session.advance_projectiles(&view, geometry, materials, &mut CommandsOut::default());

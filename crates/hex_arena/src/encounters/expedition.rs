@@ -132,6 +132,9 @@ impl ArenaSession {
                     .map_err(|error| format!("Expedition actor capacity exceeded: {error}."))?;
                 let mut actor = Actor::spawn(id, home, Vec3::NEG_Z);
                 actor.configure_expedition(role, &tuning.encounters);
+                if name == "dragon_upper" {
+                    actor.configure_summit_dragon();
+                }
                 actor.party = Some(party);
                 let feet = battle_runtime::deployment_pose(
                     &actor,

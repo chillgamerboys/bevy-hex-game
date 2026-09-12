@@ -61,7 +61,7 @@ fn shaman_authored_spread_is_a_world_space_target_offset_at_near_and_far_range()
 }
 
 #[test]
-fn retreating_dragon_can_breathe_at_visible_attacker_without_resetting_its_retreat() {
+fn damaged_noncritical_dragon_keeps_attacking_visible_target() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
     pose(&mut session, 1, Vec3::ZERO, Vec3::NEG_Z);
     pose(&mut session, 0, Vec3::NEG_Z * 4.0, Vec3::Z);
@@ -86,14 +86,14 @@ fn retreating_dragon_can_breathe_at_visible_attacker_without_resetting_its_retre
         .iter_mut()
         .find(|a| a.id == 1)
         .expect("dragon")
-        .hp = 70.0;
+        .hp = 150.0;
     session.record_damage(0, 1, 30.0);
     session.bot_enabled = true;
     ticks(&mut session, 60, &view, geometry, materials, &tuning);
     session.record_damage(0, 1, 1.0);
     ticks(&mut session, 60, &view, geometry, materials, &tuning);
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
-    assert!(dragon.flying && (dragon.hp - 70.0).abs() < 0.001);
+    assert!((dragon.hp - 150.0).abs() < 0.001);
     assert!(
         (session.actors.first().expect("attacker").hp - (100.0 - tuning.encounters.breath_damage))
             .abs()
@@ -106,8 +106,8 @@ fn retreating_dragon_can_breathe_at_visible_attacker_without_resetting_its_retre
             .find(|d| d.id == 1)
             .expect("decision")
             .retreat_seconds
-            > 3.4,
-        "new damage still refreshes retreat"
+            <= 0.0,
+        "noncritical damage does not interrupt aggression"
     );
     assert_eq!(
         session

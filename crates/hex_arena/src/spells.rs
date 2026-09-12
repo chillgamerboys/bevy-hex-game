@@ -456,7 +456,8 @@ fn wall_candidates(
     };
     let (width, height) = dimensions;
     let mut volume = BTreeSet::new();
-    for offset in -(width / 2)..=width / 2 {
+    let start = -(width / 2);
+    for offset in start..start + width {
         let coord =
             HexCoord::from_axial(base.coord.x() + dq * offset, base.coord.y() + dr * offset);
         for rise in 0..height {
@@ -874,7 +875,10 @@ pub(super) fn preview(
         world,
         geometry,
         &tuning,
-        tuning.launch_speed(actor.charge().map_or(0.0, |charge| charge.elapsed)),
+        tuning.spell_launch_speed(
+            actor.selected,
+            actor.charge().map_or(0.0, |charge| charge.elapsed),
+        ),
     )
 }
 
@@ -1244,6 +1248,33 @@ mod tests {
         let contact = advance_shot(&mut shot, &CollisionWorld::default(), &[target], false)
             .expect("moving actor crosses the ray");
         assert!(contact.actor == Some(1) && (4.0..5.0).contains(&contact.point.x));
+    }
+
+    #[test]
+    fn even_width_shields_contain_exact_columns_in_every_hex_orientation() {
+        for angle in 0_u8..6 {
+            let direction =
+                bevy_math::Quat::from_rotation_y(f32::from(angle) * std::f32::consts::PI / 3.0)
+                    * Vec3::NEG_Z;
+            for (width, height) in [(5, 5), (6, 5), (6, 6), (7, 6), (8, 7), (9, 9)] {
+                let cells = wall_candidates(
+                    shield_impact(Vec3::ZERO, Vec3::Y),
+                    direction,
+                    (width, height),
+                    ArenaVoxelGeometry::default(),
+                );
+                let columns: std::collections::BTreeSet<_> =
+                    cells.iter().map(|cell| cell.coord).collect();
+                assert_eq!(
+                    columns.len(),
+                    usize::try_from(width).expect("positive width")
+                );
+                assert_eq!(
+                    cells.len(),
+                    usize::try_from(width * height).expect("positive volume")
+                );
+            }
+        }
     }
 
     #[test]
