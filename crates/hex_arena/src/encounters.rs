@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 mod abilities;
 mod battle_runtime;
 mod brain;
+mod expedition;
 mod separation;
 use separation::separate_many;
 pub use separation::ActorSeparationStats;
@@ -125,6 +126,15 @@ impl ArenaSession {
         if self.accepted_battle.control == ArenaControl::Spectator {
             self.initialize_battle(world, geometry, tuning);
             return;
+        }
+        if world.selection.map == ArenaMap::ForestMassif {
+            if let Some(sites) = &world.expedition {
+                if let Err(message) = self.initialize_expedition(sites, world, geometry, tuning) {
+                    self.notice = message;
+                    self.refuse_player_encounter();
+                }
+                return;
+            }
         }
         let c = &tuning.encounters;
         self.encounter = EncounterState {
@@ -769,10 +779,11 @@ impl ArenaSession {
             for cd in &mut actor.cooldowns {
                 *cd = (*cd - STEP).max(0.0);
             }
+            let profile_tuning = actor.expedition_tuning(tuning);
             let actor_tuning = if Some(actor.id) == human_id {
                 &player_tuning
             } else {
-                tuning
+                &profile_tuning
             };
             let boosted = intent.high_jump && actor.high_jump(actor_tuning);
             if boosted {
@@ -793,7 +804,7 @@ impl ArenaSession {
                 flight,
                 intents.get(&actor.id).is_some_and(|i| i.lunge),
                 &self.collision,
-                &tuning.encounters,
+                &actor_tuning.encounters,
             );
             if actor.feet.y < self.collision.min_y + 2.0 || !actor.feet.is_finite() {
                 actor.hp = 0.0;
@@ -818,6 +829,7 @@ impl ArenaSession {
         casts.retain(|(id, _, _)| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
         for (id, spell, speed) in casts {
             if let Some(actor) = self.actors.iter_mut().find(|a| a.id == id) {
+                let profile_tuning = actor.expedition_tuning(tuning);
                 let cooldown = if actor.species == Species::Shaman {
                     match spell {
                         Spell::Shield => tuning.encounters.shaman_shield_cooldown,
@@ -826,7 +838,7 @@ impl ArenaSession {
                 } else if Some(id) == human_id {
                     player_tuning.cooldown(spell)
                 } else {
-                    tuning.cooldown(spell)
+                    profile_tuning.cooldown(spell)
                 };
                 if let Some(cd) = actor.cooldowns.get_mut(spell.index()) {
                     *cd = cooldown;

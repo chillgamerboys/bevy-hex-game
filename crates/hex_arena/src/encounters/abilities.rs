@@ -174,7 +174,7 @@ impl ArenaSession {
             {
                 actor.hp = (actor.hp + c.dragon_regen_rate * STEP).min(actor.max_hp);
             }
-            if map != ArenaMap::Duel
+            if !matches!(map, ArenaMap::Duel | ArenaMap::ForestMassif)
                 && Some(actor.id) == human_id
                 && elapsed(self.tick, actor.last_activity_tick) >= c.human_regen_delay
                 && elapsed(self.tick, self.encounter.human_seen_tick) >= c.human_unseen_delay
@@ -201,7 +201,8 @@ impl ArenaSession {
         if !brain.ready(request.kind) {
             return;
         }
-        let c = &tuning.encounters;
+        let profile_tuning = actor.expedition_tuning(tuning);
+        let c = &profile_tuning.encounters;
         let (windup, duration, cooldown) = match request.kind {
             CreatureAbility::FireCone => (c.breath_windup, c.breath_seconds, c.breath_cooldown),
             CreatureAbility::Bite => (c.bite_windup, 0.15, c.bite_cooldown),
@@ -255,7 +256,6 @@ impl ArenaSession {
         tuning: &ArenaTuning,
         out: &mut CommandsOut,
     ) {
-        let c = &tuning.encounters;
         for (id, brain) in brains {
             for cd in &mut brain.cooldowns {
                 *cd = (*cd - STEP).max(0.0);
@@ -271,6 +271,9 @@ impl ArenaSession {
             else {
                 continue;
             };
+            let profile_tuning = actor.expedition_tuning(tuning);
+            let tuning = profile_tuning.as_ref();
+            let c = &tuning.encounters;
             if cast.tracks_boulder()
                 && !actor
                     .worm()

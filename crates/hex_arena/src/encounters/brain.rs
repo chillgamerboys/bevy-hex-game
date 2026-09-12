@@ -158,6 +158,8 @@ impl Brain {
         tuning: &ArenaTuning,
         tick: u64,
     ) -> (MotionIntent, Option<Request>) {
+        let profile_tuning = actor.expedition_tuning(tuning);
+        let tuning = profile_tuning.as_ref();
         let c = &tuning.encounters;
         self.spell_gap = (self.spell_gap - STEP).max(0.0);
         // Live human data is confined to visibility admission. Downstream plans

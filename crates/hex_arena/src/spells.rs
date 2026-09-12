@@ -114,6 +114,8 @@ fn projectile(
     id: u64,
     launch_speed: f32,
 ) -> Projectile {
+    let profile_tuning = actor.expedition_tuning(tuning);
+    let tuning = profile_tuning.as_ref();
     Projectile {
         id,
         owner: actor.id,
@@ -1145,6 +1147,36 @@ fn forecast_projectile(
 mod tests {
     use super::*;
     use crate::collision::voxel_overlaps_body;
+
+    #[test]
+    fn authored_shadow_and_troll_projectiles_freeze_their_own_profile() {
+        for (role, expected) in [
+            (crate::ExpeditionRole::MountainShadow, 30.0_f32),
+            (crate::ExpeditionRole::Troll, 35.0_f32),
+        ] {
+            let mut actor = Actor::spawn(7, Vec3::ZERO, Vec3::X);
+            actor.configure_expedition(role, &crate::EncounterTuning::default());
+            let altered = ArenaTuning {
+                fireball_damage: 99.0,
+                projectile_gravity: 12.0,
+                ..Default::default()
+            };
+            let shot = projectile(&actor, Spell::Fireball, &altered, 0, 45.0);
+            assert_eq!(shot.parameters.damage.to_bits(), expected.to_bits());
+            assert_eq!(shot.parameters.gravity.to_bits(), 12.0_f32.to_bits());
+            assert_eq!(shot.fireball_mode(), crate::FireballMode::Explosive);
+            let mut observation = ForecastBody::human(actor.id, actor.feet, Vec3::ZERO, 0.0);
+            observation.species = actor.species;
+            observation.dimensions = actor.dimensions;
+            assert_eq!(
+                observation
+                    .reconstruct()
+                    .expect("observed body")
+                    .body_dimensions(),
+                actor.body_dimensions()
+            );
+        }
+    }
 
     #[test]
     fn ballistic_step_matches_analytic_parabola_and_downhill_has_more_reach() {

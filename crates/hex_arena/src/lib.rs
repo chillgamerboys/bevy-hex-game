@@ -26,6 +26,8 @@ mod controller;
 mod creatures;
 mod encounter_config;
 mod encounters;
+mod expedition;
+pub use expedition::ExpeditionRole;
 mod hex_prisms;
 mod motion;
 mod progression;
@@ -361,6 +363,7 @@ pub struct Actor {
     cast_needs_release: bool,
     body: Body,
     dimensions: Vec3,
+    expedition_role: Option<ExpeditionRole>,
     body_yaw: f32,
     previous_yaw: f32,
     attack: Option<AttackSnapshot>,
@@ -396,6 +399,7 @@ impl Actor {
             cast_needs_release: false,
             body: Body::default(),
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
+            expedition_role: None,
             body_yaw: (-aim.x).atan2(-aim.z),
             previous_yaw: (-aim.x).atan2(-aim.z),
             attack: None,
