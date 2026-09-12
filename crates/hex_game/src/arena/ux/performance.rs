@@ -1,19 +1,23 @@
-//! Opt-in native wall-clock frame intervals and scoped UI CPU measurements.
+//! Opt-in native frame intervals and separately scoped UI wall-time measurements.
 //!
-//! This samples one fixed point in each Update. Intervals include intervening
+//! This samples one fixed point after UI in each PostUpdate. Intervals include intervening
 //! app work and pacing/waits; they are not GPU timestamps or presented-frame FPS.
+//! Adapter timing excludes Bevy text/layout. The separately bracketed UI pipeline
+//! is an elapsed wall-span upper bound, not exclusive CPU cost: unrelated parallel
+//! systems, scheduling and deferred work can extend the measured span.
 //! No resource or system is installed unless HEX_ARENA_UX_PERF is exactly `1`.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 use bevy::window::PrimaryWindow;
 use hex_arena::ArenaSession;
 use serde_json::{Value, json};
 
 use super::{Page, UxState};
-use crate::arena::{ArenaFrame, ViewState, recording::Recorder};
+use crate::arena::{ViewState, recording::Recorder};
 
 const CAPACITY: usize = 512;
 const REPORT_INTERVAL: Duration = Duration::from_secs(5);
@@ -23,8 +27,44 @@ pub(super) fn install(app: &mut App) {
     if !opted_in(std::env::var("HEX_ARENA_UX_PERF").ok().as_deref()) {
         return;
     }
-    app.init_resource::<Samples>()
-        .add_systems(Update, observe.after(ArenaFrame::Present));
+    app.init_resource::<Samples>();
+    install_ui_span(app);
+    app.add_systems(PostUpdate, observe.after(end_ui_span));
+}
+
+fn install_ui_span(app: &mut App) {
+    // Bevy 0.19: Prepare -> Propagate -> Content (text measurement) -> Layout
+    // -> PostLayout (text rebuilding/clipping). Stack is a separate public set;
+    // font ingestion and rerender detection precede Content outside that chain.
+    app.add_systems(
+        PostUpdate,
+        begin_ui_span
+            .before(UiSystems::Prepare)
+            .before(UiSystems::Stack)
+            .before(bevy::text::load_font_assets_into_font_collection)
+            .before(bevy::text::detect_text_needs_rerender),
+    )
+    .add_systems(
+        PostUpdate,
+        end_ui_span
+            .after(begin_ui_span)
+            .after(bevy::text::load_font_assets_into_font_collection)
+            .after(bevy::text::detect_text_needs_rerender)
+            .after(UiSystems::PostLayout)
+            .after(UiSystems::Stack),
+    );
+}
+
+fn begin_ui_span(mut samples: ResMut<Samples>) {
+    samples.ui_pipeline_started = Some(Instant::now());
+    samples.ui_pipeline_wall_micros = None;
+}
+
+fn end_ui_span(mut samples: ResMut<Samples>) {
+    samples.ui_pipeline_wall_micros = samples
+        .ui_pipeline_started
+        .take()
+        .map(|start| start.elapsed().as_secs_f64() * 1e6);
 }
 
 fn opted_in(value: Option<&str>) -> bool {
@@ -51,8 +91,10 @@ struct Samples {
     phase_started: Option<Instant>,
     bucket_started: Option<Instant>,
     observed_frames: u64,
-    // Frame interval milliseconds and the same frame's measured UI microseconds.
-    retained: VecDeque<(f64, f64)>,
+    ui_pipeline_started: Option<Instant>,
+    ui_pipeline_wall_micros: Option<f64>,
+    // Frame interval ms, Update adapter wall us, optional PostUpdate UI wall us.
+    retained: VecDeque<(f64, f64, Option<f64>)>,
 }
 
 fn observe(
@@ -114,24 +156,34 @@ impl Samples {
             if self.retained.len() == CAPACITY {
                 self.retained.pop_front();
             }
-            self.retained
-                .push_back((elapsed.as_secs_f64() * 1000.0, ui_micros));
+            self.retained.push_back((
+                elapsed.as_secs_f64() * 1000.0,
+                ui_micros,
+                self.ui_pipeline_wall_micros
+                    .filter(|value| value.is_finite() && *value >= 0.0),
+            ));
         }
         let bucket_duration = now.saturating_duration_since(self.bucket_started?);
         let stable_duration = now.saturating_duration_since(self.phase_started?);
         if bucket_duration < REPORT_INTERVAL || stable_duration < REPORT_INTERVAL {
             return None;
         }
-        let mut frame_ms: Vec<_> = self.retained.iter().map(|(frame, _)| *frame).collect();
-        let mut ui_us: Vec<_> = self.retained.iter().map(|(_, ui)| *ui).collect();
+        let mut frame_ms: Vec<_> = self.retained.iter().map(|(frame, _, _)| *frame).collect();
+        let mut ui_us: Vec<_> = self.retained.iter().map(|(_, ui, _)| *ui).collect();
+        let mut pipeline_us: Vec<_> = self
+            .retained
+            .iter()
+            .filter_map(|(_, _, pipeline)| *pipeline)
+            .collect();
         let retained_interval_seconds = frame_ms.iter().sum::<f64>() / 1000.0;
         frame_ms.sort_by(f64::total_cmp);
         ui_us.sort_by(f64::total_cmp);
+        pipeline_us.sort_by(f64::total_cmp);
         let retained_samples = u64::try_from(self.retained.len()).unwrap_or(u64::MAX);
         let report = json!({
-            "schema_version": 1,
-            "measurement": "wall_clock_between_post_presentation_Update_observations",
-            "evidence_boundary": "app_update_intervals_include_intervening_work_and_waits_not_GPU_timestamps_or_presented_FPS",
+            "schema_version": 2,
+            "measurement": "wall_clock_between_post_UI_PostUpdate_observations",
+            "evidence_boundary": "app_frame_intervals_include_intervening_work_and_waits_not_GPU_timestamps_or_presented_FPS",
             "stable_phase_seconds": stable_duration.as_secs_f64(),
             "bucket_seconds": bucket_duration.as_secs_f64(),
             "actor_count": phase.actors,
@@ -150,7 +202,12 @@ impl Samples {
             "retained_interval_seconds": retained_interval_seconds,
             "quantile": "nearest_rank",
             "frame_interval_ms": { "p50": percentile(&frame_ms, 50), "p95": percentile(&frame_ms, 95) },
-            "ui_present_micros_p95": percentile(&ui_us, 95),
+            "ui_adapter_wall_micros_p95": percentile(&ui_us, 95),
+            "ui_adapter_scope": "UxState.present_micros_Update_HUD_and_UX_adapters_plus_observation_excludes_Bevy_PostUpdate_text_and_layout",
+            "bevy_ui_postupdate_wall_micros_p95": percentile(&pipeline_us, 95),
+            "bevy_ui_postupdate_samples": pipeline_us.len(),
+            "bevy_ui_postupdate_scope": "before_Prepare_font_ingestion_rerender_detection_and_Stack_through_after_PostLayout_and_Stack_includes_Content_text_measurement_Layout_text_rebuild_and_clipping",
+            "ui_timing_boundary": "elapsed_wall_span_upper_bounds_may_include_unrelated_parallel_work_and_scheduling_not_exclusive_CPU_excludes_render_extraction_and_GPU_do_not_sum_separate_p95_values",
         });
         self.clear_bucket(now);
         Some(report)
@@ -191,7 +248,10 @@ mod tests {
     #[test]
     fn stable_phase_emits_after_five_seconds_with_real_interval_units() {
         let now = Instant::now();
-        let mut samples = Samples::default();
+        let mut samples = Samples {
+            ui_pipeline_wall_micros: Some(450.0),
+            ..Default::default()
+        };
         assert!(samples.observe(now, Some(phase()), 10.0).is_none());
         for frame in 1..50_u32 {
             assert!(
@@ -217,13 +277,63 @@ mod tests {
             report.pointer("/frame_interval_ms/p95"),
             Some(&json!(100.0))
         );
-        assert_eq!(report.get("ui_present_micros_p95"), Some(&json!(100.0)));
+        assert_eq!(
+            report.get("ui_adapter_wall_micros_p95"),
+            Some(&json!(100.0))
+        );
+        assert_eq!(
+            report.get("bevy_ui_postupdate_wall_micros_p95"),
+            Some(&json!(450.0))
+        );
+        assert_eq!(report.get("bevy_ui_postupdate_samples"), Some(&json!(50)));
         assert!(samples.retained.is_empty());
         assert!(
             samples
                 .observe(now + Duration::from_secs(6), Some(phase()), 100.0)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn postupdate_markers_wrap_every_public_ui_stage_and_clear_stale_measurements() {
+        #[derive(Resource, Default)]
+        struct Visited(usize);
+        fn within_span(samples: Res<Samples>, mut visited: ResMut<Visited>) {
+            assert!(samples.ui_pipeline_started.is_some());
+            assert!(samples.ui_pipeline_wall_micros.is_none());
+            visited.0 += 1;
+        }
+        let mut app = App::new();
+        app.init_resource::<Samples>().init_resource::<Visited>();
+        app.configure_sets(
+            PostUpdate,
+            (
+                UiSystems::Prepare,
+                UiSystems::Propagate,
+                UiSystems::Content,
+                UiSystems::Layout,
+                UiSystems::PostLayout,
+            )
+                .chain(),
+        );
+        install_ui_span(&mut app);
+        for set in [
+            UiSystems::Prepare,
+            UiSystems::Propagate,
+            UiSystems::Content,
+            UiSystems::Layout,
+            UiSystems::PostLayout,
+            UiSystems::Stack,
+        ] {
+            app.add_systems(PostUpdate, within_span.in_set(set));
+        }
+        for expected in [6, 12] {
+            app.world_mut().run_schedule(PostUpdate);
+            let samples = app.world().resource::<Samples>();
+            assert!(samples.ui_pipeline_started.is_none());
+            assert!(samples.ui_pipeline_wall_micros.is_some());
+            assert_eq!(app.world().resource::<Visited>().0, expected);
+        }
     }
 
     #[test]
