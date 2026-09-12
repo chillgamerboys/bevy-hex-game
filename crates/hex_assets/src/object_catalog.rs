@@ -1479,40 +1479,24 @@ mod tests {
         let manifest: ObjectCatalogFile =
             ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
                 .expect("shipped object manifest should parse");
-        let objects = [
-            include_str!("../../../assets/art/objects/plant/date-palm.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-ancient-1.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-ancient-2.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-ancient-3.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-broadleaf-1.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-broadleaf-2.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-broadleaf-3.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-heart.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-pine-1.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-pine-2.ron"),
-            include_str!("../../../assets/art/objects/plant/forest-pine-3.ron"),
-            include_str!("../../../assets/art/objects/plant/old-growth.ron"),
-            include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
-            include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
-            include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
-            include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
-            include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
-            include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
-            include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-cathedral-heart.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
-            include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
-            include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
-        ]
-        .into_iter()
-        .map(|source| {
-            let object: ObjectBlueprint =
-                ron::from_str(source).expect("shipped object should parse");
-            (object.id.clone(), object)
-        })
-        .collect::<BTreeMap<_, _>>();
+        let object_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/art/objects");
+        let objects = manifest
+            .ids()
+            .iter()
+            .map(|asset_id| {
+                let path = object_root.join(format!("{}.ron", asset_id.as_str()));
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+                let object: ObjectBlueprint = ron::from_str(&source)
+                    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+                assert_eq!(
+                    &object.id, asset_id,
+                    "blueprint path must match its identity"
+                );
+                (object.id.clone(), object)
+            })
+            .collect::<BTreeMap<_, _>>();
         let expected_ids = [
             "plant/date-palm",
             "plant/forest-ancient-1",
@@ -1521,6 +1505,19 @@ mod tests {
             "plant/forest-broadleaf-1",
             "plant/forest-broadleaf-2",
             "plant/forest-broadleaf-3",
+            "plant/forest-expedition-ancient-1",
+            "plant/forest-expedition-ancient-2",
+            "plant/forest-expedition-ancient-3",
+            "plant/forest-expedition-heart",
+            "plant/forest-expedition-landmark-1",
+            "plant/forest-expedition-landmark-2",
+            "plant/forest-expedition-landmark-3",
+            "plant/forest-expedition-understory-broadleaf-1",
+            "plant/forest-expedition-understory-broadleaf-2",
+            "plant/forest-expedition-understory-broadleaf-3",
+            "plant/forest-expedition-understory-pine-1",
+            "plant/forest-expedition-understory-pine-2",
+            "plant/forest-expedition-understory-pine-3",
             "plant/forest-heart",
             "plant/forest-pine-1",
             "plant/forest-pine-2",
@@ -1537,6 +1534,31 @@ mod tests {
             "prop/crystal-cathedral-heart",
             "prop/crystal-low-cluster",
             "prop/crystal-spire",
+            "prop/expedition-arena-buttress-0",
+            "prop/expedition-arena-buttress-1",
+            "prop/expedition-arena-buttress-3",
+            "prop/expedition-arena-buttress-4",
+            "prop/expedition-arena-buttress-5",
+            "prop/expedition-arena-open-gate",
+            "prop/expedition-arena-wall-crown",
+            "prop/expedition-bridge-portal-east",
+            "prop/expedition-bridge-portal-west",
+            "prop/expedition-bridge-rail-north-0",
+            "prop/expedition-bridge-rail-north-1",
+            "prop/expedition-bridge-rail-north-2",
+            "prop/expedition-bridge-rail-north-3",
+            "prop/expedition-bridge-rail-south-0",
+            "prop/expedition-bridge-rail-south-1",
+            "prop/expedition-bridge-rail-south-2",
+            "prop/expedition-bridge-rail-south-3",
+            "prop/expedition-crystal-cluster",
+            "prop/expedition-crystal-fan",
+            "prop/expedition-crystal-needle",
+            "prop/expedition-fountain-rim",
+            "prop/expedition-rock-arch",
+            "prop/expedition-rock-pillar",
+            "prop/expedition-rock-ridge",
+            "prop/expedition-rock-slab",
             "prop/grass-tuft",
             "prop/snowy-grass-tuft",
         ]
@@ -1545,8 +1567,15 @@ mod tests {
 
         let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
             .expect("shipped authored object graph should resolve");
-        assert_eq!(resolved.objects().len(), 25);
-        assert_eq!(resolved.styles().styles().len(), 8);
+        assert_eq!(resolved.objects().len(), 63);
+        assert_eq!(resolved.styles().styles().len(), 14);
+
+        let expedition_heart = resolved
+            .object(&id("plant/forest-expedition-heart"))
+            .expect("expedition Heart should resolve");
+        assert_eq!(expedition_heart.category, ObjectCategory::Plant);
+        assert_eq!(expedition_heart.bounds.height, 172);
+        assert!(expedition_heart.blocker_footprint.len() > 1);
 
         let palm = resolved
             .object(&id("plant/date-palm"))
