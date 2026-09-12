@@ -431,15 +431,25 @@ fn reenter(
         while valid
             && spent < allowance
             && probe.ticks < 3600
-            && probe
+            && (probe
                 .actor
                 .feet
                 .with_y(0.0)
                 .distance(probe.target.with_y(0.0))
                 > 0.3
+                || !probe.actor.grounded
+                || shapes::ground(collision, &probe.actor, probe.actor.feet, 0.05).is_none())
         {
             let before = probe.actor.feet;
-            let direction = (probe.target - before).with_y(0.0).normalize_or_zero();
+            let settling = before.with_y(0.0).distance(probe.target.with_y(0.0)) <= 0.3;
+            // A downhill entry can arrive horizontally before touching its tread.
+            // Finish through neutral controller ticks, charged to the same bounded
+            // proof budget and retained across frames if this allowance runs out.
+            let direction = if settling {
+                Vec3::ZERO
+            } else {
+                (probe.target - before).with_y(0.0).normalize_or_zero()
+            };
             motion::tick(
                 &mut probe.actor,
                 direction,
@@ -451,11 +461,12 @@ fn reenter(
             );
             spent += 1;
             probe.ticks += 1;
-            probe.stalled = if (probe.actor.feet - before).with_y(0.0).dot(direction) < 0.001 {
-                probe.stalled + 1
-            } else {
-                0
-            };
+            probe.stalled =
+                if !settling && (probe.actor.feet - before).with_y(0.0).dot(direction) < 0.001 {
+                    probe.stalled + 1
+                } else {
+                    0
+                };
             valid = probe.stalled < 24
                 && steering::contained(&probe.actor, geometry)
                 && shapes::clear(
@@ -476,6 +487,7 @@ fn reenter(
             <= 0.3;
         if valid
             && arrived
+            && probe.actor.grounded
             && (probe.actor.feet.y - probe.target.y).abs() <= 0.45
             && shapes::ground(collision, &probe.actor, probe.actor.feet, 0.05).is_some()
         {
@@ -485,7 +497,10 @@ fn reenter(
             order.probe = None;
             break;
         }
-        if !valid || arrived || probe.ticks >= 3600 {
+        if !valid
+            || (arrived && (probe.actor.feet.y - probe.target.y).abs() > 0.45)
+            || probe.ticks >= 3600
+        {
             order.probe = None;
             order.candidate_offset += 1;
             attempted += 1;

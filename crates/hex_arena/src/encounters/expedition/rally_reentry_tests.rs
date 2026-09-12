@@ -302,3 +302,120 @@ fn full_rally_reentry_service_is_deterministic_bounded_and_round_robin() {
     first.advance_rally(&view, geometry, &ArenaTuning::default());
     assert!(order(&first, 1).joined);
 }
+
+#[test]
+fn downhill_reentry_settles_across_budgets_before_admitting_the_route() {
+    let geometry = ArenaVoxelGeometry {
+        level_height: 0.35,
+        ..Default::default()
+    };
+    let mut view = ArenaTerrainView::default();
+    for coord in HexCoord::ORIGIN.within_radius(4) {
+        view.voxels
+            .insert(TilePos::new(coord, i32::from(coord.x <= 0)), SubstanceId(1));
+    }
+    let mut collision = CollisionWorld::default();
+    collision.refresh(&view, geometry);
+    let start = HexCoord::ORIGIN.to_world(0.35 + SKIN);
+    let end = HexCoord::from_axial(1, 0).to_world(SKIN);
+    let tuning = ArenaTuning::default();
+    for role in [ExpeditionRole::Goblin, ExpeditionRole::Shaman] {
+        let actor = minion(1, start, role);
+        let mut order = Order::default();
+        let mut observed_pending_landing = false;
+        for tick in 0..120 {
+            let spent = reenter(
+                &mut order,
+                &actor,
+                &[end],
+                None,
+                &collision,
+                &view,
+                geometry,
+                &tuning,
+                tick,
+                4,
+            );
+            assert!(
+                spent <= 4,
+                "settlement must share the incremental allowance"
+            );
+            if let Some(probe) = &order.probe {
+                if probe.actor.feet.with_y(0.0).distance(end.with_y(0.0)) <= 0.3 {
+                    observed_pending_landing = true;
+                    assert!(!order.joined);
+                    assert!(!probe.actor.grounded);
+                    assert!(
+                        shapes::ground(&collision, &probe.actor, probe.actor.feet, 0.45).is_some()
+                    );
+                }
+            }
+            if order.joined {
+                break;
+            }
+        }
+        assert!(
+            observed_pending_landing,
+            "fixture must exercise a landing across updates"
+        );
+        assert!(
+            order.joined,
+            "reachable downhill entry must finish for {role:?}"
+        );
+        assert_eq!(order.cursor, 0);
+        assert_eq!(
+            order.candidate_offset, 0,
+            "must not reject the reachable nearest support"
+        );
+        assert_eq!(actor.feet, start, "a proof is not live movement or arrival");
+    }
+}
+
+#[test]
+fn successful_reentry_proof_does_not_mark_a_stationary_minion_arrived() {
+    let (view, geometry, collision) = floor();
+    let start = point(-4.0, 0.0);
+    let end = point(4.0, 0.0);
+    let mut session = session(vec![end], &[start]);
+    session.collision = collision;
+    join(&mut session, &view, geometry);
+    assert_eq!(
+        session
+            .expedition_rally_status()
+            .expect("rally")
+            .remaining_travellers,
+        1
+    );
+    let tuning = ArenaTuning::default();
+    for _ in 0..360 {
+        let actor = session.actors.first_mut().expect("minion");
+        let direction = (end - actor.feet).with_y(0.0).normalize_or_zero();
+        motion::tick(
+            actor,
+            direction,
+            true,
+            false,
+            false,
+            &session.collision,
+            &tuning.encounters,
+        );
+        session.tick += 1;
+        session.advance_rally(&view, geometry, &tuning);
+        if session
+            .expedition_rally_status()
+            .expect("rally")
+            .remaining_travellers
+            == 0
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        session
+            .expedition_rally_status()
+            .expect("rally")
+            .remaining_travellers,
+        0
+    );
+    assert!(session.actors.first().expect("minion").feet.distance(end) <= 0.8);
+}
