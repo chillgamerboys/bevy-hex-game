@@ -1333,6 +1333,78 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
 }
 
 #[test]
+fn capture_charge_waits_for_authority_and_survives_delayed_render_readiness() {
+    for (view, charge_seconds) in [
+        ("fireball-charge-partial-first", 0.75),
+        ("fireball-charge-full-third", 1.5),
+        ("shield-charge-partial-third", 1.5),
+        ("shield-charge-full-first", 0.75),
+    ] {
+        let mut app = app(60);
+        app.world_mut().resource_mut::<ArenaTuning>().charge_seconds = charge_seconds;
+        {
+            let mut state = app.world_mut().resource_mut::<ViewState>();
+            state.capture = Some(PathBuf::from("unused-charge-capture.png"));
+            state.capture_view = view.into();
+            state.frames = 0;
+        }
+        let mut frozen = None;
+        // No renderer is installed: simulate assets becoming ready much later
+        // than the nominal capture frame, using the real capture/tick driver.
+        for _ in 0..180 {
+            app.update();
+            if app
+                .world()
+                .resource::<ViewState>()
+                .capture_event_frame
+                .is_some()
+            {
+                let session = app.world().resource::<ArenaSession>();
+                let charge = session
+                    .actors
+                    .first()
+                    .and_then(|actor| actor.charge())
+                    .expect("held charge");
+                let actual = (session.tick, charge.elapsed.to_bits());
+                assert_eq!(actual, *frozen.get_or_insert(actual), "{view}");
+            }
+        }
+        assert!(frozen.is_some(), "{view}: charge phase never reached");
+        let session = app.world().resource::<ArenaSession>();
+        let tuning = app.world().resource::<ArenaTuning>();
+        assert!(capture_charge_ready(session, tuning, view));
+        assert_eq!(tuning.charge_seconds.to_bits(), charge_seconds.to_bits());
+        let charge = session
+            .actors
+            .first()
+            .and_then(|actor| actor.charge())
+            .expect("held charge");
+        let (spell, target) = capture_charge_target(view).expect("charge fixture");
+        assert_eq!(charge.spell, spell);
+        assert!(
+            (charge.elapsed / charge_seconds - target).abs() < 0.02,
+            "{view}: {charge:?}"
+        );
+        assert!(session.projectiles.is_empty());
+        let state = app.world().resource::<ViewState>();
+        assert_eq!(
+            state
+                .capture_inputs
+                .iter()
+                .filter(|(_, intent)| intent.cast_pressed)
+                .count(),
+            1
+        );
+        assert!(
+            state
+                .capture_inputs
+                .iter()
+                .all(|(_, intent)| !intent.cast_released)
+        );
+    }
+}
+
+#[test]
 fn partial_preview_capture_clips_cells_through_world_authority() {
     let mut app = app(60);
     {

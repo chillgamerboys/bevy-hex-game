@@ -1028,7 +1028,10 @@ fn drive_simulation(world: &mut World) {
                 world.resource::<ArenaTuning>(),
             )
         } else {
-            capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction)
+            let tuning = world
+                .resource::<ArenaSession>()
+                .player_tuning(world.resource::<ArenaTuning>());
+            capture_intent(frame, &view, &tuning, direction)
         };
         world.resource_mut::<ArenaInput>().human = sample;
         world
@@ -1190,6 +1193,20 @@ fn drive_simulation(world: &mut World) {
         }
         let approach_ready = world.resource::<ArenaTerrainView>().selection.map != ArenaMap::Fort
             || encounter::fort_approach_complete(world.resource::<ViewState>().capture_route_step);
+        if capture
+            && capture_charge_ready(
+                world.resource::<ArenaSession>(),
+                world.resource::<ArenaTuning>(),
+                &view,
+            )
+        {
+            // Keep the actual held charge stable while render assets warm up.
+            // Screenshot readiness may arrive long after the target input frame.
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
         if capture && expedition_capture::ready(world.resource::<ArenaSession>(), &view) {
             let mut state = world.resource_mut::<ViewState>();
             state.capture_event_frame = Some(frame);
@@ -1289,6 +1306,7 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
         capture_frame_index(view)
             .saturating_sub((tuning.charge_seconds * 0.5 * 60.0).round() as u32)
             .saturating_add(1)
+            .max(6)
     } else if hold_review || spell == Some(Spell::Shield) {
         6
     } else {
@@ -1308,6 +1326,38 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
         cast_held: casts && frame >= press_frame && (hold_review || frame < release_frame),
         ..default()
     }
+}
+
+fn capture_charge_target(view: &str) -> Option<(Spell, f32)> {
+    let spell = if view.starts_with("shield-charge-") {
+        Spell::Shield
+    } else if view.starts_with("fireball-charge-") {
+        Spell::Fireball
+    } else {
+        return None;
+    };
+    if view.contains("charge-partial") {
+        Some((spell, 0.5))
+    } else if view.contains("charge-full") {
+        Some((spell, 1.0))
+    } else {
+        None
+    }
+}
+
+fn capture_charge_ready(session: &ArenaSession, tuning: &ArenaTuning, view: &str) -> bool {
+    let Some((spell, fraction)) = capture_charge_target(view) else {
+        return false;
+    };
+    let tuning = session.player_tuning(tuning);
+    session.human_actor_id().is_some_and(|id| {
+        session.actors.iter().any(|actor| {
+            actor.id == id
+                && actor.charge().is_some_and(|charge| {
+                    charge.spell == spell && charge.elapsed >= tuning.charge_seconds * fraction
+                })
+        })
+    })
 }
 
 fn capture_frame_index(view: &str) -> u32 {
@@ -1538,6 +1588,14 @@ fn capture_frame(
     if encounter::stress_view(&state.capture_view) && state.capture_event_frame.is_none() {
         if state.frames > 2000 || session.is_finished() {
             error!("Synthetic encounter stress capture ended before 3600 active simulation ticks");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    if capture_charge_target(&state.capture_view).is_some() && state.capture_event_frame.is_none() {
+        if frames >= 1800 || session.is_finished() {
+            error!("Charge capture failed: requested authoritative held charge was not reached");
             state.requested = true;
             exit.write(AppExit::error());
         }
