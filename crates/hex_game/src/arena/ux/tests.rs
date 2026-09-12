@@ -7,7 +7,7 @@ use bevy::input::ButtonState;
 use bevy::window::{CursorOptions, WindowMode};
 use hex_arena::{ActorIntent, ArenaBattleSetup, ArenaInput, Spell};
 use hex_core::arena::{ArenaMap, ArenaSelection, ArenaTick};
-use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
+use hex_ui::test_support::HeadlessUiPlugin;
 
 use super::*;
 
@@ -167,19 +167,55 @@ fn open_page(app: &mut App, page: Page) {
 }
 
 fn assert_visible(app: &mut App, entity: Entity, label: &str) {
-    app.world_mut()
-        .entity_mut(entity)
-        .insert(Name::new(label.to_owned()));
-    let snapshot = ui_tree_snapshot(app.world_mut());
-    let node = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.name == label)
-        .expect("named UI observation");
+    // Battle owns UiScale independently of the tactical ResolvedUiMetrics used
+    // by ui_tree_snapshot. Comparing that snapshot's UI-logical coordinates to
+    // tactical window-logical bounds falsely clips e.g. a physical (640, 656)
+    // Start button: at Battle scale 2/3 it is reported as (960, 984). Keep every
+    // quantity here in the same physical pixels as Bevy's actual layout/picking.
+    let window = window(app);
+    let viewport = app
+        .world()
+        .get::<Window>(window)
+        .expect("window")
+        .physical_size()
+        .as_vec2();
+    let world = app.world();
+    let bounds = rect(world, entity);
+    let ui_scale = world.resource::<UiScale>().0;
+    let fits = |outer: Rect, inner: Rect| {
+        inner.min.cmpge(outer.min - Vec2::splat(0.5)).all()
+            && inner.max.cmple(outer.max + Vec2::splat(0.5)).all()
+    };
     assert!(
-        node.fully_visible && node.size.min_element() > 0.0,
-        "{label}: {node:?}"
+        bounds.size().min_element() > 0.0 && fits(Rect::from_corners(Vec2::ZERO, viewport), bounds),
+        "{label}: physical bounds {bounds:?}, viewport {viewport:?}, Battle UiScale {ui_scale}"
     );
+    if let Some(clip) = world.get::<bevy::ui::CalculatedClip>(entity) {
+        assert!(fits(clip.clip, bounds),
+            "{label}: physical bounds {bounds:?} clipped by {:?}, viewport {viewport:?}, Battle UiScale {ui_scale}", clip.clip);
+    }
+    let mut current = Some(entity);
+    while let Some(ancestor) = current {
+        if let Some(node) = world.get::<Node>(ancestor) {
+            assert!(
+                node.display != Display::None,
+                "{label}: hidden ancestor {ancestor:?}"
+            );
+            let area = rect(world, ancestor);
+            if !node.overflow.x.is_visible() {
+                assert!(bounds.min.x >= area.min.x - 0.5 && bounds.max.x <= area.max.x + 0.5,
+                    "{label}: bounds {bounds:?} horizontally clipped by {ancestor:?} {area:?}, viewport {viewport:?}, Battle UiScale {ui_scale}");
+            }
+            if !node.overflow.y.is_visible() {
+                assert!(bounds.min.y >= area.min.y - 0.5 && bounds.max.y <= area.max.y + 0.5,
+                    "{label}: bounds {bounds:?} vertically clipped by {ancestor:?} {area:?}, viewport {viewport:?}, Battle UiScale {ui_scale}");
+            }
+        }
+        if let Some(visibility) = world.get::<InheritedVisibility>(ancestor) {
+            assert!(visibility.get(), "{label}: invisible ancestor {ancestor:?}");
+        }
+        current = world.get::<ChildOf>(ancestor).map(ChildOf::parent);
+    }
 }
 
 #[test]
