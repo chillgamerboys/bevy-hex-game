@@ -1849,23 +1849,77 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                6_189_532_245_158_489_920,
-                4_104_461_356_700_287_722,
-                9_343_965_751_303_493_987,
+                9_966_260_057_205_757_992,
+                7_928_903_692_716_951_412,
+                16_690_941_040_798_035_421,
             )
         );
+        // Explicit authored roster: the 25 legacy blueprints remain byte-semantically
+        // unchanged, with 38 deterministic expedition blueprints added.
         let expected_object_fingerprints = BTreeMap::from([
+            (id("plant/date-palm"), 17_225_330_407_669_589_318),
             (id("plant/forest-ancient-1"), 8_974_253_312_034_340_120),
             (id("plant/forest-ancient-2"), 11_655_165_404_023_837_512),
             (id("plant/forest-ancient-3"), 6_029_170_694_562_739_770),
             (id("plant/forest-broadleaf-1"), 5_313_502_138_503_942_542),
             (id("plant/forest-broadleaf-2"), 2_889_820_918_951_926_379),
             (id("plant/forest-broadleaf-3"), 2_283_163_377_877_197_961),
+            (
+                id("plant/forest-expedition-ancient-1"),
+                10_248_136_203_936_808_091,
+            ),
+            (
+                id("plant/forest-expedition-ancient-2"),
+                16_203_574_125_959_892_247,
+            ),
+            (
+                id("plant/forest-expedition-ancient-3"),
+                18_095_867_062_456_779_917,
+            ),
+            (
+                id("plant/forest-expedition-heart"),
+                2_143_223_413_901_772_906,
+            ),
+            (
+                id("plant/forest-expedition-landmark-1"),
+                13_423_405_750_920_239_925,
+            ),
+            (
+                id("plant/forest-expedition-landmark-2"),
+                2_141_223_339_959_681_076,
+            ),
+            (
+                id("plant/forest-expedition-landmark-3"),
+                10_350_179_044_564_882_206,
+            ),
+            (
+                id("plant/forest-expedition-understory-broadleaf-1"),
+                1_417_218_857_408_461_484,
+            ),
+            (
+                id("plant/forest-expedition-understory-broadleaf-2"),
+                255_329_228_016_002_176,
+            ),
+            (
+                id("plant/forest-expedition-understory-broadleaf-3"),
+                15_732_327_220_183_394_008,
+            ),
+            (
+                id("plant/forest-expedition-understory-pine-1"),
+                18_240_309_684_301_320_925,
+            ),
+            (
+                id("plant/forest-expedition-understory-pine-2"),
+                15_048_806_083_624_618_322,
+            ),
+            (
+                id("plant/forest-expedition-understory-pine-3"),
+                9_605_923_770_576_218_925,
+            ),
             (id("plant/forest-heart"), 11_745_545_847_835_901_379),
             (id("plant/forest-pine-1"), 12_976_925_326_507_750_357),
             (id("plant/forest-pine-2"), 4_903_958_033_079_649_345),
             (id("plant/forest-pine-3"), 17_709_339_372_302_169_034),
-            (id("plant/date-palm"), 17_225_330_407_669_589_318),
             (id("plant/old-growth"), 18_215_252_645_504_955_369),
             (id("plant/small-broadleaf"), 692_655_780_260_542_668),
             (id("plant/snowy-old-growth"), 16_803_730_044_443_536_229),
@@ -1881,6 +1935,94 @@ mod tests {
             ),
             (id("prop/crystal-low-cluster"), 1_307_286_824_627_267_907),
             (id("prop/crystal-spire"), 1_248_030_652_803_885_799),
+            (
+                id("prop/expedition-arena-buttress-0"),
+                16_666_096_604_914_219_787,
+            ),
+            (
+                id("prop/expedition-arena-buttress-1"),
+                15_585_570_633_055_084_077,
+            ),
+            (
+                id("prop/expedition-arena-buttress-3"),
+                5_380_140_411_824_460_279,
+            ),
+            (
+                id("prop/expedition-arena-buttress-4"),
+                4_040_423_672_703_312_675,
+            ),
+            (
+                id("prop/expedition-arena-buttress-5"),
+                15_760_422_448_737_804_506,
+            ),
+            (
+                id("prop/expedition-arena-open-gate"),
+                18_025_756_259_765_719_195,
+            ),
+            (
+                id("prop/expedition-arena-wall-crown"),
+                7_077_205_824_426_530_377,
+            ),
+            (
+                id("prop/expedition-bridge-portal-east"),
+                11_278_275_154_776_033_132,
+            ),
+            (
+                id("prop/expedition-bridge-portal-west"),
+                2_553_324_842_234_827_020,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-0"),
+                5_936_367_129_680_989_079,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-1"),
+                16_252_360_530_451_192_656,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-2"),
+                13_012_068_504_447_639_010,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-3"),
+                10_899_755_509_310_944_413,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-0"),
+                14_682_734_963_540_393_659,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-1"),
+                7_857_261_863_834_674_397,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-2"),
+                7_157_735_480_716_514_695,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-3"),
+                12_809_180_038_782_189_345,
+            ),
+            (
+                id("prop/expedition-crystal-cluster"),
+                704_571_486_011_432_236,
+            ),
+            (
+                id("prop/expedition-crystal-fan"),
+                15_964_398_395_597_708_005,
+            ),
+            (
+                id("prop/expedition-crystal-needle"),
+                7_998_991_165_253_609_506,
+            ),
+            (
+                id("prop/expedition-fountain-rim"),
+                5_105_790_508_708_505_978,
+            ),
+            (id("prop/expedition-rock-arch"), 6_972_437_197_940_900_258),
+            (id("prop/expedition-rock-pillar"), 4_120_596_701_052_424_668),
+            (id("prop/expedition-rock-ridge"), 17_250_004_459_234_619_866),
+            (id("prop/expedition-rock-slab"), 9_474_829_001_293_181_435),
             (id("prop/grass-tuft"), 8_128_471_665_006_116_358),
             (id("prop/snowy-grass-tuft"), 10_601_105_736_077_673_696),
         ]);
