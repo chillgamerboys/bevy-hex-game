@@ -10,6 +10,10 @@ mod abilities;
 mod battle_runtime;
 mod brain;
 mod expedition;
+#[cfg(any(test, feature = "test-support"))]
+mod route_probe;
+#[cfg(any(test, feature = "test-support"))]
+pub use route_probe::DryRouteProbeFailure;
 mod separation;
 use separation::separate_many;
 pub use separation::ActorSeparationStats;
@@ -1101,57 +1105,6 @@ impl ArenaSession {
                 && dry(a, view, geometry)
                 && (a.flying || shapes::ground(&self.collision, a, a.feet, 0.05).is_some())
         })
-    }
-
-    /// Clone an actor and continuously drive authored waypoints through the actual
-    /// movement controller. At most 3,600 ticks and 32 waypoints; no live mutation.
-    #[cfg(any(test, feature = "test-support"))]
-    #[must_use]
-    pub fn probe_dry_route(
-        &self,
-        id: ActorId,
-        waypoints: &[Vec3],
-        view: &ArenaTerrainView,
-        geometry: ArenaVoxelGeometry,
-        tuning: &ArenaTuning,
-    ) -> bool {
-        if waypoints.len() > 32 {
-            return false;
-        }
-        let Some(mut actor) = self.actors.iter().find(|a| a.id == id).cloned() else {
-            return false;
-        };
-        let mut ticks = 0;
-        for point in waypoints {
-            while actor.feet.with_y(0.0).distance(point.with_y(0.0)) > 0.3 {
-                if ticks >= 3600 {
-                    return false;
-                }
-                let before = actor.feet;
-                let direction = (point - actor.feet).with_y(0.0).normalize_or_zero();
-                motion::tick(
-                    &mut actor,
-                    direction,
-                    true,
-                    false,
-                    false,
-                    &self.collision,
-                    &tuning.encounters,
-                );
-                ticks += 1;
-                if !shapes::clear(&self.collision, &actor, actor.feet, actor.body_yaw)
-                    || !dry(&actor, view, geometry)
-                    || actor.feet.y < before.y - 0.45
-                    || shapes::ground(&self.collision, &actor, actor.feet, 0.45).is_none()
-                {
-                    return false;
-                }
-            }
-            if (actor.feet.y - point.y).abs() > 0.45 {
-                return false;
-            }
-        }
-        shapes::ground(&self.collision, &actor, actor.feet, 0.05).is_some()
     }
 }
 

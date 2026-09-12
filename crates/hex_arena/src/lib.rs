@@ -56,6 +56,8 @@ pub use creatures::{
     ProjectileAppearance, Species, TeamId, CREATURE_ABILITY_COUNT,
 };
 pub use encounter_config::EncounterTuning;
+#[cfg(any(test, feature = "test-support"))]
+pub use encounters::DryRouteProbeFailure;
 pub use encounters::{
     ActorSeparationStats, CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot,
 };

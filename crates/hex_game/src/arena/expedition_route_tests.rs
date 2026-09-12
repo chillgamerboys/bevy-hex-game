@@ -85,8 +85,14 @@ fn probe_path(
             );
             if !session.actor_pose_valid(actor.id, view, geometry) {
                 report.failures.push(format!("{context}: synthetic start lacks complete dry supported body clearance at {start:?}"));
-            } else if !session.probe_dry_route(actor.id, &points, view, geometry, tuning) {
-                report.failures.push(format!("{context}: production controller did not traverse every point within 3600 ticks; from {:?} to {:?}", segment.first(), segment.last()));
+            } else if let Err(failure) =
+                session.probe_dry_route_report(actor.id, &points, view, geometry, tuning)
+            {
+                report.failures.push(format!(
+                    "{context}: {failure:?}; from {:?} to {:?}",
+                    segment.first(),
+                    segment.last()
+                ));
             } else {
                 report.segments_passed += 1;
             }
