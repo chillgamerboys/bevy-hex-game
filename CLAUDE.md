@@ -6,6 +6,12 @@ Read **[docs/architecture.md](docs/architecture.md)** first — it explains the 
 graph and, more usefully, the reasoning behind it. This file is the operational
 summary.
 
+## Temporary usage budget
+
+Until the September 14, 2026 reset, follow the user-approved
+[lean development workflow](docs/development/lean-until-reset.md): small changes,
+focused checks and user playtests; checkpoint at **7% remaining**, replacing 16%.
+
 ## Tech stack
 
 | Crate | Version | Notes |

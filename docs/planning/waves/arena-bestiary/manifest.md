@@ -565,3 +565,12 @@ Direct-controls validation complete: 327 arena tests, 107 application checks
 (two existing ignored), strict arena lint and workspace formatting pass.
 See [direct-controls.md](direct-controls.md) for fixture corrections and native
 playtest limits. Usage reports 19% remaining; commit remains local.
+
+### Lean development policy — 2026-09-11
+
+The user-approved [temporary workflow](../../../development/lean-until-reset.md)
+supersedes the earlier 16% usage stops: checkpoint at 7%, preserving the 5% floor.
+Check once per small task, reuse recent readings, prioritize focused checks and
+native playtests, and prefer one agent. Required merge checks remain in force.
+This delivery changes guidance only; links and whitespace checked, no game tests
+needed. Future playable changes record their specific pending playtests here.

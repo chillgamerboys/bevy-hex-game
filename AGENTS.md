@@ -6,6 +6,12 @@ directory with its own `CLAUDE.md`, read that file too. Treat
 `docs/architecture.md`, `docs/contracts.md`, and the relevant system or design doc
 as contracts rather than background reading.
 
+## Temporary usage budget
+
+Until the September 14, 2026 reset, follow the user-approved
+[lean development workflow](docs/development/lean-until-reset.md): small changes,
+focused checks and user playtests; checkpoint at **7% remaining**, replacing 16%.
+
 ## Launch source builds through Cargo
 
 When asked to open or launch the game from this checkout, never execute
