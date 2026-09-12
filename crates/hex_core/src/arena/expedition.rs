@@ -46,6 +46,10 @@ pub struct ArenaExpeditionRoute {
     pub from: String,
     /// Stable end junction key in `route_nodes`.
     pub to: String,
+    /// Positive clear height above every supporting voxel, in world voxel levels.
+    /// Both columns of each step also retain this aperture above the higher support.
+    /// This is a geometry guarantee; gameplay still validates each actor's body.
+    pub clearance_levels: u32,
     /// Ordered supporting voxels, including both endpoint nodes. Adjacent entries
     /// are adjoining steps; reverse this sequence for the opposite direction.
     pub supports: Vec<TilePos>,
