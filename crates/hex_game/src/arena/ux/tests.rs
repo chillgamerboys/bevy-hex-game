@@ -325,6 +325,69 @@ fn focused_ready_control_activates_with_enter_without_starting_combat() {
     assert!(!app.world().resource::<ViewState>().paused);
 }
 
+#[test]
+fn scrolled_settings_header_clicks_change_page_without_activating_clipped_controls() {
+    for (width, height) in [(1280, 720), (1600, 900), (1920, 1080)] {
+        for destination in [Page::Map, Page::Upgrades, Page::Controls] {
+            let mut app = app(width, height, 2.0);
+            {
+                let mut state = app.world_mut().resource_mut::<ViewState>();
+                state.started = true;
+                // Keep accidental Scale activation from writing real preferences.
+                // This harness has no render-capture systems installed.
+                state.capture = Some("pointer-layout-only.png".into());
+            }
+            let detail = app
+                .world_mut()
+                .query::<(Entity, &UxLabel)>()
+                .iter(app.world())
+                .find_map(|(entity, label)| {
+                    matches!(label, UxLabel::RecorderDetail).then_some(entity)
+                })
+                .expect("recording detail label");
+            // Match the native one-line recorder footer without starting OS IPC.
+            app.world_mut().entity_mut(detail).remove::<UxLabel>();
+            app.world_mut().get_mut::<Text>(detail).expect("footer").0 =
+                "Recording video · F9 adds a bookmark".into();
+            settle(&mut app);
+            open_page(&mut app, Page::Settings);
+            let window = window(&mut app);
+            app.world_mut().write_message(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: 0.0,
+                y: -100.0,
+                window,
+            });
+            settle(&mut app);
+            assert!(
+                app.world_mut()
+                    .query_filtered::<&ScrollPosition, With<MenuScroll>>()
+                    .iter(app.world())
+                    .any(|scroll| scroll.0.y > 1.0),
+                "Settings must actually be scrolled at {width}x{height}"
+            );
+            let tab = app
+                .world_mut()
+                .query::<(Entity, &UxAction)>()
+                .iter(app.world())
+                .find_map(|(entity, action)| {
+                    matches!(action, UxAction::Page(page) if *page == destination).then_some(entity)
+                })
+                .expect("visible destination tab");
+            assert_visible(&mut app, tab, "Header above the scrolled Settings body");
+            click(&mut app, tab);
+            settle(&mut app);
+            let ux = app.world().resource::<UxState>();
+            assert!((ux.scale - 2.0).abs() < f32::EPSILON,
+                "{destination:?} header click activated clipped Scale control at {width}x{height}: {}", ux.scale);
+            assert_eq!(
+                ux.page, destination,
+                "visible header tab owns its pointer click at {width}x{height}"
+            );
+        }
+    }
+}
+
 fn overview() -> ArenaOverview {
     ArenaOverview {
         generation: 7,
