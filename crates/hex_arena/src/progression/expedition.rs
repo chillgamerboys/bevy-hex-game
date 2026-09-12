@@ -295,10 +295,47 @@ impl ArenaSession {
                 .then_with(|| a.y.total_cmp(&b.y))
                 .then_with(|| a.z.total_cmp(&b.z))
         });
+        if let Some(feet) = candidates
+            .into_iter()
+            .find(|feet| self.reward_standing_pose(*feet, world, geometry))
+        {
+            return Some(feet + Vec3::Y * ORB_HEIGHT);
+        }
+        // Live carving may remove every authored route/support. Fall back to
+        // actual surviving solid tops, not the immutable admission catalogue.
+        let mut supports: BTreeSet<TilePos> = if world.columns.is_empty() {
+            world.voxels.keys().copied().collect()
+        } else {
+            world
+                .columns
+                .values()
+                .flat_map(|spans| {
+                    spans
+                        .iter()
+                        .map(|span| TilePos::new(span.bottom.coord, span.top_level))
+                })
+                .collect()
+        };
+        supports.extend(
+            world
+                .static_spans
+                .iter()
+                .filter(|span| span.blocks_movement)
+                .map(|span| TilePos::new(span.bottom.coord, span.top_level)),
+        );
+        let mut candidates: Vec<_> = supports
+            .into_iter()
+            .map(|support| support.coord.to_world(geometry.top(support) + SKIN))
+            .collect();
+        candidates.sort_by(|a, b| {
+            a.distance_squared(origin)
+                .total_cmp(&b.distance_squared(origin))
+        });
         candidates
             .into_iter()
             .find(|feet| self.reward_standing_pose(*feet, world, geometry))
             .map(|feet| feet + Vec3::Y * ORB_HEIGHT)
+            .or_else(|| (player.hp > 0.0 && player.center().is_finite()).then(|| player.center()))
     }
 
     /// Snapshot of an admitted expedition player run; absent for legacy packages.

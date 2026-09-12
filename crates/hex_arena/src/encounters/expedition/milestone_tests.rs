@@ -699,21 +699,15 @@ fn lowland_pickup_and_rank_order_give_identical_effective_spell_stats() {
     let mut outcomes = Vec::new();
     for purchase_first in [false, true] {
         let (mut session, view, geometry, _, tuning) = start();
-        session
-            .progression
-            .as_mut()
-            .expect("state")
-            .snapshot
-            .available_upgrades = 20;
+        kill_role(&mut session, ExpeditionRole::Dragon, true);
+        kill_role(&mut session, ExpeditionRole::MountainShadow, true);
         let buy = |session: &mut ArenaSession| {
             for stat in [
                 UpgradeStat::ProjectileSpeed,
                 UpgradeStat::ShieldProjectileSpeed,
                 UpgradeStat::ShieldSize,
             ] {
-                for _ in 0..stat.max_ranks() {
-                    assert!(session.spend_upgrade(stat));
-                }
+                assert!(session.spend_upgrade(stat));
             }
         };
         if purchase_first {
@@ -738,4 +732,44 @@ fn lowland_pickup_and_rank_order_give_identical_effective_spell_stats() {
         ));
     }
     assert_eq!(outcomes.first(), outcomes.get(1));
+}
+
+#[test]
+fn reward_uses_surviving_non_authored_support_after_every_route_is_destroyed() {
+    let (mut session, mut view, geometry, _, _) = start();
+    view.voxels.clear();
+    view.columns.clear();
+    view.static_spans.clear();
+    let center = HexCoord::from_axial(0, -30);
+    for coord in center.within_radius(2) {
+        view.voxels
+            .insert(TilePos::new(coord, 0), hex_core::SubstanceId(1));
+    }
+    view.revision += 1;
+    session.collision.refresh(&view, geometry);
+    kill_role(&mut session, ExpeditionRole::Troll, false);
+    session.advance_milestones(&view, geometry);
+    let point = Vec3::from_array(
+        milestone(&session, ExpeditionReward::TrollDamage)
+            .available_position
+            .expect("surviving support orb"),
+    );
+    assert!(session.reward_standing_pose(point - Vec3::Y * 0.6, &view, geometry));
+    assert!(HexCoord::from_world(point).distance(center) <= 2);
+}
+
+#[test]
+fn reward_survives_complete_support_loss_near_the_living_player_without_healing() {
+    let (mut session, mut view, geometry, _, tuning) = start();
+    session.actors.first_mut().expect("player").hp = 17.0;
+    view.voxels.clear();
+    view.columns.clear();
+    view.static_spans.clear();
+    view.revision += 1;
+    session.collision.refresh(&view, geometry);
+    kill_role(&mut session, ExpeditionRole::Troll, false);
+    session.advance_milestones(&view, geometry);
+    assert!(milestone(&session, ExpeditionReward::TrollDamage).collected);
+    assert!((session.player_tuning(&tuning).fireball_damage - 40.0).abs() < 0.001);
+    assert!((session.actors.first().expect("player").hp - 17.0).abs() < 0.001);
 }

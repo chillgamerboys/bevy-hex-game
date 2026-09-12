@@ -3,8 +3,6 @@
 use super::*;
 use hex_core::arena::ArenaExpeditionSites;
 
-mod confinement;
-pub(super) use confinement::ShadowArena;
 mod rally;
 pub(super) use rally::Control;
 pub use rally::ExpeditionRallySnapshot;
@@ -224,7 +222,6 @@ impl ArenaSession {
             }
         }
         encounter.expedition = Some(Control::new(sites, &actors, geometry));
-        encounter.shadow_arena = ShadowArena::new(sites, &actors);
         self.actors = actors;
         for (id, name) in landmarks {
             if let Some(actor) = self.actors.iter().find(|actor| actor.id == id) {

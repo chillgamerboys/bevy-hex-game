@@ -48,7 +48,6 @@ struct PartyRuntime {
 pub(crate) struct EncounterState {
     pub initialized: bool,
     expedition: Option<expedition::Control>,
-    shadow_arena: Option<expedition::ShadowArena>,
     separation_stats: ActorSeparationStats,
     worms: BTreeMap<ActorId, worm::Controller>,
     spawn_failed: bool,
@@ -840,9 +839,6 @@ impl ArenaSession {
                 &self.collision,
                 &actor_tuning.encounters,
             );
-            if let Some(arena) = self.encounter.shadow_arena.as_mut() {
-                arena.constrain(actor, &self.collision, world, geometry);
-            }
             if actor.feet.y < self.collision.min_y + 2.0 || !actor.feet.is_finite() {
                 actor.hp = 0.0;
                 actor.cancel_charge();
@@ -858,7 +854,6 @@ impl ArenaSession {
             self.record_high_jump(id, origin);
         }
         self.encounter.separation_stats = separate_many(&mut self.actors, &self.collision);
-        self.confine_shadow(world, geometry);
         self.move_worms(&intents, world, geometry, materials, tuning, &mut out);
         self.separate_worms(world, geometry, materials, &mut out);
         self.refresh_worm_heads(world, geometry);
