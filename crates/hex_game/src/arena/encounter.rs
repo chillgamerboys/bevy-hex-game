@@ -744,6 +744,23 @@ pub(super) fn camera(
     };
     if matches!(state.capture_view.as_str(), "overview" | "rear") {
         *camera = overview(*geometry, &view, state.capture_view == "rear");
+    } else if state.capture_view == "forest-landmark" {
+        if let Some(anchor) = state
+            .capture_focus
+            .as_ref()
+            .and_then(|name| view.anchors.get(name))
+        {
+            let (offset, rise) = match state.capture_focus.as_deref() {
+                Some("ancient_tree") => (Vec3::new(85.0, 55.0, 90.0), 26.0),
+                Some("bridge_west" | "bridge_east") => (Vec3::new(75.0, 62.0, 80.0), 0.0),
+                Some("dragon_upper") => (Vec3::new(-150.0, 90.0, 160.0), -18.0),
+                Some("forest_deep_a" | "forest_deep_b") => (Vec3::new(55.0, 45.0, 60.0), 12.0),
+                Some("forest_middle") => (Vec3::new(35.0, 30.0, 40.0), 6.0),
+                _ => (Vec3::new(24.0, 21.0, 28.0), 3.0),
+            };
+            let target = *anchor + Vec3::Y * rise;
+            *camera = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
+        }
     } else if state.capture_view == "encounter-landmark" {
         if let Some(anchor) = state
             .capture_focus

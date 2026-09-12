@@ -1609,7 +1609,7 @@ fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
             .iter()
             .filter(|(_, phase, _, _)| *phase == "pause")
             .count();
-        assert_eq!(start_actions, 19); // Two modes, three maps, seven recipes, four roster arrows, three actions.
+        assert_eq!(start_actions, 20); // Two modes, four maps, seven recipes, four roster arrows, three actions.
         assert_eq!(
             actions
                 .iter()
@@ -1883,7 +1883,7 @@ fn native_selection_defaults_and_invalid_capabilities_are_explicit() {
     assert_eq!(
         launch_selection(None, None).unwrap(),
         ArenaSelection {
-            map: ArenaMap::Fort,
+            map: ArenaMap::ForestMassif,
             encounter: ArenaEncounter::Dragon
         }
     );
@@ -1892,8 +1892,31 @@ fn native_selection_defaults_and_invalid_capabilities_are_explicit() {
         ArenaMap::Duel
     );
     assert!(launch_selection(Some("seven-regions"), None).is_ok());
+    assert!(launch_selection(Some("forest-massif"), None).is_ok());
+    assert!(launch_selection(Some("forest-massif"), Some("goblins")).is_err());
     assert!(launch_selection(Some("grand"), None).is_err());
     assert!(launch_selection(None, Some("unknown")).is_err());
+}
+
+#[test]
+fn pending_terrain_blocks_start_and_resume_without_blocking_the_menu() {
+    let (mut app, window) = menu_app();
+    app.insert_resource(hex_core::arena::ArenaRenderStatus { pending_chunks: 8 });
+    tap_key(&mut app, KeyCode::Enter);
+    press_action(&mut app, hud::Action::Start);
+    assert!(!app.world().resource::<ViewState>().started);
+    assert!(app.world().get::<CursorOptions>(window).expect("cursor").visible);
+    app.world_mut().resource_mut::<hex_core::arena::ArenaRenderStatus>().pending_chunks = 0;
+    press_action(&mut app, hud::Action::Start);
+    assert!(app.world().resource::<ViewState>().started);
+    tap_key(&mut app, KeyCode::Escape);
+    app.world_mut().resource_mut::<hex_core::arena::ArenaRenderStatus>().pending_chunks = 2;
+    press_action(&mut app, hud::Action::Resume);
+    tap_key(&mut app, KeyCode::Escape);
+    assert!(app.world().resource::<ViewState>().paused);
+    app.world_mut().resource_mut::<hex_core::arena::ArenaRenderStatus>().pending_chunks = 0;
+    press_action(&mut app, hud::Action::Resume);
+    assert!(!app.world().resource::<ViewState>().paused);
 }
 
 #[test]

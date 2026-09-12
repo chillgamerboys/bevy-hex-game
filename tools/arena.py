@@ -56,15 +56,15 @@ CHARGE_VIEWS = (
     "shield-partial-preview-first", "shield-partial-preview-third",
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
-MAPS = ("duel", "fort", "seven-regions")
+MAPS = ("duel", "fort", "seven-regions", "forest-massif")
 ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12", "worm")
 PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 10,
                   "shaman-party": ["Shaman", *(["Goblin"] * 5)], "golem": ["Golem"],
                   "worm": ["Worm"], "goblin": ["Goblin"], "wisp": ["Wisp"], **{f"wisps-{n}": ["Wisp"] * n for n in (2, 4, 8, 12)}}
 PLAYER_OVERRIDES = {"worm": "Worm", "golem": "Golem", "goblin": "Goblin", "wisp": "Wisp", "wisps-2": "Wisps2", "wisps-4": "Wisps4", "wisps-8": "Wisps8", "wisps-12": "Wisps12"}
-MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions"}
+MAP_LABELS = {"duel": "Duel", "fort": "Fort", "seven-regions": "Seven Regions", "forest-massif": "Forest Massif"}
 ENCOUNTER_LABELS = {"dragon": "Dragon", "goblins": "Goblins", "shaman-party": "Shaman party", "shadow": "Shadow", "golem": "Golem"}
-SEEDS = {"duel": None, "fort": 640367719, "seven-regions": 703700113}
+SEEDS = {"duel": None, "fort": 640367719, "seven-regions": 703700113, "forest-massif": 20260911}
 ENCOUNTER_VIEWS = (
     ("fort-dragon-start", "start", "fort", "dragon", None),
     ("fort-dragon-overview", "overview", "fort", "dragon", None),
@@ -94,6 +94,19 @@ ENCOUNTER_VIEWS = (
     ("seven-fort", "encounter-landmark", "seven-regions", "dragon", "fort_fort_courtyard"),
     ("seven-caves", "encounter-landmark", "seven-regions", "dragon", "caves_cave_entrance"),
 )
+FOREST_VIEWS = (
+    ("forest-start", "start", "forest-massif", "dragon", None),
+    ("forest-overview", "overview", "forest-massif", "dragon", None),
+    ("forest-rear", "rear", "forest-massif", "dragon", None),
+    ("forest-outskirts", "forest-landmark", "forest-massif", "dragon", "forest_outer_a"),
+    ("forest-middle", "forest-landmark", "forest-massif", "dragon", "forest_middle"),
+    ("forest-deep", "forest-landmark", "forest-massif", "dragon", "forest_deep_b"),
+    ("forest-ancient-tree", "forest-landmark", "forest-massif", "dragon", "ancient_tree"),
+    ("forest-bridge", "forest-landmark", "forest-massif", "dragon", "bridge_west"),
+    ("forest-massif", "forest-landmark", "forest-massif", "dragon", "dragon_upper"),
+    ("forest-upgrades", "tuning", "forest-massif", "dragon", None),
+)
+
 PERFORMANCE_VIEWS = (
     ("fort-dragon-stress", "encounter-stress", "fort", "dragon", None),
     ("fort-goblins-stress", "encounter-stress", "fort", "goblins", None),
@@ -180,6 +193,8 @@ OBSERVER_PERFORMANCE_VIEWS = tuple(
 
 
 def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool = False, result: bool = False) -> dict[str, str]:
+    if arena_map == "forest-massif" and args.encounter is not None:
+        raise RuntimeError("Forest Massif has a fixed Human, 20 Goblins, 2 Shamans and 3 Dragons; omit --encounter.")
     if args.encounter in PLAYER_OVERRIDES and arena_map not in ("fort", "duel"):
         raise RuntimeError("Creature player overrides require Fort or Duel.")
     observing = args.spectator or matrix
@@ -189,7 +204,7 @@ def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool
         return {}
     if getattr(args, "encounter", None) is not None:
         raise RuntimeError("Spectator battles use --team-a and --team-b; --encounter is a player option.")
-    if arena_map == "seven-regions":
+    if arena_map not in ("fort", "duel"):
         raise RuntimeError("Spectator battles support only Fort and Duel.")
     seed = args.seed if args.seed is not None else 1
     limit = args.tick_limit if args.tick_limit is not None else (720 if result else 14400)
@@ -352,6 +367,12 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
                     if arena_map == "duel" else None)}
     if state.get("battle_setup") != expected:
         raise RuntimeError("Capture accepted a different control, roster, seed, tick limit or player recipe.")
+    if arena_map == "forest-massif":
+        if observing or Counter(actor.get("species") for actor in state.get("actors", [])) != Counter({"Human": 1, "Goblin": 20, "Shaman": 2, "Dragon": 3}):
+            raise RuntimeError("Forest capture does not contain the fixed 26-actor authored roster.")
+        progress = state.get("progress")
+        if not isinstance(progress, dict) or progress.get("level") != 1:
+            raise RuntimeError("Forest capture lacks its fresh level-one progression snapshot.")
     if observing:
         expected_members = Counter((roster["team"], species) for roster in rosters for party in roster["parties"] for species in party)
         actual_members = Counter((actor.get("team"), actor.get("species")) for actor in state.get("actors", []))
@@ -876,6 +897,11 @@ def capture(args: argparse.Namespace) -> int:
     if args.worm_review:
         entries = list(WORM_VIEWS)
         matrix = "arena-worm-v4-clear-earth"
+    if args.forest_review:
+        if any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
+            raise RuntimeError("Forest review uses the fixed authored map and roster; use --view to select entries.")
+        entries = list(FOREST_VIEWS)
+        matrix = "forest-massif-v1"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -920,7 +946,7 @@ def capture(args: argparse.Namespace) -> int:
         "capture_method": "windowless Bevy arena image-target hook",
         "terminal_menu_note": "terminal-win/terminal-defeat explicitly set fixture HP to zero; normal authority computes the result and opens the menu. These rows establish presentation only, not naturally won/lost combat." if any(row[1].startswith("terminal-") for row in entries) else None,
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["V4 Forest Massif terrain", "Grand palette and lighting", "fixed enemy roster", "progression HUD", "upgrade menu"] if args.forest_review else ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits with validated 150-unit ground/Shadow/Dragon home leashes before admission. Authored search durations, sight, activation, movement and attacks; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
@@ -1011,7 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
     launch = commands.add_parser("launch", help="Explicitly open the native playable arena through Cargo.")
     captures = commands.add_parser("capture", help="Capture all 23 views without a native window.")
     for command in (launch, captures):
-        command.add_argument("--map", choices=MAPS, help="Map recipe (launch: fort; legacy capture: duel).")
+        command.add_argument("--map", choices=MAPS, help="Map recipe (launch: forest-massif; legacy capture: duel).")
         command.add_argument("--encounter", choices=ENCOUNTERS, help="Duel/Fort enemy party (launch: Shadow on Duel, Dragon on Fort; capture: Shadow).")
         command.add_argument("--spectator", action="store_true", help="Observe autonomous monster teams; Fort or Duel only.")
         command.add_argument("--team-a", choices=ENCOUNTERS, help="Cyan roster preset (spectator default: goblins).")
@@ -1026,6 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
+    review.add_argument("--forest-review", action="store_true", help="Ten fixed Forest Massif map, biome, giant tree, bridge, massif and upgrade menu views.")
     review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
     review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and R-key reset views.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
@@ -1048,10 +1075,10 @@ def main(argv: list[str] | None = None) -> int:
             if not 0 < args.timeout < float("inf"):
                 raise RuntimeError("--timeout must be a finite positive number.")
             return capture(args)
-        battle_env = battle_environment(args, args.map or "fort")
+        battle_env = battle_environment(args, args.map or "forest-massif")
         env, _ = environment(args.target_dir)
         env.update(battle_env)
-        env.update(HEX_ARENA_MAP=args.map or "fort", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
+        env.update(HEX_ARENA_MAP=args.map or "forest-massif", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)
         return run_cargo(env, None, None)
     except KeyboardInterrupt:

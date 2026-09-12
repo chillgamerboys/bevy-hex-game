@@ -3,7 +3,7 @@
 use super::{ArenaCamera, ViewState};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use hex_arena::{preview, ArenaSession, ArenaTuning, Species, Spell};
+use hex_arena::{ArenaSession, ArenaTuning, Species, Spell, preview};
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 
 #[derive(Component)]
@@ -322,10 +322,14 @@ pub(super) fn effects(
                 gizmos.line(center + a, center + b, c);
             }
         }
-    } else if let Some(impact) = predicted.impact {
+    } else if let Some(impact) = predicted.impact.filter(|_| {
+        session
+            .progress()
+            .is_none_or(|progress| progress.explosions_unlocked)
+    }) {
         gizmos.sphere(
             Isometry3d::from_translation(impact),
-            tuning.fireball_radius(),
+            session.player_tuning(&tuning).fireball_radius(),
             c.with_alpha(0.5),
         );
     }

@@ -1,11 +1,11 @@
 //! Small native combat HUD and paused parameter controls.
 
-use super::{spectator, ViewState};
+use super::{ViewState, spectator};
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
 use hex_arena::{
     ActorIntent, ArenaBattleSetup, ArenaControl, ArenaInput, ArenaOutcome, ArenaSession,
-    ArenaTuning, BattlePreset, Spell,
+    ArenaTuning, BattlePreset, Spell, UpgradeStat,
 };
 use hex_core::arena::{ArenaEncounter, ArenaMap, ArenaReset, ArenaSelection};
 
@@ -30,6 +30,7 @@ pub(super) enum Label {
     MenuTitle,
     MenuHelp,
     Resume,
+    MenuRules,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
@@ -127,7 +128,7 @@ pub(super) fn setup(mut commands: Commands) {
                     });
                     panel.spawn(text("MAP", 12.0, MUTED));
                     panel.spawn(Node { height: px(38), column_gap: px(8), ..default() }).with_children(|row| {
-                        for map in [ArenaMap::Duel, ArenaMap::Fort, ArenaMap::SevenRegions] {
+                        for map in [ArenaMap::ForestMassif, ArenaMap::Duel, ArenaMap::Fort, ArenaMap::SevenRegions] {
                             row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(38), align_items: AlignItems::Center, justify_content: JustifyContent::Center, border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(PANEL), Action::Map(map)))
                                 .with_children(|button| { button.spawn(text(super::map_name(map), 14.0, INK)); });
                         }
@@ -180,41 +181,173 @@ pub(super) fn setup(mut commands: Commands) {
                     });
                 });
         });
-    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, display: Display::None, ..default() },
-        BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)), GlobalZIndex(20), PausePanel))
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.01, 0.02, 0.035, 0.72)),
+            GlobalZIndex(20),
+            PausePanel,
+        ))
         .with_children(|overlay| {
-            overlay.spawn((Node { width: px(600), height: px(650), max_height: percent(95), max_width: percent(95), padding: UiRect::all(px(20)), flex_direction: FlexDirection::Column, row_gap: px(5), flex_shrink: 0.0, border_radius: BorderRadius::all(px(12)), ..default() }, BackgroundColor(PANEL)))
+            overlay
+                .spawn((
+                    Node {
+                        width: px(600),
+                        height: px(650),
+                        max_height: percent(95),
+                        max_width: percent(95),
+                        padding: UiRect::all(px(20)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(5),
+                        flex_shrink: 0.0,
+                        border_radius: BorderRadius::all(px(12)),
+                        ..default()
+                    },
+                    BackgroundColor(PANEL),
+                ))
                 .with_children(|panel| {
-                    panel.spawn((Node { height: px(30), flex_shrink: 0.0, ..default() }, text("", 24.0, INK), Label::MenuTitle));
-                    panel.spawn((Node { height: px(18), flex_shrink: 0.0, ..default() }, text("", 13.0, INK), Label::MenuHelp));
+                    panel.spawn((
+                        Node {
+                            height: px(30),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                        text("", 24.0, INK),
+                        Label::MenuTitle,
+                    ));
+                    panel.spawn((
+                        Node {
+                            height: px(18),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                        text("", 13.0, INK),
+                        Label::MenuHelp,
+                    ));
                     for index in 0..12 {
-                        panel.spawn(Node { width: percent(100), height: px(26), flex_shrink: 0.0, align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|row| {
-                            row.spawn((Node { width: px(375), height: px(20), flex_shrink: 0.0, ..default() }, text("", 15.0, INK), Label::Parameter(index)));
-                            for (label, amount) in [("-", -1.0), ("+", 1.0)] {
-                                row.spawn((Button, Node { width: px(48), height: px(26), border_radius: BorderRadius::all(px(4)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), Action::Change(index, amount)))
-                                    .with_children(|button| { button.spawn(text(label, 20.0, INK)); });
-                            }
-                        });
+                        panel
+                            .spawn(Node {
+                                width: percent(100),
+                                height: px(26),
+                                flex_shrink: 0.0,
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::SpaceBetween,
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                row.spawn((
+                                    Node {
+                                        width: px(375),
+                                        height: px(20),
+                                        flex_shrink: 0.0,
+                                        ..default()
+                                    },
+                                    text("", 15.0, INK),
+                                    Label::Parameter(index),
+                                ));
+                                for (label, amount) in [("-", -1.0), ("+", 1.0)] {
+                                    row.spawn((
+                                        Button,
+                                        Node {
+                                            width: px(48),
+                                            height: px(26),
+                                            border_radius: BorderRadius::all(px(4)),
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgb(0.14, 0.21, 0.26)),
+                                        Action::Change(index, amount),
+                                    ))
+                                    .with_children(|button| {
+                                        button.spawn(text(label, 20.0, INK));
+                                    });
+                                }
+                            });
                     }
-                    panel.spawn((Node { height: px(32), flex_shrink: 0.0, ..default() }, text("Splash passes through walls. Fireballs can hurt their caster.\nShield walls remain until destroyed; restart restores all terrain.", 12.0, MUTED)));
-                    panel.spawn(Node { height: px(42), flex_shrink: 0.0, column_gap: px(12), margin: UiRect::top(px(8)), ..default() }).with_children(|row| {
-                        for (label, action) in [("RESUME", Action::Resume), ("RESET ARENA", Action::Restart)] {
-                            row.spawn((Button, Node { width: px(260), height: px(42), border_radius: BorderRadius::all(px(5)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), action))
+                    panel.spawn((
+                        Node {
+                            height: px(32),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                        text("", 12.0, MUTED),
+                        Label::MenuRules,
+                    ));
+                    panel
+                        .spawn(Node {
+                            height: px(42),
+                            flex_shrink: 0.0,
+                            column_gap: px(12),
+                            margin: UiRect::top(px(8)),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            for (label, action) in
+                                [("RESUME", Action::Resume), ("RESET ARENA", Action::Restart)]
+                            {
+                                row.spawn((
+                                    Button,
+                                    Node {
+                                        width: px(260),
+                                        height: px(42),
+                                        border_radius: BorderRadius::all(px(5)),
+                                        justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.16, 0.37, 0.41)),
+                                    action,
+                                ))
                                 .with_children(|button| {
                                     let mut text = button.spawn(text(label, 15.0, INK));
-                                    if matches!(action, Action::Resume) { text.insert(Label::Resume); }
+                                    if matches!(action, Action::Resume) {
+                                        text.insert(Label::Resume);
+                                    }
                                 });
-                        }
-                    });
-                    panel.spawn(Node { height: px(42), flex_shrink: 0.0, column_gap: px(12), ..default() }).with_children(|row| {
-                        for (label, action) in [("FULLSCREEN", Action::Fullscreen), ("QUIT GAME", Action::Quit)] {
-                            row.spawn((Button, Node { width: px(260), height: px(42), border_radius: BorderRadius::all(px(5)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), action))
+                            }
+                        });
+                    panel
+                        .spawn(Node {
+                            height: px(42),
+                            flex_shrink: 0.0,
+                            column_gap: px(12),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            for (label, action) in [
+                                ("FULLSCREEN", Action::Fullscreen),
+                                ("QUIT GAME", Action::Quit),
+                            ] {
+                                row.spawn((
+                                    Button,
+                                    Node {
+                                        width: px(260),
+                                        height: px(42),
+                                        border_radius: BorderRadius::all(px(5)),
+                                        justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.14, 0.21, 0.26)),
+                                    action,
+                                ))
                                 .with_children(|button| {
                                     let mut label_entity = button.spawn(text(label, 15.0, INK));
-                                    if matches!(action, Action::Fullscreen) { label_entity.insert(Label::WindowMode); }
+                                    if matches!(action, Action::Fullscreen) {
+                                        label_entity.insert(Label::WindowMode);
+                                    }
                                 });
-                        }
-                    });
+                            }
+                        });
                 });
         });
 }
@@ -230,7 +363,9 @@ pub(super) fn buttons(
     mut session: ResMut<ArenaSession>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
+    render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
 ) {
+    let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed
             || !state.paused
@@ -243,12 +378,17 @@ pub(super) fn buttons(
                 if !state.started
                     && selection.map != map
                     && !(battle.control == ArenaControl::Spectator
-                        && map == ArenaMap::SevenRegions) =>
+                        && matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)) =>
             {
-                let previous = (selection.map != ArenaMap::SevenRegions)
-                    .then(|| super::player_preset(*selection, &battle));
+                let previous = (!matches!(
+                    selection.map,
+                    ArenaMap::SevenRegions | ArenaMap::ForestMassif
+                ))
+                .then(|| super::player_preset(*selection, &battle));
                 selection.map = map;
-                if map == ArenaMap::SevenRegions || battle.control == ArenaControl::Spectator {
+                if matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)
+                    || battle.control == ArenaControl::Spectator
+                {
                     battle.player_recipe = None;
                 } else {
                     let preset = previous.unwrap_or(if map == ArenaMap::Duel {
@@ -261,7 +401,12 @@ pub(super) fn buttons(
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
-            Action::Control(control) if !state.started && battle.control != control => {
+            Action::Control(control)
+                if !state.started
+                    && battle.control != control
+                    && !(selection.map == ArenaMap::ForestMassif
+                        && control == ArenaControl::Spectator) =>
+            {
                 battle.control = control;
                 if control == ArenaControl::Spectator {
                     battle.player_recipe = None;
@@ -320,8 +465,10 @@ pub(super) fn buttons(
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
-            Action::Start if !state.started => state.begin_play(),
-            Action::Resume if state.started && !session.is_finished() => state.begin_play(),
+            Action::Start if !state.started && terrain_ready => state.begin_play(),
+            Action::Resume if state.started && !session.is_finished() && terrain_ready => {
+                state.begin_play()
+            }
             Action::Restart if state.started => {
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
@@ -339,7 +486,15 @@ pub(super) fn buttons(
                 exit.write(AppExit::Success);
             }
             Action::Change(index, direction) if state.started => {
-                change(&mut tuning, index, direction)
+                if session.is_forest_run() {
+                    if direction > 0.0 {
+                        if let Some(stat) = upgrade_stat(index) {
+                            session.spend_upgrade(stat);
+                        }
+                    }
+                } else {
+                    change(&mut tuning, index, direction);
+                }
             }
             _ => continue,
         }
@@ -349,6 +504,21 @@ pub(super) fn buttons(
             aim: super::aim(&state),
             ..default()
         };
+    }
+}
+
+fn upgrade_stat(index: usize) -> Option<UpgradeStat> {
+    match index {
+        0 => Some(UpgradeStat::ShieldSize),
+        1 => Some(UpgradeStat::FireballSize),
+        2 => Some(UpgradeStat::HighJumpHeight),
+        3 => Some(UpgradeStat::ProjectileSpeed),
+        5 => Some(UpgradeStat::ShieldCooldown),
+        6 => Some(UpgradeStat::FireballCooldown),
+        7 => Some(UpgradeStat::HighJumpCooldown),
+        8 => Some(UpgradeStat::FireballDamage),
+        9 => Some(UpgradeStat::FireballKnockback),
+        _ => None,
     }
 }
 
@@ -386,10 +556,10 @@ pub(super) fn update(
     state: Res<ViewState>,
     selection: Option<Res<ArenaSelection>>,
     battle: Option<Res<ArenaBattleSetup>>,
-    mut mode_contents: Query<(&ModeContent, &mut Node), Without<CombatHud>>,
+    mut mode_contents: Query<(&ModeContent, &mut Node), (Without<CombatHud>, Without<Action>)>,
     mut labels: Query<(&Label, &mut Text)>,
     mut cards: Query<(&SpellCard, &mut BorderColor)>,
-    mut choices: Query<(&Action, &mut BackgroundColor)>,
+    mut choices: Query<(&Action, &mut BackgroundColor, &mut Node)>,
     mut panels: Query<
         (
             &mut Node,
@@ -401,6 +571,7 @@ pub(super) fn update(
         ),
         (
             Without<ModeContent>,
+            Without<Action>,
             Or<(
                 With<PausePanel>,
                 With<StartPanel>,
@@ -411,20 +582,58 @@ pub(super) fn update(
         ),
     >,
     windows: Query<&Window, With<PrimaryWindow>>,
+    render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
 ) {
+    let pending = render.map_or(0, |status| status.pending_chunks);
+    let tuning = session.player_tuning(&tuning);
+    let run = session.progress();
     let selection = selection.as_deref().copied().unwrap_or_default();
     let battle = battle.as_deref().cloned().unwrap_or_default();
     let observing = spectator::active(&session);
     for (content, mut node) in &mut mode_contents {
-        node.display = if content.0 == battle.control {
+        node.display = if content.0 == battle.control && selection.map != ArenaMap::ForestMassif {
             Display::Flex
         } else {
             Display::None
         };
     }
-    for (action, mut color) in &mut choices {
+    for (action, mut color, mut node) in &mut choices {
+        if let Action::Change(index, direction) = action {
+            if run.is_some() {
+                let stat = upgrade_stat(*index);
+                node.display = if *direction > 0.0 && stat.is_some() {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+                *color = BackgroundColor(if stat.is_some_and(|stat| session.can_upgrade(stat)) {
+                    Color::srgb(0.16, 0.40, 0.43)
+                } else {
+                    Color::srgb(0.12, 0.15, 0.18)
+                });
+            } else {
+                node.display = Display::Flex;
+                *color = BackgroundColor(Color::srgb(0.14, 0.21, 0.26));
+            }
+            continue;
+        }
+        if matches!(action, Action::Control(ArenaControl::Spectator)) {
+            node.display = if selection.map == ArenaMap::ForestMassif {
+                Display::None
+            } else {
+                Display::Flex
+            };
+        }
+        if matches!(action, Action::Start) {
+            *color = BackgroundColor(if pending > 0 {
+                Color::srgb(0.12, 0.15, 0.18)
+            } else {
+                Color::srgb(0.16, 0.37, 0.41)
+            });
+            continue;
+        }
         if matches!(action, Action::Resume) {
-            *color = BackgroundColor(if session.is_finished() {
+            *color = BackgroundColor(if session.is_finished() || pending > 0 {
                 Color::srgb(0.12, 0.15, 0.18)
             } else {
                 Color::srgb(0.16, 0.37, 0.41)
@@ -490,6 +699,8 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         text.0 = match label {
+            Label::MenuTitle if session.completed_run() => "VICTORY / EXPLORE THE MAP".into(),
+            Label::MenuTitle if run.is_some() && !session.is_finished() => "PAUSED / LEVEL UPGRADES".into(),
             Label::MenuTitle if session.is_finished() => {
                 if observing { "BATTLE COMPLETE".into() } else {
                     match session.outcome {
@@ -500,12 +711,15 @@ pub(super) fn update(
                 }
             },
             Label::MenuTitle => "PAUSED / COMBAT MENU".into(),
+            Label::MenuHelp if pending > 0 => format!("Preparing terrain: {pending} chunks remaining"),
+            Label::MenuHelp if run.is_some() => run.map_or_else(String::new, |p| format!("Level {}  /  XP {} of {}  /  {} upgrade points", p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::MenuHelp if session.is_finished() => "Mouse is free. Reset Arena returns to the start screen.".into(),
             Label::MenuHelp => "Mouse is free. ESC / TAB resumes. Sizes are independent.".into(),
             Label::Resume => if session.is_finished() { "ROUND COMPLETE" } else { "RESUME" }.into(),
             Label::Team(slot) => format!("TEAM {}  /  {}", slot + 1, spectator::preset_for(&battle, *slot).map_or("Custom", BattlePreset::label)),
             Label::ObserverTeams => session.battle_summary().map_or_else(String::new, |summary| spectator::team_status(&summary)),
             Label::ObserverStatus => session.battle_summary().map_or_else(String::new, |summary| spectator::battle_status(&summary, state.observer.mode, state.paused)),
+            Label::Help if pending > 0 => format!("Preparing terrain: {pending} chunks remaining. Start unlocks when ready."),
             Label::Help if battle.control == ArenaControl::Spectator => "WASD pan / move / Q and E down and up / Shift fast
 Mouse look / Wheel orbit zoom / C orbit or free camera
 Camera movement never controls a creature.".into(),
@@ -517,8 +731,10 @@ High Jump keeps your charge. Movement speed is 4.5 units/s.".into(),
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
+                ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),
             },
+            Label::Encounter if run.is_some() => run.map_or_else(String::new, |p| format!("FOREST {}/22  /  DRAGONS {}/3\nLEVEL {}  /  XP {} of {}  /  {} upgrade points", p.forest_defeated, p.dragons_defeated, p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::Encounter => {
                 let summary = session.encounter_summary();
                 if selection.map == ArenaMap::Duel {
@@ -546,6 +762,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 }
             }
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
+            Label::Status if session.completed_run() => "VICTORY — THE MAP IS CLEAR\nKeep exploring and casting. R restarts your run.".into(),
             Label::Status => {
                 if state.capture.is_some() && super::encounter::stress_view(&state.capture_view) {
                     "SYNTHETIC PERFORMANCE FIXTURE\nExtra HP / scripted party visits".into()
@@ -597,6 +814,12 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     }
                 )
             }
+            Label::MenuRules if run.is_some() => "Each level grants one + upgrade; cooldown + makes it faster.\nClear forest: +25 damage. Slay 3 Dragons: explosions. Reset clears upgrades.".into(),
+            Label::MenuRules => "Splash passes through walls. Fireballs can hurt their caster.\nShield walls remain until destroyed; restart restores all terrain.".into(),
+            Label::Parameter(1) if run.is_some_and(|p| !p.explosions_unlocked) => "Fireball impact only — slay 3 Dragons".into(),
+            Label::Parameter(4) if run.is_some() => "Projectile gravity       12 units/s² (fixed)".into(),
+            Label::Parameter(10) if run.is_some() => run.map_or_else(String::new, |p| format!("Forest {}/22    +25 damage {}", p.forest_defeated, if p.forest_cleared { "earned" } else { "reward" })),
+            Label::Parameter(11) if run.is_some() => run.map_or_else(String::new, |p| format!("Dragons {}/3    Explosions {}", p.dragons_defeated, if p.explosions_unlocked { "unlocked" } else { "locked" })),
             Label::Parameter(index) => match index {
                 0 => format!(
                     "Shield size                 {}",

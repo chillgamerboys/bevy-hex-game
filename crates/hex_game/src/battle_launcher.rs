@@ -158,9 +158,9 @@ fn launch_command(executable: &Path, environment_keys: impl Iterator<Item = OsSt
             command.env_remove(key);
         }
     }
-    // An ordinary visible start always lands on the existing Fort/Dragon menu.
+    // An ordinary visible start always lands on the Forest Massif ready screen.
     command
-        .env("HEX_ARENA_MAP", "fort")
+        .env("HEX_ARENA_MAP", "forest-massif")
         .env("HEX_ARENA_ENCOUNTER", "dragon")
         .env("HEX_ARENA_CONTROL", "player");
     command

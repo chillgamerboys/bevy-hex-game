@@ -3,7 +3,7 @@
 mod cast_input;
 mod encounter;
 #[cfg(feature = "test-support")]
-pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
+pub use encounter::{STRESS_VISIT_TICKS, configure_encounter_stress_tuning, stress_target_pose};
 mod golem;
 mod hud;
 mod presentation;
@@ -32,12 +32,16 @@ const HEIGHT: u32 = 900;
 const FIXED_SECONDS: f64 = 1.0 / 120.0;
 
 fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaSelection, String> {
-    let map = match map.unwrap_or("fort") {
+    let map = match map.unwrap_or("forest-massif") {
         "duel" => ArenaMap::Duel,
         "fort" => ArenaMap::Fort,
         "seven-regions" => ArenaMap::SevenRegions,
+        "forest-massif" => ArenaMap::ForestMassif,
         value => return Err(format!("Unknown arena map: {value}")),
     };
+    if map == ArenaMap::ForestMassif && encounter.is_some_and(|value| value != "dragon") {
+        return Err("Forest Massif has a fixed authored enemy roster.".into());
+    }
     let encounter = match encounter.unwrap_or(if map == ArenaMap::Duel {
         "shadow"
     } else {
@@ -131,6 +135,7 @@ fn map_name(map: ArenaMap) -> &'static str {
         ArenaMap::Duel => "Duel",
         ArenaMap::Fort => "Fort",
         ArenaMap::SevenRegions => "Seven Regions",
+        ArenaMap::ForestMassif => "Forest Massif",
     }
 }
 
@@ -454,6 +459,7 @@ pub fn run() -> AppExit {
                 .in_set(ArenaFrame::Input),
         )
         .add_systems(Update, drive_simulation.in_set(ArenaFrame::Tick))
+        .add_systems(Update, update_map_lighting.before(ArenaFrame::Present))
         .add_systems(
             Update,
             (worm_capture::observe, worm_capture::progress)
@@ -587,7 +593,7 @@ fn setup(
         Projection::Perspective(PerspectiveProjection {
             fov: 75.0_f32.to_radians(),
             near: 0.035,
-            far: 480.0,
+            far: 1_600.0,
             ..default()
         }),
         Transform::from_xyz(0.0, 6.0, 15.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
@@ -624,6 +630,63 @@ fn reset_from_input(
     state.prepare_round();
 }
 
+fn update_map_lighting(
+    mut commands: Commands,
+    selection: Res<ArenaSelection>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut clear: ResMut<ClearColor>,
+    mut lights: Query<(&mut DirectionalLight, &mut Transform), Without<ArenaCamera>>,
+    cameras: Query<Entity, With<ArenaCamera>>,
+) {
+    if !selection.is_changed() {
+        return;
+    }
+    let forest = selection.map == ArenaMap::ForestMassif;
+    ambient.color = if forest {
+        Color::WHITE
+    } else {
+        Color::srgb(0.77, 0.85, 1.0)
+    };
+    ambient.brightness = if forest { 80.0 } else { 420.0 };
+    clear.0 = if forest {
+        Color::srgb(0.55, 0.80, 0.95)
+    } else {
+        Color::srgb(0.10, 0.16, 0.22)
+    };
+    for (mut light, mut transform) in &mut lights {
+        light.illuminance = if forest { 10_000.0 } else { 18_000.0 };
+        let origin = if forest {
+            let elevation = 61.434_143_f32.to_radians();
+            let azimuth = 38.172_066_f32.to_radians();
+            Vec3::new(
+                azimuth.sin() * elevation.cos(),
+                elevation.sin(),
+                azimuth.cos() * elevation.cos(),
+            )
+        } else {
+            Vec3::new(-15.0, 30.0, 18.0)
+        };
+        *transform = Transform::from_translation(origin).looking_at(Vec3::ZERO, Vec3::Y);
+    }
+    for entity in &cameras {
+        if forest {
+            commands.entity(entity).insert((
+                bevy::camera::Exposure { ev100: 9.7 },
+                DistanceFog {
+                    color: Color::srgb(0.62, 0.72, 0.82),
+                    directional_light_color: Color::srgb(1.0, 0.78, 0.50),
+                    directional_light_exponent: 8.0,
+                    falloff: FogFalloff::Exponential { density: 0.0003 },
+                },
+            ));
+        } else {
+            commands
+                .entity(entity)
+                .remove::<(bevy::camera::Exposure, DistanceFog)>();
+        }
+    }
+}
+
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -636,7 +699,9 @@ fn input(
     mut session: ResMut<ArenaSession>,
     mut intent: ResMut<ArenaInput>,
     mut reset: ResMut<ArenaReset>,
+    render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
 ) {
+    let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     let mouse_events = buttons.read().copied().collect::<Vec<_>>();
     if state.capture.is_some() {
         if state.capture_view == "encounter-worm-reset"
@@ -671,7 +736,7 @@ fn input(
     if !window.focused {
         state.pause();
     }
-    if window.focused && !state.started && keys.just_pressed(KeyCode::Enter) {
+    if terrain_ready && window.focused && !state.started && keys.just_pressed(KeyCode::Enter) {
         session.cancel_charges();
         intent.human = ActorIntent::default();
         state.begin_play();
@@ -682,7 +747,7 @@ fn input(
     {
         session.cancel_charges();
         intent.human = ActorIntent::default();
-        if state.paused && !session.is_finished() {
+        if state.paused && !session.is_finished() && terrain_ready {
             state.begin_play();
         } else {
             state.pause();
@@ -1283,6 +1348,7 @@ fn capture_frame(
     ),
     cameras: Query<&Transform, With<ArenaCamera>>,
     liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
+    render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
     worm_context: (
@@ -1295,7 +1361,7 @@ fn capture_frame(
     let Some(path) = state.capture.clone() else {
         return;
     };
-    if state.requested {
+    if state.requested || render.is_some_and(|status| status.pending_chunks > 0) {
         return;
     }
     let (golem_prisms, wisp_prisms, worm_prisms, boulders, wisp_windups) = creature_meshes;
@@ -1514,7 +1580,9 @@ fn capture_frame(
     };
     // Keep each macro bounded: a single large object exceeds serde_json's recursive
     // token parser limit as new capture evidence is added.
+    let player_tuning = session.player_tuning(&tuning);
     let actors = session.actors.iter().map(|actor| {
+        let charge_tuning = if session.human_actor_id() == Some(actor.id) { &player_tuning } else { &*tuning };
         let attack = actor.attack_state().map(|attack| serde_json::json!({
             "kind": attack.kind, "phase": attack.phase, "origin": attack.origin.to_array(),
             "direction": attack.direction.to_array(), "range": attack.range,
@@ -1522,8 +1590,8 @@ fn capture_frame(
         }));
         let charge = actor.charge().map(|charge| serde_json::json!({
             "spell": charge.spell, "elapsed": charge.elapsed,
-            "progress": (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0),
-            "launch_speed": tuning.launch_speed(charge.elapsed)
+            "progress": (charge.elapsed / charge_tuning.charge_seconds).clamp(0.0, 1.0),
+            "launch_speed": charge_tuning.launch_speed(charge.elapsed)
         }));
         let body_hex_prisms = actor.body_hex_prisms().map(|prism| serde_json::json!({
             "offset": prism.offset.to_array(), "height": prism.height
@@ -1602,6 +1670,8 @@ fn capture_frame(
         ("view", serde_json::json!(state.capture_view)),
         ("started", serde_json::json!(state.started)),
         ("paused", serde_json::json!(state.paused)),
+        ("progress", serde_json::json!(session.progress())),
+        ("player_tuning", serde_json::json!(session.player_tuning(&tuning))),
         ("terminal_menu_fixture", serde_json::json!(matches!(state.capture_view.as_str(), "terminal-win" | "terminal-defeat").then_some("synthetic-knockout-for-menu-presentation"))),
         ("terminal_menu_outcome", serde_json::json!(session.outcome.map(|outcome| match outcome {
             hex_arena::ArenaOutcome::Winner(id) if Some(id) == session.human_actor_id() => "win",
