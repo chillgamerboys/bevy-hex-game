@@ -72,14 +72,14 @@ lanes:
     authority: world
     builder: worker
     branch: feat/expedition-content
-    owns: ['assets/config/v4/forest-massif', 'assets/art/objects/plant/forest-*', 'assets/art/object_catalog.ron', 'tools/forest_world.py', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
+    owns: ['assets/config/v4/forest-massif', 'assets/art/objects/plant/forest-*', 'assets/art/object_catalog.ron', 'tools/forest_world.py', 'tools/forest_trees.py', 'tools/test_forest_trees.py', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
     dispatch_blockers: ['shared site contract fixed', 'L1 no overlapping work']
     merge_blockers: ['L1']
-    fences: []
+    fences: ['Bounded pure tree generator ready; geography, generated assets, support on final terrain, canopy coverage and rendered review remain pending.']
     selector: {concerns: [combined_gate], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: in_progress
     pr: null
   - id: L4
     title: World publication adapters
