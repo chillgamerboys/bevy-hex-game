@@ -51,3 +51,15 @@ navigation. Repeat close water/tree/structure passes in the reverse direction.
 Native access currently reports that macOS is locked; do not bypass the lock or
 substitute OS automation. Continue windowless work, and retain HUMAN-MOTION-PENDING
 until the Mac is manually unlocked and the actual candidate can be addressed.
+
+## Scale reference inspected
+
+On September12, root inspected actual Cube World Alpha footage in BebopVoxGaming's
+[Crazy Huge Boss Tree, episode18](https://www.youtube.com/watch?v=dY-nHTdZ4a0&t=435s)
+at7:15 through the background browser. The Arutar Tree view shows a trunk dwarfing
+neighboring ordinary conifers and broad elevated limbs carrying the canopy, with
+substantial empty volume below. The crown top is cropped, so this is close-scale
+and branching reference, not a complete silhouette or measurable size reference.
+The expedition keeps its own voxel blueprints, tapered roots and taller crown form;
+no reference asset or distinctive exact tree shape is copied. This observation
+supersedes the earlier unsuccessful wiki/reference-search notes.

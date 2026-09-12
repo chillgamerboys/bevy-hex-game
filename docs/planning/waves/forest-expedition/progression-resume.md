@@ -6,7 +6,7 @@ The manifest's amendments A1–A3 supersede its original roster and healing deci
 
 ## Resumed implementation status (2026-09-12)
 
-The old checkpoint and next-slice list below are historical design/provenance. Root `e864034` now contains fountains and public snapshots, settled proximity/LOS milestone pickups, Troll ranged attack/aura/route rally, physical Shadow arena confinement, and app presentation. Arena tests pass 367 cases with one ignored at `4e94638`. New isolated-crown reward settlement correction `7bbd0d0` remains pending root integration/testing. Actual populated-map profiling and visual/native acceptance remain pending. Read `resume.md` and current source before dispatching work.
+The old checkpoint and next-slice list below are historical design/provenance. Root now contains fountains and public snapshots, settled proximity/LOS milestone pickups, Troll ranged attack/aura/route rally, physical Shadow arena confinement, and app presentation. Arena tests pass369cases with oneignored at `48b4692`, including isolated-crown settlement and Shadow max-HP/fountain capacity coverage. All populated content is integrated through `24bb0d9`; its first composed app run exposed an unsorted asset catalog, now repaired with a focused runtime rerun pending. A read-only audit found displaced rally survivors initially rejoining at their old camp; a bounded world-aware forward re-entry correction is in progress in the gameplay lane. Actual populated-map profiling and visual/native acceptance remain pending. Read `resume.md` and current source before dispatching work.
 
 ## Implemented checkpoint
 
