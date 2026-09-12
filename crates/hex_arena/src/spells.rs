@@ -763,7 +763,7 @@ impl ArenaSession {
             radius: 0.16,
             age: 0.0,
             lifetime: 0.15,
-            kind: crate::VisualEffectKind::Fireball,
+            kind: crate::VisualEffectKind::FireballContact,
         });
     }
 

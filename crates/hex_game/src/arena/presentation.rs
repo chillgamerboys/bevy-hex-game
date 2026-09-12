@@ -246,7 +246,9 @@ pub(super) fn effects(
 ) {
     let color = |kind| match kind {
         hex_arena::VisualEffectKind::Shield => Color::srgb(0.36, 0.85, 0.95),
-        hex_arena::VisualEffectKind::Fireball => Color::srgb(1.0, 0.37, 0.07),
+        hex_arena::VisualEffectKind::Fireball | hex_arena::VisualEffectKind::FireballContact => {
+            Color::srgb(1.0, 0.37, 0.07)
+        }
         hex_arena::VisualEffectKind::RadialBurst => Color::srgb(0.70, 0.40, 1.0),
         hex_arena::VisualEffectKind::HighJump => Color::srgb(0.36, 0.85, 0.95),
     };
@@ -271,6 +273,18 @@ pub(super) fn effects(
     }
     for effect in &session.effects {
         let progress = (effect.age / effect.lifetime.max(0.01)).clamp(0.0, 1.0);
+        if effect.kind == hex_arena::VisualEffectKind::FireballContact {
+            let reach = effect.radius * (1.0 - progress * 0.6);
+            let c = color(effect.kind).with_alpha(1.0 - progress);
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                gizmos.line(
+                    effect.center - axis * reach,
+                    effect.center + axis * reach,
+                    c,
+                );
+            }
+            continue;
+        }
         let radius = effect.radius * (0.3 + progress * 0.7);
         let c = color(effect.kind).with_alpha(1.0 - progress);
         gizmos.sphere(Isometry3d::from_translation(effect.center), radius, c);
@@ -448,6 +462,7 @@ pub(super) fn solid_effects(
     for effect in &session.effects {
         let progress = (effect.age / effect.lifetime.max(0.01)).clamp(0.0, 1.0);
         let material = match effect.kind {
+            hex_arena::VisualEffectKind::FireballContact => continue,
             hex_arena::VisualEffectKind::Shield => &assets.shield_wave,
             hex_arena::VisualEffectKind::Fireball => &assets.fire_wave,
             hex_arena::VisualEffectKind::RadialBurst => &assets.blast_wave,

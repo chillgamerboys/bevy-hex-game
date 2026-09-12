@@ -582,6 +582,8 @@ pub enum VisualEffectKind {
     Shield,
     /// Fireball impact sphere.
     Fireball,
+    /// Tiny contact spark with no expanding blast volume.
+    FireballContact,
     /// Creature radial attacks such as the Golem slam.
     RadialBurst,
     /// Small non-damaging boost takeoff effect.
