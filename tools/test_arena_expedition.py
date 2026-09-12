@@ -13,7 +13,8 @@ def state(expedition):
     members = [("Human", None, 1)]
     members += [("Goblin", "BabyGoblin", 15), ("Goblin", "Goblin", 92),
                 ("Goblin", "Troll", 1), ("Shaman", "Shaman", 2),
-                ("Dragon", "Dragon", 3), ("Shadow", "MountainShadow", 1)] if expedition else [
+                ("Dragon", "Dragon", 3), ("Shadow", "MountainShadow", 1),
+                ("Golem", "PlainGolem", 3), ("Wisp", "PlainWisp", 10)] if expedition else [
                     ("Goblin", None, 20), ("Shaman", None, 2), ("Dragon", None, 3)]
     return {
         "selection": {"map": "Forest Massif", "encounter": "Dragon"},
@@ -22,7 +23,7 @@ def state(expedition):
             "seed": 1, "tick_limit": 14400, "player_recipe": None},
         "actors": [{"species": species, "expedition_role": role} for species, role, count in members for _ in range(count)],
         "progress": {"level": 1},
-        "expedition": {"enemies_total": 114, "forest_total": 109,
+        "expedition": {"enemies_total": 127, "forest_total": 109,
                        "fountains": [{"name": f"{area}_fountain_{i:02}", "consumed": False}
                                      for area, count in (("forest", 4), ("mountain", 2))
                                      for i in range(1, count + 1)]} if expedition else None,

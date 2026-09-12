@@ -231,7 +231,7 @@ def player_capture_entries(views, arena_map: str | None, encounter: str | None):
 
 def battle_environment(args: argparse.Namespace, arena_map: str, *, matrix: bool = False, result: bool = False) -> dict[str, str]:
     if arena_map == "forest-massif" and args.encounter is not None:
-        raise RuntimeError("Forest Massif has a fixed Human, 20 Goblins, 2 Shamans and 3 Dragons; omit --encounter.")
+        raise RuntimeError("Forest Massif uses its complete authored roster; omit --encounter.")
     if args.encounter in PLAYER_OVERRIDES and arena_map not in ("fort", "duel"):
         raise RuntimeError("Creature player overrides require Fort or Duel.")
     observing = args.spectator or matrix
@@ -477,15 +477,15 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
             snapshot = state.get("expedition")
             fountains = snapshot.get("fountains", []) if isinstance(snapshot, dict) else []
             expected_fountains = {f"forest_fountain_{i:02}" for i in range(1, 5)} | {f"mountain_fountain_{i:02}" for i in range(1, 3)}
-            if not roles or not isinstance(snapshot, dict) or snapshot.get("enemies_total") != 114 or snapshot.get("forest_total") != 109:
+            if not roles or not isinstance(snapshot, dict) or snapshot.get("enemies_total") != 127 or snapshot.get("forest_total") != 109:
                 raise RuntimeError("Expedition review requires the complete admitted expedition, not the legacy Forest package.")
             if len(fountains) != 6 or {f.get("name") for f in fountains} != expected_fountains:
                 raise RuntimeError("Expedition review requires all six canonical fountains.")
         expected_species = Counter({"Human": 1, "Goblin": 20, "Shaman": 2, "Dragon": 3})
         if roles:
-            if roles != Counter({"BabyGoblin": 15, "Goblin": 92, "Shaman": 2, "Troll": 1, "Dragon": 3, "MountainShadow": 1}):
+            if roles != Counter({"BabyGoblin": 15, "Goblin": 92, "Shaman": 2, "Troll": 1, "Dragon": 3, "MountainShadow": 1, "PlainGolem": 3, "PlainWisp": 10}):
                 raise RuntimeError("Expedition capture does not contain the exact authored roles.")
-            expected_species = Counter({"Human": 1, "Goblin": 108, "Shaman": 2, "Dragon": 3, "Shadow": 1})
+            expected_species = Counter({"Human": 1, "Goblin": 108, "Shaman": 2, "Dragon": 3, "Shadow": 1, "Golem": 3, "Wisp": 10})
         if observing or Counter(actor.get("species") for actor in actors) != expected_species:
             raise RuntimeError("Forest capture does not contain its complete authored roster.")
         progress = state.get("progress")

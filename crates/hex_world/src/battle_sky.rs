@@ -106,7 +106,7 @@ fn update(
             Visibility::Hidden
         };
         transform.translation = frame.center;
-        if let Some(material) = materials.get_mut(&handle.0) {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
             material.params = parameters(&frame);
         }
     }

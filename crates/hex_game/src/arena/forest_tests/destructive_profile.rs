@@ -2,6 +2,7 @@
 
 use super::*;
 use hex_arena::ExpeditionRole;
+use hex_core::arena::ArenaMaterials;
 use hex_core::{
     TerrainBatchId, TerrainDamageKind, TerrainImpact, TerrainImpactOutcome, TerrainImpactResult,
     TilePos,

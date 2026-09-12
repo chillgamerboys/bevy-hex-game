@@ -1,8 +1,8 @@
 # Forest–Massif Expedition
 
-Status: candidate implemented and statically reviewed; native feedback repairs in progress. Hourly continuation paused at the user’s request. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
+Status: combat/glider/world injection integrated in source; combined validation and fresh renders in progress. Hourly continuation paused at the user’s request. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
 Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
-Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 114 enemies, physical milestone pickups and finite healing.
+Epic: none. Current outcome: Forest–Massif expedition with 127 enemies, momentum gliding, rank upgrades, physical milestone pickups, destructible solids and finite fountain healing. The original numbered decisions below are historical; amendments and the approved combat/world injection take precedence.
 User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
 
 ## Why this wave exists
@@ -120,6 +120,142 @@ lanes:
     sizing: {model: inherited, effort: inherited}
     state: queued
     pr: null
+  - id: L6
+    title: Sparse carve contracts
+    order: orders/L6.md
+    ticket: null
+    authority: shared
+    builder: worker
+    branch: feat/expedition-carved-world
+    owns: ['hex_core/src/arena.rs passive object_columns/solid_at', 'hex_assets ObjectCarveMask']
+    dispatch_blockers: []
+    merge_blockers: []
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: logic-only
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L7
+    title: Combat ranks and lowland rewards
+    order: orders/L7.md
+    ticket: null
+    authority: gameplay
+    builder: worker
+    branch: feat/expedition-combat-upgrade
+    owns: ['hex_arena progression/spells/expedition/Dragon AI/lib stat regions']
+    dispatch_blockers: []
+    merge_blockers: ['L6']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L8
+    title: Momentum glider
+    order: orders/L8.md
+    ticket: null
+    authority: gameplay
+    builder: worker
+    branch: feat/expedition-momentum-glider
+    owns: ['hex_arena glider/controller/motion/lib glider regions']
+    dispatch_blockers: []
+    merge_blockers: ['L7']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L9
+    title: Finite carved expedition and lowlands
+    order: orders/L9.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: feat/expedition-carved-world
+    owns: ['hex_world_runtime finite sessions', 'hex_map arena/liquid/strata', 'forest domain authoring/content']
+    dispatch_blockers: []
+    merge_blockers: ['L6']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L10
+    title: Sparse object sections
+    order: orders/L10.md
+    ticket: null
+    authority: shared
+    builder: worker
+    branch: feat/expedition-carved-object-render
+    owns: ['hex_objects masked section baking/reconciliation']
+    dispatch_blockers: []
+    merge_blockers: ['L6']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L11
+    title: Health events and discovery limits
+    order: orders/L11.md
+    ticket: null
+    authority: gameplay
+    builder: worker
+    branch: wave/forest-expedition
+    owns: ['hex_arena player_observation.rs and its tests']
+    dispatch_blockers: []
+    merge_blockers: []
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L12
+    title: Combat and flight presentation
+    order: orders/L12.md
+    ticket: null
+    authority: shared
+    builder: worker
+    branch: wave/forest-expedition
+    owns: ['hex_game arena HUD/input/presentation/environment/capture']
+    dispatch_blockers: []
+    merge_blockers: ['L7', 'L8', 'L9', 'L10', 'L11', 'L13']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
+  - id: L13
+    title: Reusable procedural Battle sky
+    order: orders/L13.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: wave/forest-expedition
+    owns: ['hex_world battle_sky and passive export', 'assets/shaders/sky.wgsl phase']
+    dispatch_blockers: []
+    merge_blockers: []
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: integrated
+    pr: null
+
 ```
 
 ## Ownership map
@@ -203,3 +339,13 @@ conditional post-game OpenAI audit still apply.
 ## September 12 combat/glider/world injection
 
 The approved [combat and world upgrade](combat-world-upgrade.md) extends this isolated candidate. Its ownership, locked contracts, checkpoint acceptance and current status supersede the prior UX phase’s pending-work list only for the new implementation. Historical validation remains historical.
+
+AMENDMENT A6 (user-approved September12 combat/world plan): current combat/world injection supersedes historical protected-object policy and115-actor target. New target127enemies/128actors; carve all solids, retain unsupported geometry, preserve water. Temporary lean workflow checkpoints at7% remaining; timer remains PAUSED and may not be enabled by older stop-condition text. L1–L5 rows describe historical expansion territory; current execution is L6–L13. Current user game70de964 and a538 compiled package stay intact while combined candidate is developed.
+
+## Combined combat/world checkpoint — September 12
+
+Source through `ba832ce` integrates L6–L13: ranks and Dragon profiles, glider, lowland roster/rewards, transient health/discovery, object carving, water volumes, sky and HUD. These rows are source-integrated; they are not delivery or validation approvals. Two combined compiler corrections (sky material mutability and destructive fixture import) are being checked.
+
+The isolated compiled package is `8f56a9974aaac54b`, with 128 actors / 25 parties / 49 routes / six fountains / 914 objects. It remains outside the running game's original package. Strict combined arena Clippy and 55 Python arena-helper tests pass. Sixteen current observation tests pass. Full arena regressions, the repaired menu's positive check, real-map probes, fresh renders and user motion/feel feedback remain in progress.
+
+Timer remains PAUSED. Do not control the existing user game or its recording. The new candidate has not replaced the playable launcher yet. The current UI/feel plan delegates short native actions to the user; windowless captures cover static presentation only.
