@@ -21,10 +21,18 @@ The manifest's amendments A1–A3 supersede its original roster and healing deci
 - Evidence: 350 `hex_arena` tests passed, one manual CPU sample ignored; strict
   all-target Clippy passed after retaining integer-conversion error context.
 
-**Do not enable the new package as a complete experience yet.** Progression still
-contains legacy 22-minion/three-Dragon thresholds and automatic rewards. Milestone
-pickups, fountain consumption, new XP accounting, Troll ranged/aura/rally AI and
-strict Shadow arena confinement remain unfinished.
+The subsequent accounting correction registers authored roles alongside species,
+awards Troll/Shadow 50/100 XP, derives the 109-minion and 114-enemy completion
+conditions from the accepted roster, and prevents automatic milestone bonuses in
+expedition mode. Legacy packages retain automatic clear rewards. Focused tests
+cover 327 XP, final/duplicate/uncredited deaths, the attribution cutoff and reset;
+the coordinator must run these new tests after integration because this lane did
+not take the shared Cargo target during the root build.
+
+**Do not enable the new package as a complete experience yet.** Milestone pickups,
+fountain consumption, their public snapshots, Troll ranged/aura/rally AI and strict
+Shadow arena confinement remain unfinished. Expedition milestone bonuses remain
+locked until pickup authority is implemented.
 
 ## Locked roster, rewards and healing
 
@@ -107,10 +115,10 @@ explicit; do not spawn the expanded roster in its older empty geography.
 
 ## Next bounded gameplay slices
 
-1. Extend the registered progression roster with authored role before species
-   fallback. Use separate once-only defeat, XP and reward-collection ledgers.
-   Initialize expedition fountain identities from the admitted world snapshot.
-   Add derived minion/enemy totals and the public snapshot above.
+1. The registered role/species roster, role XP, derived totals and once-only defeat
+   ledger are now present. Add a separate reward-collection ledger and initialize
+   expedition fountain identities from the admitted world snapshot. Publish the
+   complete read-only snapshot above without changing the existing progress layout.
 2. Reconcile deaths, grant credited XP immediately, and create only the three
    milestone reward orbs. The final Dragon death creates one explosion orb.
    Collection requires a living nearby player and an unobstructed approach/ray;

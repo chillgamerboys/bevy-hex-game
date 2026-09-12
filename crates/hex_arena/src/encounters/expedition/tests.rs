@@ -276,3 +276,105 @@ fn baby_and_troll_swipes_apply_their_own_damage_and_cooldown() {
         );
     }
 }
+
+fn defeat(session: &mut ArenaSession, id: ActorId, credit: bool) {
+    if credit {
+        session.record_player_hit(0, id);
+    }
+    session
+        .actors
+        .iter_mut()
+        .find(|actor| actor.id == id)
+        .expect("registered enemy")
+        .hp = 0.0;
+    session.reconcile_progression();
+}
+
+#[test]
+fn expedition_all_credited_kills_reach_level_eight_without_automatic_rewards() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let ids: Vec<_> = session
+        .actors
+        .iter()
+        .skip(1)
+        .map(|actor| actor.id)
+        .collect();
+    for id in ids.iter().take(ids.len() - 1) {
+        defeat(&mut session, *id, true);
+    }
+    assert!(!session.completed_run());
+    let last = *ids.last().expect("final enemy");
+    defeat(&mut session, last, true);
+    let progress = session.progress().expect("progress");
+    assert_eq!(
+        (
+            progress.total_xp,
+            progress.level,
+            progress.xp,
+            progress.available_upgrades
+        ),
+        (327, 8, 4, 7)
+    );
+    assert_eq!(progress.forest_defeated, 109);
+    assert_eq!(progress.dragons_defeated, 3);
+    assert!(progress.forest_cleared && progress.completed);
+    assert!(!progress.explosions_unlocked);
+    assert_eq!(progress.damage_bonus.to_bits(), 0.0_f32.to_bits());
+    assert!(!session.can_upgrade(UpgradeStat::FireballSize));
+    defeat(&mut session, last, true);
+    assert_eq!(session.progress(), Some(progress));
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    assert!(
+        !session.is_finished(),
+        "victory must leave exploration active"
+    );
+}
+
+#[test]
+fn expedition_uncredited_and_expired_deaths_count_once_without_xp_or_troll_minion_credit() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let troll = session
+        .actors
+        .iter()
+        .find(|a| a.expedition_role() == Some(ExpeditionRole::Troll))
+        .expect("troll")
+        .id;
+    let shadow = session
+        .actors
+        .iter()
+        .find(|a| a.expedition_role() == Some(ExpeditionRole::MountainShadow))
+        .expect("shadow")
+        .id;
+    session.record_player_hit(0, troll);
+    session.tick += 1200;
+    defeat(&mut session, troll, false);
+    assert_eq!(session.progress().expect("progress").total_xp, 50);
+    assert_eq!(session.progress().expect("progress").forest_defeated, 0);
+    session.record_player_hit(0, shadow);
+    session.tick += 1201;
+    defeat(&mut session, shadow, false);
+    assert_eq!(session.progress().expect("progress").total_xp, 50);
+    let ids: Vec<_> = session
+        .actors
+        .iter()
+        .skip(1)
+        .map(|actor| actor.id)
+        .collect();
+    for id in ids {
+        defeat(&mut session, id, false);
+    }
+    let progress = session.progress().expect("progress");
+    assert_eq!(progress.total_xp, 50);
+    assert_eq!(progress.forest_defeated, 109);
+    assert!(progress.completed);
+    session.reset(1, &view, geometry);
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let reset = session.progress().expect("reset progress");
+    assert_eq!(
+        (reset.total_xp, reset.level, reset.xp, reset.forest_defeated),
+        (0, 1, 0, 0)
+    );
+    assert!(!reset.completed && !reset.explosions_unlocked);
+}

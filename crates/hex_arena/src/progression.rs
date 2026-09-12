@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{ActorId, ArenaSession, ArenaTuning, Species};
+use crate::{ActorId, ArenaSession, ArenaTuning, ExpeditionRole, Species};
 
 /// Impact behavior frozen when an ordinary Fireball is released.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -50,25 +50,66 @@ pub struct ProgressSnapshot {
     pub total_xp: u32,
     /// Level rewards that have not been spent.
     pub available_upgrades: u32,
-    /// Defeated members of the twenty-Goblin/two-Shaman forest roster.
+    /// Defeated registered forest minions (Goblins/Shamans), excluding Troll.
     pub forest_defeated: usize,
     /// Defeated members of the three-Dragon roster.
     pub dragons_defeated: usize,
-    /// All twenty-two forest enemies have been defeated.
+    /// All registered forest minions have been defeated.
     pub forest_cleared: bool,
-    /// All three Dragons have been defeated.
+    /// Player explosions are unlocked (pickup required in an expedition).
     pub explosions_unlocked: bool,
-    /// Separate permanent forest-clear damage reward.
+    /// Separate permanent damage reward (Troll pickup in an expedition).
     pub damage_bonus: f32,
-    /// All twenty-five enemies have been defeated.
+    /// Every registered authored enemy has been defeated.
     pub completed: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RosterEntry {
+    species: Species,
+    role: Option<ExpeditionRole>,
+}
+
+impl RosterEntry {
+    fn is_minion(self) -> bool {
+        match self.role {
+            Some(role) => matches!(
+                role,
+                ExpeditionRole::BabyGoblin | ExpeditionRole::Goblin | ExpeditionRole::Shaman
+            ),
+            None => matches!(self.species, Species::Goblin | Species::Shaman),
+        }
+    }
+
+    fn is_dragon(self) -> bool {
+        self.role.map_or(self.species == Species::Dragon, |role| {
+            role == ExpeditionRole::Dragon
+        })
+    }
+
+    fn xp(self) -> u32 {
+        match self.role {
+            Some(ExpeditionRole::Troll) => 50,
+            Some(ExpeditionRole::MountainShadow) => 100,
+            Some(ExpeditionRole::BabyGoblin | ExpeditionRole::Goblin) => 1,
+            Some(ExpeditionRole::Shaman) => 5,
+            Some(ExpeditionRole::Dragon) => 20,
+            None => match self.species {
+                Species::Goblin => 1,
+                Species::Shaman => 5,
+                Species::Dragon => 20,
+                _ => 0,
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct ProgressState {
     snapshot: ProgressSnapshot,
     player: ArenaTuning,
-    roster: BTreeMap<ActorId, Species>,
+    roster: BTreeMap<ActorId, RosterEntry>,
+    expedition: bool,
     defeated: BTreeSet<ActorId>,
     hits: BTreeMap<ActorId, u64>,
 }
@@ -98,6 +139,7 @@ impl Default for ProgressState {
                 ..Default::default()
             },
             roster: BTreeMap::new(),
+            expedition: false,
             defeated: BTreeSet::new(),
             hits: BTreeMap::new(),
         }
@@ -198,8 +240,17 @@ impl ArenaSession {
                 .actors
                 .iter()
                 .filter(|a| a.id != 0)
-                .map(|actor| (actor.id, actor.species))
+                .map(|actor| {
+                    (
+                        actor.id,
+                        RosterEntry {
+                            species: actor.species,
+                            role: actor.expedition_role(),
+                        },
+                    )
+                })
                 .collect();
+            state.expedition = state.roster.values().any(|entry| entry.role.is_some());
         }
     }
 
@@ -225,28 +276,24 @@ impl ArenaSession {
             return;
         };
         for actor in self.actors.iter().filter(|actor| actor.hp <= 0.0) {
-            let Some(species) = state.roster.get(&actor.id) else {
+            let Some(entry) = state.roster.get(&actor.id).copied() else {
                 continue;
             };
             if !state.defeated.insert(actor.id) {
                 continue;
             }
-            match species {
-                Species::Goblin | Species::Shaman => state.snapshot.forest_defeated += 1,
-                Species::Dragon => state.snapshot.dragons_defeated += 1,
-                _ => {}
+            if entry.is_minion() {
+                state.snapshot.forest_defeated += 1;
+            }
+            if entry.is_dragon() {
+                state.snapshot.dragons_defeated += 1;
             }
             if state
                 .hits
                 .get(&actor.id)
                 .is_some_and(|tick| self.tick.saturating_sub(*tick) <= 1200)
             {
-                let xp = match species {
-                    Species::Goblin => 1,
-                    Species::Shaman => 5,
-                    Species::Dragon => 20,
-                    _ => 0,
-                };
+                let xp = entry.xp();
                 state.snapshot.xp += xp;
                 state.snapshot.total_xp += xp;
                 while state.snapshot.xp >= state.snapshot.xp_to_next {
@@ -257,19 +304,31 @@ impl ArenaSession {
                 }
             }
         }
-        state.snapshot.forest_cleared = state.snapshot.forest_defeated == 22;
-        state.snapshot.explosions_unlocked = state.snapshot.dragons_defeated == 3;
-        state.snapshot.damage_bonus = if state.snapshot.forest_cleared {
-            25.0
-        } else {
-            0.0
-        };
+        let minions = state.minion_total();
+        state.snapshot.forest_cleared = minions > 0 && state.snapshot.forest_defeated == minions;
+        if !state.expedition {
+            // Legacy packages retain automatic clear rewards. Expedition pickup
+            // authority will mutate these fields separately; deaths never do.
+            state.snapshot.explosions_unlocked = state.snapshot.dragons_defeated == 3;
+            state.snapshot.damage_bonus = if state.snapshot.forest_cleared {
+                25.0
+            } else {
+                0.0
+            };
+        }
         state.snapshot.completed =
-            state.snapshot.forest_cleared && state.snapshot.explosions_unlocked;
+            !state.roster.is_empty() && state.defeated.len() == state.roster.len();
     }
 }
 
 impl ProgressState {
+    fn minion_total(&self) -> usize {
+        self.roster
+            .values()
+            .filter(|entry| entry.is_minion())
+            .count()
+    }
+
     fn can_upgrade(&self, stat: UpgradeStat) -> bool {
         let player = &self.player;
         match stat {
