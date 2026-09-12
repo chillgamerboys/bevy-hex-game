@@ -40,7 +40,7 @@ scenario binaries continue to run in the residual workspace suite.
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams, plus the renderer-free spell-resolution composition target | `hex_test_support`, then the owning gameplay crate dependencies; the composition postflight uses real map/units/perception/combat plugins without renderer or UI | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
 | Game/UI behavior | Pure Main Menu, Campaign, Sandbox, Creator, guided deployment, HUD visibility/Main View, and input-binding transitions plus Bevy wiring, persistence, inspection, exact terrain placement, suppression, and outcome lifecycle | `hex_gameplay_model` for route/draft/deployment/launch/HUD truth; `hex_core` for stable input actions; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
-| Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
+| Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames; an authored-map delivery may exceed this only when its approved acceptance matrix names more distinct landmark/camera frames, as Crystal Mountain does |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
 The required gameplay CI job publishes separate JUnit and timing evidence for its
@@ -98,7 +98,11 @@ requires it to equal the authored exact `TilePos` before emitting that same prim
 pointer click; an anchor move therefore invalidates stale evidence instead of silently
 reviewing a new route. `AwaitPartyIdle(max_frames)` waits on public party, registry,
 command-queue, `Busy`, and `MovingTo` facts. Its bound must be positive and exhaustion
-is a failing exit. After that wait,
+is a failing exit. Pointer input is ingested after the scripted click frame; a multi-stop
+walk whose preceding frame is already idle must leave an ingress window before waiting or
+the wait can observe that preceding idle state and advance before the move starts. Crystal
+Mountain pins `ClickAnchor` -> `Settle(5)` -> `AwaitPartyIdle` at every route stop. After
+that wait,
 `AssertSelectedAt(expected: (q: ..., r: ..., level: ...))` requires exactly one
 selected unit, its authoritative `StandsOn`, and `CameraFocusTarget.surface` to match
 the expected `TilePos`. An ignored or interrupted pointer click therefore cannot
@@ -386,7 +390,7 @@ This boundary is absolute whenever a typed gameplay hook can express the claim. 
 frame may help navigate or diagnose a presentation symptom, but it must not be cited
 as corroborating logical evidence. Add a missing hook instead.
 
-A scoped gameplay acceptance run reviews at most ten deterministic Bevy image-target
+A scoped UI gameplay acceptance run reviews at most ten deterministic Bevy image-target
 frames: minimal Exploration, player turn, hostile turn, Character Main View, Required
 Decision, aiming/Action Bar, Activity, custom visibility, master-hidden Required
 Decision, and one targeted Compact or 4K/200% duplicate.
@@ -401,8 +405,9 @@ drives real wheel and Tab/Shift-Tab input through the declared scroll owner. The
 scoped gameplay script uses no combat-solving steps; generic world-owned walks retain
 their existing driver verbs.
 
-Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
-remain unchanged.
+Forest, Waterfall, map review, Alberto's map captures, and approved authored-map
+acceptance matrices such as Crystal Mountain are outside this UI budget and remain
+unchanged.
 
 ## Manual runtime sign-off
 

@@ -1,9 +1,10 @@
 //! Opaque, non-interactive presentation geometry for liquid voxel runs.
 //!
 //! The ordinary voxel prisms remain the authoritative volume, pick target, and
-//! shadow caster. This module adds only a biased horizontal cap to each exposed
-//! water or lava run, a combined vertical curtain for semantic V3 falls, and
-//! deterministic landing-splash geometry for lava falls.
+//! shadow caster. This module adds only chunk-batched biased horizontal caps for
+//! exposed water or lava runs, combined vertical curtains for exposed liquid
+//! height edges, and deterministic landing-splash geometry for semantic lava
+//! falls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -23,22 +24,31 @@ use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
 use hex_core::{HexCoord, Level, PausableSystems, Screen, SubstanceId, TilePos};
 
 use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresentationProjection};
-use crate::voxel::{runs, SubstanceRun, VoxelMap};
+use crate::voxel::{runs, terrain_chunk_coord, SubstanceRun, TerrainChunkCoord, VoxelMap};
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
 const LIQUID_FOAM_SWATCH: &str = "liquid/foam";
 const PHASE_WRAP_SECONDS: f32 = 400.0;
-const CURRENT_FLOW_SPEED: f32 = 0.22;
-const RAPID_FLOW_SPEED: f32 = 0.55;
 const FALL_FLOW_SPEED: f32 = 0.85;
 const LAVA_STILL_PULSE_RATE: f32 = 0.05;
-const LAVA_CURRENT_PULSE_RATE: f32 = 0.10;
-const LAVA_RAPID_PULSE_RATE: f32 = 0.25;
 const LAVA_FALL_PULSE_RATE: f32 = 0.40;
+/// Keeps broad, flat water caps from becoming a saturated planar mirror under
+/// the noon directional light. Bevy maps this reflectance to roughly 2% F0,
+/// matching ordinary water rather than the legacy 8.3% highlight.
+const WATER_SURFACE_ROUGHNESS: f32 = 0.60;
+const WATER_SURFACE_REFLECTANCE: f32 = 0.35;
+const LEGACY_LIQUID_ROUGHNESS: f32 = 0.28;
+const LEGACY_LIQUID_REFLECTANCE: f32 = 0.72;
 #[cfg(test)]
 const SECONDARY_WAVE_PHASE_RATE: f32 = 0.025;
 const LIQUID_CAP_BIAS_RATIO: f32 = 0.02;
 const LIQUID_CAP_BIAS_MAX: f32 = 0.002 * HEX_CIRCUMRADIUS;
+/// Stable render ordering above the authoritative opaque voxel surface.
+///
+/// The physical lift remains deliberately tiny so the visual cap cannot alter
+/// the apparent water level. A small pipeline bias keeps that cap in front at
+/// Grand-map camera distances where depth precision is coarser than the lift.
+const LIQUID_PRESENTATION_DEPTH_BIAS: f32 = 1.0;
 const LIQUID_CURTAIN_EDGE_BIAS: f32 = 0.002 * HEX_CIRCUMRADIUS;
 const LAVA_SPLASH_SURFACE_BIAS: f32 = 0.001 * HEX_CIRCUMRADIUS;
 const HEX_INRADIUS: f32 = 0.5 * HEX_SMALL_DIAMETER;
@@ -349,14 +359,32 @@ struct LiquidSurface {
     downstream: Option<TilePos>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct LiquidCapBatchKey {
+    chunk: TerrainChunkCoord,
+    role: FillMaterialRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct LiquidCurtainBatchKey {
+    role: FillMaterialRole,
+    style: MaterialStyle,
+}
+
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct LiquidCapBatch {
+    key: LiquidCapBatchKey,
+    surfaces: Vec<LiquidSurface>,
+}
+
 #[derive(Debug)]
 struct PresentationPlan {
     surfaces: Vec<LiquidSurface>,
-    falls: BTreeMap<FillMaterialRole, RawMesh>,
+    curtains: BTreeMap<LiquidCurtainBatchKey, RawMesh>,
     roles: BTreeSet<FillMaterialRole>,
 }
 
-/// Spawns non-pickable liquid caps and combined fall curtains.
+/// Spawns non-pickable, chunk-batched liquid caps and combined side curtains.
 ///
 /// Validation and mesh construction complete before commands or assets are
 /// changed, so an error never leaves a partially spawned presentation.
@@ -375,6 +403,12 @@ pub(crate) fn spawn_presentations(
         clear_material_cache(commands);
         return Ok(Vec::new());
     }
+    let cap_batches = batch_liquid_caps(&plan.surfaces)
+        .into_iter()
+        .map(|(key, surfaces)| {
+            cap_batch_geometry(&surfaces, level_height).map(|geometry| (key, surfaces, geometry))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let role_colors = plan
         .roles
@@ -388,46 +422,18 @@ pub(crate) fn spawn_presentations(
         .ok_or(LiquidPresentationError::MissingPaletteSwatch {
             swatch: LIQUID_FOAM_SWATCH,
         })?;
-    let cap = meshes.add(cap_geometry().into_mesh());
     let mut material_sets = Vec::with_capacity(role_colors.len());
-    let mut registered_handles = Vec::with_capacity(role_colors.len().saturating_mul(4));
+    let mut registered_handles = Vec::with_capacity(role_colors.len().saturating_mul(2));
     for (role, color) in role_colors {
         let set = MaterialSet::create(role, color, foam, phase_seconds, materials);
         set.extend_registry(&mut registered_handles);
         material_sets.push(set);
     }
 
-    let mut entities = Vec::with_capacity(plan.surfaces.len().saturating_add(plan.falls.len()));
-    for surface in plan.surfaces {
-        let style = match surface.flow {
-            LiquidFlowState::Still => MaterialStyle::Still,
-            LiquidFlowState::Current => MaterialStyle::Current,
-            LiquidFlowState::Rapid | LiquidFlowState::Fall => MaterialStyle::Rapid,
-        };
-        let material = material_handle(&material_sets, surface.role, style);
-        let direction = match surface.flow {
-            LiquidFlowState::Still => None,
-            LiquidFlowState::Current | LiquidFlowState::Rapid | LiquidFlowState::Fall => surface
-                .downstream
-                .and_then(|downstream| side_between(surface.position.coord, downstream.coord)),
-        };
-        let transform = cap_transform(surface.position, direction, level_height);
-        let entity = commands
-            .spawn((
-                Mesh3d(cap.clone()),
-                MeshMaterial3d(material),
-                transform,
-                Pickable::IGNORE,
-                NotShadowCaster,
-                Name::new("LiquidCap"),
-            ))
-            .id();
-        entities.push(entity);
-    }
-
-    for (role, geometry) in plan.falls {
+    let mut entities = Vec::with_capacity(cap_batches.len().saturating_add(plan.curtains.len()));
+    for (key, surfaces, geometry) in cap_batches {
         let mesh = meshes.add(geometry.into_mesh());
-        let material = material_handle(&material_sets, role, MaterialStyle::Fall);
+        let material = material_handle(&material_sets, key.role, MaterialStyle::Surface);
         let entity = commands
             .spawn((
                 Mesh3d(mesh),
@@ -435,7 +441,28 @@ pub(crate) fn spawn_presentations(
                 Transform::default(),
                 Pickable::IGNORE,
                 NotShadowCaster,
-                Name::new("LiquidFallCurtain"),
+                LiquidCapBatch { key, surfaces },
+                Name::new("LiquidCap"),
+            ))
+            .id();
+        entities.push(entity);
+    }
+
+    for (key, geometry) in plan.curtains {
+        let mesh = meshes.add(geometry.into_mesh());
+        let material = material_handle(&material_sets, key.role, key.style);
+        let name = match key.style {
+            MaterialStyle::Surface => "LiquidSideCurtain",
+            MaterialStyle::Fall => "LiquidFallCurtain",
+        };
+        let entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                Transform::default(),
+                Pickable::IGNORE,
+                NotShadowCaster,
+                Name::new(name),
             ))
             .id();
         entities.push(entity);
@@ -493,13 +520,32 @@ fn build_presentation_plan(
     }
 
     validate_surface_directions(&surfaces)?;
-    let falls = build_fall_meshes(&surfaces, level_height)?;
+    let curtains = build_curtain_meshes(&surfaces, level_height)?;
     let roles = surfaces.iter().map(|surface| surface.role).collect();
     Ok(PresentationPlan {
         surfaces,
-        falls,
+        curtains,
         roles,
     })
+}
+
+fn batch_liquid_caps(
+    surfaces: &[LiquidSurface],
+) -> BTreeMap<LiquidCapBatchKey, Vec<LiquidSurface>> {
+    let mut batches = BTreeMap::<LiquidCapBatchKey, Vec<LiquidSurface>>::new();
+    for &surface in surfaces {
+        batches
+            .entry(LiquidCapBatchKey {
+                chunk: terrain_chunk_coord(surface.position.coord),
+                role: surface.role,
+            })
+            .or_default()
+            .push(surface);
+    }
+    for batch in batches.values_mut() {
+        batch.sort_by_key(|surface| surface.position);
+    }
+    batches
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -579,15 +625,38 @@ fn validate_surface_directions(surfaces: &[LiquidSurface]) -> Result<(), LiquidP
     Ok(())
 }
 
-fn build_fall_meshes(
+fn build_curtain_meshes(
     surfaces: &[LiquidSurface],
     level_height: f32,
-) -> Result<BTreeMap<FillMaterialRole, RawMesh>, LiquidPresentationError> {
+) -> Result<BTreeMap<LiquidCurtainBatchKey, RawMesh>, LiquidPresentationError> {
+    curtain_strips(surfaces)?
+        .into_iter()
+        .map(|(key, strips)| {
+            let mut geometry = curtain_geometry(&strips, level_height)?;
+            if key.role == FillMaterialRole::Lava && key.style == MaterialStyle::Fall {
+                append_lava_landing_splashes(&mut geometry, &strips, level_height)?;
+            }
+            geometry.validate_finite()?;
+            Ok((key, geometry))
+        })
+        .collect()
+}
+
+/// Resolves every visible vertical liquid boundary exactly once.
+///
+/// Semantic downstream falls retain the animated Fall material. Other exposed
+/// steps between neighboring surfaces use the same role-wide material as the
+/// horizontal caps, covering the authoritative voxel side without inventing a
+/// second flow direction.
+fn curtain_strips(
+    surfaces: &[LiquidSurface],
+) -> Result<BTreeMap<LiquidCurtainBatchKey, Vec<CurtainStrip>>, LiquidPresentationError> {
     let surface_by_position: BTreeMap<_, _> = surfaces
         .iter()
         .map(|surface| (surface.position, *surface))
         .collect();
-    let mut falls = BTreeMap::<FillMaterialRole, Vec<FallGeometry>>::new();
+    let mut strips = BTreeMap::<LiquidCurtainBatchKey, BTreeSet<CurtainStrip>>::new();
+    let mut semantic_falls = BTreeSet::new();
     for source in surfaces
         .iter()
         .filter(|surface| surface.flow == LiquidFlowState::Fall)
@@ -622,24 +691,68 @@ fn build_fall_meshes(
                 downstream,
             });
         };
-        falls.entry(source.role).or_default().push(FallGeometry {
+        let strip = CurtainStrip {
             source: source.position,
             downstream,
             side,
-        });
+        };
+        semantic_falls.insert((source.position, downstream));
+        strips
+            .entry(LiquidCurtainBatchKey {
+                role: source.role,
+                style: MaterialStyle::Fall,
+            })
+            .or_default()
+            .insert(strip);
     }
 
-    falls
-        .into_iter()
-        .map(|(role, strips)| {
-            let mut geometry = curtain_geometry(&strips, level_height)?;
-            if role == FillMaterialRole::Lava {
-                append_lava_landing_splashes(&mut geometry, &strips, level_height)?;
+    // Presentation can encounter more than one exposed run in a column in
+    // hand-authored fixtures. Only the highest surface can expose an outer side;
+    // lower runs are hidden behind that column's upper presentation.
+    let mut highest_by_coord_role = BTreeMap::<(HexCoord, FillMaterialRole), LiquidSurface>::new();
+    for &surface in surfaces {
+        highest_by_coord_role
+            .entry((surface.position.coord, surface.role))
+            .and_modify(|current| {
+                if surface.position.level > current.position.level {
+                    *current = surface;
+                }
+            })
+            .or_insert(surface);
+    }
+    for &source in highest_by_coord_role.values() {
+        for side in HexSide::ALL {
+            let Some(&downstream) =
+                highest_by_coord_role.get(&(side.neighbor(source.position.coord), source.role))
+            else {
+                continue;
+            };
+            if source.position.level <= downstream.position.level {
+                continue;
             }
-            geometry.validate_finite()?;
-            Ok((role, geometry))
-        })
-        .collect()
+            let style = if semantic_falls.contains(&(source.position, downstream.position)) {
+                MaterialStyle::Fall
+            } else {
+                MaterialStyle::Surface
+            };
+            strips
+                .entry(LiquidCurtainBatchKey {
+                    role: source.role,
+                    style,
+                })
+                .or_default()
+                .insert(CurtainStrip {
+                    source: source.position,
+                    downstream: downstream.position,
+                    side,
+                });
+        }
+    }
+
+    Ok(strips
+        .into_iter()
+        .map(|(key, strips)| (key, strips.into_iter().collect()))
+        .collect())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -686,11 +799,9 @@ fn role_color(
         .ok_or(LiquidPresentationError::MissingSubstance { role })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MaterialStyle {
-    Still,
-    Current,
-    Rapid,
+    Surface,
     Fall,
 }
 
@@ -699,6 +810,8 @@ struct LiquidMaterialProfile {
     flow_velocity: Vec2,
     modulation: Vec4,
     emission: Vec4,
+    perceptual_roughness: f32,
+    reflectance: f32,
     double_sided: bool,
 }
 
@@ -709,17 +822,7 @@ impl LiquidMaterialProfile {
             FillMaterialRole::Lava => 0.0,
         };
         let (flow_velocity, modulation, double_sided) = match style {
-            MaterialStyle::Still => (Vec2::ZERO, Vec4::new(0.08, 0.0, 0.04, 0.65), false),
-            MaterialStyle::Current => (
-                Vec2::new(0.0, CURRENT_FLOW_SPEED),
-                Vec4::new(0.18, 0.05 * foam_scale, 0.08, 0.75),
-                false,
-            ),
-            MaterialStyle::Rapid => (
-                Vec2::new(0.0, RAPID_FLOW_SPEED),
-                Vec4::new(0.28, 0.32 * foam_scale, 0.12, 0.95),
-                false,
-            ),
+            MaterialStyle::Surface => (Vec2::ZERO, Vec4::new(0.08, 0.0, 0.04, 0.65), false),
             MaterialStyle::Fall => (
                 Vec2::new(0.0, FALL_FLOW_SPEED),
                 Vec4::new(0.34, 0.48 * foam_scale, 0.14, 1.25),
@@ -728,23 +831,25 @@ impl LiquidMaterialProfile {
         };
         let emission = match (role, style) {
             (FillMaterialRole::Water, _) => Vec4::ZERO,
-            (FillMaterialRole::Lava, MaterialStyle::Still) => {
+            (FillMaterialRole::Lava, MaterialStyle::Surface) => {
                 Vec4::new(0.20, 0.10, LAVA_STILL_PULSE_RATE, 0.0)
-            }
-            (FillMaterialRole::Lava, MaterialStyle::Current) => {
-                Vec4::new(0.26, 0.10, LAVA_CURRENT_PULSE_RATE, 0.0)
-            }
-            (FillMaterialRole::Lava, MaterialStyle::Rapid) => {
-                Vec4::new(0.34, 0.14, LAVA_RAPID_PULSE_RATE, 0.0)
             }
             (FillMaterialRole::Lava, MaterialStyle::Fall) => {
                 Vec4::new(0.52, 0.18, LAVA_FALL_PULSE_RATE, 0.0)
             }
         };
+        let (perceptual_roughness, reflectance) = match (role, style) {
+            (FillMaterialRole::Water, MaterialStyle::Surface) => {
+                (WATER_SURFACE_ROUGHNESS, WATER_SURFACE_REFLECTANCE)
+            }
+            _ => (LEGACY_LIQUID_ROUGHNESS, LEGACY_LIQUID_REFLECTANCE),
+        };
         Self {
             flow_velocity,
             modulation,
             emission,
+            perceptual_roughness,
+            reflectance,
             double_sided,
         }
     }
@@ -753,9 +858,7 @@ impl LiquidMaterialProfile {
 #[derive(Debug, Clone)]
 struct MaterialSet {
     role: FillMaterialRole,
-    still: Handle<LiquidMaterial>,
-    current: Handle<LiquidMaterial>,
-    rapid: Handle<LiquidMaterial>,
+    surface: Handle<LiquidMaterial>,
     fall: Handle<LiquidMaterial>,
 }
 
@@ -777,27 +880,18 @@ impl MaterialSet {
         };
         Self {
             role,
-            still: add(MaterialStyle::Still),
-            current: add(MaterialStyle::Current),
-            rapid: add(MaterialStyle::Rapid),
+            surface: add(MaterialStyle::Surface),
             fall: add(MaterialStyle::Fall),
         }
     }
 
     fn extend_registry(&self, registry: &mut Vec<Handle<LiquidMaterial>>) {
-        registry.extend([
-            self.still.clone(),
-            self.current.clone(),
-            self.rapid.clone(),
-            self.fall.clone(),
-        ]);
+        registry.extend([self.surface.clone(), self.fall.clone()]);
     }
 
     fn handle(&self, style: MaterialStyle) -> Handle<LiquidMaterial> {
         match style {
-            MaterialStyle::Still => self.still.clone(),
-            MaterialStyle::Current => self.current.clone(),
-            MaterialStyle::Rapid => self.rapid.clone(),
+            MaterialStyle::Surface => self.surface.clone(),
             MaterialStyle::Fall => self.fall.clone(),
         }
     }
@@ -823,10 +917,11 @@ fn liquid_material(
     LiquidMaterial {
         base: StandardMaterial {
             base_color: color,
-            perceptual_roughness: 0.28,
-            reflectance: 0.72,
+            perceptual_roughness: profile.perceptual_roughness,
+            reflectance: profile.reflectance,
             alpha_mode: AlphaMode::Opaque,
             opaque_render_method: OpaqueRendererMethod::Forward,
+            depth_bias: LIQUID_PRESENTATION_DEPTH_BIAS,
             cull_mode: if profile.double_sided {
                 None
             } else {
@@ -913,26 +1008,87 @@ fn cap_geometry() -> RawMesh {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct FallGeometry {
+fn cap_batch_geometry(
+    surfaces: &[LiquidSurface],
+    level_height: f32,
+) -> Result<RawMesh, LiquidPresentationError> {
+    let cap = cap_geometry();
+    let mut batch = RawMesh {
+        positions: Vec::with_capacity(surfaces.len().saturating_mul(cap.positions.len())),
+        normals: Vec::with_capacity(surfaces.len().saturating_mul(cap.normals.len())),
+        uvs: Vec::with_capacity(surfaces.len().saturating_mul(cap.uvs.len())),
+        indices: Vec::with_capacity(surfaces.len().saturating_mul(cap.indices.len())),
+    };
+    for surface in surfaces {
+        let transform = cap_transform(surface.position, level_height);
+        let transformed_positions = cap
+            .positions
+            .iter()
+            .copied()
+            .map(Vec3::from_array)
+            .map(|position| transform.transform_point(position))
+            .collect::<Vec<_>>();
+        let base = u32::try_from(batch.positions.len())
+            .map_err(|_error| LiquidPresentationError::MeshIndexOverflow)?;
+        batch.positions.extend(
+            transformed_positions
+                .iter()
+                .map(|position| position.to_array()),
+        );
+        batch.normals.extend(
+            cap.normals
+                .iter()
+                .copied()
+                .map(Vec3::from_array)
+                .map(|normal| (transform.rotation * normal).to_array()),
+        );
+        batch
+            .uvs
+            .extend(transformed_positions.iter().copied().map(continuous_cap_uv));
+        for &index in &cap.indices {
+            batch.indices.push(
+                base.checked_add(index)
+                    .ok_or(LiquidPresentationError::MeshIndexOverflow)?,
+            );
+        }
+    }
+    batch.validate_finite()?;
+    Ok(batch)
+}
+
+/// Projects every horizontal cap from one absolute world-space UV chart.
+///
+/// The old per-prism `0..=1` UVs restarted the analytic wave at every hex, making
+/// rivers look like independently animated tiles. A role-wide material plus
+/// absolute coordinates gives both vertices of every shared edge identical UVs,
+/// including at flow turns, state changes, and chunk boundaries.
+fn continuous_cap_uv(world_position: Vec3) -> [f32; 2] {
+    [
+        world_position.z / (2.0 * HEX_CIRCUMRADIUS),
+        world_position.x / (2.0 * HEX_INRADIUS),
+    ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CurtainStrip {
     source: TilePos,
     downstream: TilePos,
     side: HexSide,
 }
 
 fn curtain_geometry(
-    falls: &[FallGeometry],
+    strips: &[CurtainStrip],
     level_height: f32,
 ) -> Result<RawMesh, LiquidPresentationError> {
     let mut mesh = RawMesh::default();
-    for fall in falls {
+    for strip in strips {
         let base = u32::try_from(mesh.positions.len())
             .map_err(|_error| LiquidPresentationError::MeshIndexOverflow)?;
-        let top_y = surface_y(fall.source.level, level_height);
-        let bottom_y = surface_y(fall.downstream.level, level_height);
+        let top_y = surface_y(strip.source.level, level_height);
+        let bottom_y = surface_y(strip.downstream.level, level_height);
         let height = top_y - bottom_y;
-        let rotation = side_rotation(fall.side);
-        let center = fall.source.coord.to_world(0.0);
+        let rotation = side_rotation(strip.side);
+        let center = strip.source.coord.to_world(0.0);
         let normal = rotation * Vec3::X;
         for (x, y, z, uv) in [
             (
@@ -974,15 +1130,15 @@ fn curtain_geometry(
 
 fn append_lava_landing_splashes(
     mesh: &mut RawMesh,
-    falls: &[FallGeometry],
+    strips: &[CurtainStrip],
     level_height: f32,
 ) -> Result<(), LiquidPresentationError> {
-    for fall in falls {
+    for strip in strips {
         let base = u32::try_from(mesh.positions.len())
             .map_err(|_error| LiquidPresentationError::MeshIndexOverflow)?;
-        let rotation = side_rotation(fall.side);
-        let center = fall.downstream.coord.to_world(0.0);
-        let y = surface_y(fall.downstream.level, level_height) + LAVA_SPLASH_SURFACE_BIAS;
+        let rotation = side_rotation(strip.side);
+        let center = strip.downstream.coord.to_world(0.0);
+        let y = surface_y(strip.downstream.level, level_height) + LAVA_SPLASH_SURFACE_BIAS;
         for (x, z, uv) in [
             (
                 -HEX_INRADIUS + LIQUID_CURTAIN_EDGE_BIAS,
@@ -1008,12 +1164,11 @@ fn append_lava_landing_splashes(
     Ok(())
 }
 
-fn cap_transform(position: TilePos, direction: Option<HexSide>, level_height: f32) -> Transform {
+fn cap_transform(position: TilePos, level_height: f32) -> Transform {
     let translation = position
         .coord
         .to_world(surface_y(position.level, level_height));
-    let rotation = direction.map_or(Quat::IDENTITY, side_rotation);
-    Transform::from_translation(translation).with_rotation(rotation)
+    Transform::from_translation(translation)
 }
 
 fn surface_y(level: Level, level_height: f32) -> f32 {
@@ -1052,6 +1207,7 @@ fn side_between(source: HexCoord, target: HexCoord) -> Option<HexSide> {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::world::CommandQueue;
     use bevy::platform::collections::HashMap;
     use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1135,12 +1291,8 @@ mod tests {
     #[test]
     fn phase_wrap_is_a_common_period_for_every_authored_rate() {
         for rate in [
-            CURRENT_FLOW_SPEED,
-            RAPID_FLOW_SPEED,
             FALL_FLOW_SPEED,
             LAVA_STILL_PULSE_RATE,
-            LAVA_CURRENT_PULSE_RATE,
-            LAVA_RAPID_PULSE_RATE,
             LAVA_FALL_PULSE_RATE,
             SECONDARY_WAVE_PHASE_RATE,
         ] {
@@ -1163,7 +1315,7 @@ mod tests {
         let mut handles = Vec::new();
         set.extend_registry(&mut handles);
 
-        assert_eq!(handles.len(), 4);
+        assert_eq!(handles.len(), 2);
         for handle in handles {
             let material = materials
                 .get(&handle)
@@ -1214,7 +1366,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_mesh_has_upward_triangles_and_downstream_uv_axis() {
+    fn cap_mesh_has_upward_triangles_and_complete_vertex_attributes() {
         let mesh = cap_geometry();
         assert_eq!(mesh.positions.len(), 7);
         assert_eq!(mesh.normals, vec![[0.0, 1.0, 0.0]; 7]);
@@ -1237,13 +1389,240 @@ mod tests {
             let c = Vec3::from_array(c);
             assert!((b - a).cross(c - a).y > 0.0);
         }
-        let Some([_west_cross, west]) = mesh.uvs.get(3).copied() else {
-            unreachable!("cap contains its west UV")
+        assert_eq!(mesh.uvs.len(), mesh.positions.len());
+    }
+
+    #[test]
+    fn liquid_caps_batch_by_euclidean_chunk_and_role_only() {
+        let still = |q, role| LiquidSurface {
+            position: TilePos::new(HexCoord::from_axial(q, 0), 4),
+            role,
+            flow: LiquidFlowState::Still,
+            downstream: None,
         };
-        let Some([_east_cross, east]) = mesh.uvs.get(5).copied() else {
-            unreachable!("cap contains its east UV")
+        let moving = |q, level, role, flow| LiquidSurface {
+            position: TilePos::new(HexCoord::from_axial(q, 0), level),
+            role,
+            flow,
+            downstream: Some(TilePos::new(
+                HexCoord::from_axial(q + 1, 0),
+                level.saturating_sub(4),
+            )),
         };
-        assert!(west < east, "local +V must point East/downstream");
+        let surfaces = vec![
+            still(-17, FillMaterialRole::Water),
+            still(-16, FillMaterialRole::Water),
+            still(-1, FillMaterialRole::Water),
+            moving(0, 4, FillMaterialRole::Water, LiquidFlowState::Current),
+            moving(2, 8, FillMaterialRole::Water, LiquidFlowState::Rapid),
+            moving(4, 8, FillMaterialRole::Water, LiquidFlowState::Fall),
+            still(6, FillMaterialRole::Lava),
+        ];
+
+        let batches = batch_liquid_caps(&surfaces);
+        assert_eq!(batches.len(), 4);
+        assert_eq!(
+            batches
+                .keys()
+                .map(|key| (key.chunk.q, key.chunk.r, key.role))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (-2, 0, FillMaterialRole::Water),
+                (-1, 0, FillMaterialRole::Water),
+                (0, 0, FillMaterialRole::Lava),
+                (0, 0, FillMaterialRole::Water),
+            ])
+        );
+        assert_eq!(
+            batches
+                .get(&LiquidCapBatchKey {
+                    chunk: TerrainChunkCoord { q: 0, r: 0 },
+                    role: FillMaterialRole::Water,
+                })
+                .map(Vec::len),
+            Some(3),
+            "Current, Rapid, and Fall semantics must not split the opaque base surface"
+        );
+        let logical = batches
+            .values()
+            .flatten()
+            .map(|surface| surface.position)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            logical.len(),
+            surfaces.len(),
+            "logical caps may not duplicate"
+        );
+        assert_eq!(
+            logical,
+            surfaces
+                .iter()
+                .map(|surface| surface.position)
+                .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn disconnected_cap_batch_preserves_each_surface_and_flow_orientation() {
+        let east = TilePos::new(HexCoord::from_axial(1, 0), 4);
+        let surfaces = [
+            LiquidSurface {
+                position: TilePos::new(HexCoord::ORIGIN, 4),
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Current,
+                downstream: Some(east),
+            },
+            LiquidSurface {
+                position: TilePos::new(HexCoord::from_axial(15, 15), 7),
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+        ];
+        let mesh = cap_batch_geometry(&surfaces, 0.4).expect("valid disconnected cap batch");
+        assert_eq!(mesh.positions.len(), surfaces.len() * 7);
+        assert_eq!(mesh.normals.len(), surfaces.len() * 7);
+        assert_eq!(mesh.uvs.len(), surfaces.len() * 7);
+        assert_eq!(mesh.indices.len(), surfaces.len() * 18);
+        mesh.validate_finite().expect("batch geometry is finite");
+
+        let expected_first_center =
+            cap_transform(surfaces[0].position, 0.4).transform_point(Vec3::ZERO);
+        assert_vec3_near(Vec3::from_array(mesh.positions[0]), expected_first_center);
+        let expected_second_center =
+            cap_transform(surfaces[1].position, 0.4).transform_point(Vec3::ZERO);
+        assert_vec3_near(Vec3::from_array(mesh.positions[7]), expected_second_center);
+    }
+
+    #[test]
+    fn adjacent_caps_share_world_uvs_across_every_turn_and_chunk_boundary() {
+        for origin in [HexCoord::ORIGIN, HexCoord::from_axial(15, 0)] {
+            for (index, side) in HexSide::ALL.into_iter().enumerate() {
+                let source = TilePos::new(origin, 4);
+                let target = TilePos::new(side.neighbor(origin), 4);
+                let Some(turn) = HexSide::ALL.get((index + 1) % HexSide::ALL.len()).copied() else {
+                    unreachable!("a wrapped side index stays inside the six-side table")
+                };
+                let surfaces = [
+                    LiquidSurface {
+                        position: source,
+                        role: FillMaterialRole::Water,
+                        flow: LiquidFlowState::Current,
+                        downstream: Some(target),
+                    },
+                    LiquidSurface {
+                        position: target,
+                        role: FillMaterialRole::Water,
+                        flow: LiquidFlowState::Rapid,
+                        downstream: Some(TilePos::new(turn.neighbor(target.coord), target.level)),
+                    },
+                ];
+                let mesh = cap_batch_geometry(&surfaces, 0.4)
+                    .expect("adjacent turning flow caps are valid");
+                let mut shared_vertices = 0;
+                for first in 0..7 {
+                    for second in 7..14 {
+                        let first_position = Vec3::from_array(mesh.positions[first]);
+                        let second_position = Vec3::from_array(mesh.positions[second]);
+                        if !first_position.abs_diff_eq(second_position, 1.0e-5) {
+                            continue;
+                        }
+                        shared_vertices += 1;
+                        assert!(Vec2::from_array(mesh.uvs[first])
+                            .abs_diff_eq(Vec2::from_array(mesh.uvs[second]), 1.0e-5));
+                    }
+                }
+                assert_eq!(shared_vertices, 2, "one shared hex edge has two vertices");
+            }
+        }
+    }
+
+    #[test]
+    fn spawned_cap_batches_retain_exact_logical_coverage_and_teardown_cleanly() {
+        let table = liquid_table();
+        let Some(water) = table.id("water") else {
+            unreachable!("test table contains water")
+        };
+        let Some(lava) = table.id("lava") else {
+            unreachable!("test table contains lava")
+        };
+        let positions = [
+            (TilePos::new(HexCoord::from_axial(-17, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(-16, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(-1, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(0, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(16, 0), 0), water),
+            (TilePos::new(HexCoord::from_axial(0, 1), 0), lava),
+        ];
+        let mut map = VoxelMap::new();
+        for &(position, substance) in &positions {
+            map.set(position, substance);
+        }
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<LiquidMaterial>::default();
+        let entities = {
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_presentations(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &map,
+                &table,
+                0.4,
+                0.0,
+                None,
+            )
+            .expect("valid liquid batches should spawn")
+        };
+        queue.apply(&mut world);
+
+        assert_eq!(
+            entities.len(),
+            5,
+            "five chunk/role cap batches are expected and no curtains are needed"
+        );
+        assert_eq!(meshes.len(), entities.len());
+        assert_eq!(
+            materials.len(),
+            4,
+            "water and lava each retain one shared surface and one fall material"
+        );
+        assert_eq!(
+            world.resource::<LiquidMaterialHandles>().handles.len(),
+            materials.len(),
+            "the teardown registry owns every role-wide material handle"
+        );
+        let mut logical = BTreeSet::new();
+        let mut keys = BTreeSet::new();
+        let mut query =
+            world.query::<(&LiquidCapBatch, &Pickable, Has<NotShadowCaster>, &Transform)>();
+        for (batch, pickable, no_shadow, transform) in query.iter(&world) {
+            assert!(keys.insert(batch.key), "duplicate liquid batch key");
+            assert_eq!(*pickable, Pickable::IGNORE);
+            assert!(no_shadow);
+            assert_eq!(*transform, Transform::default());
+            for surface in &batch.surfaces {
+                assert!(
+                    logical.insert(surface.position),
+                    "duplicate logical liquid cap"
+                );
+                assert_eq!(surface.flow, LiquidFlowState::Still);
+            }
+        }
+        assert_eq!(
+            logical,
+            positions
+                .into_iter()
+                .map(|(position, _substance)| position)
+                .collect::<BTreeSet<_>>()
+        );
+
+        for entity in entities {
+            assert!(world.despawn(entity));
+        }
+        assert_eq!(query.iter(&world).count(), 0);
     }
 
     #[test]
@@ -1268,7 +1647,7 @@ mod tests {
         let source = TilePos::new(HexCoord::ORIGIN, 8);
         let downstream = TilePos::new(coord(1, 0, -1), 4);
         let mesh = curtain_geometry(
-            &[FallGeometry {
+            &[CurtainStrip {
                 source,
                 downstream,
                 side: HexSide::East,
@@ -1300,21 +1679,144 @@ mod tests {
     }
 
     #[test]
-    fn lava_profiles_pulse_slowly_when_still_and_brighten_when_falling() {
-        let water = LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Still);
-        assert_eq!(water.emission, Vec4::ZERO);
+    fn every_same_role_exposed_height_edge_gets_one_deduplicated_curtain() {
+        let generic_source = TilePos::new(HexCoord::ORIGIN, 8);
+        let generic_lower = TilePos::new(HexSide::East.neighbor(generic_source.coord), 4);
+        let fall_source = TilePos::new(HexCoord::from_axial(10, 0), 8);
+        let fall_lower = TilePos::new(HexSide::East.neighbor(fall_source.coord), 4);
+        let equal_source = TilePos::new(HexCoord::from_axial(20, 0), 5);
+        let equal_neighbor = TilePos::new(HexSide::East.neighbor(equal_source.coord), 5);
+        let unlike_source = TilePos::new(HexCoord::from_axial(30, 0), 8);
+        let unlike_lower = TilePos::new(HexSide::East.neighbor(unlike_source.coord), 4);
+        let surfaces = [
+            LiquidSurface {
+                position: generic_source,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+            LiquidSurface {
+                position: generic_lower,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+            LiquidSurface {
+                position: fall_source,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Fall,
+                downstream: Some(fall_lower),
+            },
+            LiquidSurface {
+                position: fall_lower,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+            LiquidSurface {
+                position: equal_source,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+            LiquidSurface {
+                position: equal_neighbor,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+            LiquidSurface {
+                position: unlike_source,
+                role: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+            LiquidSurface {
+                position: unlike_lower,
+                role: FillMaterialRole::Lava,
+                flow: LiquidFlowState::Still,
+                downstream: None,
+            },
+        ];
 
-        let still = LiquidMaterialProfile::new(FillMaterialRole::Lava, MaterialStyle::Still);
+        let strips = curtain_strips(&surfaces).expect("valid exposed liquid sides");
+        assert_eq!(strips.len(), 2);
+        assert_eq!(
+            strips[&LiquidCurtainBatchKey {
+                role: FillMaterialRole::Water,
+                style: MaterialStyle::Surface,
+            }],
+            vec![CurtainStrip {
+                source: generic_source,
+                downstream: generic_lower,
+                side: HexSide::East,
+            }]
+        );
+        assert_eq!(
+            strips[&LiquidCurtainBatchKey {
+                role: FillMaterialRole::Water,
+                style: MaterialStyle::Fall,
+            }],
+            vec![CurtainStrip {
+                source: fall_source,
+                downstream: fall_lower,
+                side: HexSide::East,
+            }]
+        );
+
+        let meshes = build_curtain_meshes(&surfaces, 0.4)
+            .expect("every exact exposed edge should materialize");
+        assert!(meshes
+            .values()
+            .all(|mesh| mesh.positions.len() == 4 && mesh.indices.len() == 6));
+    }
+
+    #[test]
+    fn role_wide_surface_profiles_stay_subtle_and_falls_brighten() {
+        let water = LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Surface);
+        assert_eq!(water.emission, Vec4::ZERO);
+        assert_f32_near(water.perceptual_roughness, WATER_SURFACE_ROUGHNESS);
+        assert_f32_near(water.reflectance, WATER_SURFACE_REFLECTANCE);
+        assert!(
+            water.perceptual_roughness - water.modulation.z >= 0.55,
+            "animated ripples must not turn a flat water cap back into a broad planar mirror"
+        );
+
+        let still = LiquidMaterialProfile::new(FillMaterialRole::Lava, MaterialStyle::Surface);
         let fall = LiquidMaterialProfile::new(FillMaterialRole::Lava, MaterialStyle::Fall);
         assert_eq!(still.flow_velocity, Vec2::ZERO);
         assert_f32_near(still.emission.z, LAVA_STILL_PULSE_RATE);
         assert!(still.emission.y > 0.0);
         assert_f32_near(fall.flow_velocity.y, FALL_FLOW_SPEED);
-        assert!(fall.flow_velocity.y > RAPID_FLOW_SPEED);
+        assert!(fall.flow_velocity.y > still.flow_velocity.y);
         assert!(fall.emission.x > still.emission.x);
         assert!(fall.emission.y > still.emission.y);
         assert!(fall.emission.z > still.emission.z);
         assert!(fall.double_sided);
+        assert_f32_near(still.perceptual_roughness, LEGACY_LIQUID_ROUGHNESS);
+        assert_f32_near(still.reflectance, LEGACY_LIQUID_REFLECTANCE);
+        assert_f32_near(fall.perceptual_roughness, LEGACY_LIQUID_ROUGHNESS);
+        assert_f32_near(fall.reflectance, LEGACY_LIQUID_REFLECTANCE);
+    }
+
+    #[test]
+    fn liquid_material_uses_depth_precedence_above_the_opaque_voxel_surface() {
+        let material = liquid_material(
+            Color::srgb(0.08, 0.32, 0.65),
+            0.0,
+            Color::srgb(0.90, 0.96, 0.99),
+            LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Surface),
+        );
+        assert!(LIQUID_PRESENTATION_DEPTH_BIAS > 0.0);
+        assert!(cap_bias(0.4) > 0.0 && cap_bias(0.4) < 0.4);
+        assert_f32_near(material.base.depth_bias, LIQUID_PRESENTATION_DEPTH_BIAS);
+        assert_f32_near(material.base.perceptual_roughness, WATER_SURFACE_ROUGHNESS);
+        assert_f32_near(material.base.reflectance, WATER_SURFACE_REFLECTANCE);
+        assert_eq!(material.base.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(
+            material.base.opaque_render_method,
+            OpaqueRendererMethod::Forward
+        );
     }
 
     #[test]
@@ -1338,21 +1840,27 @@ mod tests {
             ]
         };
 
-        let water = build_fall_meshes(&surfaces(FillMaterialRole::Water), 0.4)
+        let water = build_curtain_meshes(&surfaces(FillMaterialRole::Water), 0.4)
             .expect("water curtain should remain valid");
         let water = water
-            .get(&FillMaterialRole::Water)
+            .get(&LiquidCurtainBatchKey {
+                role: FillMaterialRole::Water,
+                style: MaterialStyle::Fall,
+            })
             .expect("water curtain should exist");
         assert_eq!(water.positions.len(), 4);
         assert_eq!(water.indices.len(), 6);
 
-        let first = build_fall_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
+        let first = build_curtain_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
             .expect("lava fall effect should be valid");
-        let second = build_fall_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
+        let second = build_curtain_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
             .expect("lava fall effect should be repeatable");
         assert_eq!(first, second);
         let lava = first
-            .get(&FillMaterialRole::Lava)
+            .get(&LiquidCurtainBatchKey {
+                role: FillMaterialRole::Lava,
+                style: MaterialStyle::Fall,
+            })
             .expect("lava fall effect should exist");
         assert_eq!(lava.positions.len(), 8);
         assert_eq!(lava.indices.len(), 12);
@@ -1379,7 +1887,7 @@ mod tests {
             downstream: Some(TilePos::new(coord(1, 0, -1), 4)),
         };
         assert!(matches!(
-            build_fall_meshes(&[source], 0.4),
+            build_curtain_meshes(&[source], 0.4),
             Err(LiquidPresentationError::MissingFallLanding { .. })
         ));
     }
@@ -1405,7 +1913,7 @@ mod tests {
                 downstream: None,
             }]
         );
-        assert!(plan.falls.is_empty());
+        assert!(plan.curtains.is_empty());
     }
 
     #[test]

@@ -1,0 +1,165 @@
+// Crystal Mountain: one radius-77 Macro world whose only ordinary route from the
+// western foot to the high Forest basin passes through a four-wide level-6 tunnel
+// and the complete 144-level Crystal Ascent.
+(
+    grid_radius: 77,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Macro((
+            macro_radius: 3,
+            approach_depth: 3,
+            instances: [
+                // The landmark keeps its approved world-origin placement and claims
+                // only the exact radius-32 authored site around these seven logical
+                // cells. Composite fringe fill belongs to the level-150 summit.
+                (
+                    name: "crystal-ascent",
+                    cells: [
+                        (x: 0, y: 0, z: 0),
+                        (x: 1, y: 0, z: -1),
+                        (x: 1, y: -1, z: 0),
+                        (x: 0, y: -1, z: 1),
+                        (x: -1, y: 0, z: 1),
+                        (x: -1, y: 1, z: 0),
+                        (x: 0, y: 1, z: -1),
+                    ],
+                    environment: TemperateGrassland,
+                    recipe: CrystalAscent((
+                        base_level: 6,
+                        rise_levels: 144,
+                    )),
+                    rotation_turns: 0,
+                    access: Land,
+                    elevation: (low: 6, high: 150, grade_axis: East),
+                ),
+                // Five consecutive upper radius-two cells form one connected
+                // temperate basin around the summit clearing.
+                (
+                    name: "summit-forest",
+                    cells: [
+                        (x: 2, y: 0, z: -2),
+                        (x: 1, y: 1, z: -2),
+                        (x: 0, y: 2, z: -2),
+                        (x: -1, y: 2, z: -1),
+                        (x: -2, y: 2, z: 0),
+                    ],
+                    environment: TemperateGrassland,
+                    recipe: Forest(()),
+                    rotation_turns: 0,
+                    access: Land,
+                    elevation: (low: 149, high: 151, grade_axis: NorthWest),
+                ),
+                // The remainder of radius two is one inner mountain wall. Its
+                // nineteen-level scarp above the basin prevents ordinary surface
+                // adjacency outside the one explicit summit port.
+                (
+                    name: "inner-mountain",
+                    cells: [
+                        (x: -2, y: 1, z: 1),
+                        (x: -2, y: 0, z: 2),
+                        (x: -1, y: -1, z: 2),
+                        (x: 0, y: -2, z: 2),
+                        (x: 1, y: -2, z: 1),
+                        (x: 2, y: -2, z: 0),
+                        (x: 2, y: -1, z: -1),
+                    ],
+                    environment: Alpine,
+                    recipe: Mountains((
+                        base_level: 170,
+                        relief: 14,
+                        peak_count: 7,
+                    )),
+                    rotation_turns: 0,
+                    access: Scenic,
+                    elevation: (low: 170, high: 184, grade_axis: West),
+                ),
+                // The complete radius-three ring climbs from the level-6 western
+                // foot into the map's highest enclosing ridge. The Mountain cap
+                // still fixes the crown at 192; the broad datum supplies the
+                // actual exterior slope instead of a sheer map-edge pedestal.
+                (
+                    name: "outer-mountain",
+                    cells: [
+                        (x: 3, y: 0, z: -3),
+                        (x: 2, y: 1, z: -3),
+                        (x: 1, y: 2, z: -3),
+                        (x: 0, y: 3, z: -3),
+                        (x: -1, y: 3, z: -2),
+                        (x: -2, y: 3, z: -1),
+                        (x: -3, y: 3, z: 0),
+                        (x: -3, y: 2, z: 1),
+                        (x: -3, y: 1, z: 2),
+                        (x: -3, y: 0, z: 3),
+                        (x: -2, y: -1, z: 3),
+                        (x: -1, y: -2, z: 3),
+                        (x: 0, y: -3, z: 3),
+                        (x: 1, y: -3, z: 2),
+                        (x: 2, y: -3, z: 1),
+                        (x: 3, y: -3, z: 0),
+                        (x: 3, y: -2, z: -1),
+                        (x: 3, y: -1, z: -2),
+                    ],
+                    environment: Alpine,
+                    recipe: Mountains((
+                        base_level: 178,
+                        relief: 14,
+                        peak_count: 7,
+                    )),
+                    rotation_turns: 0,
+                    access: Scenic,
+                    elevation: (low: 6, high: 192, grade_axis: East),
+                ),
+            ],
+            liquid_connections: [],
+            headwaters: [],
+            walker_connections: [
+                (
+                    first_instance: "crystal-ascent",
+                    second_instance: "summit-forest",
+                    width: 4,
+                    level: 150,
+                ),
+            ],
+            spanning_features: [
+                Tunnel((
+                    name: "crystal_mountain.tunnel",
+                    canonical_route: true,
+                    instance_route: [
+                        "outer-mountain",
+                        "inner-mountain",
+                        "crystal-ascent",
+                    ],
+                    boundary_terminal: (
+                        instance: "outer-mountain",
+                        side: West,
+                    ),
+                    destination_anchor: (
+                        instance: "crystal-ascent",
+                        anchor: "crystal_ascent.lower_entry",
+                    ),
+                    floor_level: 6,
+                    width: 4,
+                    clearance: 6,
+                    roof_thickness: 3,
+                )),
+            ],
+            // Macro-local anchors are explicitly re-exported under the landmark's
+            // stable standalone names. World-owned tunnel and basin review anchors
+            // are published directly by the combined constructor.
+            anchor_aliases: [
+                (alias: "crystal_ascent.lower_entry", instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+                (alias: "crystal_ascent.bottom_chamber", instance: "crystal-ascent", anchor: "crystal_ascent.bottom_chamber"),
+                (alias: "crystal_ascent.mid_flight", instance: "crystal-ascent", anchor: "crystal_ascent.mid_flight"),
+                (alias: "crystal_ascent.corner_landing", instance: "crystal-ascent", anchor: "crystal_ascent.corner_landing"),
+                (alias: "crystal_ascent.upper_contraction", instance: "crystal-ascent", anchor: "crystal_ascent.upper_contraction"),
+                (alias: "crystal_ascent.upper_exit", instance: "crystal-ascent", anchor: "crystal_ascent.upper_exit"),
+                (alias: "crystal_mountain.ascent_threshold", instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+                (alias: "crystal_mountain.summit_exit", instance: "crystal-ascent", anchor: "crystal_ascent.upper_exit"),
+            ],
+            // The one canonical spanning feature supplies the complete ordinary
+            // route; no legacy surface critical route is inferred.
+            critical_route: [],
+        )),
+    )),
+)

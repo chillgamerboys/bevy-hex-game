@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "candidate_id": "l06-high-contrast-noon",
+  "base": "default-cycle",
+  "noon_overrides": {
+    "direct_illuminance": 14000.0,
+    "ambient_brightness": 32.0,
+    "ambient_color": [1.0, 0.98, 0.95],
+    "sky_light_intensity": 0.0,
+    "ground_color": [0.24, 0.20, 0.16]
+  }
+}

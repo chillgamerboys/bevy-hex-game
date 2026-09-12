@@ -1193,7 +1193,7 @@ mod structural_tests {
             let view = sandbox_view(SandboxRoute::MapBrowser);
             assert_eq!(
                 view.maps.len(),
-                18,
+                26,
                 "the full shipped catalog is the fixture"
             );
             assert_eq!(
@@ -1213,7 +1213,7 @@ mod structural_tests {
                     .iter()
                     .filter(|node| node.name.starts_with("Inspect "))
                     .count(),
-                18
+                26
             );
             let final_row = snapshot
                 .nodes

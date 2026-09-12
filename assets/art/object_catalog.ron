@@ -1,6 +1,7 @@
 (
     schema_version: 1,
     objects: [
+        "plant/date-palm",
         "plant/old-growth",
         "plant/small-broadleaf",
         "plant/snowy-old-growth",

@@ -43,22 +43,23 @@ use hex_core::{
     HexSpan, HexTile, IlluminationLevel, InteriorRegionId, InteriorRegions, Level, MapAnchorId,
     MapAnchors, MapViewHint, PausableSystems, Pause, PerceptionSystems, PresentationOcclusion,
     ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainBatchId, TerrainEdit, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
-    TerrainImpactRejection, TerrainImpactResult, TerrainReady, TerrainSystems, TerrainVoxelHealth,
-    TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
+    TerrainBatchId, TerrainChunkRoot, TerrainEdit, TerrainImpact, TerrainImpactDisposition,
+    TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainReady,
+    TerrainRenderBatch, TerrainSystems, TerrainVoxelHealth, TilePos, TraversalBlockers,
+    TreeOccluder, MAX_HEADROOM,
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MacroHeadwaterSettings,
     MacroLiquidConnectionSettings, MacroMetrics, MapSettings, MountainRangeMetrics,
-    MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring19Metrics, Ring7Metrics,
-    SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
-    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
-    V3CrystalAscentSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings,
-    V3FortSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings,
-    VoxelMap,
+    MountainsSettings, OceanArchipelagoMetrics, PatchEdgeContractSettings, PatchEdgesSettings,
+    PatchMaskSettings, PatchSpec, PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics,
+    ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings,
+    Ring19Metrics, Ring7Metrics, SandyIsletsReportMetrics, SkyIslandsSettings, SubstanceRun,
+    TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings,
+    V2RecipeSettings, V3CavesSettings, V3CrystalAscentSettings, V3DeepForestSettings,
+    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
+    V3RecipeSettings, V3WaterfallSettings, VoxelMap, WoodedIslandReportMetrics,
 };
 use hex_test_support::{enter_gameplay, TestAppBuilder};
 
@@ -705,6 +706,78 @@ fn tile_count(app: &mut App) -> usize {
         .query_filtered::<Entity, With<HexTile>>()
         .iter(app.world())
         .count()
+}
+
+fn terrain_chunk_key(coord: HexCoord) -> (i32, i32) {
+    (coord.x().div_euclid(16), coord.y().div_euclid(16))
+}
+
+fn terrain_chunk_roots(app: &mut App) -> BTreeMap<(i32, i32), Entity> {
+    let world = app.world_mut();
+    let expected = world
+        .resource::<VoxelMap>()
+        .columns()
+        .map(|(coord, _column)| terrain_chunk_key(coord))
+        .collect::<BTreeSet<_>>();
+    let grid = world
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(world)
+        .expect("the active terrain grid should be unique");
+    let mut roots = world.query::<(Entity, &TerrainChunkRoot, Option<&ChildOf>)>();
+    let mut found = BTreeMap::new();
+    for (entity, chunk, parent) in roots.iter(world) {
+        let parent = parent.expect("every terrain chunk root should have a parent");
+        assert_eq!(
+            parent.parent(),
+            grid,
+            "every terrain chunk root should belong to the active grid"
+        );
+        let key = (chunk.q, chunk.r);
+        assert_eq!(
+            found.insert(key, entity),
+            None,
+            "the active grid published duplicate chunk root {key:?}"
+        );
+    }
+    assert_eq!(
+        found.len(),
+        expected.len(),
+        "the active grid published the wrong number of chunk roots"
+    );
+    assert_eq!(
+        found.keys().copied().collect::<BTreeSet<_>>(),
+        expected,
+        "the active grid's chunk roots disagree with resident voxel storage"
+    );
+    found
+}
+
+fn terrain_render_batches_by_chunk(app: &mut App) -> BTreeMap<(i32, i32), BTreeSet<Entity>> {
+    let world = app.world_mut();
+    let mut batches = world.query::<(Entity, &TerrainRenderBatch)>();
+    let mut by_chunk = BTreeMap::<_, BTreeSet<_>>::new();
+    for (entity, batch) in batches.iter(world) {
+        let chunk = batch.chunk();
+        by_chunk
+            .entry((chunk.q, chunk.r))
+            .or_default()
+            .insert(entity);
+    }
+    by_chunk
+}
+
+fn terrain_render_meshes_by_chunk(app: &mut App) -> BTreeMap<(i32, i32), BTreeSet<AssetId<Mesh>>> {
+    let world = app.world_mut();
+    let mut batches = world.query::<(&TerrainRenderBatch, &Mesh3d)>();
+    let mut by_chunk = BTreeMap::<_, BTreeSet<_>>::new();
+    for (batch, mesh) in batches.iter(world) {
+        let chunk = batch.chunk();
+        by_chunk
+            .entry((chunk.q, chunk.r))
+            .or_default()
+            .insert(mesh.0.id());
+    }
+    by_chunk
 }
 
 fn published_run_bounds(app: &mut App, coord: HexCoord) -> BTreeSet<(Level, Level, SubstanceId)> {

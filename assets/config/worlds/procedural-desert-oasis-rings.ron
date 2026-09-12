@@ -1,0 +1,141 @@
+// Fixed V3 nineteen-region desert review world: one local oasis, an inner ring
+// of six dunes, and an alternating outer ring of dunes and open desert.
+(
+    grid_radius: 55,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Ring19((
+            profile: DesertOasis,
+            regions: [
+                (
+                    environment: Arid,
+                    recipe: Oasis((
+                        base_level: 15,
+                        pool_radius: 5,
+                        palm_count: 12,
+                        grass_ring_width: 3,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 4, ridge_spacing: 10, ridge_count: 3)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 4, ridge_spacing: 10, ridge_count: 3)),
+                    overlays: [],
+                    rotation_turns: 1,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 4, ridge_spacing: 10, ridge_count: 3)),
+                    overlays: [],
+                    rotation_turns: 2,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 4, ridge_spacing: 10, ridge_count: 3)),
+                    overlays: [],
+                    rotation_turns: 3,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 4, ridge_spacing: 10, ridge_count: 3)),
+                    overlays: [],
+                    rotation_turns: 4,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 4, ridge_spacing: 10, ridge_count: 3)),
+                    overlays: [],
+                    rotation_turns: 5,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 4)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: DesertPlain((base_level: 15, max_relief: 2)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 4)),
+                    overlays: [],
+                    rotation_turns: 1,
+                ),
+                (
+                    environment: Arid,
+                    recipe: DesertPlain((base_level: 15, max_relief: 2)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 4)),
+                    overlays: [],
+                    rotation_turns: 2,
+                ),
+                (
+                    environment: Arid,
+                    recipe: DesertPlain((base_level: 15, max_relief: 2)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 4)),
+                    overlays: [],
+                    rotation_turns: 3,
+                ),
+                (
+                    environment: Arid,
+                    recipe: DesertPlain((base_level: 15, max_relief: 2)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 4)),
+                    overlays: [],
+                    rotation_turns: 4,
+                ),
+                (
+                    environment: Arid,
+                    recipe: DesertPlain((base_level: 15, max_relief: 2)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                (
+                    environment: Arid,
+                    recipe: Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 4)),
+                    overlays: [],
+                    rotation_turns: 5,
+                ),
+                (
+                    environment: Arid,
+                    recipe: DesertPlain((base_level: 15, max_relief: 2)),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+            ],
+            seam_defaults: (
+                elevation: (preferred: 17, min: 15, max: 19),
+                walker: (count: 2, width: 2),
+                liquid: Dry,
+                approach_depth: 3,
+            ),
+            liquid_connections: [],
+            boundary_outlets: [],
+        )),
+    )),
+)

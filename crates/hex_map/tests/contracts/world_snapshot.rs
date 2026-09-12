@@ -135,6 +135,126 @@ fn assert_round_trip(name: &str, mut app: App) {
 
 #[expect(
     clippy::panic,
+    reason = "the cache-equivalence helper reports the exact edit fixture that drifted"
+)]
+fn assert_current_snapshot_matches_live_export(context: &str, app: &App) {
+    let live = export_world_snapshot_v1(app.world())
+        .unwrap_or_else(|error| panic!("{context} live world should export: {error}"));
+    let current = app
+        .world()
+        .get_resource::<CurrentWorldSnapshotV1>()
+        .unwrap_or_else(|| panic!("{context} should retain a current snapshot"));
+    assert_eq!(
+        current.snapshot(),
+        &live,
+        "{context} incremental cache drifted from a fresh complete export"
+    );
+}
+
+#[test]
+fn accepted_multi_column_edits_refresh_the_current_snapshot_in_the_same_update() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let targets = {
+        let world = app.world();
+        let map = world.resource::<VoxelMap>();
+        let table = world.resource::<SubstanceTable>();
+        map.columns()
+            .filter_map(|(coord, column)| {
+                hex_map::runs(column)
+                    .into_iter()
+                    .rev()
+                    .find(|run| table.is_diggable(run.substance))
+                    .map(|run| TilePos::new(coord, run.top.saturating_sub(1)))
+            })
+            .take(2)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(targets.len(), 2, "fixture should expose two edit columns");
+    for target in targets {
+        app.world_mut()
+            .write_message(TerrainEdit::Clear { pos: target });
+    }
+
+    app.update();
+
+    assert_current_snapshot_matches_live_export("multi-column direct edit", &app);
+}
+
+#[test]
+fn retiring_a_nonblocking_feature_updates_only_its_object_consequence() {
+    let mut app = v3_forest_app();
+    enter_gameplay(&mut app);
+    let before = app
+        .world()
+        .resource::<CurrentWorldSnapshotV1>()
+        .snapshot()
+        .clone();
+    let grass_root = feature_roots(&mut app)
+        .into_iter()
+        .find_map(|(_entity, kind, position, _parent)| {
+            (kind == "GeneratedTallGrass").then_some(position)
+        })
+        .expect("Forest should publish presentation-only grass");
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: grass_root });
+    app.update();
+
+    assert_current_snapshot_matches_live_export("retired grass feature", &app);
+    let after = app.world().resource::<CurrentWorldSnapshotV1>().snapshot();
+    assert_eq!(after.lights, before.lights);
+    assert_eq!(after.liquids, before.liquids);
+    assert_eq!(after.objects.len(), before.objects.len().saturating_sub(1));
+}
+
+#[test]
+fn editing_heart_footing_reprojects_its_contextual_object_blockers() {
+    let mut app = v3_crystal_ascent_app();
+    enter_gameplay(&mut app);
+    let before = app
+        .world()
+        .resource::<CurrentWorldSnapshotV1>()
+        .snapshot()
+        .clone();
+    let heart_before = before
+        .objects
+        .iter()
+        .find(|object| object.asset_identity.as_str() == "prop/crystal-cathedral-heart")
+        .expect("Crystal Ascent should snapshot the cathedral heart");
+    let target = {
+        let world = app.world();
+        let map = world.resource::<VoxelMap>();
+        let table = world.resource::<SubstanceTable>();
+        heart_before
+            .blockers
+            .iter()
+            .copied()
+            .find(|position| {
+                position.coord != heart_before.root.coord && table.is_diggable(map.get(*position))
+            })
+            .expect("heart footprint should expose editable contextual footing")
+    };
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+
+    assert!(app.world().resource::<VoxelMap>().get(target).is_air());
+    assert_current_snapshot_matches_live_export("heart-footing edit", &app);
+    let after = app.world().resource::<CurrentWorldSnapshotV1>().snapshot();
+    let heart_after = after
+        .objects
+        .iter()
+        .find(|object| object.asset_identity.as_str() == "prop/crystal-cathedral-heart")
+        .expect("edited Crystal Ascent should retain the heart object");
+    assert_ne!(heart_after.blockers, heart_before.blockers);
+    assert_eq!(after.lights, before.lights);
+    assert_eq!(after.liquids, before.liquids);
+}
+
+#[expect(
+    clippy::panic,
     reason = "the shared test helper reports the exact shipped fixture that violated bootstrap"
 )]
 fn assert_campaign_process_round_trip(name: &str, fixture: fn() -> App) {
@@ -229,6 +349,74 @@ fn campaign_bootstrap_restores_every_world_family_without_regeneration() {
     for (name, fixture) in fixtures {
         assert_campaign_process_round_trip(name, fixture);
     }
+}
+
+#[test]
+fn legacy_v1_snapshot_repartitions_negative_columns_without_wire_chunk_metadata() {
+    let mut source = test_app();
+    enter_gameplay(&mut source);
+    let snapshot = export_world_snapshot_v1(source.world())
+        .expect("the legacy V1-compatible source world should export");
+    assert_eq!(
+        snapshot.version, 1,
+        "the fixture exercises the V1 wire shape"
+    );
+
+    let mut expected_columns_by_chunk = BTreeMap::<(i32, i32), usize>::new();
+    for column in snapshot.columns.as_slice() {
+        *expected_columns_by_chunk
+            .entry(terrain_chunk_key(column.coord))
+            .or_default() += 1;
+    }
+    assert!(
+        expected_columns_by_chunk.len() > 1,
+        "the fixture must cross a resident chunk boundary"
+    );
+    assert!(
+        expected_columns_by_chunk
+            .keys()
+            .any(|(q, r)| *q < 0 || *r < 0),
+        "the fixture must exercise Euclidean partitioning of negative coordinates"
+    );
+    assert!(
+        expected_columns_by_chunk
+            .values()
+            .all(|count| *count <= 16 * 16),
+        "fixed resident chunks cannot exceed 256 columns"
+    );
+
+    // A fresh process boundary proves that no private chunk metadata survives from
+    // the exporting VoxelMap. V1 carries exact world columns only; import derives the
+    // current 16x16 resident partition from those stable coordinates.
+    drop(source);
+    let mut restored = test_app();
+    restored.world_mut().remove_resource::<ResolvedMapSeed>();
+    restored.insert_resource(PendingCampaignWorldSnapshotV2::new(snapshot.clone()));
+    enter_gameplay(&mut restored);
+
+    assert!(restored.world().contains_resource::<TerrainReady>());
+    let roots = terrain_chunk_roots(&mut restored);
+    assert_eq!(
+        roots.keys().copied().collect::<BTreeSet<_>>(),
+        expected_columns_by_chunk
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        "V1 import must derive the exact resident chunk-key set"
+    );
+    let mut actual_columns_by_chunk = BTreeMap::<(i32, i32), usize>::new();
+    for (coord, _column) in restored.world().resource::<VoxelMap>().columns() {
+        *actual_columns_by_chunk
+            .entry(terrain_chunk_key(coord))
+            .or_default() += 1;
+    }
+    assert_eq!(actual_columns_by_chunk, expected_columns_by_chunk);
+    assert_eq!(
+        export_world_snapshot_v1(restored.world())
+            .expect("the repartitioned world should re-export"),
+        snapshot,
+        "private chunk partitioning must not alter the V1 wire authority"
+    );
 }
 
 #[test]

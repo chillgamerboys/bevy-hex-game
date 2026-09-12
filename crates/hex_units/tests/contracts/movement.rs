@@ -387,13 +387,13 @@ fn the_player_spawns_on_the_surface() {
 }
 
 #[test]
-fn shipped_unit_swatches_preserve_the_pre_migration_colors() {
+fn shipped_unit_swatches_use_the_selected_high_separation_colors() {
     let palette: ArtPalette = ron::from_str(include_str!("../../../../assets/art/palette.ron"))
         .expect("the shipped art palette should parse");
 
     for (id, expected) in [
-        ("unit/player", [1.0_f32, 0.2, 0.2]),
-        ("unit/hostile", [0.25_f32, 0.45, 0.9]),
+        ("unit/player", [1.0_f32, 0.07, 0.05]),
+        ("unit/hostile", [0.13_f32, 0.32, 1.0]),
     ] {
         let actual = palette
             .get_str(id)
@@ -403,7 +403,7 @@ fn shipped_unit_swatches_preserve_the_pre_migration_colors() {
         assert_eq!(
             actual.map(f32::to_bits),
             expected.map(f32::to_bits),
-            "{id} changed during the zero-delta palette migration"
+            "{id} differs from the selected high-separation palette"
         );
     }
 }

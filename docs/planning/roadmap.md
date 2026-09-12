@@ -40,6 +40,7 @@ combined school acceptance.
 
 | Epic | Scope | Owner |
 |---|---|---|
+| Reusable V4 world platform | **Implemented on an unmerged review branch:** [PR #220](https://github.com/chillgamerboys/bevy-hex-game/pull/220) supplies data-authored regional geography, shared boundaries, paged terrain, exact local queries/edits, fresh partition persistence and an explicit explorer. One/two/seven Grand-sized fixtures compile through the same workflow. Full acceptance remains separate: strict baseline CI, native motion, human authoring hours, cold-storage and long-session measurements. Production online gameplay, encounter orchestration and indefinite procedural geography remain future consumers | map / shared integration |
 | Terrain magic | **Partial / In Progress:** permanent `Single`/`Column` stone evocation, the #175/#178 world resolver, answer schema, and ordering foundation, and #180's explicit Impact/Fireball content, paid monotonic `TerrainImpact` emission, matching-outcome consumption, fresh occupancy/movement ordering, deterministic unsupported-actor settlement, authority adoption, and typed frozen failure are live. Remaining HEX-19 work keeps authored Interior membership with no dynamic cave daylight and defers area construction, enchantment-bound terrain, fluid dynamics, feature destruction, and terrain save/restore persistence | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | **Partial / In Progress:** #162's exact `Direct`/`Arc`/`None` material trajectories share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while command authority retains full occupancy. #180 adds live radial per-voxel clipping and stable friendly-fire area Disable/Burn behind one held resolution transaction. Sight now reuses the rational intersection foundation through an independent strict-interior policy without changing casting's closed-contact results. Remaining HEX-24 work is area Restore/Reveal policy, area-lingering zones, and dispel | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
@@ -47,6 +48,10 @@ combined school acceptance.
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Fog presentation refinements | full-scene shading for cliff sides and tall props, soft transitions, and fades beyond the live exact-surface tactical caps; current terrain intentionally remains public and pickable | perception |
 | Tactical first-person camera | **Delivered / HEX-89:** #190's rebindable `C` action cycles Map → Third Person → First Person → Map with fixed-eye right-drag look, tactical click movement, disclosure-safe retargeting, composable model hiding, and exact Map-pose restoration; automated contracts and the exact-`dev` native acceptance route passed at `8a8e45e4` | world / presentation |
+| Crystal Mountain and cross-biome tunnel | **In Progress / draft PR #210:** exact head `74deb7f` constructs one selectable radius-77 Macro world around Crystal Ascent, a level-150 wooded basin, enclosing ridges, and a lit four-wide level-6 tunnel as the only ordinary foot-to-basin route. The complete CI-equivalent, release corpus, lifecycle, perception, camera, memory, and benchmark gates pass; generation is 2.33× Ring19 inside the 2.5× budget, and the deterministic pack contains 28 captures. Human visual/play approval, leaving draft, and delivery to `dev` remain | map / presentation |
+| Arid biomes and Desert Oasis Rings | **Review-ready:** the stacked delivery branch adds Arid Desert Transition, Desert Plain, Dunes, and Oasis recipes; one exact blocking date-palm asset; three radius-12 focused maps; and a radius-55 dry Ring19 profile with a local central oasis and two desert rings. The full selector-chosen CI-equivalent, lifecycle, lint, docs, and optimized shipping gates pass, and four pointer-driven walks produced 22 deterministic frames. Human visual/play approval and delivery to `dev` remain | map / presentation |
+| Coastal islands and Ocean Archipelagoes | **Review-ready:** implementation head `6f78a9c` plus validation close-out `45b0704` add focused radius-24 Sandy Islets and radius-40 Wooded Island recipes plus a radius-77 Macro ocean with three scenic sandy clusters, one playable landing, and a six-cell wooded heart. The full selector-chosen CI-equivalent, exhaustive partition, lifecycle, lint, docs, policy, optimized shipping, and release camera gates pass; three deterministic scripted walks produced 17 captures. Named-human visual/play approval and delivery to `dev` remain; no swimming or remote-island traversal mechanic is included | map / presentation |
+| Grand V3 schematic and map compiler | **Implementation in progress:** the exact radius-187 scale and proxy budgets are approved. Bounded chunk batches, exact picking, final hydrology, two bridges, ordinary hubs, the tunnel/Crystal composition, interiors, lights, vegetation, stable review anchors, and a seed-exact 58-frame camera route are implemented. The 256-seed fine-topology corpus, 32-seed fully materialized release corpus, reference/zero/hero/maximum complete worlds, exact edit-locality, Crystal lifecycle, vegetation, seam, 10,000-idle-frame, and final-content headless performance gates pass; all approved latency and snapshot budgets are green. A same-process trace isolates the remaining renderer-memory miss to a roughly 2.94 GB terrain publication/extraction spike; settled residency is about 0.50--0.72 GB and PNG capture about 0.78 GB. Publication-memory optimization, the real preview, route capture, CI-equivalent gate, and visual approval are still required. No radius, pitch, height, or content-fidelity reduction is authorized | map / presentation |
 | Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario after the three-view cycle lands; do not conflate that policy with first-person locomotion | world / presentation |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
@@ -182,7 +187,7 @@ exact-head hook-backed evidence (CONTRIBUTING.md has the rules).
   separate Character Creator and Spell Creator workspaces plus Combat Lab. Local records have
   stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
   dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
-  rosters on all seventeen distinct supported shipped maps, previews and describes
+  rosters on all seventeen then-supported shipped maps, previews and describes
   each choice, resolves deployment, freezes content for Retry, and refuses resume
   writes. Fixed automated scenarios live behind one searchable stable-ID selector.
 - **Wave 7 — tactical integrity and tempo (delivered).** Combat Lab is now the
@@ -329,7 +334,7 @@ replay (D1) remain prerequisites for durable saves, but do not block this scaffo
 The casting contract those waves implement — the announce model, the legality ladder,
 volumes, and persistent effects — is [casting.md](../systems/casting.md).
 
-The complete V3 map contract, fixed Ring7 and Ring19 rosters, authored Mountain Range
+The complete V3 map contract, fixed Ring7 and Ring19 profile rosters, authored Mountain Range
 Macro composition, fingerprint policy, recipe stages, and removal gate live in
 [world-generation-v3.md](../systems/world-generation-v3.md). Publication asks and
 fallbacks in both directions are [boundary.md](boundary.md); what crosses the boundary
@@ -408,9 +413,11 @@ V3 replaces the recipe-per-map assumption with a patch-capable semantic world pl
 `Single` keeps focused recipe iteration fast; Ring7 composes a central Hills region
 and six fixed outer recipes inside one radius-33 footprint. Ring19 composes a centre,
 six first-ring regions, and twelve second-ring regions inside one radius-55
-footprint. Shared edges, routes, elevation datums, and hydrology are resolved before
-patch interiors, so the system never tries to disguise incompatible maps with a
-material blend.
+footprint. Its original `TwoRings` profile retains the mountain-fed watershed; the
+in-delivery `DesertOasis` profile reuses the exact masks and redundant walker graph
+with Dry seams around one local central pool. Shared edges, routes, elevation datums,
+and hydrology are resolved before patch interiors, so the system never tries to
+disguise incompatible maps with a material blend.
 
 The delivered Mountain Range map uses an authored `Macro` path: 37 atomic cells
 cover one radius-77 footprint, while 30 named logical biome instances own connected
@@ -425,9 +432,12 @@ and playable terrain behind or atop the massif remain outside this milestone.
 Waterfall establishes the liquid layer, Forest establishes surface features and
 exact blockers, and Fort establishes structures and circulation. Deep Forest and
 Prairie reuse one vegetation authority at opposite density extremes, while Volcano
-owns the separate lava topology. Those recipes feed Ring7 and Ring19, while the
-coastal and alpine recipes feed Macro; every active shipped recipe now uses the same
-V3 semantic pipeline.
+owns the separate lava topology. The Arid family adds connected climate-transition
+bands, open sand, traversable dune ridges, and an isolated palm-lined oasis; seed
+variation cannot change its authored coverage, ridge dimensions, local pool, or exact
+palm count. The complete recipe catalog feeds Ring7 and both Ring19 profiles, while
+the coastal and alpine recipes feed Macro; every active or in-delivery recipe uses
+the same V3 semantic pipeline.
 V1/V2 remain frozen development oracles only until replacement review passes;
 they are removed rather than maintained as permanent compatibility paths.
 The decision-complete contract is

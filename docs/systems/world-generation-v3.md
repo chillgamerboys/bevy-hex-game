@@ -64,16 +64,138 @@ leave stale current or fall descriptors behind.
 
 ## Layouts and patches
 
-`generator_version: 3` selects one of four layouts:
+### Pre-terrain schematic planning
+
+The Grand V3 baseline introduces a planning stage before any V3 layout or voxel recipe.
+`hex_schematic` consumes a strict versioned template and `u64` world seed and resolves one
+complete radius-eight graph: 217 canonical coarse cells, 600 internal adjacencies, 48
+boundary cells, and 102 outward sides. The plan stores surface/landform, climate,
+vegetation, access intent, feature overlays, provenance, hydrology, metrics, and a semantic
+fingerprint. It stores no voxel radius, height, substance, final colour, entity, or camera
+fact.
+
+The designer orientation is fixed and is never rotated as a whole. Its flat-top projection
+uses `x = 1.5q` and `y = sqrt(3)(r + q/2)`: `(0,-8)` is north, `(8,-8)` north-east,
+`(8,0)` south-east, `(0,8)` south, `(-8,8)` south-west, and `(-8,0)` north-west.
+Template revision 2 is the approved cell-for-cell transcription of the source drawing and
+supersedes the earlier approximate trace. Revision 3 preserves that geography but changes
+the sealed waterfall-gorge land cell and outer Peak-backdrop shelves 127, 128, 214, and 215 from
+`Ordinary` to `Scenic`: the reachable `grand_v3.waterfall_profile` remains the gameplay
+review point, while the gorge observations and world-edge Peak shelves are visual terrain
+rather than promises of walkable footing.
+
+The revision-2 geography retained by revision 3 fixes twelve north-eastern sharp peaks as two six-cell chains around the
+elevated mountain lake, with the scenic lake island inside it and the authored waterfall
+opening left in the enclosure. The four narrow world-edge shelves behind the outer Peak
+feather remain Mountain backdrop without requiring another cut through the chain. It also
+fixes the frozen-woods three-cell core and its
+single mountain-shore contact, Crystal Ascent, and the straight `q = 1` tunnel from the
+Ascent to its hill terminal. The river remains an overlay over land until its one sea
+outlet rather than turning every routed cell into open water. The template bounds the
+remaining biome envelopes and lets named independent seed streams vary the coast, valley
+lake/river, sea-island groups, and coherent woodland. Thirty-two complete schematic
+candidates are validated and scored.
+If all candidates fail, generation may use one exact reference-fallback copy whose layer
+provenance records the underlying template authorities. A directly requested canonical
+reference artifact is different: it preserves the template's original locked, bounded,
+and seeded provenance and never claims that candidate generation failed.
+
+The standalone `hex_schematic` CLI emits canonical plan and metrics RON plus review-only
+SVG/HTML projections. Directory outputs are staged and published with an atomic no-replace
+rename; malformed or partially rendered galleries never replace an existing destination.
+The contact sheet is self-contained, while the typed plan and validator remain the only
+logical authority. Invalid output is never published.
+
+`V3LayoutSettings::Schematic` is the additive runtime compiler boundary for this plan.
+The strict compiler contract accepts Grand V3 revision 3 at pitch 22 with the
+`GrandV3BasicV1` vertical profile. Runtime generation calls the same pure
+`hex_schematic::generate(template, seed)` function once, then compiles its already-selected
+plan; V3 does not wrap it in the legacy eight-candidate voxel search. Tests and review
+tooling may instead compile an exact validated plan directly. The schematic fingerprint,
+template revision, pitch, profile version, and every vertical-profile value participate in
+the existing V3 settings and semantic fingerprint chain. Existing layout tags and
+fingerprints are unchanged.
+
+Each of the 217 canonical coarse cells retains one stable biome identity. Pitch controls
+only where its centre lands in the fine grid: every fine column is assigned to its nearest
+centre with canonical cell ID as the exact-distance tie break. The first baseline therefore
+has radius 187 and exactly 105,469 columns. This ownership layer is independent of build
+topology: the compiler produces one continuous global height field and material volume, not
+217 isolated recipes whose boundaries could become visible shelves.
+
+`GrandV3BasicV1` is the complete baseline compiler profile. It preserves the approved
+coarse geography while resolving one global fine-grid volume, the mountain-lake to sea
+hydrology chain, exactly two worked-stone river bridges, ordinary hubs and routes, one
+variable-width natural upper pass, and the tunnel/Crystal route. The exact Crystal Ascent
+landmark is compiled through its existing authored builder and retains its occupancy,
+interior, lighting, cutaway, and stable-anchor contracts. Vegetation is applied only after
+water, routes, structures, and sight-critical clearings are reserved.
+
+Grand V3's highlands are one continuous natural field rather than independent coarse-cell
+stamps. The two six-peak chains overlap through broad lower and middle slopes, split only
+above level 240 into six crowns per chain, and retain scenic V-shaped saddles below the
+ordinary route graph. Their irregular summits lie at levels 260–300. The Massif continues
+the same terraced rise to one small central crest at levels 330–350, with no capped body
+plateau. Frozen Woods overrides those uplift fields across its core: at least 70 percent of
+its surface stays within levels 151–153 and its six-row mountain blend never steps more than
+eight levels. In composite worlds, neighboring natural rock and snow begin immediately
+outside Crystal Ascent's radius-32 authored site, burying the worked exterior except at its
+declared openings; the standalone landmark is unchanged.
+
+The mountain-lake outlet descends from level 150 to the level-15 valley lake as a bending
+three-lane cascade. At least 28 upstream rows contain ordinary 0–2-level descents, six to
+eight open-air 4–10-level falls, and short pools before the final 24–30-level fall. Its
+gorge is formed only by lowering and feathering adjacent terrain; raised retaining banks
+are invalid. All V3 layouts share an inclusive level-384 ceiling, while existing layout
+settings and generated heights remain unchanged unless their own recipe requests more
+vertical space. V1/V2 limits are unchanged.
+
+The earlier undecorated radius-187 artifact remains useful as the recorded performance
+baseline in `docs/planning/waves/grand-v3-map/proxy-checkpoint.md`; it is not the semantic
+definition of this profile. Completion claims for the final world require the delivery
+manifest's typed, runtime, benchmark, and visual gates rather than inference from that
+proxy.
+
+`generator_version: 3` selects one of five layouts:
 
 - `Single(PatchSpec)` fills one connected world footprint with one recipe.
 - `Ring7` fills one radius-33 footprint with a central patch and six surrounding
   connected patches.
 - `Ring19` fills one radius-55 footprint with a central patch, six first-ring
   patches, and twelve second-ring patches.
-- `Macro(MacroLayoutSettings)` fills the radius-77 Mountain Range footprint from
-  37 radius-12-scale atomic cells, then collapses those cells into authored logical
+- `Macro(MacroLayoutSettings)` fills a radius-77 footprint from 37
+  radius-12-scale atomic cells, then collapses those cells into authored logical
   biome instances.
+- `Schematic(V3SchematicLayoutSettings)` compiles one validated coarse schematic into a
+  continuous fine-grid world while retaining exact coarse-cell identities.
+
+## Chunk-native terrain residency
+
+`VoxelMap` stores generated columns in fixed 16 by 16 axial rhombi using Euclidean
+division, so negative and positive coordinates share one canonical split/join rule.
+Whole-world iteration remains canonical and independent of storage order. Radius 187
+occupies exactly 444 resident chunks, each with at most 256 columns. Chunk coordinates are
+runtime presentation metadata only: they never enter semantic fingerprints, map IDs,
+anchors, snapshots, saves, or network payloads. A restored legacy snapshot is repartitioned
+internally without changing its wire version.
+
+Presentation publishes one `HexGrid` root with one deterministic `TerrainChunkRoot` child
+per resident chunk. Every material run remains a lightweight logical `HexTile`; bounded
+`TerrainRenderBatch` meshes group those runs by chunk, substance, and cutaway owner and
+project exact pointer hits back to the logical entity. Internal same-chunk walls are
+culled, while chunk-seam walls remain independently owned so a terrain edit never needs
+to invalidate a neighbouring root. All terrain runs, render batches, and global gameplay
+projections exist before `TerrainReady`. A terrain edit validates the active grid topology
+first, mutates authority, and atomically replaces only affected chunk roots before
+publishing one world revision. Unchanged chunk entity identities and shared material
+handles survive; removed feature roots are reconciled against the new projection. Missing,
+duplicate, orphaned, or mis-parented chunk roots fail closed instead of leaving authority
+and presentation out of sync. Teardown removes the complete grid and its generated mesh
+assets atomically.
+
+The public snapshot remains the existing canonical column/run tuple. Its column admission
+bound is 131,072, raised additively from 65,536 without changing the snapshot wire version;
+chunk metadata is never serialized.
 
 A `PatchSpec` contains an environment, a typed recipe, named overlays, one connected
 mask, and six directional edge contracts. A mask is a set of horizontal columns
@@ -113,11 +235,11 @@ Sky Islands upper layer remain within their owning horizontal masks for the firs
 composite. The critical ordinary-walker network must connect every region through
 redundant macro routes, but every shared boundary need not be open.
 
-`Ring19` is the fixed **Two Rings** composite. Its deterministic Voronoi masks cover
+`Ring19` admits fixed profile rosters over one composite geometry. Its deterministic Voronoi masks cover
 exactly 9,241 columns around patch centres 22 columns apart, with 42 reciprocal
 internal seams and 30 outer boundary sides. Slot order is stable: centre, six
-first-ring slots clockwise, then twelve second-ring slots clockwise. The shipped
-roster is:
+first-ring slots clockwise, then twelve second-ring slots clockwise. The original
+selectable **Two Rings** map uses the `TwoRings` profile roster:
 
 1. central Hills confluence;
 2. Frozen Hills, Forest A, Prairie A, downstream Hills, Waterfall B, and Waterfall A;
@@ -144,6 +266,23 @@ are level 16. The outlet Waterfall reaches its boundary terminal at level 3.
 Volcano owns a separate lava body which exits the western boundary at level 14; lava
 never joins the water graph. Every liquid crossing is explicit, directed, acyclic,
 level or descending, and checked against the exact seam lanes.
+
+The `DesertOasis` Ring19 profile keeps the same masks, slot order, 42 seams, redundant
+ordinary-walker graph, and 5-bit patch namespace while replacing the biome roster:
+
+1. one central Oasis with a radius-five local pool, a three-column green ring, and
+   twelve date palms;
+2. six clockwise Dunes patches, rotated once through all six local orientations; and
+3. an outer ring alternating six taller Dunes patches with six Desert Plain patches.
+
+Every patch uses the `Arid` environment. Its seams remain Dry and expose the same two
+width-two walker ports with depth-three approaches. The oasis is an explicit local-
+water exception: its connected Still pool has no cross-region liquid connection and
+no boundary outlet, so this profile declares empty `liquid_connections` and
+`boundary_outlets`. That is not permission for an omitted hydrology graph in the
+`TwoRings` profile or another composite. `DesertOasis` appends a conditional profile
+extension to the settings fingerprint; the original defaulted `TwoRings` byte stream
+and fingerprint remain unchanged.
 
 `Macro` separates atomic ownership from logical biome identity. Atomic cells provide
 exact coverage, adjacency, and masks. Each named biome instance claims one connected
@@ -203,6 +342,66 @@ intentionally not required. The party starts on central Shore, the hostile start
 central Hills, and review anchors cover coast, inland, foothill, massif front, and the
 Deep Mountain base.
 
+Crystal Mountain is the second authored Macro layout and the first to use a spanning
+feature. Four logical instances own the complete 37-cell graph:
+
+1. `crystal-ascent` owns the centre and all six radius-one cells, then expands as
+   needed to contain the complete radius-32 authored landmark footprint around world
+   origin while retaining its original central-cell fringe;
+2. `summit-forest` owns five consecutive upper radius-two cells and keeps a connected
+   temperate basin at levels 149–151;
+3. `inner-mountain` owns the other seven radius-two cells; and
+4. `outer-mountain` owns all eighteen radius-three cells and rises into the enclosing
+   level-178-through-192 ridge.
+
+Alpine treeline filtering applies only to alpine vegetation. It does not remove the
+temperate Forest basin's trees at levels 149–151 or Crystal Ascent's authored crown
+trees; both remain valid above the surrounding alpine recipes' normal treeline.
+
+The initial seven-cell union is not itself a radius-32 disk: it both misses a small
+part of the authored site and protrudes beyond it. Resolution transfers only the
+missing disk columns from adjacent atomic masks and does not trim the central seven's
+pre-existing ownership. Those transfers happen before seam construction; complete
+coverage, disjoint ownership, and every donor mask's remaining connectivity are then
+revalidated. In composite mode every retained landmark column outside radius 32
+receives level-150 summit terrain instead of the standalone world's base-level grass.
+
+Macro has three defaulted, orthogonal collections for this composition.
+`walker_connections` declares explicit ordinary surface ports independently from the
+legacy `critical_route`; Crystal Mountain resolves one exact four-wide connection
+whose Crystal-side approach is the authored upper terminal trail and whose other side
+opens into the Forest basin. `spanning_features` declares a
+stable name, ordered instance route, world-boundary terminal, destination anchor,
+floor, width, clearance, and roof thickness. `anchor_aliases` maps instance-local
+anchors to stable world names. An empty `critical_route` is admitted only when exactly
+one spanning feature is marked as the canonical route.
+
+The `crystal_mountain.tunnel` route follows `outer-mountain` → `inner-mountain` →
+`crystal-ascent`, entering from the outer instance's west world boundary and ending at
+`crystal_ascent.lower_entry`. It remains flat at level 6, has exactly four lanes, six
+clear levels, and at least three solid roof levels. Its eight-wide, twelve-level
+exterior mouth narrows to the four-lane passage. Its eight boundary apron floors are
+open to the exterior; the first roofed row is the four-wide foot threshold. Resolved
+seam facts record exact subsurface lane pairs and never masquerade as surface walker
+ports. After carving, every incidental ordinary level-6 contact across a crossed
+shared edge is changed to a world-owned special-movement closure, leaving exactly the
+declared four lane pairs traversable. Routing minimizes length and then turns within
+the declared instance order, with stable coordinate tie-breaking. The final twelve
+centerline rows transition from rough stone to worked Gothic masonry. The tunnel is
+the only ordinary foot-to-basin route; the ridge and surface masks expose no
+alternative ascent.
+
+The tunnel floor retains the `BiomeRegionId` of its horizontal owner. One Dark
+interior and light domain spans every roofed passage floor and Crystal Ascent. The
+four foot-threshold and four summit-threshold surfaces are the interior's exact
+entrance set; the eight open boundary-apron floors remain exterior, and the lower
+Crystal aperture is an internal connection. Stable world anchors cover the foot
+apron, mouth, midpoint, Gothic transition, Ascent threshold, summit exit, basin
+clearing, and ridge while retaining every `crystal_ascent.*` review anchor. The world
+reserves Macro namespace prefix 63 across feature, light, interior, and special
+movement ids; the tunnel consumes it for its lights, unified interior, and exact seam
+closures.
+
 Single and Ring7 retain their shipped 4-bit patch / 28-bit local numeric namespace.
 Ring19 uses a layout-specific 5-bit patch / 27-bit local namespace, so patch ids
 16–18 cannot alias local feature, structure, liquid, light, interior, or
@@ -233,6 +432,14 @@ Settings, semantic-plan, and materialized-map fingerprints use separate V3 domai
 They exclude timings and unordered iteration, include every field that affects their
 respective output, and are stable only within V3. V1/V2 fingerprints are frozen while
 those implementations remain; V3 is not required to reproduce them.
+
+Macro's walker, spanning-feature, and anchor-alias settings extend the settings
+fingerprint only when at least one collection is nonempty. A legacy Macro file whose
+three defaulted collections are empty retains its exact prior byte stream and
+fingerprint; adding the schema with empty defaults cannot rewrite Mountain Range.
+Ring19 follows the same compatibility principle for its defaulted profile: `TwoRings`
+retains its prior settings bytes, while `DesertOasis` carries an explicit versioned
+profile suffix.
 
 Reports record generator version, resolved seed, candidate, repair actions, fallback
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
@@ -343,6 +550,32 @@ blocker footprints, and deterministic semantic fingerprints. Their standalone
 selectable maps are **Deep Forest** and **Prairie**, both pinned to seed
 `1592598566`.
 
+### Arid recipes
+
+`Arid` is the sand, sparse-vegetation, dune, and isolated-oasis environment. Its four
+recipes are deliberately separate so a focused `Single` map does not need to pretend
+to be a complete desert region:
+
+- Desert Transition assigns connected grass, dirt-ecotone, and sand bands from exact
+  slices of the recipe-local frame. Rotation turns the complete transition. The band
+  boundaries and requested dry coverage are exact consequences of settings; the
+  modest rolling relief varies through its named landform stream.
+- Desert Plain is connected, low-relief sand without authored structures or
+  vegetation. Its rolling surface varies by seed while its material coverage,
+  relief bound, seams, routes, and anchors remain exact.
+- Dunes authors the requested number, spacing, and height of parallel ridges. A named
+  seed stream varies only their bounded lateral warp; the resulting sand surface
+  remains one-level-Lipschitz and ordinary-walkable from trough to crest.
+- Oasis authors one exact local Still-water pool, a grass-and-soil shore ring, dry
+  sand approaches, and the requested exact count of `plant/date-palm` instances.
+  Pool and shore geometry do not vary with the seed. Palm priority and rotation do,
+  while their visual volumes, reserved-route clearance, and single-root traversal
+  blockers remain exact. Oasis water never participates in a composite seam.
+
+All four reject non-Arid environments and overlays. The selectable **Desert
+Transition**, **Desert Plain**, and **Dunes** scenarios are radius-12 `Single` maps;
+**Desert Oasis Rings** is the radius-55 `DesertOasis` Ring19 profile described above.
+
 ### Volcano
 
 Volcanic Hills keeps its scenario name for compatibility but now dispatches the V3
@@ -351,6 +584,35 @@ patch and rises at least 20 levels above its base. A directed lava body descends
 the crater to the boundary with distinct static, current, fall, and deterministic
 landing presentation. There is no ford. The only ordinary crossing is an elevated
 bridge at least four levels above lava, reached by one-level stair approaches.
+
+### Coastal island recipes
+
+The Coastal environment also admits two island recipes. `SandyIslets` authors an
+exact requested count of separated low sand components inside one level-8 still sea;
+only its designated primary component owns actor anchors and a protected ordinary
+route. `WoodedIsland` authors one broad connected dry component with an exact
+two-column sand fringe, grass-and-soil interior, protected route, and deterministic
+eligible broadleaf placement. Its configured tree percentage describes canopy
+coverage; exact roots use half that density because every accepted silhouette spans
+multiple columns and visual volumes may not overlap. Both keep material topology and
+component count stable while named streams vary bounded relief and feature placement.
+
+Their focused scenarios are radius-24 **Sandy Islets** with exactly five dry
+components and radius-40 **Wooded Island** with one connected island. The radius-77
+**Ocean Archipelagoes** Macro profile composes one 24-cell Shallow Sea, three two-cell
+scenic Sandy Islets instances, one one-cell sandy landing, and one six-cell Wooded
+Island heart. Ten Standing seams form one ocean; one width-four landing-to-heart
+walker aperture excludes its exact protected causeway footprint from the otherwise wet coast and
+forms the entire ordinary inter-instance route. Its seven dry
+components are intentional: the landing/heart component is playable and six satellite
+components are scenic. Sandy Islets and Wooded Island currently reject Macro spanning
+features because their specialized coastline construction does not yet consume global
+feature reservations.
+
+Island metrics retain exact world columns, water and dry coverage, dry-component and
+reachable-surface counts, shoreline coverage, relief, route length, and trees where
+applicable. The Macro report additionally fixes 37 cells, six logical regions, ten
+standing-water seams, seven dry components, and six scenic dry components.
 
 ### Coastal and alpine Macro recipes
 
@@ -462,8 +724,10 @@ standalone recipe fills the surrounding radius-40 world with ordinary grass terr
 A real Macro patch context constructs and round-trips its volume, blockers, regions,
 lights, and anchors after translation and any of the six rotations; recipe-owned
 decorative rotations compose from recipe-local orientation into world space and
-round-trip exactly. Macro placement is deliberately deferred until the larger
-authored world defines its composition contract.
+round-trip exactly. Arbitrary Macro placement remains invalid. Crystal Mountain is the
+first admitted composite: it fixes the landmark at world origin with rotation zero,
+requires its mask to contain the complete radius-32 site, and retains any central-cell
+fringe without resizing the architecture.
 
 Each of the eighteen outward landing alcoves reuses one accepted cave-crystal asset.
 Every alcove origin publishes exactly one Bright radius-4 source and one Dim radius-18
@@ -507,10 +771,27 @@ fort remains generated static geometry, not a player construction system.
 ### Composite
 
 Ring7, Ring19, and Macro first resolve global routes, elevation profiles, liquid
-ports, and protected seam approaches. They then run each recipe against its resolved
-mask and contracts, validate fragment-local invariants, and finally validate the
-exact combined `TilePos` graph. Materials and decorative boundaries are classified
-only after the geometry and semantics are accepted.
+ports, spanning-feature reservations, and protected seam approaches. When a feature
+ends at an authored landmark, that destination fragment is built first so planning
+can consume its exact terminal, upper threshold, and interior identity. The resulting
+per-patch footprint is supplied to the remaining recipes before they plan liquids or
+decoration. Each fragment still validates against its resolved mask and contracts.
+
+Composition then follows four distinct stages: reserve, merge, carve, and finalize.
+Normal fragments are merged without publishing a final world; each spanning feature
+atomically rewrites the combined volume exactly once; Crystal Mountain publishes its
+authored Forest approach, basin clearing, ridge, and scenario anchors; and only then
+does ordinary finalization classify materials and decorative boundaries and admit the
+exact `TilePos` graph.
+
+This stage split is load-bearing for cross-biome passages. Liquids and decoration must
+observe the reserved corridor, while no patch may independently carve its idea of one
+side of a tunnel. The global pass preserves overlying surfaces, carries horizontal
+biome ownership onto the new floor, closes undeclared ordinary subsurface seam
+contacts, and publishes one continuous interior, lighting, and cutaway projection.
+Missing seam lanes, an undeclared opening, a roof or bedrock breach, a blocker
+collision, or a second ordinary foot-to-destination path rejects the complete
+candidate.
 
 Directed liquid ports are realized during checked composition, not by a later blend
 pass. Every declared lane must resolve to exactly one terminal source node and one
@@ -557,7 +838,12 @@ The normative delivery order is:
 13. `Ring19` and the selectable Two Rings map;
 14. Macro layout, adjacency, coastal/alpine recipes, and the selectable Mountain
     Range map;
-15. V1/V2 removal.
+15. Macro spanning features and the selectable Crystal Mountain map;
+16. Arid recipes and the selectable Desert Transition, Desert Plain, Dunes, and
+    Desert Oasis Rings maps;
+17. Coastal island recipes and the selectable Sandy Islets, Wooded Island, and Ocean
+    Archipelagoes maps;
+18. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 
@@ -599,6 +885,48 @@ adjacency behavior, exact sea strata, one shared water body with a continuous st
 coastal/sea footprint, acyclic descending tributaries, coastal coverage, massif
 shape, and the Shore-to-massif-base route.
 
+Crystal Mountain coverage additionally fixes the exact seven-cell logical landmark
+core, containment of the radius-32 site plus its retained central-cell fringe and
+connected donor remainders; five-cell Forest basin; enclosing inner/outer ridges; the
+authored summit approach and exact four-wide walker port; ordered subsurface instance
+route; four level-6 lanes and exact seam closures; six-level clearance; three-level
+roof; eight exterior apron floors; one continuous interior and light domain with two
+four-wide entrance sets; complete Dim coverage; and the absence of a surface bypass,
+undeclared seam opening, liquid collision, bedrock breach, or shortcut.
+Representative seeds and all six landmark rotations exercise the patch constructor
+even though the shipped world fixes rotation zero.
+
+Grand V3 coverage fixes 217 nonempty biome owners over 105,469 columns and 444 resident
+chunks; the exact three-lane, descending, acyclic mountain-lake-to-sea liquid graph; two
+and only two worked-stone river crossings; one foothill-reachable Ordinary component with
+one representative hub per Ordinary schematic cell; and a typed complete review-anchor
+roster whose current-source hero export is byte-stable. The public
+`public_schematic_fine_topology_admits_256_seeds` contract exercises 256 deterministic
+schematic plans, both declared upper routes, and natural-pass widths 3, 4, and 5 without
+paying complete-world decoration cost. Feature-gated `hex_game` contracts separately prove
+one-chunk edit locality, the embedded Crystal occupancy/light/perception/fog/cutaway
+lifecycle, and 10,000 unchanged runtime updates with no terrain, perception, knowledge, or
+fog-batch rebuild. The complete 32-world release corpus and deterministic performance
+comparison also pass. Renderer publication-memory optimization, the selector-chosen
+CI-equivalent gate, multi-angle and temporal visual inspection, and human play approval
+remain tracked by the Grand V3 delivery manifest.
+
+Arid coverage fixes connected and rotated transition bands, exact sand coverage,
+bounded low relief, dune ridge count/spacing/height, one-level dune transitions, the
+local oasis pool and green ring, exact date-palm count and blocker projection, and
+Dry Ring19 seams around the local-water exception. Composite tests retain all 9,241
+columns, 19 region ids, 42 reciprocal seams, single-seam-removal reachability, stable
+world aliases, and the original `TwoRings` fingerprint.
+
+Island coverage fixes Sandy Islets' exact requested component count, primary ordinary
+route, level-8 connected water, relief bound, and two-column sand fringes; Wooded
+Island's single connected dry component, grass-and-soil interior, tree exclusions,
+and complete ordinary route; and Ocean Archipelagoes' 18,019 columns, 37 cells, six
+logical instances, ten Standing seams, seven dry components, six scenic components,
+and sole width-four landing-heart connection. Focused and Macro tests also prove
+stable semantic anchors, deterministic re-entry, and that no ordinary cross-water
+route appears.
+
 Recipe tests must enforce each runnable recipe's topology and protected routes.
 Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
 valid final maps including fallback and target less than 1% fallback use.
@@ -612,8 +940,20 @@ Ring19 on the same runner and budgets generation p95 at no more than 2.5× Ring1
 character-camera collision remains below 2 ms p95. Review packs must include
 deterministic reports and default, rotated, top-down, and character-camera captures.
 Mountain Range additionally requires coast, watershed, both mountain tiers,
-front-massif, and rear-silhouette views. Manual review must traverse every critical
-recipe route and every open composite seam before that surface ships. The landed Two
+front-massif, and rear-silhouette views. Crystal Mountain requires Map, First Person,
+and Third Person frames of the foot portal, natural tunnel, Gothic transition,
+Crystal chamber, ascent, summit, Forest basin, and ridge, plus review-only illumination
+and full-cutaway frames. Manual review must traverse every critical recipe route and
+every open composite seam before that surface ships. Desert acceptance adds Map and
+character-camera views of all three Desert Transition bands, Desert Plain's long
+sightlines, Dunes from both a crest and trough, and the central oasis plus both
+surrounding rings. Those frames establish presentation only;
+Island acceptance adds Map and character-camera views of Sandy Islets' complete
+component roster, Wooded Island's beach-to-ridge progression, and Ocean
+Archipelagoes' open-water gaps, sandy clusters, landing, and wooded heart. Those
+frames likewise establish presentation only;
+typed recipe and composite tests remain the authority for coverage, elevation,
+liquid isolation, date-palm blockers, seams, and reachability. The landed Two
 Rings surface received its final visual and play approval at the reviewed wave head;
 Mountain Range's 2026-08-03 delivery record contains its four-view deterministic pack
 and a 45-step, eight-frame feature-only walk with exact arrival and focus assertions.

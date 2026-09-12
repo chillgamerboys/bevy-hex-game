@@ -30,8 +30,9 @@ fn fragment(
 ) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-    // Mesh UV +V is authored downstream. Cap entities rotate that axis toward
-    // their exact successor; curtain +V runs from the lip to the landing.
+    // Horizontal caps share one absolute world-space UV chart, so waves remain
+    // continuous across hex, flow-state, and chunk boundaries. Curtain +V runs
+    // from the lip to the landing and uses the dedicated fall material.
     let uv_scale = max(liquid.flow_phase_scale.w, 0.0001);
     let scaled_uv = in.uv * uv_scale;
     let advected_uv =

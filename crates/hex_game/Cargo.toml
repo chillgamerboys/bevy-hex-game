@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 autotests = false
 description = "Thin launcher library and composition root for gameplay, world, and runtime UI."
+default-run = "hex_game"
 
 [dependencies]
 # Direct Connect exposes private invite codes through the native OS clipboard.
@@ -27,6 +28,8 @@ hex_units = { workspace = true }
 hex_map = { workspace = true }
 hex_perception = { workspace = true }
 hex_world = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts", optional = true }
+hex_world_runtime = { path = "../hex_world_runtime", optional = true }
 hex_multiplayer = { workspace = true }
 hex_online = { workspace = true, optional = true }
 hex_dev = { workspace = true, optional = true }
@@ -49,9 +52,13 @@ hex_test_app = { workspace = true }
 default = ["arena-prototype"]
 # Isolated real-time combat; no tactical or network plugins installed by --arena.
 arena-prototype = ["dep:hex_arena", "hex_map/arena-prototype"]
+# Explicit V4 map-platform explorer.
+v4-world = ["dep:hex_world_contracts", "dep:hex_world_runtime"]
 # Store-neutral EOS integration. Merely compiling this feature does not load an EOS
 # runtime or open a socket; a configured application flow must install the backend.
 online = ["dep:hex_online"]
+# Local render-only time override shared by the ordinary development build.
+dev-time-preview = ["hex_ui/dev-tools", "hex_world/dev-time-preview"]
 # Development tooling: world inspector, debug overlays, and live asset reload so
 # editing a file under assets/config/ takes effect without restarting.
 # `bevy/dynamic_linking` links Bevy as a shared library instead of statically
@@ -64,7 +71,7 @@ dev = [
     "bevy/file_watcher",
     "bevy/dynamic_linking",
     "hex_core/dev-input",
-    "hex_ui/dev-tools",
+    "dev-time-preview",
 ]
 # Deterministic procedural-map launch and renderer capture automation. Kept
 # separate from `dev` so review packs exercise an otherwise release-shaped build.
@@ -112,3 +119,8 @@ required-features = ["arena-prototype", "test-support"]
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "hex_v4"
+path = "src/bin/hex_v4.rs"
+required-features = ["v4-world"]

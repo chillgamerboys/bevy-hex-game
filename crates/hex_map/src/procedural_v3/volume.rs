@@ -5,7 +5,7 @@
 //! and the clearance between stacked floors. The horizontal mask is explicit and
 //! need not be a radius-shaped footprint.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::fmt;
 
 use hex_core::{
@@ -16,6 +16,8 @@ use hex_core::{
 use crate::settings::MAX_V3_LEVEL;
 use crate::terrain::TerrainPalette;
 use crate::voxel::{Column, VoxelMap};
+
+use super::selection::VolumeAdmission;
 
 /// Inclusive-bottom, exclusive-top vertical interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -106,12 +108,14 @@ pub(crate) struct VolumeColumn {
 }
 
 impl VolumeColumn {
-    /// Counts implicit air from `from`, using the same saturation rule as
-    /// [`Column::headroom_above`].
+    /// Counts every clear level from `from` to the next occupied interval.
+    ///
+    /// Open sky is represented by [`Level::MAX`]. This is the semantic geometry
+    /// query for authored clearances; runtime traversal should use
+    /// [`Self::headroom_above`] and its intentional saturation instead.
     #[must_use]
-    pub(crate) fn headroom_above(&self, from: Level) -> Headroom {
-        let clear = self
-            .elements
+    fn clearance_above(&self, from: Level) -> Level {
+        self.elements
             .iter()
             .copied()
             .filter_map(|element| {
@@ -123,8 +127,14 @@ impl VolumeColumn {
                 }
             })
             .min()
-            .unwrap_or(MAX_HEADROOM)
-            .clamp(0, MAX_HEADROOM);
+            .unwrap_or(Level::MAX)
+    }
+
+    /// Counts implicit air from `from`, using the same saturation rule as
+    /// [`Column::headroom_above`].
+    #[must_use]
+    pub(crate) fn headroom_above(&self, from: Level) -> Headroom {
+        let clear = self.clearance_above(from).clamp(0, MAX_HEADROOM);
         Headroom(clear)
     }
 }
@@ -294,6 +304,58 @@ impl VolumePlan {
             .map(|column| column.headroom_above(surface.level.saturating_add(1)))
     }
 
+    /// Measures the exact authored clearance above one declared surface.
+    ///
+    /// Unlike [`Self::surface_headroom`], this does not saturate at the runtime
+    /// traversal limit. Open sky is represented by [`Level::MAX`].
+    #[must_use]
+    pub(crate) fn surface_clearance(&self, surface: TilePos) -> Option<Level> {
+        self.surfaces.get(&surface)?;
+        let from = surface.level.checked_add(1)?;
+        self.columns
+            .get(&surface.coord)
+            .map(|column| column.clearance_above(from))
+    }
+
+    /// Iterates only the exact exposed surfaces in one horizontal column.
+    ///
+    /// [`TilePos`] orders the horizontal coordinate before its level, so these
+    /// inclusive level bounds select one contiguous `BTreeMap` key range. This
+    /// keeps stacked cave floors and roofs visible to callers without scanning
+    /// every surface in a large world.
+    pub(crate) fn surfaces_at_coord(
+        &self,
+        coord: HexCoord,
+    ) -> impl DoubleEndedIterator<Item = (&TilePos, &SurfaceMetadata)> + '_ {
+        self.surfaces
+            .range(TilePos::new(coord, Level::MIN)..=TilePos::new(coord, Level::MAX))
+    }
+
+    /// Returns the highest exact exposed surface in one horizontal column.
+    #[must_use]
+    pub(crate) fn top_surface_at_coord(
+        &self,
+        coord: HexCoord,
+    ) -> Option<(TilePos, SurfaceMetadata)> {
+        self.surfaces_at_coord(coord)
+            .next_back()
+            .map(|(position, metadata)| (*position, *metadata))
+    }
+
+    /// Removes every exposed surface in one horizontal column.
+    ///
+    /// Callers which own projections keyed by the same [`TilePos`] values must
+    /// remove those entries in the same transaction.
+    pub(crate) fn remove_surfaces_at_coord(&mut self, coord: HexCoord) {
+        let positions = self
+            .surfaces_at_coord(coord)
+            .map(|(position, _)| *position)
+            .collect::<Vec<_>>();
+        for position in positions {
+            let _removed_surface = self.surfaces.remove(&position);
+        }
+    }
+
     /// Returns every non-solid fill run keyed by its top occupied voxel.
     ///
     /// This is a run identity, not an exposed-surface query. A fill immediately
@@ -321,11 +383,26 @@ impl VolumePlan {
 
     /// Checks mask, interval, surface, and access invariants shared by every recipe.
     pub(crate) fn validate(&self) -> Result<(), Vec<VolumeIssue>> {
+        self.validate_internal(true)
+    }
+
+    /// Checks every mutable volume invariant after the owning layout already
+    /// proved that this exact mask is connected.
+    ///
+    /// Complete-world validation still compares the admitted layout footprint
+    /// with `mask`, and this pass still checks non-emptiness, exact column
+    /// coverage, intervals, surfaces, and headroom. Only the duplicate
+    /// connectivity walk is omitted.
+    pub(super) fn validate_with_admitted_mask_connectivity(&self) -> Result<(), Vec<VolumeIssue>> {
+        self.validate_internal(false)
+    }
+
+    fn validate_internal(&self, validate_mask_connectivity: bool) -> Result<(), Vec<VolumeIssue>> {
         let mut issues = Vec::new();
 
         if self.mask.is_empty() {
             issues.push(VolumeIssue::EmptyMask);
-        } else if !mask_is_connected(&self.mask) {
+        } else if validate_mask_connectivity && !mask_is_connected(&self.mask) {
             issues.push(VolumeIssue::DisconnectedMask);
         }
 
@@ -441,6 +518,28 @@ impl VolumePlan {
         self.validate()
             .map_err(VolumeMaterializationError::InvalidVolume)?;
 
+        self.project_materialized(palette, is_solid)
+    }
+
+    /// Resolves a volume whose complete owning world already passed validation.
+    ///
+    /// Only [`ValidatedWorldPlan`](super::selection::ValidatedWorldPlan) owns the
+    /// sealed admission token, preventing callers from bypassing validation for an
+    /// arbitrary [`VolumePlan`].
+    pub(super) fn materialize_admitted(
+        &self,
+        _admission: &VolumeAdmission,
+        palette: &TerrainPalette,
+        is_solid: &dyn Fn(SubstanceId) -> bool,
+    ) -> Result<MaterializedVolume, VolumeMaterializationError> {
+        self.project_materialized(palette, is_solid)
+    }
+
+    fn project_materialized(
+        &self,
+        palette: &TerrainPalette,
+        is_solid: &dyn Fn(SubstanceId) -> bool,
+    ) -> Result<MaterializedVolume, VolumeMaterializationError> {
         let mut map = VoxelMap::new();
         let mut interiors = InteriorRegions::new();
         let mut special_regions = SpecialMovementRegions::new();
@@ -568,16 +667,17 @@ fn mask_is_connected(mask: &BTreeSet<HexCoord>) -> bool {
     let Some(start) = mask.first().copied() else {
         return false;
     };
-    let mut reached = BTreeSet::from([start]);
+    let mut remaining = mask.iter().copied().collect::<HashSet<_>>();
+    remaining.remove(&start);
     let mut frontier = VecDeque::from([start]);
     while let Some(coord) = frontier.pop_front() {
         for neighbour in coord.neighbors() {
-            if mask.contains(&neighbour) && reached.insert(neighbour) {
+            if remaining.remove(&neighbour) {
                 frontier.push_back(neighbour);
             }
         }
     }
-    reached.len() == mask.len()
+    remaining.is_empty()
 }
 
 const fn solid_substance(role: SolidMaterialRole, palette: &TerrainPalette) -> SubstanceId {
@@ -751,6 +851,47 @@ mod tests {
     }
 
     #[test]
+    fn coord_local_surface_range_top_and_removal_preserve_neighboring_stacks() {
+        let coord = HexCoord::ORIGIN;
+        let [neighbor, ..] = coord.neighbors();
+        let lower = TilePos::new(coord, 4);
+        let upper = TilePos::new(coord, 11);
+        let neighboring = TilePos::new(neighbor, 7);
+        let lower_metadata = surface(SurfaceAccess::Ordinary, Some(InteriorRegionId(3)));
+        let upper_metadata = surface(
+            SurfaceAccess::SpecialMovement(SpecialMovementRegion(8)),
+            None,
+        );
+        let neighboring_metadata = surface(SurfaceAccess::Ordinary, None);
+        let mut plan = VolumePlan::new(BTreeSet::from([coord, neighbor]));
+        plan.surfaces.insert(lower, lower_metadata);
+        plan.surfaces.insert(upper, upper_metadata);
+        plan.surfaces.insert(neighboring, neighboring_metadata);
+
+        assert_eq!(
+            plan.surfaces_at_coord(coord)
+                .map(|(position, metadata)| (*position, *metadata))
+                .collect::<Vec<_>>(),
+            vec![(lower, lower_metadata), (upper, upper_metadata)]
+        );
+        assert_eq!(
+            plan.top_surface_at_coord(coord),
+            Some((upper, upper_metadata))
+        );
+
+        plan.remove_surfaces_at_coord(coord);
+        assert!(plan.surfaces_at_coord(coord).next().is_none());
+        assert_eq!(
+            plan.top_surface_at_coord(neighbor),
+            Some((neighboring, neighboring_metadata))
+        );
+        assert_eq!(
+            plan.surfaces,
+            BTreeMap::from([(neighboring, neighboring_metadata)])
+        );
+    }
+
+    #[test]
     fn arbitrary_connected_mask_is_exactly_covered() {
         let origin = HexCoord::ORIGIN;
         let [east, ..] = origin.neighbors();
@@ -913,6 +1054,32 @@ mod tests {
             Some(cave)
         );
         assert_eq!(materialized.special_regions.get(upper_surface), Some(upper));
+    }
+
+    #[test]
+    fn authored_clearance_is_not_limited_by_runtime_headroom() {
+        let coord = HexCoord::ORIGIN;
+        let mut plan = VolumePlan::new(BTreeSet::from([coord]));
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![
+            mass(0, 7, SolidMaterialRole::WorkedStone, None),
+            mass(20, 21, SolidMaterialRole::WorkedStone, None),
+        ];
+        let floor = TilePos::new(coord, 6);
+        plan.surfaces
+            .insert(floor, surface(SurfaceAccess::Ordinary, None));
+
+        assert_eq!(plan.surface_headroom(floor), Some(Headroom(MAX_HEADROOM)));
+        assert_eq!(plan.surface_clearance(floor), Some(13));
+
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements
+            .insert(1, mass(15, 16, SolidMaterialRole::Stone, None));
+        assert_eq!(plan.surface_clearance(floor), Some(8));
     }
 
     #[test]

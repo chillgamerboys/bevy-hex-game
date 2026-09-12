@@ -1,0 +1,22 @@
+// Non-combat Crystal Mountain exploration party.
+//
+// The complete shipped party begins together on the generated western foot apron.
+// No Hostile roster is authored: this scenario reviews the cross-biome tunnel,
+// Crystal Ascent, summit Forest basin, lighting, and all three camera modes.
+(
+    name: "Crystal Mountain Showcase",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(
+                center: Anchor("crystal_mountain.foot_apron"),
+                spread: 2,
+            ),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+    ],
+)

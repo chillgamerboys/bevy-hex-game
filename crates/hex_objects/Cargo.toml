@@ -9,6 +9,7 @@ description = "Runtime presentation for editor-authored voxel objects."
 bevy = { workspace = true }
 hex_assets = { path = "../hex_assets" }
 hex_core = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts" }
 
 [dev-dependencies]
 hex_test_app = { workspace = true }
