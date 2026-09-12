@@ -30,7 +30,7 @@ pub(super) enum Response {
     Status(String),
     Finished(String),
     Failed(String),
-    Quit,
+    Quit(Result<(), String>),
 }
 
 pub(super) fn launch() -> (SyncSender<Command>, Receiver<Response>) {
@@ -92,6 +92,7 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
     }
     let mut active: Option<Clip> = None;
     let mut quitting = false;
+    let mut last_failure = None;
     loop {
         match requests.recv_timeout(Duration::from_millis(25)) {
             Ok(Command::Start {
@@ -100,8 +101,12 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
                 snapshot,
             }) if active.is_none() && available && !quitting => {
                 match Clip::start(pid, title, snapshot) {
-                    Ok(clip) => active = Some(clip),
+                    Ok(clip) => {
+                        active = Some(clip);
+                        last_failure = None;
+                    }
                     Err(error) => {
+                        last_failure = Some(error.clone());
                         let _ = responses.send(Response::Failed(error));
                     }
                 }
@@ -168,12 +173,13 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if let Some(clip) = &mut active {
-            if clip.poll(&responses) {
+            if let Some(outcome) = clip.poll(&responses) {
+                last_failure = outcome.err();
                 active = None;
             }
         }
         if quitting && active.is_none() {
-            let _ = responses.send(Response::Quit);
+            let _ = responses.send(Response::Quit(last_failure.map_or(Ok(()), Err)));
             return;
         }
     }
@@ -313,7 +319,7 @@ impl Clip {
         )
     }
 
-    fn poll(&mut self, responses: &SyncSender<Response>) -> bool {
+    fn poll(&mut self, responses: &SyncSender<Response>) -> Option<Result<(), String>> {
         let mut output_closed = false;
         for _ in 0..16 {
             match self.output.try_recv() {
@@ -332,7 +338,7 @@ impl Clip {
         }
         if self.completed {
             if matches!(self.child.try_wait(), Ok(Some(_))) {
-                return true;
+                return Some(Ok(()));
             }
             if self
                 .stopping
@@ -340,9 +346,9 @@ impl Clip {
             {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                return true;
+                return Some(Ok(()));
             }
-            return false;
+            return None;
         }
         if self
             .stopping
@@ -370,9 +376,9 @@ impl Clip {
             let _ = self.child.kill();
             let _ = self.child.wait();
             let _ = responses.send(Response::Failed(format!("Recording failed: {error}")));
-            return true;
+            return Some(Err(error));
         }
-        false
+        None
     }
 
     fn native_event(
@@ -522,6 +528,63 @@ fn prepare_helper() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn native_failure_remains_an_error_after_child_cleanup_for_quit() {
+        let path = std::env::temp_dir().join(format!(
+            "hex-recorder-failure-{}-{}.events.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("epoch")
+                .as_nanos()
+        ));
+        let mut child = Process::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("inert child");
+        let input = child.stdin.take().expect("pipe");
+        let (native, output) = mpsc::sync_channel(4);
+        let (responses, received) = mpsc::sync_channel(4);
+        let mut clip = Clip {
+            identity: SourceIdentity {
+                pid: 42,
+                window: Some(7),
+            },
+            child,
+            input,
+            output,
+            events: OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .expect("metadata"),
+            path: path.with_extension("mp4"),
+            requested: Instant::now(),
+            started: Some(Instant::now()),
+            stopping: Some(Instant::now()),
+            failure: None,
+            completed: false,
+        };
+        native
+            .send(Ok(
+                json!({"event":"failed","message":"disk full during finalization"}),
+            ))
+            .expect("native event");
+        let outcome = clip.poll(&responses).expect("terminal cleanup");
+        assert_eq!(outcome, Err("disk full during finalization".to_owned()));
+        assert!(
+            matches!(received.try_recv(), Ok(Response::Failed(message)) if message.contains("disk full"))
+        );
+        assert!(!clip.completed, "failed cleanup is not MP4 completion");
+        assert!(clip.child.try_wait().expect("child state").is_some());
+        drop(clip);
+        fs::remove_file(path).expect("remove owned metadata fixture");
+    }
+
     #[test]
     fn native_start_requires_the_confirmed_process_window_and_bounded_video_settings() {
         let configured = json!({"pid":42,"window_id":7,"width":1600,"height":900,"fps":30,"audio":false,"codec":"h264"});

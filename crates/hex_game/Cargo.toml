@@ -39,6 +39,14 @@ serde = { workspace = true }
 serde_json = "1"
 xxhash-rust = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Safe AppKit menu inspection keeps native Cmd-Q on the recorder's graceful
+# shutdown path without changing Bevy's event loop or permitting unsafe Rust.
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem",
+] }
+
 [dev-dependencies]
 # Only for the tests that open each scenario's world file and check it parses.
 ron = { workspace = true }

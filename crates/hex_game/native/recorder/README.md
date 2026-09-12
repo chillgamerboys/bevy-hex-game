@@ -44,7 +44,11 @@ requesting any capture permission. Protocol tests may send `quit`, malformed JSO
 or invalid start parameters; valid recording tests require an explicit native
 playtest. Required integration wiring is `mod recording`, `recording::install`,
 `WindowPlugin.close_when_requested = false`, and menu Quit through
-`Recorder::request_quit()`. The recording system runs after Tick and before Present.
+`Recorder::request_quit()`. On macOS, a main-thread Startup system removes only
+the native `terminate:` menu items using safe AppKit methods; focused Cmd-Q is
+then handled by the same recorder control. OS-forced termination (including Dock
+Quit or logout) can still destroy the window outside this graceful path and is
+best-effort through helper EOF; only a finished callback proves a saved clip. The recording system runs after Tick and before Present.
 
 Native acceptance still needs permission denial/grant, actual MP4 playback,
 pause/death/restart continuity, bookmarks, window resizing/fullscreen/minimizing,

@@ -3919,6 +3919,8 @@ dependencies = [
  "hex_world",
  "hex_world_contracts",
  "hex_world_runtime",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "rand 0.8.7",
  "ron",
  "serde",

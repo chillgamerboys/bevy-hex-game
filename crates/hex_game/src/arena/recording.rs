@@ -1,6 +1,8 @@
 //! Asynchronous, opt-in native recording. It observes the run and never drives it.
 
 mod backend;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::sync::{mpsc, Mutex};
 use std::time::Instant;
@@ -99,6 +101,8 @@ struct RunMarker {
 }
 
 pub(super) fn install(app: &mut App) {
+    #[cfg(target_os = "macos")]
+    macos::install(app);
     let (commands, responses) = backend::launch();
     app.insert_resource(Recorder {
         commands,
@@ -131,7 +135,7 @@ fn snapshot(
         "started": view.started, "map": format!("{:?}", terrain.selection.map),
         "encounter": format!("{:?}", terrain.selection.encounter),
         "package": terrain.package_identity,
-        "player": session.actors.iter().find(|actor| actor.id == 0).map(|actor|
+        "player": player(session).map(|actor|
             json!({"hp": actor.hp, "max_hp": actor.max_hp, "position": actor.feet.to_array()})),
     })
 }
@@ -166,12 +170,20 @@ fn update(
                 recorder.started = None;
                 recorder.status = message;
             }
-            backend::Response::Quit => {
-                exit.write(AppExit::Success);
+            backend::Response::Quit(outcome) => {
+                if let Err(message) = &outcome {
+                    recorder.status = format!("Recording could not be finalized: {message}");
+                    error!(%message, "Recording finalization failed during quit");
+                }
+                exit.write(quit_exit(&outcome));
             }
         }
     }
-    if closing.read().next().is_some() {
+    let command_quit = cfg!(target_os = "macos")
+        && windows.iter().any(|window| window.focused)
+        && keys.just_pressed(KeyCode::KeyQ)
+        && keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
+    if closing.read().next().is_some() || command_quit {
         recorder.request_quit();
     }
     if recorder.quit && !recorder.quit_sent {
@@ -213,12 +225,8 @@ fn update(
     let marker = RunMarker {
         generation: reset.generation,
         paused: view.paused,
-        dead: session
-            .actors
-            .iter()
-            .find(|actor| actor.id == 0)
-            .is_some_and(|actor| actor.hp <= 0.0),
-        finished: session.outcome.is_some(),
+        dead: player(&session).is_some_and(|actor| actor.hp <= 0.0),
+        finished: session.is_finished(),
     };
     if recorder.active {
         for kind in changed_events(recorder.last_run, marker) {
@@ -237,6 +245,20 @@ fn update(
         }
     }
     recorder.last_run = Some(marker);
+}
+
+fn player(session: &ArenaSession) -> Option<&hex_arena::Actor> {
+    session
+        .human_actor_id()
+        .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+}
+
+fn quit_exit(outcome: &Result<(), String>) -> AppExit {
+    if outcome.is_ok() {
+        AppExit::Success
+    } else {
+        AppExit::error()
+    }
 }
 
 fn changed_events(previous: Option<RunMarker>, current: RunMarker) -> Vec<&'static str> {
@@ -262,6 +284,52 @@ fn changed_events(previous: Option<RunMarker>, current: RunMarker) -> Vec<&'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_finalization_never_reports_a_successful_quit() {
+        assert_eq!(quit_exit(&Ok(())), AppExit::Success);
+        assert_ne!(quit_exit(&Err("disk full".into())), AppExit::Success);
+    }
+
+    #[test]
+    fn spectator_actor_zero_is_not_recorded_as_a_player() {
+        use hex_arena::{ArenaBattleSetup, BattlePreset};
+        use hex_core::arena::{ArenaMap, ArenaSelection, ArenaTick};
+        for spectator in [false, true] {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(ArenaSelection {
+                    map: ArenaMap::Duel,
+                    ..default()
+                });
+            if spectator {
+                app.insert_resource(ArenaBattleSetup::spectator(
+                    BattlePreset::Shadow,
+                    BattlePreset::Shadow,
+                    1,
+                ));
+            }
+            app.add_plugins((hex_map::arena::plugin, hex_arena::plugin));
+            app.update();
+            app.world_mut().run_schedule(ArenaTick);
+            let session = app.world().resource::<ArenaSession>();
+            assert!(
+                session.actors.iter().any(|actor| actor.id == 0),
+                "real actor-zero admission"
+            );
+            assert_eq!(player(session).is_none(), spectator);
+            let state = snapshot(
+                &ViewState::default(),
+                session,
+                app.world().resource::<ArenaReset>(),
+                app.world().resource::<ArenaTerrainView>(),
+            );
+            assert_eq!(
+                state.get("player").expect("metadata player").is_null(),
+                spectator
+            );
+        }
+    }
 
     #[test]
     fn run_events_keep_simultaneous_death_pause_and_outcome_and_restart_once() {
