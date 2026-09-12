@@ -637,11 +637,16 @@ fn update_map_lighting(
     mut clear: ResMut<ClearColor>,
     mut lights: Query<(&mut DirectionalLight, &mut Transform), Without<ArenaCamera>>,
     cameras: Query<Entity, With<ArenaCamera>>,
+    mut was_forest: Local<bool>,
 ) {
     if !selection.is_changed() {
         return;
     }
     let forest = selection.map == ArenaMap::ForestMassif;
+    if !forest && !*was_forest {
+        return;
+    }
+    *was_forest = forest;
     ambient.color = if forest {
         Color::WHITE
     } else {
