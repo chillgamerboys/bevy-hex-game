@@ -186,8 +186,6 @@ pub(super) fn setup(mut commands: Commands) {
                     panel.spawn((text("", 14.0, INK), Label::Help));
                     panel.spawn(text("ESC or TAB pauses combat and frees the mouse.\nUse the paused menu for fullscreen, tuning, or quitting.", 16.0, Color::srgb(0.36, 0.90, 0.78)));
                     panel.spawn(text("Combat waits until you start.", 15.0, INK));
-                    panel.spawn((Button, Node { width: percent(100), height: px(46), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), Action::Start))
-                        .with_children(|button| { button.spawn(text("START  /  ENTER", 17.0, INK)); });
                     panel.spawn(Node { height: px(42), column_gap: px(12), ..default() }).with_children(|row| {
                         for (label, action) in [("FULLSCREEN", Action::Fullscreen), ("QUIT GAME", Action::Quit)] {
                             row.spawn((Button, Node { flex_grow: 1.0, flex_basis: px(0), height: px(42), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.14,0.21,0.26)), action))
@@ -197,6 +195,10 @@ pub(super) fn setup(mut commands: Commands) {
                                 });
                         }
                     });
+                    // Restart reveals this panel under the pointer. Keep the primary
+                    // action last so a repeated click cannot land on Quit.
+                    panel.spawn((Button, Node { width: percent(100), height: px(46), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(5)), ..default() }, BackgroundColor(Color::srgb(0.16,0.37,0.41)), Action::Start))
+                        .with_children(|button| { button.spawn(text("START  /  ENTER", 17.0, INK)); });
                 });
         });
     commands
