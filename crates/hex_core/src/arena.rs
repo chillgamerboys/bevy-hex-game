@@ -286,6 +286,18 @@ pub struct ArenaRenderStatus {
     pub pending_chunks: usize,
 }
 
+/// Disposable fountain appearance supplied by game integration to map rendering.
+///
+/// This is never a healing or collision authority. The simulation owns consumed
+/// state; the world's published fountain cells define which liquid is styled.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct ArenaFountainVisuals {
+    /// Reset generation belonging to this snapshot; stale generations are ignored.
+    pub generation: u64,
+    /// Names of unconsumed fountains whose actual water should glow.
+    pub charged: BTreeSet<String>,
+}
+
 /// Accepted material identities published from the same content catalog as damage rules.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct ArenaMaterials {

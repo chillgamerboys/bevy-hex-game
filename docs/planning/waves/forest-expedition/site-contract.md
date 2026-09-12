@@ -24,6 +24,14 @@ terrain, movement-blocking static geometry or another fountain's claimed cells.
 The published spans, rather than visual glow or a guessed material, establish
 water membership. Healing amounts and one-use consumption remain gameplay facts.
 
+`ArenaFountainVisuals` is a disposable presentation snapshot from game integration:
+the reset generation and names of currently charged fountains. Map rendering may
+style only the corresponding published water cells, and ignores stale generations.
+It never changes liquid geometry, physics, healing eligibility or consumed state.
+Caps and exposed curtains use the same water material treatment; no second
+translucent surface is layered over a fountain. Empty state restores ordinary
+animated water. The integration layer separately owns the floating charged lights.
+
 Validation tests cover low ceilings, static crowns, elevated water, stair
 apertures in both directions, blocked shoulder joins, remote rally nodes, fake
 water materials and world bounds. Cargo execution is coordinated on the combined
