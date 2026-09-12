@@ -19,6 +19,9 @@ use crate::procedural_v3::{
     MaterializedLiquidVoxel, PlannedFeature,
 };
 
+#[path = "expedition_file.rs"]
+mod expedition_file;
+
 pub(super) fn asset_root() -> PathBuf {
     std::env::var_os("BEVY_ASSET_ROOT")
         .map(PathBuf::from)
@@ -154,6 +157,7 @@ pub(super) fn material_id(name: &str, substances: &SubstanceTable) -> Result<Sub
         "soil" | "pine-floor" => "dirt",
         "moss" | "foliage" => "grass",
         "timber" | "limestone" => "stone",
+        "spring-water" => "water",
         other => other,
     };
     substances
@@ -188,8 +192,9 @@ pub(super) fn build(
             )
         })?,
     );
-    if source.manifest().world_id != "forest-massif-battle" {
-        return Err("Forest selection requires forest-massif-battle package".into());
+    let expedition = source.manifest().world_id == "forest-massif-expedition";
+    if !expedition && source.manifest().world_id != "forest-massif-battle" {
+        return Err("Forest selection requires a Forest battle or expedition package".into());
     }
     let backend = ForestRuntime::new(source.clone())?;
     let mut map = VoxelMap::new();
@@ -280,36 +285,50 @@ pub(super) fn build(
         .into_iter()
         .map(|(name, pos)| (name, pos.coord.to_world(geometry.top(pos))))
         .collect();
-    let required = [
-        "party_start",
-        "hostile_start",
-        "forest_outer_a",
-        "forest_outer_b",
-        "forest_middle",
-        "forest_deep_a",
-        "forest_deep_b",
-        "dragon_lower",
-        "dragon_middle",
-        "dragon_upper",
-        "ancient_tree",
-        "bridge_west",
-        "bridge_east",
-    ];
-    for name in required {
+    let sites = expedition_file::load(&path, source.manifest(), geometry)?;
+    let required: &[&str] = if expedition {
+        &["party_start", "bridge_center", "bridge_west", "bridge_east"]
+    } else {
+        &[
+            "party_start",
+            "hostile_start",
+            "forest_outer_a",
+            "forest_outer_b",
+            "forest_middle",
+            "forest_deep_a",
+            "forest_deep_b",
+            "dragon_lower",
+            "dragon_middle",
+            "dragon_upper",
+            "ancient_tree",
+            "bridge_west",
+            "bridge_east",
+        ]
+    };
+    for &name in required {
         if !anchors.contains_key(name) {
             return Err(format!("Forest lacks {name}"));
         }
     }
+    let hostile_start = anchors
+        .get("hostile_start")
+        .copied()
+        .or_else(|| {
+            sites.as_ref()?.encounters.values().next().map(|site| {
+                let at = site.deployment.preferred;
+                at.coord.to_world(geometry.top(at))
+            })
+        })
+        .ok_or("Forest lacks a hostile support candidate")?;
     let mut view = ArenaTerrainView {
         revision: 1,
         selection,
         spawns: [
             *anchors.get("party_start").ok_or("Missing start")?,
-            *anchors
-                .get("hostile_start")
-                .ok_or("Missing hostile start")?,
+            hostile_start,
         ],
         anchors,
+        expedition: sites,
         full_rebuild: true,
         ..default()
     };
