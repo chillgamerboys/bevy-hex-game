@@ -422,6 +422,9 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             }
         }
         for feature in &recipe.features {
+            if feature.rotation.is_some_and(|turn| turn >= 6) {
+                issue(&feature.id, "feature rotation must be 0..5".into());
+            }
             if feature
                 .overhead_clearance
                 .is_some_and(|value| !(2..=1024).contains(&value))

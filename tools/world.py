@@ -108,7 +108,7 @@ def checked_binary(target: Path) -> tuple[Path, dict]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-dir", type=Path, default=ROOT / "target" / "v4-authoring")
-    parser.add_argument("command", choices=("build", "validate", "compile", "preview", "inspect", "probe", "benchmark", "edit-benchmark", "runtime-benchmark", "replication-benchmark"))
+    parser.add_argument("command", choices=("build", "validate", "compile", "preview", "inspect", "probe", "survey", "benchmark", "edit-benchmark", "runtime-benchmark", "replication-benchmark"))
     args, trailing = parser.parse_known_args(argv)
     target = args.target_dir.resolve()
     try:

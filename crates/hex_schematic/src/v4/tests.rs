@@ -712,6 +712,7 @@ fn overhead_fixture(second_bottom: Option<i32>) -> (RegionRecipe, operators::Reg
             },
             density: 0,
             roots: vec![root],
+            rotation: None,
             overhead_clearance: Some(4),
             voxels,
         });

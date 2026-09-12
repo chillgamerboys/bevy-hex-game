@@ -323,6 +323,10 @@ pub struct FeatureRule {
     /// Exact local roots always requested, independently of density.
     #[serde(default)]
     pub roots: Vec<WorldHex>,
+    /// Authored local orientation. Omission retains the existing seeded per-root
+    /// rotation; explicit turns support asymmetric prefabs and composed structures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<u8>,
     /// Opt into exact vertical placement over reserved ground, retaining this
     /// many clear levels above each protected terrain surface. Roots still
     /// cannot occupy reserved ground, and occupied object voxels never overlap.

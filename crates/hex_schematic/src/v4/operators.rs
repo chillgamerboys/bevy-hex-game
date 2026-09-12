@@ -849,7 +849,10 @@ pub(super) fn decorate(
                 continue;
             }
             let (ground, _) = terrain(build, root)?;
-            let turn = (hash(seed, &rule.id, root)? % 6) as u8;
+            let turn = match rule.rotation {
+                Some(turn) => turn,
+                None => (hash(seed, &rule.id, root)? % 6) as u8,
+            };
             let mut occupancy: BTreeMap<WorldHex, Vec<VoxelRun>> = BTreeMap::new();
             let mut rejected = false;
             for voxel in &rule.voxels {

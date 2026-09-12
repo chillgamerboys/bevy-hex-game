@@ -32,4 +32,6 @@ pub fn validate_world(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
 #[cfg(test)]
 mod bridge_tests;
 #[cfg(test)]
+mod rotation_tests;
+#[cfg(test)]
 mod tests;
