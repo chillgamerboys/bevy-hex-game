@@ -1,6 +1,6 @@
 # Forest–Massif Expedition
 
-Status: dispatching. Branch: `wave/forest-expedition`. Coordinator: root.
+Status: paused at the user-approved 3% quota floor; hourly reset continuation active. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
 Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
 Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 114 enemies, physical milestone pickups and finite healing.
 User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
@@ -31,6 +31,8 @@ World facts, gameplay rules and visible presentation must compose in one candida
 ## Shared foundation
 World authority owns named supported encounter areas, rally route graph and fountain volumes, exact object occupancy, root support footprints, bounded edit protections and map vertical bounds. Gameplay owns profiles, spawning/pose acceptance, spatial actor broadphase, progress/pickup/fountain state, upgrade spending and read-only HUD snapshots. Shared core holds passive data types only; app adapts publications. Existing ArenaTerrainView/Geometry/Systems remain the transport.
 Root first adds backward-compatible optional authored-site contracts and records validation expectations. L1 establishes world admission/publication agreement for editable air beneath foliage, explicit root/buttress foundations and conservative legacy packages. L2 implements deterministic actor broadphase independently before population expands. L3/L4/L5 begin behavior work only after these facts are fixed.
+
+The queue below records initial dispatch and ownership, not final delivery status. The latest integrated and pending source checkpoints are recorded in `resume.md`; no lane constitutes a delivered expanded map yet.
 
 ## Dispatch queue
 ```yaml
@@ -148,3 +150,11 @@ Focused evidence: world lane 186 tests pass with one pre-existing ignored releas
 Shared Cargo targets reused stale dependency artifacts across isolated source worktrees. One bridge invocation discovered zero tests; another reused new world contracts against old compiler source and failed a field initializer. Neither counts as evidence. Touch changed crate roots on checkout switches, serialize builds sharing a target, and require positive expected test counts. Rebuilt combined compiler executed all6bridge tests successfully.
 
 Next: finish/test115actor roster profiles, harden site validation, compile exact-radius terrain/path proxy, integrate tree distribution/grounding and canopy target, then milestones/fountains/Troll rally and presentation. Current source branches retain work; no remote changes. Quota at6%remaining; user's3%floor applies. No reset monitor created yet because active development has not reached checkpoint floor. Optional OpenAI practice audit remains conditional on game completion and >=20%remaining after reset.
+
+## Checkpoint 2026-09-12, 3% pause
+
+Integrated code `5ddc5fb` includes the complete 115-actor proxy admission, canonical fountain names, role XP and derived victory, and explicit Cargo helper package selection. Combined game/map tests pass (108/41), arena tests pass (352), Python authoring/helper tests pass (20/44). The actual compiled proxy now passes supported spawning and reset for all 115 actors / 19 parties; idle simulation p95 is 0.807 ms, without any populated-forest/FPS claim. First production admission exposed and then corrected the spring/fountain ID mismatch. The tested proxy has no trees or finished decorations and is not the new playable delivery.
+
+Gameplay fountain/snapshot source `6a822d70` is preserved separately, clean but **uncompiled, untested and not integrated**. Begin the reset continuation there. Milestone pickups, Troll ranged/aura/rally, Shadow confinement, final vegetation/structures, HUD effects, full-map combat profiling, fresh windowless captures and native feel validation remain pending. The playable `hex-forest` launcher is unchanged.
+
+Hourly heartbeat `resume-forest-expedition-after-reset` is ACTIVE on this task. It waits quietly for a live confirmed reset, then resumes the authorized work; it does not spend reset credits. Full source locations, evidence, remaining steps and usage state are in [resume.md](resume.md).

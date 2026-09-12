@@ -5,9 +5,9 @@ The latest user amendments A1–A3 in `manifest.md` override the original locked
 ## Preserved delivery
 
 - Integration checkout: `/Users/alberto/Documents/Codex/2026-09-11/i-w/work/hex-expedition`, branch `wave/forest-expedition`.
-- Last code checkpoint: `bbcd24d`. No remote writes or dev/main integration.
+- Last integrated code checkpoint: `5ddc5fb73027b90d742715e6a97e7532101cbfa2`. No remote writes or dev/main integration.
 - Existing playable checkout remains `work/hex-forest` at `a872a57`; `outputs/Launch Forest Battle.command` still launches it. The expedition candidate is unfinished and must not replace that launcher before composed acceptance.
-- Agent branches retain source work: `feat/expedition-world-foundation` at `43dceeb`, `feat/expedition-gameplay` at `c5a1a966`, `feat/expedition-content` at `963d630`. Their implementation commits have been integrated individually.
+- Agent branches retain source work: `feat/expedition-world-foundation` at `43dceeb`, `feat/expedition-content` at `963d630`; their implementation commits have been integrated individually. Gameplay is integrated through `0d439414` (root `b8e7bec`). Its latest **unintegrated and uncompiled** fountain/snapshot checkpoint is `6a822d70f38cc3ae2056ab7db8a8117c730267ac` on `feat/expedition-gameplay` in `work/expedition-gameplay`.
 
 ## Current implementation
 
@@ -23,7 +23,16 @@ This is a terrain-only proxy. Trees, rocks, crystals and finished structures are
 
 Lane evidence: 186 world tests pass (one pre-existing ignored release test); 350 arena tests pass (one manual benchmark ignored), strict arena Clippy passes; tree generator eight tests cover 39 preset/seed pairs; proxy twelve tests pass; bridge six tests pass including reversed and rotated arches and atomic rejection. A previous combined app/map checkpoint passed 108 game and 29 map tests before later site, roster and proxy integration.
 
-The `bbcd24d` combined map/game suite and explicit 115-actor production-loader proxy test are pending at this document's initial write. Do not infer a pass from the earlier suite or from an ignored test listing. Append their actual outcomes below before parking.
+Final pre-pause evidence:
+
+- `bbcd24d` combined suite: **108 game tests passed / four ignored; 41 map tests passed / one ignored**. This includes all eleven site-validator and five companion-loader checks.
+- Actual proxy initially rejected all spawning because gameplay expected `*_spring_*` names while the world published `*_fountain_*`. Root `b8e7bec` aligns admission/fixtures/documentation to the producer's canonical names; validators were not weakened.
+- After that correction, the explicit production-loader fixture **passed with all 115 physically supported actors / 19 parties**, the exact role distribution, and identical reset roster. Setup 2922.95 ms, reset 860.48 ms; 120 idle bridge-start ticks p50 0.660 ms, p95 0.807 ms, max 1.000 ms. These are terrain-proxy simulation CPU measurements, not populated-forest/rally or FPS claims.
+- Updated role XP and derived completion: **352 arena tests passed / one manual benchmark ignored**, including all-credit 327 XP → level 8 / 4 XP, uncredited/expired attribution, duplicates and final-kill settlement. Expedition deaths no longer grant automatic damage/explosion bonuses; legacy package tests pass.
+- Combined Python authoring: **20 tests passed**. Cargo launcher/capture helper, including exact legacy/expedition roster validation and explicit `--forest-world` package selection: **44 tests passed**.
+- Durable logs: `outputs/expedition-validation/proxy-bbcd24d.log` (failed), `proxy-b8e7bec.log` (passed), and `arena-accounting.log` (passed), under the projectless workspace root.
+- No fresh expedition windowless captures or native playtest yet. The helper can now select the proxy explicitly, but its final expedition landmark matrix still needs expansion. Do not use old Forest images as new expedition evidence.
+- Fountain/snapshot source commit `6a822d70` has only formatting/diff checks; its three new tests have **not run**, and compilation is **unverified**. Preserve that distinction until the reset continuation tests it. No Cargo process remains running at this checkpoint.
 
 Builds sharing a target must be serialized. Same-version isolated worktrees previously reused stale Cargo artifacts: one invocation discovered zero tests, another linked incompatible grounding contracts. Touch the changed crate roots when switching source trees and require the intended positive test count. App target:
 
@@ -48,8 +57,8 @@ Its receipt measures real supported spawning, reset and idle bridge-start simula
 
 ## Next work
 
-1. Resolve any production-loader/physical-spawn proxy failures without weakening the validators.
-2. Replace old hardcoded 22/3 automatic progression for expedition packages with authored-role XP and gameplay-owned milestone/fountain state. Preserve legacy maps. Implement independent defeat/available/collected states, player-only bonuses, launch-time payloads and exact reset. The current progression is still the old implementation and is not suitable for playing the expanded roster.
+1. Inspect and cherry-pick only `6a822d70f38cc3ae2056ab7db8a8117c730267ac` from the preserved gameplay branch. It adds the approved public `expedition_progress()` snapshot, frozen-roster milestone defeated flags, named pool cells and single-use exact capsule/current-water overlap healing. Milestone positions remain `None`, collection flags remain false. Run its new tests, the arena suite, strict Clippy, and the app proxy after integration; fix actual failures before more behavior work. Do not blindly merge the entire agent branch.
+2. Finish gameplay-owned milestone pickup state and app presentation. Role XP, derived 109-minion/114-enemy accounting and victory are already integrated and tested. Preserve legacy maps; implement independent defeat/available/collected states, player-only bonuses and frozen launch-time payloads. Damage/explosions intentionally remain locked in the unfinished expedition until pickup authority is implemented.
 3. Implement Troll ranged/aura/rally behavior using world route facts and normal perception; confine the Shadow to its arena. Test largest camp and full surviving-forest rally at 115 actors.
 4. Place supported tree blueprints on final terrain, retain local landmark clearings and exact routes/camps, and prove at least 50% whole-forest canopy coverage. Add rock/crystal formations, mountain trees, fountain approaches and detailed bridge/arena structures. The CubeWorld reference image has not been successfully inspected; do not claim otherwise.
 5. Present read-only progression snapshots, milestone spheres and fountain glow/consumption, update objectives, and test XP rollover/upgrades/reward orders/final kills/pause/victory/reset and Duel/Fort regressions. Expected total XP is 327, yielding level 8 with 4 XP carried forward.
@@ -60,4 +69,6 @@ Its receipt measures real supported spawning, reset and idle bridge-start simula
 
 User's 3% floor overrides the repository's older 7% instruction. Check live `codex` account limits, not the separate Spark bucket. At the floor, finish the bounded checkpoint and configure an hourly heartbeat on this current task. While usage remains exhausted/unchanged, perform only the quota check and stay quiet. Resume development only after a confirmed fresh window/reset in live usage, not a predicted wall-clock deadline. No reset credits may be consumed.
 
-Last observed usage at this document's initial write: 96% used / 4% remaining; weekly reset timestamp 1789435563 (September 14, 2026 at 18:26:03 America/Los_Angeles). The user expected an earlier reset, so the heartbeat must use fresh tool evidence. No monitor has been created at this initial write; record its actual ID and state before claiming it is scheduled.
+Parked at **97% used / 3% remaining**, weekly reset timestamp **1789435563** (September 14, 2026 at 18:26:03 America/Los_Angeles). The user expected an earlier reset, so the heartbeat uses fresh tool evidence.
+
+Hourly current-task heartbeat **`resume-forest-expedition-after-reset` is ACTIVE**, created through `automation_update` for task `01a0936b-7adc-7c31-95e6-391395cf9e86`. State file: `/Users/alberto/Documents/Codex/2026-09-11/i-w/outputs/expedition-reset-state.json`. While waiting, do only the quota check and stay quiet on unchanged state. On a confirmed reset, resume the above work, then checkpoint again at 3%. The local app and computer need to remain available for scheduled work. Pause this heartbeat when all authorized work, including the conditional guidance review if eligible, is handled.
