@@ -1,0 +1,305 @@
+//! Run-local Forest–Massif progression and player-only spell tuning.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::{ActorId, ArenaSession, ArenaTuning, Species};
+
+/// Impact behavior frozen when an ordinary Fireball is released.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum FireballMode {
+    /// Damage only the exact struck body, barrier, or terrain voxel.
+    ContactOnly,
+    /// Apply one ordinary radial explosion, without extra contact damage.
+    #[default]
+    Explosive,
+}
+
+/// Beneficial player upgrades available in the Forest–Massif pause menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeStat {
+    /// Increase shield dimensions by one preset.
+    ShieldSize,
+    /// Increase the unlocked explosion radius by one preset.
+    FireballSize,
+    /// Increase High Jump rise by half a unit.
+    HighJumpHeight,
+    /// Increase projectile reference speed by two units per second.
+    ProjectileSpeed,
+    /// Reduce Shield cooldown by half a second.
+    ShieldCooldown,
+    /// Reduce Fireball cooldown by a quarter second.
+    FireballCooldown,
+    /// Reduce High Jump cooldown by half a second.
+    HighJumpCooldown,
+    /// Increase base Fireball damage by five HP, independently of the forest bonus.
+    FireballDamage,
+    /// Increase impact impulse by one unit per second.
+    FireballKnockback,
+}
+
+/// Read-only player progress, with no hidden enemy positions or party activity.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct ProgressSnapshot {
+    /// Current player level, starting at one.
+    pub level: u32,
+    /// XP earned toward the next level.
+    pub xp: u32,
+    /// Additional XP required for this complete level.
+    pub xp_to_next: u32,
+    /// Total credited kill XP this run.
+    pub total_xp: u32,
+    /// Level rewards that have not been spent.
+    pub available_upgrades: u32,
+    /// Defeated members of the twenty-Goblin/two-Shaman forest roster.
+    pub forest_defeated: usize,
+    /// Defeated members of the three-Dragon roster.
+    pub dragons_defeated: usize,
+    /// All twenty-two forest enemies have been defeated.
+    pub forest_cleared: bool,
+    /// All three Dragons have been defeated.
+    pub explosions_unlocked: bool,
+    /// Separate permanent forest-clear damage reward.
+    pub damage_bonus: f32,
+    /// All twenty-five enemies have been defeated.
+    pub completed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProgressState {
+    snapshot: ProgressSnapshot,
+    player: ArenaTuning,
+    roster: BTreeMap<ActorId, Species>,
+    defeated: BTreeSet<ActorId>,
+    hits: BTreeMap<ActorId, u64>,
+}
+
+impl Default for ProgressState {
+    fn default() -> Self {
+        Self {
+            snapshot: ProgressSnapshot {
+                level: 1,
+                xp: 0,
+                xp_to_next: 10,
+                total_xp: 0,
+                available_upgrades: 0,
+                forest_defeated: 0,
+                dragons_defeated: 0,
+                forest_cleared: false,
+                explosions_unlocked: false,
+                damage_bonus: 0.0,
+                completed: false,
+            },
+            player: ArenaTuning {
+                projectile_speed: 45.0,
+                projectile_gravity: 12.0,
+                fireball_damage: 15.0,
+                fireball_knockback: 12.0,
+                fireball_cooldown: 0.5,
+                ..Default::default()
+            },
+            roster: BTreeMap::new(),
+            defeated: BTreeSet::new(),
+            hits: BTreeMap::new(),
+        }
+    }
+}
+
+impl ArenaSession {
+    /// Whether the reset-accepted session is the authored Forest–Massif player run.
+    #[must_use]
+    pub fn is_forest_run(&self) -> bool {
+        self.progression.is_some()
+    }
+
+    /// Run progress; other maps and spectators have no progression.
+    #[must_use]
+    pub fn progress(&self) -> Option<ProgressSnapshot> {
+        self.progression.as_ref().map(|state| state.snapshot)
+    }
+
+    /// All authored enemies are defeated; movement and exploration may continue.
+    #[must_use]
+    pub fn completed_run(&self) -> bool {
+        self.progress().is_some_and(|progress| progress.completed)
+    }
+
+    /// Effective player spell tuning, keeping the supplied enemy configuration unchanged.
+    #[must_use]
+    pub fn player_tuning(&self, base: &ArenaTuning) -> ArenaTuning {
+        let Some(state) = &self.progression else {
+            return base.clone();
+        };
+        let mut value = base.clone();
+        let player = &state.player;
+        value.shield_size = player.shield_size;
+        value.fireball_size = player.fireball_size;
+        value.high_jump_height = player.high_jump_height;
+        value.projectile_speed = player.projectile_speed;
+        value.projectile_gravity = player.projectile_gravity;
+        value.shield_cooldown = player.shield_cooldown;
+        value.fireball_cooldown = player.fireball_cooldown;
+        value.high_jump_cooldown = player.high_jump_cooldown;
+        value.fireball_damage = player.fireball_damage + state.snapshot.damage_bonus;
+        value.fireball_knockback = player.fireball_knockback;
+        value
+    }
+
+    /// Whether one available level reward can improve this field now.
+    #[must_use]
+    pub fn can_upgrade(&self, stat: UpgradeStat) -> bool {
+        self.progression
+            .as_ref()
+            .is_some_and(|state| state.snapshot.available_upgrades > 0 && state.can_upgrade(stat))
+    }
+
+    /// Spend exactly one level reward; rejected or capped choices change nothing.
+    pub fn spend_upgrade(&mut self, stat: UpgradeStat) -> bool {
+        if !self.can_upgrade(stat) {
+            return false;
+        }
+        let Some(state) = &mut self.progression else {
+            return false;
+        };
+        let player = &mut state.player;
+        match stat {
+            UpgradeStat::ShieldSize => player.shield_size += 1,
+            UpgradeStat::FireballSize => player.fireball_size += 1,
+            UpgradeStat::HighJumpHeight => player.high_jump_height += 0.5,
+            UpgradeStat::ProjectileSpeed => {
+                player.projectile_speed = (player.projectile_speed + 2.0).min(64.0)
+            }
+            UpgradeStat::ShieldCooldown => {
+                player.shield_cooldown = (player.shield_cooldown - 0.5).max(0.5)
+            }
+            UpgradeStat::FireballCooldown => {
+                player.fireball_cooldown = (player.fireball_cooldown - 0.25).max(0.25)
+            }
+            UpgradeStat::HighJumpCooldown => {
+                player.high_jump_cooldown = (player.high_jump_cooldown - 0.5).max(0.5)
+            }
+            UpgradeStat::FireballDamage => player.fireball_damage += 5.0,
+            UpgradeStat::FireballKnockback => player.fireball_knockback += 1.0,
+        }
+        state.snapshot.available_upgrades -= 1;
+        true
+    }
+
+    pub(crate) fn player_fireball_mode(&self) -> FireballMode {
+        if self.progress().is_some_and(|p| !p.explosions_unlocked) {
+            FireballMode::ContactOnly
+        } else {
+            FireballMode::Explosive
+        }
+    }
+
+    pub(crate) fn register_forest_roster(&mut self) {
+        if let Some(state) = &mut self.progression {
+            state.roster = self
+                .actors
+                .iter()
+                .filter(|a| a.id != 0)
+                .map(|actor| (actor.id, actor.species))
+                .collect();
+        }
+    }
+
+    pub(crate) fn record_player_hit(&mut self, owner: ActorId, victim: ActorId) {
+        if self.human_actor_id() != Some(owner) || owner == victim {
+            return;
+        }
+        let hostile = self
+            .actors
+            .iter()
+            .find(|a| a.id == owner)
+            .zip(self.actors.iter().find(|a| a.id == victim))
+            .is_some_and(|(a, b)| a.team != b.team);
+        if hostile {
+            if let Some(state) = &mut self.progression {
+                state.hits.insert(victim, self.tick);
+            }
+        }
+    }
+
+    pub(crate) fn reconcile_progression(&mut self) {
+        let Some(state) = &mut self.progression else {
+            return;
+        };
+        for actor in self.actors.iter().filter(|actor| actor.hp <= 0.0) {
+            let Some(species) = state.roster.get(&actor.id) else {
+                continue;
+            };
+            if !state.defeated.insert(actor.id) {
+                continue;
+            }
+            match species {
+                Species::Goblin | Species::Shaman => state.snapshot.forest_defeated += 1,
+                Species::Dragon => state.snapshot.dragons_defeated += 1,
+                _ => {}
+            }
+            if state
+                .hits
+                .get(&actor.id)
+                .is_some_and(|tick| self.tick.saturating_sub(*tick) <= 1200)
+            {
+                let xp = match species {
+                    Species::Goblin => 1,
+                    Species::Shaman => 5,
+                    Species::Dragon => 20,
+                    _ => 0,
+                };
+                state.snapshot.xp += xp;
+                state.snapshot.total_xp += xp;
+                while state.snapshot.xp >= state.snapshot.xp_to_next {
+                    state.snapshot.xp -= state.snapshot.xp_to_next;
+                    state.snapshot.level += 1;
+                    state.snapshot.available_upgrades += 1;
+                    state.snapshot.xp_to_next = level_threshold(state.snapshot.level);
+                }
+            }
+        }
+        state.snapshot.forest_cleared = state.snapshot.forest_defeated == 22;
+        state.snapshot.explosions_unlocked = state.snapshot.dragons_defeated == 3;
+        state.snapshot.damage_bonus = if state.snapshot.forest_cleared {
+            25.0
+        } else {
+            0.0
+        };
+        state.snapshot.completed =
+            state.snapshot.forest_cleared && state.snapshot.explosions_unlocked;
+    }
+}
+
+impl ProgressState {
+    fn can_upgrade(&self, stat: UpgradeStat) -> bool {
+        let player = &self.player;
+        match stat {
+            UpgradeStat::ShieldSize => player.shield_size < 2,
+            UpgradeStat::FireballSize => {
+                self.snapshot.explosions_unlocked && player.fireball_size < 2
+            }
+            UpgradeStat::HighJumpHeight => player.high_jump_height < 8.0,
+            UpgradeStat::ProjectileSpeed => player.projectile_speed < 64.0,
+            UpgradeStat::ShieldCooldown => player.shield_cooldown > 0.5,
+            UpgradeStat::FireballCooldown => player.fireball_cooldown > 0.25,
+            UpgradeStat::HighJumpCooldown => player.high_jump_cooldown > 0.5,
+            UpgradeStat::FireballDamage => player.fireball_damage < 100.0,
+            UpgradeStat::FireballKnockback => player.fireball_knockback < 25.0,
+        }
+    }
+}
+
+fn level_threshold(level: u32) -> u32 {
+    // Compute ceil(10 * (3/2)^(level-1)) without cumulative per-level rounding.
+    let exponent = level.saturating_sub(1);
+    let numerator = 3_u64
+        .checked_pow(exponent)
+        .and_then(|value| value.checked_mul(10));
+    let denominator = 2_u64.checked_pow(exponent);
+    numerator
+        .zip(denominator)
+        .and_then(|(n, d)| u32::try_from(n.div_ceil(d)).ok())
+        .unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod tests;

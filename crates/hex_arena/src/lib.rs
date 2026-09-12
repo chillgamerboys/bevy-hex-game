@@ -28,6 +28,8 @@ mod encounter_config;
 mod encounters;
 mod hex_prisms;
 mod motion;
+mod progression;
+pub use progression::{FireballMode, ProgressSnapshot, UpgradeStat};
 mod shapes;
 mod spells;
 mod targeting;
@@ -641,6 +643,7 @@ pub struct ArenaSession {
     pub terrain_outcomes: u64,
     /// Number of shield impacts that added at least one safe cell since reset.
     pub shields_raised: u64,
+    progression: Option<progression::ProgressState>,
     collision: CollisionWorld,
     generation: Option<u64>,
     bot: Bot,
@@ -676,6 +679,7 @@ impl Default for ArenaSession {
             notice: String::new(),
             terrain_outcomes: 0,
             shields_raised: 0,
+            progression: None,
             collision: CollisionWorld::default(),
             generation: None,
             bot: Bot::default(),
@@ -792,6 +796,8 @@ impl ArenaSession {
         *self = Self {
             actors: vec![Actor::spawn(0, human, aim), Actor::spawn(1, bot, -aim)],
             generation: Some(generation),
+            progression: (world.selection.map == hex_core::arena::ArenaMap::ForestMassif)
+                .then(progression::ProgressState::default),
             bot_enabled,
             bot: Bot::default(),
             #[cfg(any(test, feature = "test-support"))]
@@ -811,6 +817,7 @@ impl ArenaSession {
         self.reset(generation, world, geometry);
         self.accepted_battle = setup.clone();
         if setup.control == ArenaControl::Spectator {
+            self.progression = None;
             self.actors.clear();
         }
         if let Err(reason) = setup.validate_for(world.selection.map) {

@@ -152,7 +152,34 @@ impl ArenaSession {
             human.previous_feet = feet;
         }
         self.actors = vec![human];
-        let specs: Vec<(Vec3, Vec<Species>)> = if world.selection.map == ArenaMap::SevenRegions {
+        let specs: Vec<(Vec3, Vec<Species>)> = if world.selection.map == ArenaMap::ForestMassif {
+            let camps = [
+                ("forest_outer_a", vec![Species::Goblin; 2]),
+                ("forest_outer_b", vec![Species::Goblin; 3]),
+                ("forest_middle", vec![Species::Goblin; 4]),
+                (
+                    "forest_deep_a",
+                    [vec![Species::Shaman], vec![Species::Goblin; 5]].concat(),
+                ),
+                (
+                    "forest_deep_b",
+                    [vec![Species::Shaman], vec![Species::Goblin; 6]].concat(),
+                ),
+                ("dragon_lower", vec![Species::Dragon]),
+                ("dragon_middle", vec![Species::Dragon]),
+                ("dragon_upper", vec![Species::Dragon]),
+            ];
+            let mut specs = Vec::new();
+            for (name, roster) in camps {
+                let Some(home) = world.anchors.get(name).copied() else {
+                    self.notice = format!("Forest–Massif is missing required camp {name}.");
+                    self.refuse_player_encounter();
+                    return;
+                };
+                specs.push((home, roster));
+            }
+            specs
+        } else if world.selection.map == ArenaMap::SevenRegions {
             [
                 ("mountains_high_pass", vec![Species::Dragon]),
                 ("fort_fort_courtyard", BattlePreset::ShamanParty.members()),
@@ -335,7 +362,7 @@ impl ArenaSession {
             });
         }
         if self.encounter.spawn_failed
-            && (world.selection.map == ArenaMap::Duel
+            && (matches!(world.selection.map, ArenaMap::Duel | ArenaMap::ForestMassif)
                 || self.accepted_battle.player_recipe.is_some_and(|recipe| {
                     BattlePreset::WISP_SWARMS.contains(&recipe) || recipe == BattlePreset::Worm
                 }))
@@ -405,6 +432,11 @@ impl ArenaSession {
                 human.aim = (home - human.eye()).normalize_or(Vec3::NEG_Z);
             }
         }
+        if world.selection.map == ArenaMap::ForestMassif && self.encounter.spawn_failed {
+            self.refuse_player_encounter();
+            return;
+        }
+        self.register_forest_roster();
         self.publish_parties();
     }
 
@@ -690,6 +722,7 @@ impl ArenaSession {
         let mut casts = Vec::new();
         let mut boosts = Vec::new();
         let human_id = self.human_actor_id();
+        let player_tuning = self.player_tuning(tuning);
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             actor.previous_yaw = actor.body_yaw;
@@ -726,7 +759,12 @@ impl ArenaSession {
             for cd in &mut actor.cooldowns {
                 *cd = (*cd - STEP).max(0.0);
             }
-            let boosted = intent.high_jump && actor.high_jump(tuning);
+            let actor_tuning = if Some(actor.id) == human_id {
+                &player_tuning
+            } else {
+                tuning
+            };
+            let boosted = intent.high_jump && actor.high_jump(actor_tuning);
             if boosted {
                 boosts.push((actor.id, actor.feet));
             }
@@ -752,7 +790,7 @@ impl ArenaSession {
                 actor.cancel_charge();
             }
             if actor.hp > 0.0 {
-                if let Some((spell, speed)) = actor.casting(intent, tuning) {
+                if let Some((spell, speed)) = actor.casting(intent, actor_tuning) {
                     casts.push((actor.id, spell, speed));
                 }
             }
@@ -775,6 +813,8 @@ impl ArenaSession {
                         Spell::Shield => tuning.encounters.shaman_shield_cooldown,
                         _ => tuning.encounters.shaman_fireball_cooldown,
                     }
+                } else if Some(id) == human_id {
+                    player_tuning.cooldown(spell)
                 } else {
                     tuning.cooldown(spell)
                 };
@@ -793,6 +833,7 @@ impl ArenaSession {
         self.encounter.brains = brains;
         self.advance_walls(world, geometry, materials, &mut out);
         self.publish_parties();
+        self.reconcile_progression();
         self.pending_burrows
             .retain(|id, _| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
         out.burrows.retain(|request| {
@@ -810,6 +851,7 @@ impl ArenaSession {
             self.finish_battle_tick();
         } else {
             self.outcome = match (human_alive, enemy) {
+                (true, None) if self.completed_run() => None,
                 (true, None) => Some(ArenaOutcome::Winner(0)),
                 (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
                 (false, None) => Some(ArenaOutcome::Draw),
@@ -843,8 +885,11 @@ fn elapsed(tick: u64, since: u64) -> f32 {
     tick.saturating_sub(since) as f32 * STEP
 }
 
-fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> bool {
-    !view.liquids.iter().any(|run| {
+pub(super) fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> bool {
+    if view.liquids.is_empty() {
+        return true;
+    }
+    let overlaps = |run: &hex_core::arena::ArenaSolidSpan| {
         let bottom = geometry.top(run.bottom) - geometry.level_height;
         let top = geometry.top(TilePos::new(run.bottom.coord, run.top_level));
         if matches!(
@@ -857,7 +902,31 @@ fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> 
             && actor.feet.y + actor.dimensions.y > bottom + SKIN
             && run.bottom.coord.to_world(actor.feet.y).distance(actor.feet)
                 < actor.dimensions.x.max(actor.dimensions.z) * 0.5 + 1.0
-    })
+    };
+    if view.selection.map != ArenaMap::ForestMassif {
+        return !view.liquids.iter().any(overlaps);
+    }
+    // This world publishes liquid runs sorted by exact bottom identity. Query
+    // only nearby columns without rebuilding or reinterpreting its occupancy.
+    let reach = actor.dimensions.x.max(actor.dimensions.z) * 0.5 + 1.0;
+    let mut radius = 1;
+    let mut covered = 0.0;
+    while covered < reach {
+        radius += 1;
+        covered += hex_core::config::HEX_SMALL_DIAMETER * 0.5;
+    }
+    !HexCoord::from_world(actor.feet)
+        .within_radius(radius)
+        .into_iter()
+        .any(|coord| {
+            let start = view.liquids.partition_point(|run| run.bottom.coord < coord);
+            view.liquids
+                .get(start..)
+                .unwrap_or(&[])
+                .iter()
+                .take_while(|run| run.bottom.coord == coord)
+                .any(overlaps)
+        })
 }
 
 fn safe_spawn(

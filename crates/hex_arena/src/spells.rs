@@ -23,6 +23,7 @@ pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShotParameters {
+    mode: crate::FireballMode,
     gravity: f32,
     collision_radius: f32,
     appearance: crate::ProjectileAppearance,
@@ -48,6 +49,12 @@ pub(crate) struct PendingWall {
 }
 
 impl Projectile {
+    /// Frozen contact or radial response; rewards never mutate an in-flight shot.
+    #[must_use]
+    pub fn fireball_mode(&self) -> crate::FireballMode {
+        self.parameters.mode
+    }
+
     /// Frozen rendering identity, never inferred from a living source actor.
     #[must_use]
     pub fn appearance(&self) -> crate::ProjectileAppearance {
@@ -116,6 +123,7 @@ fn projectile(
         spell,
         age: 0.0,
         parameters: ShotParameters {
+            mode: crate::FireballMode::Explosive,
             gravity: tuning.projectile_gravity,
             collision_radius: PROJECTILE_RADIUS,
             appearance: if spell == Spell::Shield {
@@ -174,6 +182,7 @@ fn creature_projectile(
         spell: Spell::Fireball,
         age: 0.0,
         parameters: ShotParameters {
+            mode: crate::FireballMode::Explosive,
             gravity: spec.gravity,
             collision_radius: spec.collision_radius,
             appearance: spec.appearance,
@@ -527,7 +536,17 @@ impl ArenaSession {
         };
         self.combat_cue(owner, actor.eye(), CombatCueKind::Release);
         self.record_cast(owner, spell);
-        let mut shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
+        let player_tuning;
+        let effective = if Some(owner) == self.human_actor_id() {
+            player_tuning = self.player_tuning(tuning);
+            &player_tuning
+        } else {
+            tuning
+        };
+        let mut shot = projectile(&actor, spell, effective, self.next_projectile, launch_speed);
+        if Some(owner) == self.human_actor_id() {
+            shot.parameters.mode = self.player_fireball_mode();
+        }
         shot.parameters.min_y = self.collision.min_y.min(-10.0);
         self.next_projectile += 1;
         self.projectiles.push(shot);
@@ -583,6 +602,9 @@ impl ArenaSession {
                         // Ordinary swept movement resolves the impulse next tick.
                         actor.body.impulse_velocity += direction * shot.parameters.shield_push;
                     }
+                    if let Some(victim) = impact.actor {
+                        self.record_player_hit(shot.owner, victim);
+                    }
                     let candidates = wall_candidates(
                         impact,
                         shot.parameters.direction,
@@ -613,6 +635,8 @@ impl ArenaSession {
                             kind: crate::VisualEffectKind::Shield,
                         });
                     }
+                } else if shot.parameters.mode == crate::FireballMode::ContactOnly {
+                    self.contact_fireball(&shot, impact, world, geometry, materials, out);
                 } else {
                     self.explode(
                         impact.point,
@@ -683,6 +707,64 @@ impl ArenaSession {
             }
         }
         self.pending_walls = survivors;
+    }
+
+    fn contact_fireball(
+        &mut self,
+        shot: &Projectile,
+        impact: Impact,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        materials: ArenaMaterials,
+        out: &mut CommandsOut,
+    ) {
+        let mut damaged = None;
+        if let Some(actor) = impact
+            .actor
+            .and_then(|id| self.actors.iter_mut().find(|a| a.id == id))
+        {
+            if actor.hp > 0.0 && (actor.id == shot.owner || actor.team != shot.parameters.team) {
+                let removed = actor.hp.min(shot.parameters.damage);
+                actor.hp -= removed;
+                let direction = (shot.parameters.direction + Vec3::Y * 0.35).normalize_or(Vec3::Y);
+                actor.body.impulse_velocity += direction * shot.parameters.knockback;
+                if direction.y > 0.0 && shot.parameters.knockback > 0.0 {
+                    actor.body.grounded = false;
+                }
+                damaged = Some((actor.id, removed));
+            }
+        }
+        if let Some((victim, amount)) = damaged {
+            self.record_damage(shot.owner, victim, amount);
+        }
+        self.record_fireball_impact(
+            shot.owner,
+            damaged.is_some_and(|(id, amount)| id != shot.owner && amount > 0.0),
+        );
+        if impact.actor.is_none() && impact.barrier.is_none() {
+            let inside = impact.point - impact.normal * (shot.collision_radius() + SKIN * 4.0);
+            if let Some(pos) = geometry
+                .voxel_at(inside)
+                .filter(|pos| world.voxels.contains_key(pos))
+            {
+                let request = TerrainImpact {
+                    batch: TerrainBatchId(self.next_impact),
+                    volume: vec![pos],
+                    kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
+                    power: shot.parameters.terrain_power,
+                };
+                self.next_impact += 1;
+                self.pending_impacts.insert(request.batch, request.clone());
+                out.impacts.push(request);
+            }
+        }
+        self.effects.push(VisualEffect {
+            center: impact.point,
+            radius: 0.16,
+            age: 0.0,
+            lifetime: 0.15,
+            kind: crate::VisualEffectKind::Fireball,
+        });
     }
 
     pub(super) fn explode(
@@ -782,13 +864,14 @@ pub(super) fn preview(
     else {
         return Preview::default();
     };
+    let tuning = session.player_tuning(tuning);
     preview_actor(
         actor,
         &session.actors,
         &session.collision,
         world,
         geometry,
-        tuning,
+        &tuning,
         tuning.launch_speed(actor.charge().map_or(0.0, |charge| charge.elapsed)),
     )
 }
