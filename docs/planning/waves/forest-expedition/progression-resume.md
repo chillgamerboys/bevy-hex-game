@@ -34,6 +34,20 @@ fountain consumption, their public snapshots, Troll ranged/aura/rally AI and str
 Shadow arena confinement remain unfinished. Expedition milestone bonuses remain
 locked until pickup authority is implemented.
 
+## Fountain/snapshot checkpoint at the 3% floor
+
+Source now adds `ArenaSession::expedition_progress()` and the approved snapshot,
+reward, milestone and fountain types. It registers admitted pool cells and consumes
+one use for up to40HP only when a living wounded player overlaps the exact pool
+volume and currently published liquid. FullHP preserves the use; reset recreates it.
+Milestone positions remain None and collected remains false until pickup authority
+is implemented. Three focused tests cover water/body-volume checks, healing limits,
+death/reset and frozen-roster snapshot facts. **This follow-up has not been compiled
+or run:** quota reached3% after formatting/diff checks, and no Cargo job was started.
+The coordinator must validate it before treating this source checkpoint as working.
+Reward pickups, Troll ranged/aura/rally, Shadow confinement and all HUD/pool visual
+wiring remain unfinished. Earlier sections describe the last validated baseline.
+
 ## Locked roster, rewards and healing
 
 Fourteen Goblin camp counts are

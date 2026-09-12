@@ -856,6 +856,7 @@ impl ArenaSession {
         self.advance_walls(world, geometry, materials, &mut out);
         self.publish_parties();
         self.reconcile_progression();
+        self.advance_fountains(world, geometry);
         self.pending_burrows
             .retain(|id, _| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
         out.burrows.retain(|request| {

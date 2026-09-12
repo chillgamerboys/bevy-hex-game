@@ -162,6 +162,7 @@ impl ArenaSession {
         self.actors = actors;
         self.encounter = encounter;
         self.register_forest_roster();
+        self.register_expedition_fountains(sites);
         self.publish_parties();
         Ok(())
     }

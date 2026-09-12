@@ -31,7 +31,10 @@ pub use expedition::ExpeditionRole;
 mod hex_prisms;
 mod motion;
 mod progression;
-pub use progression::{FireballMode, ProgressSnapshot, UpgradeStat};
+pub use progression::{
+    ExpeditionReward, ExpeditionSnapshot, FireballMode, FountainSnapshot, MilestoneSnapshot,
+    ProgressSnapshot, UpgradeStat,
+};
 mod shapes;
 mod spells;
 mod targeting;

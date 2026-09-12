@@ -56,7 +56,11 @@ fn fixture() -> (
             sites.fountains.insert(
                 format!("{prefix}_fountain_{i:02}"),
                 ArenaFountainVolume {
-                    cells: [TilePos::new(HexCoord::from_axial(i, 70), 1)].into(),
+                    cells: [TilePos::new(
+                        HexCoord::from_axial(if prefix == "forest" { i } else { i + 10 }, 70),
+                        1,
+                    )]
+                    .into(),
                 },
             );
         }
@@ -377,4 +381,166 @@ fn expedition_uncredited_and_expired_deaths_count_once_without_xp_or_troll_minio
         (0, 1, 0, 0)
     );
     assert!(!reset.completed && !reset.explosions_unlocked);
+}
+
+fn pool(view: &mut ArenaTerrainView, geometry: ArenaVoxelGeometry) -> (TilePos, Vec3) {
+    let cell = *view
+        .expedition
+        .as_ref()
+        .expect("sites")
+        .fountains
+        .get("forest_fountain_01")
+        .expect("pool")
+        .cells
+        .first()
+        .expect("water cell");
+    let floor = TilePos::new(cell.coord, cell.level - 1);
+    view.voxels.insert(floor, SubstanceId(1));
+    view.liquids.push(hex_core::arena::ArenaSolidSpan {
+        bottom: cell,
+        top_level: cell.level,
+        substance: SubstanceId(5),
+    });
+    (cell, cell.coord.to_world(geometry.top(floor) + SKIN))
+}
+
+#[test]
+fn expedition_fountain_requires_actual_water_body_overlap_and_spends_only_when_wounded() {
+    let (mut session, mut view, geometry, materials, tuning) = fixture();
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let (_, feet) = pool(&mut view, geometry);
+    let consumed = |session: &ArenaSession| {
+        session
+            .expedition_progress()
+            .expect("snapshot")
+            .fountains
+            .iter()
+            .filter(|pool| pool.consumed)
+            .count()
+    };
+    session.actors.first_mut().expect("player").feet = feet;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(consumed(&session), 0, "full HP preserves the pool");
+
+    let player = session.actors.first_mut().expect("player");
+    player.hp = 90.0;
+    player.feet = feet + Vec3::X * 1.2;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(
+        consumed(&session),
+        0,
+        "standing outside the actual hex volume cannot heal"
+    );
+    session.actors.first_mut().expect("player").feet = feet + Vec3::Y;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(consumed(&session), 0, "above the water is not inside it");
+    session.actors.first_mut().expect("player").feet = feet;
+    let liquids = std::mem::take(&mut view.liquids);
+    session.advance_fountains(&view, geometry);
+    assert_eq!(
+        consumed(&session),
+        0,
+        "an authored cell without actual water cannot heal"
+    );
+    view.liquids = liquids;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(
+        session.actors.first().expect("player").hp.to_bits(),
+        100.0_f32.to_bits()
+    );
+    assert_eq!(consumed(&session), 1);
+    session.actors.first_mut().expect("player").hp = 1.0;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(
+        session.actors.first().expect("player").hp.to_bits(),
+        1.0_f32.to_bits()
+    );
+    assert_eq!(view.liquids.len(), 1, "consumption preserves the water");
+}
+
+#[test]
+fn expedition_fountain_heals_forty_never_revives_and_reset_restores_it() {
+    let (mut session, mut view, geometry, materials, tuning) = fixture();
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let (_, feet) = pool(&mut view, geometry);
+    let player = session.actors.first_mut().expect("player");
+    player.feet = feet;
+    player.hp = 0.0;
+    session.advance_fountains(&view, geometry);
+    assert!(session
+        .expedition_progress()
+        .expect("snapshot")
+        .fountains
+        .iter()
+        .all(|f| !f.consumed));
+    session.actors.first_mut().expect("player").hp = 10.0;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(
+        session.actors.first().expect("player").hp.to_bits(),
+        50.0_f32.to_bits()
+    );
+    session.reset(1, &view, geometry);
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    assert!(session
+        .expedition_progress()
+        .expect("snapshot")
+        .fountains
+        .iter()
+        .all(|f| !f.consumed));
+    let player = session.actors.first_mut().expect("player");
+    player.feet = feet;
+    player.hp = 10.0;
+    session.advance_fountains(&view, geometry);
+    assert_eq!(
+        session.actors.first().expect("player").hp.to_bits(),
+        50.0_f32.to_bits()
+    );
+}
+
+#[test]
+fn expedition_snapshot_uses_registered_roles_and_does_not_invent_reward_orbs() {
+    let (mut session, view, geometry, materials, tuning) = fixture();
+    session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+    let before = session.expedition_progress().expect("snapshot");
+    assert_eq!(
+        (
+            before.enemies_total,
+            before.enemies_defeated,
+            before.forest_total
+        ),
+        (114, 0, 109)
+    );
+    assert_eq!(before.fountains.len(), 6);
+    assert!(before
+        .milestones
+        .iter()
+        .all(|m| !m.defeated && !m.collected && m.available_position.is_none()));
+    let troll = session
+        .actors
+        .iter()
+        .find(|a| a.expedition_role() == Some(ExpeditionRole::Troll))
+        .expect("troll")
+        .id;
+    // The admitted ledger, not a later live species mutation, defines the reward.
+    session
+        .actors
+        .iter_mut()
+        .find(|a| a.id == troll)
+        .expect("troll")
+        .species = Species::Shadow;
+    defeat(&mut session, troll, false);
+    let after = session.expedition_progress().expect("snapshot");
+    assert_eq!((after.enemies_defeated, after.forest_defeated), (1, 0));
+    assert!(
+        after
+            .milestones
+            .iter()
+            .find(|m| m.reward == ExpeditionReward::TrollDamage)
+            .expect("milestone")
+            .defeated
+    );
+    assert!(after
+        .milestones
+        .iter()
+        .all(|m| !m.collected && m.available_position.is_none()));
 }

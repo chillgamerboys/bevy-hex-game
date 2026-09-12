@@ -2,6 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod expedition;
+pub use expedition::{ExpeditionReward, ExpeditionSnapshot, FountainSnapshot, MilestoneSnapshot};
+
 use crate::{ActorId, ArenaSession, ArenaTuning, ExpeditionRole, Species};
 
 /// Impact behavior frozen when an ordinary Fireball is released.
@@ -110,6 +113,7 @@ pub(crate) struct ProgressState {
     player: ArenaTuning,
     roster: BTreeMap<ActorId, RosterEntry>,
     expedition: bool,
+    fountains: BTreeMap<String, expedition::FountainState>,
     defeated: BTreeSet<ActorId>,
     hits: BTreeMap<ActorId, u64>,
 }
@@ -140,6 +144,7 @@ impl Default for ProgressState {
             },
             roster: BTreeMap::new(),
             expedition: false,
+            fountains: BTreeMap::new(),
             defeated: BTreeSet::new(),
             hits: BTreeMap::new(),
         }
