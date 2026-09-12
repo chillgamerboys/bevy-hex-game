@@ -337,6 +337,149 @@ fn overview() -> ArenaOverview {
 }
 
 #[test]
+fn expanded_atlas_and_clear_destination_fit_every_window_and_scale() {
+    for (width, height) in [(1280, 720), (1600, 900), (1920, 1080)] {
+        for scale in [1.0, 2.0] {
+            let mut app = app(width, height, scale);
+            let mut atlas = overview();
+            // Exercise the finite hex region's near-square world bounds, not
+            // the much shallower 2:1 pointer fixture above.
+            atlas.min = Vec2::new(-100.0, -86.6);
+            atlas.max = -atlas.min;
+            app.world_mut().insert_resource(atlas);
+            app.world_mut().resource_mut::<ViewState>().started = true;
+            app.world_mut().resource_mut::<UxState>().pin = Some(Vec2::ZERO);
+            settle(&mut app);
+            open_page(&mut app, Page::Map);
+            let map = app
+                .world_mut()
+                .query::<(Entity, &MapCanvas)>()
+                .iter(app.world())
+                .find_map(|(entity, canvas)| canvas.large.then_some(entity))
+                .expect("expanded atlas");
+            let clear = app
+                .world_mut()
+                .query::<(Entity, &UxAction)>()
+                .iter(app.world())
+                .find_map(|(entity, action)| matches!(action, UxAction::ClearPin).then_some(entity))
+                .expect("clear destination");
+            assert_visible(&mut app, map, "Entire expanded atlas");
+            assert_visible(&mut app, clear, "Clear destination beside atlas");
+            let bounds = rect(app.world(), map);
+            assert!(
+                (bounds.height() / bounds.width() - 0.866).abs() < 0.01,
+                "atlas preserves world aspect at {width}x{height}, scale {scale}: {bounds:?}"
+            );
+            click(&mut app, clear);
+            assert!(
+                app.world().resource::<UxState>().pin.is_none(),
+                "visible destination control remains usable at {width}x{height}, scale {scale}"
+            );
+        }
+    }
+}
+
+#[test]
+fn overflowing_upgrade_page_has_a_visible_scroll_hint() {
+    for (width, height) in [(1280, 720), (1600, 900), (1920, 1080)] {
+        for scale in [1.0, 2.0] {
+            let mut app = app(width, height, scale);
+            app.world_mut().resource_mut::<ViewState>().started = true;
+            settle(&mut app);
+            open_page(&mut app, Page::Upgrades);
+            let scroll = app
+                .world_mut()
+                .query_filtered::<Entity, With<MenuScroll>>()
+                .iter(app.world())
+                .find(|entity| in_panel::<hud::PausePanel>(app.world(), *entity))
+                .expect("paused page scroll area");
+            let node = app
+                .world()
+                .get::<ComputedNode>(scroll)
+                .expect("scroll layout");
+            assert!(
+                node.content_size().y > node.size().y + 2.0,
+                "fixture must contain hidden upgrade rows at {width}x{height}, scale {scale}"
+            );
+            let hint = app
+                .world_mut()
+                .query_filtered::<Entity, With<MenuScrollHint>>()
+                .iter(app.world())
+                .find(|entity| in_panel::<hud::PausePanel>(app.world(), *entity))
+                .expect("paused scroll hint");
+            assert_visible(&mut app, hint, "Upgrade scroll hint outside clipped rows");
+            let label = &app.world().get::<Text>(hint).expect("scroll hint text").0;
+            assert!(
+                label.contains("Scroll") && label.contains('↓'),
+                "hidden lower upgrades must advertise downward scrolling: {label:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn expedition_health_glyphs_fit_inside_the_combat_pill() {
+    for (width, height) in [(1280, 720), (1600, 900), (1920, 1080)] {
+        for scale in [1.0, 2.0] {
+            let mut app = app(width, height, scale);
+            app.world_mut().resource_mut::<ViewState>().begin_play();
+            settle(&mut app);
+            let health = app
+                .world_mut()
+                .query::<(Entity, &hud::Label)>()
+                .iter(app.world())
+                .find_map(|(entity, label)| {
+                    (matches!(label, hud::Label::Health)
+                        && in_panel::<hud::CombatHud>(app.world(), entity))
+                    .then_some(entity)
+                })
+                .expect("combat health pill");
+            app.world_mut()
+                .get_mut::<Text>(health)
+                .expect("health text")
+                .0 = "100 / 100 HP".into();
+            // Run actual text shaping/layout without the synthetic empty
+            // session replacing the expedition string in the Update adapter.
+            for _ in 0..6 {
+                app.world_mut().run_schedule(PostUpdate);
+            }
+            assert_visible(&mut app, health, "Combat health pill");
+            let world = app.world();
+            let bounds = rect(world, health);
+            let node = world.get::<ComputedNode>(health).expect("health layout");
+            let transform = world
+                .get::<UiGlobalTransform>(health)
+                .expect("health transform");
+            let layout = world
+                .get::<bevy::text::TextLayoutInfo>(health)
+                .expect("shaped health text");
+            assert!(
+                !layout.glyphs.is_empty(),
+                "real health glyphs must be shaped"
+            );
+            let local_to_world = bevy::math::Affine2::from(*transform)
+                * bevy::math::Affine2::from_translation(node.content_box().min);
+            for glyph in &layout.glyphs {
+                let half = glyph.atlas_info.rect.size() * 0.5;
+                for corner in [
+                    Vec2::new(-half.x, -half.y),
+                    Vec2::new(half.x, -half.y),
+                    half,
+                    Vec2::new(-half.x, half.y),
+                ] {
+                    let point = local_to_world.transform_point2(glyph.position + corner);
+                    assert!(
+                        point.cmpge(bounds.min - Vec2::splat(0.5)).all()
+                            && point.cmple(bounds.max + Vec2::splat(0.5)).all(),
+                        "health glyph at {point:?} escapes pill {bounds:?} at {width}x{height}, scale {scale}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn map_pointer_uses_world_bounds_and_empty_overview_clears_old_texture() {
     let mut app = app(1600, 900, 1.0);
     app.world_mut().insert_resource(overview());
