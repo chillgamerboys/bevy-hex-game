@@ -411,12 +411,18 @@ fn canonicalize_semantics(semantics: &mut ChunkSemantics) -> Result<(), Contract
             column.seal()?;
         }
         influence.occupancy.sort_by_key(|column| column.position);
+        if let Some(contacts) = &mut influence.grounding {
+            contacts.sort();
+        }
     }
     for object in &mut semantics.objects {
         for column in &mut object.occupancy {
             column.seal()?;
         }
         object.occupancy.sort_by_key(|column| column.position);
+        if let Some(contacts) = &mut object.grounding {
+            contacts.sort();
+        }
     }
     semantics.validate()
 }
@@ -1009,6 +1015,40 @@ impl ChunkPackage {
                     manifest.material(&run.material)?;
                 }
             }
+            if let Some(contacts) = &influence.grounding {
+                let mut actual = Vec::new();
+                for occupied in &influence.occupancy {
+                    let terrain = column_at(&self.columns, occupied.position)?;
+                    if occupied.runs.iter().any(|object_run| {
+                        terrain
+                            .runs
+                            .iter()
+                            .any(|run| run.bottom < object_run.top && object_run.bottom < run.top)
+                    }) {
+                        return Err(reject(
+                            "object.grounding",
+                            "grounded geometry overlaps terrain",
+                        ));
+                    }
+                    for run in occupied.runs.iter().rev() {
+                        if let Some(level) = run.bottom.checked_sub(1) {
+                            if solid_at(terrain, level, manifest)? {
+                                actual.push(VoxelPosition {
+                                    column: occupied.position,
+                                    level,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+                if &actual != contacts {
+                    return Err(reject(
+                        "object.grounding",
+                        "contacts differ from exact terrain support",
+                    ));
+                }
+            }
             if influence.origin.column.chunk() == self.coordinate {
                 let root = self
                     .semantics
@@ -1273,6 +1313,9 @@ impl Seal for WorldPackage {
                     column.seal()?;
                 }
                 object.occupancy.sort_by_key(|column| column.position);
+                if let Some(contacts) = &mut object.grounding {
+                    contacts.sort();
+                }
             }
         }
         let objects = crate::objects::project_objects(&candidate)?;

@@ -464,6 +464,7 @@ fn object_root_and_full_cross_chunk_occupancy_survive_roundtrip() {
         .semantics
         .objects
         .push(ObjectInstance {
+            grounding: None,
             id: "region/tree".into(),
             region_id: "region".into(),
             asset: "tree.oak".into(),
@@ -521,6 +522,7 @@ fn forged_or_conflicting_object_projections_are_rejected() {
         level: 1,
     };
     let object = ObjectInstance {
+        grounding: None,
         id: "one".into(),
         region_id: "region".into(),
         asset: "tree".into(),
@@ -1174,6 +1176,7 @@ fn zero_radius_light_is_clipped_to_its_exact_column_and_outside_sources_are_reje
 
 fn spanning_object(id: &str) -> ObjectInstance {
     ObjectInstance {
+        grounding: None,
         id: id.into(),
         region_id: "region".into(),
         asset: "tree".into(),
@@ -1361,4 +1364,123 @@ fn object_transactions_require_canonical_exact_dependencies_and_allocated_new_id
         .expect("after")
         .id = runtime_object_id("other-command", 0).expect("id");
     assert!(transaction.validate().is_err());
+}
+
+#[test]
+fn grounding_contacts_preserve_legacy_wire_and_clip_foundations_across_chunks() {
+    let mut object = spanning_object("grounded-tree");
+    let legacy = ron::ser::to_string(&object).expect("legacy wire");
+    assert!(!legacy.contains("grounding"));
+    assert_eq!(
+        ron::from_str::<ObjectInstance>(&legacy).expect("old wire"),
+        object
+    );
+    let root = object.origin.column;
+    let crown = WorldHex::new(16, 0);
+    let legacy_crown = object
+        .influence(crown.chunk())
+        .expect("projection")
+        .expect("crown");
+    assert_eq!(
+        legacy_crown.terrain_edit_protection().get(&crown),
+        Some(&vec![(i32::MIN, i32::MAX)])
+    );
+    object.grounding = Some(vec![VoxelPosition {
+        column: root,
+        level: 0,
+    }]);
+    let root_projection = object
+        .influence(root.chunk())
+        .expect("projection")
+        .expect("root");
+    assert_eq!(root_projection.grounding, object.grounding);
+    assert_eq!(
+        root_projection.terrain_edit_protection().get(&root),
+        Some(&vec![(1, 3), (i32::MIN, 0)])
+    );
+    let crown_projection = object
+        .influence(crown.chunk())
+        .expect("projection")
+        .expect("crown");
+    assert_eq!(crown_projection.grounding, Some(vec![]));
+    assert_eq!(
+        crown_projection.terrain_edit_protection().get(&crown),
+        Some(&vec![(2, 4)])
+    );
+    object.grounding = Some(vec![]);
+    assert!(
+        object.validate().is_err(),
+        "empty metadata cannot opt out of protection"
+    );
+}
+
+#[test]
+fn grounding_admission_rejects_missing_forged_and_unsupported_contacts() {
+    let root = WorldHex::new(15, 0);
+    let buttress = WorldHex::new(16, 0);
+    let mut package = world(root, 2);
+    let mut object = spanning_object("grounded-tree");
+    object.occupancy.get_mut(1).expect("buttress").runs = vec![run(1, 5, "stone")];
+    object.grounding = Some(vec![
+        VoxelPosition {
+            column: root,
+            level: 0,
+        },
+        VoxelPosition {
+            column: buttress,
+            level: 0,
+        },
+    ]);
+    package
+        .chunks
+        .get_mut(&root.chunk())
+        .expect("owner")
+        .semantics
+        .objects
+        .push(object);
+    package.seal().expect("all contacts supported");
+    let mut missing = package.clone();
+    missing
+        .chunks
+        .get_mut(&root.chunk())
+        .expect("owner")
+        .semantics
+        .objects
+        .first_mut()
+        .expect("tree")
+        .grounding
+        .as_mut()
+        .expect("metadata")
+        .pop();
+    assert!(missing.seal().is_err(), "omitting a buttress must fail");
+    let mut unsupported = package.clone();
+    unsupported
+        .chunks
+        .get_mut(&buttress.chunk())
+        .expect("member")
+        .columns
+        .iter_mut()
+        .find(|column| column.position == buttress)
+        .expect("ground")
+        .runs = vec![run(-4, 0, "stone")];
+    assert!(unsupported.seal().is_err(), "floating buttress must fail");
+    let mut forged = package;
+    forged
+        .chunks
+        .get_mut(&root.chunk())
+        .expect("owner")
+        .semantics
+        .objects
+        .first_mut()
+        .expect("tree")
+        .grounding
+        .as_mut()
+        .expect("metadata")
+        .first_mut()
+        .expect("contact")
+        .level = -1;
+    assert!(
+        forged.seal().is_err(),
+        "contact must touch occupied geometry"
+    );
 }

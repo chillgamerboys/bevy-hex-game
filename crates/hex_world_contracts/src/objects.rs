@@ -27,6 +27,9 @@ pub struct ObjectInfluence {
     pub region_id: String,
     /// Exact contribution clipped to this chunk, sorted by column.
     pub occupancy: Vec<ColumnData>,
+    /// Grounding contacts clipped to this chunk; `None` retains legacy protection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<Vec<VoxelPosition>>,
 }
 
 impl ObjectInfluence {
@@ -47,8 +50,69 @@ impl ObjectInfluence {
         for column in &self.occupancy {
             column.validate()?;
         }
+        validate_grounding(&self.occupancy, self.grounding.as_deref())?;
         Ok(())
     }
+
+    /// Inclusive terrain edit exclusions, independent of root-chunk residency.
+    /// Legacy objects protect whole occupied/root columns. Grounded objects protect
+    /// their exact occupied intervals and every level at or below each contact.
+    pub fn terrain_edit_protection(&self) -> BTreeMap<WorldHex, Vec<(i32, i32)>> {
+        let mut ranges: BTreeMap<WorldHex, Vec<(i32, i32)>> = BTreeMap::new();
+        for column in &self.occupancy {
+            let target = ranges.entry(column.position).or_default();
+            if self.grounding.is_none() {
+                target.push((i32::MIN, i32::MAX));
+            } else {
+                target.extend(column.runs.iter().map(|run| (run.bottom, run.top - 1)));
+            }
+        }
+        if let Some(contacts) = &self.grounding {
+            for contact in contacts {
+                ranges
+                    .entry(contact.column)
+                    .or_default()
+                    .push((i32::MIN, contact.level));
+            }
+        } else {
+            ranges
+                .entry(self.origin.column)
+                .or_default()
+                .push((i32::MIN, i32::MAX));
+        }
+        ranges
+    }
+}
+
+fn validate_grounding(
+    occupancy: &[ColumnData],
+    grounding: Option<&[VoxelPosition]>,
+) -> Result<(), ContractError> {
+    let Some(contacts) = grounding else {
+        return Ok(());
+    };
+    ordered(
+        contacts.iter().map(|contact| contact.column),
+        "object.grounding",
+    )?;
+    for contact in contacts {
+        let touches = occupancy
+            .iter()
+            .find(|column| column.position == contact.column)
+            .is_some_and(|column| {
+                column
+                    .runs
+                    .iter()
+                    .any(|run| contact.level.checked_add(1) == Some(run.bottom))
+            });
+        if !touches {
+            return Err(ContractError::new(
+                "object.grounding",
+                "contact does not touch occupied geometry",
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl Validate for ObjectInfluence {
@@ -75,6 +139,13 @@ impl Validate for ObjectInstance {
         for column in &self.occupancy {
             column.validate()?;
         }
+        if self.grounding.as_ref().is_some_and(Vec::is_empty) {
+            return Err(ContractError::new(
+                "object.grounding",
+                "grounded object needs at least one contact",
+            ));
+        }
+        validate_grounding(&self.occupancy, self.grounding.as_deref())?;
         Ok(())
     }
 }
@@ -117,6 +188,13 @@ impl ObjectInstance {
                         origin: self.origin,
                         region_id: self.region_id.clone(),
                         occupancy,
+                        grounding: self.grounding.as_ref().map(|contacts| {
+                            contacts
+                                .iter()
+                                .filter(|contact| contact.column.chunk() == coordinate)
+                                .copied()
+                                .collect()
+                        }),
                     },
                 )
             })
@@ -141,6 +219,13 @@ impl ObjectInstance {
             origin: self.origin,
             region_id: self.region_id.clone(),
             occupancy,
+            grounding: self.grounding.as_ref().map(|contacts| {
+                contacts
+                    .iter()
+                    .filter(|contact| contact.column.chunk() == coordinate)
+                    .copied()
+                    .collect()
+            }),
         }))
     }
 }

@@ -2,6 +2,7 @@ use super::*;
 
 fn object(id: &str, origin: WorldHex, columns: &[WorldHex]) -> ObjectInstance {
     ObjectInstance {
+        grounding: None,
         id: id.into(),
         region_id: "region-0000".into(),
         asset: "tree.oak".into(),

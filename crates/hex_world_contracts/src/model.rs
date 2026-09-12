@@ -290,6 +290,11 @@ pub struct ObjectInstance {
     pub rotation: u8,
     /// Exact material intervals, possibly spanning neighboring chunks.
     pub occupancy: Vec<ColumnData>,
+    /// Every terrain contact immediately below occupied geometry, in world coordinates.
+    /// Contacts preserve their complete underlying terrain foundations. Missing metadata
+    /// retains conservative whole-column edit protection for legacy objects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<Vec<VoxelPosition>>,
 }
 
 /// Semantic projections accompanying authoritative intervals.

@@ -451,6 +451,7 @@ fn object_blocker_and_surface_remain_exact_with_foreign_owner_unloaded() {
         .semantics
         .objects
         .push(ObjectInstance {
+            grounding: None,
             id: "crossing-rock".into(),
             region_id: "region-0000".into(),
             asset: "rock".into(),
@@ -1396,6 +1397,7 @@ fn derived_object_terrain_union_does_not_reapply_the_individual_wire_run_cap() {
         .map(|index| run(index * 4, index * 4 + 1, "stone"))
         .collect();
     chunk.semantics.objects.push(ObjectInstance {
+        grounding: None,
         id: "layered-object".into(),
         region_id: "region-0000".into(),
         asset: "layered-rock".into(),

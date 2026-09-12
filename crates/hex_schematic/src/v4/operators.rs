@@ -896,6 +896,7 @@ pub(super) fn decorate(
                 asset: Some(rule.asset.clone()),
             });
             build.semantics.objects.push(ObjectInstance {
+                grounding: None,
                 id,
                 region_id: region_id.into(),
                 asset: rule.asset.clone(),
