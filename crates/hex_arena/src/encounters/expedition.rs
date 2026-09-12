@@ -3,6 +3,8 @@
 use super::*;
 use hex_core::arena::ArenaExpeditionSites;
 
+mod confinement;
+pub(super) use confinement::ShadowArena;
 mod rally;
 pub(super) use rally::Control;
 pub use rally::ExpeditionRallySnapshot;
@@ -178,6 +180,7 @@ impl ArenaSession {
             }
         }
         encounter.expedition = Some(Control::new(sites, &actors, geometry));
+        encounter.shadow_arena = ShadowArena::new(sites, &actors);
         self.actors = actors;
         self.encounter = encounter;
         self.register_forest_roster();

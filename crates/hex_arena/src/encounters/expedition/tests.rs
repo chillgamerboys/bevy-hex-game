@@ -550,3 +550,6 @@ mod milestone_tests;
 
 #[path = "rally_tests.rs"]
 mod rally_tests;
+
+#[path = "confinement_tests.rs"]
+mod confinement_tests;
