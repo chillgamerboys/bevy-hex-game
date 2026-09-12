@@ -12,6 +12,8 @@ pub(super) struct ExpeditionVisualAssets {
     gold: Handle<StandardMaterial>,
     blue: Handle<StandardMaterial>,
     violet: Handle<StandardMaterial>,
+    green: Handle<StandardMaterial>,
+    silver: Handle<StandardMaterial>,
     halo: Handle<StandardMaterial>,
     glimmer: Handle<StandardMaterial>,
 }
@@ -54,6 +56,8 @@ pub(super) fn setup(
         gold: light(Color::srgb(1.0, 0.76, 0.19)),
         blue: light(Color::srgb(0.35, 0.83, 1.0)),
         violet: light(Color::srgb(0.82, 0.55, 1.0)),
+        green: light(Color::srgb(0.40, 1.0, 0.62)),
+        silver: light(Color::srgb(0.75, 0.86, 0.98)),
         halo: light(Color::srgba(0.88, 0.96, 1.0, 0.10)),
         glimmer: light(Color::srgb(0.72, 1.0, 0.88)),
     });
@@ -65,6 +69,8 @@ fn reward_color(reward: ExpeditionReward) -> Color {
         ExpeditionReward::TrollDamage => Color::srgb(1.0, 0.76, 0.19),
         ExpeditionReward::DragonExplosions => Color::srgb(0.35, 0.83, 1.0),
         ExpeditionReward::ShadowVitality => Color::srgb(0.82, 0.55, 1.0),
+        ExpeditionReward::WispBallistics => Color::srgb(0.40, 1.0, 0.62),
+        ExpeditionReward::GolemShield => Color::srgb(0.75, 0.86, 0.98),
     }
 }
 
@@ -149,6 +155,8 @@ pub(super) fn present(
             ExpeditionReward::TrollDamage => &assets.gold,
             ExpeditionReward::DragonExplosions => &assets.blue,
             ExpeditionReward::ShadowVitality => &assets.violet,
+            ExpeditionReward::WispBallistics => &assets.green,
+            ExpeditionReward::GolemShield => &assets.silver,
         };
         commands
             .spawn((

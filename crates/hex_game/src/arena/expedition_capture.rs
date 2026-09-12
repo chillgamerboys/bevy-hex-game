@@ -282,15 +282,19 @@ mod tests {
     #[test]
     fn readiness_requires_the_requested_reward_or_pool_and_shadow_never_heals() {
         let mut snapshot = ExpeditionSnapshot {
-            enemies_total: 114,
+            enemies_total: 127,
             enemies_defeated: 1,
             forest_total: 109,
             forest_defeated: 0,
             dragons_defeated: 0,
+            wisps_defeated: 0,
+            golems_defeated: 0,
             milestones: [
                 ExpeditionReward::TrollDamage,
                 ExpeditionReward::DragonExplosions,
                 ExpeditionReward::ShadowVitality,
+                ExpeditionReward::WispBallistics,
+                ExpeditionReward::GolemShield,
             ]
             .map(|reward| hex_arena::MilestoneSnapshot {
                 reward,

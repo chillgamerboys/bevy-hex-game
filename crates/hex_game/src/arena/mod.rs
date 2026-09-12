@@ -3,12 +3,14 @@
 mod bootstrap;
 mod cast_input;
 mod encounter;
+mod environment;
 mod expedition;
 mod expedition_capture;
 #[cfg(all(test, feature = "test-support"))]
 mod expedition_route_tests;
 #[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
+mod glider_visual;
 #[cfg(feature = "test-support")]
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
@@ -168,6 +170,7 @@ struct ViewState {
     pitch: f32,
     initialized: bool,
     previews: [bool; 2],
+    fireball_guide_seen: bool,
     suppress_click: bool,
     casts: cast_input::CastInput,
     suppress_high_jump: bool,
@@ -221,6 +224,7 @@ impl Default for ViewState {
             pitch: 0.0,
             initialized: false,
             previews: [true, false],
+            fireball_guide_seen: false,
             suppress_click: true,
             casts: Default::default(),
             suppress_high_jump: true,
@@ -294,6 +298,8 @@ impl ViewState {
     fn prepare_round(&mut self) {
         self.forest_preparation.cancel_selection();
         self.started = false;
+        self.previews = [true, false];
+        self.fireball_guide_seen = false;
         self.casts = Default::default();
         self.initialized = false;
         self.observer.generation = None;
@@ -417,6 +423,8 @@ pub fn run() -> AppExit {
     }
     recording::install(&mut app);
     ux::install(&mut app);
+    environment::install(&mut app);
+    glider_visual::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
         .insert_resource(selection)
@@ -690,15 +698,7 @@ fn update_map_lighting(
             Color::WHITE
         };
         let origin = if forest {
-            // 15:00 between the accepted noon and 16:30 Grand sun anchors.
-            // Stronger cool ambient fill keeps the understory readable.
-            let elevation = 37.145_f32.to_radians();
-            let azimuth = 76.057_f32.to_radians();
-            Vec3::new(
-                azimuth.sin() * elevation.cos(),
-                elevation.sin(),
-                azimuth.cos() * elevation.cos(),
-            )
+            environment::sun_direction()
         } else {
             Vec3::new(-15.0, 30.0, 18.0)
         };
@@ -895,6 +895,8 @@ fn input(
     if !keys.pressed(KeyCode::KeyE) {
         state.suppress_high_jump = false;
     }
+    intent.human.glider_look = direction;
+    intent.human.glider_toggle |= keys.just_pressed(KeyCode::KeyG);
     intent.human.aim = current_aim;
     if state.suppress_click {
         state.casts.clear();
@@ -909,12 +911,25 @@ fn input(
         state.casts.write(&mut intent.human);
     }
     // Assistance follows the gesture sampled above, even before a physics tick.
+    let guide_unlocked = session
+        .progress()
+        .is_none_or(|progress| progress.fireball_guide_unlocked);
+    if session
+        .progress()
+        .is_some_and(|progress| progress.fireball_guide_unlocked)
+        && !state.fireball_guide_seen
+    {
+        state.fireball_guide_seen = true;
+        if let Some(enabled) = state.previews.get_mut(1) {
+            *enabled = true;
+        }
+    }
     if window.focused && state.started && !state.paused && keys.just_pressed(KeyCode::KeyT) {
         let spell = state.casts.spell();
         let slot = match spell {
             Spell::Shield => Some(0),
-            Spell::Fireball => Some(1),
-            Spell::HighJump => None,
+            Spell::Fireball if guide_unlocked => Some(1),
+            Spell::Fireball | Spell::HighJump => None,
         };
         if let Some(enabled) = slot.and_then(|slot| state.previews.get_mut(slot)) {
             *enabled = !*enabled;

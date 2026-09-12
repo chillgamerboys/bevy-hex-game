@@ -132,23 +132,25 @@ pub(crate) fn setup(
                     color: Color::BLACK,
                 },
             ));
-            root.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: percent(50),
-                    left: percent(50),
-                    margin: UiRect::new(px(-180), px(0), px(30), px(0)),
-                    width: px(360),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-                text("", 22.0, INK),
-                UxLabel::Target,
-                TextShadow {
-                    offset: Vec2::splat(1.5),
-                    color: Color::BLACK,
-                },
-            ));
+            for index in 0..128 {
+                root.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        display: Display::None,
+                        width: px(90),
+                        margin: UiRect::axes(px(-45), px(-24)),
+                        ..default()
+                    },
+                    text("", 22.0, INK),
+                    TextLayout::new(Justify::Center, bevy::text::LineBreak::NoWrap),
+                    ux::combat_cues::EnemyDots(index),
+                    Pickable::IGNORE,
+                    TextShadow {
+                        offset: Vec2::splat(1.5),
+                        color: Color::BLACK,
+                    },
+                ));
+            }
             root.spawn((
                 Node {
                     position_type: PositionType::Absolute,
@@ -171,28 +173,29 @@ pub(crate) fn setup(
                     text("", 24.0, INK),
                     UxLabel::Notice,
                 ));
-                strip.spawn((
-                    Node {
-                        min_width: px(220),
-                        min_height: px(42),
-                        padding: UiRect::axes(px(14), px(5)),
-                        border_radius: BorderRadius::all(px(6)),
-                        ..default()
-                    },
-                    BackgroundColor(PANEL),
-                    text("", 24.0, INK),
-                    TextLayout::new(Justify::Center, bevy::text::LineBreak::NoWrap),
-                    Label::Health,
-                ));
+                strip
+                    .spawn((
+                        Node {
+                            min_height: px(42),
+                            padding: UiRect::axes(px(14), px(5)),
+                            column_gap: px(18),
+                            align_items: AlignItems::Center,
+                            border_radius: BorderRadius::all(px(6)),
+                            ..default()
+                        },
+                        BackgroundColor(PANEL),
+                    ))
+                    .with_children(|health| {
+                        health.spawn((text("", 24.0, INK), Label::Health));
+                        health.spawn((text("", 24.0, INK), ux::combat_cues::PlayerLevel));
+                        health.spawn((text("", 20.0, INK), ux::combat_cues::GliderStatus));
+                    });
                 strip.spawn(row()).with_children(|bar| {
-                    for (index, (key, name, _icon)) in [
-                        ("RMB", "SHIELD", "[]"),
-                        ("LMB", "FIREBALL", "*"),
-                        ("E", "HIGH JUMP", "↑"),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
+                    for (index, key, name) in [
+                        (1, "LMB", "FIREBALL"),
+                        (0, "RMB", "SHIELD"),
+                        (2, "E", "HIGH JUMP"),
+                    ] {
                         bar.spawn((
                             Node {
                                 width: px(220),
@@ -383,7 +386,7 @@ pub(crate) fn setup(
                                     row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..scroll_content(column())}).with_children(|details| {
                                         details.spawn((text("",24.0,INK),UxLabel::MapSelection));
                                         button(details,"CLEAR DESTINATION",UxAction::ClearPin);
-                                        details.spawn(text("D  Dragon     S  Shadow     T  Troll\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
+                                        details.spawn(text("D  Dragon     S  Shadow     T  Troll     G  Golem\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
                                     });
                                 });
                             }

@@ -369,6 +369,7 @@ pub(super) fn capture_intent(
         cast_pressed: attack && cycle == 45,
         cast_held: attack && (45..76).contains(&cycle),
         cast_released: attack && cycle == 76,
+        ..Default::default()
     }
 }
 

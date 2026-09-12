@@ -150,15 +150,28 @@ pub(super) fn actors(
             }
             _ => {}
         }
+        let summit = actor.dragon_tier() == hex_arena::DragonTier::Summit;
+        if summit {
+            cloth = Color::srgb(0.22, 0.11, 0.38);
+            skin = Color::srgb(0.64, 0.82, 0.92);
+        }
         let palette = [
             if super::spectator::active(&session) {
                 super::spectator::team_color(&session, actor.team)
             } else {
                 cloth
             },
-            Color::srgb(0.055, 0.075, 0.095),
+            if summit {
+                Color::srgb(0.43, 0.57, 0.76)
+            } else {
+                Color::srgb(0.055, 0.075, 0.095)
+            },
             skin,
-            Color::srgb(1.0, 0.62, 0.15),
+            if summit {
+                Color::srgb(0.67, 0.95, 1.0)
+            } else {
+                Color::srgb(1.0, 0.62, 0.15)
+            },
         ]
         .map(|base_color| {
             materials.add(StandardMaterial {
@@ -317,7 +330,16 @@ pub(super) fn effects(
     };
     let enabled = match actor.selected {
         Spell::Shield => state.previews.first().copied().unwrap_or(false),
-        Spell::Fireball => state.previews.get(1).copied().unwrap_or(false),
+        Spell::Fireball => {
+            state.previews.get(1).copied().unwrap_or(false)
+                && session
+                    .progress()
+                    .is_none_or(|progress| progress.fireball_guide_unlocked)
+                && (session.progress().is_none()
+                    || actor
+                        .charge()
+                        .is_some_and(|charge| charge.spell == Spell::Fireball))
+        }
         Spell::HighJump => false,
     };
     if !enabled || state.paused {

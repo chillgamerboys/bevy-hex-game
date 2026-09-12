@@ -1,4 +1,5 @@
 //! Player-facing UI consumes gameplay observations and a cached world overview.
+pub(super) mod combat_cues;
 pub(super) mod icons;
 mod performance;
 #[cfg(test)]
@@ -53,7 +54,6 @@ pub(super) enum UxAction {
 }
 #[derive(Component)]
 pub(super) enum UxLabel {
-    Target,
     Notice,
     Recording,
     RecordButton,
@@ -187,6 +187,7 @@ fn load(mut ux: ResMut<UxState>, state: Res<ViewState>) {
 }
 pub(super) fn install(app: &mut App) {
     performance::install(app);
+    combat_cues::install(app);
     app.init_resource::<UxState>()
         .add_systems(
             Update,
@@ -208,7 +209,7 @@ pub(super) fn install(app: &mut App) {
                 present_menus,
                 reflow,
                 present_scroll_hints,
-                end_timing,
+                end_timing.after(combat_cues::PresentCombatCues),
             )
                 .chain()
                 .after(hud::update)
@@ -233,7 +234,7 @@ pub(super) fn spawn_map(parent: &mut ChildSpawnerCommands, large: bool, size: f3
             Name::new(if large { "Expanded map" } else { "Minimap" }),
         ))
         .with_children(|map| {
-            for index in 0..13 {
+            for index in 0..16 {
                 map.spawn((
                     Node {
                         position_type: PositionType::Absolute,
@@ -555,6 +556,7 @@ fn landmark_name(kind: LandmarkKind) -> &'static str {
         LandmarkKind::Dragon => "Dragon",
         LandmarkKind::Shadow => "Shadow",
         LandmarkKind::Troll => "Troll",
+        LandmarkKind::Golem => "Golem",
         LandmarkKind::Fountain => "Fountain",
     }
 }
@@ -685,6 +687,7 @@ fn present_map(
                     LandmarkKind::Dragon => "D",
                     LandmarkKind::Shadow => "S",
                     LandmarkKind::Troll => "T",
+                    LandmarkKind::Golem => "G",
                     LandmarkKind::Fountain => "+",
                 },
                 Color::srgb(1.0, 0.69, 0.44),
@@ -788,7 +791,6 @@ fn present_menus(
     ux: Res<UxState>,
     state: Res<ViewState>,
     session: Res<ArenaSession>,
-    tuning: Res<ArenaTuning>,
     recorder: Option<Res<Recorder>>,
     mut labels: Query<(&UxLabel, &mut Text, &mut Node), Without<PageBody>>,
     mut pages: Query<(&PageBody, &mut Node), Without<UxLabel>>,
@@ -811,7 +813,6 @@ fn present_menus(
             },
         );
     }
-    let feedback = session.combat_feedback(&tuning);
     for (label, mut text, mut node) in &mut labels {
         let next = match label {
             UxLabel::Notice => {
@@ -825,19 +826,6 @@ fn present_menus(
                 );
                 ux.notice.clone()
             }
-            UxLabel::Target => feedback.target.as_ref().map_or(String::new(), |t| {
-                let (pips, condition) = match t.health_pips {
-                    3 => ("● ● ●", "Healthy"),
-                    2 => ("● ● ○", "Wounded"),
-                    _ => ("● ○ ○", "Critical"),
-                };
-                let name = match t.role {
-                    Some(hex_arena::ExpeditionRole::BabyGoblin) => "Baby goblin".into(),
-                    Some(hex_arena::ExpeditionRole::Troll) => "Troll".into(),
-                    _ => format!("{:?}", t.species),
-                };
-                format!("{name}  {pips}  {condition}")
-            }),
             UxLabel::Recording => {
                 set_display(
                     &mut node,

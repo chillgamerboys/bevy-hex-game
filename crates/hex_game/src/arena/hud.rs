@@ -265,6 +265,7 @@ pub(super) fn buttons(
         session.cancel_charges();
         input.human = ActorIntent {
             aim: super::aim(&state),
+            glider_look: super::aim(&state),
             ..default()
         };
     }
@@ -310,6 +311,8 @@ fn upgrade_stat(index: usize) -> Option<UpgradeStat> {
         7 => Some(UpgradeStat::HighJumpCooldown),
         8 => Some(UpgradeStat::FireballDamage),
         9 => Some(UpgradeStat::FireballKnockback),
+        10 => Some(UpgradeStat::ShieldProjectileSpeed),
+        11 => Some(UpgradeStat::WalkingSpeed),
         _ => None,
     }
 }
@@ -520,11 +523,11 @@ Mouse look / Wheel orbit zoom / C orbit or free camera
 Camera movement never controls a creature.".into(),
             Label::Help => format!("WASD move / mouse look / Space jump / E High Jump
 Hold LMB for Fireball or RMB for Shield; release to cast.
-The first button pressed owns the charge.
-High Jump keeps your charge. Movement speed is {} units/s.", if expedition.is_some() { "4.725" } else { "4.5" }),
+G opens or folds your glider; diving gains speed, climbing loses it.
+Casting folds the glider. High Jump keeps your charge. Movement speed is {} units/s.", if expedition.is_some() { "4.725" } else { "4.5" }),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
-            Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains.\nStart on the bridge. Hidden fountains are your only healing.".into(),
+            Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains; 3 Golems and 10 Wisps inhabit the lowlands.\nStart on the bridge. Hidden fountains are your only healing.".into(),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
                 ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
@@ -544,7 +547,12 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     format!("{}  /  {} / {} parties cleared", super::map_name(selection.map), summary.defeated_parties, session.parties().len())
                 }
             },
-            Label::Rewards => expedition.as_ref().map_or(String::new(), |e| format!("Troll: +25 damage / {}\nDragons {}/3: explosions / {}", milestone_status(e, ExpeditionReward::TrollDamage), e.dragons_defeated, milestone_status(e, ExpeditionReward::DragonExplosions))),
+            Label::Rewards => expedition.as_ref().map_or(String::new(), |e| format!(
+                "Troll: +25 base damage / {}\nDragons {}/3: explosions / {}\nWisps {}/10: +15 Fireball speed and aim guide / {}\nGolems {}/3: +20 Shield speed, +2 × +2 dimensions / {}",
+                milestone_status(e, ExpeditionReward::TrollDamage), e.dragons_defeated,
+                milestone_status(e, ExpeditionReward::DragonExplosions), e.wisps_defeated,
+                milestone_status(e, ExpeditionReward::WispBallistics), e.golems_defeated,
+                milestone_status(e, ExpeditionReward::GolemShield))),
             Label::Health if expedition.is_some() => actor.map_or_else(String::new, |a| format!("{:.0} / {:.0} HP", a.hp, a.max_hp)),
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
             Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nR to restart from level 1.".into(),
@@ -592,10 +600,9 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             Label::Parameter(1) if expedition.is_some() && run.is_some_and(|p| !p.explosions_unlocked) => "Contact only / collect the Dragon orb".into(),
             Label::Parameter(1) if run.is_some_and(|p| !p.explosions_unlocked) => "Fireball impact only - slay 3 Dragons".into(),
             Label::Parameter(4) if run.is_some() => "Gravity (fixed)           12 units/s^2".into(),
-            Label::Parameter(10) if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Troll: +25 damage / {}", milestone_status(e, ExpeditionReward::TrollDamage))),
-            Label::Parameter(11) if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Dragons {}/3: explosions / {}", e.dragons_defeated, milestone_status(e, ExpeditionReward::DragonExplosions))),
-            Label::Parameter(10) if run.is_some() => run.map_or_else(String::new, |p| format!("Forest {}/22    +25 damage {}", p.forest_defeated, if p.forest_cleared { "earned" } else { "reward" })),
-            Label::Parameter(11) if run.is_some() => run.map_or_else(String::new, |p| format!("Dragons {}/3    Explosions {}", p.dragons_defeated, if p.explosions_unlocked { "unlocked" } else { "locked" })),
+            Label::Parameter(index) if run.is_some() => upgrade_stat(*index)
+                .and_then(|stat| session.upgrade_preview(stat).map(|preview| upgrade_description(*index, preview)))
+                .unwrap_or_default(),
             Label::Parameter(index) => match index {
                 0 => format!(
                     "Shield size                 {}",
@@ -643,4 +650,32 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             _ => MUTED,
         }));
     }
+}
+
+fn upgrade_description(index: usize, preview: hex_arena::UpgradePreview) -> String {
+    let name = match index {
+        0 => "Shield dimensions",
+        1 => "Explosion radius",
+        2 => "High Jump height",
+        3 => "Fireball launch speed",
+        5 => "Shield cooldown",
+        6 => "Fireball cooldown",
+        7 => "High Jump cooldown",
+        8 => "Fireball damage",
+        9 => "Fireball knockback",
+        10 => "Shield launch speed",
+        11 => "Walking speed",
+        _ => "Upgrade",
+    };
+    let value = |value: hex_arena::UpgradeValue| match value {
+        hex_arena::UpgradeValue::Scalar(value) => format!("{value:.2}"),
+        hex_arena::UpgradeValue::Dimensions(width, height) => format!("{width} × {height}"),
+    };
+    let next = preview.after.map_or_else(|| "MAX".into(), value);
+    format!(
+        "{name}  {} → {next}  [{}/{}]",
+        value(preview.before),
+        preview.rank,
+        preview.max_ranks
+    )
 }
