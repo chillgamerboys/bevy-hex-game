@@ -19,6 +19,14 @@ struct RenderCache {
     forest: forest_chunks::ForestRender,
 }
 
+impl RenderCache {
+    fn clear_legacy_terrain(&mut self, commands: &mut Commands) {
+        for (_, root) in std::mem::take(&mut self.columns) {
+            commands.entity(root).despawn();
+        }
+    }
+}
+
 pub(super) fn plugin(app: &mut App) {
     if app.world().contains_resource::<AssetServer>() {
         app.add_plugins(crate::liquid_render::arena_plugin);
@@ -49,6 +57,9 @@ fn refresh(
         return;
     };
     if state.forest.is_some() {
+        // The resident renderer owns its own entities. Retire the old map's
+        // column hierarchy while retaining reusable legacy mesh/material assets.
+        cache.clear_legacy_terrain(&mut commands);
         forest_chunks::refresh(
             &mut commands,
             &mut cache.forest,
@@ -267,6 +278,7 @@ fn hex_prism() -> Mesh {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::world::CommandQueue;
     use bevy::mesh::VertexAttributeValues;
 
     use super::*;
@@ -316,5 +328,71 @@ mod tests {
         assert_ne!(after.get(&HexCoord::ORIGIN), before.get(&HexCoord::ORIGIN));
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 4);
+    }
+
+    #[test]
+    fn forest_entry_retires_legacy_columns_and_children_but_keeps_reusable_assets() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .add_plugins(super::super::plugin);
+        app.update();
+        let columns = app.world().resource::<RenderCache>().columns.clone();
+        assert_eq!(
+            columns.len(),
+            469,
+            "fixture publishes the real Duel terrain"
+        );
+        let mut query = app.world_mut().query_filtered::<Entity, With<Mesh3d>>();
+        let children: Vec<_> = query.iter(app.world()).collect();
+        assert!(children.len() >= columns.len());
+        let mesh = app
+            .world()
+            .resource::<RenderCache>()
+            .mesh
+            .clone()
+            .expect("shared mesh");
+        let materials = app.world().resource::<RenderCache>().materials.clone();
+        let unrelated = app
+            .world_mut()
+            .spawn(Name::new("unrelated scene root"))
+            .id();
+
+        // Exercise the same resource transition invoked before resident terrain
+        // publication, without requiring a compiled map or a GPU in this test.
+        let mut queue = CommandQueue::default();
+        app.world_mut()
+            .resource_scope(|world, mut cache: Mut<RenderCache>| {
+                cache.clear_legacy_terrain(&mut Commands::new(&mut queue, world));
+            });
+        queue.apply(app.world_mut());
+        assert!(app.world().resource::<RenderCache>().columns.is_empty());
+        for entity in columns.values().chain(children.iter()) {
+            assert!(
+                app.world().get_entity(*entity).is_err(),
+                "retired terrain descendant remains"
+            );
+        }
+        assert!(app.world().get_entity(unrelated).is_ok());
+        assert!(app.world().resource::<Assets<Mesh>>().get(&mesh).is_some());
+        assert_eq!(app.world().resource::<RenderCache>().materials, materials);
+
+        // Returning to the legacy publication can reuse the retained handles.
+        app.world_mut()
+            .resource_mut::<ArenaWorldState>()
+            .render_dirty
+            .extend(columns.keys().copied());
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderCache>().columns.len(),
+            columns.len()
+        );
+        assert_eq!(app.world().resource::<RenderCache>().mesh, Some(mesh));
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            materials.len()
+        );
     }
 }
