@@ -16,13 +16,19 @@ pub enum ExpeditionReward {
     DragonExplosions,
     /// Shadow's +25 maximum HP without any current-HP healing.
     ShadowVitality,
+    /// +15 base Fireball speed and charging aim guide after ten Wisps.
+    WispBallistics,
+    /// +20 base Shield speed and +2 columns/+2 levels after three Golems.
+    GolemShield,
 }
 
 impl ExpeditionReward {
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 5] = [
         Self::TrollDamage,
         Self::DragonExplosions,
         Self::ShadowVitality,
+        Self::WispBallistics,
+        Self::GolemShield,
     ];
 
     const fn role(self) -> ExpeditionRole {
@@ -30,6 +36,8 @@ impl ExpeditionReward {
             Self::TrollDamage => ExpeditionRole::Troll,
             Self::DragonExplosions => ExpeditionRole::Dragon,
             Self::ShadowVitality => ExpeditionRole::MountainShadow,
+            Self::WispBallistics => ExpeditionRole::PlainWisp,
+            Self::GolemShield => ExpeditionRole::PlainGolem,
         }
     }
 }
@@ -45,6 +53,13 @@ pub(super) struct RewardState {
 }
 
 impl ProgressState {
+    fn defeated_role_count(&self, role: ExpeditionRole) -> usize {
+        self.roster
+            .iter()
+            .filter(|(id, entry)| entry.role == Some(role) && self.defeated.contains(id))
+            .count()
+    }
+
     fn milestone_defeated(&self, reward: ExpeditionReward) -> bool {
         let mut members = self
             .roster
@@ -99,8 +114,12 @@ pub struct ExpeditionSnapshot {
     pub forest_defeated: usize,
     /// Registered Dragon deaths.
     pub dragons_defeated: usize,
-    /// Stable Troll, Dragon and Shadow milestone ordering.
-    pub milestones: [MilestoneSnapshot; 3],
+    /// Registered lowland Wisp deaths.
+    pub wisps_defeated: usize,
+    /// Registered lowland Golem deaths.
+    pub golems_defeated: usize,
+    /// Stable Troll, Dragon, Shadow, Wisp and Golem milestone ordering.
+    pub milestones: [MilestoneSnapshot; 5],
     /// Canonically ordered pool identities and consumption; not map markers.
     pub fountains: Vec<FountainSnapshot>,
 }
@@ -209,6 +228,20 @@ impl ArenaSession {
                     }
                     notices.push("Shadow reward: maximum health +25.");
                 }
+                ExpeditionReward::WispBallistics => {
+                    state.fireball_speed_bonus = 15.0;
+                    state.snapshot.fireball_guide_unlocked = true;
+                    notices.push(
+                        "Wisp reward: Fireball base speed +15 and charging aim guide unlocked.",
+                    );
+                }
+                ExpeditionReward::GolemShield => {
+                    state.shield_speed_bonus = 20.0;
+                    state.shield_dimension_bonus = 2;
+                    notices.push(
+                        "Golem reward: Shield base speed +20 and dimensions +2 columns/+2 levels.",
+                    );
+                }
             }
         }
         if !notices.is_empty() {
@@ -289,10 +322,14 @@ impl ArenaSession {
             forest_total: state.minion_total(),
             forest_defeated: state.snapshot.forest_defeated,
             dragons_defeated: state.snapshot.dragons_defeated,
+            wisps_defeated: state.defeated_role_count(ExpeditionRole::PlainWisp),
+            golems_defeated: state.defeated_role_count(ExpeditionRole::PlainGolem),
             milestones: [
                 milestone(ExpeditionReward::TrollDamage),
                 milestone(ExpeditionReward::DragonExplosions),
                 milestone(ExpeditionReward::ShadowVitality),
+                milestone(ExpeditionReward::WispBallistics),
+                milestone(ExpeditionReward::GolemShield),
             ],
             fountains: state
                 .fountains

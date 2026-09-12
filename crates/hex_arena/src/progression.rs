@@ -126,6 +126,8 @@ pub struct ProgressSnapshot {
     pub forest_cleared: bool,
     /// Player explosions are unlocked (pickup required in an expedition).
     pub explosions_unlocked: bool,
+    /// Collected Wisp reward permits a charging-only trajectory guide.
+    pub fireball_guide_unlocked: bool,
     /// Separate permanent damage reward (Troll pickup in an expedition).
     pub damage_bonus: f32,
     /// Every registered authored enemy has been defeated.
@@ -162,6 +164,8 @@ impl RosterEntry {
             Some(ExpeditionRole::BabyGoblin | ExpeditionRole::Goblin) => 1,
             Some(ExpeditionRole::Shaman) => 5,
             Some(ExpeditionRole::Dragon) => 20,
+            Some(ExpeditionRole::PlainWisp) => 3,
+            Some(ExpeditionRole::PlainGolem) => 25,
             None => match self.species {
                 Species::Goblin => 1,
                 Species::Shaman => 5,
@@ -203,6 +207,7 @@ impl Default for ProgressState {
                 dragons_defeated: 0,
                 forest_cleared: false,
                 explosions_unlocked: false,
+                fireball_guide_unlocked: false,
                 damage_bonus: 0.0,
                 completed: false,
             },

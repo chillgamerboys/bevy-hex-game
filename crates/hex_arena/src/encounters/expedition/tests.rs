@@ -86,8 +86,8 @@ fn fixture() -> (
 fn expedition_admits_exact_named_roster_and_actual_supported_profiles() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
-    assert_eq!(session.actors.len(), 115, "{}", session.notice);
-    assert_eq!(session.parties().len(), 19);
+    assert_eq!(session.actors.len(), 128, "{}", session.notice);
+    assert_eq!(session.parties().len(), 25);
     for (role, count) in [
         (ExpeditionRole::BabyGoblin, 15),
         (ExpeditionRole::Goblin, 92),
@@ -95,6 +95,8 @@ fn expedition_admits_exact_named_roster_and_actual_supported_profiles() {
         (ExpeditionRole::Troll, 1),
         (ExpeditionRole::Dragon, 3),
         (ExpeditionRole::MountainShadow, 1),
+        (ExpeditionRole::PlainGolem, 3),
+        (ExpeditionRole::PlainWisp, 10),
     ] {
         assert_eq!(
             session
@@ -105,6 +107,30 @@ fn expedition_admits_exact_named_roster_and_actual_supported_profiles() {
             count
         );
     }
+    assert_eq!(
+        session
+            .actors
+            .iter()
+            .filter(|a| a.dragon_tier() == DragonTier::Summit)
+            .count(),
+        1
+    );
+    let summit = session
+        .actors
+        .iter()
+        .find(|a| a.dragon_tier() == DragonTier::Summit)
+        .expect("summit");
+    let summit_profile = summit.expedition_tuning(&tuning);
+    assert_eq!(summit.max_hp.to_bits(), 330.0_f32.to_bits());
+    assert_eq!(
+        (
+            summit_profile.encounters.breath_damage,
+            summit_profile.encounters.bite_damage,
+            summit_profile.encounters.breath_range,
+            summit_profile.encounters.breath_angle
+        ),
+        (60.0, 65.0, 7.0, 60.0)
+    );
     for actor in &session.actors {
         assert!(
             session.actor_pose_valid(actor.id, &view, geometry),
@@ -402,7 +428,7 @@ fn expedition_all_credited_kills_reach_level_eight_without_automatic_rewards() {
             progress.xp,
             progress.available_upgrades
         ),
-        (327, 8, 4, 7)
+        (432, 8, 109, 7)
     );
     assert_eq!(progress.forest_defeated, 109);
     assert_eq!(progress.dragons_defeated, 3);
@@ -592,7 +618,7 @@ fn expedition_snapshot_uses_registered_roles_and_does_not_invent_reward_orbs() {
             before.enemies_defeated,
             before.forest_total
         ),
-        (114, 0, 109)
+        (127, 0, 109)
     );
     assert_eq!(before.fountains.len(), 6);
     assert!(before

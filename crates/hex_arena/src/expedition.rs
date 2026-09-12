@@ -19,6 +19,10 @@ pub enum ExpeditionRole {
     Dragon,
     /// Fixed-strength spell opponent in the side arena.
     MountainShadow,
+    /// Independent southern lowland Golem.
+    PlainGolem,
+    /// Member of a southern lowland Wisp pack.
+    PlainWisp,
 }
 
 impl ExpeditionRole {
@@ -32,6 +36,8 @@ impl ExpeditionRole {
             Self::Shaman => Species::Shaman,
             Self::Dragon => Species::Dragon,
             Self::MountainShadow => Species::Shadow,
+            Self::PlainGolem => Species::Golem,
+            Self::PlainWisp => Species::Wisp,
         }
     }
 }

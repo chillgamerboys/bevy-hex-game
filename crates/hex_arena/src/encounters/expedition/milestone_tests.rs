@@ -211,7 +211,7 @@ fn uncollected_final_rewards_survive_victory_and_reset_restores_every_reward() {
     }
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
     assert!(session.completed_run() && !session.is_finished());
-    assert_eq!(session.progress().expect("progress").total_xp, 327);
+    assert_eq!(session.progress().expect("progress").total_xp, 432);
     assert!(session
         .expedition_progress()
         .expect("snapshot")
@@ -590,4 +590,152 @@ fn enemy_shaman_payload_is_unchanged_after_milestone_pickups_and_player_upgrades
             .all(|(a, b)| (a - b).abs() < 0.001),
         "enemy damage/radius/gravity/speed changed after player rewards: {samples:?}"
     );
+}
+
+#[test]
+fn lowland_clear_thresholds_drop_once_and_pickups_apply_only_to_player() {
+    for reverse in [false, true] {
+        let (mut session, view, geometry, materials, tuning) = start();
+        let roles = if reverse {
+            [ExpeditionRole::PlainGolem, ExpeditionRole::PlainWisp]
+        } else {
+            [ExpeditionRole::PlainWisp, ExpeditionRole::PlainGolem]
+        };
+        for role in roles {
+            let (reward, total, xp) = if role == ExpeditionRole::PlainWisp {
+                (ExpeditionReward::WispBallistics, 10, 3)
+            } else {
+                (ExpeditionReward::GolemShield, 3, 25)
+            };
+            let ids: Vec<_> = session
+                .actors
+                .iter()
+                .filter(|a| a.expedition_role() == Some(role))
+                .map(|a| a.id)
+                .collect();
+            assert_eq!(ids.len(), total);
+            for id in ids.iter().take(total - 1) {
+                defeat(&mut session, *id, true);
+            }
+            session.advance_milestones(&view, geometry);
+            assert!(!milestone(&session, reward).defeated);
+            let prior = session.progress().expect("progress").total_xp;
+            let final_id = *ids.last().expect("last enemy");
+            defeat(&mut session, final_id, true);
+            session.advance_milestones(&view, geometry);
+            assert_eq!(session.progress().expect("progress").total_xp, prior + xp);
+            assert!(milestone(&session, reward).available_position.is_some());
+            let effective = session.player_tuning(&tuning);
+            match role {
+                ExpeditionRole::PlainWisp => {
+                    assert!(
+                        !session
+                            .progress()
+                            .expect("locked guide")
+                            .fireball_guide_unlocked
+                    );
+                    assert!((effective.projectile_speed - 45.0).abs() < 0.001);
+                }
+                _ => {
+                    assert!((effective.spell_projectile_speed(Spell::Shield) - 45.0).abs() < 0.001);
+                    assert_eq!(effective.shield_dimensions(), (5, 5));
+                }
+            }
+            collect(&mut session, reward, &view, geometry);
+            let before = session.player_tuning(&tuning);
+            defeat(&mut session, final_id, true);
+            session.advance_milestones(&view, geometry);
+            assert_eq!(session.progress().expect("once XP").total_xp, prior + xp);
+            assert_eq!(
+                before.player_profile,
+                session.player_tuning(&tuning).player_profile
+            );
+            assert_eq!(
+                before.projectile_speed.to_bits(),
+                session.player_tuning(&tuning).projectile_speed.to_bits()
+            );
+            assert!(milestone(&session, reward).collected);
+            assert!(milestone(&session, reward).available_position.is_none());
+        }
+        let effective = session.player_tuning(&tuning);
+        assert!(session.progress().expect("guide").fireball_guide_unlocked);
+        assert!((effective.projectile_speed - 60.0).abs() < 0.001);
+        assert!((effective.spell_projectile_speed(Spell::Shield) - 65.0).abs() < 0.001);
+        assert_eq!(effective.shield_dimensions(), (7, 7));
+        assert!((tuning.projectile_speed - 32.0).abs() < 0.001);
+        assert_eq!(tuning.shield_dimensions(), (5, 5));
+        assert_eq!(
+            session
+                .expedition_progress()
+                .expect("counts")
+                .wisps_defeated,
+            10
+        );
+        assert_eq!(
+            session
+                .expedition_progress()
+                .expect("counts")
+                .golems_defeated,
+            3
+        );
+        assert_eq!(session.progress().expect("XP").total_xp, 105);
+        session.reset(1, &view, geometry);
+        session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
+        assert!(
+            !session
+                .progress()
+                .expect("reset guide")
+                .fireball_guide_unlocked
+        );
+        let reset = session.player_tuning(&tuning);
+        assert!((reset.projectile_speed - 45.0).abs() < 0.001);
+        assert!((reset.spell_projectile_speed(Spell::Shield) - 45.0).abs() < 0.001);
+        assert_eq!(reset.shield_dimensions(), (5, 5));
+    }
+}
+
+#[test]
+fn lowland_pickup_and_rank_order_give_identical_effective_spell_stats() {
+    let mut outcomes = Vec::new();
+    for purchase_first in [false, true] {
+        let (mut session, view, geometry, _, tuning) = start();
+        session
+            .progression
+            .as_mut()
+            .expect("state")
+            .snapshot
+            .available_upgrades = 20;
+        let buy = |session: &mut ArenaSession| {
+            for stat in [
+                UpgradeStat::ProjectileSpeed,
+                UpgradeStat::ShieldProjectileSpeed,
+                UpgradeStat::ShieldSize,
+            ] {
+                for _ in 0..stat.max_ranks() {
+                    assert!(session.spend_upgrade(stat));
+                }
+            }
+        };
+        if purchase_first {
+            buy(&mut session);
+        }
+        for (role, reward) in [
+            (ExpeditionRole::PlainGolem, ExpeditionReward::GolemShield),
+            (ExpeditionRole::PlainWisp, ExpeditionReward::WispBallistics),
+        ] {
+            kill_role(&mut session, role, true);
+            session.advance_milestones(&view, geometry);
+            collect(&mut session, reward, &view, geometry);
+        }
+        if !purchase_first {
+            buy(&mut session);
+        }
+        let effective = session.player_tuning(&tuning);
+        effective.validate().expect("max rewarded profile");
+        outcomes.push((
+            effective.projectile_speed.to_bits(),
+            effective.player_profile,
+        ));
+    }
+    assert_eq!(outcomes.first(), outcomes.get(1));
 }

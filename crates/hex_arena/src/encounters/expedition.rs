@@ -38,6 +38,18 @@ fn roster() -> Vec<(String, Vec<ExpeditionRole>)> {
             vec![ExpeditionRole::MountainShadow],
         ),
     ]);
+    for index in 1..=3 {
+        result.push((
+            format!("plain_golem_{index:02}"),
+            vec![ExpeditionRole::PlainGolem],
+        ));
+    }
+    for (index, count) in [3, 3, 4].into_iter().enumerate() {
+        result.push((
+            format!("plain_wisp_{:02}", index + 1),
+            vec![ExpeditionRole::PlainWisp; count],
+        ));
+    }
     result
 }
 
@@ -71,7 +83,7 @@ impl ArenaSession {
                 .any(|(name, _)| !sites.encounters.contains_key(name))
         {
             return Err(
-                "Expedition requires all fourteen camps, Troll, three Dragons and mountain Shadow."
+                "Expedition requires fourteen camps, Troll, three Dragons, Shadow, three Golems and three Wisp packs."
                     .into(),
             );
         }
@@ -127,7 +139,7 @@ impl ArenaSession {
                 .to_world(geometry.top(region.preferred) + SKIN);
             let leader = roles.first().copied().ok_or("Empty expedition party.")?;
             let count = roles.len();
-            for role in roles {
+            for (slot, role) in roles.into_iter().enumerate() {
                 let id = u8::try_from(actors.len())
                     .map_err(|error| format!("Expedition actor capacity exceeded: {error}."))?;
                 let mut actor = Actor::spawn(id, home, Vec3::NEG_Z);
@@ -136,21 +148,46 @@ impl ArenaSession {
                     actor.configure_summit_dragon();
                 }
                 actor.party = Some(party);
-                let feet = battle_runtime::deployment_pose(
-                    &actor,
-                    region,
-                    &actors,
-                    &self.collision,
-                    world,
-                    geometry,
-                )
+                let feet = if role == ExpeditionRole::PlainWisp {
+                    battle_runtime::flying_deployment_pose(
+                        &actor,
+                        region,
+                        &actors,
+                        &self.collision,
+                        world,
+                        geometry,
+                        tuning,
+                    )
+                    .map(|(feet, layer)| {
+                        actor.flight_layer = Some(layer);
+                        feet
+                    })
+                } else {
+                    battle_runtime::deployment_pose(
+                        &actor,
+                        region,
+                        &actors,
+                        &self.collision,
+                        world,
+                        geometry,
+                    )
+                }
                 .ok_or_else(|| format!("No complete supported pose for {role:?} in {name}."))?;
                 actor.feet = feet;
                 actor.previous_feet = feet;
-                actor.body.grounded = true;
-                actor.grounded = true;
+                actor.flying = role == ExpeditionRole::PlainWisp;
+                actor.body.grounded = !actor.flying;
+                actor.grounded = !actor.flying;
                 landmarks.push((id, name.clone()));
-                encounter.brains.insert(id, brain::Brain::new(id, feet));
+                let mut brain = brain::Brain::new(id, feet);
+                if role == ExpeditionRole::PlainWisp {
+                    brain.configure_wisp_opening(
+                        slot,
+                        count,
+                        tuning.encounters.wisp_initial_volley_spread,
+                    );
+                }
+                encounter.brains.insert(id, brain);
                 encounter.stats.insert(id, ActorCombatStats::default());
                 actors.push(actor);
             }
