@@ -2,7 +2,7 @@
 
 mod cast_input;
 mod encounter;
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
 #[cfg(feature = "test-support")]
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
