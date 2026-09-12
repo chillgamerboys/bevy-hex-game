@@ -50,7 +50,9 @@ pub use creatures::{
     ProjectileAppearance, Species, TeamId, CREATURE_ABILITY_COUNT,
 };
 pub use encounter_config::EncounterTuning;
-pub use encounters::{CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot};
+pub use encounters::{
+    ActorSeparationStats, CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot,
+};
 pub use telemetry::{ActorCombatStats, RoundSummary};
 use telemetry::{CombatCue, CombatCueKind};
 

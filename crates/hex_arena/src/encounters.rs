@@ -9,6 +9,9 @@ use std::collections::BTreeMap;
 mod abilities;
 mod battle_runtime;
 mod brain;
+mod separation;
+use separation::separate_many;
+pub use separation::ActorSeparationStats;
 mod steering;
 #[cfg(test)]
 mod tests;
@@ -39,6 +42,7 @@ struct PartyRuntime {
 #[derive(Debug, Default)]
 pub(crate) struct EncounterState {
     pub initialized: bool,
+    separation_stats: ActorSeparationStats,
     worms: BTreeMap<ActorId, worm::Controller>,
     spawn_failed: bool,
     pub parties: Vec<PartySnapshot>,
@@ -54,6 +58,12 @@ pub(crate) struct EncounterState {
 }
 
 impl ArenaSession {
+    /// Deterministic work counters for the latest encounter actor-separation tick.
+    #[must_use]
+    pub const fn actor_separation_stats(&self) -> ActorSeparationStats {
+        self.encounter.separation_stats
+    }
+
     /// Active direct-attack barriers; transparent to sight, movement and cameras.
     #[must_use]
     pub fn barriers(&self) -> &[BarrierSnapshot] {
@@ -798,7 +808,7 @@ impl ArenaSession {
         for (id, origin) in boosts {
             self.record_high_jump(id, origin);
         }
-        separate_many(&mut self.actors, &self.collision);
+        self.encounter.separation_stats = separate_many(&mut self.actors, &self.collision);
         self.move_worms(&intents, world, geometry, materials, tuning, &mut out);
         self.separate_worms(world, geometry, materials, &mut out);
         self.refresh_worm_heads(world, geometry);
@@ -1019,37 +1029,6 @@ fn body_overlap(a: &Actor, b: &Actor) -> Option<Vec3> {
         }
     }
     best.map(|axis| axis * (depth * 0.5 + SKIN))
-}
-
-fn separate_many(actors: &mut [Actor], world: &CollisionWorld) {
-    for _ in 0..4 {
-        let mut changed = false;
-        for i in 0..actors.len() {
-            let (left, right) = actors.split_at_mut(i + 1);
-            let Some(a) = left.last_mut() else {
-                continue;
-            };
-            if a.hp <= 0.0 {
-                continue;
-            }
-            for b in right.iter_mut().filter(|a| a.hp > 0.0) {
-                if a.species == Species::Worm || b.species == Species::Worm {
-                    continue;
-                }
-                if let Some(push) = body_overlap(a, b) {
-                    let fa = shapes::slide(world, a, a.feet, push).0;
-                    let fb = shapes::slide(world, b, b.feet, -push).0;
-                    changed |= fa.distance_squared(a.feet) > SKIN * SKIN
-                        || fb.distance_squared(b.feet) > SKIN * SKIN;
-                    a.feet = fa;
-                    b.feet = fb;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
 }
 
 /// Per-actor counters for the selected map encounter.
