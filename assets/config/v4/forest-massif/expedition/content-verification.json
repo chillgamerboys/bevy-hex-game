@@ -1,17 +1,17 @@
 {
   "version": 1,
   "world_id": "forest-massif-expedition",
-  "manifest_fingerprint": 17324119174118615472,
+  "manifest_fingerprint": 11905307660019206431,
   "object_count": 914,
   "tree_count": 807,
   "structure_count": 107,
-  "exact_ground_contacts": 4633,
+  "exact_ground_contacts": 4908,
   "validated_site_supports": 8002,
   "route_count": 42,
   "encounter_count": 19,
   "fountain_count": 6,
   "forest_columns": 47743,
-  "canopy_columns": 32922,
-  "canopy_fraction": 0.6895670569507572,
+  "canopy_columns": 31992,
+  "canopy_fraction": 0.6700877615566679,
   "evidence": "compiled-public-world-facts; production admission and rendered/native review separate"
 }

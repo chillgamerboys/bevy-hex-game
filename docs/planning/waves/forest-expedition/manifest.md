@@ -75,11 +75,11 @@ lanes:
     ticket: null
     authority: world
     builder: worker
-    branch: feat/expedition-content-finish
+    branch: feat/expedition-tree-silhouettes
     owns: ['assets/config/v4/forest-massif', 'assets/art/objects/plant/forest-*', 'assets/art/object_catalog.ron', 'tools/forest_world.py', 'tools/forest_trees.py', 'tools/test_forest_trees.py', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
     dispatch_blockers: ['shared site contract fixed', 'L1 no overlapping work']
     merge_blockers: ['L1']
-    fences: ['Final f06ba29a0bdfa9b0 compiles and reproduces exactly: 807 trees,107 props,4633 ground contacts,8002 site supports,68.9567% whole-forest canopy; coordinator production admission and visual/native review remain pending.']
+    fences: ['Large-tree silhouette revision a538263d612e891f compiles: 807 trees,107 props,4908 ground contacts,8002 site supports,67.0088% whole-forest canopy; six understory assets unchanged. Fresh coordinator art/runtime admission and visual/native review remain pending.']
     selector: {concerns: [combined_gate], full: true}
     evidence: logic-only
     sizing: {model: inherited, effort: inherited}
