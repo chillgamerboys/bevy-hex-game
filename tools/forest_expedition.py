@@ -14,6 +14,7 @@ import random
 RADIUS = 187
 SEED = 20260911
 LEVEL_HEIGHT = .35
+WORLD_ID = "forest-massif-expedition"
 DIRECTIONS = ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))
 CAMP_COUNTS = (3, 3, 3, 3, 3, 5, 5, 5, 9, 9, 11, 13, 15, 20)
 CAMP_CENTERS = ((-46, 13, 44), (-46, -24, 42), (-59, 39, 47),
@@ -23,7 +24,7 @@ CAMP_CENTERS = ((-46, 13, 44), (-46, -24, 42), (-59, 39, 47),
                 (-151, 36, 56), (-125, 12, 56))
 HEART = (-143, 18, 56)
 ANCHORS = {f"forest_camp_{i:02}": p for i, p in enumerate(CAMP_CENTERS, 1)} | {
-    "party_start": (0, 0, 58), "bridge_west": (-28, 0, 44),
+    "party_start": (0, 0, 58), "bridge_center": (0, 0, 58), "bridge_west": (-28, 0, 44),
     "bridge_east": (28, 0, 44), "forest_troll": (-142, 4, 56),
     "heart_north": (-135, 39, 56), "ancient_tree": HEART,
     "dragon_lower": (65, 25, 80), "dragon_middle": (120, -18, 160),
@@ -254,7 +255,7 @@ def recipe(*, raw):
              "anchors": [{"id": name, "column": xy(p), "level": raw(f"Some({p[2]})"),
                           "role": raw("Observation" if name == "ancient_tree" else "Gameplay")}
                          for name, p in ANCHORS.items()], "hub": grade(ANCHORS["party_start"])}
-    metadata = {"schema_version": 1, "status": "proxy-awaiting-compiled-grounding",
+    metadata = {"schema_version": 1, "world_id": WORLD_ID, "status": "proxy-awaiting-compiled-grounding",
                 "radius": RADIUS, "columns": len(region), "level_height": LEVEL_HEIGHT,
                 "anchors": ANCHORS.copy(), "encounters": sites,
                 "roster": {"goblins": 107, "shamans": 2, "trolls": 1, "dragons": 3, "shadows": 1,
@@ -286,8 +287,52 @@ def document(*, raw, ron):
     materials = [{"id": name, "solid": name not in ("water", "spring-water"),
                   "diggable": name not in ("bedrock", "water", "spring-water"), "color": raw(str(color))}
                  for name, color in colors.items()]
-    source = {"version": 1, "id": "forest-massif-expedition", "seed": SEED, "materials": materials,
+    source = {"version": 1, "id": WORLD_ID, "seed": SEED, "materials": materials,
               "recipes": raw('{"forest-massif":' + ron(value) + '}'),
               "regions": [{"id": "forest", "recipe": "forest-massif", "origin": {"q": 0, "r": 0},
                            "radius": RADIUS, "rotation": 0}], "connections": []}
     return ron(source) + "\n", metadata
+
+
+def site_document(metadata, *, world_id, manifest_fingerprint, raw, ron):
+    """Serialize only world-owned facts to the strict ``arena-sites.ron`` schema.
+
+    The caller supplies the identity of a successfully compiled package. This
+    function does not read packages or certify surfaces: the production world
+    loader must validate the emitted facts against that exact compiled world.
+    Duplicate positions are preserved so that admission rejects them rather
+    than silently changing the proposal. Route supports retain traversal order.
+    """
+    if world_id != WORLD_ID or metadata.get("world_id") != world_id:
+        raise ValueError("site metadata and compiled world identity must match")
+    if type(manifest_fingerprint) is not int or not 0 <= manifest_fingerprint < 2**64:
+        raise ValueError("manifest fingerprint must be an explicit u64 integer")
+
+    def position(p):
+        q, r, level = p
+        return {"column": {"q": q, "r": r}, "level": level}
+
+    def positions(values):
+        return [position(p) for p in sorted(values)]
+
+    encounters = []
+    for name, entry in sorted(metadata["encounters"].items()):
+        rally = entry["rally_entry"]
+        encounters.append({"id": name, "preferred": position(entry["preferred"]),
+                           "surfaces": positions(entry["surfaces"]),
+                           "rally_entry": raw("Some(" + ron(rally) + ")") if rally else None})
+    value = {"version": 1, "world_id": world_id, "manifest_fingerprint": manifest_fingerprint,
+             "encounters": encounters,
+             "route_nodes": [{"id": name, "position": position(p)}
+                             for name, p in sorted(metadata["route_nodes"].items())],
+             "routes": [{"id": name, "from": route["from"], "to": route["to"],
+                         "clearance_levels": route["clearance_levels"],
+                         "supports": [position(p) for p in route["supports"]],
+                         "ribbon": positions(route["ribbon"])}
+                        for name, route in sorted(metadata["routes"].items())],
+             "fountains": [{"id": name, "cells": positions(pool["cells"])}
+                           for name, pool in sorted(metadata["fountains"].items())]}
+    encoded = ron(value) + "\n"
+    if len(encoded.encode("utf-8")) > 16 * 1024 * 1024:
+        raise ValueError("expedition companion exceeds 16 MiB")
+    return encoded

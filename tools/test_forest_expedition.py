@@ -1,5 +1,6 @@
 """Full-footprint authoring invariants for the undecorated expedition proxy."""
 from collections import deque
+from copy import deepcopy
 import json
 import unittest
 
@@ -53,6 +54,7 @@ class ExpeditionProxy(unittest.TestCase):
         self.assertEqual(len(self.recipe["bridges"]), 1)
         controls = meta["bridge"]["controls"]
         self.assertEqual(meta["anchors"]["party_start"], (0, 0, 58))
+        self.assertEqual(meta["anchors"]["bridge_center"], meta["anchors"]["party_start"])
         self.assertGreater(controls[len(controls)//2][2], controls[0][2] + 10)
         self.assertEqual(controls[0][2], controls[-1][2])
         for a, b in zip(controls, controls[1:]):
@@ -169,6 +171,53 @@ class ExpeditionProxy(unittest.TestCase):
         self.assertIn("radius:187", source)
         self.assertIn("features:[]", source)
         self.assertIn('id:"spring-water",solid:false', source)
+
+    def test_companion_schema_excludes_gameplay_and_report_fields(self):
+        captured = []
+        def record(value):
+            if isinstance(value, dict):
+                captured.append(value)
+            return ron(value)
+
+        encoded = world.site_document(self.metadata, world_id=world.WORLD_ID,
+                                      manifest_fingerprint=42, raw=Raw, ron=record)
+        value = captured[0]
+        self.assertEqual(set(value), {"version", "world_id", "manifest_fingerprint", "encounters",
+                                     "route_nodes", "routes", "fountains"})
+        self.assertEqual(len(value["encounters"]), 19)
+        self.assertEqual(len(value["routes"]), 30)
+        self.assertEqual(len(value["fountains"]), 6)
+        for entry in value["encounters"]:
+            self.assertEqual(set(entry), {"id", "preferred", "surfaces", "rally_entry"})
+        for entry in value["fountains"]:
+            self.assertEqual(set(entry), {"id", "cells"})
+        for entry in value["routes"]:
+            self.assertEqual(set(entry), {"id", "from", "to", "clearance_levels", "supports", "ribbon"})
+            self.assertEqual(entry["clearance_levels"], 4)
+            original = self.metadata["routes"][entry["id"]]["supports"]
+            self.assertEqual([(p["column"]["q"], p["column"]["r"], p["level"]) for p in entry["supports"]], original)
+        self.assertIn('rally_entry:Some("forest_camp_01")', encoded)
+        self.assertIn('preferred:(column:(q:-46,r:13),level:44)', encoded)
+        for field in ("goblins:", "shamans:", "heal:", "uses:", "profile:", "pending:", "roster:"):
+            self.assertNotIn(field, encoded)
+
+    def test_companion_requires_explicit_matching_identity(self):
+        for fingerprint in (-1, 2**64, "42", True, None):
+            with self.subTest(fingerprint=fingerprint), self.assertRaises(ValueError):
+                world.site_document(self.metadata, world_id=world.WORLD_ID,
+                                    manifest_fingerprint=fingerprint, raw=Raw, ron=ron)
+        with self.assertRaises(ValueError):
+            world.site_document(self.metadata, world_id="other-world", manifest_fingerprint=42, raw=Raw, ron=ron)
+
+    def test_companion_is_canonical_without_hiding_duplicate_cells(self):
+        copied = deepcopy(self.metadata)
+        for key in ("encounters", "route_nodes", "routes", "fountains"):
+            copied[key] = dict(reversed(list(copied[key].items())))
+        arguments = dict(world_id=world.WORLD_ID, manifest_fingerprint=42, raw=Raw, ron=ron)
+        self.assertEqual(world.site_document(copied, **arguments), world.site_document(self.metadata, **arguments))
+        pool = copied["fountains"]["forest_fountain_01"]
+        pool["cells"].append(pool["cells"][0])
+        self.assertNotEqual(world.site_document(copied, **arguments), world.site_document(self.metadata, **arguments))
 
 
 if __name__ == "__main__":
