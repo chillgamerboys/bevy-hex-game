@@ -380,7 +380,45 @@ def png_info(path: Path) -> dict:
             "physical_pixels": [width, height]}
 
 
-def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dict[str, str]) -> None:
+def forest_package_state(directory: Path) -> dict:
+    """Freeze actual runtime bytes, including the companion and workspace pointer."""
+    directory = directory.resolve(strict=True)
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError(f"Capture package contains a mutable symbolic link: {path}")
+        if path.is_file():
+            files[path.relative_to(directory).as_posix()] = digest(path.read_bytes())
+    receipt_path = directory / "compile-receipt.json"
+    if not receipt_path.is_file():
+        raise RuntimeError("Forest capture requires the compiled workspace with compile-receipt.json.")
+    compiled = json.loads(receipt_path.read_text())
+    fingerprint = compiled.get("package_fingerprint")
+    if compiled.get("strict") is not True or not isinstance(fingerprint, str) or len(fingerprint) != 16:
+        raise RuntimeError("Forest capture needs a strict public compiler receipt and package fingerprint.")
+    try:
+        manifest_fingerprint = int(fingerprint, 16)
+    except ValueError as error:
+        raise RuntimeError("Invalid compiler package fingerprint.") from error
+    return {"directory": str(directory), "manifest_fingerprint": manifest_fingerprint, "files": files}
+
+
+def validate_forest_package(state: dict, package: dict, previous: dict | None) -> dict:
+    """Match the producer's loaded identity to frozen compiled workspace bytes."""
+    identity = state.get("package_identity")
+    if not isinstance(identity, dict) or identity.get("manifest_fingerprint") != package["manifest_fingerprint"]:
+        raise RuntimeError("Native Forest package differs from the frozen compiler receipt.")
+    expedition = isinstance(state.get("expedition"), dict)
+    if identity.get("world_id") != ("forest-massif-expedition" if expedition else "forest-massif-battle"):
+        raise RuntimeError("Native Forest world identity disagrees with its admitted gameplay.")
+    if expedition and type(identity.get("sites_fingerprint")) is not int:
+        raise RuntimeError("Expedition capture lacks its decoded companion fingerprint.")
+    if previous is not None and identity != previous:
+        raise RuntimeError("Native Forest package or companion changed between capture frames.")
+    return identity
+
+
+def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dict[str, str], *, expedition: bool = False) -> None:
     """Check accepted setup and actual bodies for selectable player parties."""
     expected_selection = {"map": MAP_LABELS[arena_map],
                           "encounter": ENCOUNTER_LABELS["dragon" if encounter in PLAYER_OVERRIDES else encounter]}
@@ -401,6 +439,14 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
     if arena_map == "forest-massif":
         actors = state.get("actors", [])
         roles = Counter(actor.get("expedition_role") for actor in actors if actor.get("expedition_role") is not None)
+        if expedition:
+            snapshot = state.get("expedition")
+            fountains = snapshot.get("fountains", []) if isinstance(snapshot, dict) else []
+            expected_fountains = {f"forest_fountain_{i:02}" for i in range(1, 5)} | {f"mountain_fountain_{i:02}" for i in range(1, 3)}
+            if not roles or not isinstance(snapshot, dict) or snapshot.get("enemies_total") != 114 or snapshot.get("forest_total") != 109:
+                raise RuntimeError("Expedition review requires the complete admitted expedition, not the legacy Forest package.")
+            if len(fountains) != 6 or {f.get("name") for f in fountains} != expected_fountains:
+                raise RuntimeError("Expedition review requires all six canonical fountains.")
         expected_species = Counter({"Human": 1, "Goblin": 20, "Shaman": 2, "Dragon": 3})
         if roles:
             if roles != Counter({"BabyGoblin": 15, "Goblin": 92, "Shaman": 2, "Troll": 1, "Dragon": 3, "MountainShadow": 1}):
@@ -967,6 +1013,11 @@ def capture(args: argparse.Namespace) -> int:
         if any(entry[2] != "forest-massif" for entry in entries):
             raise RuntimeError("--forest-world requires a Forest-only capture matrix.")
         env["HEX_FOREST_WORLD"] = str(args.forest_world)
+    package = None
+    if any(entry[2] == "forest-massif" for entry in entries):
+        directory = Path(env.get("HEX_FOREST_WORLD", ROOT / "assets/config/v4/forest-massif/compiled"))
+        package = forest_package_state(directory)
+        env["HEX_FOREST_WORLD"] = package["directory"]
     initial, staged, unstaged = source_state()
     output.mkdir(parents=True, exist_ok=False)
     # The state-derived child is the actual pack; the requested directory is never reused.
@@ -986,13 +1037,14 @@ def capture(args: argparse.Namespace) -> int:
         "terrain_seed_note": "Each frame records its accepted recipe and fixed seed.",
         "scenario_correction": "Worm buried view requires actual Travel plus published head-center earth. Conversion view uses ordinary Duel Worm/Goblins and waits for a correlated exposed dirt top after actor body and surface decoration clear it; Fort retains the ordinary reset comparison. Windup uses the exposed physical head warning material." if args.worm_review else "Duel observer Golem vs Dragon: native 3710941 paired corpus exercised GolemLaser in 16/16 Dragon rows and 0/16 Shadow rows. Ordinary rosters/seed 1; no injected state or weakened phase guards. Fort Stone Swipe uses ordinary player Shield taps and medium-range movement after the dry gate route; actual Golem policy must choose the recovery attack." if args.golem_review else None,
         "capture_method": "windowless Bevy arena image-target hook",
+        "forest_package": package,
         "terminal_menu_note": "terminal-win/terminal-defeat explicitly set fixture HP to zero; normal authority computes the result and opens the menu. These rows establish presentation only, not naturally won/lost combat." if any(row[1].startswith("terminal-") for row in entries) else None,
         "logical_canvas": CANVAS, "device_scale": 1.0,
-        "changed_surfaces": ["V4 Forest Massif terrain", "Grand palette and lighting", "fixed enemy roster", "progression HUD", "upgrade menu"] if args.forest_review else ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
+        "changed_surfaces": ["layered forest canopy and roots", "arched bridge and decorated Shadow arena", "mountain shelves and curved river", "milestone spheres and finite fountain glow", "afternoon lighting", "115-actor role presentation", "progression HUD and upgrades"] if args.expedition_review else ["V4 Forest Massif terrain", "Grand palette and lighting", "fixed enemy roster", "progression HUD", "upgrade menu"] if args.forest_review else ["dynamic head-first native Worm segments", "opaque-earth occlusion", "Boulder windup and frozen projectile", "seven-button Fort menu", "acknowledged dirt conversion and key reset"] if args.worm_review else ["24 autonomous Wisps", "both flight layers", "native app-frame and tick load"] if args.wisp_performance else ["one-prism Wisp", "glow and dim-light comparisons", "frozen Ember appearance", "six-button Fort menu", "observer swarm labels"] if args.wisp_review else ["seven-prism stone body", "independent face", "charge/tracking/beam", "spherical slam warning", "frontal Stone Swipe", "Fort party selector", "observer Golem roster"] if args.golem_review else ["observer mode and rosters", "orbit/free camera", "team body colors", "observer HUD", "terminal results"] if (observer_matrix or args.spectator) else ["map selectors", "authored map terrain and objects", "creature models", "windups", "breath", "barrier", "aura", "party count"] if args.encounter_review else ["charge bar", "release guidance", "partial shield footprint", "ready screen", "paused menu", "actor cameras"] if args.charge_review else ["ready screen", "paused menu", "synthetic win/defeat result menus", "HUD key guidance"] if args.menu_review else ["terrain", "actor cameras", "cover", "spell effects", "HUD", "tuning", "ready screen"],
         "expected_views": [entry[0] for entry in entries], "mechanical_status": "INCOMPLETE",
         "static_review": "NOT_AN_APPROVAL_PACK" if (args.performance_review or args.spectator_performance or args.wisp_performance) else "UNREVIEWED", "human_motion": "NOT_MEASURED_SYNTHETIC" if (args.performance_review or args.wisp_performance) else "OBSERVER-CAMERA-MOTION-PENDING" if (observer_matrix or args.spectator) else "HUMAN-MOTION-PENDING",
         "performance_fixture": "Synthetic validated Wisp HP 1000 before admission, 12 vs 12 for 1440 ticks; authored nominal HP retained per native receipt. No actor HP mutation or injected impacts. Actual zero terrain publications are valid; separate Seven Regions/destruction fixtures cover that workload." if args.wisp_performance else "Synthetic extra-HP party visits with validated 150-unit ground/Shadow/Dragon home leashes before admission. Authored search durations, sight, activation, movement and attacks; no ordinary movement or human balance evidence." if args.performance_review else "Ordinary seeded autonomous battle; real app-frame wall intervals, no GPU or vsync measurement." if args.spectator_performance else None,
-        "human_route": "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, press 3 for High Jump while holding a charge, cancel holds with pause/focus/spell changes, and reset.",
+        "human_route": "Start on bridge; aim contact shots around trunks, follow winding forest routes into a large camp, approach the Heart, enter and leave the Shadow gate, climb lower and middle Dragon shelves and try the summit approach, enter a hidden fountain, collect a milestone sphere, pause/resume and restart. Judge light, occlusion, animated water, camera collision and combat readability." if args.expedition_review else "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, press 3 for High Jump while holding a charge, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
         "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "HEX_FOREST_WORLD") if key in env},
@@ -1002,9 +1054,12 @@ def capture(args: argparse.Namespace) -> int:
     print(f"Windowless capture pack: {pack}", flush=True)
     try:
         seen = {}
+        loaded_package = None
         for name, view, arena_map, encounter, focus in entries:
             if source_state()[0] != initial:
                 raise RuntimeError("Source changed during capture; this pack is stale.")
+            if package is not None and forest_package_state(Path(package["directory"])) != package:
+                raise RuntimeError("Compiled Forest package changed during capture; this pack is stale.")
             png = pack / f"{name}.png"
             frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view,
                              HEX_ARENA_MAP=arena_map, HEX_ARENA_ENCOUNTER=encounter)
@@ -1044,7 +1099,12 @@ def capture(args: argparse.Namespace) -> int:
             frame.update(png_info(png))
             frame["native_state_receipt"] = native_receipt_info(png, view, frame["physical_pixels"])
             native_state = json.loads(png.with_suffix(".json").read_text())
-            validate_capture_setup(native_state, arena_map, encounter, frame_env)
+            validate_capture_setup(native_state, arena_map, encounter, frame_env, expedition=args.expedition_review)
+            if arena_map == "forest-massif" and package is not None:
+                loaded_package = validate_forest_package(native_state, package, loaded_package)
+                frame["loaded_package_identity"] = loaded_package
+                if forest_package_state(Path(package["directory"])) != package:
+                    raise RuntimeError("Compiled Forest package changed while a frame was loading.")
             frame.update(logical_canvas=CANVAS, device_scale=1.0)
             if frame["sha256"] in seen:
                 raise RuntimeError(f"Unexpected duplicate frames: {view} and {seen[frame['sha256']]}.")
