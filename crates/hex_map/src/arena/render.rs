@@ -15,6 +15,7 @@ struct RenderCache {
     columns: BTreeMap<HexCoord, Entity>,
     presentations: Vec<Entity>,
     features: BTreeMap<crate::procedural_v3::FeatureId, Entity>,
+    mask_revisions: BTreeMap<crate::procedural_v3::FeatureId, u64>,
     generation: Option<u64>,
     forest: forest_chunks::ForestRender,
 }
@@ -165,8 +166,12 @@ fn refresh_presentations(
     if cache.generation == Some(state.generation) {
         if let Some(forest) = &state.forest {
             for (id, mask) in &forest.masks {
-                if let Some(entity) = cache.features.get(id) {
-                    commands.entity(*entity).insert(mask.clone());
+                if cache.mask_revisions.get(id) == Some(&mask.revision) {
+                    continue;
+                }
+                if let Some(entity) = cache.features.get(id).copied() {
+                    commands.entity(entity).insert(mask.clone());
+                    cache.mask_revisions.insert(*id, mask.revision);
                 }
             }
         }
@@ -240,15 +245,18 @@ fn refresh_presentations(
             return;
         }
     };
-    if state
+    cache.mask_revisions.clear();
+    if let Some(forest) = state
         .forest
         .as_ref()
-        .is_some_and(|forest| forest.finite.is_some())
+        .filter(|forest| forest.finite.is_some())
     {
-        for entity in &features {
-            commands
-                .entity(*entity)
-                .insert(hex_assets::ObjectCarveMask::default());
+        for (id, entity) in projection.features().keys().zip(&features) {
+            // Usually pristine; retain any accepted damage that preceded the
+            // first presentation, and reset publication receipts on Restart.
+            let mask = forest.masks.get(id).cloned().unwrap_or_default();
+            cache.mask_revisions.insert(*id, mask.revision);
+            commands.entity(*entity).insert(mask);
         }
     }
     roots.extend(crate::crystal_render::spawn_prepared(

@@ -417,7 +417,9 @@ fn reconcile_objects(
         let carve_changed = carve_mask.is_some_and(|mask| {
             rendered
                 .and_then(|rendered| rendered.carved.as_ref())
-                .is_none_or(|previous| previous.mask != *mask)
+                // The world owns an immutable removal snapshot per revision.
+                // Idle frames must not walk all historical carved cells.
+                .is_none_or(|previous| previous.mask.revision != mask.revision)
         });
         if !needs_rebuild && !carve_changed {
             continue;
