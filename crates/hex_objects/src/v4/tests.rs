@@ -42,6 +42,7 @@ fn record(blueprint: &ObjectBlueprint, id: &str, rotation: u8) -> ObjectInstance
             });
     }
     ObjectInstance {
+        grounding: None,
         id: id.into(),
         region_id: "region-a".into(),
         asset: blueprint.id.to_string(),

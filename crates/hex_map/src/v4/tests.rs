@@ -100,6 +100,7 @@ fn add_object(world: &mut WorldPackage, root: WorldHex, occupied: WorldHex) {
         .semantics
         .objects
         .push(ObjectInstance {
+            grounding: None,
             id: "object".into(),
             region_id: "region".into(),
             asset: "authored_statue".into(),
@@ -1202,6 +1203,7 @@ fn render_halo_subtracts_published_object_masks_before_culling_opaque_background
         .semantics
         .objects
         .push(ObjectInstance {
+            grounding: None,
             id: "cutout-stock".into(),
             region_id: "region".into(),
             asset: "cutout-stock".into(),

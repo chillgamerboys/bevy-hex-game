@@ -1295,6 +1295,7 @@ mod tests {
             asset: Some("test-tree".into()),
         };
         let object = ObjectInstance {
+            grounding: None,
             id: feature.id.clone(),
             region_id: "a".into(),
             asset: "test-tree".into(),

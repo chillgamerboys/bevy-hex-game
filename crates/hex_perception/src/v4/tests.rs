@@ -189,6 +189,7 @@ fn add_object(package: &mut WorldPackage, root: WorldHex, column: WorldHex, bott
         .semantics
         .objects
         .push(ObjectInstance {
+            grounding: None,
             id: "pillar".into(),
             region_id: "region-0000".into(),
             asset: "pillar".into(),
@@ -942,6 +943,7 @@ fn asset_landmark(package: &mut WorldPackage, at: WorldHex) -> (FeatureSummary, 
         asset: Some("test-tree".into()),
     };
     let object = ObjectInstance {
+        grounding: None,
         id: feature.id.clone(),
         region_id: feature.region_id.clone(),
         asset: feature.asset.clone().expect("asset"),

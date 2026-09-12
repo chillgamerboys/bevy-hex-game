@@ -828,6 +828,7 @@ pub(in crate::v4) mod tests {
                 .semantics
                 .objects
                 .push(ObjectInstance {
+                    grounding: None,
                     id: "test-tree".into(),
                     region_id: "a".into(),
                     asset: "test-prefab".into(),

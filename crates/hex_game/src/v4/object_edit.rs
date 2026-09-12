@@ -511,6 +511,7 @@ mod tests {
             );
         }
         let a = ObjectInstance {
+            grounding: None,
             id: "a-tree".into(),
             region_id: "region-0".into(),
             asset: "tree".into(),
@@ -532,6 +533,7 @@ mod tests {
             .push(a);
         if overlap {
             let b = ObjectInstance {
+                grounding: None,
                 id: "b-tree".into(),
                 region_id: "region-3".into(),
                 asset: "tree".into(),

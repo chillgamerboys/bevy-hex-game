@@ -405,6 +405,7 @@ mod tests {
     #[test]
     fn changed_sources_wait_until_every_old_fragment_is_retired() {
         let old = ObjectInstance {
+            grounding: None,
             id: "region/tree".into(),
             region_id: "region".into(),
             asset: "plant/tall-narrow".into(),

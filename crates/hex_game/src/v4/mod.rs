@@ -1781,6 +1781,7 @@ mod picking_tests {
     fn stock_pick_keeps_exact_large_world_identity_and_rejects_neighbor_or_foreign_fragment() {
         let column = WorldHex::new(9_000_000_000_015, -9_000_000_000_017);
         let object = ObjectInstance {
+            grounding: None,
             id: "test/tree".into(),
             region_id: "test".into(),
             asset: "plant/tall-narrow".into(),
