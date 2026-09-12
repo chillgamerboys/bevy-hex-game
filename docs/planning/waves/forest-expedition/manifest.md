@@ -1,0 +1,133 @@
+# Forest–Massif Expedition
+
+Status: dispatching. Branch: `wave/forest-expedition`. Coordinator: root.
+Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
+Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 107 enemies, physical reward pickups and finite healing.
+User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
+
+## Why this wave exists
+World facts, gameplay rules and visible presentation must compose in one candidate. Establish shared facts first, then use disjoint world/gameplay/presentation lanes; the coordinator owns combination and validation.
+
+## Locked decisions
+1. Keep radius 187 and V4 authority, west forest/east massif, a gently curved central river and exactly one broad arched stone bridge with parapets, supports and open portal gates. Spawn the player on the bridge. Keep current water physics.
+2. Rebuild tree distribution: approximately 36 large landmarks plus the unique 60-unit Heart, and initially about 700 smaller 6–12-unit trees. Large tiers 14–22/28–40. Smaller foliage generally begins 3.5–5 units up. Smallest landmark has about 9 units of clear walking beyond its trunk, increasing with tree size; Heart clearing fits three groups and Troll. Use irregular buttressed tapering trunks, fuller taller and narrower landmark crowns, exact matching voxel collision, and supported roots. Aim near 60% canopy with a hard 50% whole-forest floor including paths/clearings. CubeWorld giant trees are scale reference only, not copied art.
+3. Add 4–10-unit forest hills, 2–4-unit gullies, local undulations, graded camps, indirect winding bridge-to-Heart paths with forks/reconnecting loops, narrow passages, broad clearings, rock formations and bright crystals. Preserve useful firing positions and local walking clearance, not globally empty understory.
+4. All three Dragons exist from reset, with initial shelf levels 80/160/260, variable-width switchbacks, intermediate openings and resting shelves. Intended ascent passes the two lower encounters. Off-route slopes are steep and unpleasant but possible with repeated High Jump; no hard gate, locked spawn or defeat-triggered access. Trees surround foothills and thin up slopes toward snow.
+5. A mountain side path leads to a decorated walled arena with Duel-sized radius-12 interior, tall walls/buttresses/ornaments and massive open gate. Its Shadow exists from reset, stays in the arena, has 125 HP and independent explosive Fireballs (30 damage, speed 45, gravity 12, cooldown .75), using existing Shadow movement/AI.
+6. Nine camps contain 4,6,8,10,10,12,14,17,19 Goblins = 100. First 18 are Baby Goblins (30 HP, walk/run 3/5, swipe 8, cooldown 1.4). Other 82 use adult baseline. Two Shamans join the last two camps, keeping largest complete party at 20. Add one Troll and three Dragons and one Shadow: 107 enemies + player = 108 actors.
+7. Troll starts at 600 HP, about three player heights, slower movement, stronger melee and 35-damage Fireballs. Its radius-9 aura gives forest allies across parties +25% damage and existing support healing; ordinary Shaman aura stays party-local. First damaging player hit announces and rallies all surviving forest parties via authored routes. Keep ordinary perception, stable party ids, no duplicate orders; Troll death ends rally.
+8. Start player at speed 45, gravity 12, contact damage 15, knockback 12, cooldown .5, explosions locked. Keep health/movement/charging/Shield/High Jump/controls and existing bankable upgrades. Gravity fixed. Freeze payload and mode at launch. Only player benefits from upgrades and rewards.
+9. Rewards require proximity pickup: Troll orb grants a separate +25 damage (replaces all-Goblin-clear reward); last Dragon orb unlocks radius-2.5 explosions; Shadow orb grants +25 maximum HP and heals 25. Distinguish defeated, reward available and reward collected; apply each once, never alter in-flight shots. Health orbs mint-white; milestone orbs larger and distinct colors, with unobstructed living-player collection. Initial deterministic one-third Goblin drops heal 10; Shaman 20; Dragon/Troll 35. At full HP health orbs remain.
+10. Six glowing fountain pools (four forest, two mountain) heal up to 40 HP once, then stop glowing; full HP does not consume. Disable Forest player passive regeneration, retain enemy healing. XP immediately on credited kills: Goblin 1, Shaman 5, Dragon 20, Troll 50, Shadow 100; preserve 10-second knockback credit and once-only XP, ceil(10*1.5^(L-1)) level thresholds and rollover. All authored enemies dead marks victory with exploration and pickups still active. Restart restores terrain/enemies/stats/rewards/pools/XP; pause preserves, no persistence.
+11. Use 15:00 light, softer direct sun, brighter ambient shadows, warmer highlights and restrained haze. Retain accepted V3 foliage/material/water visuals. Presentation consumes gameplay snapshots only.
+12. User's new 3% remaining floor supersedes repository temporary 7%. Work in bounded units and check live usage; at floor checkpoint and activate hourly current-task heartbeat. Resume only after a live confirmed quota reset, not the clock alone. Only after game work and validation finish, with at least 20% remaining, review recent official OpenAI development/skills guidance and report prioritized improvements; no global instruction/config changes without a separate request.
+
+## Shared foundation
+World authority owns named supported encounter areas, rally route graph and fountain volumes, exact object occupancy, root support footprints, bounded edit protections and map vertical bounds. Gameplay owns profiles, spawning/pose acceptance, spatial actor broadphase, progress/pickup/fountain state, upgrade spending and read-only HUD snapshots. Shared core holds passive data types only; app adapts publications. Existing ArenaTerrainView/Geometry/Systems remain the transport.
+Root first adds backward-compatible optional authored-site contracts and records validation expectations. L1 establishes world admission/publication agreement for editable air beneath foliage, explicit root/buttress foundations and conservative legacy packages. L2 implements deterministic actor broadphase independently before population expands. L3/L4/L5 begin behavior work only after these facts are fixed.
+
+## Dispatch queue
+```yaml
+lanes:
+  - id: L1
+    title: World support and edit foundation
+    order: orders/L1.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: feat/expedition-world-foundation
+    owns: ['crates/hex_world_contracts', 'crates/hex_world_runtime', 'crates/hex_schematic', 'crates/hex_map/src/arena/forest.rs', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
+    dispatch_blockers: []
+    merge_blockers: []
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: logic-only
+    sizing: {model: inherited, effort: inherited}
+    state: queued
+    pr: null
+  - id: L2
+    title: Actor broadphase and expedition gameplay
+    order: orders/L2.md
+    ticket: null
+    authority: gameplay
+    builder: worker
+    branch: feat/expedition-gameplay
+    owns: ['crates/hex_arena', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
+    dispatch_blockers: []
+    merge_blockers: []
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: logic-only
+    sizing: {model: inherited, effort: inherited}
+    state: queued
+    pr: null
+  - id: L3
+    title: Expedition geography and content
+    order: orders/L3.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: feat/expedition-content
+    owns: ['assets/config/v4/forest-massif', 'assets/art/objects/plant/forest-*', 'assets/art/object_catalog.ron', 'tools/forest_world.py', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
+    dispatch_blockers: ['shared site contract fixed', 'L1 no overlapping work']
+    merge_blockers: ['L1']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: static-presentation
+    sizing: {model: inherited, effort: inherited}
+    state: queued
+    pr: null
+  - id: L4
+    title: World publication adapters
+    order: orders/L4.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: feat/expedition-adapter
+    owns: ['crates/hex_map/src/arena', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
+    dispatch_blockers: ['shared site contract fixed', 'L1 no overlapping work']
+    merge_blockers: ['L1', 'L3']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: logic-only
+    sizing: {model: inherited, effort: inherited}
+    state: queued
+    pr: null
+  - id: L5
+    title: Expedition HUD and presentation
+    order: orders/L5.md
+    ticket: null
+    authority: shared
+    builder: worker
+    branch: feat/expedition-presentation
+    owns: ['crates/hex_game/src/arena', 'tools/arena.py', 'docs/planning/waves/forest-expedition/manifest.md (own queue row)']
+    dispatch_blockers: ['gameplay read-only snapshot fixed']
+    merge_blockers: ['L2', 'L4']
+    fences: []
+    selector: {concerns: [combined_gate], full: true}
+    evidence: motion-or-feel
+    sizing: {model: inherited, effort: inherited}
+    state: queued
+    pr: null
+```
+
+## Ownership map
+L1 owns support metadata/compiler/runtime validation and forest edit-protection publication only. L4 starts after L1 and owns other adapter regions. L2 exclusively owns hex_arena gameplay. L3 owns content/blueprints/catalog/tool generation. L5 owns arena app views/materials/effects/captures. Root owns shared core vocabulary, manifest outside lane rows, integration wiring/docs and combined tests. Shared manifest rows are additive; never resolve another lane's row in isolation. No concurrent source writes in the same worktree. Pure builds and app builds use separate targets; app builds serialize.
+
+## Territory
+Read-only GitHub sweep 2026-09-11: #220 V4 on #219 Grand, #219 Grand on dev, #213 biome feedback on #212 islands, #212 on #211 desert, #211 on #210 mountain, #210 and #196 lattice on dev. These are existing donor/unrelated work; no remote changes. Refreshed local origin. Measured old candidate versus origin/dev: 719 files, 372983 insertions, 5381 deletions (large donor history, not this revision's diff). This wave has zero initial difference from a872a57. Old content/gameplay/UI worktrees are preserved. No Linear inventory in this local delivery; no ticket writes or reconciliation claims.
+
+## Integration order
+Root commits shared passive contracts; L1 and L2's broadphase can run independently. Merge L1 then world content/publication; merge L2 gameplay; finish presentation on combined snapshots. Maintain current supported baseline until package regeneration and composed acceptance succeed. One coordinator writes integration branch. Keep source branches.
+
+## Combined acceptance
+Deterministic terrain/curved continuous river/exactly one bridge; complete graded route ribbons and support/body-clearance validation; exact 108 roster and camp totals; final rotated voxel intersections/root support and full-forest canopy >=50%; Heart clearing and landmarks. Shield under canopies, cross-chunk edits, roots/anchors/objects protected, atomic rejection/reset. Profile exploration/largest camp/full rally with actual 108 actors (CPU claims distinct from FPS). Test baby/Troll profiles, aura/rally, no enemy upgrades, pickup/progression orders, XP credit/rollover, final kill/duplicates/in-flight payloads, full-HP orbs/pools, pause/victory/reset. Regression Duel/Fort. Windowless ground-level forest, full-footprint, bridge, mountain openings, Shadow arena, orb/pool and HUD captures inspected individually. Native aiming/traversal/combat/readability pass remains required; record unverified controls honestly if CUA cannot address the native game. Cargo-based launcher/guide and outputs evidence. Full selector-chosen merge gate before future dev integration; local candidate reports exact checks only.
+
+## Stop conditions
+Unknown owner facts, object/support policy mismatch, malformed anchors/routes, overlapping ownership, unable-to-validate destructive change. At live <=3% remaining pause new development, gather all agent checkpoints, commit durable state and start hourly reset heartbeat. Do not consume reset credits. No automatic claim that the reset happened at its predicted time.
+
+## Injection log
+2026-09-11: approved expedition plan, user choices and conditional OpenAI guidance review banked from planning conversation.
+
+## Close-out
+In progress. Current playable launcher still targets old validated build. All expanded map/gameplay/presentation and combined validation remain to be completed; no new visuals delivered yet.
