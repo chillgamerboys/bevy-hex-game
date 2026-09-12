@@ -69,8 +69,48 @@ fn bridge_cross_sections_are_invariant_under_reverse_traversal() {
     operators::bridge(&mut forward, &bridge).expect("forward");
     bridge.points.reverse();
     operators::bridge(&mut reverse, &bridge).expect("reverse");
-    assert_eq!(forward.columns, reverse.columns);
+    for (p, expected) in &forward.columns {
+        assert_eq!(reverse.columns.get(p), Some(expected), "column {p:?}");
+    }
     assert_eq!(forward.reserved, reverse.reserved);
+}
+
+#[test]
+fn bridge_cross_sections_rotate_with_the_authored_path() {
+    let mut canonical = ground();
+    operators::bridge(&mut canonical, &arch()).expect("canonical");
+    for turns in 1..6 {
+        let mut rotated = ground();
+        let mut bridge = arch();
+        for point in &mut bridge.points {
+            point.column = point.column.rotate_60(turns).expect("rotation");
+        }
+        operators::bridge(&mut rotated, &bridge).expect("rotated arch");
+        for p in &canonical.reserved {
+            let rotated_p = p.rotate_60(turns).expect("rotation");
+            assert_eq!(
+                rotated.columns.get(&rotated_p),
+                canonical.columns.get(p),
+                "turn {turns} at {p:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bridge_cannot_silently_flatten_conflicting_retraced_controls() {
+    let mut world = ground();
+    let mut bridge = arch();
+    bridge.points = [(-12, 48), (12, 60), (-12, 50)]
+        .into_iter()
+        .map(|(q, level)| GradePoint {
+            column: WorldHex::new(q, 0),
+            level,
+        })
+        .collect();
+    let error = operators::bridge(&mut world, &bridge).expect_err("contradictory crossing");
+    assert!(error.contains("conflicting centerline"), "{error}");
+    assert!(world.reserved.is_empty());
 }
 
 #[test]

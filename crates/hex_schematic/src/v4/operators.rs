@@ -617,7 +617,26 @@ pub(super) fn auto_route(
 }
 
 pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<()> {
-    let center = controlled_line(&bridge.points, &[])?;
+    let mut center = Vec::new();
+    for pair in bridge.points.windows(2) {
+        let [a, b] = pair else { continue };
+        let line = geometry::line(a.column, b.column)?;
+        let steps = line.len().saturating_sub(1) as i64;
+        if steps == 0 {
+            return Err("duplicate bridge control coordinate".into());
+        }
+        for (i, column) in line.into_iter().enumerate() {
+            // Weighted interpolation floors the same height in either direction.
+            // The directional channel operator keeps its existing fall semantics.
+            let i = i as i64;
+            let level =
+                (i64::from(a.level) * (steps - i) + i64::from(b.level) * i).div_euclid(steps);
+            center.push(GradePoint {
+                column,
+                level: i32::try_from(level).map_err(|error| error.to_string())?,
+            });
+        }
+    }
     let mut sections = BTreeMap::new();
     for point in &center {
         for p in geometry::disk(point.column, bridge.half_width)? {
@@ -637,6 +656,15 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
         .into_iter()
         .map(|(column, (_, level))| (column, level))
         .collect();
+    if center
+        .iter()
+        .any(|point| deck.get(&point.column) != Some(&point.level))
+    {
+        return Err(format!(
+            "bridge {} has conflicting centerline levels",
+            bridge.id
+        ));
+    }
     for (p, level) in &deck {
         for neighbor in geometry::neighbors(*p) {
             if deck
