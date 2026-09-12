@@ -1,5 +1,7 @@
 # Expedition resume checkpoint
 
+**Active continuation, 2026-09-12:** quota reset confirmed (100% available); waiting_for_reset is false. The prior pause record below remains historical evidence. Fountain/snapshot commit 6a822d70 is now integrated as d8958a8 and its arena suite passes 355 tests / one ignored. Root app presentation is being checked at d2b3bb0. Gameplay, content and structures agents are continuing from d8958a8 on new `feat/expedition-*-finish` / `feat/expedition-structures` branches. Read current source/task state before following the historical next-work list.
+
 The latest user amendments A1–A3 in `manifest.md` override the original locked decisions: 107 Goblins in fourteen camps (3,3,3,3,3,5,5,5,9,9,11,13,15,20), two Shamans, Troll, three Dragons and Shadow. Total 114 enemies / 115 actors. No enemy healing drops or player regeneration. Hidden finite fountains are the only healing source. Shadow grants +25 maximum HP with **no current-HP increase**. Troll grants +25 damage; the final Dragon unlocks explosions, both through milestone pickups.
 
 ## Preserved delivery

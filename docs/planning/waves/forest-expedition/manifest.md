@@ -1,6 +1,6 @@
 # Forest–Massif Expedition
 
-Status: paused at the user-approved 3% quota floor; hourly reset continuation active. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
+Status: resumed after a live confirmed reset; implementation and validation in progress. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
 Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
 Epic: none. One outcome: a 45–60 minute Forest–Massif expedition with layered forest, 114 enemies, physical milestone pickups and finite healing.
 User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
@@ -158,3 +158,7 @@ Integrated code `5ddc5fb` includes the complete 115-actor proxy admission, canon
 Gameplay fountain/snapshot source `6a822d70` is preserved separately, clean but **uncompiled, untested and not integrated**. Begin the reset continuation there. Milestone pickups, Troll ranged/aura/rally, Shadow confinement, final vegetation/structures, HUD effects, full-map combat profiling, fresh windowless captures and native feel validation remain pending. The playable `hex-forest` launcher is unchanged.
 
 Hourly heartbeat `resume-forest-expedition-after-reset` is ACTIVE on this task. It waits quietly for a live confirmed reset, then resumes the authorized work; it does not spend reset credits. Full source locations, evidence, remaining steps and usage state are in [resume.md](resume.md).
+
+## Resumed 2026-09-12
+
+The hourly check confirmed a fresh weekly window with 100% available. State now has `waiting_for_reset=false`. Integrated fountain/snapshot source as `d8958a8`; 355 arena tests pass, one manual benchmark ignored. Gameplay continues milestone pickups and Troll/Shadow AI, content continues supported vegetation/global reservations, and structures continue bridge/arena/rock/crystal/fountain architecture in isolated source branches. Root owns app HUD/effects and combined checks. Explicit fixed feature rotation, public compiled-world survey and bridge travel-strip reservation are small world foundations being coordinated by the content owner before final placement. The old playable launcher remains unchanged until final acceptance.
