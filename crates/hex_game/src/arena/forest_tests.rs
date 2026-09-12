@@ -357,12 +357,12 @@ fn authored_expedition_proxy_has_115_supported_actors_and_resets() {
     tick(&mut app);
     assert_eq!(inspect(&app), initial);
     println!(
-        "EXPEDITION_PROXY_RECEIPT {}",
+        "EXPEDITION_ADMISSION_RECEIPT {}",
         serde_json::json!({
             "actors": 115, "parties": 19, "setup_ms": setup_ms,
             "reset_ms": reset.elapsed().as_secs_f64() * 1000.0,
             "bridge_start_ticks": distribution(samples),
-            "scope": "terrain-only proxy spawn/reset and idle simulation CPU; no forest/rally/renderer/FPS claim"
+            "scope": "selected compiled expedition package: spawn/reset and bridge-idle simulation CPU; no active combat, rally, renderer or FPS claim"
         })
     );
 }
@@ -529,7 +529,10 @@ fn authored_forest_spawn_reset_and_three_second_active_tick_profile() {
     });
     println!("FOREST_COMBINED_RECEIPT {receipt}");
     assert_eq!(peak_active, 8, "all real camps must activate");
-    assert!(all_active_ticks >= 240, "at least two of the three measured seconds need all eight parties active; got {all_active_ticks}/360 ticks");
+    assert!(
+        all_active_ticks >= 240,
+        "at least two of the three measured seconds need all eight parties active; got {all_active_ticks}/360 ticks"
+    );
 }
 
 /// Explicit CPU workload on the complete expedition. Validated player visits and

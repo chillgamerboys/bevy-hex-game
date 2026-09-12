@@ -1,108 +1,51 @@
 # Expedition resume checkpoint
 
-**Active continuation, September 12, 04:19 PT:** reset confirmed; live quota last checked at **85% remaining**. `waiting_for_reset` is false. Integration source is `50e9e60` on `wave/forest-expedition`; the next commit records this checkpoint. All requested gameplay and content are implemented in source; composed movement, performance, static presentation and native acceptance remain unfinished. Earlier checkpoints below are historical.
+Active continuation, September 12, 2026. **Keep implementing until complete or live Codex quota reaches 3% remaining.** The reset was confirmed; `waiting_for_reset=false`. Latest usage check: 84% remaining. Earlier checkpoints are preserved in Git history rather than repeated as current instructions here.
 
-- Current package: `assets/config/v4/forest-massif/expedition/compiled`, fingerprint **a538263d612e891f**. Root compiler reproduction passes: 914 objects (807 trees and 107 props), 4908 ground contacts, 8002 support/clearance positions, 42 routes, 19 encounters, six fountains. New large-tree silhouettes retain **31992/47743 = 67.0088%** whole-forest canopy. Seven large-tree blueprints changed; 56 catalog objects are unchanged. Understory and prop bytes are preserved. Actual rendered validation of the new trees remains pending.
-- Exact roster: 107 Goblins in14 camps (3,3,3,3,3,5,5,5,9,9,11,13,15,20), two Shamans, Troll, three Dragons, Shadow; 114 enemies / 115 actors. Fountains are the only healing. Shadow adds25 maximum HP with zero current-HP increase. Troll damage and final-Dragon explosions are proximity/LOS pickups, each once. Amendments A1–A3 remain authoritative.
-- Baseline normal validation: 374 arena tests/one ignored + strict arena Clippy at `ce155de`; 119 game/seven ignored and45 map/one ignored at `c272039`. New test-only CPU diagnostics, collision fixes, route settling, legacy terrain cleanup and presentation changes require fresh combined tests. The first new arena/art compilation exposed three test-code errors (private coordinate field access twice and a borrow ordering error); those are corrected locally, with rerun pending.
-- Actual populated old package f06: four ignored fixtures ran, **three passed / one failed** twice. Supported115 roster/reset, ordinary-tick reward/fountain states and camp/rally simulation pass. Route probes failed20/408 segments. Precise evidence found18 descents stopped just before landing and two bridge ascents exposed a real short-stride collision-skin units error. Root `80070e0` fixes the collision kernel; `1adc5a8` waits for actual grounded support in the test without loosening its constraints. These fixes need actual new-package rerun. A related production rally re-entry descent fix is in progress in the gameplay lane.
-- Old populated CPU ArenaTick profile (not FPS/GPU/native): bridge idle p95 .782ms; camp p95 39.818ms; full rally p95 18.939ms. Coarse phases prove spikes are mostly Simulate, including unchanged-terrain ticks. New opt-in `aec1d5b` records eight phases and bounded steering/recovery counters to locate the cause; compile/run it next before changing AI behavior. All14 forest parties began travelling, but a21s fixture with109 remaining travellers does not prove all arrived.
-- First windowless26-frame pack at exact clean `ccc5847b7d68cb4d0c3c51af46e15bc126872358` / old f06 is mechanically COMPLETE and independently inspected: **13 PASS,10 FAIL,3 BLOCKED; overall static FAIL**. Root inspected every original and the whole contact sheet. Main defects: forest shadows too dark, regular large-tree collars/trunks, opaque fountain caps, clipped/blocked feature cameras. New art plus root `028894e` repairs are unrendered: brighter ambient/lower sun contrast, a single translucent water surface, and revised bridge/arena/fountain compositions. Recapture fresh exact-head evidence after testing; inspect every frame plus contact sheet with a fresh reviewer. Native motion remains pending.
-- `785434d` serializes concurrent first-launch preparation and publishes the companion atomically; `cfc4d09` removes leftover Duel/Fort terrain entities when entering Forest. Independent Python package/launcher/capture subset20 PASS; composed Rust cleanup regression remains unrun. Default Cargo/helper/lazy selection preparation already exists. Never launch a bare source binary.
-- Native access reports a locked Mac. Do not bypass it. Continue windowless work; native aiming/traversal/combat review remains pending until manual unlock and successful game addressing. The original launcher still opens `work/hex-forest`; do not replace it before composed acceptance. No remote writes or dev/main integration.
-- Full map Clippy retains inherited Grand/V3 debt (517 library +829 test findings); do not call that a passed merge gate. After all game work and validation, and only with at least20% quota remaining, perform the requested official OpenAI guidance audit. No global settings changes authorized.
+## Candidate and authoritative requirements
 
-## Latest composed evidence, 50e9e60
+- Integration checkout: `/Users/alberto/Documents/Codex/2026-09-11/i-w/work/hex-expedition`, branch `wave/forest-expedition`. Integrated runtime head before the current presentation repair is **2040abe**. No remote writes or dev/main merges. Preserve source branches and the old playable `work/hex-forest` checkout/launcher until composed acceptance.
+- [manifest.md](manifest.md), amendments A1–A3, govern the expansion. **107 Goblins in 14 camps: 3,3,3,3,3,5,5,5,9,9,11,13,15,20.** Two Shamans join the 13/15 camps. First five camps contain 15 Baby Goblins. Troll, three Dragons and Shadow bring the total to **114 enemies / 115 actors, 19 parties**.
+- **Fountains are the only healing source.** Six hidden single-use 40-HP pools, not consumed at full HP. No enemy HP drops or passive player regeneration. Shadow violet orb adds **25 maximum HP and zero current HP**. Troll gold orb adds 25 damage; final-Dragon blue orb unlocks explosions. Collection requires proximity and line of sight. Gameplay owns once-only XP, defeat/available/collected state, frozen projectile payloads, upgrades, victory exploration and reset.
+- Start on bridge with 45 launch speed, 12 projectile gravity, 15 contact damage, 12 knockback, .5 cooldown, explosions locked. Enemy spells remain independent. All credited kills give 327 XP: level 8 with 4 XP carried and seven bankable points.
+- All requested content/gameplay exists in source. Static presentation repairs, populated CPU evaluation, remaining combined checks, final windowless review and native acceptance are still open. Do not describe the map as delivered.
 
-- **382 arena tests PASS / one ignored;220 asset tests PASS; strict arena Clippy PASS.** Includes new downhill rally re-entry, bridge skin, diagnostics and full63-object/14-style art catalog. Logs `arena-art-a538-complete.log`, `clippy-a538-arena.log`. Earlier test-compilation and stale style-count failures are repaired.
-- **119 game tests PASS / seven ignored;46 map tests PASS / one ignored.** Includes legacy-render cleanup; log `composed-a538-normal.log`. The arena/assets portions of that filtered invocation execute zero tests and are not their evidence; their full suites above are separate.
-- **All four actual a538 populated fixtures PASS:** `populated-a538-profile.log`. Exact115 actors/19 parties/reset, ordinary-tick reward/fountain states, all14 camps begin rally movement, and **408/408 route segments with9360 waypoint visits** over42 routes +both bridge approaches, both directions, player/adult/Shaman. The map portion of this explicitly ignored invocation has zero matching tests. These are typed/CPU checks, not native control feel.
-- Current measured CPU (notFPS/GPU): idle bridge p95 .770ms; camp p95 39.482ms; rally p95 20.673ms. Brains alone p95 38.470/19.640ms; movement/separation about1ms. Counters show slow unchanged ticks synchronize97–113 decisions and5700–6560 walk-probe steps, often without deep recovery. Performance lane will cache exact bounded movement-query candidate data within one immutable brain loop, preserving deadlines and narrow-phase behavior. No performance repair has been measured yet.
-- Actual a538 setup4067.5ms/reset935.5ms. The old receipt name/scope still says proxy; the explicit invocation and package hashes establish this is the populated a538 package. Fix that stale diagnostic label during the next test-code integration. A21s rally observation proves all camps start moving, not all arrive: many nominal routes alone take28–56s and nearby parties can legitimately enter combat.
-- First50e9e60 repair image subset is next; source/package will remain frozen during capture. The firstccc5847 pack remains staticFAIL; fresh revised geometry/light/pool/camera pixels are still unreviewed.
+## Current package
 
-## Immediate sequence
+`assets/config/v4/forest-massif/expedition/compiled`, fingerprint **a538263d612e891f**. Root reproduction passes: 105469 columns / 444 chunks, 914 objects (807 trees + 107 props), 4908 ground contacts, 8002 support/clearance positions, 42 routes, 19 encounters, six fountains. Tree count includes 700 understory, 36 landmarks, the Heart and 70 mountain trees. Whole-forest canopy **31992/47743 = 67.0088%**, including routes and clearings. Seven large-tree blueprints changed; the other 56 catalog objects, including all understory and props, remain byte-identical. Root and independent reviewer have inspected runtime tree pixels on this package. Cube World scale reference was inspected and is recorded in [render-review.md](render-review.md).
 
-1. Finish art/arena tests and scoped strict arena Clippy; run combined game/map tests with `hex_game/dev,hex_game/test-support,hex_map/arena-prototype`. Keep APP_TARGET exclusive to root.
-2. Run the four ignored `expedition` fixtures on **a538** with explicit `HEX_FOREST_WORLD`; verify408 route segments and inspect CPU counters. Integrate/test the gameplay descent re-entry repair, then address only measured runtime causes.
-3. Commit a clean candidate; capture the fresh26-entry matrix with `tools/arena.py capture --expedition-review`, actual package and new output path. Inspect every original/contact sheet independently, iterate visible failures.
-4. Complete native review after manual unlock, update the Cargo launcher/guide only when accepted, and handle the conditional guidance audit. At live3% remaining, checkpoint and let the existing hourly heartbeat wait quietly for a confirmed reset. Never consume reset credits.
+## Verified evidence
 
-Logs: `/Users/alberto/Documents/Codex/2026-09-11/i-w/outputs/expedition-validation/`. New: `arena-art-irregular-trees.log`, `tree-revision-reproduction.log`; previous runtime: `populated-expedition-diagnostics.log`; first render: `render-ccc5847.log`. Per-frame independent findings live with the first capture pack under `.context/expedition-review-ccc5847-first/`.
+Logs and JSON receipts live at `/Users/alberto/Documents/Codex/2026-09-11/i-w/outputs/expedition-validation`.
 
-App target: `/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore`. Pure compiler target: `/Users/alberto/Documents/Codex/2026-09-04/i/work/cargo-v4-pure`. Set `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`; serialize same-target builds, require positive intended test counts. Source worktrees remain preserved. The new package was reproduced by root, not merely copied from the content lane.
+- At `50e9e60`: **382 arena tests PASS / one ignored; 220 asset tests PASS; strict arena Clippy PASS.** `arena-art-a538-complete.log`, `clippy-a538-arena.log`.
+- At `50e9e60`: **119 game tests PASS / seven ignored; 46 map tests PASS / one ignored.** `composed-a538-normal.log`. The arena/art parts of that filtered invocation ran zero tests and are not their evidence.
+- At `50e9e60`, actual a538 package: **all four ignored expedition fixtures PASS**, `populated-a538-profile.log`. Exact 115 supported actors / 19 parties and reset; ordinary-tick reward/fountain readiness; all **408/408 segmented route traversals, 9360 waypoint visits**, both directions for player/adult Goblin/Shaman. These are production-controller collision/support checks with synthetic standing starts, not continuous crowd/native movement proof.
+- Python arena tooling **51 PASS**, `python-arena-final-integration.log`; separate authoring/tree tests **54 PASS**. First-launch package locking/atomic publication subset **20 PASS**. Source `785434d` serializes first launches; `cfc4d09` removes old Duel/Fort render entities when entering Forest, covered by the combined map suite.
+- CPU baseline on actual a538: idle bridge p95 .770 ms; camp p95 **39.482 ms**, rally p95 **20.673 ms**. Brains dominate spikes. Movement/separation p95 about 1 ms. Receipts `expedition_active_receipt-a538.json`, `expedition_proxy_receipt-a538.json`. The latter's PROXY text is stale: the command loaded actual a538. These measure ArenaTick CPU, never renderer/GPU/FPS/native.
+- Cache integrated as `73dd277` + `2040abe`, from performance agent `135d04b` + `1e12163`: exact ordered short Movement candidate spans cached only within one brain phase, capped at 128 entries/8192 spans; no decisions, clearances, hits, barriers, long rays or cross-tick terrain state cached. **386 arena tests PASS / one ignored**, default and test-support strict Clippy PASS in agent PURE target, including ordered oracle and 720-tick cached/uncached trajectories. Root combined actual CPU rerun remains pending.
+- Full map Clippy retains inherited Grand/V3 debt (517 library / 829 test findings); it is not a passed merge gate. Current scoped game Clippy and explicit `arena_encounters`, `arena_routes`, `arena_battles` integration suites remain pending.
 
-The original pre-reset checkpoint follows for provenance; its "unimplemented" and "next work" statements are historical.
+## Static and native review
 
-The latest user amendments A1–A3 in `manifest.md` override the original locked decisions: 107 Goblins in fourteen camps (3,3,3,3,3,5,5,5,9,9,11,13,15,20), two Shamans, Troll, three Dragons and Shadow. Total 114 enemies / 115 actors. No enemy healing drops or player regeneration. Hidden finite fountains are the only healing source. Shadow grants +25 maximum HP with **no current-HP increase**. Troll grants +25 damage; the final Dragon unlocks explosions, both through milestone pickups.
+- First full 26-frame old `ccc5847` / f06 pack: independently inspected **13 PASS / 10 FAIL / 3 BLOCKED**, static FAIL. Keep it historical.
+- Repair subset: exact clean **cd6e2c08a258de5870e33b3d78ac296ba1aac531** / a538, 14 frames, mechanically complete, all originals + contact sheet inspected by root and independent `actor_broadphase`. **11 PASS / 3 FAIL**. Trees, brighter forest shadows, full overview, Heart, arena and gate now pass static inspection. Remaining issues: reverse bridge foreground trees obscure span; charged fountain tint/glow too weak; mountain fountain camera crops basin and lacks approach context.
+- Pack: `.context/expedition-repair-first/cd6e2c08a258de5870e33b3d78ac296ba1aac531-forest-expedition-v2-rewards-focused`, independent `independent-review-actor-broadphase.{md,json}` and contact sheet. These are diagnostic subset results, not final 26-view acceptance.
+- Current root repair changes only presentation/capture code: stronger translucent turquoise cap and drifting glimmers hidden under the consumed pool parent; bridge camera moved into river center; mountain pool composition uses published approach with higher fallback. Charged/spent forest views share a camera. New actual-package test covers charged children, consumption visibility and reset. **Not compiled or rendered yet.** Existing lighting is 15:00 / ambient1100 / directional6000 and already passed static inspection.
+- Native CUA still reports **Mac locked**. A concise async request to unlock it is pending; no answer yet, no bypass. User already authorized the native playtest. Continue independent work. Native aiming/traversal/combat readability and motion remain HUMAN-MOTION-PENDING.
 
-## Preserved delivery
+## Immediate next work and target ownership
 
-- Integration checkout: `/Users/alberto/Documents/Codex/2026-09-11/i-w/work/hex-expedition`, branch `wave/forest-expedition`.
-- Last integrated code checkpoint: `5ddc5fb73027b90d742715e6a97e7532101cbfa2`. No remote writes or dev/main integration.
-- Existing playable checkout remains `work/hex-forest` at `a872a57`; `outputs/Launch Forest Battle.command` still launches it. The expedition candidate is unfinished and must not replace that launcher before composed acceptance.
-- Agent branches retain source work: `feat/expedition-world-foundation` at `43dceeb`, `feat/expedition-content` at `963d630`; their implementation commits have been integrated individually. Gameplay is integrated through `0d439414` (root `b8e7bec`). Its latest **unintegrated and uncompiled** fountain/snapshot checkpoint is `6a822d70f38cc3ae2056ab7db8a8117c730267ac` on `feat/expedition-gameplay` in `work/expedition-gameplay`.
+1. Performance agent is profiling actual a538 on its clean **1e12163** worktree (`work/expedition-performance`; runtime-equivalent to root2040abe, docs differ). It exclusively owns APP_TARGET until released. Outputs are `cache-a538-*`. Compare exact steering counters against the baseline before claiming a behavior-preserving speedup. All 14 forest parties move, but 109 travellers remaining after a 21-second fixture is not evidence of arrival or failure.
+2. Root finishes the current presentation repair and its test; actor agent reviews source read-only. Do not build against APP_TARGET until performance agent releases it.
+3. Run scoped game Clippy, meaningful presentation test and remaining legacy integration checks; fix real failures. Capture a small repair subset if needed, inspect original pixels, then produce a fresh full 26-view pack from one clean committed source/package and inspect every original plus contact sheet independently.
+4. Complete native route after manual unlock and successful addressing of the real Cargo-launched candidate. Repoint Cargo launcher/play guide only after composed acceptance. Do not substitute old binary or count screenshot checks as gameplay proof.
+5. Once all game work and validation are complete, with at least 20% quota remaining, do the requested recent official OpenAI skills/development-guidance audit. This is not eligible yet. No global settings/instruction changes are authorized.
 
-## Current implementation
+APP_TARGET: `/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore`.
+PURE_TARGET: `/Users/alberto/Documents/Codex/2026-09-04/i/work/cargo-v4-pure` (free).
+Use `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`. Serialize shared targets. When switching source worktrees, refresh changed crate roots and require positive expected test counts; stale cross-worktree artifacts previously gave zero tests or incompatible rlibs. Never execute a bare source binary; Cargo supplies asset roots.
 
-Passive named encounter/route/fountain contracts, strict manifest-bound `arena-sites.ron` loading, route clearance and real-water validation, exact tree grounding/edit guards, atomic arched bridge geometry, deterministic actor broadphase, 115-actor admission and role profiles, softer afternoon lighting and role palettes are present. The tree generator has thirteen presets with irregular tapered trunks and exact matching occupied voxels.
+## Quota and automatic continuation
 
-The radius-187 terrain proxy has 105469 columns, 444 chunks, fourteen camp pads, thirty graded route segments, six pools, three Dragon elevations and the Shadow arena opening. Compiled fingerprint: `484603000e2166fd`. Runtime package and companion are currently at:
-
-`/Users/alberto/Documents/Codex/2026-09-11/i-w/work/expedition-content/.context/expedition-proxy/compiled`
-
-This is a terrain-only proxy. Trees, rocks, crystals and finished structures are not populated. Compiler success is not evidence of gameplay admission, finished traversal or visual quality.
-
-## Validation status
-
-Lane evidence: 186 world tests pass (one pre-existing ignored release test); 350 arena tests pass (one manual benchmark ignored), strict arena Clippy passes; tree generator eight tests cover 39 preset/seed pairs; proxy twelve tests pass; bridge six tests pass including reversed and rotated arches and atomic rejection. A previous combined app/map checkpoint passed 108 game and 29 map tests before later site, roster and proxy integration.
-
-Final pre-pause evidence:
-
-- `bbcd24d` combined suite: **108 game tests passed / four ignored; 41 map tests passed / one ignored**. This includes all eleven site-validator and five companion-loader checks.
-- Actual proxy initially rejected all spawning because gameplay expected `*_spring_*` names while the world published `*_fountain_*`. Root `b8e7bec` aligns admission/fixtures/documentation to the producer's canonical names; validators were not weakened.
-- After that correction, the explicit production-loader fixture **passed with all 115 physically supported actors / 19 parties**, the exact role distribution, and identical reset roster. Setup 2922.95 ms, reset 860.48 ms; 120 idle bridge-start ticks p50 0.660 ms, p95 0.807 ms, max 1.000 ms. These are terrain-proxy simulation CPU measurements, not populated-forest/rally or FPS claims.
-- Updated role XP and derived completion: **352 arena tests passed / one manual benchmark ignored**, including all-credit 327 XP → level 8 / 4 XP, uncredited/expired attribution, duplicates and final-kill settlement. Expedition deaths no longer grant automatic damage/explosion bonuses; legacy package tests pass.
-- Combined Python authoring: **20 tests passed**. Cargo launcher/capture helper, including exact legacy/expedition roster validation and explicit `--forest-world` package selection: **44 tests passed**.
-- Durable logs: `outputs/expedition-validation/proxy-bbcd24d.log` (failed), `proxy-b8e7bec.log` (passed), and `arena-accounting.log` (passed), under the projectless workspace root.
-- No fresh expedition windowless captures or native playtest yet. The helper can now select the proxy explicitly, but its final expedition landmark matrix still needs expansion. Do not use old Forest images as new expedition evidence.
-- Fountain/snapshot source commit `6a822d70` has only formatting/diff checks; its three new tests have **not run**, and compilation is **unverified**. Preserve that distinction until the reset continuation tests it. No Cargo process remains running at this checkpoint.
-
-Builds sharing a target must be serialized. Same-version isolated worktrees previously reused stale Cargo artifacts: one invocation discovered zero tests, another linked incompatible grounding contracts. Touch the changed crate roots when switching source trees and require the intended positive test count. App target:
-
-`/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore`
-
-Use `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`. The pure target is `/Users/alberto/Documents/Codex/2026-09-04/i/work/cargo-v4-pure`.
-
-From the integration checkout, the combined check is:
-
-```bash
-touch crates/hex_core/src/lib.rs crates/hex_arena/src/lib.rs crates/hex_map/src/lib.rs crates/hex_game/src/lib.rs
-CARGO_TARGET_DIR=/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p hex_map -p hex_game --features hex_game/dev,hex_game/test-support,hex_map/arena-prototype --lib arena::
-```
-
-Then explicitly run the ignored full-scale fixture:
-
-```bash
-HEX_FOREST_WORLD=/Users/alberto/Documents/Codex/2026-09-11/i-w/work/expedition-content/.context/expedition-proxy/compiled CARGO_TARGET_DIR=/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p hex_game --features dev,arena-prototype,test-support --lib arena::forest_tests::authored_expedition_proxy_has_115_supported_actors_and_resets -- --ignored --nocapture
-```
-
-Its receipt measures real supported spawning, reset and idle bridge-start simulation CPU. It does not measure a populated forest, full Troll rally or renderer FPS.
-
-## Next work
-
-1. Inspect and cherry-pick only `6a822d70f38cc3ae2056ab7db8a8117c730267ac` from the preserved gameplay branch. It adds the approved public `expedition_progress()` snapshot, frozen-roster milestone defeated flags, named pool cells and single-use exact capsule/current-water overlap healing. Milestone positions remain `None`, collection flags remain false. Run its new tests, the arena suite, strict Clippy, and the app proxy after integration; fix actual failures before more behavior work. Do not blindly merge the entire agent branch.
-2. Finish gameplay-owned milestone pickup state and app presentation. Role XP, derived 109-minion/114-enemy accounting and victory are already integrated and tested. Preserve legacy maps; implement independent defeat/available/collected states, player-only bonuses and frozen launch-time payloads. Damage/explosions intentionally remain locked in the unfinished expedition until pickup authority is implemented.
-3. Implement Troll ranged/aura/rally behavior using world route facts and normal perception; confine the Shadow to its arena. Test largest camp and full surviving-forest rally at 115 actors.
-4. Place supported tree blueprints on final terrain, retain local landmark clearings and exact routes/camps, and prove at least 50% whole-forest canopy coverage. Add rock/crystal formations, mountain trees, fountain approaches and detailed bridge/arena structures. The CubeWorld reference image has not been successfully inspected; do not claim otherwise.
-5. Present read-only progression snapshots, milestone spheres and fountain glow/consumption, update objectives, and test XP rollover/upgrades/reward orders/final kills/pause/victory/reset and Duel/Fort regressions. Expected total XP is 327, yielding level 8 with 4 XP carried forward.
-6. Profile the actual populated 115-actor map, inspect fresh windowless full-map and ground views plus HUD, then complete the requested native aiming/traversal/combat review. Earlier CUA could not address the unbundled native game; that is a technical limitation, not completed feel validation. Launch through Cargo/helper, never a bare source binary.
-7. Publish a new Cargo launcher only after the candidate is ready. After all game work and validation are complete, and only with at least 20% usage remaining, review recent official OpenAI development/skills guidance and report prioritized improvements. No global settings changes are authorized by that optional audit.
-
-## Usage and automatic continuation
-
-User's 3% floor overrides the repository's older 7% instruction. Check live `codex` account limits, not the separate Spark bucket. At the floor, finish the bounded checkpoint and configure an hourly heartbeat on this current task. While usage remains exhausted/unchanged, perform only the quota check and stay quiet. Resume development only after a confirmed fresh window/reset in live usage, not a predicted wall-clock deadline. No reset credits may be consumed.
-
-Parked at **97% used / 3% remaining**, weekly reset timestamp **1789435563** (September 14, 2026 at 18:26:03 America/Los_Angeles). The user expected an earlier reset, so the heartbeat uses fresh tool evidence.
-
-Hourly current-task heartbeat **`resume-forest-expedition-after-reset` is ACTIVE**, created through `automation_update` for task `01a0936b-7adc-7c31-95e6-391395cf9e86`. State file: `/Users/alberto/Documents/Codex/2026-09-11/i-w/outputs/expedition-reset-state.json`. While waiting, do only the quota check and stay quiet on unchanged state. On a confirmed reset, resume the above work, then checkpoint again at 3%. The local app and computer need to remain available for scheduled work. Pause this heartbeat when all authorized work, including the conditional guidance review if eligible, is handled.
+Hourly heartbeat **resume-forest-expedition-after-reset** remains ACTIVE on task `01a0936b-7adc-7c31-95e6-391395cf9e86`. State is `/Users/alberto/Documents/Codex/2026-09-11/i-w/outputs/expedition-reset-state.json`; confirmed reset window ends at Unix1789806214. Use live `codex` limits, not Spark. At 3% remaining, finish a bounded checkpoint, update state and wait quietly for a confirmed restored quota window; check hourly. Never consume reset credits. Pause heartbeat only when all authorized work is complete.

@@ -821,14 +821,13 @@ pub(super) fn camera(
                     // haunches, banks and portals remain visible in silhouette.
                     let side = if rear { -1.0 } else { 1.0 };
                     let target = *center - Vec3::Y;
-                    let position = target + Vec3::new(12.0 * side, -2.0, 75.0 * side);
+                    let position = target + Vec3::new(0.0, -2.0, 50.0 * side);
                     *camera = Transform::from_translation(position).looking_at(target, Vec3::Y);
                     return;
                 }
             }
-            if focus.is_some_and(|name| name.contains("_fountain_")) {
-                *camera =
-                    feature_camera(&session, anchor + Vec3::Y * 0.4, Vec3::new(6.0, 4.0, 7.0));
+            if let Some(name) = focus.filter(|name| name.contains("_fountain_")) {
+                *camera = fountain_camera(&session, &view, *geometry, name, anchor);
                 return;
             }
             if focus == Some("shadow_gate") {
@@ -918,6 +917,38 @@ pub(super) fn feature_camera(session: &ArenaSession, target: Vec3, offset: Vec3)
         }
     }
     Transform::from_translation(best).looking_at(target, Vec3::Y)
+}
+
+/// Frame the upper spring through its open approach or from above its cliff
+/// pocket. The charged and spent views share this external composition camera.
+pub(super) fn fountain_camera(
+    session: &ArenaSession,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    name: &str,
+    anchor: Vec3,
+) -> Transform {
+    let target = anchor + Vec3::Y * 0.4;
+    if name.starts_with("mountain_") {
+        if let Some(turn) = view
+            .expedition
+            .as_ref()
+            .and_then(|sites| sites.route_nodes.get(&format!("{name}_turn")))
+        {
+            let approach = (turn.coord.to_world(geometry.top(*turn)) - anchor)
+                .with_y(0.0)
+                .normalize_or(Vec3::Z);
+            for (distance, height) in [(9.0, 12.0), (6.0, 18.0), (1.0, 20.0)] {
+                let desired = target + approach * distance + Vec3::Y * height;
+                let position = session.camera_position(target, desired);
+                if position.distance_squared(desired) < 0.001 {
+                    return Transform::from_translation(position).looking_at(target, Vec3::Y);
+                }
+            }
+        }
+        return feature_camera(session, target, Vec3::new(1.0, 20.0, 1.0));
+    }
+    feature_camera(session, target, Vec3::new(6.0, 4.0, 7.0))
 }
 
 /// Explicit review target from published world facts; never a HUD map marker.

@@ -17,6 +17,7 @@ pub(super) struct ExpeditionVisualAssets {
     violet: Handle<StandardMaterial>,
     halo: Handle<StandardMaterial>,
     pool: Handle<StandardMaterial>,
+    glimmer: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -26,6 +27,12 @@ pub(super) struct RewardVisual(ExpeditionReward, u64);
 pub(super) struct PoolVisual {
     name: String,
     generation: u64,
+}
+
+#[derive(Component)]
+struct PoolGlimmer {
+    origin: Vec3,
+    phase: f32,
 }
 
 pub(super) fn setup(
@@ -53,7 +60,8 @@ pub(super) fn setup(
         blue: light(Color::srgb(0.35, 0.83, 1.0)),
         violet: light(Color::srgb(0.82, 0.55, 1.0)),
         halo: light(Color::srgba(0.88, 0.96, 1.0, 0.10)),
-        pool: light(Color::srgba(0.28, 1.0, 0.80, 0.16)),
+        pool: light(Color::srgba(0.28, 1.0, 0.80, 0.38)),
+        glimmer: light(Color::srgb(0.72, 1.0, 0.88)),
     });
 }
 
@@ -91,11 +99,17 @@ pub(super) fn present(
     assets: Res<ExpeditionVisualAssets>,
     mut rewards: Query<(Entity, &RewardVisual, &mut Transform)>,
     mut pools: Query<(Entity, &PoolVisual, &mut Visibility)>,
+    mut glimmers: Query<(&PoolGlimmer, &mut Transform), Without<RewardVisual>>,
 ) {
     let progress = session.expedition_progress();
     // Tie animation to simulation time so pausing and deterministic captures freeze it.
     let cycle_tick = u16::try_from(session.tick % 480).unwrap_or_default();
     let phase = f32::from(cycle_tick) / 480.0 * std::f32::consts::TAU;
+    for (glimmer, mut transform) in &mut glimmers {
+        let drift = phase + glimmer.phase;
+        transform.translation =
+            glimmer.origin + Vec3::new(drift.cos() * 0.08, drift.sin() * 0.20, drift.sin() * 0.08);
+    }
     for (entity, visual, mut transform) in &mut rewards {
         let position = progress.as_ref().and_then(|p| {
             p.milestones
@@ -213,7 +227,7 @@ pub(super) fn present(
                 },
             ))
             .with_children(|pool| {
-                for pos in caps.values() {
+                for (index, pos) in caps.values().enumerate() {
                     pool.spawn((
                         Mesh3d(assets.cap.clone()),
                         MeshMaterial3d(assets.pool.clone()),
@@ -221,7 +235,124 @@ pub(super) fn present(
                         NotShadowCaster,
                         NotShadowReceiver,
                     ));
+                    // Small rising lights distinguish a charged spring from
+                    // ordinary water without obscuring the animated surface.
+                    // The common parent hides every glimmer when it is spent.
+                    if index % 3 == 0 {
+                        let phase = u16::try_from(index).map_or(0.0, f32::from) * 1.7;
+                        let origin = pos
+                            .coord
+                            .to_world(geometry.top(*pos) + 0.55 + phase.sin().abs() * 0.55);
+                        pool.spawn((
+                            PoolGlimmer { origin, phase },
+                            Transform::from_translation(origin),
+                            Visibility::default(),
+                        ))
+                        .with_children(|glimmer| {
+                            for (material, radius) in
+                                [(&assets.glimmer, 0.065), (&assets.halo, 0.19)]
+                            {
+                                glimmer.spawn((
+                                    Mesh3d(assets.sphere.clone()),
+                                    MeshMaterial3d(material.clone()),
+                                    Transform::from_scale(Vec3::splat(radius)),
+                                    NotShadowCaster,
+                                    NotShadowReceiver,
+                                ));
+                            }
+                        });
+                    }
                 }
             });
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use hex_core::arena::{ArenaMap, ArenaSelection, ArenaTick};
+
+    #[test]
+    #[ignore = "requires HEX_FOREST_WORLD pointing at the compiled expedition and companion"]
+    fn expedition_fountain_presentation_consumes_and_resets_all_charged_children() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(ArenaSelection {
+                map: ArenaMap::ForestMassif,
+                ..default()
+            })
+            .add_plugins((hex_map::arena::plugin, hex_arena::plugin));
+        app.update();
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        app.world_mut().run_schedule(ArenaTick);
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>();
+        app.world_mut()
+            .run_system_once(setup)
+            .expect("visual assets");
+        app.world_mut()
+            .run_system_once(present)
+            .expect("charged visuals");
+        let initial = app
+            .world_mut()
+            .query::<(Entity, &PoolVisual, &Visibility)>()
+            .iter(app.world())
+            .map(|(entity, pool, visibility)| {
+                assert_eq!(*visibility, Visibility::Visible);
+                (pool.name.clone(), entity)
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(initial.len(), 6);
+        let glimmers = app
+            .world_mut()
+            .query_filtered::<&ChildOf, With<PoolGlimmer>>()
+            .iter(app.world())
+            .map(ChildOf::parent)
+            .collect::<Vec<_>>();
+        assert_eq!(glimmers.len(), 42);
+        assert!(
+            glimmers
+                .iter()
+                .all(|parent| initial.values().any(|entity| entity == parent))
+        );
+
+        super::super::expedition_capture::stage(app.world_mut(), 20, "expedition-fountain-spent")
+            .expect("wounded player enters actual fountain");
+        app.world_mut().run_schedule(ArenaTick);
+        app.world_mut()
+            .run_system_once(present)
+            .expect("spent visuals");
+        for (name, entity) in &initial {
+            assert_eq!(
+                *app.world().get::<Visibility>(*entity).expect("pool parent"),
+                if name == "forest_fountain_01" {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Visible
+                },
+                "only the consumed fountain loses its surface tint and lights",
+            );
+        }
+        app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+        app.world_mut().run_schedule(ArenaTick);
+        app.world_mut()
+            .run_system_once(present)
+            .expect("reset visuals");
+        assert!(
+            initial
+                .values()
+                .all(|entity| app.world().get_entity(*entity).is_err())
+        );
+        let mut query = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<PoolVisual>>();
+        let reset = query.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(reset.len(), 6);
+        assert!(
+            reset
+                .iter()
+                .all(|visibility| **visibility == Visibility::Visible)
+        );
     }
 }

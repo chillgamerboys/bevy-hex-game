@@ -245,12 +245,16 @@ pub(super) fn camera(
     } else {
         super::encounter::forest_focus(terrain, geometry, FOUNTAIN)?
     };
-    let offset = if fixture == Fixture::FountainSpent {
-        Vec3::new(6.0, 4.0, 7.0)
-    } else {
-        Vec3::new(5.0, 3.0, 6.0)
-    };
-    Some(super::encounter::feature_camera(session, target, offset))
+    if fixture == Fixture::FountainSpent {
+        return Some(super::encounter::fountain_camera(
+            session, terrain, geometry, FOUNTAIN, target,
+        ));
+    }
+    Some(super::encounter::feature_camera(
+        session,
+        target,
+        Vec3::new(5.0, 3.0, 6.0),
+    ))
 }
 
 #[cfg(test)]
