@@ -1,10 +1,14 @@
 //! Explicit world/gameplay contracts for the isolated real-time arena experiment.
 
 mod burrow;
+mod expedition;
 
 pub use burrow::{
     ArenaBurrowChange, ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRejection,
     ArenaBurrowRequest, ArenaBurrowResult, MAX_ARENA_BURROW_CELLS,
+};
+pub use expedition::{
+    ArenaEncounterSite, ArenaExpeditionRoute, ArenaExpeditionSites, ArenaFountainVolume,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -232,6 +236,11 @@ pub struct ArenaTerrainView {
     pub selection: ArenaSelection,
     /// Authored region and encounter sites in the published world coordinate space.
     pub anchors: BTreeMap<String, Vec3>,
+    /// Optional authored expedition geometry. World validates all supporting
+    /// surfaces and route ribbons before publication; gameplay owns roster,
+    /// activation, movement orders, healing amounts and reward state.
+    /// Absent on legacy packages and non-expedition maps.
+    pub expedition: Option<ArenaExpeditionSites>,
     /// Optional authored spectator sides, in roster order. No gameplay-generated
     /// search may escape these surfaces onto unrelated floors or rooftops.
     pub battle_deployment: Option<[ArenaDeploymentRegion; 2]>,

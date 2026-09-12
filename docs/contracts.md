@@ -202,6 +202,18 @@ dirty columns. Full rebuild marks resets; consumers missing a revision rebuild
 rather than assuming the latest delta is complete. World publication commits the
 selection before actor reset. Only the world writes these facts.
 
+`ArenaTerrainView.expedition` is an optional passive authored-site extension.
+`ArenaExpeditionSites` publishes named encounter deployment surfaces, stack-safe
+route junctions and bidirectional ribbons, and exact fountain liquid volumes.
+World validates support, full route width/grade, endpoints and references before
+publishing the complete snapshot. Gameplay owns roster/profile selection, complete
+body-pose admission, route orders and perception, fountain healing and consumption.
+The data contains no enemy stats, defeat gates, healing amounts or reward state.
+Legacy packages leave the field absent. A published route never authorizes movement
+through later terrain or actor obstructions. The
+[expedition wave](planning/waves/forest-expedition/manifest.md) tracks producer and
+consumer implementation; the vocabulary alone does not enable the new encounters.
+
 ArenaVoxelGeometry publishes vertical_offset and inclusive min/max levels.
 Upper-face height is level*level_height+vertical_offset: accepted Duel uses 0,
 authored maps use one level height. TilePos identities remain unchanged.
