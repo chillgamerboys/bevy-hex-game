@@ -77,7 +77,29 @@ fn overlay() -> Node {
     }
 }
 
-pub(crate) fn setup(mut commands: Commands, mut images: Option<ResMut<Assets<Image>>>) {
+pub(crate) fn setup(
+    mut commands: Commands,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut fonts: Option<ResMut<Assets<Font>>>,
+) {
+    // The isolated arena owns its font collection. Inter includes the map arrows,
+    // condition pips and ready checkmark missing from Bevy's Fira Mono subset.
+    // Embed the already licensed repository face so captures and native startup
+    // use identical metrics without an asynchronous font-loading transition.
+    if let Some(fonts) = fonts.as_mut() {
+        if let Err(error) = fonts.insert(
+            Handle::<Font>::default().id(),
+            Font::from_bytes(
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/fonts/Inter.ttf"
+                ))
+                .to_vec(),
+            ),
+        ) {
+            warn!("Battle font could not be installed: {error}");
+        }
+    }
     let icons: [Handle<Image>; 3] = std::array::from_fn(|i| {
         images
             .as_mut()
