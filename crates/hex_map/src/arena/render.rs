@@ -271,8 +271,6 @@ mod tests {
 
     use super::*;
 
-    mod forest_chunks;
-
     #[test]
     fn prism_faces_have_outward_normals_and_exact_hex_extents() {
         let mesh = hex_prism();
