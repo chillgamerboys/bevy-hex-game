@@ -115,3 +115,10 @@ The paired low bridge views now include the formerly cropped east portal and a r
 The complete contact sheet confirms consistent afternoon palette and readable shaded ground across the forest, connected mountain shoulders and separate shelf elevations, coherent architecture and legible HUD. No further concrete static defect was identified. Earlier failed packs remain historical evidence of the repairs and are superseded for the current static verdict.
 
 **Native review remains HUMAN-MOTION-PENDING.** CUA still reports the Mac locked after this review, and the existing manual-unlock request remains unanswered. No FPS, continuous movement, contact-shot aiming or live combat acceptance is inferred from these windowless images or the separate ArenaTick CPU profiles. No native process is left running.
+
+
+## Native feedback menu repair, a8559dd
+
+A fresh two-view menu pack at clean **a8559dd4f4263e661860b3f0a8e53e601b55b206** / unchanged **a538263d612e891f** passes **2/2**, all originals and the whole contact sheet inspected by root and independent reviewer. Source/package/per-frame hashes are verified. Evidence: `.context/expedition-restart-speed/a8559dd4f4263e661860b3f0a8e53e601b55b206-forest-expedition-v2-rewards-focused/independent-review.md` and sibling contact sheet/receipts.
+
+The ready menu now places Start beneath Fullscreen/Quit, in the prior Restart screen region; speed help visibly reads 4.725 units/s without clipping. Pause controls remain unchanged and legible. These static findings complement the separate three-size actual-pointer regression and actual controller-distance/408-route tests. The prior 26-view pack remains map/art evidence; the two fresh frames supersede its menu views. User native feedback is partial experience evidence, not completion of the full motion route.
