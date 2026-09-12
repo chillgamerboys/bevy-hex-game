@@ -418,6 +418,58 @@ fn overflowing_upgrade_page_has_a_visible_scroll_hint() {
 }
 
 #[test]
+fn recording_badge_stays_above_menu_headings_at_every_supported_scale() {
+    for (width, height) in [(1280, 720), (1600, 900), (1920, 1080)] {
+        for scale in [1.0, 2.0] {
+            for started in [false, true] {
+                let mut app = app(width, height, scale);
+                app.world_mut().resource_mut::<ViewState>().started = started;
+                settle(&mut app);
+                let badge = app
+                    .world_mut()
+                    .query::<(Entity, &UxLabel)>()
+                    .iter(app.world())
+                    .find_map(|(entity, label)| {
+                        matches!(label, UxLabel::Recording).then_some(entity)
+                    })
+                    .expect("recording badge");
+                app.world_mut()
+                    .get_mut::<Node>(badge)
+                    .expect("badge node")
+                    .display = Display::Flex;
+                app.world_mut()
+                    .get_mut::<Text>(badge)
+                    .expect("badge text")
+                    .0 = "● REC 12:34".into();
+                // Shape the actual recording label without installing or starting
+                // an OS recorder in a deterministic layout regression.
+                for _ in 0..6 {
+                    app.world_mut().run_schedule(PostUpdate);
+                }
+                let heading = app
+                    .world_mut()
+                    .query::<(Entity, &Text)>()
+                    .iter(app.world())
+                    .find_map(|(entity, text)| {
+                        (if started {
+                            text.0.starts_with("PAUSED /")
+                        } else {
+                            text.0 == "BATTLE MODE"
+                        })
+                        .then_some(entity)
+                    })
+                    .expect("visible menu heading");
+                assert_visible(&mut app, badge, "Recording badge");
+                assert!(
+                    rect(app.world(), badge).max.y < rect(app.world(), heading).min.y,
+                    "REC overlaps heading at {width}x{height}, scale {scale}, started {started}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn expedition_health_glyphs_fit_inside_the_combat_pill() {
     for (width, height) in [(1280, 720), (1600, 900), (1920, 1080)] {
         for scale in [1.0, 2.0] {

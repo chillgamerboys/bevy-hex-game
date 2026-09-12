@@ -269,8 +269,8 @@ pub(crate) fn setup(
         Node {
             position_type: PositionType::Absolute,
             left: px(20),
-            top: px(16),
-            padding: UiRect::axes(px(10), px(5)),
+            top: px(4),
+            padding: UiRect::axes(px(8), px(2)),
             display: Display::None,
             ..default()
         },
