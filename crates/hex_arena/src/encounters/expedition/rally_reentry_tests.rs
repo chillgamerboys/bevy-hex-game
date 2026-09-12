@@ -32,18 +32,20 @@ fn minion(id: ActorId, feet: Vec3, role: ExpeditionRole) -> Actor {
 
 fn session(path: Vec<Vec3>, starts: &[Vec3]) -> ArenaSession {
     let end = *path.last().expect("route endpoint");
-    let mut result = ArenaSession::default();
-    result.actors = starts
-        .iter()
-        .enumerate()
-        .map(|(i, feet)| {
-            minion(
-                ActorId::try_from(i + 1).expect("bounded test roster"),
-                *feet,
-                ExpeditionRole::Goblin,
-            )
-        })
-        .collect();
+    let mut result = ArenaSession {
+        actors: starts
+            .iter()
+            .enumerate()
+            .map(|(i, feet)| {
+                minion(
+                    ActorId::try_from(i + 1).expect("bounded test roster"),
+                    *feet,
+                    ExpeditionRole::Goblin,
+                )
+            })
+            .collect(),
+        ..ArenaSession::default()
+    };
     let mut control = Control {
         troll: Some(200),
         started: true,
