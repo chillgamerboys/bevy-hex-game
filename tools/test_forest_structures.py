@@ -126,6 +126,14 @@ class StructureContracts(unittest.TestCase):
         self.assertEqual(len(pieces), 7)
         self.assertFalse(any(piece["id"] == "arena-buttress-2" for piece in pieces))
 
+    def test_arena_assembly_accepts_public_json_coordinate_arrays(self):
+        center, walls, gate, surfaces = self.arena_fixture()
+        expected = structures.arena_assembly(center, walls, gate, 92, surfaces, raw=Raw)
+        actual = structures.arena_assembly(list(center), [list(p) for p in walls],
+                                          [list(p) for p in gate], 92, surfaces, raw=Raw,
+                                          clear_columns=[list(center)])
+        self.assertEqual(expected, actual)
+
     def test_assembly_blueprints_intervals_and_world_occupancy_are_identical(self):
         pieces = structures.bridge_assembly(self.bridge_surfaces(), raw=Raw)
         center, walls, gate, surfaces = self.arena_fixture()

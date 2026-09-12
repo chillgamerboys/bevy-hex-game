@@ -250,7 +250,7 @@ def placement(shape, id, anchor, *, raw, rotation=0, clear_columns=()):
             "desired_rotation": rotation, "blueprint": blueprint, "intervals": intervals,
             "occupied_offsets": tuple((c.q, c.r, c.level) for c in shape.cells),
             "occupied_world": tuple(occupied), "reserved_columns": tuple(sorted(lowest)),
-            "clear_columns": tuple(sorted(clear_columns)), "foundation_levels": foundations,
+            "clear_columns": tuple(sorted(tuple(p) for p in clear_columns)), "foundation_levels": foundations,
             "overhead_clearance": 4}
 
 
@@ -324,9 +324,9 @@ def arena_assembly(center, walls, gate, wall_top, surfaces, *, raw, clear_column
     Its terrain jambs remain the load-bearing supports for the elevated arch.
     """
     center = center[:2]
-    walls, gate = set(walls), set(gate)
+    walls, gate = {tuple(p) for p in walls}, {tuple(p) for p in gate}
     interior = disk(center, 12)
-    clear = set(clear_columns) | interior | gate
+    clear = {tuple(p) for p in clear_columns} | interior | gate
     q0, r0 = center
     jambs = {(q0 + q, r0 + r) for q in range(-15, -12) for r in (2, 12)}
     if not jambs <= walls or any(surfaces.get(p) != wall_top for p in walls):
