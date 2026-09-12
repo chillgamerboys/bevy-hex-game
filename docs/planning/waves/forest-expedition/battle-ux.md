@@ -1,7 +1,6 @@
 # Battle navigation, readability and recording
 
-Status: integrated local candidate with recorder shutdown follow-ups and native
-acceptance in progress for the user-approved September 12 plan on the existing
+Status: integrated local candidate with native acceptance in progress for the user-approved September 12 plan on the existing
 `wave/forest-expedition` candidate, base `4b697e90be6ee52c00b1b0f7b984abb8b88a4024`.
 The hourly automation remains paused. No remote publication or dev/main merge.
 
@@ -39,9 +38,9 @@ historical expedition branches are preserved, not merged by branch tip.
 3. Recorder worker owns new `hex_game/src/arena/recording.rs` and its children,
    native Swift helper/build/package support. Root alone wires arena mod.rs/HUD.
 4. Root owns `hex_game` HUD, navigation and shared wiring, preferences, combined
-   tests and review. Integrate world foundation, world publication, gameplay,
-   recorder, then composed presentation checks. Work can proceed concurrently
-   against the contracts below; final integration waits on their implementations.
+   tests and review. World foundation, world publication, gameplay, recording
+   and presentation are integrated. Follow-up work preserves those ownership
+   boundaries and is composed by root before validation.
 
 ## Contracts
 
@@ -49,11 +48,13 @@ historical expedition branches are preserved, not merged by branch tip.
   `width:u32`, `height:u32`, `min:Vec2`, `max:Vec2`, `rgba:Vec<u8>`.
   Vec2 axes are world X/Z; first image row is minimum Z (north). World publishes
   it once per generation/selection, covering the full finite region. Empty on
-  unsupported maps. No enemy/fountain knowledge in these pixels.
+  unsupported maps. Cache identity includes package and art fingerprints; ordinary
+  terrain destruction intentionally leaves this authored overview unchanged. No
+  enemy/fountain knowledge is encoded in these pixels.
 - Gameplay exports `PlayerObservation` (camera origin/direction, vertical FOV,
   aspect, viewport height), `DiscoveredLandmark`, `LandmarkKind`,
-  `CombatFeedbackSnapshot`, and spell availability facts. Worker publishes the
-  exact signatures before root connects presentation. Observations are input;
+  `CombatFeedbackSnapshot`, and spell availability facts, consumed by the integrated
+  presentation adapter. Observations are input;
   gameplay owns filtering, dwell, memory and current health feedback.
 - Recorder exports `install(&mut App)` and Resource `Recorder` with
   `request_toggle()`, `request_open_folder()`, `request_quit()`, `status_text()`,
@@ -104,7 +105,11 @@ No focused active-play telemetry or completed video exists yet, so the <1 ms
 additional UI and <10% recording frame-time targets remain unverified. Short
 windowless timing samples are diagnostic wall spans, not exclusive UI CPU evidence.
 Recorder review additionally identified saturated-command-queue Quit and a blocking
-folder-open call; their bounded lifecycle fixes and regressions are in progress.
+folder-open call. Follow-up `be62a96` retries a full Quit queue with one five-second
+deadline and opens folders in a separate bounded job; all 11 recorder tests pass,
+including four new lifecycle regressions; strict game-library Clippy passes again.
+These changes do not alter map or UI
+presentation, so the preceding static review retains its named-surface scope.
 
 Logs, capture receipts, independent static review and the reusable native telemetry
 analyzer are in the local `outputs/expedition-validation` artifact directory. The

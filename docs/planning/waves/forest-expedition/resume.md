@@ -1,16 +1,16 @@
 # Expedition resume checkpoint
 
-Candidate checkpoint, September 12, 2026. **The user stopped the timer: hourly continuation is PAUSED. Do not reactivate it without a new request.** The quota reset was confirmed earlier. Current work follows native feedback: fix defeat→Restart closing the game and increase expedition player movement by 5%.
+Candidate checkpoint, September 12, 2026. **The user stopped the timer: hourly continuation is PAUSED. Do not reactivate it without a new request.** The quota reset was confirmed earlier. The Restart and movement feedback fixes are integrated. Current work implements the approved navigation, readability, taller-player and native recording plan; see [battle-ux.md](battle-ux.md) for the current acceptance record.
 
 ## Candidate and authoritative requirements
 
-- Integration checkout: `/Users/alberto/Documents/Codex/2026-09-11/i-w/work/hex-expedition`, branch `wave/forest-expedition`. Current integrated runtime head is **a8559dd4f4263e661860b3f0a8e53e601b55b206**, including Restart fix **304908c**, player movement +5%, and earlier fountain repair **74ac687**. No remote writes or dev/main merges. Preserve source branches and the old playable `work/hex-forest` checkout/launcher until composed acceptance.
+- Integration checkout: `/Users/alberto/Documents/Codex/2026-09-11/i-w/work/hex-expedition`, branch `wave/forest-expedition`. Current integrated runtime checkpoint is **be62a96a4da0d014005fd7ee3dd5c52e352e76e4**, including the Battle UX implementation and recorder shutdown follow-up. The earlier Restart fix **304908c**, player movement +5%, and fountain repair **74ac687** remain included. No remote writes or dev/main merges. Preserve source branches and the old playable `work/hex-forest` checkout/launcher until composed acceptance.
 - [manifest.md](manifest.md), amendments A1–A3, govern the expansion. **107 Goblins in 14 camps: 3,3,3,3,3,5,5,5,9,9,11,13,15,20.** Two Shamans join the 13/15 camps. First five camps contain 15 Baby Goblins. Troll, three Dragons and Shadow bring the total to **114 enemies / 115 actors, 19 parties**.
 - **Fountains are the only healing source.** Six hidden single-use 40-HP pools, not consumed at full HP. No enemy HP drops or passive player regeneration. Shadow violet orb adds **25 maximum HP and zero current HP**. Troll gold orb adds 25 damage; final-Dragon blue orb unlocks explosions. Collection requires proximity and line of sight. Gameplay owns once-only XP, defeat/available/collected state, frozen projectile payloads, upgrades, victory exploration and reset.
 - Start on bridge with 45 launch speed, 12 projectile gravity, 15 contact damage, 12 knockback, .5 cooldown, explosions locked. Enemy spells remain independent. All credited kills give 327 XP: level 8 with 4 XP carried and seven bankable points.
 - All requested content/gameplay exists in source. Automated gameplay, populated CPU evaluation, route checks and final windowless review are complete for the candidate. Native acceptance is still open; the Mac is unlocked and the user has played the candidate, reporting difficulty and the Restart defect. Do not describe native playtesting or delivery acceptance as complete.
 
-## Latest native feedback changes
+## Historical Restart and movement feedback changes
 
 - **304908c:** actual Bevy UI pointer reproduction found the ready-menu Quit overlapped 83% of the prior Restart button at 1600×900. A second click caused clean AppExit, matching the reported closure route, though the user's exact click timing was not recorded. Move primary Start below secondary controls; a repeated Restart click now selects Start. No artificial quit debounce or game-lifecycle rewrite.
 - **a8559dd:** expedition player movement increases **4.5→4.725 units/s** for walk/run, with a private player marker set only at complete expedition admission. Enemy movement, legacy maps, projectile speed, impulses, gravity and jump height stay unchanged. The fresh per-tick profile cannot stack the bonus across resets. Ready-screen help matches 4.725.
@@ -18,7 +18,7 @@ Candidate checkpoint, September 12, 2026. **The user stopped the timer: hourly c
 - **Actual expedition pointer regression PASS at three window sizes**, after both changes: 1600×900, 1280×720, 1920×1080. Six prior terminal menu regressions and existing computed-layout test PASS. Strict game all-target/no-deps Clippy PASS. `restart-pointer-composed-speed.log`, `restart-menu-regressions.log`, `restart-menu-layout.log`, `clippy-restart-speed-composed.log`.
 - **Actual map's 408/408 segmented controller checks PASS again**, including the faster admitted player, adult Goblin and Shaman; 9360 waypoint visits. `player-speed-route-probes.log`. Earlier CPU measurements predate the player-speed change and remain historical, not new FPS/performance proof.
 - Fresh two-view menu capture completed exit 0 at clean a8559dd/a538, `.context/expedition-restart-speed/a8559dd4f4263e661860b3f0a8e53e601b55b206-forest-expedition-v2-rewards-focused`. Root inspected both full-resolution originals: correct Start placement, legible 4.725 text, unchanged clear pause controls. Root and independent reviewer inspected both originals and the complete contact sheet: **2 PASS / 0 FAIL / 0 BLOCKED**. Receipt/source/package/image/state/log hashes verified; `independent-review.md` and `independent-contact-sheet.png` are in the pack.
-- User-requested native relaunch **session 46006** is the earlier **e821670** build. The latest edits are built but require another launch. An async question asks whether to reopen with updates, because that resets the current run. Await the answer before ending an active user run. No native acceptance is inferred from user combat logs alone. Details: [restart-feedback.md](restart-feedback.md).
+- Historical user-requested relaunch **session 46006** used **e821670**. Its old relaunch question is superseded by the approved September 12 native playtest plan. Preserve the original user process while testing a separate candidate. No native acceptance is inferred from combat logs alone. Details: [restart-feedback.md](restart-feedback.md).
 
 ## Current package
 
@@ -65,9 +65,9 @@ Logs and JSON receipts live at `/Users/alberto/Documents/Codex/2026-09-11/i-w/ou
 
 ## Immediate next work and target ownership
 
-1. The two-frame review and all scoped automated checks are complete and pass. Await the current relaunch choice; do not repeat completed suites without a new issue.
-2. The existing async question asks whether to reopen the user's running game with the tested updates. Reopening resets the run; wait for the answer before stopping their live session. The candidate Cargo launcher and guide are in outer `outputs/`. Preserve the original Forest Battle launcher/checkout.
-3. Complete any remaining native acceptance when the user is ready, following [render-review.md](render-review.md), and repair concrete feedback with relevant tests. Do not operate the user's live game without coordinating the session.
+1. All 11 focused recorder lifecycle tests pass for the integrated shutdown fixes. Strict game-library Clippy also passes. Complete the Cargo rebuild, then native acceptance. Keep the full selector gate's inherited 517 map lint failures explicit.
+2. Ten Battle UX frames at clean `a7013698` passed independent static review; the recorder follow-up changes lifecycle only. Do not repeat unchanged map or gameplay suites without a new issue.
+3. Native candidate PID 92872 was launched separately at the ready screen. The user unlocked the Mac, but CUA cannot address the unbundled Cargo application; explicit authorization for the game-specific CGEvent driver is pending. Preserve original user PID 71141. Complete real pointer/motion, recording playback/lifecycle and stable map/recording performance measurements when native control is available.
 4. The requested official OpenAI guidance review remains pending after game validation, provided quota remains at least 20%. No global settings/instruction changes are authorized. **Timer remains paused.**
 
 APP_TARGET: `/Users/alberto/Documents/Codex/2026-09-04/there-were-a-few-issues-i/work/cargo-target-explore`.

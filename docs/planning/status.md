@@ -16,8 +16,9 @@ Navigation adds remembered discoveries, an optional minimap and one destination;
 combat adds larger spell cards, contextual health cues and the taller expedition
 player. Esc has readable, scalable pages and a bundled macOS recording backend.
 Focused gameplay, world, UI and actual-route checks and ten independently reviewed
-windowless frames pass. Recorder shutdown follow-ups and native input, recording
-playback and performance acceptance remain in progress. The complete selector gate
+windowless frames pass. The recorder shutdown follow-up adds four passing
+regressions (11 recorder tests total). Native input, recording playback and
+performance acceptance remain in progress. The complete selector gate
 stops at inherited map-library lint failures. This is a local implementation
 checkpoint, not delivery on `dev`; the older checkpoints below retain their original
 scope. See the [Battle UX record](waves/forest-expedition/battle-ux.md).
