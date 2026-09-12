@@ -340,6 +340,7 @@ fn overview() -> ArenaOverview {
 fn map_pointer_uses_world_bounds_and_empty_overview_clears_old_texture() {
     let mut app = app(1600, 900, 1.0);
     app.world_mut().insert_resource(overview());
+    app.world_mut().resource_mut::<ArenaVoxelGeometry>().radius = 40;
     app.world_mut().resource_mut::<ViewState>().started = true;
     settle(&mut app);
     open_page(&mut app, Page::Map);
@@ -355,6 +356,12 @@ fn map_pointer_uses_world_bounds_and_empty_overview_clears_old_texture() {
     assert!(
         pin.distance(Vec2::new(-50.0, -25.0)) < 1.0,
         "north-up quarter click: {pin}"
+    );
+    click_at(&mut app, bounds.min + bounds.size() * Vec2::splat(0.01));
+    assert_eq!(
+        app.world().resource::<UxState>().pin,
+        Some(pin),
+        "outside-world click preserves the existing destination"
     );
     let old = app
         .world()

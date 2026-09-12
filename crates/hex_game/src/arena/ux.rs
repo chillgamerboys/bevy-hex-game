@@ -265,6 +265,7 @@ pub(super) fn controls(
     mut recorder: Option<ResMut<Recorder>>,
     reset: Res<ArenaReset>,
     overview: Option<Res<ArenaOverview>>,
+    geometry: Res<ArenaVoxelGeometry>,
     session: Res<ArenaSession>,
     maps: Query<(&Interaction, &MapCanvas, &RelativeCursorPosition), Changed<Interaction>>,
     mut wheels: MessageReader<MouseWheel>,
@@ -387,9 +388,15 @@ pub(super) fn controls(
                     );
                     ux.pin = Some(m.position.xz());
                 } else {
-                    ux.pin = Some(overview.min + fraction * (overview.max - overview.min));
-                    ux.selected_id = None;
-                    ux.selected = "Personal destination placed".into();
+                    let position = overview.min + fraction * (overview.max - overview.min);
+                    if geometry
+                        .voxel_at(Vec3::new(position.x, 0.0, position.y))
+                        .is_some()
+                    {
+                        ux.pin = Some(position);
+                        ux.selected_id = None;
+                        ux.selected = "Personal destination placed".into();
+                    }
                 }
             }
         }
@@ -575,7 +582,9 @@ fn present_map(
     let Some(overview) = overview.filter(|o| !o.rgba.is_empty()) else {
         for (_, mut image, mut node) in &mut canvases {
             set_display(&mut node, Display::None);
-            image.image = Handle::default();
+            if image.image != Handle::default() {
+                image.image = Handle::default();
+            }
         }
         if let Some(handle) = ux.image.take() {
             images.remove(handle.id());
