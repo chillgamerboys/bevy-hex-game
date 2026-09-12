@@ -1,6 +1,6 @@
 //! Small native combat HUD and paused parameter controls.
 
-use super::{ViewState, spectator};
+use super::{spectator, ViewState};
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowMode};
 use hex_arena::{

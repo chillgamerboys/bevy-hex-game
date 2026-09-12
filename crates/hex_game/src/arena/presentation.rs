@@ -3,7 +3,7 @@
 use super::{ArenaCamera, ViewState};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use hex_arena::{ArenaSession, ArenaTuning, Species, Spell, preview};
+use hex_arena::{preview, ArenaSession, ArenaTuning, Species, Spell};
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 
 #[derive(Component)]

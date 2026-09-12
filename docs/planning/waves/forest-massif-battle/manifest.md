@@ -1,6 +1,6 @@
 # Forest–Massif Battle
 
-Status: implementing local candidate. Coordinator: root. Branch: wave/forest-massif-battle.
+Status: integrated local candidate; combined validation in progress. Coordinator: root. Branch: wave/forest-massif-battle.
 User-approved local implementation; no dev/main merge or remote publication in this delivery.
 Source: battle 99d56c7 and V4 45f689b, common base 495a73d, composed in 98f68fb.
 The explicit user source checkpoints supersede the ordinary dev-first landing sequence for this local experiment. Shared changes remain reviewable in the candidate.
@@ -30,7 +30,7 @@ lanes:
     dispatch_blockers: []
     merge_blockers: []
     evidence: static-presentation
-    state: queued
+    state: integrated
     ticket: null
     pr: null
   - id: L2
@@ -42,7 +42,7 @@ lanes:
     dispatch_blockers: []
     merge_blockers: []
     evidence: logic-only
-    state: queued
+    state: integrated
     ticket: null
     pr: null
   - id: L3
@@ -54,7 +54,7 @@ lanes:
     dispatch_blockers: []
     merge_blockers: [L2]
     evidence: motion-or-feel
-    state: queued
+    state: integrated
     ticket: null
     pr: null
 ```
@@ -66,4 +66,10 @@ Root owns hex_core, world adapter in hex_map/arena, shared manifests/Cargo, docs
 Read-only GitHub inventory: #220 V4 foundation stacks on #219 Grand; both are source donors. Older biome #210–213 and lattice #196 remain separate. No remote PR edits. Linear reconciliation is unavailable in this local delivery; tickets are not required.
 
 ## Validation
-Focused world compile/geometry/roster tests; contact-only vs explosion, reward, XP, spend/reset tests; unchanged enemy and Duel/Fort checks; app input/menu/reset checks; full map/forest/bridge/massif windowless captures; actual runtime performance. Source launch through Cargo with asset-log validation. Human feel remains user playtest. Full selector checks are required before a future dev merge; this local delivery reports exact checks run.
+Focused world compile/geometry/roster tests; contact-only vs explosion, reward, XP, spend/reset tests; unchanged enemy and Duel/Fort checks; app input/menu/reset checks; full map/forest/bridge/massif windowless captures; actual runtime performance. Source launch through Cargo with asset-log validation. Automated native controls and rendering checks are followed by the user’s subjective combat-feel review. Full selector checks are required before a future dev merge; this local delivery reports exact checks run.
+
+## Integrated evidence
+
+The runtime-loaded stone-bridge package is `987d396f3972feb5`. Source generation, exact tree spacing/height/stock checks and 388 runtime column probes pass. The source has 105,469 columns, 444 storage chunks, 275 exact-voxel trees and thirteen named gameplay anchors.
+
+Gameplay lane validation passed all 334 `hex_arena` library tests, eight final focused progression/contact/liquid checks, and strict arena Clippy. Python arena helper checks passed; combined game, runtime terrain edits, environment captures and native playtest remain the coordinator’s final gate. The ignored combined fixture measures ArenaTick CPU time only, with synthetic player camp visits; it makes no renderer or FPS claim.

@@ -1905,16 +1905,27 @@ fn pending_terrain_blocks_start_and_resume_without_blocking_the_menu() {
     tap_key(&mut app, KeyCode::Enter);
     press_action(&mut app, hud::Action::Start);
     assert!(!app.world().resource::<ViewState>().started);
-    assert!(app.world().get::<CursorOptions>(window).expect("cursor").visible);
-    app.world_mut().resource_mut::<hex_core::arena::ArenaRenderStatus>().pending_chunks = 0;
+    assert!(
+        app.world()
+            .get::<CursorOptions>(window)
+            .expect("cursor")
+            .visible
+    );
+    app.world_mut()
+        .resource_mut::<hex_core::arena::ArenaRenderStatus>()
+        .pending_chunks = 0;
     press_action(&mut app, hud::Action::Start);
     assert!(app.world().resource::<ViewState>().started);
     tap_key(&mut app, KeyCode::Escape);
-    app.world_mut().resource_mut::<hex_core::arena::ArenaRenderStatus>().pending_chunks = 2;
+    app.world_mut()
+        .resource_mut::<hex_core::arena::ArenaRenderStatus>()
+        .pending_chunks = 2;
     press_action(&mut app, hud::Action::Resume);
     tap_key(&mut app, KeyCode::Escape);
     assert!(app.world().resource::<ViewState>().paused);
-    app.world_mut().resource_mut::<hex_core::arena::ArenaRenderStatus>().pending_chunks = 0;
+    app.world_mut()
+        .resource_mut::<hex_core::arena::ArenaRenderStatus>()
+        .pending_chunks = 0;
     press_action(&mut app, hud::Action::Resume);
     assert!(!app.world().resource::<ViewState>().paused);
 }
