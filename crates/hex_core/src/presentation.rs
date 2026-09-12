@@ -12,6 +12,10 @@ use crate::{TilePos, UnitId};
 /// Cross-crate ordering for camera-driven world presentation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PresentationSystems {
+    /// Publish world-owned object instances and accepted sparse carve masks.
+    PublishObjects,
+    /// Reconcile object meshes after publication and before frame extraction.
+    ReconcileObjects,
     /// Resolve camera obstruction into renderer-neutral presentation requests.
     ResolveCameraOcclusion,
     /// Apply renderer-owned material changes after requests settle.
