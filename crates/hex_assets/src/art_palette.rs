@@ -1213,10 +1213,16 @@ mod tests {
         let styles = shipped_style_catalog();
 
         assert_eq!(palette.swatches().len(), 24);
-        assert_eq!(styles.styles().len(), 8);
+        assert_eq!(styles.styles().len(), 14);
         for style_name in [
             "crystal/cyan-body",
             "crystal/cyan-glow",
+            "expedition/crystal",
+            "expedition/crystal-tip",
+            "expedition/mossy-stone",
+            "expedition/stone",
+            "expedition/stone-edge",
+            "expedition/stone-recess",
             "plant/foliage-dark",
             "plant/foliage-light",
             "plant/foliage-mid",
