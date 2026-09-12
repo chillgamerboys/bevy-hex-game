@@ -1344,8 +1344,8 @@ fn capture_frame(
     geometry: Res<hex_core::arena::ArenaVoxelGeometry>,
     game_assets: Option<Res<hex_assets::GameAssets>>,
     meshes: Res<Assets<Mesh>>,
-    objects: Query<&hex_assets::ObjectInstance>,
-    chunks: Query<&hex_objects::ObjectRenderChunk>,
+    objects: Query<Option<&Children>, With<hex_assets::ObjectInstance>>,
+    chunks: Query<&Mesh3d, With<hex_objects::ObjectRenderChunk>>,
     creature_meshes: (
         Query<&Mesh3d, With<golem::GolemPrism>>,
         Query<&Mesh3d, With<wisp::WispPrism>>,
@@ -1378,9 +1378,21 @@ fn capture_frame(
     let object_count = objects.iter().count();
     let chunk_count = chunks.iter().count();
     let needs_objects = !view.static_spans.is_empty() || object_count > 0;
+    let every_forest_object_ready = !session.is_forest_run()
+        || objects.iter().all(|children| {
+            children.is_some_and(|children| {
+                !children.is_empty()
+                    && children.iter().all(|child| {
+                        chunks
+                            .get(child)
+                            .is_ok_and(|mesh| meshes.get(&mesh.0).is_some())
+                    })
+            })
+        });
     let authored_assets_ready = !needs_objects
         || (object_count > 0
             && chunk_count > 0
+            && every_forest_object_ready
             && game_assets
                 .as_ref()
                 .is_some_and(|assets| meshes.get(&assets.hex_tile).is_some()));

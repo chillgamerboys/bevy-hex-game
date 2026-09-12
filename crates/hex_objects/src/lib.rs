@@ -97,6 +97,10 @@ impl FaceCullMask {
     fn is_empty(self) -> bool {
         !self.top && !self.bottom && self.sides.iter().all(|culled| !culled)
     }
+
+    fn is_full(self) -> bool {
+        self.top && self.bottom && self.sides.iter().all(|culled| *culled)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -862,17 +866,33 @@ fn bake_blueprint_selected(
         );
     }
 
-    groups
-        .into_iter()
-        .map(|(key, mut cells)| {
-            cells.sort_unstable();
-            let occupied = occupied_by_visibility
-                .get(&key.canopy)
-                .ok_or_else(|| "object chunk lost its visibility partition".to_owned())?;
-            let mesh = merge_cells(&treated_source, blueprint.origin, &cells, occupied)?;
-            Ok((key, mesh))
-        })
-        .collect()
+    // Verify the source has no inset faces before omitting enclosed cells. This
+    // preserves the existing culling result even for tooling's non-prism meshes.
+    let enclosed_source = cull_internal_faces(
+        &treated_source,
+        FaceCullMask {
+            sides: [true; 6],
+            top: true,
+            bottom: true,
+        },
+    )?;
+    let enclosed_is_invisible = enclosed_source.indices().is_some_and(Indices::is_empty);
+    let mut baked = Vec::with_capacity(groups.len());
+    for (key, mut cells) in groups {
+        cells.sort_unstable();
+        let occupied = occupied_by_visibility
+            .get(&key.canopy)
+            .ok_or_else(|| "object chunk lost its visibility partition".to_owned())?;
+        if enclosed_is_invisible {
+            cells.retain(|cell| !face_cull_mask(*cell, occupied).is_full());
+        }
+        if cells.is_empty() {
+            continue;
+        }
+        let mesh = merge_cells(&treated_source, blueprint.origin, &cells, occupied)?;
+        baked.push((key, mesh));
+    }
+    Ok(baked)
 }
 
 fn mesh_with_micro_bevel_normals(
@@ -1819,6 +1839,89 @@ mod tests {
         assert!(error.contains("effect/material-test"));
         assert!(error.contains("test/missing"));
         assert!(error.contains("while baking"));
+    }
+
+    #[test]
+    fn enclosed_cells_reduce_vertices_without_changing_visible_faces_for_any_surface_mode() {
+        let source = Cylinder::new(1.0, 1.0)
+            .mesh()
+            .resolution(6)
+            .build()
+            .try_transformed_by(Transform::from_rotation(Quat::from_rotation_y(TAU / 12.0)))
+            .expect("hex prism fixture");
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        let cells: Vec<_> = (-2_i32..=2)
+            .flat_map(|q| (-2_i32..=2).map(move |r| (q, r)))
+            .filter(|(q, r)| (q + r).abs() <= 2)
+            .flat_map(|(q, r)| (0..9).map(move |level| LocalVoxelCoord::new(q, r, level)))
+            .collect();
+        let catalog = fixture_catalog(0.24);
+        for name in [
+            "test/opaque",
+            "test/cutout",
+            "test/translucent",
+            "test/additive",
+        ] {
+            let mut blueprint = material_fixture_blueprint();
+            blueprint.origin = origin;
+            blueprint.bounds.min_level = 0;
+            blueprint.bounds.height = 9;
+            blueprint.placements = cells
+                .iter()
+                .map(|cell| ObjectPlacement {
+                    position: *cell,
+                    style: style_id(name),
+                    part: ObjectPart::Effect(EffectPart::Core),
+                })
+                .collect();
+            let occupied = cells
+                .iter()
+                .map(|cell| {
+                    (
+                        *cell,
+                        OccupiedCell {
+                            style: style_id(name),
+                            surface_mode: catalog
+                                .style(&style_id(name))
+                                .expect("fixture style")
+                                .authored()
+                                .surface_mode(),
+                        },
+                    )
+                })
+                .collect();
+            let previous = merge_cells(&source, origin, &cells, &occupied).expect("prior bake");
+            let baked = bake_blueprint(&source, &blueprint, &catalog).expect("optimized bake");
+            let (_, actual) = baked.first().expect("visible shell");
+            assert_eq!(baked.len(), 1);
+            assert!(
+                actual.count_vertices() < previous.count_vertices() * 3 / 4,
+                "{name}"
+            );
+            let referenced_vertices = |mesh: &Mesh| {
+                mesh.indices()
+                    .expect("indexed mesh")
+                    .iter()
+                    .map(|index| {
+                        (
+                            mesh_positions(mesh)
+                                .get(index)
+                                .expect("position")
+                                .map(f32::to_bits),
+                            mesh_normals(mesh)
+                                .get(index)
+                                .expect("normal")
+                                .map(f32::to_bits),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                referenced_vertices(actual),
+                referenced_vertices(&previous),
+                "{name}"
+            );
+        }
     }
 
     #[test]
