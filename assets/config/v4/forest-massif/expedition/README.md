@@ -36,7 +36,8 @@ From the repository root, build the pure authoring CLI once into its own target:
 ```sh
 python3 tools/world.py --target-dir target/world-authoring build
 python3 tools/forest_package.py compile --target-dir target/world-authoring
-python3 tools/forest_package.py verify --target-dir target/world-authoring```
+python3 tools/forest_package.py verify --target-dir target/world-authoring
+```
 
 Only the first command invokes Cargo. `compile` defaults to this directory's
 ignored `compiled/` package workspace. Both commands accept `--output PATH` and

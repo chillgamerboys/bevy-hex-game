@@ -85,29 +85,47 @@ reset and map changes within the session; reopening the game loads configured de
 
 ## Forest–Massif progression
 
-The radius-187 V4 map has five forest camps (20 Goblins and two Shamans), three
-independent mountain Dragons, a central stone bridge and one reserved giant-tree
-clearing. The player begins outside enemy activation range. Its terrain package
-loads at runtime; the ready screen waits for terrain publication.
+The expedition package uses a radius-187 V4 world with 14 forest camps, three
+mountain Dragons, a Troll beneath the central giant tree, and a Shadow in a walled
+arena. The player starts on the arched bridge across the curved river. The camps
+contain `3,3,3,3,3,5,5,5,9,9,11,13,15,20` Goblins; the first five are babies.
+Two Shamans join the 13- and 15-Goblin camps. There are 114 enemies in total.
+Terrain loads at runtime and the ready screen waits for its rendering publication.
 
 Fireball starts with 15 contact damage, 45 base launch speed, 12 projectile gravity,
-12 knockback and a 0.5-second cooldown. A contact shot stops on its first valid
-collision and only affects the struck target. Clearing all 22 forest enemies adds
-25 damage separately from purchased upgrades. Clearing all three Dragons unlocks
-the standard 2.5-unit explosion. Each shot retains the damage and impact mode it
-had at launch. Enemy spells keep their original tuning.
+12 knockback and a 0.5-second cooldown. It stops at the first valid collision and
+only hurts the struck target. Defeating the Troll leaves a gold reward sphere
+that adds 25 damage separately from purchased upgrades. Defeating all three Dragons
+leaves a blue sphere that unlocks standard radius-2.5 explosions. The Shadow leaves
+a violet sphere granting 25 maximum HP **without healing current HP**. Walk near a
+sphere with a clear approach to collect it. Each shot retains its launch-time damage
+and impact mode. Enemy spells have independent tuning.
 
-Player kills award 1 XP per Goblin, 5 per Shaman and 20 per Dragon, including
-attributed knockback deaths within ten seconds. Levels require 10, 15, 23, 34…
-additional XP; surplus carries forward. Each level banks one upgrade point. Spend
-it with a beneficial **+** in the Esc menu; unavailable or capped upgrades are
-disabled. Explosion radius stays locked until the Dragon reward; gravity stays 12.
-The menu shows both objectives and their rewards.
+Enemies give XP and **never drop health**. The player does not regenerate HP.
+Six hidden fountains are the only healing source: four in the forest and two in
+the mountains. Enter their glowing water while wounded to recover up to 40 HP once;
+the glow then fades, but the water remains. A full-health visit does not consume it.
 
-Clearing all 25 enemies marks victory and leaves exploration and casting available.
-Pausing preserves the run. Restart restores terrain, enemies, initial stats, level 1,
-zero XP and locked rewards. Runs do not persist across launches. Forest–Massif does
-not use the older maps' unrestricted tuning or spectator roster overrides.
+Player kills award Goblin 1, Shaman 5, Dragon 20, Troll 50 and Shadow 100 XP,
+including attributed knockback deaths within ten seconds. Levels require 10, 15,
+23, 34… additional XP; surplus carries forward. Each level banks one upgrade point.
+Spend it with a beneficial **+** in the Esc menu. Unavailable and capped upgrades
+are disabled; explosion radius remains locked until its reward and gravity stays 12.
+The menu shows milestone progress, upgrades and fountain healing rules.
+
+The Troll casts fireballs and supports nearby forest minions. Damaging it calls all
+surviving Goblin parties toward the ancient grove along authored paths; they still
+need ordinary perception to find the player. Defeating the Troll ends the rally.
+The Shadow remains physically inside its arena. All Dragons exist from the start;
+the intended summit route passes the lower encounters, while steep off-route climbs
+remain possible with High Jump.
+
+Defeating all 114 enemies marks victory and leaves exploration, casting and uncollected
+rewards available. Pause preserves the run. Restart restores terrain, enemies, initial
+stats, level 1, zero XP, locked rewards and unused fountains. Runs do not persist across
+launches. The older 26-actor Forest package remains compatible through `--forest-world`.
+See [expedition content](../../assets/config/v4/forest-massif/expedition/README.md)
+for reproducible package compilation and verification.
 
 ## Watching monster battles
 
