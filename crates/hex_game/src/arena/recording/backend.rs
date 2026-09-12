@@ -398,6 +398,14 @@ impl Clip {
                     .send(Response::Status(message(&event)))
                     .map_err(|error| error.to_string())?;
             }
+            Some("cancelled") if self.started.is_none() => {
+                self.events.sync_all().map_err(|error| error.to_string())?;
+                self.completed = true;
+                self.stopping = Some(Instant::now());
+                responses
+                    .send(Response::Finished(message(&event)))
+                    .map_err(|error| error.to_string())?;
+            }
             Some("finished") if self.started.is_some() => {
                 if event.get("path").and_then(Value::as_str).map(Path::new)
                     != Some(self.path.as_path())

@@ -78,6 +78,10 @@ final class Recorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
                 throw RecorderError.message("Allow Hex Game Recorder in System Settings → Privacy & Security → Screen & System Audio Recording, then try again. macOS may require restarting the game.")
             }
             let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            if stopPending {
+                emit("cancelled", ["message": "Recording canceled before capture began."])
+                exit(0)
+            }
             let matches = content.windows.filter {
                 $0.owningApplication?.processID == pid && $0.title == title && $0.windowLayer == 0
             }
