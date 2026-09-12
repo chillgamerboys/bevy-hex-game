@@ -5,6 +5,10 @@ use super::*;
 use crate::cpu_diagnostics::{self, ProbeCounter, ProbeKind};
 use bevy_math::Quat;
 
+#[cfg(test)]
+#[path = "steering_kernel_tests.rs"]
+mod kernel_tests;
+
 /// Frozen pre-recovery movement for the accepted Shadow's patrol/home phases.
 /// Active Shadow combat already returns through its unchanged Bot controller.
 #[derive(Debug)]
