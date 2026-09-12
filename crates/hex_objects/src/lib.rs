@@ -276,7 +276,15 @@ pub fn plugin(app: &mut App) {
         .register_type::<TreeFadeAmount>()
         .init_resource::<ObjectRenderCache>()
         .init_resource::<TreeFadeMaterialAssets>()
-        .add_systems(Update, reconcile_objects)
+        .add_systems(
+            PostUpdate,
+            reconcile_objects
+                .in_set(PresentationSystems::ReconcileObjects)
+                .after(PresentationSystems::PublishObjects)
+                .before(PresentationSystems::ResolveCameraOcclusion)
+                .before(PresentationSystems::ApplyMaterials)
+                .before(bevy::transform::TransformSystems::Propagate),
+        )
         .add_systems(
             PostUpdate,
             (apply_tree_fade_materials, manage_object_oit)
