@@ -48,6 +48,56 @@ pub(super) fn load_art(palette: &ArtPalette) -> Result<RuntimeArtCatalog, String
         include_str!("../../../../assets/art/objects/prop/crystal-spire.ron"),
         include_str!("../../../../assets/art/objects/prop/grass-tuft.ron"),
         include_str!("../../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-ancient-1.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-ancient-2.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-ancient-3.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-heart.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-landmark-1.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-landmark-2.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-landmark-3.ron"),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-broadleaf-1.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-broadleaf-2.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-broadleaf-3.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-pine-1.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-pine-2.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-pine-3.ron"
+        ),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-0.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-1.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-3.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-4.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-5.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-open-gate.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-wall-crown.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-portal-east.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-portal-west.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-0.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-1.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-2.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-3.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-0.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-1.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-2.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-3.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-crystal-cluster.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-crystal-fan.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-crystal-needle.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-fountain-rim.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-arch.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-pillar.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-ridge.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-slab.ron"),
     ];
     let mut objects = BTreeMap::new();
     for source in sources {
