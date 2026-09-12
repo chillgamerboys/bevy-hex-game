@@ -29,6 +29,7 @@ mod burrow;
 mod burrow_tests;
 mod expedition;
 mod forest;
+mod overview;
 #[cfg(test)]
 mod real_world_tests;
 mod render;
@@ -100,7 +101,7 @@ pub fn plugin(app: &mut App) {
                 .in_set(ArenaSystems::PublishTerrain)
                 .run_if(resource_exists::<VoxelMap>),
         )
-        .add_plugins(render::plugin);
+        .add_plugins((overview::plugin, render::plugin));
 }
 
 /// Preserve the last simulated tick's effects while the complete tick schedule is
