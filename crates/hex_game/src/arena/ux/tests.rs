@@ -356,6 +356,7 @@ fn scrolled_settings_header_clicks_change_page_without_activating_clipped_contro
                 unit: MouseScrollUnit::Line,
                 x: 0.0,
                 y: -100.0,
+                phase: bevy::input::touch::TouchPhase::Moved,
                 window,
             });
             settle(&mut app);
