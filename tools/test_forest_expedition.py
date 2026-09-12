@@ -21,6 +21,9 @@ class ExpeditionProxy(unittest.TestCase):
         self.assertEqual([i for i, c in enumerate(camps, 1) if c["shamans"]], [12, 13])
         self.assertEqual(sum(c["goblins"] for c in camps if c["profile"] == "baby"), 15)
         self.assertEqual(meta["roster"]["actors_including_player"], 115)
+        for operator in self.recipe["biomes"] + self.recipe["basins"] + self.recipe["overrides"]:
+            mask = operator["mask"]
+            self.assertLessEqual(world.distance((mask["center"]["q"], mask["center"]["r"])) + mask["radius"], 187)
         wet = set(meta["river"]["wet_columns"]) | {p[:2] for pool in meta["fountains"].values() for p in pool["cells"]}
         for name, site in meta["encounters"].items():
             with self.subTest(site=name):
@@ -122,8 +125,9 @@ class ExpeditionProxy(unittest.TestCase):
         self.assertGreaterEqual((arena["wall_top"] - arena["floor_level"]) * .35, 12)
         self.assertTrue(arena["gate"])
         walls = set(arena["walls"])
-        gate_route = self.metadata["routes"]["mountain-path-10"]
-        self.assertFalse(walls & {p[:2] for p in gate_route["ribbon"]})
+        for name in ("mountain-path-09", "mountain-path-10"):
+            gate_route = self.metadata["routes"][name]
+            self.assertFalse(walls & {p[:2] for p in gate_route["ribbon"]})
         self.assertIn(self.metadata["anchors"]["shadow_gate"][:2], arena["gate"])
 
     def test_six_hidden_fountains_are_finite_and_cover_forest_and_mountains(self):

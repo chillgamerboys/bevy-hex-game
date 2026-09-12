@@ -187,11 +187,11 @@ def recipe(*, raw):
                        "shoulder_width": 4, "material": "moss" if name.startswith("forest") else "gravel"})
         graph[name] = {"from": start, "to": end, "supports": path, "ribbon": surface, "clearance_levels": 4,
                        "half_width": width, "purpose": "rally" if name.startswith("forest") else "travel"}
-    # The wall is terrain in the proxy. The western seven-column gate stays open;
+    # The wall is terrain in the proxy. The broad western gate stays open;
     # buttresses, lintels and ornament blueprints belong to the content pass.
     arena = ANCHORS["mountain_shadow"]
     wall = disk(arena, 15) - disk(arena, 12)
-    gate = {(q, r) for q, r in wall if q - arena[0] <= -11 and 4 <= r - arena[1] <= 10}
+    gate = {(q, r) for q, r in wall if q - arena[0] <= -11 and 3 <= r - arena[1] <= 11}
     wall -= gate
     for q, r in sorted(wall):
         overrides.append(override(f"wall-{q}-{r}", (q, r, arena[2] + 36), 0, "stone"))
@@ -239,8 +239,8 @@ def recipe(*, raw):
              "biomes": [{"id": name, "mask": mask(p, radius), "priority": priority, "material": material}
                         for name, p, radius, priority, material in (
                             ("pine-uplands", (-99, 24), 66, 2, "pine-floor"),
-                            ("ancient-grove", HEART, 48, 3, "moss"),
-                            ("massif-rock", (117, -47), 78, 4, "basalt"),
+                            ("ancient-grove", (-138, 18), 48, 3, "moss"),
+                            ("massif-rock", (107, -47), 78, 4, "basalt"),
                             ("massif-snow", (126, -94), 34, 5, "snow"))],
              "channels": [{"id": "great-river", "points": [grade(p) for p in RIVER],
                            "half_width": 13, "depth": 12, "material": "water", "bed_material": "sand", "bank_width": 6}],
