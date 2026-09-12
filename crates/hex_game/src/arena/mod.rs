@@ -157,6 +157,7 @@ fn encounter_name(encounter: ArenaEncounter) -> &'static str {
 
 #[derive(Resource)]
 struct ViewState {
+    forest_preparation: bootstrap::Preparation,
     started: bool,
     paused: bool,
     third_person: bool,
@@ -209,6 +210,7 @@ impl Default for ViewState {
         let started =
             capture.is_some() && !matches!(capture_view.as_str(), "start" | "observer-start");
         Self {
+            forest_preparation: Default::default(),
             started,
             paused: !started,
             third_person: false,
@@ -270,6 +272,7 @@ impl ViewState {
     }
 
     fn begin_play(&mut self) {
+        self.forest_preparation.cancel_selection();
         self.started = true;
         self.paused = false;
         self.suppress_click = true;
@@ -287,6 +290,7 @@ impl ViewState {
     }
 
     fn prepare_round(&mut self) {
+        self.forest_preparation.cancel_selection();
         self.started = false;
         self.casts = Default::default();
         self.initialized = false;

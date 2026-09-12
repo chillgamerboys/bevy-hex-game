@@ -384,12 +384,29 @@ pub(super) fn buttons(
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
 ) {
     let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
+    let chooses_something_else = state.paused
+        && windows.iter().all(|window| window.focused)
+        && interactions.iter().any(|(interaction, action)| {
+            *interaction == Interaction::Pressed
+                && !matches!(action, Action::Map(ArenaMap::ForestMassif) | Action::Fullscreen)
+        });
+    if state.started || battle.control == ArenaControl::Spectator || chooses_something_else {
+        state.forest_preparation.cancel_selection();
+    }
+    if state.forest_preparation.poll() {
+        apply_map_selection(ArenaMap::ForestMassif, &mut state, &mut reset, &mut selection, &mut battle);
+        // A new map needs its own publication before any Start event can apply.
+        return;
+    }
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed
             || !state.paused
             || windows.iter().any(|window| !window.focused)
         {
             continue;
+        }
+        if !matches!(action, Action::Map(ArenaMap::ForestMassif) | Action::Fullscreen) {
+            state.forest_preparation.cancel_selection();
         }
         match *action {
             Action::Map(map)
@@ -398,26 +415,10 @@ pub(super) fn buttons(
                     && !(battle.control == ArenaControl::Spectator
                         && matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)) =>
             {
-                let previous = (!matches!(
-                    selection.map,
-                    ArenaMap::SevenRegions | ArenaMap::ForestMassif
-                ))
-                .then(|| super::player_preset(*selection, &battle));
-                selection.map = map;
-                if matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)
-                    || battle.control == ArenaControl::Spectator
-                {
-                    battle.player_recipe = None;
-                } else {
-                    let preset = previous.unwrap_or(if map == ArenaMap::Duel {
-                        BattlePreset::Shadow
-                    } else {
-                        BattlePreset::Dragon
-                    });
-                    super::choose_player_preset(&mut selection, &mut battle, preset);
+                if map == ArenaMap::ForestMassif && !state.forest_preparation.request() {
+                    continue;
                 }
-                reset.generation = reset.generation.saturating_add(1);
-                state.prepare_round();
+                apply_map_selection(map, &mut state, &mut reset, &mut selection, &mut battle);
             }
             Action::Control(control)
                 if !state.started
@@ -523,6 +524,28 @@ pub(super) fn buttons(
             ..default()
         };
     }
+}
+
+fn apply_map_selection(
+    map: ArenaMap,
+    state: &mut ViewState,
+    reset: &mut ArenaReset,
+    selection: &mut ArenaSelection,
+    battle: &mut ArenaBattleSetup,
+) {
+    let previous = (!matches!(selection.map, ArenaMap::SevenRegions | ArenaMap::ForestMassif))
+        .then(|| super::player_preset(*selection, battle));
+    selection.map = map;
+    if matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)
+        || battle.control == ArenaControl::Spectator
+    {
+        battle.player_recipe = None;
+    } else {
+        let preset = previous.unwrap_or(if map == ArenaMap::Duel { BattlePreset::Shadow } else { BattlePreset::Dragon });
+        super::choose_player_preset(selection, battle, preset);
+    }
+    reset.generation = reset.generation.saturating_add(1);
+    state.prepare_round();
 }
 
 fn upgrade_stat(index: usize) -> Option<UpgradeStat> {
@@ -743,6 +766,7 @@ pub(super) fn update(
             Label::Team(slot) => format!("TEAM {}  /  {}", slot + 1, spectator::preset_for(&battle, *slot).map_or("Custom", BattlePreset::label)),
             Label::ObserverTeams => session.battle_summary().map_or_else(String::new, |summary| spectator::team_status(&summary)),
             Label::ObserverStatus => session.battle_summary().map_or_else(String::new, |summary| spectator::battle_status(&summary, state.observer.mode, state.paused)),
+            Label::Help if state.forest_preparation.status().is_some() => state.forest_preparation.status().unwrap_or_default().into(),
             Label::Help if pending > 0 => format!("Preparing terrain: {pending} chunks remaining. Start unlocks when ready."),
             Label::Help if battle.control == ArenaControl::Spectator => "WASD pan / move / Q and E down and up / Shift fast
 Mouse look / Wheel orbit zoom / C orbit or free camera
