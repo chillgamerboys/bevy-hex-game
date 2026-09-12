@@ -161,6 +161,7 @@ impl Brain {
         let profile_tuning = actor.expedition_tuning(tuning);
         let tuning = profile_tuning.as_ref();
         let c = &tuning.encounters;
+        let troll = actor.expedition_role() == Some(crate::ExpeditionRole::Troll);
         self.spell_gap = (self.spell_gap - STEP).max(0.0);
         // Live human data is confined to visibility admission. Downstream plans
         // receive this copy or the party's dated observation, never a hidden pose.
@@ -593,7 +594,7 @@ impl Brain {
                     }
                 }
             }
-        } else if actor.species == Species::Goblin {
+        } else if actor.species == Species::Goblin && !troll {
             if let Some(target) = target {
                 goal = goblin_approach(actor, actors, party.snapshot.home, target, c);
                 let distance = sight.and_then(|seen| seen.observed).map_or_else(
@@ -626,7 +627,7 @@ impl Brain {
             request = self.golem_intent(
                 actor, party, sight, goal, collision, world, geometry, tuning, tick, &mut input,
             );
-        } else if actor.species == Species::Shaman {
+        } else if actor.species == Species::Shaman || troll {
             if tick >= self.next_shot_probe || sight.is_none() {
                 self.shooting_angle = sight.is_some_and(|seen| {
                     self.shot_aim_at_speed(
@@ -654,7 +655,7 @@ impl Brain {
                         + (actor.center() - target).with_y(0.0).normalize_or(Vec3::Z) * 4.0;
                 }
             }
-            if let Some(center) = frontline_center(actor, actors) {
+            if let Some(center) = (!troll).then(|| frontline_center(actor, actors)).flatten() {
                 let away = target
                     .map_or(actor.feet - center, |point| center - point)
                     .with_y(0.0)
@@ -670,17 +671,35 @@ impl Brain {
                             .clamp_length_max(c.aura_radius * 0.65);
                 }
             }
+            if troll {
+                if let Some(seen) = sight {
+                    let distance = seen.observed.map_or_else(
+                        || actor.eye().distance(seen.point),
+                        |observed| observed.distance(actor.eye(), 0.0),
+                    );
+                    if distance <= c.swipe_range + 0.2 {
+                        goal = actor.feet;
+                        if actor.charge().is_none() && self.ready(CreatureAbility::Swipe) {
+                            request = Some(Request {
+                                kind: CreatureAbility::Swipe,
+                                aim: input.aim,
+                            });
+                        }
+                    }
+                }
+            }
+            let support = actor.support_scope();
             let eligible: Vec<_> = actors
                 .iter()
                 .filter(|a| {
-                    a.id != actor.id
-                        && a.hp > 0.0
-                        && a.party == actor.party
+                    a.hp > 0.0
+                        && support.includes(a)
                         && a.center().distance(actor.center()) <= c.aura_radius
                         && collision.sight_clear(actor.eye(), a.center())
                 })
                 .collect();
             if actor.charge().is_none()
+                && request.is_none()
                 && self.ready(CreatureAbility::Aura)
                 && (eligible.iter().any(|a| a.hp < a.max_hp - 0.1)
                     || (party.snapshot.phase == PartyPhase::Active
@@ -747,7 +766,10 @@ impl Brain {
                     }
                 }
             } else if self.active.is_none() && self.spell_gap <= 0.0 && request.is_none() {
-                if (hurt || threatened) && actor.cooldowns.first().is_some_and(|cd| *cd <= 0.0) {
+                if !troll
+                    && (hurt || threatened)
+                    && actor.cooldowns.first().is_some_and(|cd| *cd <= 0.0)
+                {
                     let direction = input.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
                     let mut caster = actor.clone();
                     caster.selected = Spell::Shield;

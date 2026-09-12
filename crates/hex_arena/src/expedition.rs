@@ -22,6 +22,10 @@ pub enum ExpeditionRole {
 }
 
 impl ExpeditionRole {
+    pub(crate) const fn is_forest_minion(self) -> bool {
+        matches!(self, Self::BabyGoblin | Self::Goblin | Self::Shaman)
+    }
+
     pub(crate) const fn species(self) -> Species {
         match self {
             Self::BabyGoblin | Self::Goblin | Self::Troll => Species::Goblin,
@@ -32,7 +36,38 @@ impl ExpeditionRole {
     }
 }
 
+/// The owner identity is frozen while mutable allies consume a support field.
+#[derive(Clone, Copy)]
+pub(crate) struct SupportScope {
+    owner: crate::ActorId,
+    team: crate::TeamId,
+    party: Option<crate::PartyId>,
+    forest: bool,
+}
+
+impl SupportScope {
+    pub(crate) fn includes(self, ally: &Actor) -> bool {
+        ally.id != self.owner
+            && ally.team == self.team
+            && if self.forest {
+                ally.expedition_role
+                    .is_some_and(ExpeditionRole::is_forest_minion)
+            } else {
+                self.party.is_some() && ally.party == self.party
+            }
+    }
+}
+
 impl Actor {
+    pub(crate) fn support_scope(&self) -> SupportScope {
+        SupportScope {
+            owner: self.id,
+            team: self.team,
+            party: self.party,
+            forest: self.expedition_role == Some(ExpeditionRole::Troll),
+        }
+    }
+
     /// Authored expedition identity; absent for legacy worlds and ordinary battles.
     #[must_use]
     pub const fn expedition_role(&self) -> Option<ExpeditionRole> {
@@ -80,6 +115,7 @@ impl Actor {
                 tuning.encounters.swipe_range = 2.5;
                 tuning.encounters.swipe_cooldown = 1.8;
                 tuning.encounters.swipe_windup = 0.45;
+                tuning.encounters.aura_radius = 9.0;
                 tuning.fireball_damage = 35.0;
                 tuning.fireball_cooldown = 2.5;
             }

@@ -1225,3 +1225,6 @@ fn breath_chips_intersected_hex_face_even_when_its_center_is_outside_the_cone() 
         .all(|i| i.power == tuning.encounters.breath_terrain_power));
     assert!(impacts.iter().all(|i| !i.volume.contains(&outside)));
 }
+
+#[path = "troll_tests.rs"]
+mod troll_tests;

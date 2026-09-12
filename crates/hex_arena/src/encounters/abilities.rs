@@ -656,15 +656,13 @@ impl ArenaSession {
                 self.actors
                     .iter()
                     .find(|a| a.id == aura.owner)
-                    .map(|owner| (*aura, owner.party, owner.eye()))
+                    .map(|owner| (*aura, owner.support_scope(), owner.eye()))
             })
             .collect();
         for actor in &mut self.actors {
             let eligible = actor.hp > 0.0
-                && fields.iter().any(|(aura, party, eye)| {
-                    aura.owner != actor.id
-                        && party.is_some()
-                        && *party == actor.party
+                && fields.iter().any(|(aura, scope, eye)| {
+                    scope.includes(actor)
                         && aura.center.distance(actor.center()) <= aura.radius
                         && self.collision.sight_clear(*eye, actor.center())
                 });
