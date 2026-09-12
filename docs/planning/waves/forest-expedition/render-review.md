@@ -95,3 +95,10 @@ Exact clean source **6b455e12e1828c979b034d618c4e4159f0ed7506**, package **a5382
 The complete overview, reverse bridge span and spent fountain pass. River bank terraces are visible through the water, and foreground foliage no longer hides the reverse span. Charged glimmers are clearly visible, the mountain basin fits completely, and spent forest water retains its ripples without charged lights. Two charged pools fail because flat cyan hex patches alternate abruptly with dark-blue animated water; the independent translucent cap and water batches have conflicting sort centers. Forward bridge framing also cuts the east portal's outer pier, which the nearly edge-on reverse view does not show coherently. These are presentation repairs; no terrain/package regeneration is needed.
 
 The next candidate widens the river-centered bridge view and repairs charged-water rendering order. All six entries must be freshly recaptured before the full 26-view matrix. Native access was checked again and still reports the Mac locked; the existing manual-unlock request remains pending.
+
+
+## Actual-water fountain material repair
+
+Foundation **6a68252**, game integration **5595b9d** and map repair **74ac687** remove the competing pool cap and style actual liquid cap/curtain batches from the disposable charged-name snapshot. Existing geometry, UVs, alpha and animation remain unchanged. Charged pools share turquoise surface/fall materials with restrained extension emission; spent or stale-generation bindings select ordinary water. Glimmers retain the gameplay consumption parent. The bridge review eye now uses river-row centering at offset62 instead of50.
+
+Composed25 liquid tests, the actual a538 charged/spent/reset game fixture, and strict game Clippy pass. An independent source review found no concrete issue. These checks do not validate pixels; a fresh six-view subset and then the full26 matrix remain pending. No package geometry changed.
