@@ -350,6 +350,21 @@ pub(super) fn build(
     let presentation =
         MapPresentationProjection::from_snapshot_parts(liquids, features, BTreeMap::new());
     worlds::project_static(&mut view, &presentation, geometry, art)?;
+    // Legacy presentations intentionally leave TallGrass nonblocking. V4 props
+    // instead carry authoritative occupancy and need their own exact projection.
+    for product in backend.runtime.resident_chunks() {
+        for object in &product.package.semantics.objects {
+            if !object.asset.starts_with("plant/") {
+                project_prop(
+                    &mut view,
+                    object,
+                    &source.manifest().materials,
+                    geometry,
+                    art,
+                )?;
+            }
+        }
+    }
     // Preserve V4's material admission even where several names share one battle
     // durability class. The projection must never offer an edit V4 forbids.
     for product in backend.runtime.resident_chunks() {
@@ -425,6 +440,117 @@ pub(super) fn build(
     })
 }
 
+/// V4 props currently admit opaque/cutout geometry only. Verify the public art
+/// artifact against the compiled solid cells before publishing any collision.
+fn project_prop(
+    view: &mut ArenaTerrainView,
+    source: &hex_world_contracts::ObjectInstance,
+    materials: &[hex_world_contracts::MaterialSpec],
+    geometry: ArenaVoxelGeometry,
+    art: &RuntimeArtCatalog,
+) -> Result<(), String> {
+    let id = ObjectAssetId::new(source.asset.clone()).map_err(|error| error.to_string())?;
+    let blueprint = art
+        .object(&id)
+        .ok_or_else(|| format!("Missing Forest prop {}", source.asset))?;
+    let rotation = HexObjectRotation::new(source.rotation).map_err(|error| error.to_string())?;
+    let mut visible = BTreeSet::new();
+    for placement in &blueprint.placements {
+        let style = art
+            .style(&placement.style)
+            .ok_or_else(|| format!("Missing Forest prop style {}", placement.style))?;
+        if !matches!(
+            style.authored().surface_mode(),
+            hex_assets::VoxelSurfaceMode::Opaque | hex_assets::VoxelSurfaceMode::Cutout
+        ) {
+            return Err(format!(
+                "Forest prop {} requires opaque or cutout geometry",
+                source.id
+            ));
+        }
+        let rotated = rotation
+            .rotate_voxel(placement.position, blueprint.origin)
+            .ok_or("Forest prop rotation overflow")?;
+        let q = source
+            .origin
+            .column
+            .q
+            .checked_add(i64::from(rotated.q) - i64::from(blueprint.origin.q))
+            .ok_or("Forest prop q overflow")?;
+        let r = source
+            .origin
+            .column
+            .r
+            .checked_add(i64::from(rotated.r) - i64::from(blueprint.origin.r))
+            .ok_or("Forest prop r overflow")?;
+        let level = source
+            .origin
+            .level
+            .checked_add(rotated.level)
+            .and_then(|level| level.checked_sub(blueprint.origin.level))
+            .ok_or("Forest prop level overflow")?;
+        let voxel = VoxelPosition {
+            column: WorldHex::new(q, r),
+            level,
+        };
+        position(voxel)?;
+        if !(geometry.min_level..=geometry.max_level).contains(&level) {
+            return Err(format!(
+                "Forest prop {} exceeds arena vertical bounds",
+                source.id
+            ));
+        }
+        visible.insert(voxel);
+    }
+    let mut compiled = BTreeSet::new();
+    for column in &source.occupancy {
+        for run in &column.runs {
+            if !materials
+                .iter()
+                .any(|material| material.id == run.material && material.solid)
+            {
+                return Err(format!(
+                    "Forest prop {} has nonsolid or unknown occupancy",
+                    source.id
+                ));
+            }
+            let length = i64::from(run.top) - i64::from(run.bottom);
+            if length <= 0 || length > visible.len() as i64 {
+                return Err(format!(
+                    "Forest prop {} has mismatched occupancy",
+                    source.id
+                ));
+            }
+            for level in run.bottom..run.top {
+                let voxel = VoxelPosition {
+                    column: column.position,
+                    level,
+                };
+                if !visible.contains(&voxel) || !compiled.insert(voxel) {
+                    return Err(format!(
+                        "Forest prop {} has mismatched occupancy",
+                        source.id
+                    ));
+                }
+            }
+        }
+    }
+    if visible != compiled {
+        return Err(format!(
+            "Forest prop {} has mismatched occupancy",
+            source.id
+        ));
+    }
+    let instance = hex_assets::ObjectInstance::new(
+        id,
+        position(source.origin)?,
+        geometry.level_height,
+        rotation,
+    )
+    .map_err(|error| error.to_string())?;
+    worlds::project_instance(view, art, &instance, false)
+}
+
 fn compact_static(view: &mut ArenaTerrainView) {
     view.static_spans.sort_by_key(|span| {
         (
@@ -457,6 +583,177 @@ fn compact_static(view: &mut ArenaTerrainView) {
 mod tests {
     use super::*;
     use hex_world_contracts::{QueryResult, WorldQuery};
+
+    fn prop_fixture(
+        asset: &str,
+        turn: u8,
+    ) -> (
+        hex_world_contracts::ObjectInstance,
+        Vec<hex_world_contracts::MaterialSpec>,
+    ) {
+        let content = load_content().expect("accepted content");
+        let id = ObjectAssetId::new(asset).expect("id");
+        let blueprint = content.art.object(&id).expect("real authored prop");
+        let rotation = HexObjectRotation::new(turn).expect("rotation");
+        let mut columns: BTreeMap<WorldHex, Vec<hex_world_contracts::VoxelRun>> = BTreeMap::new();
+        for cell in &blueprint.placements {
+            let cell = rotation
+                .rotate_voxel(cell.position, blueprint.origin)
+                .expect("bounded rotation");
+            columns
+                .entry(WorldHex::new(
+                    3 + i64::from(cell.q - blueprint.origin.q),
+                    -2 + i64::from(cell.r - blueprint.origin.r),
+                ))
+                .or_default()
+                .push(hex_world_contracts::VoxelRun {
+                    bottom: 20 + cell.level - blueprint.origin.level,
+                    top: 21 + cell.level - blueprint.origin.level,
+                    material: "stone".into(),
+                });
+        }
+        (
+            hex_world_contracts::ObjectInstance {
+                id: "fixture/prop".into(),
+                region_id: "fixture".into(),
+                asset: asset.into(),
+                origin: VoxelPosition {
+                    column: WorldHex::new(3, -2),
+                    level: 20,
+                },
+                rotation: turn,
+                occupancy: columns
+                    .into_iter()
+                    .map(|(position, runs)| hex_world_contracts::ColumnData { position, runs })
+                    .collect(),
+                grounding: None,
+            },
+            vec![hex_world_contracts::MaterialSpec {
+                id: "stone".into(),
+                solid: true,
+                diggable: true,
+                color: [128, 128, 128, 255],
+            }],
+        )
+    }
+
+    #[test]
+    fn forest_props_publish_exact_rotated_actor_projectile_sight_and_edit_masks() {
+        let content = load_content().expect("content");
+        for turn in 0..6 {
+            let (source, materials) = prop_fixture("prop/cave-moss", turn);
+            let mut view = ArenaTerrainView::default();
+            project_prop(&mut view, &source, &materials, default(), &content.art)
+                .expect("exact prop");
+            let expected: BTreeSet<_> = source
+                .occupancy
+                .iter()
+                .flat_map(|column| {
+                    column.runs.iter().flat_map(|run| {
+                        (run.bottom..run.top).map(|level| {
+                            TilePos::new(local(column.position).expect("local"), level)
+                        })
+                    })
+                })
+                .collect();
+            assert_eq!(expected.len(), 4, "real asymmetric authored fixture");
+            assert_eq!(
+                view.static_spans
+                    .iter()
+                    .map(|span| span.bottom)
+                    .collect::<BTreeSet<_>>(),
+                expected
+            );
+            for span in &view.static_spans {
+                assert_eq!(span.bottom.level, span.top_level);
+                assert!(span.blocks_movement && span.blocks_projectiles && span.blocks_sight);
+                assert!(
+                    view.edit_protected[&span.bottom.coord]
+                        .contains(&(span.bottom.level, span.bottom.level))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forest_prop_geometry_mismatch_and_transparency_reject_before_publication() {
+        let content = load_content().expect("content");
+        let (original, materials) = prop_fixture("prop/cave-moss", 2);
+        let mut changed = original.clone();
+        changed.occupancy.pop();
+        let mut nonsolid = materials.clone();
+        nonsolid[0].solid = false;
+        let (transparent, _) = prop_fixture("prop/crystal-spire", 0);
+        let mut oversized = original.clone();
+        oversized.occupancy[0].runs[0].top = i32::MAX;
+        for (source, policy) in [
+            (&changed, &materials),
+            (&original, &nonsolid),
+            (&transparent, &materials),
+            (&oversized, &materials),
+        ] {
+            let mut view = ArenaTerrainView::default();
+            assert!(project_prop(&mut view, source, policy, default(), &content.art).is_err());
+            assert!(view.static_spans.is_empty() && view.edit_protected.is_empty());
+        }
+    }
+
+    #[test]
+    fn forest_prop_protection_rejects_shield_assignment_and_leaves_adjacent_air_editable() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(plugin);
+        app.update();
+        let (source, materials) = prop_fixture("prop/grass-tuft", 0);
+        let content = load_content().expect("content");
+        let mut view = ArenaTerrainView::default();
+        project_prop(&mut view, &source, &materials, default(), &content.art).expect("V4 prop");
+        let hit = position(source.origin).expect("inside arena");
+        let clear = hit.above();
+        {
+            let mut state = app.world_mut().resource_mut::<ArenaWorldState>();
+            let recipe = state.original.as_mut().expect("initialized world");
+            recipe.view.static_spans.extend(view.static_spans);
+            recipe.view.edit_protected.extend(view.edit_protected);
+        }
+        let stone = app.world().resource::<ArenaMaterials>().stone;
+        for pos in [hit, clear] {
+            app.world_mut().write_message(TerrainEdit::Set {
+                pos,
+                substance: stone,
+            });
+        }
+        app.world_mut().run_schedule(ArenaTick);
+        let map = app.world().resource::<VoxelMap>();
+        assert!(
+            map.get(hit).is_air(),
+            "Shield must not replace exact prop geometry"
+        );
+        assert_eq!(
+            map.get(clear),
+            stone,
+            "air above the one-voxel prop remains usable"
+        );
+
+        let feature = PlannedFeature {
+            root: TilePos::new(hit.coord, hit.level - 1),
+            kind: FeatureKind::TallGrass,
+            object_id: ObjectAssetId::new("prop/grass-tuft").expect("id"),
+            rotation: default(),
+            blocker_footprint: BTreeSet::new(),
+        };
+        let legacy = MapPresentationProjection::from_snapshot_parts(
+            BTreeMap::new(),
+            BTreeMap::from([(FeatureId(1), feature)]),
+            BTreeMap::new(),
+        );
+        let mut legacy_view = ArenaTerrainView::default();
+        worlds::project_static(&mut legacy_view, &legacy, default(), &content.art)
+            .expect("legacy grass");
+        assert!(
+            legacy_view.static_spans.is_empty(),
+            "legacy grass retains its original semantics"
+        );
+    }
 
     /// Full authored fixture test is explicit so ordinary small arena checks do
     /// not quietly depend on an operator's generated world workspace.

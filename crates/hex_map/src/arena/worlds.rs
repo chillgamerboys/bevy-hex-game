@@ -413,7 +413,7 @@ fn protect(view: &mut ArenaTerrainView, coord: HexCoord, bottom: i32, top: i32) 
 /// Explicit arena object policy: woody plant parts collide; opaque/cutout canopy
 /// blocks sight and projectiles. Grass and moss are excluded by their feature kind.
 /// Crystal structural cells collide only where their authored style is opaque.
-fn project_instance(
+pub(super) fn project_instance(
     view: &mut ArenaTerrainView,
     art: &RuntimeArtCatalog,
     instance: &ObjectInstance,
