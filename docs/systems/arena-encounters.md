@@ -55,22 +55,30 @@ The launcher also accepts `--map seven-regions` or `--map duel`; Fort and Duel p
 | Hold then release left mouse (LMB) | Charge and cast Fireball |
 | Hold then release right mouse (RMB) | Charge and cast Shield |
 | C | Switch first person / close third person |
-| T | Toggle assistance for the active gesture, or the last-used projectile (initially Fireball) |
+| T | Toggle active projectile assistance; expedition Fireball guide requires the Wisp reward |
+| G | Open/fold the expedition momentum glider while airborne |
 | Escape or Tab | Pause combat, release the cursor and open the menu |
 | R | Restore the whole selected encounter and return to the ready screen |
 | M | Toggle the expedition minimap without pausing |
 | F9 | Bookmark the current native recording |
 | Cmd-Q (macOS) | Finalize any recording and quit |
 
-Battle UI keeps the active screen to the reticle, spell cards and compact player HP.
-Cards distinguish ready, cooldown and held-charge states; aiming at a visible enemy
-shows Healthy, Wounded or Critical pips. Esc pages hold Overview, Map, Upgrades,
+Battle UI keeps the active screen to the reticle, Fireball/Shield/High Jump cards,
+compact player HP and level, plus optional map/recording or glider indicators.
+Cards distinguish ready, cooldown and held-charge states. Available upgrade points
+turn the level indicator gold. Enemy health appears for one second above the body:
+three white pips above two-thirds HP, two amber pips above one-third, otherwise one
+red pip. The first visible damaging player hit announces health; later announcements
+require a band change, including healing. Same-band hits never extend the display,
+and occluded or off-screen bodies have no indicator. Esc pages hold Overview, Map, Upgrades,
 Settings and Controls. Settings cycles interface size from 100% through 200%; menus
 scroll with the wheel and arrows move keyboard focus. Presentation preferences
 persist separately from the current run.
 
-The expedition's north-up map remembers Dragons, Shadow, Troll and fountains only
-after the player visibly observes them. Icons remember last-seen locations and
+The expedition's north-up map remembers Dragons, Shadow, Troll, Golems and fountains
+only after five consecutive visible observations at ten Hz. Discovery requires a
+meaningful central view, within 120 units for Dragons, 60 for bosses/Golems, and 35
+for a fountain's central water patch. Icons remember last-seen locations and
 charged/spent fountain state; hidden enemies do not update their remembered position.
 Click a discovered marker in Esc → Map to inspect it, or click terrain to set one
 personal destination. M starts hidden each run; Restart clears all discoveries and
@@ -125,39 +133,72 @@ The expedition package uses a radius-187 V4 world with 14 forest camps, three
 mountain Dragons, a Troll beneath the central giant tree, and a Shadow in a walled
 arena. The player starts on the arched bridge across the curved river. The camps
 contain `3,3,3,3,3,5,5,5,9,9,11,13,15,20` Goblins; the first five are babies.
-Two Shamans join the 13- and 15-Goblin camps. There are 114 enemies in total.
+Two Shamans join the 13- and 15-Goblin camps. The southern mountain-side plain adds
+three independent Golems and Wisp packs of 3, 3 and 4. There are 127 enemies/128 actors
+in total.
 Terrain loads at runtime and the ready screen waits for its rendering publication.
 
 Fireball starts with 15 contact damage, 45 base launch speed, 12 projectile gravity,
 12 knockback and a 0.5-second cooldown. It stops at the first valid collision and
 only hurts the struck target. Defeating the Troll leaves a gold reward sphere
-that adds 25 damage separately from purchased upgrades. Defeating all three Dragons
-leaves a blue sphere that unlocks standard radius-2.5 explosions. The Shadow leaves
-a violet sphere granting 25 maximum HP **without healing current HP**. Walk near a
-sphere with a clear approach to collect it. Each shot retains its launch-time damage
-and impact mode. Enemy spells have independent tuning.
+that adds 25 to base damage before purchased damage multipliers. Defeating all three
+Dragons leaves a blue sphere that unlocks radius-2.5 explosions. The Shadow leaves
+a violet sphere granting 25 maximum HP **without healing current HP**. Clearing all
+ten Wisps drops a reward granting +15 base Fireball speed and a charging-only aim
+guide, ending at first collision. Clearing all three Golems drops a reward granting
++20 base Shield speed and +2 columns/+2 levels to Shield dimensions. Walk near a sphere
+with a clear approach to collect it. Every reward is once-only; clearing an area does
+not award its bonus until collection. Each shot freezes speed, damage, geometry and
+impact mode at launch. Enemy spells have independent tuning.
 
 Enemies give XP and **never drop health**. The player does not regenerate HP.
 Six hidden fountains are the only healing source: four in the forest and two in
 the mountains. Enter their glowing water while wounded to recover up to 40 HP once;
 the glow then fades, but the water remains. A full-health visit does not consume it.
 
-Player kills award Goblin 1, Shaman 5, Dragon 20, Troll 50 and Shadow 100 XP,
+Player kills award Goblin 1, Shaman 5, Wisp 3, Golem 25, Dragon 20, Troll 50 and Shadow 100 XP,
 including attributed knockback deaths within ten seconds. Levels require 10, 15,
 23, 34… additional XP; surplus carries forward. Each level banks one upgrade point.
 Spend it with a beneficial **+** in the Esc menu. Unavailable and capped upgrades
 are disabled; explosion radius remains locked until its reward and gravity stays 12.
-The menu shows milestone progress, upgrades and fountain healing rules.
+The menu shows numerical before/after values, milestone progress and fountain rules.
+Purchased ranks and collected base bonuses are separate, so purchase/reward order
+produces identical final stats.
+
+| Expedition upgrade | Per point | Rank cap |
+|---|---|---:|
+| Walking speed | ×1.10 from 4.725 |4|
+| Fireball damage | ×1.15 on 15 plus collected Troll +25 |5|
+| Fireball / Shield launch speed | Separate ×1.10 ranks on 45 plus each collected bonus |5 each|
+| Fireball knockback | ×1.15 from 12 |5|
+| Each spell cooldown | ×0.85 from its starting cooldown |5 each|
+| High Jump height | ×1.15 from 4, capped at 8 |5|
+| Unlocked explosion radius | +0.15 from 2.5 |5|
+| Shield dimensions |5×5 →6×5 →6×6 →7×6 →7×7, then Golem +2×2 |4|
+
+The glider is available immediately: press **G** airborne, and steer with mouse look.
+It preserves momentum when opened or folded, gains speed in a dive, loses speed
+quickly when climbing, and slowly slows in level flight. Its cap is 32 units/s and
+steering pitch is 60° down to 30° up. Lift fades below 8 units/s; near 4 it descends
+strongly but stays open so a dive can recover. Landing, water, blocking collisions,
+starting Fireball/Shield charge, or High Jump fold it. Repeated airborne High Jump
+remains available on its ordinary cooldown; reopening the glider requires G.
+Pause preserves flight; death and Restart clear it.
 
 The Troll casts fireballs and supports nearby forest minions. Damaging it calls all
 surviving Goblin parties toward the ancient grove along authored paths; they still
 need ordinary perception to find the player. Defeating the Troll ends the rally.
-The Shadow remains physically inside its arena. All Dragons exist from the start;
-the intended summit route passes the lower encounters, while steep off-route climbs
-remain possible with High Jump.
+The Shadow uses ordinary AI homing; a destroyed wall or open gate allows real
+movement and knockback beyond its original arena. All Dragons exist from the start;
+the intended summit route passes the lower encounters, while off-route approaches
+remain possible with High Jump and gliding. The summit Dragon has a distinct violet/icy
+palette, 330 HP, 60 total breath damage, 65 bite damage, seven-unit breath range and a
+60° cone. Ordinary Dragons retain 220 HP, 45/50 damage, six-unit breath and a 50° cone.
 
-Defeating all 114 enemies marks victory and leaves exploration, casting and uncollected
-rewards available. Pause preserves the run. Restart restores terrain, enemies, initial
+Defeating all 127 enemies marks victory and leaves exploration, casting and uncollected
+rewards available. All credited kills yield 432 XP: level 8 with 109/171 XP and seven
+upgrade points in total. Pause preserves the run. Restart restores terrain, objects,
+enemies, initial
 stats, level 1, zero XP, locked rewards and unused fountains. Runs do not persist across
 launches. The older 26-actor Forest package remains compatible through `--forest-world`.
 See [expedition content](../../assets/config/v4/forest-massif/expedition/README.md)
@@ -237,7 +278,7 @@ and roster, including barriers, cooldowns and party memories.
 | Enemy | Starting HP | What to expect |
 |---|---:|---|
 | Shadow |100| Charged Fireballs and Shield, configurable reaction delay, and shared High Jump for escaping holes. |
-| Dragon |220| Slow flight, fast ground pursuit, occasional approach bursts, fire breath and a heavy bite; retreats and shields after damage. |
+| Dragon |220; summit 330| Aggressive pursuit and mouth-origin breath/bite above one-third HP; escapes when critical. |
 | Goblin |50| Spreading melee groups with high jumps and a short, telegraphed 12-damage swipe. |
 | Shaman |60| Less aggressive Fireballs, permanent stone Shields and a timed healing/damage aura for its Goblins. |
 | Golem |320| Slow seven-hex stone body, broad nearby slam, a sustained tracking laser and a frontal cover-clearing swipe. |
@@ -249,7 +290,7 @@ its combat charge. Recovery is bounded and requires supported landings; it canno
 escape every deep or enclosed crater. See [arena bot behavior](arena-bot.md) for
 observation limits and the comparison controls.
 
-Goblins match the player body: .8 units tall with a .25-unit radius. Groups approach
+Goblins retain the legacy .8-unit body and .25-unit radius; the expedition player is taller. Groups approach
 from wider angles and keep space between bodies. While pursuing, they attempt
 2.8-unit jumps at intervals of two to three seconds only when a swept route and
 landing are admitted. Ground recovery can also use a checked descent or jump out
@@ -262,9 +303,13 @@ Its breath reaches six units and can deal 45 total damage across three pulses; a
 mouth bite deals 50. When above 60% HP, a Dragon under ranged pressure can burst
 toward its own visible opponent from at least eight units away. The burst lasts
 up to .75 seconds at 12 units/second, has an eight-second cooldown and uses normal
-body clearance checks. Damage interrupts it for the existing retreat behavior.
-It regenerates 3 HP/second after four seconds undamaged, so chasing a retreating
-Dragon can prevent recovery.
+body clearance checks. Ordinary pursuit flight is six units/second. Taking damage
+alone does not trigger retreat: Dragons escape at or below one-third HP and resume
+aggression if healed above that threshold. Visible pursuit continues beyond the old
+home leash; losing sight uses dated observations and a bounded search. When a target
+is directly underneath, the Dragon repositions into a valid mouth-origin attack
+rather than remaining stationary. It regenerates 3 HP/second after four seconds
+undamaged, so chasing an escaping Dragon can prevent recovery.
 
 The transparent Dragon panel lasts four seconds or until its 60 HP is depleted.
 It blocks direct attacks from either direction but lets bodies and sight pass.
@@ -359,9 +404,15 @@ For the first 20–30 Fort encounters, note preset, win/loss, remaining HP and t
 main cause of damage. Compare Dragon pursuit/escape, Goblin crowd pressure and
 how much prioritizing the Shaman changes the fight.
 
-Water remains non-solid with no swimming or drowning; required approaches are dry.
-Static authored map objects remain indestructible. Ground enemies use bounded
-local steering, so heavy destruction and unusual traps can defeat their routes.
+Water remains physically non-solid with no swimming or drowning; required approaches
+are initially dry. Expedition terrain and solid objects, including trees, bedrock,
+bridge, arena and fountain vessels, support voxel carving. Only damaged cells vanish;
+unsupported crowns and structures may remain suspended. Air, water and clouds are
+unaffected. Carves update visible geometry, collision, sight and Shield placement at
+one accepted world revision. Earned rewards relocate to surviving support, or near
+the living player if no valid support remains. Initial package/spawn validation stays
+strict; live destruction may invalidate routes. Ground enemies use bounded local
+steering, so heavy destruction and unusual traps can defeat their routes.
 The Forest–Massif expedition uses the accepted Grand visuals and has run-local
 XP, upgrades and encounter rewards. Multiplayer and cross-launch progression saves
 remain deferred.
