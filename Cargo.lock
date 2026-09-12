@@ -3958,6 +3958,7 @@ dependencies = [
  "hex_schematic",
  "hex_test_support",
  "hex_world_contracts",
+ "hex_world_runtime",
  "rand 0.8.7",
  "ron",
  "serde",

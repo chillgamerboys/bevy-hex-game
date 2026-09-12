@@ -212,6 +212,7 @@ fn refresh_presentations(
     roots.extend(crate::crystal_render::spawn_prepared(
         &mut commands,
         prepared,
+        hex_core::ReviewCrystalLightProfile::Current,
     ));
     for root in std::mem::replace(&mut cache.presentations, roots) {
         commands.entity(root).despawn();

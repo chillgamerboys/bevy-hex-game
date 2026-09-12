@@ -25,7 +25,7 @@ hex_core = { workspace = true }
 hex_multiplayer = { workspace = true }
 hex_schematic = { workspace = true }
 hex_world_contracts = { path = "../hex_world_contracts" }
-hex_world_runtime = { workspace = true, optional = true }
+hex_world_runtime = { path = "../hex_world_runtime", optional = true }
 rand = { workspace = true }
 ron = { workspace = true, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }

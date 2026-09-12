@@ -237,7 +237,7 @@ fn join_column_coord(chunk: TerrainChunkCoord, local: LocalColumnCoord) -> Optio
 
 /// A fixed set of axial column slots. Empty slots cost only their discriminant and
 /// let lookup avoid hashing every individual coordinate in a large world.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TerrainChunk {
     columns: Vec<Option<Column>>,
 }

@@ -214,10 +214,9 @@ pub(super) fn build(
             map.insert_column(coord, projected);
         }
         for anchor in &product.package.semantics.anchors {
-            let name = anchor
-                .id
-                .strip_prefix("forest/anchor/")
-                .unwrap_or(&anchor.id);
+            let Some(name) = anchor.id.strip_prefix("forest/anchor/") else {
+                continue;
+            };
             anchors.insert(name.to_owned(), position(anchor.position)?);
         }
         for liquid in &product.package.semantics.liquids {
@@ -335,6 +334,23 @@ pub(super) fn build(
     // Preserve V4's material admission even where several names share one battle
     // durability class. The projection must never offer an edit V4 forbids.
     for product in backend.runtime.resident_chunks() {
+        // V4 terrain transactions currently retain static semantics unchanged.
+        // A column carrying authored object occupancy is therefore immutable as a
+        // whole, not only at the occupied heights. Publish that exact restriction.
+        for column in &product.package.semantics.occupancy {
+            view.edit_protected
+                .entry(local(column.position)?)
+                .or_default()
+                .push((geometry.min_level, geometry.max_level));
+        }
+        for anchor in &product.package.semantics.anchors {
+            if anchor.role != hex_world_contracts::AnchorRole::Observation {
+                view.edit_protected
+                    .entry(local(anchor.position.column)?)
+                    .or_default()
+                    .push((anchor.position.level, anchor.position.level + 2));
+            }
+        }
         for column in &product.package.columns {
             let coord = local(column.position)?;
             for run in &column.runs {
@@ -451,6 +467,22 @@ mod tests {
             assert!(
                 content.substances.is_solid(recipe.map.get(support)),
                 "{name}"
+            );
+        }
+        for pos in [
+            TilePos::new(HexCoord::from_axial(-132, 5), 40),
+            TilePos::new(HexCoord::from_axial(-109, 100), 40),
+            TilePos::new(HexCoord::from_axial(-109, 100), 41),
+        ] {
+            assert!(
+                recipe
+                    .view
+                    .edit_protected
+                    .get(&pos.coord)
+                    .is_some_and(|ranges| ranges
+                        .iter()
+                        .any(|(low, high)| (*low..=*high).contains(&pos.level))),
+                "V4 semantic protection must be published before a spell: {pos:?}"
             );
         }
         let source = recipe.forest_source.clone().expect("V4 source");
