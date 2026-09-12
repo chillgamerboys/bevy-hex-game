@@ -70,6 +70,8 @@ pub(super) struct MiniMap;
 #[derive(Component)]
 pub(super) struct MenuScroll;
 #[derive(Component)]
+pub(super) struct MenuScrollHint;
+#[derive(Component)]
 pub(super) struct MenuPanel;
 #[derive(Component)]
 pub(super) struct MenuHelper;
@@ -202,6 +204,7 @@ pub(super) fn install(app: &mut App) {
                 present_feedback,
                 present_menus,
                 reflow,
+                present_scroll_hints,
                 end_timing,
             )
                 .chain()
@@ -558,6 +561,7 @@ fn present_map(
     overview: Option<Res<ArenaOverview>>,
     session: Res<ArenaSession>,
     mut images: ResMut<Assets<Image>>,
+    scrolls: Query<&ComputedNode, With<MenuScroll>>,
     mut canvases: Query<
         (&MapCanvas, &mut ImageNode, &mut Node),
         (Without<MapDot>, Without<MiniMap>),
@@ -617,15 +621,34 @@ fn present_map(
             images.remove(handle.id());
         }
         let handle = images.add(image);
-        for (canvas, mut image_node, mut node) in &mut canvases {
+        for (_, mut image_node, _) in &mut canvases {
             image_node.image = handle.clone();
-            node.height = px(if canvas.large { 480.0 } else { 280.0 }
-                * (overview.max.y - overview.min.y)
-                / (overview.max.x - overview.min.x));
         }
         ux.image = Some(handle);
         ux.image_generation = Some(overview.generation);
         ux.image_size = UVec2::new(overview.width, overview.height);
+    }
+    let viewport = scrolls
+        .iter()
+        .map(|node| node.size() * node.inverse_scale_factor())
+        .filter(|size| size.min_element() > 0.0)
+        .max_by(|a, b| a.y.total_cmp(&b.y))
+        .unwrap_or(Vec2::new(1000.0, 400.0));
+    let aspect = (overview.max.y - overview.min.y) / (overview.max.x - overview.min.x);
+    for (canvas, _, mut node) in &mut canvases {
+        let width = if canvas.large {
+            480.0_f32
+                .min(viewport.x * 0.48)
+                .min((viewport.y - 4.0).max(1.0) / aspect)
+        } else {
+            280.0
+        };
+        if node.width != px(width) {
+            node.width = px(width);
+        }
+        if node.height != px(width * aspect) {
+            node.height = px(width * aspect);
+        }
     }
     let player = session
         .human_actor_id()
@@ -878,7 +901,7 @@ fn present_menus(
                         }
                     )
                 } else if ux.selected.is_empty() {
-                    "Discover landmarks by looking at them. M toggles the minimap.".into()
+                    "Look at landmarks to discover them.".into()
                 } else {
                     ux.selected.clone()
                 }
@@ -946,6 +969,40 @@ fn reflow(
                 Display::Flex
             },
         );
+    }
+}
+fn present_scroll_hints(
+    scrolls: Query<(&ComputedNode, &ScrollPosition, &ChildOf), With<MenuScroll>>,
+    mut hints: Query<(&ChildOf, &mut Node, &mut Text), With<MenuScrollHint>>,
+) {
+    for (parent, mut node, mut text) in &mut hints {
+        let scroll = scrolls
+            .iter()
+            .find(|(_, _, owner)| owner.parent() == parent.parent());
+        let label = scroll.map_or("", |(computed, position, _)| {
+            let maximum = (computed.content_size().y - computed.size().y).max(0.0)
+                * computed.inverse_scale_factor();
+            if maximum <= 2.0 || computed.size().y <= 0.0 {
+                ""
+            } else if position.0.y <= 2.0 {
+                "Scroll for more ↓"
+            } else if position.0.y >= maximum - 2.0 {
+                "Scroll back ↑"
+            } else {
+                "Scroll ↑ ↓"
+            }
+        });
+        set_display(
+            &mut node,
+            if label.is_empty() {
+                Display::None
+            } else {
+                Display::Flex
+            },
+        );
+        if text.0 != label {
+            text.0 = label.into();
+        }
     }
 }
 fn begin_timing(mut ux: ResMut<UxState>) {

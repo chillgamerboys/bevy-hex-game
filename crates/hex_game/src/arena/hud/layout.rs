@@ -165,12 +165,15 @@ pub(crate) fn setup(
                 ));
                 strip.spawn((
                     Node {
+                        min_width: px(220),
+                        min_height: px(42),
                         padding: UiRect::axes(px(14), px(5)),
                         border_radius: BorderRadius::all(px(6)),
                         ..default()
                     },
                     BackgroundColor(PANEL),
                     text("", 24.0, INK),
+                    TextLayout::new(Justify::Center, bevy::text::LineBreak::NoWrap),
                     Label::Health,
                 ));
                 strip.spawn(row()).with_children(|bar| {
@@ -338,6 +341,7 @@ pub(crate) fn setup(
                 p.spawn((text("",24.0,INK),Label::Help));
                 p.spawn(text("M toggles your map. Esc opens upgrades, settings and recording.\nCombat waits until you start.",24.0,INK));
             });
+            p.spawn((Node {flex_shrink:0.0,display:Display::None,..default()},text("",20.0,INK),ux::MenuScrollHint));
             // Fixed action positions: Restart reopens a safe Start button.
             p.spawn(row()).with_children(|r| {
                 button(r,"FULLSCREEN",Action::Fullscreen);
@@ -366,10 +370,14 @@ pub(crate) fn setup(
                                 p.spawn((text("",24.0,INK),UxLabel::RecorderFull));
                             }
                             Page::Map => {
-                                ux::spawn_map(p,true,480.0);
-                                p.spawn((text("",24.0,INK),UxLabel::MapSelection));
-                                p.spawn(text("D  Dragon     S  Shadow     T  Troll\n+  Charged fountain     ○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
-                                button(p,"CLEAR DESTINATION",UxAction::ClearPin);
+                                p.spawn(Node {width:percent(100),column_gap:px(18),align_items:AlignItems::Start,flex_shrink:0.0,..default()}).with_children(|row| {
+                                    ux::spawn_map(row,true,480.0);
+                                    row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..column()}).with_children(|details| {
+                                        details.spawn((text("",24.0,INK),UxLabel::MapSelection));
+                                        button(details,"CLEAR DESTINATION",UxAction::ClearPin);
+                                        details.spawn(text("D  Dragon     S  Shadow     T  Troll\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
+                                    });
+                                });
                             }
                             Page::Upgrades => {
                                 p.spawn(text("Each level earns one upgrade point. Disabled upgrades cost nothing.",26.0,INK));
@@ -389,6 +397,7 @@ pub(crate) fn setup(
                     });
                 }
             });
+            p.spawn((Node {flex_shrink:0.0,display:Display::None,..default()},text("",20.0,INK),ux::MenuScrollHint));
             p.spawn(row()).with_children(|r| {
                 r.spawn((Button,BorderColor::all(Color::NONE),Node { border:UiRect::all(px(2)), min_height:px(52),padding:UiRect::axes(px(18),px(10)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default() },BackgroundColor(Color::srgb(0.12,0.24,0.29)),UxAction::Record)).with_children(|b|{b.spawn((text("START RECORDING",26.0,INK),UxLabel::RecordButton));});
                 button(r,"OPEN RECORDINGS",UxAction::OpenFolder);
