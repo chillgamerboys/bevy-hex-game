@@ -799,22 +799,46 @@ pub(super) fn camera(
         } else {
             overview(*geometry, &view, state.capture_view == "rear")
         };
-    } else if state.capture_view == "forest-landmark" {
+    } else if matches!(
+        state.capture_view.as_str(),
+        "forest-landmark" | "forest-landmark-rear" | "forest-ground" | "forest-ground-rear"
+    ) {
         if let Some(anchor) = state
             .capture_focus
             .as_ref()
-            .and_then(|name| view.anchors.get(name))
+            .and_then(|name| forest_focus(&view, *geometry, name))
         {
-            let (offset, rise) = match state.capture_focus.as_deref() {
+            let ground_view = state.capture_view.starts_with("forest-ground");
+            let rear = state.capture_view.ends_with("-rear");
+            let (mut offset, rise) = match state.capture_focus.as_deref() {
+                _ if ground_view => (Vec3::new(12.0, 2.0, 15.0), 1.3),
                 Some("ancient_tree") => (Vec3::new(85.0, 55.0, 90.0), 26.0),
                 Some("bridge_west" | "bridge_east") => (Vec3::new(75.0, 62.0, 80.0), 0.0),
                 Some("dragon_upper") => (Vec3::new(-150.0, 90.0, 160.0), -18.0),
+                Some("dragon_lower" | "dragon_middle") => (Vec3::new(55.0, 38.0, 60.0), 0.0),
+                Some("mountain_shadow") => (Vec3::new(-30.0, 28.0, 34.0), 2.0),
                 Some("forest_deep_a" | "forest_deep_b") => (Vec3::new(55.0, 45.0, 60.0), 12.0),
                 Some("forest_middle") => (Vec3::new(35.0, 30.0, 40.0), 6.0),
                 _ => (Vec3::new(24.0, 21.0, 28.0), 3.0),
             };
-            let target = *anchor + Vec3::Y * rise;
-            *camera = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
+            if rear {
+                offset.x = -offset.x;
+                offset.z = -offset.z;
+            }
+            let target = anchor + Vec3::Y * rise;
+            let mut position = target + offset;
+            if ground_view {
+                let column = hex_core::HexCoord::from_world(position);
+                if let Some(level) = view
+                    .columns
+                    .get(&column)
+                    .and_then(|spans| spans.iter().map(|s| s.top_level).max())
+                {
+                    position.y = geometry.top(hex_core::TilePos::new(column, level)) + 1.8;
+                }
+                position = session.camera_position(target, position);
+            }
+            *camera = Transform::from_translation(position).looking_at(target, Vec3::Y);
         }
     } else if state.capture_view == "encounter-landmark" {
         if let Some(anchor) = state
@@ -840,6 +864,29 @@ pub(super) fn camera(
             *camera = close_camera(target, actor.body_rotation(), &state.capture_view);
         }
     }
+}
+
+/// Explicit review target from published world facts; never a HUD map marker.
+pub(super) fn forest_focus(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    name: &str,
+) -> Option<Vec3> {
+    view.anchors.get(name).copied().or_else(|| {
+        let fountain = view.expedition.as_ref()?.fountains.get(name)?;
+        let mut minimum = Vec3::splat(f32::INFINITY);
+        let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+        for cell in &fountain.cells {
+            let point = cell.coord.to_world(geometry.top(*cell));
+            minimum = minimum.min(point);
+            maximum = maximum.max(point);
+        }
+        (!fountain.cells.is_empty()).then_some(Vec3::new(
+            (minimum.x + maximum.x) * 0.5,
+            maximum.y,
+            (minimum.z + maximum.z) * 0.5,
+        ))
+    })
 }
 
 #[derive(Resource)]

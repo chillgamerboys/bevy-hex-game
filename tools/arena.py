@@ -107,6 +107,30 @@ FOREST_VIEWS = (
     ("forest-upgrades", "tuning", "forest-massif", "dragon", None),
 )
 
+EXPEDITION_VIEWS = (
+    ("expedition-start", "start", "forest-massif", "dragon", None),
+    ("expedition-overview", "overview", "forest-massif", "dragon", None),
+    ("expedition-rear", "rear", "forest-massif", "dragon", None),
+    ("bridge-first", "first", "forest-massif", "dragon", None),
+    ("bridge-third", "third", "forest-massif", "dragon", None),
+    ("bridge-arch", "forest-landmark", "forest-massif", "dragon", "bridge_west"),
+    ("bridge-arch-rear", "forest-landmark-rear", "forest-massif", "dragon", "bridge_west"),
+    ("woodland-ground", "forest-ground", "forest-massif", "dragon", "forest_camp_02"),
+    ("pine-ground", "forest-ground", "forest-massif", "dragon", "forest_camp_08"),
+    ("ancient-ground", "forest-ground", "forest-massif", "dragon", "forest_camp_12"),
+    ("ancient-ground-rear", "forest-ground-rear", "forest-massif", "dragon", "forest_camp_12"),
+    ("heart-tree", "forest-landmark", "forest-massif", "dragon", "ancient_tree"),
+    ("heart-tree-rear", "forest-landmark-rear", "forest-massif", "dragon", "ancient_tree"),
+    ("dragon-lower", "forest-landmark", "forest-massif", "dragon", "dragon_lower"),
+    ("dragon-middle", "forest-landmark", "forest-massif", "dragon", "dragon_middle"),
+    ("dragon-summit", "forest-landmark", "forest-massif", "dragon", "dragon_upper"),
+    ("shadow-arena", "forest-landmark", "forest-massif", "dragon", "mountain_shadow"),
+    ("shadow-gate", "forest-ground", "forest-massif", "dragon", "shadow_gate"),
+    ("forest-fountain", "forest-landmark", "forest-massif", "dragon", "forest_fountain_01"),
+    ("mountain-fountain", "forest-landmark", "forest-massif", "dragon", "mountain_fountain_02"),
+    ("expedition-upgrades", "tuning", "forest-massif", "dragon", None),
+)
+
 PERFORMANCE_VIEWS = (
     ("fort-dragon-stress", "encounter-stress", "fort", "dragon", None),
     ("fort-goblins-stress", "encounter-stress", "fort", "goblins", None),
@@ -911,11 +935,11 @@ def capture(args: argparse.Namespace) -> int:
     if args.worm_review:
         entries = list(WORM_VIEWS)
         matrix = "arena-worm-v4-clear-earth"
-    if args.forest_review:
+    if args.forest_review or args.expedition_review:
         if any(value is not None and value is not False for value in (args.map, args.encounter, args.spectator, args.team_a, args.team_b, args.seed, args.tick_limit)):
             raise RuntimeError("Forest review uses the fixed authored map and roster; use --view to select entries.")
-        entries = list(FOREST_VIEWS)
-        matrix = "forest-massif-v1"
+        entries = list(EXPEDITION_VIEWS if args.expedition_review else FOREST_VIEWS)
+        matrix = "forest-expedition-v1" if args.expedition_review else "forest-massif-v1"
     if args.wisp_performance:
         entries = list(WISP_PERFORMANCE_VIEWS)
         matrix = "arena-wisp-performance-v1-synthetic"
@@ -1073,6 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
     review = captures.add_mutually_exclusive_group()
     review.add_argument("--forest-review", action="store_true", help="Ten fixed Forest Massif map, biome, giant tree, bridge, massif and upgrade menu views.")
+    review.add_argument("--expedition-review", action="store_true", help="Twenty-one expedition map, ground, bridge, Heart, Dragon, Shadow, fountain and HUD views.")
     review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
     review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and R-key reset views.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")

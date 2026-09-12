@@ -75,7 +75,8 @@ pub(super) fn present(
 ) {
     let progress = session.expedition_progress();
     // Tie animation to simulation time so pausing and deterministic captures freeze it.
-    let phase = session.tick as f32 / 120.0;
+    let cycle_tick = u16::try_from(session.tick % 480).unwrap_or_default();
+    let phase = f32::from(cycle_tick) / 480.0 * std::f32::consts::TAU;
     for (entity, visual, mut transform) in &mut rewards {
         let position = progress.as_ref().and_then(|p| {
             p.milestones
@@ -86,8 +87,7 @@ pub(super) fn present(
         if visual.1 != reset.generation || position.is_none() {
             commands.entity(entity).despawn();
         } else if let Some(position) = position {
-            transform.translation =
-                Vec3::from_array(position) + Vec3::Y * (phase * 1.8).sin() * 0.08;
+            transform.translation = Vec3::from_array(position) + Vec3::Y * phase.sin() * 0.08;
         }
     }
     for (entity, visual, mut visible) in &mut pools {

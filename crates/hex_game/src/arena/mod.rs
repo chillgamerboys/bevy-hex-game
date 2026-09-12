@@ -1580,11 +1580,15 @@ fn capture_frame(
     }
     if matches!(
         state.capture_view.as_str(),
-        "encounter-landmark" | "forest-landmark"
+        "encounter-landmark"
+            | "forest-landmark"
+            | "forest-landmark-rear"
+            | "forest-ground"
+            | "forest-ground-rear"
     ) && !state
         .capture_focus
         .as_ref()
-        .is_some_and(|name| view.anchors.contains_key(name))
+        .is_some_and(|name| encounter::forest_focus(&view, *geometry, name).is_some())
     {
         error!("Encounter capture requires a published focus anchor");
         state.requested = true;
