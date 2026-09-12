@@ -307,3 +307,144 @@ fn cache_ignores_dirty_terrain_and_refreshes_on_reset_package_or_selection() {
     app.update();
     assert!(app.world().resource::<ArenaOverview>().rgba.is_empty());
 }
+
+#[test]
+fn v4_overview_preserves_package_colors_after_collision_material_aliasing() {
+    use hex_world_contracts::{
+        ChunkDescriptor, ChunkPackage, ChunkSemantics, ColumnData, MaterialSpec, RegionDescriptor,
+        Seal, VoxelRun, WorldHex, WorldManifest, WorldPackage, SCHEMA_VERSION,
+    };
+    use hex_world_runtime::MemoryChunkSource;
+
+    // One validated chunk, with the accepted expedition colors. Moss/grass and
+    // pine-floor/soil deliberately share collision policies but not appearance.
+    let palette = [
+        ("basalt", [76, 88, 101, 255]),
+        ("grass", [105, 141, 72, 255]),
+        ("moss", [49, 91, 57, 255]),
+        ("pine-floor", [78, 98, 60, 255]),
+        ("soil", [98, 76, 49, 255]),
+        ("stone", [105, 112, 116, 255]),
+        ("water", [42, 115, 144, 190]),
+    ];
+    let origin = WorldHex::new(8, 8);
+    let expected: BTreeMap<_, _> = HexCoord::from_axial(8, 8)
+        .within_radius(1)
+        .zip(palette)
+        .collect();
+    let mut package = WorldPackage {
+        manifest: WorldManifest {
+            schema_version: SCHEMA_VERSION,
+            world_id: "overview-palette".into(),
+            compiler_version: "test".into(),
+            source_fingerprint: 1,
+            materials: palette
+                .into_iter()
+                .map(|(name, color)| MaterialSpec {
+                    id: name.into(),
+                    solid: name != "water",
+                    diggable: name != "water",
+                    color,
+                })
+                .collect(),
+            regions: vec![RegionDescriptor {
+                id: "palette".into(),
+                origin,
+                radius: 1,
+                source_fingerprint: 1,
+            }],
+            chunks: vec![ChunkDescriptor {
+                coordinate: origin.chunk(),
+                fingerprint: 0,
+                path: "chunks/0_0.ron".into(),
+            }],
+            boundaries: Vec::new(),
+            summary: Vec::new(),
+            features: Vec::new(),
+            fingerprint: 0,
+        },
+        chunks: [(
+            origin.chunk(),
+            ChunkPackage {
+                schema_version: SCHEMA_VERSION,
+                world_id: "overview-palette".into(),
+                coordinate: origin.chunk(),
+                source_fingerprint: 1,
+                columns: expected
+                    .iter()
+                    .map(|(coord, (name, _))| ColumnData {
+                        position: WorldHex::new(i64::from(coord.x()), i64::from(coord.y())),
+                        runs: vec![
+                            VoxelRun {
+                                bottom: 0,
+                                top: 4,
+                                material: "stone".into(),
+                            },
+                            VoxelRun {
+                                bottom: 7,
+                                top: 9,
+                                material: (*name).into(),
+                            },
+                        ],
+                    })
+                    .collect(),
+                features: Vec::new(),
+                semantics: ChunkSemantics::default(),
+                fingerprint: 0,
+            },
+        )]
+        .into(),
+    };
+    package.seal().expect("small V4 fixture seals");
+    let source = MemoryChunkSource::new(package).expect("validated V4 fixture");
+    let mut surfaces: BTreeMap<_, _> = expected
+        .iter()
+        .map(|(coord, (name, _))| {
+            let policy =
+                forest::material_id(name, &content().substances).expect("collision policy");
+            let (r, g, b) = content().substances.get(policy).expect("substance").color;
+            (
+                *coord,
+                Surface {
+                    level: 8,
+                    color: Vec3::new(r, g, b),
+                    foliage: false,
+                },
+            )
+        })
+        .collect();
+    let old_bounds = bounds(&surfaces);
+    assert_eq!(
+        forest::material_id("grass", &content().substances).expect("grass"),
+        forest::material_id("moss", &content().substances).expect("moss"),
+    );
+    let basalt = expected
+        .iter()
+        .find(|(_, (name, _))| *name == "basalt")
+        .map(|(coord, _)| *coord)
+        .expect("basalt column");
+    assert_ne!(
+        rgba8(surfaces.get(&basalt).expect("basalt").color),
+        [76, 88, 101, 255],
+        "the old generic palette demonstrably differs"
+    );
+    apply_package_palette(&mut surfaces, &source).expect("package display colors");
+    assert_eq!(surfaces.len(), 7);
+    assert_eq!(bounds(&surfaces), old_bounds);
+    for (coord, (_, [r, g, b, _])) in expected {
+        let surface = surfaces.get(&coord).expect("same surface coordinate");
+        assert_eq!(surface.level, 8);
+        assert!(!surface.foliage);
+        assert_eq!(rgba8(surface.color), [r, g, b, 255]);
+    }
+    // Resolve the run containing the chosen surface; neither a buried material
+    // nor a guessed upper run may replace that exact stack-safe height.
+    surfaces.get_mut(&basalt).expect("basalt").level = 3;
+    apply_package_palette(&mut surfaces, &source).expect("lower selected surface");
+    assert_eq!(
+        rgba8(surfaces.get(&basalt).expect("lower stone").color),
+        [105, 112, 116, 255]
+    );
+    surfaces.get_mut(&basalt).expect("basalt").level = 6;
+    assert!(apply_package_palette(&mut surfaces, &source).is_err());
+}

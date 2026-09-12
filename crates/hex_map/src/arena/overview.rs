@@ -7,6 +7,7 @@
 use hex_assets::{LocalVoxelCoord, ObjectAssetId, ObjectPart, PlantPart};
 use hex_core::arena::{ArenaMap, ArenaOverview, ArenaPackageIdentity};
 use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
+use hex_world_runtime::ChunkSource;
 
 use super::*;
 
@@ -100,7 +101,7 @@ fn build(
     }
     // Collapsing the stack is confined to this overhead picture. Collision and
     // routes continue to use their exact, stack-safe supporting voxels.
-    let terrain: BTreeMap<_, _> = recipe
+    let mut terrain: BTreeMap<_, _> = recipe
         .map
         .columns()
         .filter_map(|(coord, column)| {
@@ -116,6 +117,12 @@ fn build(
             ))
         })
         .collect();
+    if let Some(source) = &recipe.forest_source {
+        if let Err(error) = apply_package_palette(&mut terrain, source.as_ref()) {
+            error!("Forest overview palette: {error}");
+            return empty;
+        }
+    }
     let Some((min, max)) = bounds(&terrain) else {
         return empty;
     };
@@ -162,6 +169,52 @@ fn build(
         max,
         rgba,
     }
+}
+
+// The legacy map preserves collision policy, not V4 material identity: moss and
+// foliage share grass, while pine-floor shares dirt. Read the immutable accepted
+// package only when rebuilding this pristine atlas, never the edited live world.
+fn apply_package_palette(
+    terrain: &mut BTreeMap<HexCoord, Surface>,
+    source: &impl ChunkSource,
+) -> Result<(), String> {
+    let palette: BTreeMap<_, _> = source
+        .manifest()
+        .materials
+        .iter()
+        .map(|material| {
+            let [r, g, b, _] = material.color;
+            (
+                material.id.as_str(),
+                Vec3::new(f32::from(r), f32::from(g), f32::from(b)) / 255.0,
+            )
+        })
+        .collect();
+    for descriptor in &source.manifest().chunks {
+        // FileChunkSource bounds, fingerprints and validates each chunk. Drop it
+        // after this pass; the overview never retains a second terrain package.
+        let chunk = source
+            .load_chunk(descriptor.coordinate)
+            .map_err(|error| error.to_string())?;
+        for column in &chunk.columns {
+            let coord = HexCoord::from_axial(
+                i32::try_from(column.position.q).map_err(|error| error.to_string())?,
+                i32::try_from(column.position.r).map_err(|error| error.to_string())?,
+            );
+            let Some(surface) = terrain.get_mut(&coord) else {
+                continue;
+            };
+            let run = column
+                .runs
+                .iter()
+                .find(|run| run.bottom <= surface.level && surface.level < run.top)
+                .ok_or_else(|| format!("No V4 material at {coord:?} level {}", surface.level))?;
+            surface.color = *palette
+                .get(run.material.as_str())
+                .ok_or_else(|| format!("Missing V4 overview color for {}", run.material))?;
+        }
+    }
+    Ok(())
 }
 
 fn bounds(terrain: &BTreeMap<HexCoord, Surface>) -> Option<(Vec2, Vec2)> {
