@@ -88,7 +88,7 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         // The worker also finalizes on channel EOF, including abnormal app exit.
-        let _ = self.commands.try_send(backend::Command::Quit);
+        drop(self.commands.try_send(backend::Command::Quit));
     }
 }
 
@@ -235,13 +235,15 @@ fn update(
                 snapshot: snapshot(&view, &session, &reset, &terrain),
             });
         }
-        if keys.just_pressed(KeyCode::F9) && recorder.is_recording() && !recorder.finalizing {
-            if recorder.send(backend::Command::Event {
+        if keys.just_pressed(KeyCode::F9)
+            && recorder.is_recording()
+            && !recorder.finalizing
+            && recorder.send(backend::Command::Event {
                 kind: "bookmark".into(),
                 snapshot: snapshot(&view, &session, &reset, &terrain),
-            }) {
-                recorder.status = "Saving bookmark…".into();
-            }
+            })
+        {
+            recorder.status = "Saving bookmark…".into();
         }
     }
     recorder.last_run = Some(marker);

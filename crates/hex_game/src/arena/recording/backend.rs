@@ -41,10 +41,10 @@ pub(super) fn launch() -> (SyncSender<Command>, Receiver<Response>) {
         .name("battle-recorder".into())
         .spawn(move || worker(requests, responses))
     {
-        let _ = errors.send(Response::Supported(
+        drop(errors.send(Response::Supported(
             false,
             format!("Recorder worker unavailable: {error}"),
-        ));
+        )));
     }
     (sender, receiver)
 }
@@ -107,12 +107,12 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
                     }
                     Err(error) => {
                         last_failure = Some(error.clone());
-                        let _ = responses.send(Response::Failed(error));
+                        drop(responses.send(Response::Failed(error)));
                     }
                 }
             }
             Ok(Command::Start { .. }) => {
-                let _ = responses.send(Response::Failed("Recorder is busy or unsupported.".into()));
+                drop(responses.send(Response::Failed("Recorder is busy or unsupported.".into())));
             }
             Ok(Command::Stop) => {
                 if let Some(clip) = &mut active {
@@ -152,18 +152,18 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
                         })
                 });
                 if let Err(error) = result {
-                    let _ = responses.send(Response::Status(error));
+                    drop(responses.send(Response::Status(error)));
                 }
             }
             Ok(Command::Event { kind, snapshot }) => {
                 if let Some(clip) = &mut active {
                     match clip.event(&kind, snapshot) {
                         Ok(()) if kind == "bookmark" => {
-                            let _ = responses.send(Response::Status(format!(
+                            drop(responses.send(Response::Status(format!(
                                 "Bookmark saved at {:.1}s",
                                 clip.started
                                     .map_or(0.0, |start| start.elapsed().as_secs_f64())
-                            )));
+                            ))));
                         }
                         Err(error) => clip.failure = Some(error),
                         Ok(()) => {}
@@ -179,7 +179,7 @@ fn worker(requests: Receiver<Command>, responses: SyncSender<Response>) {
             }
         }
         if quitting && active.is_none() {
-            let _ = responses.send(Response::Quit(last_failure.map_or(Ok(()), Err)));
+            drop(responses.send(Response::Quit(last_failure.map_or(Ok(()), Err))));
             return;
         }
     }
@@ -271,8 +271,8 @@ impl Clip {
         let (input, output) = match setup {
             Ok(value) => value,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                drop(child.kill());
+                drop(child.wait());
                 return Err(error);
             }
         };
@@ -344,8 +344,8 @@ impl Clip {
                 .stopping
                 .is_some_and(|time| time.elapsed() > Duration::from_secs(5))
             {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                drop(self.child.kill());
+                drop(self.child.wait());
                 return Some(Ok(()));
             }
             return None;
@@ -372,10 +372,10 @@ impl Clip {
             }
         }
         if let Some(error) = self.failure.take() {
-            let _ = self.event("failed", json!({"message":error}));
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-            let _ = responses.send(Response::Failed(format!("Recording failed: {error}")));
+            drop(self.event("failed", json!({"message":error})));
+            drop(self.child.kill());
+            drop(self.child.wait());
+            drop(responses.send(Response::Failed(format!("Recording failed: {error}"))));
             return Some(Err(error));
         }
         None
@@ -443,9 +443,9 @@ impl Drop for Clip {
     fn drop(&mut self) {
         // Reap only after the worker has finalized or reported a bounded failure.
         if !self.completed {
-            let _ = self.child.kill();
+            drop(self.child.kill());
         }
-        let _ = self.child.wait();
+        drop(self.child.wait());
     }
 }
 
