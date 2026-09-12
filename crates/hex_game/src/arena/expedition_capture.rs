@@ -240,7 +240,7 @@ pub(super) fn camera(
                     .get(site)?
                     .deployment
                     .preferred;
-                Some(support.coord.to_world(geometry.top(support)))
+                Some(support.coord.to_world(geometry.top(support) + 0.6))
             })?
     } else {
         super::encounter::forest_focus(terrain, geometry, FOUNTAIN)?
@@ -250,8 +250,7 @@ pub(super) fn camera(
     } else {
         Vec3::new(5.0, 3.0, 6.0)
     };
-    let position = session.camera_position(target, target + offset);
-    Some(Transform::from_translation(position).looking_at(target, Vec3::Y))
+    Some(super::encounter::feature_camera(session, target, offset))
 }
 
 #[cfg(test)]
@@ -363,13 +362,15 @@ mod tests {
                 session.expedition_progress()
             );
             assert_eq!(session.progress().expect("progress").total_xp, 0);
-            assert!(camera(
-                session,
-                app.world().resource::<ArenaTerrainView>(),
-                *app.world().resource::<ArenaVoxelGeometry>(),
-                name
-            )
-            .is_some());
+            assert!(
+                camera(
+                    session,
+                    app.world().resource::<ArenaTerrainView>(),
+                    *app.world().resource::<ArenaVoxelGeometry>(),
+                    name
+                )
+                .is_some()
+            );
         }
     }
 }

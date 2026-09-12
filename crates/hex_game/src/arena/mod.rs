@@ -10,7 +10,7 @@ mod expedition_route_tests;
 #[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
 #[cfg(feature = "test-support")]
-pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
+pub use encounter::{STRESS_VISIT_TICKS, configure_encounter_stress_tuning, stress_target_pose};
 mod golem;
 mod hud;
 mod presentation;
@@ -669,14 +669,14 @@ fn update_map_lighting(
     } else {
         Color::srgb(0.77, 0.85, 1.0)
     };
-    ambient.brightness = if forest { 240.0 } else { 420.0 };
+    ambient.brightness = if forest { 1_100.0 } else { 420.0 };
     clear.0 = if forest {
         Color::srgb(0.54, 0.75, 0.90)
     } else {
         Color::srgb(0.10, 0.16, 0.22)
     };
     for (mut light, mut transform) in &mut lights {
-        light.illuminance = if forest { 7_400.0 } else { 18_000.0 };
+        light.illuminance = if forest { 6_000.0 } else { 18_000.0 };
         light.color = if forest {
             Color::srgb(1.0, 0.92, 0.80)
         } else {

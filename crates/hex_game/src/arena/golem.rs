@@ -11,7 +11,7 @@ pub(super) struct GolemPrism;
 
 // Native circumradius-one pointy hex; same corner convention as HexCoord and
 // hex_map's arena terrain renderer. This is render geometry, never a collider.
-const CORNERS: [Vec3; 6] = [
+pub(super) const CORNERS: [Vec3; 6] = [
     Vec3::new(0.0, 0.0, 1.0),
     Vec3::new(0.866_025_4, 0.0, 0.5),
     Vec3::new(0.866_025_4, 0.0, -0.5),
@@ -561,12 +561,14 @@ mod tests {
         }));
         for (pose, material, no_shadow) in segments {
             assert!(no_shadow);
-            assert!(pose
-                .transform_point(Vec3::NEG_Y * 0.5)
-                .abs_diff_eq(beam.origin, 0.0001));
-            assert!(pose
-                .transform_point(Vec3::Y * 0.5)
-                .abs_diff_eq(beam.end, 0.0001));
+            assert!(
+                pose.transform_point(Vec3::NEG_Y * 0.5)
+                    .abs_diff_eq(beam.origin, 0.0001)
+            );
+            assert!(
+                pose.transform_point(Vec3::Y * 0.5)
+                    .abs_diff_eq(beam.end, 0.0001)
+            );
             assert!(pose.scale.x <= beam.radius && pose.scale.z <= beam.radius);
             let is_core = &material == core;
             let material = materials.get(&material).expect("cached beam material");

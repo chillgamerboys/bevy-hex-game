@@ -814,13 +814,41 @@ pub(super) fn camera(
         {
             let ground_view = state.capture_view.starts_with("forest-ground");
             let rear = state.capture_view.ends_with("-rear");
+            let focus = state.capture_focus.as_deref();
+            if matches!(focus, Some("bridge_west" | "bridge_east")) && !ground_view {
+                if let Some(center) = view.anchors.get("bridge_center") {
+                    // Look across the river below the deck crest so both arch
+                    // haunches, banks and portals remain visible in silhouette.
+                    let side = if rear { -1.0 } else { 1.0 };
+                    let target = *center - Vec3::Y;
+                    let position = target + Vec3::new(12.0 * side, -2.0, 75.0 * side);
+                    *camera = Transform::from_translation(position).looking_at(target, Vec3::Y);
+                    return;
+                }
+            }
+            if focus.is_some_and(|name| name.contains("_fountain_")) {
+                *camera =
+                    feature_camera(&session, anchor + Vec3::Y * 0.4, Vec3::new(6.0, 4.0, 7.0));
+                return;
+            }
+            if focus == Some("shadow_gate") {
+                if let Some(center) = forest_focus(&view, *geometry, "mountain_shadow") {
+                    let outward = (anchor - center).with_y(0.0).normalize_or_zero();
+                    *camera = feature_camera(
+                        &session,
+                        anchor + Vec3::Y * 4.0,
+                        outward * 26.0 + Vec3::Y * 7.0,
+                    );
+                    return;
+                }
+            }
             let (mut offset, rise) = match state.capture_focus.as_deref() {
                 _ if ground_view => (Vec3::new(12.0, 2.0, 15.0), 1.3),
                 Some("ancient_tree") => (Vec3::new(85.0, 55.0, 90.0), 26.0),
                 Some("bridge_west" | "bridge_east") => (Vec3::new(75.0, 62.0, 80.0), 0.0),
                 Some("dragon_upper") => (Vec3::new(-150.0, 90.0, 160.0), -18.0),
                 Some("dragon_lower" | "dragon_middle") => (Vec3::new(55.0, 38.0, 60.0), 0.0),
-                Some("mountain_shadow") => (Vec3::new(-30.0, 28.0, 34.0), 2.0),
+                Some("mountain_shadow") => (Vec3::new(9.0, 30.0, 12.0), 2.0),
                 Some(name) if name.contains("_fountain_") => (Vec3::new(6.0, 4.0, 7.0), 0.0),
                 Some("forest_deep_a" | "forest_deep_b") => (Vec3::new(55.0, 45.0, 60.0), 12.0),
                 Some("forest_middle") => (Vec3::new(35.0, 30.0, 40.0), 6.0),
@@ -869,6 +897,27 @@ pub(super) fn camera(
             *camera = close_camera(target, actor.body_rotation(), &state.capture_view);
         }
     }
+}
+
+/// External composition camera with an unobstructed route from a clear subject
+/// point. Cliff-side pools need an alternative azimuth instead of a camera buried
+/// in the mountain. This is not a shipped player-camera movement probe.
+pub(super) fn feature_camera(session: &ArenaSession, target: Vec3, offset: Vec3) -> Transform {
+    let mut best = target;
+    let mut longest = 0.0;
+    for degrees in [0.0_f32, 45.0, -45.0, 90.0, -90.0, 135.0, -135.0, 180.0] {
+        let desired = target + Quat::from_rotation_y(degrees.to_radians()) * offset;
+        let position = session.camera_position(target, desired);
+        let distance = position.distance_squared(target);
+        if distance > longest {
+            best = position;
+            longest = distance;
+        }
+        if position.distance_squared(desired) < 0.001 {
+            break;
+        }
+    }
+    Transform::from_translation(best).looking_at(target, Vec3::Y)
 }
 
 /// Explicit review target from published world facts; never a HUD map marker.

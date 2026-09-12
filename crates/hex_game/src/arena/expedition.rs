@@ -1,6 +1,8 @@
 //! Visible milestone spheres and charged fountain water from public snapshots.
 
+use bevy::asset::RenderAssetUsages;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use hex_arena::{ArenaSession, ExpeditionReward};
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
@@ -46,13 +48,30 @@ pub(super) fn setup(
     };
     commands.insert_resource(ExpeditionVisualAssets {
         sphere: meshes.add(Sphere::new(1.0).mesh().uv(20, 14)),
-        cap: meshes.add(super::golem::native_hex_prism()),
+        cap: meshes.add(water_glow_cap()),
         gold: light(Color::srgb(1.0, 0.76, 0.19)),
         blue: light(Color::srgb(0.35, 0.83, 1.0)),
         violet: light(Color::srgb(0.82, 0.55, 1.0)),
         halo: light(Color::srgba(0.88, 0.96, 1.0, 0.10)),
-        pool: light(Color::srgba(0.28, 1.0, 0.80, 0.38)),
+        pool: light(Color::srgba(0.28, 1.0, 0.80, 0.16)),
     });
+}
+
+/// One surface per liquid column. A closed translucent prism layers its top,
+/// bottom and sides over the water and makes a shallow pool look like solid tiles.
+fn water_glow_cap() -> Mesh {
+    let corners = super::golem::CORNERS;
+    let mut positions = Vec::with_capacity(18);
+    for (a, b) in corners.into_iter().zip(corners.into_iter().cycle().skip(1)) {
+        positions.extend([Vec3::ZERO.to_array(), a.to_array(), b.to_array()]);
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 18])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; 18])
 }
 
 fn reward_color(reward: ExpeditionReward) -> Color {
@@ -198,8 +217,7 @@ pub(super) fn present(
                     pool.spawn((
                         Mesh3d(assets.cap.clone()),
                         MeshMaterial3d(assets.pool.clone()),
-                        Transform::from_translation(pos.coord.to_world(geometry.top(*pos) + 0.018))
-                            .with_scale(Vec3::new(0.97, 0.012, 0.97)),
+                        Transform::from_translation(pos.coord.to_world(geometry.top(*pos) + 0.025)),
                         NotShadowCaster,
                         NotShadowReceiver,
                     ));
