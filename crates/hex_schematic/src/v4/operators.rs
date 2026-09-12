@@ -618,19 +618,41 @@ pub(super) fn auto_route(
 
 pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<()> {
     let center = controlled_line(&bridge.points, &[])?;
-    let mut deck = BTreeMap::new();
-    for point in center {
+    let mut sections = BTreeMap::new();
+    for point in &center {
         for p in geometry::disk(point.column, bridge.half_width)? {
-            if let Some(old) = deck.insert(p, point.level) {
-                if old != point.level {
-                    return Err(format!(
-                        "bridge {} needs constant level across overlapping deck disks",
-                        bridge.id
-                    ));
-                }
+            // A column belongs to its nearest centerline cross-section, not to
+            // every overlapping width disk. Squared cube distance is exact and
+            // rotation invariant; lower-level ties are independent of traversal.
+            let dq = i128::from(p.q) - i128::from(point.column.q);
+            let dr = i128::from(p.r) - i128::from(point.column.r);
+            let rank = (dq * dq + dr * dr + (dq + dr) * (dq + dr), point.level);
+            let nearest = sections.entry(p).or_insert(rank);
+            if rank < *nearest {
+                *nearest = rank;
             }
         }
     }
+    let deck: BTreeMap<_, _> = sections
+        .into_iter()
+        .map(|(column, (_, level))| (column, level))
+        .collect();
+    for (p, level) in &deck {
+        for neighbor in geometry::neighbors(*p) {
+            if deck
+                .get(&neighbor)
+                .is_some_and(|other| level.abs_diff(*other) > 1)
+            {
+                return Err(format!(
+                    "bridge {} has incompatible adjacent cross-section grades at {p:?}",
+                    bridge.id
+                ));
+            }
+        }
+    }
+    // Validate the complete deck before committing any columns. An invalid bank
+    // or water clearance must not leave a partially constructed crossing.
+    let mut staged = Vec::with_capacity(deck.len());
     for (p, level) in deck {
         if build
             .liquids
@@ -644,7 +666,7 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
         }
         let columns = build
             .columns
-            .get_mut(&p)
+            .get(&p)
             .ok_or_else(|| format!("bridge {} leaves region", bridge.id))?;
         let bottom = level - bridge.thickness as i32 + 1;
         if columns.last().is_some_and(|run| run.top > level + 1) {
@@ -654,7 +676,12 @@ pub(super) fn bridge(build: &mut RegionBuild, bridge: &BridgeSpec) -> OpResult<(
             ));
         }
         // Endpoints can be rooted in solid abutments; crossing intervals must retain air/water below.
-        volume::replace(columns, bottom, level + 1, Some(&bridge.material))?;
+        let mut columns = columns.clone();
+        volume::replace(&mut columns, bottom, level + 1, Some(&bridge.material))?;
+        staged.push((p, columns));
+    }
+    for (p, columns) in staged {
+        build.columns.insert(p, columns);
         build.reserved.insert(p);
     }
     Ok(())
