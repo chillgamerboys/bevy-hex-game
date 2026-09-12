@@ -182,7 +182,13 @@ impl ArenaVoxelGeometry {
                 }
                 if let Some(spans) = view.object_columns.get(&coord) {
                     for span in spans {
-                        for level in span.bottom.level..=span.top_level {
+                        let lower = self
+                            .voxel_at(center - Vec3::Y * (radius + self.level_height))
+                            .map_or(span.bottom.level, |pos| pos.level);
+                        let upper = self
+                            .voxel_at(center + Vec3::Y * (radius + self.level_height))
+                            .map_or(span.top_level, |pos| pos.level);
+                        for level in span.bottom.level.max(lower)..=span.top_level.min(upper) {
                             let position = TilePos::new(coord, level);
                             if self.center(position).distance_squared(center) <= radius * radius {
                                 result.push(position);
