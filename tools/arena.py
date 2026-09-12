@@ -314,6 +314,20 @@ def environment(target: Path) -> tuple[dict[str, str], list[str]]:
     return env, removed
 
 
+def ux_environment(args: argparse.Namespace) -> dict[str, str]:
+    """Apply only explicit review options after inherited capabilities are removed."""
+    env = {}
+    if getattr(args, "ui_page", None) is not None:
+        env["HEX_ARENA_UI_PAGE"] = args.ui_page
+    if getattr(args, "ui_scale", None) is not None:
+        env["HEX_ARENA_UI_SCALE"] = args.ui_scale
+    if getattr(args, "show_map", False):
+        env["HEX_ARENA_UI_MAP"] = "1"
+    if args.ux_performance:
+        env["HEX_ARENA_UX_PERF"] = "1"
+    return env
+
+
 def stop_process(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
@@ -1029,6 +1043,7 @@ def capture(args: argparse.Namespace) -> int:
         if not ignored:
             raise RuntimeError("Capture output inside the checkout must be Git-ignored (use .context/).")
     env, removed = environment(args.target_dir)
+    env.update(ux_environment(args))
     if getattr(args, "forest_world", None):
         if any(entry[2] != "forest-massif" for entry in entries):
             raise RuntimeError("--forest-world requires a Forest-only capture matrix.")
@@ -1068,7 +1083,7 @@ def capture(args: argparse.Namespace) -> int:
         "human_route": "Start on bridge; aim contact shots around trunks, follow winding forest routes into a large camp, approach the Heart, enter and leave the Shadow gate, climb lower and middle Dragon shelves and try the summit approach, enter a hidden fountain, collect a milestone sphere, pause/resume and restart. Judge light, occlusion, animated water, camera collision and combat readability." if args.expedition_review else "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, press 3 for High Jump while holding a charge, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
-        "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "HEX_FOREST_WORLD") if key in env},
+        "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "HEX_FOREST_WORLD", "HEX_ARENA_UI_PAGE", "HEX_ARENA_UI_SCALE", "HEX_ARENA_UI_MAP", "HEX_ARENA_UX_PERF") if key in env},
         "frames": [],
     }
     write_json(pack / "receipt.json", receipt)
@@ -1171,11 +1186,19 @@ def main(argv: list[str] | None = None) -> int:
                              help="Explicit shared Cargo target directory (absolute path).")
         command.add_argument("--forest-world", type=Path,
                              help="Explicit absolute compiled V4 Forest package directory; the default package is otherwise retained.")
+        command.add_argument("--ux-performance", action="store_true",
+                             help="Record Battle interface performance diagnostics for this invocation.")
     captures.add_argument("--output", type=Path, required=True,
                           help="New absolute parent directory; receives a state-named capture pack.")
     captures.add_argument("--timeout", type=float, default=300,
                           help="Maximum seconds per capture, including any Cargo work (default: 300).")
     captures.add_argument("--view", action="append", help="Capture only a named matrix entry; repeat for multiple entries.")
+    captures.add_argument("--ui-page", choices=("overview", "map", "upgrades", "settings", "controls"),
+                          help="Select the Battle menu page for capture review.")
+    captures.add_argument("--ui-scale", choices=("1", "1.25", "1.5", "2"),
+                          help="Set the Battle interface scale for capture review.")
+    captures.add_argument("--show-map", action="store_true",
+                          help="Show the Battle map overlay for capture review.")
     review = captures.add_mutually_exclusive_group()
     review.add_argument("--forest-review", action="store_true", help="Ten fixed Forest Massif map, biome, giant tree, bridge, massif and upgrade menu views.")
     review.add_argument("--expedition-review", action="store_true", help="Twenty-six expedition map, ground, bridge, Heart, Dragon, Shadow, fountain, reward and HUD views; reward states are explicit synthetic presentation fixtures.")
@@ -1207,6 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
             return capture(args)
         battle_env = battle_environment(args, args.map or "forest-massif")
         env, _ = environment(args.target_dir)
+        env.update(ux_environment(args))
         if args.forest_world is not None:
             if (args.map or "forest-massif") != "forest-massif":
                 raise RuntimeError("--forest-world requires the Forest map.")
