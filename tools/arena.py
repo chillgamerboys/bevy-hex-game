@@ -375,8 +375,15 @@ def validate_capture_setup(state: dict, arena_map: str, encounter: str, env: dic
     if state.get("battle_setup") != expected:
         raise RuntimeError("Capture accepted a different control, roster, seed, tick limit or player recipe.")
     if arena_map == "forest-massif":
-        if observing or Counter(actor.get("species") for actor in state.get("actors", [])) != Counter({"Human": 1, "Goblin": 20, "Shaman": 2, "Dragon": 3}):
-            raise RuntimeError("Forest capture does not contain the fixed 26-actor authored roster.")
+        actors = state.get("actors", [])
+        roles = Counter(actor.get("expedition_role") for actor in actors if actor.get("expedition_role") is not None)
+        expected_species = Counter({"Human": 1, "Goblin": 20, "Shaman": 2, "Dragon": 3})
+        if roles:
+            if roles != Counter({"BabyGoblin": 15, "Goblin": 92, "Shaman": 2, "Troll": 1, "Dragon": 3, "MountainShadow": 1}):
+                raise RuntimeError("Expedition capture does not contain the exact authored roles.")
+            expected_species = Counter({"Human": 1, "Goblin": 108, "Shaman": 2, "Dragon": 3, "Shadow": 1})
+        if observing or Counter(actor.get("species") for actor in actors) != expected_species:
+            raise RuntimeError("Forest capture does not contain its complete authored roster.")
         progress = state.get("progress")
         if not isinstance(progress, dict) or progress.get("level") != 1:
             raise RuntimeError("Forest capture lacks its fresh level-one progression snapshot.")
@@ -932,6 +939,10 @@ def capture(args: argparse.Namespace) -> int:
         if not ignored:
             raise RuntimeError("Capture output inside the checkout must be Git-ignored (use .context/).")
     env, removed = environment(args.target_dir)
+    if getattr(args, "forest_world", None):
+        if any(entry[2] != "forest-massif" for entry in entries):
+            raise RuntimeError("--forest-world requires a Forest-only capture matrix.")
+        env["HEX_FOREST_WORLD"] = str(args.forest_world)
     initial, staged, unstaged = source_state()
     output.mkdir(parents=True, exist_ok=False)
     # The state-derived child is the actual pack; the requested directory is never reused.
@@ -960,7 +971,7 @@ def capture(args: argparse.Namespace) -> int:
         "human_route": "Choose both teams and map; start, pan/orbit/zoom, switch free camera, move near walls, pause/focus/resume, observe actual result, reset and switch back to Play. Camera controls never command a creature." if (observer_matrix or args.spectator) else "Select and restart every map and Fort encounter, traverse the three dry Seven Regions approaches, observe windups/breath/barrier/aura and party completion. Move, jump, sprint, look near walls, toggle camera; tap, partially charge and fully charge Shield/Fireball, press 3 for High Jump while holding a charge, cancel holds with pause/focus/spell changes, and reset.",
         "gameplay_evidence": "Not established by captures; use typed tests and simulation receipts.",
         "inherited_capability_names_removed": removed,
-        "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS")},
+        "environment": {key: env[key] for key in ("CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "HEX_FOREST_WORLD") if key in env},
         "frames": [],
     }
     write_json(pack / "receipt.json", receipt)
@@ -1053,6 +1064,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--tick-limit", type=int, help="Observer simulation limit at 120 Hz (default: 14400).")
         command.add_argument("--target-dir", type=Path, default=DEFAULT_TARGET,
                              help="Explicit shared Cargo target directory (absolute path).")
+        command.add_argument("--forest-world", type=Path,
+                             help="Explicit absolute compiled V4 Forest package directory; the default package is otherwise retained.")
     captures.add_argument("--output", type=Path, required=True,
                           help="New absolute parent directory; receives a state-named capture pack.")
     captures.add_argument("--timeout", type=float, default=300,
@@ -1078,12 +1091,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.target_dir.is_absolute():
             raise RuntimeError("--target-dir must be absolute.")
+        if args.forest_world is not None:
+            if not args.forest_world.is_absolute() or not args.forest_world.is_dir():
+                raise RuntimeError("--forest-world must name an existing absolute package directory.")
+            args.forest_world = args.forest_world.resolve()
         if args.command == "capture":
             if not 0 < args.timeout < float("inf"):
                 raise RuntimeError("--timeout must be a finite positive number.")
             return capture(args)
         battle_env = battle_environment(args, args.map or "forest-massif")
         env, _ = environment(args.target_dir)
+        if args.forest_world is not None:
+            if (args.map or "forest-massif") != "forest-massif":
+                raise RuntimeError("--forest-world requires the Forest map.")
+            env["HEX_FOREST_WORLD"] = str(args.forest_world)
         env.update(battle_env)
         env.update(HEX_ARENA_MAP=args.map or "forest-massif", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)
