@@ -291,7 +291,9 @@ impl Steering {
 }
 
 pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
-    if matches!(actor.species, Species::Wisp | Species::Worm) {
+    if matches!(actor.species, Species::Wisp | Species::Worm)
+        || actor.expedition_role() == Some(ExpeditionRole::Dragon)
+    {
         let low = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.min_level))
             - geometry.level_height;
         let high = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.max_level));
@@ -351,7 +353,12 @@ fn flight_step_safe(
     geometry: ArenaVoxelGeometry,
 ) -> bool {
     if contained(previous, geometry) {
-        return volume_safe(next, world, view, geometry) && flight_supported(next, world);
+        // Expedition Dragons can follow gliding targets over deep valleys. The
+        // resident volume and swept body remain authoritative; nearby ground is
+        // only a cruise constraint for the older low-flight controllers.
+        return volume_safe(next, world, view, geometry)
+            && (next.expedition_role() == Some(ExpeditionRole::Dragon)
+                || flight_supported(next, world));
     }
     // Real knockback is not erased by an AI boundary. Once pushed outside,
     // permit clear inward progress even before the complete long body reenters.
@@ -383,6 +390,30 @@ pub(super) fn flight_goal(
     }
     body.feet = floor + Vec3::Y * tuning.dragon_cruise_height;
     volume_safe(&body, world, view, geometry).then_some(body.feet)
+}
+
+/// A disclosed airborne target may require more than ordinary ground-following.
+/// Callers pass their own sight or remembered goal, never a hidden live position.
+pub(super) fn pursuit_flight_goal(
+    actor: &Actor,
+    desired: Vec3,
+    world: &CollisionWorld,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &EncounterTuning,
+) -> Option<Vec3> {
+    let cruise = flight_goal(actor, desired, world, view, geometry, tuning);
+    let feet = desired - Vec3::Y * (actor.dimensions.y * 0.5);
+    if actor.expedition_role() == Some(ExpeditionRole::Dragon)
+        && cruise.is_none_or(|cruise| feet.y > cruise.y + tuning.breath_range * 0.5)
+    {
+        let mut body = actor.clone();
+        body.feet = feet;
+        if volume_safe(&body, world, view, geometry) {
+            return Some(feet);
+        }
+    }
+    cruise
 }
 
 pub(super) fn retreat_goal(

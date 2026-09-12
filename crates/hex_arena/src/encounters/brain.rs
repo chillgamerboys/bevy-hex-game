@@ -340,7 +340,12 @@ impl Brain {
         if actor.species == Species::Dragon {
             flight = party.snapshot.phase == PartyPhase::Dormant
                 || (party.snapshot.phase == PartyPhase::Active
-                    && (sight.is_none() || actor.flying))
+                    && (sight.is_none()
+                        || actor.flying
+                        || actor.expedition_role() == Some(crate::ExpeditionRole::Dragon)
+                            && target.is_some_and(|point| {
+                                point.y > actor.eye().y + c.breath_range * 0.5
+                            })))
                 || retreat;
             if retreat {
                 self.flight_recovery = None;
@@ -395,7 +400,7 @@ impl Brain {
                                 let direction = bevy_math::Quat::from_rotation_y(angle) * away;
                                 let approach =
                                     target + direction * (actor.dimensions.z * 0.5 + 3.0);
-                                steering::flight_goal(
+                                steering::pursuit_flight_goal(
                                     actor, approach, collision, world, geometry, c,
                                 )
                             })
@@ -418,11 +423,14 @@ impl Brain {
                     } else {
                         self.patrol_goal = None;
                     }
-                    goal = steering::flight_goal(actor, goal, collision, world, geometry, c)
-                        .or_else(|| {
-                            steering::flight_goal(actor, self.home, collision, world, geometry, c)
-                        })
-                        .unwrap_or(actor.feet);
+                    goal =
+                        steering::pursuit_flight_goal(actor, goal, collision, world, geometry, c)
+                            .or_else(|| {
+                                steering::flight_goal(
+                                    actor, self.home, collision, world, geometry, c,
+                                )
+                            })
+                            .unwrap_or(actor.feet);
                 }
             }
             if !retreat
@@ -441,15 +449,24 @@ impl Brain {
                 );
                 let facing = (actor.body_rotation() * Vec3::NEG_Z)
                     .dot(input.aim.with_y(0.0).normalize_or(Vec3::NEG_Z));
-                let center_distance =
-                    target.map_or(f32::MAX, |point| point.distance(actor.center()));
+                // Yaw can move the mouth around the body, but cannot remove a
+                // vertical range gap. Only stop to turn when that best possible
+                // mouth position can actually reach the disclosed target body.
+                let turning_reach = target.map_or(f32::MAX, |point| {
+                    let mouth = actor.center()
+                        + (point - actor.center()).with_y(0.0).normalize_or(actor.aim)
+                            * actor.eye().distance(actor.center());
+                    sight
+                        .and_then(|seen| seen.observed)
+                        .map_or_else(|| mouth.distance(point), |seen| seen.distance(mouth, 0.0))
+                });
                 let underneath = target.is_some_and(|point| {
                     point.with_y(0.0).distance(actor.center().with_y(0.0))
                         < actor.dimensions.z * 0.5 + 0.5
                 });
                 if !retreat
                     && !underneath
-                    && center_distance <= c.breath_range + actor.eye().distance(actor.center())
+                    && turning_reach <= c.breath_range
                     && self.ready(CreatureAbility::FireCone)
                 {
                     // Within prospective mouth reach, finish turning before

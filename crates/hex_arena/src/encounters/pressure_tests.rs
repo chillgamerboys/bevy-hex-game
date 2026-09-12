@@ -2,6 +2,9 @@
 use super::*;
 use hex_core::{ElementId, SubstanceId};
 
+#[path = "dragon_aerial_tests.rs"]
+mod dragon_aerial_tests;
+
 fn scene(
     species: Species,
 ) -> (
