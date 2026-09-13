@@ -1,6 +1,6 @@
 # Forest–Massif Expedition
 
-Status: combat/glider/world injection integrated in source; combined validation and fresh renders in progress. Hourly continuation paused at the user’s request. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
+Status: combat/glider/world injection integrated; validation and user playtest handoff are recorded in the resume checkpoint. Hourly continuation paused at the user’s request. Branch: `wave/forest-expedition`. Coordinator: root. Current resume authority: [resume.md](resume.md).
 Local candidate based on validated `a872a57`; origin/dev at survey: `2795c75c7fb9dd61775708e98c341e0da1f33105`.
 Epic: none. Current outcome: Forest–Massif expedition with 127 enemies, momentum gliding, rank upgrades, physical milestone pickups, destructible solids and finite fountain healing. The original numbered decisions below are historical; amendments and the approved combat/world injection take precedence.
 User-approved isolation supersedes dev-first foundation/remote PR sequence. Preserve the playable `hex-forest` checkout. No dev/main merges, remote writes, unrelated branches, or investigation of the dismissed “run ended” report.
@@ -344,7 +344,7 @@ AMENDMENT A6 (user-approved September12 combat/world plan): current combat/world
 
 ## Combined combat/world checkpoint — September 12
 
-Source through `ba832ce` integrates L6–L13: ranks and Dragon profiles, glider, lowland roster/rewards, transient health/discovery, object carving, water volumes, sky and HUD. These rows are source-integrated; they are not delivery or validation approvals. Two combined compiler corrections (sky material mutability and destructive fixture import) are being checked.
+L6–L13 are integrated, including later arrival steering, fountain memory, menu clipping and visual corrections. Final gameplay sources pass 437 tests; actual128-actor roster/routes/destruction and focused menu/world checks pass. The selected workspace gate retains inherited V3 lint debt. The user accepted the visible crater layers and requested a bluer sky. See `resume.md` and its final validation artifact for the exact build/render identity and native playtest remainder; lane integration is not native acceptance.
 
 The isolated compiled package is `8f56a9974aaac54b`, with 128 actors / 25 parties / 49 routes / six fountains / 914 objects. It remains outside the running game's original package. Strict combined arena Clippy and 55 Python arena-helper tests pass. Sixteen current observation tests pass. Full arena regressions, the repaired menu's positive check, real-map probes, fresh renders and user motion/feel feedback remain in progress.
 

@@ -43,8 +43,8 @@ pub fn install(app: &mut App) {
 }
 fn parameters(frame: &BattleSkyFrame) -> SkyParams {
     SkyParams {
-        horizon_color: Vec3::new(0.35, 0.48, 0.63),
-        zenith_color: Vec3::new(0.11, 0.27, 0.48),
+        horizon_color: Vec3::new(0.12, 0.32, 0.68),
+        zenith_color: Vec3::new(0.025, 0.14, 0.50),
         cloud_color: Vec3::new(0.60, 0.68, 0.77),
         cloud_coverage: 0.22,
         hex_scale: 28.0,
