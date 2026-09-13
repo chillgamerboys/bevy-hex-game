@@ -34,9 +34,12 @@ use actual ground velocity. G can open the glider on land without adding lift or
 changing walking/jumping. Landing leaves the canopy open; water, blocking walls
 and casting fold it.
 
-**V** independently toggles a north-up wind instrument showing the direction the
-wind blows toward and its current speed in units/s. It sits beside the minimap
-when M is enabled, or in the upper-right corner otherwise. It uses the same wind
+**V** independently toggles a wind instrument relative to your look direction:
+up means the wind blows ahead, right/left mean sideways, and down means behind.
+The arrow rotates as you look around in first or third person; its compass label
+still names the world direction and the readout shows current speed in units/s.
+It sits beside the north-up minimap when M is enabled, or in the upper-right
+corner otherwise. It uses the same wind
 and simulation clock as sailing and gliding, and is available on land too.
 
 ## Water and residency

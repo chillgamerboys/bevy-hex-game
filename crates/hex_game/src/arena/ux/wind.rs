@@ -1,4 +1,4 @@
-//! Optional north-up wind instrument, consuming the same wind and clock as flight.
+//! Optional view-relative wind instrument, consuming the same wind and clock as flight.
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
 use hex_core::{arena::ArenaOverview, ocean::OceanEnvironmentView};
@@ -33,7 +33,7 @@ pub(in crate::arena) fn spawn(parent: &mut ChildSpawnerCommands) {
         ))
         .with_children(|panel| {
             panel.spawn(hud::text("WIND  /  V", 20.0, Color::WHITE));
-            panel.spawn(hud::text("NORTH UP", 14.0, Color::srgb(0.72, 0.82, 0.86)));
+            panel.spawn(hud::text("YOUR VIEW", 14.0, Color::srgb(0.72, 0.82, 0.86)));
             panel.spawn((
                 Node {
                     width: px(68),
@@ -94,7 +94,9 @@ pub(super) fn present(
         return;
     };
     let velocity = ocean.wind.velocity_at(session.ocean_time());
-    let heading = velocity.x.atan2(-velocity.y);
+    // Camera yaw turns left-positive; UI rotation turns clockwise-positive.
+    // Up means downwind lies ahead of the current look direction, in either camera mode.
+    let heading = velocity.x.atan2(-velocity.y) + state.yaw;
     for mut arrow in &mut arrows {
         arrow.set_if_neq(UiTransform::from_rotation(Rot2::radians(heading)));
     }

@@ -912,7 +912,7 @@ fn exploration_navigation_keys_use_published_overview_and_wind_without_progressi
             .expect("wind arrow");
         assert!(
             (arrow.rotation * Vec2::NEG_Y - Vec2::X).length() < 1e-5,
-            "eastward wind points right on a north-up display"
+            "eastward wind points right when looking north"
         );
         let text = app
             .world_mut()
@@ -924,6 +924,32 @@ fn exploration_navigation_keys_use_published_overview_and_wind_without_progressi
             "shared initial gust: {}",
             text.0
         );
+        // Look changes must rotate the arrow even while the player and wind stand still.
+        for third_person in [false, true] {
+            for (yaw, expected) in [
+                (-std::f32::consts::FRAC_PI_2, Vec2::NEG_Y), // Looking east: ahead.
+                (std::f32::consts::FRAC_PI_2, Vec2::Y),      // Looking west: behind.
+                (std::f32::consts::PI, Vec2::NEG_X),         // Looking south: left.
+                (std::f32::consts::TAU, Vec2::X),            // Full turn: right again.
+            ] {
+                {
+                    let mut view = app.world_mut().resource_mut::<ViewState>();
+                    view.yaw = yaw;
+                    view.pitch = 0.7;
+                    view.third_person = third_person;
+                }
+                settle(&mut app);
+                let arrow = app
+                    .world_mut()
+                    .query_filtered::<&UiTransform, With<super::wind::WindArrow>>()
+                    .single(app.world())
+                    .expect("view-relative wind arrow");
+                assert!(
+                    (arrow.rotation * Vec2::NEG_Y - expected).length() < 1e-5,
+                    "wind direction relative to look: yaw={yaw}, third_person={third_person}"
+                );
+            }
+        }
         key(&mut app, KeyCode::KeyM);
         assert!(!app.world().resource::<UxState>().map_visible);
         assert!(app.world().resource::<UxState>().wind_visible);

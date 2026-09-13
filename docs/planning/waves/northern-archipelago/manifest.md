@@ -317,3 +317,12 @@ without a visible gap. Existing shallow/deep tonal contrast remains a visual not
 Native movement, input and wave feel remain the user's check; these captures ran
 alongside their open game and are not performance evidence. No broad CI rerun or
 complete CI pass is claimed beyond the focused checks listed above.
+
+Player follow-up: V's arrow now rotates relative to `ViewState.yaw`, shared by
+first- and third-person look. Up means wind blowing ahead of the view; the panel
+label reads YOUR VIEW, while the compass text retains world direction. The
+existing navigation test covers stationary wind with east/west/south/full-turn
+look changes in both camera modes at all three UI sizes; both navigation tests
+pass. This small presentation change uses the lean user playtest path: toggle V
+and turn around, then switch C and repeat. Native motion remains unverified in
+this change; the current game was not restarted automatically.
