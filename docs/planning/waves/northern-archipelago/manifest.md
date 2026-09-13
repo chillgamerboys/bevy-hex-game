@@ -198,3 +198,17 @@ visible in [archived boating imagery](https://www.timetoloot.com/game/other-game
 This candidate uses a compact stepped timber hull and portable deployment, with
 the user's requested sail, directional wind and conserved momentum as separate
 mechanics. It copies no game assets.
+
+Fresh combined static pack at 7e4919e (package02) mechanically completed all seven
+views. The underwater sky leak is repaired, complete trees replace partial crowns,
+and the boat/HUD is visible. Bay angular surface tones and an isolated offshore
+zigzag remain under typed diagnosis; the basic visual checkpoint is not yet
+approved for full dressing. The boat receipt's phase was hardcoded at zero even
+though its renderer uses the shared simulation phase; status now reports the
+accepted material uniform. No surface alignment claim comes from that old receipt.
+
+Selector concern: all 116 Python tests pass after registering four exact ignored
+package regressions in the canonical map partition. An actual session drowning
+regression first failed on oxygen resetting during death, then passed after
+cleanup retained the terminal oxygen state; Restart alone replenishes it. Strict
+arena library Clippy also passes. Complete selected Cargo gate still pending.

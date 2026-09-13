@@ -119,6 +119,11 @@ def validate_native(path: Path, view: str, package: dict) -> dict:
     if state.get("liquid_phase_seconds") != 0.0:
         raise RuntimeError(f"{view}: liquid presentation was not frozen at phase zero.")
     camera = state.get("camera") or {}
+    rendered_phase = ((state.get("northern") or {}).get("ocean") or {}).get("phase_seconds")
+    expected_phase = state.get("ocean_time_seconds", 0.0) % 900.0 if view == "northern-boat" else 0.0
+    if (not isinstance(rendered_phase, (int, float))
+            or not math.isclose(rendered_phase, expected_phase, abs_tol=1e-5)):
+        raise RuntimeError(f"{view}: accepted ocean material phase disagrees with the frozen scene.")
     if not isinstance(camera.get("position"), list) or len(camera["position"]) != 3:
         raise RuntimeError(f"{view}: native camera pose missing.")
     return {"file": path.name, **file_record(path), "package_identity": identity,

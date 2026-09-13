@@ -1,6 +1,7 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
 use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
 use bevy::camera::ScalingMode;
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
 use hex_core::arena::{
@@ -43,7 +44,10 @@ pub(super) fn install(app: &mut App) {
     hex_map::ocean::install(app);
     app.init_resource::<NorthernPresentation>()
         .add_systems(Startup, spawn_cue)
-        .add_systems(Update, configure.before(ArenaFrame::Input))
+        .add_systems(
+            Update,
+            (configure, ocean_depth).chain().before(ArenaFrame::Input),
+        )
         .add_systems(
             Update,
             interest.in_set(ArenaFrame::Input).after(super::input),
@@ -55,6 +59,23 @@ pub(super) fn install(app: &mut App) {
                 .in_set(ArenaFrame::Present)
                 .after(super::environment::present),
         );
+}
+
+// Only ocean presentation needs opaque scene depth for underwater sight length.
+// Leaving Northern restores the existing Forest/Duel/Fort camera pipeline.
+fn ocean_depth(
+    mut commands: Commands,
+    selection: Res<ArenaSelection>,
+    cameras: Query<(Entity, Has<DepthPrepass>), With<ArenaCamera>>,
+) {
+    let enabled = selection.map == ArenaMap::NorthernArchipelago;
+    for (entity, present) in &cameras {
+        if enabled && !present {
+            commands.entity(entity).insert(DepthPrepass);
+        } else if !enabled && present {
+            commands.entity(entity).remove::<DepthPrepass>();
+        }
+    }
 }
 
 pub(super) fn sun_direction() -> Vec3 {
@@ -146,7 +167,7 @@ pub(super) fn snapshot(
             "boundary_vertices": value.boundary_vertices,
             "bathymetry_revision": value.bathymetry_revision,
             "error": value.error,
-            "phase_seconds": 0.0,
+            "phase_seconds": value.phase_seconds,
         })),
     })
 }
@@ -596,7 +617,7 @@ fn capture_pose(
             let boat = actor.boat().filter(|boat| boat.active)?;
             let side = boat.heading.cross(Vec3::Y);
             (
-                actor.feet - boat.heading * 5.5 + side * 4.0 + Vec3::Y * 3.0,
+                actor.feet - boat.heading * 5.5 - side * 4.0 + Vec3::Y * 3.0,
                 actor.feet + Vec3::Y * 0.8,
                 actor.feet,
             )

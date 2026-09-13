@@ -616,6 +616,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                         match outcome {
                             ArenaOutcome::Winner(0) => "YOU WIN",
                             ArenaOutcome::Winner(_) => "YOU WERE KNOCKED OUT",
+                            ArenaOutcome::Draw if session.is_exploration() => "YOU WERE KNOCKED OUT",
                             ArenaOutcome::Draw => "DOUBLE KNOCKOUT",
                         }
                     )
