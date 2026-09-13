@@ -37,4 +37,6 @@ mod bridge_tests;
 #[cfg(test)]
 mod rotation_tests;
 #[cfg(test)]
+mod sea_identity_tests;
+#[cfg(test)]
 mod tests;

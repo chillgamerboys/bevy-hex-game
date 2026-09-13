@@ -92,7 +92,8 @@ pub struct RegionRecipe {
     #[serde(default)]
     pub basins: Vec<BasinSpec>,
     /// Sea fills preserve composed terrain and occupy only the space above its bed.
-    #[serde(default)]
+    /// Omit an unused extension so existing recipes retain their reviewed identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seas: Vec<SeaFillSpec>,
     /// Directed channels with explicit grade controls and physical falls.
     #[serde(default)]
