@@ -1,5 +1,6 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
 use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
+use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
 use hex_core::arena::{
@@ -18,6 +19,7 @@ use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
 struct CapturePose {
     camera: Transform,
     interest: Vec3,
+    overview_height: Option<f32>,
 }
 
 #[derive(Resource, Default)]
@@ -225,10 +227,32 @@ fn interest(
     }
 }
 
-fn camera(cache: Res<NorthernPresentation>, mut cameras: Query<&mut Transform, With<ArenaCamera>>) {
+fn camera(
+    cache: Res<NorthernPresentation>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<ArenaCamera>>,
+) {
     if let Some(capture) = cache.capture {
-        if let Ok(mut camera) = cameras.single_mut() {
+        if let Ok((mut camera, mut projection)) = cameras.single_mut() {
             *camera = capture.camera;
+            if let Some(height) = capture.overview_height {
+                if !matches!(&*projection, Projection::Orthographic(_)) {
+                    *projection = Projection::Orthographic(OrthographicProjection {
+                        scaling_mode: ScalingMode::FixedVertical {
+                            viewport_height: height,
+                        },
+                        near: 0.035,
+                        far: 24_000.0,
+                        ..OrthographicProjection::default_3d()
+                    });
+                }
+            } else if matches!(&*projection, Projection::Orthographic(_)) {
+                *projection = Projection::Perspective(PerspectiveProjection {
+                    fov: 75.0_f32.to_radians(),
+                    near: 0.035,
+                    far: 24_000.0,
+                    ..default()
+                });
+            }
         }
     }
 }
@@ -478,14 +502,24 @@ fn capture_pose(
 ) -> Option<CapturePose> {
     let map = &streamed.overview;
     let spawn = Vec3::from_array(map.player_spawn);
+    if view == "northern-overview" {
+        return Some(overview_pose(
+            Vec2::from_array(map.origin_xz),
+            Vec2::new(
+                map.width.saturating_sub(1) as f32,
+                map.height.saturating_sub(1) as f32,
+            ) * map.spacing,
+            map.sea_level,
+            map.bed_heights
+                .iter()
+                .copied()
+                .fold(map.sea_level, f32::max),
+            spawn,
+        ));
+    }
     let anchor = |name: &str| map.anchors.get(name).copied().map(Vec3::from_array);
     let bay = anchor("bay")?.with_y(map.sea_level);
     let (position, target, interest) = match view {
-        "northern-overview" => (
-            Vec3::new(1450.0, 1900.0, 1650.0),
-            Vec3::new(0.0, map.sea_level + 60.0, 80.0),
-            spawn,
-        ),
         "northern-bay" => (spawn + Vec3::Y * 6.0, bay + Vec3::Y * 5.0, spawn),
         "northern-settlement" => {
             let site = anchor("settlement")?;
@@ -534,5 +568,69 @@ fn capture_pose(
     Some(CapturePose {
         camera: Transform::from_translation(position).looking_at(target, Vec3::Y),
         interest,
+        overview_height: None,
     })
+}
+
+/// Fit the complete finite footprint, including its highest visible terrain, with
+/// a ten-percent frame margin. Orthographic overview avoids the old distant wide
+/// lens shrinking all three clusters; other captures retain the gameplay lens.
+fn overview_pose(origin: Vec2, extent: Vec2, sea: f32, summit: f32, interest: Vec3) -> CapturePose {
+    let center = origin + extent * 0.5;
+    let target = Vec3::new(center.x, (sea + summit) * 0.5, center.y);
+    let back = Vec3::new(0.0, 1.65, 1.0).normalize();
+    let up = back.cross(Vec3::X);
+    let corners = overview_corners(origin, extent, sea, summit);
+    let mut half_width: f32 = 0.0;
+    let mut half_height: f32 = 0.0;
+    let mut near_depth: f32 = 0.0;
+    for corner in corners {
+        let local = corner - target;
+        half_width = half_width.max(local.x.abs());
+        half_height = half_height.max(local.dot(up).abs());
+        near_depth = near_depth.max(local.dot(back));
+    }
+    // The windowless arena canvas is fixed at 1600 × 900.
+    let aspect = 16.0 / 9.0;
+    let height = 2.0 * half_height.max(half_width / aspect) / 0.9;
+    CapturePose {
+        camera: Transform::from_translation(target + back * (near_depth + 800.0))
+            .looking_at(target, Vec3::Y),
+        interest,
+        overview_height: Some(height),
+    }
+}
+
+fn overview_corners(origin: Vec2, extent: Vec2, sea: f32, summit: f32) -> [Vec3; 8] {
+    std::array::from_fn(|index| {
+        Vec3::new(
+            origin.x + if index & 1 == 0 { 0.0 } else { extent.x },
+            if index & 2 == 0 { sea } else { summit },
+            origin.y + if index & 4 == 0 { 0.0 } else { extent.y },
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overview_fits_complete_published_bounds_with_margin() {
+        let origin = Vec2::new(-1216.0, -1056.0);
+        let extent = Vec2::new(2432.0, 2112.0);
+        let interest = Vec3::new(-645.0, 161.7, -100.5);
+        let pose = overview_pose(origin, extent, 140.0, 442.75, interest);
+        let half_height = pose.overview_height.expect("orthographic overview") * 0.5;
+        let half_width = half_height * (16.0 / 9.0);
+        for corner in overview_corners(origin, extent, 140.0, 442.75) {
+            let local = pose.camera.rotation.inverse() * (corner - pose.camera.translation);
+            assert!(local.x.abs() <= half_width * 0.901);
+            assert!(local.y.abs() <= half_height * 0.901);
+            assert!(local.z < -0.035 && local.z > -24_000.0);
+        }
+        // The landscape occupies useful image width while all world edges remain included.
+        assert!(1528.0 / (2.0 * half_width) > 0.38);
+        assert_eq!(pose.interest, interest);
+    }
 }

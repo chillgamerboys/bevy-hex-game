@@ -512,12 +512,17 @@ pub(super) fn update(
         .and_then(|id| session.actors.iter().find(|actor| actor.id == id));
     let forest_knocked_out =
         run.is_some() && session.is_finished() && actor.is_some_and(|actor| actor.hp <= 0.0);
+    // External landscape cameras never grant player observations. Their spell
+    // readiness is intentionally inactive, so keep that combat strip out of the
+    // composition evidence instead of presenting it as unavailable gameplay.
+    let composition_capture =
+        state.capture.is_some() && super::northern::fixture_view(&state.capture_view);
     for (mut node, pause, start, combat, observer) in &mut panels {
         set_display(
             &mut node,
             if (pause && state.paused && state.started)
                 || (start && !state.started)
-                || (combat && state.started && !state.paused && !observing)
+                || (combat && state.started && !state.paused && !observing && !composition_capture)
                 || (observer && state.started && observing)
             {
                 Display::Flex
