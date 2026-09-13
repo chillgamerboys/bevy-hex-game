@@ -12,7 +12,7 @@ use hex_core::arena::{ArenaRenderStatus, ArenaStreamInterest};
 use hex_world_contracts::{ChunkId, ChunkPackage, ColumnData, VoxelRun};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{mpsc, Arc, Mutex},
+    sync::{mpsc, Arc, Mutex, OnceLock},
 };
 
 struct Completion {
@@ -22,6 +22,8 @@ struct Completion {
     authority: BTreeMap<ChunkId, u64>,
     retired: BTreeSet<ChunkId>,
     objects: BTreeMap<String, BTreeSet<ChunkId>>,
+    edges: BTreeMap<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>,
+    proxies: Vec<(ChunkId, Mesh)>,
     prepared: Result<Vec<PreparedChunk>, String>,
 }
 #[derive(Resource)]
@@ -30,6 +32,7 @@ struct Renderer {
     accepted: BTreeMap<ChunkId, u64>,
     visible_objects: BTreeMap<String, BTreeSet<ChunkId>>,
     publication_revision: u64,
+    terrain_edges: BTreeMap<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>,
     proxies: BTreeMap<ChunkId, (Entity, Handle<Mesh>)>,
     hidden_proxies: BTreeSet<ChunkId>,
     materials: Vec<Handle<StandardMaterial>>,
@@ -198,6 +201,10 @@ fn visual_package(
     package.seal().map_err(|e| e.to_string())?;
     Ok(Arc::new(package))
 }
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "published finite terrain levels are bounded to 4096"
+)]
 fn draw(world: &mut World) {
     if !world.contains_resource::<Assets<Mesh>>() {
         return;
@@ -299,6 +306,19 @@ fn draw(world: &mut World) {
                                 if !failed {
                                     renderer.accepted.extend(published);
                                     renderer.visible_objects = completion.objects;
+                                    for chunk in &completion.retired {
+                                        renderer.terrain_edges.remove(chunk);
+                                    }
+                                    renderer.terrain_edges.extend(completion.edges);
+                                    for (chunk, mesh) in completion.proxies {
+                                        if let Some((_, handle)) = renderer.proxies.get(&chunk) {
+                                            if let Some(old) =
+                                                world.resource_mut::<Assets<Mesh>>().get_mut(handle)
+                                            {
+                                                *old = mesh;
+                                            }
+                                        }
+                                    }
                                 } else {
                                     renderer.accepted.remove(&completion.target);
                                 }
@@ -407,6 +427,8 @@ fn draw(world: &mut World) {
             renderer.publication_revision = renderer.publication_revision.saturating_add(1);
             let render_revision = renderer.publication_revision;
             let mut authority = BTreeMap::new();
+            let mut edges =
+                BTreeMap::<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>::new();
             let mut snapshots = BTreeMap::new();
             for c in &affected {
                 for n in neighbors(*c) {
@@ -424,6 +446,40 @@ fn draw(world: &mut World) {
                     return;
                 };
                 authority.insert(*c, authority_revision);
+                let edge = state
+                    .runtime
+                    .resident_chunk(*c)
+                    .map(|source| {
+                        source
+                            .package
+                            .columns
+                            .iter()
+                            .filter(|column| {
+                                let q = column.position.q.rem_euclid(16);
+                                let r = column.position.r.rem_euclid(16);
+                                q == 0 || q == 15 || r == 0 || r == 15
+                            })
+                            .filter_map(|column| {
+                                let terrain = state.edits.terrain_column(column.position)?;
+                                let top = terrain
+                                    .runs
+                                    .iter()
+                                    .rev()
+                                    .find(|run| {
+                                        state
+                                            .runtime
+                                            .manifest()
+                                            .materials
+                                            .iter()
+                                            .any(|m| m.id == run.material && m.solid)
+                                    })
+                                    .map_or(0, |r| r.top);
+                                Some((column.position, top as f32 * state.overview.level_height))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                edges.insert(*c, edge);
                 match visual_package(&state, *c, &objects) {
                     Ok(package) => {
                         snapshots.insert(
@@ -441,6 +497,25 @@ fn draw(world: &mut World) {
                     }
                 }
             }
+            let mut next_edges = renderer.terrain_edges.clone();
+            for chunk in &retired {
+                next_edges.remove(chunk);
+            }
+            next_edges.extend(edges.iter().map(|(c, columns)| (*c, columns.clone())));
+            let changed_proxies: BTreeSet<_> = authority
+                .keys()
+                .chain(&retired)
+                .flat_map(|c| {
+                    (-1..=1).flat_map(move |q| {
+                        (-1..=1).map(move |r| ChunkId {
+                            q: c.q + q,
+                            r: c.r + r,
+                        })
+                    })
+                })
+                .filter(|c| renderer.proxies.contains_key(c))
+                .collect();
+            let overview = state.overview.clone();
             let context = renderer.presenter.preparer();
             let sender = renderer.sender.clone();
             let epoch = renderer.epoch;
@@ -468,6 +543,7 @@ fn draw(world: &mut World) {
                                 .map_err(|e| e.to_string())
                         })
                         .collect();
+                    let proxies = proxy_updates(&overview, &next_edges, &changed_proxies);
                     let _sent = sender.send(Completion {
                         epoch,
                         target,
@@ -475,6 +551,8 @@ fn draw(world: &mut World) {
                         authority,
                         retired,
                         objects,
+                        edges,
+                        proxies,
                         prepared,
                     });
                 }) {
@@ -535,6 +613,7 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         accepted: BTreeMap::new(),
         visible_objects: BTreeMap::new(),
         publication_revision: 0,
+        terrain_edges: BTreeMap::new(),
         proxies,
         hidden_proxies: BTreeSet::new(),
         materials: vec![material],
@@ -603,38 +682,290 @@ fn proxy_sample(
     })
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "bounded finite chunk coordinates and fixed eight-step proxy topology"
-)]
-fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Option<Mesh> {
-    let steps = usize::try_from(PROXY_STEPS).ok()?;
-    let vertex_count = (steps + 1) * (steps + 1);
-    let mut positions = Vec::with_capacity(vertex_count);
-    let mut normals = Vec::with_capacity(vertex_count);
-    let mut colors = Vec::with_capacity(vertex_count);
-    let mut indices = Vec::with_capacity(steps * steps * 6);
-    for r in 0..=PROXY_STEPS {
-        for q in 0..=PROXY_STEPS {
-            let x = (c.q * 16) as f32 + q as f32 * 2.0 - 0.5;
-            let z = (c.r * 16) as f32 + r as f32 * 2.0 - 0.5;
-            let wx = 3.0_f32.sqrt() * (x + z * 0.5);
-            let wz = z * 1.5;
-            let sample = proxy_sample(map, wx, wz)?;
-            positions.push([wx, sample.height, wz]);
-            normals.push(sample.normal);
-            colors.push(sample.color);
+#[derive(Clone)]
+struct BoundaryEdge {
+    a: Vec2,
+    b: Vec2,
+    outside: [i32; 2],
+}
+struct ProxyTopology {
+    positions: Vec<Vec2>,
+    indices: Vec<u32>,
+    boundary: Vec<BoundaryEdge>,
+}
+fn cross(a: Vec2, b: Vec2) -> f32 {
+    a.x * b.y - a.y * b.x
+}
+fn clip_axis(poly: &[Vec2], axis: usize, value: f32, minimum: bool) -> Vec<Vec2> {
+    let component = |p: Vec2| if axis == 0 { p.x } else { p.y };
+    let inside = |p: Vec2| {
+        if minimum {
+            component(p) >= value - 0.00001
+        } else {
+            component(p) <= value + 0.00001
+        }
+    };
+    let mut result = Vec::new();
+    for (a, b) in poly
+        .iter()
+        .copied()
+        .zip(poly.iter().copied().cycle().skip(1))
+        .take(poly.len())
+    {
+        if inside(a) {
+            result.push(a);
+        }
+        if inside(a) != inside(b) {
+            let fraction = (value - component(a)) / (component(b) - component(a));
+            result.push(a.lerp(b, fraction));
         }
     }
-    // Transparent water can reveal every submerged sample, including from below
-    // the surface. Retain the original sampled relief throughout the finite
-    // catalogue: a sea-level cutoff leaves an open sawtooth rim around islands.
-    let stride = PROXY_STEPS + 1;
-    for r in 0..PROXY_STEPS {
-        for q in 0..PROXY_STEPS {
-            let a = r * stride + q;
-            indices.extend([a, a + stride, a + 1, a + 1, a + stride, a + stride + 1]);
+    result.dedup_by(|a, b| a.distance_squared(*b) < 0.0000001);
+    if result
+        .first()
+        .zip(result.last())
+        .is_some_and(|(a, b)| a.distance_squared(*b) < 0.0000001)
+    {
+        result.truncate(result.len().saturating_sub(1));
+    }
+    result
+}
+fn triangulate(poly: &[Vec2]) -> Vec<usize> {
+    let mut ring: Vec<_> = (0..poly.len()).collect();
+    let mut triangles = Vec::new();
+    while ring.len() >= 3 {
+        let mut ear = None;
+        for (i, b) in ring.iter().copied().enumerate() {
+            let Some(&a) = ring.get((i + ring.len() - 1) % ring.len()) else {
+                continue;
+            };
+            let Some(&c) = ring.get((i + 1) % ring.len()) else {
+                continue;
+            };
+            let (Some(pa), Some(pb), Some(pc)) = (poly.get(a), poly.get(b), poly.get(c)) else {
+                continue;
+            };
+            if cross(*pb - *pa, *pc - *pb) >= -0.000001 {
+                continue;
+            }
+            let contains = ring
+                .iter()
+                .copied()
+                .filter(|p| ![a, b, c].contains(p))
+                .any(|p| {
+                    poly.get(p).is_some_and(|p| {
+                        cross(*pb - *pa, *p - *pa) < -0.000001
+                            && cross(*pc - *pb, *p - *pb) < -0.000001
+                            && cross(*pa - *pc, *p - *pc) < -0.000001
+                    })
+                });
+            if !contains {
+                ear = Some((i, [a, b, c]));
+                break;
+            }
         }
+        let Some((index, triangle)) = ear else {
+            break;
+        };
+        triangles.extend(triangle);
+        ring.remove(index);
+    }
+    triangles
+}
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "fixed sixteen-column proxy topology has fewer than 1024 vertices"
+)]
+fn proxy_topology() -> &'static ProxyTopology {
+    static TOPOLOGY: OnceLock<ProxyTopology> = OnceLock::new();
+    TOPOLOGY.get_or_init(|| {
+        let corners = [(1, 1), (2, -1), (1, -2), (-1, -1), (-2, 1), (-1, 2)];
+        let directions = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
+        let mut edges = BTreeMap::new();
+        for r in 0..16 {
+            for q in 0..16 {
+                for (i, (dq, dr)) in directions.iter().copied().enumerate() {
+                    let outside = [q + dq, r + dr];
+                    if outside.into_iter().all(|v| (0..16).contains(&v)) {
+                        continue;
+                    }
+                    let Some(&(aq, ar)) = corners.get(i) else {
+                        continue;
+                    };
+                    let Some(&(bq, br)) = corners.get((i + 1) % 6) else {
+                        continue;
+                    };
+                    edges.insert(
+                        (q * 3 + aq, r * 3 + ar),
+                        ((q * 3 + bq, r * 3 + br), outside),
+                    );
+                }
+            }
+        }
+        let mut boundary = Vec::new();
+        let mut polygon = Vec::new();
+        if let Some(&start) = edges.keys().next() {
+            let mut at = start;
+            for _ in 0..edges.len() {
+                let Some(&(next, outside)) = edges.get(&at) else {
+                    break;
+                };
+                let a = Vec2::new(at.0 as f32, at.1 as f32) / 3.0;
+                let b = Vec2::new(next.0 as f32, next.1 as f32) / 3.0;
+                polygon.push(a);
+                boundary.push(BoundaryEdge { a, b, outside });
+                at = next;
+            }
+        }
+        let mut positions = Vec::<Vec2>::new();
+        let mut indices = Vec::new();
+        for r in 0..PROXY_STEPS {
+            for q in 0..PROXY_STEPS {
+                let mut cell = polygon.clone();
+                for (axis, index) in [(0, q), (1, r)] {
+                    if index > 0 {
+                        cell = clip_axis(&cell, axis, index as f32 * 2.0 - 0.5, true);
+                    }
+                    if index + 1 < PROXY_STEPS {
+                        cell = clip_axis(&cell, axis, index as f32 * 2.0 + 1.5, false);
+                    }
+                }
+                let local = triangulate(&cell);
+                let mapping: Vec<_> = cell
+                    .into_iter()
+                    .map(|point| {
+                        let index = positions
+                            .iter()
+                            .position(|p| p.distance_squared(point) < 0.0000001)
+                            .unwrap_or_else(|| {
+                                positions.push(point);
+                                positions.len() - 1
+                            });
+                        index as u32
+                    })
+                    .collect();
+                indices.extend(local.into_iter().filter_map(|i| mapping.get(i).copied()));
+            }
+        }
+        ProxyTopology {
+            positions,
+            indices,
+            boundary,
+        }
+    })
+}
+
+#[derive(Clone)]
+struct EdgeTransition {
+    owner: ChunkId,
+    a: Vec2,
+    b: Vec2,
+    height: f32,
+    top_a: f32,
+    top_b: f32,
+}
+const TRANSITION_WIDTH: f32 = 4.0;
+fn segment_projection(point: Vec2, a: Vec2, b: Vec2) -> (Vec2, f32) {
+    let t = ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+    (a.lerp(b, t), t)
+}
+fn transition_height(base: f32, point: Vec2, edges: &[EdgeTransition]) -> f32 {
+    let nearest = edges
+        .iter()
+        .map(|edge| {
+            let (at, t) = segment_projection(point, edge.a, edge.b);
+            (
+                point.distance(at),
+                edge.top_a + (edge.top_b - edge.top_a) * t,
+            )
+        })
+        .filter(|(d, _)| *d < TRANSITION_WIDTH)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((distance, height)) = nearest else {
+        return base;
+    };
+    // All incident edge heights contribute at shared corners, deterministically.
+    let height = edges
+        .iter()
+        .filter_map(|edge| {
+            let (at, t) = segment_projection(point, edge.a, edge.b);
+            (point.distance(at) <= distance + 0.0001)
+                .then_some(edge.top_a + (edge.top_b - edge.top_a) * t)
+        })
+        .fold(height, f32::max);
+    let t = (distance / TRANSITION_WIDTH).clamp(0.0, 1.0);
+    height + (base - height) * (t * t * (3.0 - 2.0 * t))
+}
+fn axial_xz(q: f32, r: f32) -> Vec2 {
+    Vec2::new(3.0_f32.sqrt() * (q + r * 0.5), r * 1.5)
+}
+fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Option<Mesh> {
+    proxy_with_edges(map, c, &[])
+}
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "validated finite chunk coordinates and fixed proxy topology"
+)]
+fn proxy_with_edges(
+    map: &hex_schematic::v4::northern::NorthernOverview,
+    c: ChunkId,
+    edges: &[EdgeTransition],
+) -> Option<Mesh> {
+    let topology = proxy_topology();
+    let mut positions = Vec::with_capacity(topology.positions.len() + edges.len() * 4);
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut colors = Vec::with_capacity(positions.capacity());
+    let mut indices = topology.indices.clone();
+    let point_sample = |point: Vec2| -> Option<(Vec3, [f32; 3], [f32; 4])> {
+        let sample = proxy_sample(map, point.x, point.y)?;
+        let height = transition_height(sample.height, point, edges);
+        let normal = if edges.is_empty() {
+            sample.normal
+        } else {
+            let height_at = |p: Vec2| {
+                proxy_sample(map, p.x, p.y).map(|sample| transition_height(sample.height, p, edges))
+            };
+            let dx = height_at(point + Vec2::X * 0.125)? - height_at(point - Vec2::X * 0.125)?;
+            let dz = height_at(point + Vec2::Y * 0.125)? - height_at(point - Vec2::Y * 0.125)?;
+            Vec3::new(-dx / 0.25, 1.0, -dz / 0.25)
+                .normalize()
+                .to_array()
+        };
+        Some((Vec3::new(point.x, height, point.y), normal, sample.color))
+    };
+    for local in &topology.positions {
+        let point = axial_xz((c.q * 16) as f32 + local.x, (c.r * 16) as f32 + local.y);
+        let (position, normal, color) = point_sample(point)?;
+        positions.push(position.to_array());
+        normals.push(normal);
+        colors.push(color);
+    }
+    // A junction of differently elevated voxel tops needs a short vertical cut
+    // face. Its endpoints are the actual fine top and the matched coarse edge,
+    // never an arbitrary skirt depth or geometry extending into the fine area.
+    for edge in edges.iter().filter(|edge| edge.owner == c) {
+        let (a, _, color) = point_sample(edge.a)?;
+        let (b, _, _) = point_sample(edge.b)?;
+        if (a.y - edge.height).abs() < 0.0001 && (b.y - edge.height).abs() < 0.0001 {
+            continue;
+        }
+        let first = u32::try_from(positions.len()).ok()?;
+        let bottom_a = Vec3::new(edge.a.x, edge.height, edge.a.y);
+        let bottom_b = Vec3::new(edge.b.x, edge.height, edge.b.y);
+        let normal = (bottom_b - bottom_a)
+            .cross(Vec3::Y)
+            .normalize_or_zero()
+            .to_array();
+        positions.extend([
+            bottom_a.to_array(),
+            bottom_b.to_array(),
+            b.to_array(),
+            a.to_array(),
+        ]);
+        normals.extend([normal; 4]);
+        colors.extend([color; 4]);
+        indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
     }
     Some(
         Mesh::new(
@@ -646,6 +977,85 @@ fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Opt
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
         .with_inserted_indices(Indices::U32(indices)),
     )
+}
+fn match_edge_corners(edges: &mut [EdgeTransition]) {
+    let heights: Vec<_> = edges
+        .iter()
+        .map(|edge| (edge.a, edge.b, edge.height))
+        .collect();
+    for edge in edges {
+        for (point, height) in [(&edge.a, &mut edge.top_a), (&edge.b, &mut edge.top_b)] {
+            for (a, b, neighbor_height) in &heights {
+                if point.distance_squared(*a) < 0.000001 || point.distance_squared(*b) < 0.000001 {
+                    *height = height.max(*neighbor_height);
+                }
+            }
+        }
+    }
+}
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "validated finite chunk coordinates"
+)]
+fn nearby_transition_edges(
+    chunk: ChunkId,
+    terrain_edges: &BTreeMap<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>,
+) -> Vec<EdgeTransition> {
+    let mut edges = Vec::new();
+    // A shared coarse/coarse corner must see the same nearby fine-edge field.
+    // Include diagonal storage neighbors; six axial neighbors alone miss a
+    // four-unit transition crossing a storage rectangle's corner.
+    for dq in -1..=1 {
+        for dr in -1..=1 {
+            let owner = ChunkId {
+                q: chunk.q + dq,
+                r: chunk.r + dr,
+            };
+            if terrain_edges.contains_key(&owner) {
+                continue;
+            }
+            for edge in &proxy_topology().boundary {
+                let [q, r] = edge.outside;
+                let outside = hex_world_contracts::WorldHex::new(
+                    owner.q * 16 + i64::from(q),
+                    owner.r * 16 + i64::from(r),
+                );
+                let Some(height) = terrain_edges
+                    .get(&outside.chunk())
+                    .and_then(|columns| columns.get(&outside))
+                else {
+                    continue;
+                };
+                let origin = Vec2::new((owner.q * 16) as f32, (owner.r * 16) as f32);
+                let a = origin + edge.a;
+                let b = origin + edge.b;
+                edges.push(EdgeTransition {
+                    owner,
+                    a: axial_xz(a.x, a.y),
+                    b: axial_xz(b.x, b.y),
+                    height: *height,
+                    top_a: *height,
+                    top_b: *height,
+                });
+            }
+        }
+    }
+    match_edge_corners(&mut edges);
+    edges
+}
+fn proxy_updates(
+    map: &hex_schematic::v4::northern::NorthernOverview,
+    terrain_edges: &BTreeMap<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>,
+    changed: &BTreeSet<ChunkId>,
+) -> Vec<(ChunkId, Mesh)> {
+    changed
+        .iter()
+        .filter(|c| !terrain_edges.contains_key(c))
+        .filter_map(|chunk| {
+            let edges = nearby_transition_edges(*chunk, terrain_edges);
+            proxy_with_edges(map, *chunk, &edges).map(|mesh| (*chunk, mesh))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -872,29 +1282,53 @@ mod tests {
         let map = planar_overview();
         let left = proxy(&map, ChunkId { q: 0, r: 0 }).expect("left land");
         let right = proxy(&map, ChunkId { q: 1, r: 0 }).expect("right land");
-        assert_eq!(left.count_vertices(), 81);
-        assert_eq!(left.indices().expect("triangles").len(), 384);
+        assert!(
+            left.count_vertices() <= 256,
+            "bounded static chunk vertices"
+        );
+        assert!(
+            left.indices().expect("triangles").len() <= 768,
+            "bounded static triangles"
+        );
         assert_shared_edge(&left, &right);
     }
 
     fn assert_shared_edge(left: &Mesh, right: &Mesh) {
-        for attribute in [Mesh::ATTRIBUTE_POSITION, Mesh::ATTRIBUTE_NORMAL] {
-            let bevy::mesh::VertexAttributeValues::Float32x3(a) =
-                left.attribute(attribute).expect("left attribute")
+        let triples = |mesh: &Mesh, attribute: bevy::mesh::MeshVertexAttribute| {
+            let bevy::mesh::VertexAttributeValues::Float32x3(values) =
+                mesh.attribute(attribute).expect("attribute")
             else {
-                panic!("float triples");
+                panic!("triples");
             };
-            let bevy::mesh::VertexAttributeValues::Float32x3(b) =
-                right.attribute(attribute).expect("right attribute")
-            else {
-                panic!("float triples");
-            };
-            for r in 0..9 {
-                let a = Vec3::from_array(*a.get(r * 9 + 8).expect("left edge"));
-                let b = Vec3::from_array(*b.get(r * 9).expect("right edge"));
-                assert!(a.distance(b) < 0.00001, "shared edge discontinuity");
+            values.clone()
+        };
+        let lp = triples(left, Mesh::ATTRIBUTE_POSITION);
+        let rp = triples(right, Mesh::ATTRIBUTE_POSITION);
+        let ln = triples(left, Mesh::ATTRIBUTE_NORMAL);
+        let rn = triples(right, Mesh::ATTRIBUTE_NORMAL);
+        let mut shared = 0;
+        for (i, a) in lp.iter().copied().enumerate() {
+            for (j, b) in rp.iter().copied().enumerate() {
+                if Vec3::from_array(a)
+                    .with_y(0.0)
+                    .distance(Vec3::from_array(b).with_y(0.0))
+                    < 0.00001
+                {
+                    shared += 1;
+                    assert!(
+                        Vec3::from_array(a).distance(Vec3::from_array(b)) < 0.00001,
+                        "matched boundary heights"
+                    );
+                    assert!(
+                        Vec3::from_array(*ln.get(i).expect("normal"))
+                            .distance(Vec3::from_array(*rn.get(j).expect("normal")))
+                            < 0.00001,
+                        "matched boundary normals"
+                    );
+                }
             }
         }
+        assert!(shared >= 32, "the full zigzag boundary is shared");
     }
 
     #[test]
@@ -913,7 +1347,7 @@ mod tests {
         else {
             panic!("float triples");
         };
-        assert_eq!(positions.len(), 81, "bounded static topology");
+        assert!(positions.len() <= 256, "bounded static topology");
         for position in positions {
             let [x, y, _] = *position;
             assert!(y < map.sea_level - 2.0, "exercise the removed depth cutoff");
@@ -923,7 +1357,7 @@ mod tests {
             );
         }
         let indices: Vec<_> = deep.indices().expect("continuous seabed").iter().collect();
-        assert_eq!(indices.len(), 384);
+        assert!(indices.len() <= 768, "bounded static triangles");
         let mut edges = BTreeMap::<(usize, usize), usize>::new();
         let mut projected_area = 0.0;
         for triangle in indices.chunks_exact(3) {
@@ -944,14 +1378,170 @@ mod tests {
             (projected_area - 384.0 * 3.0_f32.sqrt()).abs() < 0.001,
             "cover the complete chunk footprint without missing triangles"
         );
-        assert_eq!(
-            edges.values().filter(|count| **count == 1).count(),
-            32,
-            "only the four outer edges remain open for neighboring chunks"
-        );
+        for ((a, b), count) in &edges {
+            if *count != 1 {
+                continue;
+            }
+            let midpoint = (Vec3::from_array(*positions.get(*a).expect("edge"))
+                + Vec3::from_array(*positions.get(*b).expect("edge")))
+                * 0.5;
+            let local = Vec2::new(
+                midpoint.x / 3.0_f32.sqrt() - midpoint.z / 3.0 - 16.0,
+                midpoint.z / 1.5,
+            );
+            assert!(
+                proxy_topology()
+                    .boundary
+                    .iter()
+                    .any(
+                        |edge| segment_projection(local, edge.a, edge.b).0.distance(local) < 0.0001
+                    ),
+                "only the actual hex footprint perimeter may have an unmatched edge"
+            );
+        }
         assert!(
             edges.values().all(|count| matches!(*count, 1 | 2)),
             "no duplicated faces or interior cracks"
+        );
+    }
+    #[test]
+    fn northern_proxy_transition_meets_exact_edges_without_filling_fine_terrain() {
+        let map = planar_overview();
+        let mut edges: Vec<_> = proxy_topology()
+            .boundary
+            .iter()
+            .filter(|edge| edge.outside.first().is_some_and(|q| *q < 0))
+            .map(|edge| {
+                let height = if edge.a.y < 8.0 { 175.0 } else { 182.0 };
+                EdgeTransition {
+                    owner: ChunkId { q: 0, r: 0 },
+                    a: axial_xz(edge.a.x, edge.a.y),
+                    b: axial_xz(edge.b.x, edge.b.y),
+                    height,
+                    top_a: height,
+                    top_b: height,
+                }
+            })
+            .collect();
+        match_edge_corners(&mut edges);
+        let mesh = proxy_with_edges(&map, ChunkId { q: 0, r: 0 }, &edges).expect("transition mesh");
+        let bevy::mesh::VertexAttributeValues::Float32x3(vertices) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("vertices")
+        else {
+            panic!("triples");
+        };
+        assert!(vertices.len() <= 512, "edge-only transition bound");
+        for edge in &edges {
+            for (point, height) in [
+                (edge.a, edge.height),
+                (edge.b, edge.height),
+                (edge.a, edge.top_a),
+                (edge.b, edge.top_b),
+            ] {
+                assert!(
+                    vertices.iter().any(|p| Vec3::from_array(*p)
+                        .distance(Vec3::new(point.x, height, point.y))
+                        < 0.0001),
+                    "each voxel edge reaches its true top and the matched coarse profile"
+                );
+            }
+        }
+        for point in &proxy_topology().positions {
+            let xz = axial_xz(point.x, point.y);
+            if edges.iter().all(|edge| {
+                segment_projection(xz, edge.a, edge.b).0.distance(xz) >= TRANSITION_WIDTH
+            }) {
+                let exact = proxy_sample(&map, xz.x, xz.y).expect("sample").height;
+                assert!(
+                    vertices.iter().any(|p| Vec3::from_array(*p)
+                        .distance(Vec3::new(xz.x, exact, xz.y))
+                        < 0.0001),
+                    "the overview remains unchanged beyond the four-unit boundary band"
+                );
+            }
+        }
+        assert!(
+            edges
+                .iter()
+                .any(|edge| (edge.height - edge.top_a).abs() > 0.01
+                    || (edge.height - edge.top_b).abs() > 0.01),
+            "exercise a stepped junction, not just a flat edge"
+        );
+    }
+    #[test]
+    fn northern_transition_field_matches_at_diagonal_storage_corners() {
+        let map = planar_overview();
+        let mut columns = BTreeMap::new();
+        for r in 0_i16..16 {
+            for q in 0_i16..16 {
+                if q == 0 || q == 15 || r == 0 || r == 15 {
+                    columns.insert(
+                        hex_world_contracts::WorldHex::new(i64::from(q), i64::from(r)),
+                        178.0 + f32::from(r % 3) * 0.35,
+                    );
+                }
+            }
+        }
+        let cache = BTreeMap::from([(ChunkId { q: 0, r: 0 }, columns)]);
+        let left_id = ChunkId { q: 1, r: 0 };
+        let right_id = ChunkId { q: 1, r: -1 };
+        let left = proxy_with_edges(&map, left_id, &nearby_transition_edges(left_id, &cache))
+            .expect("first coarse corner");
+        let right = proxy_with_edges(&map, right_id, &nearby_transition_edges(right_id, &cache))
+            .expect("diagonal coarse corner");
+        let triples = |mesh: &Mesh, attribute: bevy::mesh::MeshVertexAttribute| {
+            let bevy::mesh::VertexAttributeValues::Float32x3(v) =
+                mesh.attribute(attribute).expect("attribute")
+            else {
+                panic!("triples");
+            };
+            v.clone()
+        };
+        let lp = triples(&left, Mesh::ATTRIBUTE_POSITION);
+        let rp = triples(&right, Mesh::ATTRIBUTE_POSITION);
+        let ln = triples(&left, Mesh::ATTRIBUTE_NORMAL);
+        let rn = triples(&right, Mesh::ATTRIBUTE_NORMAL);
+        let mut shared = 0;
+        let mut morphed = 0;
+        for (i, a) in lp
+            .iter()
+            .take(proxy_topology().positions.len())
+            .copied()
+            .enumerate()
+        {
+            for (j, b) in rp
+                .iter()
+                .take(proxy_topology().positions.len())
+                .copied()
+                .enumerate()
+            {
+                if Vec3::from_array(a)
+                    .with_y(0.0)
+                    .distance(Vec3::from_array(b).with_y(0.0))
+                    < 0.0001
+                {
+                    shared += 1;
+                    assert!(
+                        Vec3::from_array(a).distance(Vec3::from_array(b)) < 0.0001,
+                        "coarse/coarse corner height seam"
+                    );
+                    assert!(
+                        Vec3::from_array(*ln.get(i).expect("normal"))
+                            .distance(Vec3::from_array(*rn.get(j).expect("normal")))
+                            < 0.002,
+                        "coarse/coarse normal seam"
+                    );
+                    let [x, y, z] = a;
+                    if (proxy_sample(&map, x, z).expect("sample").height - y).abs() > 0.1 {
+                        morphed += 1;
+                    }
+                }
+            }
+        }
+        assert!(shared >= 32, "complete shared zigzag edge");
+        assert!(
+            morphed > 0,
+            "exercise a changed corner shared by coarse chunks"
         );
     }
 }
