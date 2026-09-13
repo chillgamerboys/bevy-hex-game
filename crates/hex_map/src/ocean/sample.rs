@@ -1,13 +1,15 @@
 use super::{OceanBathymetry, OceanNearBoundary, OceanSurfaceProfile};
 use bevy::prelude::*;
 
-/// Visual height, normal and color at a world position; never collision authority.
+/// Surface height, normal and color; exact liquid occupancy remains world authority.
 #[derive(Debug, Clone, Copy)]
 pub struct OceanSurfaceSample {
     /// Displaced water height in world units.
     pub height: f32,
     /// Analytic upward normal including shoreline attenuation.
     pub normal: Vec3,
+    /// Analytic vertical surface velocity; no horizontal current is implied.
+    pub vertical_velocity: f32,
     /// Initial static depth at this X/Z point.
     pub depth: f32,
     /// Linear shallow/deep water color.
@@ -53,7 +55,7 @@ pub fn sample_local_surface(
     sample_surface(profile, bed, at, seconds)
 }
 
-fn sample(
+pub(super) fn sample(
     profile: &OceanSurfaceProfile,
     bed: &OceanBathymetry,
     at: Vec2,
@@ -80,18 +82,39 @@ fn sample(
     let slope = depth_slope * shelter + shelter_slope * depth_attenuation;
     let mut wave_height = 0.0;
     let mut wave_gradient = Vec2::ZERO;
+    let mut wave_velocity = 0.0;
+    let reflection = super::reflection::reflection(profile, bed, at)?;
     for wave in &profile.waves {
         let direction = wave.direction.normalize();
         let frequency = std::f32::consts::TAU / wave.wavelength;
         let phase = frequency * direction.dot(at) - std::f32::consts::TAU * seconds / wave.period
             + wave.phase_radians;
-        wave_height += wave.amplitude * phase.sin();
-        wave_gradient += direction * (wave.amplitude * frequency * phase.cos());
+        let rate = std::f32::consts::TAU / wave.period;
+        let incident = Vec4::new(
+            wave.amplitude * phase.sin(),
+            direction.x * wave.amplitude * frequency * phase.cos(),
+            direction.y * wave.amplitude * frequency * phase.cos(),
+            -rate * wave.amplitude * phase.cos(),
+        );
+        let blended = reflection.blend(
+            incident,
+            direction,
+            wave.amplitude,
+            frequency,
+            rate,
+            wave.phase_radians,
+            at,
+            seconds,
+        );
+        wave_height += blended.x;
+        wave_gradient += Vec2::new(blended.y, blended.z);
+        wave_velocity += blended.w;
     }
     let derivative = wave_gradient * attenuation + slope * wave_height;
     Some(OceanSurfaceSample {
         height: profile.mean_sea_level + wave_height * attenuation,
         normal: Vec3::new(-derivative.x, 1.0, -derivative.y).normalize(),
+        vertical_velocity: wave_velocity * attenuation,
         depth,
         color: profile
             .shallow_color
@@ -100,6 +123,18 @@ fn sample(
 }
 
 impl OceanBathymetry {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Validated grid dimensions are at most2048."
+    )]
+    pub(super) fn contains(&self, at: Vec2) -> bool {
+        let grid = (at - self.origin_xz) / self.spacing;
+        at.is_finite()
+            && grid.is_finite()
+            && grid.min_element() >= 0.0
+            && grid.x <= self.width.saturating_sub(1) as f32
+            && grid.y <= self.height.saturating_sub(1) as f32
+    }
     pub(super) fn sample(&self, at: Vec2) -> Option<(f32, Vec2)> {
         self.sample_values(&self.bed_heights, at, -140.0)
     }

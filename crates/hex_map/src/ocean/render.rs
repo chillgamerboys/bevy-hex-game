@@ -20,6 +20,7 @@ struct OceanParams {
     periods: Vec4,
     phase_offsets: Vec4,
     near: Vec4,
+    effects: Vec4,
     shallow: Vec4,
     deep: Vec4,
 }
@@ -130,6 +131,16 @@ fn parameters(
         ),
         phase_offsets: Vec4::new(a.phase_radians, b.phase_radians, c.phase_radians, 0.0),
         near: near.as_vec2().extend(0.0).extend(0.0),
+        effects: Vec4::new(
+            profile.shore_reflection,
+            super::reflection::REFLECTION_RANGE,
+            if bed.shore_anchors.is_empty() {
+                0.0
+            } else {
+                1.0
+            },
+            0.0,
+        ),
         shallow: profile.shallow_color,
         deep: profile.deep_color,
     }
@@ -147,15 +158,20 @@ fn texture(bed: &OceanBathymetry) -> Image {
             .iter()
             .enumerate()
             .flat_map(|(index, height)| {
-                [
-                    *height,
-                    bed.shore_shelter.get(index).copied().unwrap_or(1.0),
-                ]
+                {
+                    let anchor = bed.shore_anchors.get(index).copied().unwrap_or(Vec2::ZERO);
+                    [
+                        *height,
+                        bed.shore_shelter.get(index).copied().unwrap_or(1.0),
+                        anchor.x,
+                        anchor.y,
+                    ]
+                }
                 .into_iter()
                 .flat_map(f32::to_le_bytes)
             })
             .collect(),
-        TextureFormat::Rg32Float,
+        TextureFormat::Rgba32Float,
         RenderAssetUsages::default(),
     )
 }
@@ -256,8 +272,8 @@ fn update(
                     base: StandardMaterial {
                         base_color: Color::WHITE,
                         alpha_mode: AlphaMode::Blend,
-                        perceptual_roughness: 0.42,
-                        reflectance: 0.35,
+                        perceptual_roughness: 0.58,
+                        reflectance: 0.18,
                         cull_mode: None,
                         double_sided: true,
                         opaque_render_method: OpaqueRendererMethod::Forward,
@@ -349,6 +365,33 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_texels_keep_bed_shelter_and_shore_anchor_in_the_declared_channels() {
+        let bed = OceanBathymetry {
+            bed_heights: vec![-20.0; 4],
+            shore_shelter: vec![0.4; 4],
+            shore_anchors: vec![Vec2::new(-12.0, 31.0); 4],
+            ..default()
+        };
+        let image = texture(&bed);
+        assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba32Float);
+        let bytes = image.data.expect("CPU texture publication");
+        assert_eq!(bytes.len(), 64);
+        for texel in bytes.chunks_exact(16) {
+            let values: Vec<f32> = texel
+                .chunks_exact(4)
+                .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                .collect();
+            for (actual, expected) in values.iter().zip([-20.0, 0.4, -12.0, 31.0]) {
+                assert!((*actual - expected).abs() < 0.00001);
+            }
+        }
+        let params = parameters(&OceanSurfaceProfile::default(), &bed, 7.0, IVec2::ZERO);
+        assert!((params.effects.x - 0.15).abs() < 0.00001);
+        assert!((params.effects.y - 35.0).abs() < 0.00001);
+        assert!((params.effects.z - 1.0).abs() < 0.00001);
+    }
 
     #[test]
     fn phase_offsets_agree_between_cpu_sampling_and_gpu_uniforms() {

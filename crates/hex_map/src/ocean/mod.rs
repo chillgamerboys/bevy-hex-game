@@ -1,15 +1,18 @@
 //! A camera-centered ocean with world-coherent, presentation-only swells.
 //!
-//! The host publishes immutable bathymetry and explicit visual time. Neither
-//! displacement nor camera tint changes voxel occupancy or actor motion.
+//! The host publishes immutable bathymetry and explicit shared time. Surface
+//! contact queries reuse this model without changing authoritative water volume.
+mod adapter;
 mod boundary;
 mod mesh;
+mod reflection;
 mod render;
 mod sample;
 mod shelter;
 
 use bevy::prelude::*;
 
+pub use adapter::OceanSurfaceAdapter;
 pub use boundary::{OceanBoundaryColumn, OceanNearBoundary};
 pub use render::{install, OceanRenderStatus};
 pub use sample::{sample_local_surface, sample_surface, OceanSurfaceSample};
@@ -38,6 +41,8 @@ pub struct OceanSurfaceProfile {
     pub waves: [OceanWave; 3],
     /// Positive depth at which swells reach their full amplitude.
     pub shore_depth: f32,
+    /// Weak reflected component, normalized with its incident swell to preserve amplitude bounds.
+    pub shore_reflection: f32,
     /// Shallow-water linear RGBA, before lighting and fog.
     pub shallow_color: Vec4,
     /// Deep-water linear RGBA, before lighting and fog.
@@ -72,8 +77,9 @@ impl Default for OceanSurfaceProfile {
                 },
             ],
             shore_depth: 12.0,
-            shallow_color: Vec4::new(0.035, 0.18, 0.23, 0.62),
-            deep_color: Vec4::new(0.008, 0.047, 0.090, 0.985),
+            shore_reflection: 0.15,
+            shallow_color: Vec4::new(0.025, 0.14, 0.23, 0.65),
+            deep_color: Vec4::new(0.009, 0.045, 0.110, 0.985),
         }
     }
 }
@@ -85,6 +91,8 @@ impl OceanSurfaceProfile {
         self.mean_sea_level.is_finite()
             && self.shore_depth.is_finite()
             && self.shore_depth > 0.0
+            && self.shore_reflection.is_finite()
+            && (0.0..=0.25).contains(&self.shore_reflection)
             && self.shallow_color.is_finite()
             && self.deep_color.is_finite()
             && self.waves.iter().all(|wave| {
@@ -121,6 +129,8 @@ pub struct OceanBathymetry {
     /// Cached shoreline-distance approximation, zero to one; empty means open sea.
     /// This is visual shelter only, with no currents or directional wind simulation.
     pub shore_shelter: Vec<f32>,
+    /// Cached nearest-shore X/Z anchors, matching the shelter grid; empty disables reflection.
+    pub shore_anchors: Vec<Vec2>,
 }
 
 impl Default for OceanBathymetry {
@@ -133,6 +143,7 @@ impl Default for OceanBathymetry {
             height: 2,
             bed_heights: vec![-140.0; 4],
             shore_shelter: Vec::new(),
+            shore_anchors: Vec::new(),
         }
     }
 }
@@ -152,6 +163,9 @@ impl OceanBathymetry {
                 .and_then(|n| usize::try_from(n).ok())
                 == Some(self.bed_heights.len())
             && self.bed_heights.iter().all(|height| height.is_finite())
+            && (self.shore_anchors.is_empty()
+                || (self.shore_anchors.len() == self.bed_heights.len()
+                    && self.shore_anchors.iter().all(|point| point.is_finite())))
             && (self.shore_shelter.is_empty()
                 || (self.shore_shelter.len() == self.bed_heights.len()
                     && self

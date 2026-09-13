@@ -1,4 +1,5 @@
 use super::OceanBathymetry;
+use bevy::prelude::Vec2;
 
 impl OceanBathymetry {
     /// Caches a bounded two-pass shore-distance approximation. Nearby coast and
@@ -8,6 +9,10 @@ impl OceanBathymetry {
     /// # Errors
     /// Returns an error for invalid bathymetry, a nonfinite sea level or a
     /// nonpositive/nonfinite shelter range.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Validated grid coordinates are at most2048."
+    )]
     pub fn with_shore_shelter(mut self, sea: f32, range: f32) -> Result<Self, &'static str> {
         if !self.is_valid() || !sea.is_finite() || !range.is_finite() || range <= 0.0 {
             return Err("Shelter requires valid bathymetry, sea level and positive range");
@@ -19,20 +24,30 @@ impl OceanBathymetry {
             .iter()
             .map(|bed| if *bed >= sea { 0.0 } else { range })
             .collect();
+        // An unreachable finite anchor disables reflection outside the bounded shore search.
+        let mut anchors = vec![self.origin_xz + Vec2::splat(-100_000.0); distances.len()];
+        for z in 0..height {
+            for x in 0..width {
+                if self.bed_heights[z * width + x] >= sea {
+                    anchors[z * width + x] =
+                        self.origin_xz + Vec2::new(x as f32, z as f32) * self.spacing;
+                }
+            }
+        }
         let diagonal = self.spacing * std::f32::consts::SQRT_2;
         for z in 0..height {
             for x in 0..width {
                 let at = z * width + x;
                 if x > 0 {
-                    distances[at] = distances[at].min(distances[at - 1] + self.spacing);
+                    relax(at, at - 1, self.spacing, &mut distances, &mut anchors);
                 }
                 if z > 0 {
-                    distances[at] = distances[at].min(distances[at - width] + self.spacing);
+                    relax(at, at - width, self.spacing, &mut distances, &mut anchors);
                     if x > 0 {
-                        distances[at] = distances[at].min(distances[at - width - 1] + diagonal);
+                        relax(at, at - width - 1, diagonal, &mut distances, &mut anchors);
                     }
                     if x + 1 < width {
-                        distances[at] = distances[at].min(distances[at - width + 1] + diagonal);
+                        relax(at, at - width + 1, diagonal, &mut distances, &mut anchors);
                     }
                 }
             }
@@ -41,19 +56,20 @@ impl OceanBathymetry {
             for x in (0..width).rev() {
                 let at = z * width + x;
                 if x + 1 < width {
-                    distances[at] = distances[at].min(distances[at + 1] + self.spacing);
+                    relax(at, at + 1, self.spacing, &mut distances, &mut anchors);
                 }
                 if z + 1 < height {
-                    distances[at] = distances[at].min(distances[at + width] + self.spacing);
+                    relax(at, at + width, self.spacing, &mut distances, &mut anchors);
                     if x > 0 {
-                        distances[at] = distances[at].min(distances[at + width - 1] + diagonal);
+                        relax(at, at + width - 1, diagonal, &mut distances, &mut anchors);
                     }
                     if x + 1 < width {
-                        distances[at] = distances[at].min(distances[at + width + 1] + diagonal);
+                        relax(at, at + width + 1, diagonal, &mut distances, &mut anchors);
                     }
                 }
             }
         }
+        self.shore_anchors = anchors;
         self.shore_shelter = distances
             .into_iter()
             .map(|distance| {
@@ -62,6 +78,14 @@ impl OceanBathymetry {
             })
             .collect();
         Ok(self)
+    }
+}
+
+fn relax(at: usize, neighbor: usize, step: f32, distances: &mut [f32], anchors: &mut [Vec2]) {
+    let candidate = distances[neighbor] + step;
+    if candidate < distances[at] {
+        distances[at] = candidate;
+        anchors[at] = anchors[neighbor];
     }
 }
 
