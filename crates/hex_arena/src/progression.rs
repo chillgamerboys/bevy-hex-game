@@ -265,7 +265,7 @@ impl ArenaSession {
     pub fn player_walking_speed(&self) -> f32 {
         self.progression
             .as_ref()
-            .map_or(if self.exploration { 4.725 } else { 4.5 }, |state| {
+            .map_or(if self.exploration { 5.90625 } else { 4.5 }, |state| {
                 state.walking_speed()
             })
     }
@@ -417,13 +417,13 @@ impl ProgressState {
     }
 
     fn walking_speed(&self) -> f32 {
-        4.725 * 1.10_f32.powi(i32::from(self.rank(UpgradeStat::WalkingSpeed)))
+        5.90625 * 1.10_f32.powi(i32::from(self.rank(UpgradeStat::WalkingSpeed)))
     }
 
     fn upgrade_value(&self, stat: UpgradeStat, rank: u8) -> UpgradeValue {
         let r = i32::from(rank);
         UpgradeValue::Scalar(match stat {
-            UpgradeStat::WalkingSpeed => 4.725 * 1.10_f32.powi(r),
+            UpgradeStat::WalkingSpeed => 5.90625 * 1.10_f32.powi(r),
             UpgradeStat::FireballDamage => (15.0 + self.snapshot.damage_bonus) * 1.15_f32.powi(r),
             UpgradeStat::ProjectileSpeed => (45.0 + self.fireball_speed_bonus) * 1.10_f32.powi(r),
             UpgradeStat::ShieldProjectileSpeed => {

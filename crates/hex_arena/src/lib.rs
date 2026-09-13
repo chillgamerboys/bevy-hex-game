@@ -306,7 +306,7 @@ impl ArenaTuning {
             if !profile.shield_projectile_speed.is_finite()
                 || !(45.0..=110.0).contains(&profile.shield_projectile_speed)
                 || !profile.walking_speed.is_finite()
-                || !(4.725..=7.0).contains(&profile.walking_speed)
+                || !(5.90625..=9.0).contains(&profile.walking_speed)
                 || !profile.fireball_radius.is_finite()
                 || !(2.5..=3.25).contains(&profile.fireball_radius)
                 || !(5..=9).contains(&profile.shield_dimensions.0)
@@ -485,7 +485,7 @@ impl Actor {
             body: Body::default(),
             glider: glider::GliderState::default(),
             free_flight: None,
-            walking_speed: 4.725,
+            walking_speed: 5.90625,
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             expedition_role: None,
             dragon_tier: DragonTier::Standard,

@@ -89,7 +89,7 @@ fn empty_exploration_is_playable_with_starting_profile_and_no_progression() {
     assert!((player.body_dimensions().y - 1.2).abs() < 0.0001);
     assert!((player.eye().y - player.feet.y - 1.02).abs() < 0.0001);
     assert!((player.body_dimensions().x - 0.5).abs() < 0.0001);
-    assert!((session.player_walking_speed() - 4.725).abs() < 0.0001);
+    assert!((session.player_walking_speed() - 5.90625).abs() < 0.0001);
     let base = ArenaTuning {
         projectile_speed: 70.0,
         fireball_damage: 99.0,

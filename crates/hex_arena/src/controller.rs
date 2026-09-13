@@ -437,6 +437,116 @@ mod tests {
         assert!(feet.x > 2.0);
     }
 
+    fn expedition_ledge(levels: i32, sign: f32) -> CollisionWorld {
+        let geometry = ArenaVoxelGeometry {
+            level_height: 0.35,
+            ..Default::default()
+        };
+        let mut view = ArenaTerrainView::default();
+        for coord in HexCoord::ORIGIN.within_radius(12) {
+            let top = if coord.to_world(0.0).x * sign > 0.9 {
+                levels
+            } else {
+                0
+            };
+            for level in 0..=top {
+                view.voxels
+                    .insert(TilePos::new(coord, level), SubstanceId(1));
+            }
+        }
+        let mut world = CollisionWorld::default();
+        world.refresh(&view, geometry);
+        world
+    }
+
+    #[test]
+    fn expedition_jump_traverses_three_voxel_ledge_and_lands_on_top() {
+        for sign in [-1.0, 1.0] {
+            let world = expedition_ledge(3, sign);
+            let mut actor = crate::Actor::spawn(0, Vec3::ZERO, Vec3::X * sign);
+            actor.configure_expedition_player();
+            let tuning = crate::EncounterTuning::default();
+            // Approach the full-height ledge on foot first: ordinary stepping cannot climb it.
+            for _ in 0..60 {
+                crate::motion::tick(
+                    &mut actor,
+                    Vec3::X * sign,
+                    false,
+                    false,
+                    false,
+                    &world,
+                    &tuning,
+                );
+            }
+            assert!(actor.feet.x * sign < 0.63 && actor.feet.y.abs() < 0.001);
+            for tick in 0..180 {
+                crate::motion::tick(
+                    &mut actor,
+                    Vec3::X * sign,
+                    false,
+                    tick == 0,
+                    false,
+                    &world,
+                    &tuning,
+                );
+                assert!(
+                    world.clear(actor.feet, actor.dimensions.y, actor.dimensions.x * 0.5),
+                    "embedded on three-voxel jump: {:?}",
+                    actor.feet
+                );
+            }
+            assert!(
+                actor.feet.x * sign > 3.0,
+                "did not cross ledge: {:?}",
+                actor.feet
+            );
+            assert!(
+                (actor.feet.y - 1.05).abs() < 0.001 && actor.grounded,
+                "did not land on plateau: {:?}",
+                actor.feet
+            );
+        }
+    }
+
+    #[test]
+    fn expedition_jump_cannot_traverse_four_voxel_ledge() {
+        for sign in [-1.0, 1.0] {
+            let world = expedition_ledge(4, sign);
+            for approach in [0.0, 0.4, 0.8, 1.2] {
+                let mut actor =
+                    crate::Actor::spawn(0, Vec3::X * (-approach * sign), Vec3::X * sign);
+                actor.configure_expedition_player();
+                let tuning = crate::EncounterTuning::default();
+                for tick in 0..180 {
+                    crate::motion::tick(
+                        &mut actor,
+                        Vec3::X * sign,
+                        false,
+                        tick == 0,
+                        false,
+                        &world,
+                        &tuning,
+                    );
+                    assert!(
+                        world.clear(actor.feet, actor.dimensions.y, actor.dimensions.x * 0.5),
+                        "embedded on four-voxel jump: {:?}",
+                        actor.feet
+                    );
+                    assert!(
+                        actor.feet.x * sign < 0.63,
+                        "crossed four-voxel ledge from {approach}: {:?}",
+                        actor.feet
+                    );
+                }
+                assert!(
+                    actor.feet.y.abs() < 0.001 && actor.grounded,
+                    "did not return to lower floor: {:?}",
+                    actor.feet
+                );
+            }
+        }
+    }
+
     #[test]
     fn coyote_jump_expires_and_airborne_edges_cannot_jump_again() {
         let supported = floor(5);

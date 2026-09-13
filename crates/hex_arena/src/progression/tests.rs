@@ -668,7 +668,7 @@ fn all_rank_caps_are_beneficial_and_effective_profiles_validate() {
     assert_eq!(tuning.shield_dimensions(), (9, 9));
     assert!((tuning.fireball_radius() - 3.25).abs() < 0.0001);
     assert!((tuning.high_jump_height - 8.0).abs() < 0.0001);
-    assert!((f.session.player_walking_speed() - 4.725 * 1.1_f32.powi(4)).abs() < 0.0001);
+    assert!((f.session.player_walking_speed() - 5.90625 * 1.1_f32.powi(4)).abs() < 0.0001);
 }
 
 #[test]

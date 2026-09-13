@@ -238,7 +238,7 @@ fn expedition_profiles_drive_real_movement() {
 }
 
 #[test]
-fn expedition_player_moves_five_percent_faster_without_stacking_on_reset() {
+fn expedition_player_uses_faster_starting_walk_without_stacking_on_reset() {
     let (mut session, view, geometry, materials, tuning) = fixture();
     for generation in [0, 1] {
         session.reset(generation, &view, geometry);
@@ -254,7 +254,7 @@ fn expedition_player_moves_five_percent_faster_without_stacking_on_reset() {
             .all(|actor| !actor.expedition_player));
         for run in [false, true] {
             for (mut actor, expected) in [
-                (player.clone(), 4.725),
+                (player.clone(), 5.90625),
                 (Actor::spawn(0, player.feet, Vec3::NEG_Z), 4.5),
                 (Actor::spawn(1, player.feet, Vec3::NEG_Z), 4.5),
             ] {
