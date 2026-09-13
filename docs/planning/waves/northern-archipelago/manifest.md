@@ -7,7 +7,7 @@ Topology: one wave, because the new world, shared surface renderer and explorati
 
 ## Locked decisions
 
-The user's approved Northern Archipelago plan is authoritative: approximately2400 world units across, exactly11 islands in3 clusters separated by300–500 water units; crater~300 high; cold snowy Viking landscape;4 buildings and1 field; dry bay spawn. No enemies/objectives/victory, no new fluid physics. Normal expedition player and spells, G glider, F collision-aware freeflight80/160. Ocean waves amplitudes1.2/.6/.2, wavelengths110/180/60, periods18/25/12; shared static liquid levels and dynamic visual surface. Water is indestructible; all solids carve; unloaded is never air. Original Forest package and running game stay untouched. No native automation or launch without user request; user owns motion/feel checks.
+The user's approved Northern Archipelago plan is authoritative: approximately2400 world units across, exactly11 islands in3 clusters separated by300–500 water units; crater~300 high; cold snowy Viking landscape;4 buildings and1 field; dry bay spawn. The first checkpoint has no enemies/objectives/victory and no fluid simulation. The later user-authorized marine extension below adds surface sailing and swimming, with optional enemies only after that checkpoint. Normal expedition player and spells, G glider, F collision-aware freeflight80/160. Ocean waves amplitudes1.2/.6/.2, wavelengths110/180/60, periods18/25/12; shared static liquid levels and dynamic visual surface. Water is indestructible; all solids carve; unloaded is never air. Original Forest package and running game stay untouched. No native automation or launch without user request; user owns motion/feel checks.
 
 ## Foundation
 
@@ -130,3 +130,40 @@ The first actual-package three-circuit authority benchmark passed residency, que
 User steering during implementation: retain at least 20% account allowance; no automatic reset or timers. Increase ordinary expedition starting walking speed by 25% to 5.90625 units/s, in the current expedition and this candidate. Normal jump rise is now 1.38 units; actual controller tests verify three-voxel ledge traversal and four-voxel rejection from both directions. The user requested a restart of the current expedition once these small movement changes are ready; that authorizes its native relaunch independently of the archipelago review.
 
 Deferred user request: allow G to open the glider on land for appearance only, with no lift or movement benefit until airborne. This is recorded for a later change; current glider opening still requires being airborne.
+
+
+## Offline marine extension — September 12
+
+User priority: finish the basic sea map, improve additive waves/crest foam/shore
+interference, then portable sailing, swimming with finite oxygen, wind for sailing
+and gliding; island enemies are optional after those features if allowance permits.
+Keep at least **20% remaining**. No reset credits, timers, or unattended native UI
+checks. The user is offline; use these initial playtest defaults without waiting.
+
+- **B** deploys/folds a portable timber sailboat near admitted, sufficiently deep
+  ocean water. Momentum survives toggling; tailwind adds propulsion, crosswind and
+  headwind lose speed. W provides a slow paddling fallback; S brakes. Boat hull and
+  player sweep against exact solids and unloaded boundaries.
+- **Space / Ctrl** rise/dive while swimming. Oxygen lasts **90 seconds**, refills
+  over six seconds when breathing, and empty oxygen costs 10 HP/s. Use physical
+  eye submersion, not the third-person camera. No passive healing.
+- Prevailing wind starts at approximately **10 units/s** with slow modest gusts.
+  Glider lift and stall consume air-relative speed; collision and prefetch consume
+  ground velocity. Opening equipment supplies no momentum or altitude.
+- World publishes one immutable analytic surface sampler through a core contract;
+  authoritative current wet spans/residency gate gameplay sampling. Decorative
+  ocean never authorizes movement. The same pause/reset-aware run clock drives
+  surface sampling, wind and rendering. No currents or volume solver.
+- Keep three additive swells and their two-unit envelope. Weak cached shoreline
+  reflection and crest-driven foam share the surface phase and derivatives.
+
+Implementation remains a wave. First land the behavior-neutral core surface/wind
+contract. The existing world ocean lane owns surface math, its renderer and adapter;
+existing gameplay lane owns boat/swimming/oxygen/glider wind; root owns input, HUD,
+boat presentation, run clock wiring and combined checks. No lane imports another
+owner's implementation. Geography finishes dressing after the basic six-view static
+checkpoint. Optional enemies require a separate bounded roster/reward decision and
+must not hold the marine checkpoint open.
+
+Restart now requires **Shift+R**; the Esc button remains. The original expedition
+checkout has the same source fix. The native run was left untouched as promised.
