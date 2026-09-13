@@ -165,7 +165,12 @@ fn optical_transmission(input: VertexOutput) -> f32 {
         let scene_z = depth_ndc_to_view_z(scene_depth);
         if scene_z >= surface_view.z { return 1.0; }
         if scene_z > -10000000.0 {
+#ifdef VIEW_PROJECTION_ORTHOGRAPHIC
+            // Orthographic rays are parallel to view -Z, even off screen center.
+            let ray_cosine = 1.0;
+#else
             let ray_cosine = abs(surface_view.z)/max(length(surface_view), 0.00001);
+#endif
             path = clamp((surface_view.z-scene_z)/max(ray_cosine, 0.00001), 0.0, 300.0);
         }
     }
