@@ -24,6 +24,7 @@ pub mod hex;
 pub mod input;
 pub mod lattice_ids;
 pub mod occupancy;
+pub mod ocean;
 pub mod perception;
 pub mod presentation;
 pub mod setup;
