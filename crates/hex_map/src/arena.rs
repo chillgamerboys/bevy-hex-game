@@ -33,6 +33,7 @@ mod overview;
 #[cfg(test)]
 mod real_world_tests;
 mod render;
+pub mod streamed;
 #[cfg(test)]
 mod tests;
 mod worlds;
@@ -88,6 +89,7 @@ pub fn plugin(app: &mut App) {
         .add_message::<TerrainImpactOutcome>()
         .add_message::<AppExit>()
         .add_systems(Startup, initialize.in_set(ArenaSystems::PublishTerrain))
+        .add_systems(PreUpdate, switch_mode.before(retain_announcements))
         .add_systems(PreUpdate, retain_announcements)
         .add_systems(
             ArenaTick,
@@ -101,7 +103,7 @@ pub fn plugin(app: &mut App) {
                 .in_set(ArenaSystems::PublishTerrain)
                 .run_if(resource_exists::<VoxelMap>),
         )
-        .add_plugins((overview::plugin, render::plugin));
+        .add_plugins((overview::plugin, render::plugin, streamed::plugin));
 }
 
 /// Preserve the last simulated tick's effects while the complete tick schedule is
@@ -169,6 +171,26 @@ fn load_content() -> Result<Content, String> {
     })
 }
 
+fn switch_mode(world: &mut World) {
+    let requested = world.resource::<ArenaSelection>().map;
+    let current = world
+        .get_resource::<ArenaTerrainView>()
+        .map(|view| view.selection.map);
+    if current == Some(requested)
+        || (!requested.capabilities().streamed
+            && !world.contains_resource::<streamed::StreamedArena>())
+    {
+        return;
+    }
+    if world.contains_resource::<Assets<Mesh>>() {
+        render::clear_world(world);
+        streamed::clear_render(world);
+    }
+    world.remove_resource::<streamed::StreamedArena>();
+    world.remove_resource::<VoxelMap>();
+    initialize(world);
+}
+
 fn initialize(world: &mut World) {
     let content = match load_content() {
         Ok(content) => content,
@@ -179,6 +201,13 @@ fn initialize(world: &mut World) {
         }
     };
     let selection = *world.resource::<ArenaSelection>();
+    if selection.map.capabilities().streamed {
+        if let Err(error) = streamed::initialize(world, content) {
+            error!("Northern initialization: {error}");
+            world.write_message(AppExit::error());
+        }
+        return;
+    }
     let recipe = match worlds::build(
         selection,
         content.materials,

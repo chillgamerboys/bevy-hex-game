@@ -128,3 +128,62 @@ fn finite_refill_is_terrain_and_does_not_resurrect_carved_object() {
         .apply_transaction(&edit("cut", at, 0, Some("stone")))
         .is_err());
 }
+
+#[test]
+fn streamed_session_releases_sources_but_keeps_carves_across_reload() {
+    let mut runtime = finite_fixture();
+    let mut session = FiniteWorldSession::streamed(&runtime, -4, 100).expect("streamed overlay");
+    let at = voxel(point(0, 0), 1);
+    session
+        .apply_transaction(&WorldEditTransaction {
+            id: "stream-cut".into(),
+            expected_revisions: BTreeMap::from([(at.column.chunk(), 0)]),
+            edits: vec![VoxelEdit {
+                position: at,
+                material: None,
+            }],
+        })
+        .expect("carve");
+    runtime.set_interests(vec![]).expect("retire interests");
+    runtime.pump();
+    session.sync_residency(&runtime);
+    assert_eq!(session.resident_source_count(), 0);
+    assert_eq!(session.revision(at.column.chunk()), Some(1));
+    load(&mut runtime, vec![interest("return", point(0, 0), 2, 2)]);
+    session.sync_residency(&runtime);
+    assert_eq!(session.material_at(at), None);
+    assert_eq!(session.material_at(voxel(point(0, 0), 2)), Some("stone"));
+    let rendered = session
+        .presentation_package(at.column.chunk())
+        .expect("render projection");
+    rendered
+        .validate_against_manifest(runtime.manifest())
+        .expect("valid surviving geometry");
+    assert_eq!(
+        rendered
+            .columns
+            .iter()
+            .find(|c| c.position == at.column)
+            .and_then(|c| c.material_at(at.level)),
+        None
+    );
+    let reset = FiniteWorldSession::streamed(&runtime, -4, 100).expect("restart");
+    assert_eq!(reset.material_at(at), Some("stone"));
+}
+
+#[test]
+fn streamed_session_accepts_partial_residency_and_preserves_liquid() {
+    let runtime = finite_fixture();
+    let mut session = FiniteWorldSession::streamed(&runtime, -4, 100).expect("overlay");
+    let at = voxel(point(1, 0), 1);
+    let tx = WorldEditTransaction {
+        id: "water".into(),
+        expected_revisions: BTreeMap::from([(at.column.chunk(), 0)]),
+        edits: vec![VoxelEdit {
+            position: at,
+            material: None,
+        }],
+    };
+    assert!(session.apply_transaction(&tx).is_err());
+    assert_eq!(session.terrain_at(at), Some("water"));
+}

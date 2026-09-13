@@ -144,6 +144,9 @@ pub(super) fn build(
                 MapPresentationProjection::default(),
             )
         }
+        ArenaMap::NorthernArchipelago => {
+            return Err("Northern must load through the streamed adapter".into())
+        }
         ArenaMap::ForestMassif => return Err("Forest must load through its V4 adapter".into()),
         ArenaMap::Fort | ArenaMap::SevenRegions => {
             let (source, seed) = match selection.map {
@@ -254,7 +257,9 @@ fn battle_deployment(
         // Both sides share the open west courtyard. The adventure starts lie
         // outside/inside the curtain wall and would require gate/keep routing.
         ArenaMap::Fort => ([(-4, 2), (-2, -2)], 15),
-        ArenaMap::SevenRegions | ArenaMap::ForestMassif => return Ok(None),
+        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago => {
+            return Ok(None)
+        }
     };
     let regions = centers.map(|(q, r)| {
         let preferred = TilePos::new(HexCoord::from_axial(q, r), level);

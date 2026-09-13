@@ -435,3 +435,28 @@ mod tests {
         );
     }
 }
+
+/// Retire legacy presentation when selecting the independently streamed world.
+pub(super) fn clear_world(world: &mut World) {
+    let Some(mut cache) = world.remove_resource::<RenderCache>() else {
+        return;
+    };
+    for entity in cache
+        .columns
+        .values()
+        .copied()
+        .chain(cache.presentations.iter().copied())
+        .chain(cache.features.values().copied())
+        .collect::<Vec<_>>()
+    {
+        if world.get_entity(entity).is_ok() {
+            world.despawn(entity);
+        }
+    }
+    world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+        let mut commands = world.commands();
+        cache.forest.clear(&mut commands, &mut meshes);
+    });
+    world.flush();
+    world.insert_resource(RenderCache::default());
+}

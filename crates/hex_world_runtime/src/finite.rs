@@ -15,7 +15,7 @@ use hex_world_contracts::{
     WorldChange, WorldEditTransaction, WorldHex,
 };
 
-/// Explicit session authority for a completely resident finite destructible world.
+/// Explicit session authority for a finite destructible world, resident or streamed.
 /// Source packages/blueprints remain unchanged; only edited cells consume storage.
 /// Dropping this value restores the source. It intentionally has no save method.
 #[derive(Debug)]
@@ -31,6 +31,153 @@ pub struct FiniteWorldSession {
 }
 
 impl FiniteWorldSession {
+    /// Create a run-local edit overlay whose immutable sources follow residency.
+    /// Edits and partition revisions survive retirement; source bytes do not.
+    pub fn streamed(runtime: &WorldRuntime, bottom: i32, top: i32) -> RuntimeResult<Self> {
+        if bottom > top || top == i32::MAX {
+            return Err(RuntimeError::invalid("invalid streamed edit height bounds"));
+        }
+        let mut result = Self {
+            sources: BTreeMap::new(),
+            materials: runtime
+                .manifest()
+                .materials
+                .iter()
+                .map(|m| (m.id.clone(), m.clone()))
+                .collect(),
+            revisions: BTreeMap::new(),
+            terrain_edits: BTreeMap::new(),
+            object_removed: BTreeSet::new(),
+            transactions: BTreeMap::new(),
+            bottom,
+            top,
+        };
+        result.sync_residency(runtime);
+        Ok(result)
+    }
+
+    /// Retire unloaded source payloads without discarding sparse edits or revisions.
+    pub fn sync_residency(&mut self, runtime: &WorldRuntime) {
+        let resident: BTreeSet<_> = runtime.resident_chunks().map(|p| p.coordinate).collect();
+        self.sources.retain(|chunk, _| resident.contains(chunk));
+        for product in runtime.resident_chunks() {
+            self.sources
+                .entry(product.coordinate)
+                .or_insert_with(|| product.package.clone());
+            self.revisions
+                .entry(product.coordinate)
+                .or_insert(product.revision);
+        }
+    }
+
+    /// Number of immutable fine source payloads currently retained by this overlay.
+    #[must_use]
+    pub fn resident_source_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// Current clipped object intervals, with cut cells removed independently of terrain.
+    #[must_use]
+    pub fn object_column(&self, column: WorldHex) -> Option<ColumnData> {
+        let source = self.source_column(column, true)?;
+        let removed: BTreeSet<_> = self.removed_in_column(column).map(|p| p.level).collect();
+        if removed.is_empty() {
+            return Some(source.clone());
+        }
+        let mut runs = Vec::new();
+        for run in &source.runs {
+            let mut start = run.bottom;
+            for level in removed.range(run.bottom..run.top) {
+                if start < *level {
+                    runs.push(VoxelRun {
+                        bottom: start,
+                        top: *level,
+                        material: run.material.clone(),
+                    });
+                }
+                start = level + 1;
+            }
+            if start < run.top {
+                runs.push(VoxelRun {
+                    bottom: start,
+                    top: run.top,
+                    material: run.material.clone(),
+                });
+            }
+        }
+        Some(ColumnData {
+            position: column,
+            runs,
+        })
+    }
+
+    /// Produce exact current occupancy for disposable voxel rendering.
+    /// Broken authored supports deliberately cease to be live semantic promises.
+    /// Immutable source packages were fully validated before this session began.
+    pub fn presentation_package(&self, chunk: ChunkId) -> RuntimeResult<Arc<ChunkPackage>> {
+        let source = self
+            .sources
+            .get(&chunk)
+            .ok_or_else(|| RuntimeError::invalid("render source is not resident"))?;
+        if self.revision(chunk) == Some(0) {
+            return Ok(source.clone());
+        }
+        let mut package = (**source).clone();
+        package.columns = source
+            .columns
+            .iter()
+            .filter_map(|column| self.terrain_column(column.position))
+            .collect();
+        // Rendering damaged objects as exact colored intervals preserves all surviving cells.
+        // The original object descriptors remain owned by the immutable source.
+        for column in &mut package.columns {
+            let object = self.object_column(column.position);
+            if let Some(object) = object {
+                let mut bounds: BTreeSet<_> = column
+                    .runs
+                    .iter()
+                    .chain(&object.runs)
+                    .flat_map(|r| [r.bottom, r.top])
+                    .collect();
+                let sorted: Vec<_> = std::mem::take(&mut bounds).into_iter().collect();
+                let mut merged: Vec<VoxelRun> = Vec::new();
+                for pair in sorted.windows(2) {
+                    let [bottom, top] = *pair else {
+                        continue;
+                    };
+                    let material = column
+                        .material_at(bottom)
+                        .or_else(|| object.material_at(bottom));
+                    let Some(material) = material else {
+                        continue;
+                    };
+                    if let Some(last) = merged
+                        .last_mut()
+                        .filter(|last| last.top == bottom && last.material == material)
+                    {
+                        last.top = top;
+                    } else {
+                        merged.push(VoxelRun {
+                            bottom,
+                            top,
+                            material: material.to_owned(),
+                        });
+                    }
+                }
+                column.runs = merged;
+            }
+        }
+        package.semantics.occupancy.clear();
+        package.semantics.objects.clear();
+        package.semantics.object_influences.clear();
+        package.semantics.anchors.clear();
+        package.semantics.interiors.clear();
+        package.semantics.lights.clear();
+        package.semantics.light_influences.clear();
+        package.seal().map_err(RuntimeError::invalid)?;
+        Ok(Arc::new(package))
+    }
+
     /// Pin immutable products from a fully resident runtime, with inclusive bounds.
     /// Strict source validation has already run before any relaxed live edit exists.
     pub fn new(runtime: &WorldRuntime, bottom: i32, top: i32) -> RuntimeResult<Self> {
