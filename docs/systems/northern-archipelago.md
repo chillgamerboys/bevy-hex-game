@@ -56,4 +56,6 @@ B through the normal controller, then freezes a close boat/HUD frame. Its receip
 records active boat state and simulation time; it is not evidence of native input
 or travel feel.
 
+A capture-only `--view northern-bay-flat` uses zero wave amplitudes with the same bay camera, bathymetry and depth absorption. `--settle-frames 244` adds a bounded settled sample for wave-cost comparisons (allowed range 4–600); receipts record the requested count. Update wall intervals include scheduler/render-submission waits and are not GPU or native frame timing.
+
 Static captures establish visible geography, geometry, water boundaries and composition. Native motion and feel remain separate user checks: watch the bay swells, fly between clusters with a fast reversal, then walk through the settlement and enter/leave the water. See the [wave manifest](../planning/waves/northern-archipelago/manifest.md) for validation status and the remaining acceptance gates.

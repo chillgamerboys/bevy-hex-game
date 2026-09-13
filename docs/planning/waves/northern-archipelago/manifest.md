@@ -212,3 +212,35 @@ package regressions in the canonical map partition. An actual session drowning
 regression first failed on oxygen resetting during death, then passed after
 cleanup retained the terminal oxygen state; Restart alone replenishes it. Strict
 arena library Clippy also passes. Complete selected Cargo gate still pending.
+
+
+## Full marine validation checkpoint — September 13
+
+Full dressing is enabled. Strict package `9ec5adc635004d97` contains 11 islands,
+three clusters, 255 trees, four buildings and one field. All 5,852 chunks validate;
+the supported bay spawn and submerged relief remain unchanged. Both candidate
+Cargo launchers select the full package when opening Northern.
+
+The seven-view `a9e1df7/full-marine-01` pack passed root and independent static
+review. The former offshore reflection zigzag was caused by interpolating
+unrelated shoreline anchor positions; weighted distances to the real anchors
+remove false offshore reflection. Depth absorption and underwater sky attenuation
+remove distant seabed transmission and the bright underwater strip. Exact
+published front-facing mesh intersections confirm the remaining bay division is
+a physical shelf tangent, with roughly 12 versus 438 units of submerged sight-line
+length. Distant crest accents remain visually repetitive; native motion is pending.
+
+The full-package three-circuit authority benchmark at `f80159c` passed. Active-pump
+p95 was 0.835 / 0.825 / 0.847 ms; peaks were 182 resident sources, two workers and
+185 queued products. Parked sources stayed at 180. Parked RSS was 93,984 / 94,736 /
+94,832 KiB. Damage survived retirement/reload, Restart restored it, and Duel/Fort
+switches passed. This excludes renderer and player-controller cost.
+
+A final integrated review caught stale ground-step events replaying camera
+smoothing during boat/swim/loading ticks. `b6ee4bc` clears them, and the actual-step
+transition regression passes. Full-world/render content was unchanged by this fix.
+The selector tests pass (116). The canonical combined Clippy run found 532 map
+diagnostics: 15 in the new streamed/ocean code and 517 in unchanged V3/preview
+files. The new diagnostics are repaired; their rerun and the paired windowless
+wave-cost comparison are the remaining automated checkpoint work. The full CI
+suite is not claimed passed. Native travel/boat/glider feel remains a user check.
