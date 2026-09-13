@@ -156,6 +156,7 @@ fn canonical(source: &WorldSpec) -> WorldSpec {
     for recipe in result.recipes.values_mut() {
         recipe.landforms.sort_by(|a, b| a.id.cmp(&b.id));
         recipe.biomes.sort_by(|a, b| a.id.cmp(&b.id));
+        recipe.seas.sort_by(|a, b| a.id.cmp(&b.id));
         recipe.basins.sort_by(|a, b| a.id.cmp(&b.id));
         recipe.channels.sort_by(|a, b| a.id.cmp(&b.id));
         recipe.routes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -252,6 +253,7 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             .map(|v| &v.id)
             .chain(recipe.biomes.iter().map(|v| &v.id))
             .chain(recipe.basins.iter().map(|v| &v.id))
+            .chain(recipe.seas.iter().map(|v| &v.id))
             .chain(recipe.channels.iter().map(|v| &v.id))
             .chain(recipe.routes.iter().map(|v| &v.id))
             .chain(recipe.bridges.iter().map(|v| &v.id))
@@ -298,6 +300,14 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
         for biome in &recipe.biomes {
             if let Some(error) = require_material(&biome.material, true) {
                 issue(&biome.id, error);
+            }
+        }
+        for sea in &recipe.seas {
+            if !(1..=60_000).contains(&sea.water_level) {
+                issue(&sea.id, "invalid sea level".into());
+            }
+            if let Some(error) = require_material(&sea.material, false) {
+                issue(&sea.id, error);
             }
         }
         for basin in &recipe.basins {
@@ -557,6 +567,7 @@ pub fn validate_source(source: &WorldSpec) -> Result<(), CompileDiagnostics> {
             .iter()
             .map(|v| &v.mask)
             .chain(recipe.basins.iter().map(|v| &v.mask))
+            .chain(recipe.seas.iter().map(|v| &v.mask))
             .chain(recipe.features.iter().map(|v| &v.mask))
             .chain(recipe.overrides.iter().map(|v| &v.mask))
             .chain(recipe.caves.iter().flat_map(|v| v.rooms.iter()))
@@ -899,6 +910,28 @@ fn compile_geometry(
             "boundary terrain",
             operators::check_constraints(&build, recipe, &seam.source.id),
         )?;
+    }
+    for sea in &recipe.seas {
+        for column in geometry::disk(sea.mask.center, sea.mask.radius)
+            .map_err(|error| CompileDiagnostics::one(&sea.id, "sea", error))?
+        {
+            let runs = build
+                .columns
+                .get_mut(&column)
+                .ok_or_else(|| CompileDiagnostics::one(&sea.id, "sea", "fill leaves region"))?;
+            if let Some(liquid) = super::fill_sea_column(
+                column,
+                runs,
+                sea.water_level,
+                &sea.material,
+                &format!("{}/{}", region.id, sea.id),
+            )
+            .map_err(|error| CompileDiagnostics::one(&sea.id, "sea", error.to_string()))?
+            {
+                build.liquids.insert(column, liquid);
+                build.reserved.insert(column);
+            }
+        }
     }
     for basin in &recipe.basins {
         contextual(

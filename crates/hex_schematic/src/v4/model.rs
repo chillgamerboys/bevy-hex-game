@@ -91,6 +91,9 @@ pub struct RegionRecipe {
     /// Standing pools with exact level and depth.
     #[serde(default)]
     pub basins: Vec<BasinSpec>,
+    /// Sea fills preserve composed terrain and occupy only the space above its bed.
+    #[serde(default)]
+    pub seas: Vec<SeaFillSpec>,
     /// Directed channels with explicit grade controls and physical falls.
     #[serde(default)]
     pub channels: Vec<ChannelSpec>,
@@ -431,4 +434,18 @@ pub struct BoundaryFlowSpec {
     pub upstream: WorldHex,
     /// Downstream terminal surface in the opposite participating region.
     pub downstream: WorldHex,
+}
+
+/// A standing sea filled above composed solid relief, without flattening the seabed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeaFillSpec {
+    /// Stable connected body identity.
+    pub id: String,
+    /// Exact candidate footprint; dry columns remain unchanged.
+    pub mask: DiskMask,
+    /// Topmost occupied liquid voxel.
+    pub water_level: i32,
+    /// Non-solid registered material.
+    pub material: String,
 }

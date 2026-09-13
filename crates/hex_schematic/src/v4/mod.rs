@@ -7,7 +7,10 @@
 mod compiler;
 mod geometry;
 mod model;
+pub mod northern;
 mod operators;
+mod sea;
+pub use sea::fill_sea_column;
 mod volume;
 
 pub use compiler::{

@@ -1,5 +1,6 @@
 //! Supported prebuilt V4 authoring command. Map edits are runtime inputs.
 
+mod northern;
 mod preview;
 mod replication_benchmark;
 mod runtime_benchmark;
@@ -19,7 +20,7 @@ use hex_world_runtime::{publish_revision, FileChunkSource, IoLimits};
 use serde::{Deserialize, Serialize};
 
 const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
-const USAGE: &str = "worldc validate --source WORLD.ron\nworldc compile --source WORLD.ron --output DIRECTORY\nworldc preview --package DIRECTORY --output REVIEW.html\nworldc inspect --package DIRECTORY\nworldc probe --package DIRECTORY --at q,r\nworldc survey --package DIRECTORY --output SURVEY.json\nworldc benchmark --source WORLD.ron --output RECEIPT.json [--iterations 20]\nworldc edit-benchmark --series SERIES.ron --output RECEIPT.json\nworldc runtime-benchmark --series SERIES.ron --output RECEIPT.json\nworldc replication-benchmark --package DIRECTORY --output RECEIPT.json\n\nBuild worldc once. Authoring commands read source files at runtime and never invoke Cargo.\n";
+const USAGE: &str = "worldc northern-compile --source NORTHERN.ron --output DIRECTORY\nworldc validate --source WORLD.ron\nworldc compile --source WORLD.ron --output DIRECTORY\nworldc preview --package DIRECTORY --output REVIEW.html\nworldc inspect --package DIRECTORY\nworldc probe --package DIRECTORY --at q,r\nworldc survey --package DIRECTORY --output SURVEY.json\nworldc benchmark --source WORLD.ron --output RECEIPT.json [--iterations 20]\nworldc edit-benchmark --series SERIES.ron --output RECEIPT.json\nworldc runtime-benchmark --series SERIES.ron --output RECEIPT.json\nworldc replication-benchmark --package DIRECTORY --output RECEIPT.json\n\nBuild worldc once. Authoring commands read source files at runtime and never invoke Cargo.\n";
 
 fn main() -> ExitCode {
     match execute(std::env::args().skip(1)) {
@@ -52,7 +53,7 @@ impl Arguments {
         }
         let allowed: &[&str] = match command.as_str() {
             "validate" => &["--source"],
-            "compile" => &["--source", "--output"],
+            "compile" | "northern-compile" => &["--source", "--output"],
             "preview" | "replication-benchmark" | "survey" => &["--package", "--output"],
             "replica-worker" => &["--package", "--save", "--connect"],
             "inspect" => &["--package"],
@@ -118,6 +119,9 @@ fn execute(arguments: impl IntoIterator<Item = String>) -> Result<String, Box<dy
     let arguments = Arguments::parse(arguments)?;
     match arguments.command.as_str() {
         "help" => Ok(USAGE.to_owned()),
+        "northern-compile" => {
+            northern::compile(&arguments.path("--source")?, &arguments.path("--output")?)
+        }
         "survey" => survey::run(&arguments.path("--package")?, &arguments.path("--output")?),
         "probe" => probe(
             &arguments.path("--package")?,
