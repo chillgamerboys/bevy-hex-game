@@ -86,18 +86,32 @@ fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> Fragment
     let bed = bed_sample(input.world_position.xz);
     let depth = ocean.water.x - bed.x;
     var shading = input;
+    var crest = 0.0;
+    var foam = 0.0;
     if input.world_normal.y > 0.5 {
         let swell = surface(input.world_position.xz, bed);
         shading.world_normal = normalize(vec3<f32>(-swell.y, 1.0, -swell.z));
+        // Reuse the displaced, shore-attenuated swell rather than a separate
+        // moving noise pattern. Zero-amplitude or flattened shoreline water has
+        // neither highlights nor foam; no new texture reads or wave sampling.
+        let amplitude = max(ocean.wave0.z + ocean.wave1.z + ocean.wave2.z, 0.0001);
+        let crest_height = max(swell.x / amplitude, 0.0);
+        crest = smoothstep(0.35, 0.85, crest_height);
+        let shallow = 1.0 - smoothstep(ocean.water.z, ocean.water.z * 3.0, depth);
+        foam = smoothstep(0.62, 0.90, crest_height) * mix(0.025, 0.045, shallow);
     }
     var pbr = pbr_input_from_standard_material(shading, front);
     let color = mix(ocean.shallow, ocean.deep, clamp(depth / 40.0, 0.0, 1.0));
+    // Restrained cool crest accents keep long swells readable without white
+    // patches covering the sea. Preserve depth-driven alpha, especially shallows.
+    let highlighted = color.rgb * (1.0 + 0.12 * crest);
+    let surface_color = mix(highlighted, vec3<f32>(0.40, 0.56, 0.60), foam);
     // The decorative mesh is finite. Fade its far ring into the clear lower sky
     // so high-altitude views never reveal the camera-centered circular boundary.
     let camera_distance = length(input.world_position.xz - view.world_position.xz);
     let horizon = 1.0 - smoothstep(ocean.water.w * 0.67, ocean.water.w, camera_distance);
-    pbr.material.base_color = vec4<f32>(color.rgb, color.a * horizon);
-    pbr.material.perceptual_roughness = 0.42;
+    pbr.material.base_color = vec4<f32>(surface_color, color.a * horizon);
+    pbr.material.perceptual_roughness = 0.42 - 0.04 * crest;
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr, apply_pbr_lighting(pbr));
     // StandardMaterial sampling uses implicit derivatives. Keep that work ahead
