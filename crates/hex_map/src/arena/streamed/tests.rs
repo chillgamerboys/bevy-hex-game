@@ -30,6 +30,7 @@ struct Lap {
     parked_sources: usize,
     parked_columns: usize,
     parked_solid_runs: usize,
+    parked_process_rss: ProcessRss,
 }
 #[derive(Serialize)]
 struct Receipt {
@@ -38,14 +39,66 @@ struct Receipt {
     adapter_source_fingerprint: u64,
     simulated_speed: f32,
     simulated_step_seconds: f32,
+    initial_parked_process_rss: ProcessRss,
     laps: Vec<Lap>,
     peaks: Peaks,
     revisited_carve_after_retirement: bool,
     reset_restored_carve: bool,
     duel_and_fort_switches: bool,
     parked_sources_growth_last_lap: isize,
+    rss_warmup_growth_kib: Option<i64>,
+    rss_post_warmup_growth_kib: Option<i64>,
+    rss_last_lap_growth_kib: Option<i64>,
     cpu_target_under_two_ms: bool,
     scope: &'static str,
+}
+
+#[derive(Serialize)]
+struct ProcessRss {
+    kib: Option<u64>,
+    unavailable_reason: Option<String>,
+}
+impl ProcessRss {
+    fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            kib: None,
+            unavailable_reason: Some(reason.into()),
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+fn process_rss() -> ProcessRss {
+    // The child's ps call reads this test process. Collection happens only at
+    // parked lap boundaries, outside the production publication CPU interval.
+    let output = match std::process::Command::new("/bin/ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => return ProcessRss::unavailable(format!("ps launch failed: {error}")),
+    };
+    if !output.status.success() {
+        return ProcessRss::unavailable(format!("ps exited with {}", output.status));
+    }
+    match String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+    {
+        Ok(kib) => ProcessRss {
+            kib: Some(kib),
+            unavailable_reason: None,
+        },
+        Err(error) => ProcessRss::unavailable(format!("ps RSS was not integer KiB: {error}")),
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn process_rss() -> ProcessRss {
+    ProcessRss::unavailable("process RSS collection is implemented only for macOS")
+}
+fn rss_growth(later: &ProcessRss, earlier: &ProcessRss) -> Option<i64> {
+    i64::try_from(later.kib?)
+        .ok()?
+        .checked_sub(i64::try_from(earlier.kib?).ok()?)
 }
 #[derive(Default)]
 struct Measurements {
@@ -285,6 +338,7 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
         .expect("solid source");
     let mut measures = Measurements::default();
     measures.settle(&mut world, carved);
+    let initial_parked_process_rss = process_rss();
     world
         .resource_mut::<ArenaInbox>()
         .edits
@@ -348,6 +402,7 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
                 .resident_source_count(),
             parked_columns: view.columns.len(),
             parked_solid_runs: view.columns.values().map(Vec::len).sum(),
+            parked_process_rss: process_rss(),
         });
     }
     assert!(
@@ -393,6 +448,15 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
     let cpu_target = laps
         .iter()
         .all(|lap| lap.publication_cpu_p95_ms < 2.0 && lap.active_publication_cpu_p95_ms < 2.0);
+    let (rss_warmup_growth_kib, rss_post_warmup_growth_kib, rss_last_lap_growth_kib) =
+        match laps.as_slice() {
+            [first, second, last] => (
+                rss_growth(&first.parked_process_rss, &initial_parked_process_rss),
+                rss_growth(&last.parked_process_rss, &first.parked_process_rss),
+                rss_growth(&last.parked_process_rss, &second.parked_process_rss),
+            ),
+            _ => unreachable!("three circuits"),
+        };
     let receipt = Receipt {
         kind: "actual-northern-production-pump",
         package_fingerprint: overview.package_fingerprint,
@@ -400,14 +464,18 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
             .expect("source identity"),
         simulated_speed: 160.0,
         simulated_step_seconds: 1.0 / 60.0,
+        initial_parked_process_rss,
         laps,
         peaks: measures.peaks,
         revisited_carve_after_retirement: measures.saw_carve_retired,
         reset_restored_carve: true,
         duel_and_fort_switches: true,
         parked_sources_growth_last_lap: growth,
+        rss_warmup_growth_kib,
+        rss_post_warmup_growth_kib,
+        rss_last_lap_growth_kib,
         cpu_target_under_two_ms: cpu_target,
-        scope: "World authority/pump CPU and bounded cardinalities only. No renderer/GPU/FPS, actor flight physics, wave or native-feel claim.",
+        scope: "World authority/pump CPU, bounded cardinalities, and test-process RSS only. RSS includes allocator/test overhead and is reported without an invented pass threshold. No renderer/GPU/FPS, actor flight physics, wave or native-feel claim.",
     };
     let report = ron::ser::to_string_pretty(&receipt, ron::ser::PrettyConfig::default())
         .expect("receipt encoding");
