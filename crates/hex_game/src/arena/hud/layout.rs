@@ -2,6 +2,11 @@
 use super::*;
 use crate::arena::ux::{self, Page, UxAction, UxLabel};
 
+// Percentage sizing and UI scaling leave nested flex edges fractional; child
+// bounds can round one physical pixel beyond an ancestor clip. Reserve a real
+// trailing gutter: two logical pixels cover that at the smallest Battle scale.
+const CLIP_EDGE_INSET: f32 = 2.0;
+
 fn column() -> Node {
     Node {
         flex_direction: FlexDirection::Column,
@@ -383,7 +388,7 @@ pub(crate) fn setup(
                             Page::Map => {
                                 p.spawn(Node {width:percent(100),column_gap:px(18),align_items:AlignItems::Start,flex_shrink:0.0,overflow:Overflow::clip(),..default()}).with_children(|row| {
                                     ux::spawn_map(row,true,480.0);
-                                    row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..scroll_content(column())}).with_children(|details| {
+                                    row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),padding:UiRect::right(px(CLIP_EDGE_INSET)),..scroll_content(column())}).with_children(|details| {
                                         details.spawn((text("",24.0,INK),UxLabel::MapSelection));
                                         button(details,"CLEAR DESTINATION",UxAction::ClearPin);
                                         details.spawn(text("D  Dragon     S  Shadow     T  Troll     G  Golem\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
@@ -392,7 +397,7 @@ pub(crate) fn setup(
                             }
                             Page::Upgrades => {
                                 p.spawn(text("Each level earns one upgrade point. Disabled upgrades cost nothing.",26.0,INK));
-                                for index in 0..12 { p.spawn(Node { min_height:px(58),width:percent(100),align_items:AlignItems::Center,column_gap:px(10),flex_shrink:0.0,overflow:Overflow::clip(),..default() }).with_children(|r| {
+                                for index in 0..12 { p.spawn(Node { min_height:px(58),width:percent(100),padding:UiRect::right(px(CLIP_EDGE_INSET)),align_items:AlignItems::Center,column_gap:px(10),flex_shrink:0.0,overflow:Overflow::clip(),..default() }).with_children(|r| {
                                     r.spawn((Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),..default()},text("",26.0,INK),Label::Parameter(index)));
                                     button(r,"−",Action::Change(index,-1.0));button(r,"+",Action::Change(index,1.0));
                                 }); }
