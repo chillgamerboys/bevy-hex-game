@@ -121,6 +121,12 @@ First prove full scale and final ocean mesh with all silhouettes, tallest peak a
 
 ## Current integration checkpoint
 
-The combined code is under validation. L1 full-scale proxy package has 5,852 chunks, 11 islands, a 303.1-unit peak above sea, and a deepest bed 138.95 units below sea. The proxy has 63 trees, four buildings and a field; full dressing follows visual/runtime review. L2 wave CPU tests and L3 flight/collision tests passed. L4 sparse carve unload/reload tests passed; combined windowless capture and circuit performance remain pending.
+The combined code is under validation. L1 full-scale proxy package has 5,852 chunks, 11 islands, a 303.1-unit peak above sea, and a deepest bed 138.95 units below sea. The proxy has 63 trees, four buildings and a field; full dressing follows visual/runtime review. L2 wave CPU tests and L3 flight/collision tests passed. L4 sparse carve unload/reload tests passed.
+
+The first exact-head overview at `d1c4406` mechanically captured but failed independent static review: framing was too distant, mirrored lower-sky clouds dominated transparent water, the outer ocean edge was visible, and proxy/ocean shoreline interpolation disagreed. Those surfaces have targeted repairs awaiting fresh captures; the failed image is not acceptance evidence. Native motion and GPU performance remain unverified.
+
+The first actual-package three-circuit authority benchmark passed residency, queue, edit-retention and reset checks; all-pump p95 was 0.72–0.74 ms and the source count settled at 180 across each parked lap. A stronger receipt now measures active-pump p95 separately and process RSS after each lap; replay remains required. This benchmark does not include the renderer or player controller. The same-frame menu switch regression passes: selecting a streamed map must switch adapters before applying the reset, without waiting for the following PreUpdate.
 
 User steering during implementation: retain at least 20% account allowance; no automatic reset or timers. Increase ordinary expedition starting walking speed by 25% to 5.90625 units/s, in the current expedition and this candidate. Normal jump rise is now 1.38 units; actual controller tests verify three-voxel ledge traversal and four-voxel rejection from both directions. The user requested a restart of the current expedition once these small movement changes are ready; that authorizes its native relaunch independently of the archipelago review.
+
+Deferred user request: allow G to open the glider on land for appearance only, with no lift or movement benefit until airborne. This is recorded for a later change; current glider opening still requires being airborne.

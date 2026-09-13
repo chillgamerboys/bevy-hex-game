@@ -311,7 +311,7 @@ def environment(target: Path) -> tuple[dict[str, str], list[str]]:
         del env[key]
     # Let .cargo/config.toml supply the checkout's asset root, even from Finder.
     env.pop("BEVY_ASSET_ROOT", None)
-    env.update(CARGO_TARGET_DIR=str(target), CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="1")
+    env.update(CARGO_TARGET_DIR=str(target), CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2")
     cargo = shutil.which("cargo", path=env.get("PATH"))
     if cargo is None:
         fallback = Path.home() / ".cargo" / "bin" / "cargo"
