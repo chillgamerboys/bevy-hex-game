@@ -59,6 +59,8 @@ pub struct OceanRenderStatus {
     pub boundary_vertices: usize,
     /// Accepted bathymetry revision.
     pub bathymetry_revision: Option<u64>,
+    /// Last phase successfully written to the accepted material; absent before publication.
+    pub phase_seconds: Option<f32>,
     /// Invalid requested inputs; no partial invalid material is published.
     pub error: Option<String>,
 }
@@ -299,6 +301,7 @@ fn update(
     };
     if let Some(mut value) = materials.get_mut(&material) {
         value.extension.params = parameters(&profile, &bed, frame.phase_seconds, cache.near_origin);
+        status.phase_seconds = Some(value.extension.params.water.y);
     }
     let position = Vec3::new(
         frame.camera_position.x,
