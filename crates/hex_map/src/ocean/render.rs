@@ -18,6 +18,7 @@ struct OceanParams {
     wave1: Vec4,
     wave2: Vec4,
     periods: Vec4,
+    phase_offsets: Vec4,
     shallow: Vec4,
     deep: Vec4,
 }
@@ -112,6 +113,7 @@ fn parameters(profile: &OceanSurfaceProfile, bed: &OceanBathymetry, phase: f32) 
             std::f32::consts::TAU / c.period,
             0.0,
         ),
+        phase_offsets: Vec4::new(a.phase_radians, b.phase_radians, c.phase_radians, 0.0),
         shallow: profile.shallow_color,
         deep: profile.deep_color,
     }
@@ -283,4 +285,37 @@ fn update(
     }
     status.ready = true;
     status.error = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase_offsets_agree_between_cpu_sampling_and_gpu_uniforms() {
+        let mut profile = OceanSurfaceProfile::default();
+        let bed = OceanBathymetry::default();
+        for (at, seconds) in [(Vec2::ZERO, 0.0), (Vec2::new(17.0, -29.0), 7.0)] {
+            let uniforms = parameters(&profile, &bed, seconds);
+            assert!((uniforms.phase_offsets - Vec4::new(0.0, 1.3, 2.4, 0.0)).length() < 0.00001);
+            let specifications = [uniforms.wave0, uniforms.wave1, uniforms.wave2];
+            let mut height = profile.mean_sea_level;
+            let mut gradient = Vec2::ZERO;
+            for (index, specification) in specifications.into_iter().enumerate() {
+                let direction = Vec2::new(specification.x, specification.y);
+                let phase = specification.w * direction.dot(at)
+                    - uniforms.water.y * uniforms.periods[index]
+                    + uniforms.phase_offsets[index];
+                height += specification.z * phase.sin();
+                gradient += direction * (specification.z * specification.w * phase.cos());
+            }
+            let cpu = super::super::sample_surface(&profile, &bed, at, seconds).unwrap();
+            let normal = Vec3::new(-gradient.x, 1.0, -gradient.y).normalize();
+            assert!((cpu.height - height).abs() < 0.00001);
+            assert!((cpu.normal - normal).length() < 0.00001);
+        }
+        profile.waves[1].phase_radians = f32::NAN;
+        assert!(!profile.is_valid());
+        assert!(super::super::sample_surface(&profile, &bed, Vec2::ZERO, 0.0).is_none());
+    }
 }

@@ -24,6 +24,8 @@ pub struct OceanWave {
     pub wavelength: f32,
     /// Seconds for one full oscillation.
     pub period: f32,
+    /// Phase at the world origin and time zero, in radians.
+    pub phase_radians: f32,
 }
 
 /// World-owned visual ocean profile; ordinary liquids keep zero displacement.
@@ -51,18 +53,21 @@ impl Default for OceanSurfaceProfile {
                     amplitude: 1.2,
                     wavelength: 110.0,
                     period: 18.0,
+                    phase_radians: 0.0,
                 },
                 OceanWave {
                     direction: Vec2::new(-0.35, 0.94),
                     amplitude: 0.6,
                     wavelength: 180.0,
                     period: 25.0,
+                    phase_radians: 1.3,
                 },
                 OceanWave {
                     direction: Vec2::new(0.60, -0.80),
                     amplitude: 0.2,
                     wavelength: 60.0,
                     period: 12.0,
+                    phase_radians: 2.4,
                 },
             ],
             shore_depth: 12.0,
@@ -90,6 +95,7 @@ impl OceanSurfaceProfile {
                     && wave.wavelength > 0.0
                     && wave.period.is_finite()
                     && wave.period > 0.0
+                    && wave.phase_radians.is_finite()
             })
     }
 }

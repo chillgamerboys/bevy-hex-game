@@ -44,7 +44,8 @@ pub fn sample_surface(
     for wave in &profile.waves {
         let direction = wave.direction.normalize();
         let frequency = std::f32::consts::TAU / wave.wavelength;
-        let phase = frequency * direction.dot(at) - std::f32::consts::TAU * seconds / wave.period;
+        let phase = frequency * direction.dot(at) - std::f32::consts::TAU * seconds / wave.period
+            + wave.phase_radians;
         wave_height += wave.amplitude * phase.sin();
         wave_gradient += direction * (wave.amplitude * frequency * phase.cos());
     }

@@ -17,6 +17,7 @@ struct OceanParams {
     wave1: vec4<f32>,
     wave2: vec4<f32>,
     periods: vec4<f32>,
+    phase_offsets: vec4<f32>,
     shallow: vec4<f32>,
     deep: vec4<f32>,
 }
@@ -42,8 +43,8 @@ fn bed_sample(at: vec2<f32>) -> vec3<f32> {
     let row1 = mix(c, d, t.x);
     return vec3<f32>(mix(row0, row1, t.y), mix(b - a, d - c, t.y) / ocean.bath.z, (row1 - row0) / ocean.bath.z);
 }
-fn wave(at: vec2<f32>, specification: vec4<f32>, rate: f32) -> vec3<f32> {
-    let phase = specification.w * dot(specification.xy, at) - ocean.water.y * rate;
+fn wave(at: vec2<f32>, specification: vec4<f32>, rate: f32, phase_offset: f32) -> vec3<f32> {
+    let phase = specification.w * dot(specification.xy, at) - ocean.water.y * rate + phase_offset;
     return vec3<f32>(specification.z * sin(phase), specification.xy * (specification.z * specification.w * cos(phase)));
 }
 // Displacement followed by X/Z derivative, including shore attenuation.
@@ -52,7 +53,7 @@ fn surface(at: vec2<f32>, bed: vec3<f32>) -> vec3<f32> {
     let t = clamp(depth / ocean.water.z, 0.0, 1.0);
     let weight = t * t * (3.0 - 2.0 * t);
     let slope = -bed.yz * (6.0 * t * (1.0 - t) / ocean.water.z);
-    let waves = wave(at, ocean.wave0, ocean.periods.x) + wave(at, ocean.wave1, ocean.periods.y) + wave(at, ocean.wave2, ocean.periods.z);
+    let waves = wave(at, ocean.wave0, ocean.periods.x, ocean.phase_offsets.x) + wave(at, ocean.wave1, ocean.periods.y, ocean.phase_offsets.y) + wave(at, ocean.wave2, ocean.periods.z, ocean.phase_offsets.z);
     return vec3<f32>(waves.x * weight, waves.yz * weight + slope * waves.x);
 }
 @vertex
