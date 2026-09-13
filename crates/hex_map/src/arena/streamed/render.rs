@@ -965,7 +965,12 @@ fn proxy_with_edges(
         ]);
         normals.extend([normal; 4]);
         colors.extend([color; 4]);
-        indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+        if (b.y - edge.height).abs() > 0.0001 {
+            indices.extend([first, first + 1, first + 2]);
+        }
+        if (a.y - edge.height).abs() > 0.0001 {
+            indices.extend([first, first + 2, first + 3]);
+        }
     }
     Some(
         Mesh::new(
