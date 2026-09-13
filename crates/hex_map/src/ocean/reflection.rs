@@ -224,11 +224,9 @@ mod tests {
         for (at, origin, anchors) in probes {
             let at = Vec2::from_array(at);
             let anchors = anchors.map(Vec2::from_array);
-            assert!(
-                anchors
-                    .iter()
-                    .all(|anchor| at.distance(*anchor) > REFLECTION_RANGE)
-            );
+            assert!(anchors
+                .iter()
+                .all(|anchor| at.distance(*anchor) > REFLECTION_RANGE));
             let bed = OceanBathymetry {
                 origin_xz: Vec2::from_array(origin),
                 spacing: 4.0,

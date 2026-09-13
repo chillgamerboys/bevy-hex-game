@@ -1,4 +1,4 @@
-use super::{OceanBathymetry, OceanFrame, OceanNearBoundary, OceanSurfaceProfile, mesh};
+use super::{mesh, OceanBathymetry, OceanFrame, OceanNearBoundary, OceanSurfaceProfile};
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::NoFrustumCulling,
