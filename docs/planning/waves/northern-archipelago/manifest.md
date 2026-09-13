@@ -308,3 +308,12 @@ launcher/helper tests pass. Native input/feel remains the user's check.
 Swells now have amplitudes 2.1 / 1.05 / 0.35 units, a ±3.5-unit envelope, retaining
 the existing 18 / 25 / 12-second periods and shared CPU/GPU sampling. Focused ocean
 tests and fresh navigation/water captures follow on this combined candidate.
+
+Follow-up validation at `95d608d`: all 16 ocean tests pass. Fresh bay, waterline and
+boat/navigation originals pass focused static review in
+`.context/northern-review/95d608d…/northern-six-v1-focused-1d4b336f-navigation-taller-waves-01/`.
+The wind panel is readable beside the map, and close water still meets the bank
+without a visible gap. Existing shallow/deep tonal contrast remains a visual note.
+Native movement, input and wave feel remain the user's check; these captures ran
+alongside their open game and are not performance evidence. No broad CI rerun or
+complete CI pass is claimed beyond the focused checks listed above.
