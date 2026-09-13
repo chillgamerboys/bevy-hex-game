@@ -408,7 +408,7 @@ pub(crate) fn setup(
                                 p.spawn((Button, Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),border:UiRect::all(px(2)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,overflow:Overflow::clip(),..default() }, BackgroundColor(Color::srgb(0.12, 0.24, 0.29)), BorderColor::all(Color::NONE), Action::Fullscreen)).with_children(|b| {b.spawn((text("Fullscreen",26.0,INK),Label::WindowMode));});
                                 p.spawn(text("C switches first / third person.\nUI preferences persist; Restart resets only your run.",26.0,INK));
                             }
-                            Page::Controls => {p.spawn(text("WASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nEsc / Tab   Pause / resume\nR   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls",26.0,INK));}
+                            Page::Controls => {p.spawn(text("WASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nG   Open / fold glider (Expedition)\nCharging or High Jump folds the glider.\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nEsc / Tab   Pause / resume\nR   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls",26.0,INK));}
                         }
                     });
                 }
