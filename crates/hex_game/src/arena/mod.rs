@@ -12,7 +12,7 @@ mod expedition_route_tests;
 mod forest_tests;
 mod glider_visual;
 #[cfg(feature = "test-support")]
-pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
+pub use encounter::{STRESS_VISIT_TICKS, configure_encounter_stress_tuning, stress_target_pose};
 mod golem;
 mod hud;
 mod northern;
@@ -1510,6 +1510,7 @@ fn capture_frame(
         Option<Res<readability_capture::ReadabilityCapture>>,
         Option<Res<hex_map::arena::streamed::StreamedArena>>,
         Option<Res<hex_map::ocean::OceanRenderStatus>>,
+        Res<northern::NorthernPresentation>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1520,9 +1521,18 @@ fn capture_frame(
         Res<hex_core::DamagedVoxels>,
     ),
 ) {
-    let (liquid_clock, render, ui, readability, northern_world, ocean_status) = render_context;
+    let (
+        liquid_clock,
+        render,
+        ui,
+        readability,
+        northern_world,
+        ocean_status,
+        northern_presentation,
+    ) = render_context;
     if !northern::capture_ready(
         &state.capture_view,
+        &northern_presentation,
         northern_world.as_deref(),
         render.as_deref(),
         ocean_status.as_deref(),

@@ -1,17 +1,17 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
-use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
+use super::{ArenaCamera, ArenaFrame, ViewState, environment::UnderwaterTint};
 use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
+use hex_core::HexCoord;
 use hex_core::arena::{
     ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
     ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
 };
-use hex_core::HexCoord;
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
-    sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary,
-    OceanRenderStatus, OceanSurfaceProfile,
+    OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary, OceanRenderStatus,
+    OceanSurfaceProfile, sample_local_surface, sample_surface,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
 
@@ -23,7 +23,7 @@ struct CapturePose {
 }
 
 #[derive(Resource, Default)]
-struct NorthernPresentation {
+pub(super) struct NorthernPresentation {
     package: Option<u64>,
     generation: Option<u64>,
     phase: f32,
@@ -84,12 +84,16 @@ pub(super) fn fixture_view(view: &str) -> bool {
 /// Static publication readiness, independent of native motion and control feel.
 pub(super) fn capture_ready(
     view: &str,
+    presentation: &NorthernPresentation,
     streamed: Option<&StreamedArena>,
     terrain: Option<&ArenaRenderStatus>,
     ocean: Option<&OceanRenderStatus>,
 ) -> bool {
     if !fixture_view(view) {
         return true;
+    }
+    if presentation.capture.is_none() {
+        return false;
     }
     let Some(streamed) = streamed else {
         return false;
@@ -153,10 +157,13 @@ fn configure(
     reset: Res<ArenaReset>,
     state: Res<ViewState>,
     streamed: Option<Res<StreamedArena>>,
+    terrain: Res<ArenaTerrainView>,
+    geometry: Res<ArenaVoxelGeometry>,
     mut cache: ResMut<NorthernPresentation>,
     mut bath: ResMut<OceanBathymetry>,
     mut profile: ResMut<OceanSurfaceProfile>,
     mut sky_profile: ResMut<BattleSkyProfile>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let enabled = selection.map == ArenaMap::NorthernArchipelago;
     if enabled != cache.enabled {
@@ -176,14 +183,24 @@ fn configure(
     };
     let map = &streamed.overview;
     if cache.package != Some(map.package_fingerprint) {
-        *bath = OceanBathymetry {
+        let prepared = OceanBathymetry {
             revision: map.package_fingerprint,
             origin_xz: Vec2::from_array(map.origin_xz),
             spacing: map.spacing,
             width: map.width,
             height: map.height,
             bed_heights: map.bed_heights.clone(),
-        };
+            ..default()
+        }
+        .with_shore_shelter(map.sea_level, 80.0);
+        match prepared {
+            Ok(prepared) => *bath = prepared,
+            Err(error) => {
+                error!("Northern shoreline presentation: {error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        }
         *profile = OceanSurfaceProfile {
             mean_sea_level: map.sea_level,
             ..default()
@@ -199,7 +216,14 @@ fn configure(
     }
     if state.capture.is_some() && fixture_view(&state.capture_view) {
         if cache.capture.is_none() || cache.capture_view != state.capture_view {
-            cache.capture = capture_pose(&state.capture_view, &streamed, &profile, &bath);
+            cache.capture = capture_pose(
+                &state.capture_view,
+                &streamed,
+                &profile,
+                &bath,
+                &terrain,
+                *geometry,
+            );
             cache.capture_view.clone_from(&state.capture_view);
         }
     } else {
@@ -311,6 +335,7 @@ fn present(
             *geometry,
             &profile,
             &bath,
+            &boundary,
             camera.translation,
             frame.phase_seconds,
         );
@@ -344,10 +369,17 @@ fn camera_water(
     geometry: ArenaVoxelGeometry,
     profile: &OceanSurfaceProfile,
     bath: &OceanBathymetry,
+    boundary: &OceanNearBoundary,
     camera: Vec3,
     phase: f32,
 ) -> Option<Color> {
-    let sample = sample_surface(profile, bath, Vec2::new(camera.x, camera.z), phase)?;
+    let sample = sample_local_surface(
+        profile,
+        bath,
+        boundary,
+        Vec2::new(camera.x, camera.z),
+        phase,
+    )?;
     if camera.y >= sample.height {
         return None;
     }
@@ -499,6 +531,8 @@ fn capture_pose(
     streamed: &StreamedArena,
     profile: &OceanSurfaceProfile,
     bath: &OceanBathymetry,
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
 ) -> Option<CapturePose> {
     let map = &streamed.overview;
     let spawn = Vec3::from_array(map.player_spawn);
@@ -547,14 +581,11 @@ fn capture_pose(
             (site + Vec3::new(70.0, 52.0, 90.0), site, site)
         }
         "northern-waterline" | "northern-underwater" => {
-            let site = (0_u16..=100)
-                .map(|step| spawn.lerp(bay, f32::from(step) / 100.0))
-                .find(|p| {
-                    sample_surface(profile, bath, Vec2::new(p.x, p.z), 0.0)
-                        .is_some_and(|sample| sample.depth > 3.0)
-                })?;
+            let site = waterline_site(terrain, geometry, spawn, bay, map.sea_level)?;
+            let surface = sample_surface(profile, bath, Vec2::new(site.x, site.z), 0.0)
+                .map_or(map.sea_level, |sample| sample.height);
             let eye = site.with_y(
-                map.sea_level
+                surface
                     + if view == "northern-underwater" {
                         -1.2
                     } else {
@@ -570,6 +601,35 @@ fn capture_pose(
         interest,
         overview_height: None,
     })
+}
+
+// A coarse height sample can misclassify a steep coast. Wait for actual admitted
+// liquid intervals so the underwater fixture cannot start inside the seabed.
+fn waterline_site(
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    spawn: Vec3,
+    bay: Vec3,
+    sea: f32,
+) -> Option<Vec3> {
+    (0_u16..=100)
+        .map(|step| spawn.lerp(bay, f32::from(step) / 100.0))
+        .find(|point| {
+            let coord = HexCoord::from_world(*point);
+            let first = terrain
+                .liquids
+                .partition_point(|span| span.bottom.coord < coord);
+            terrain
+                .liquids
+                .iter()
+                .skip(first)
+                .take_while(|span| span.bottom.coord == coord)
+                .any(|span| {
+                    let top = geometry.top(hex_core::TilePos::new(coord, span.top_level));
+                    let bottom = geometry.top(span.bottom) - geometry.level_height;
+                    (top - sea).abs() < 0.01 && top - bottom >= 5.0
+                })
+        })
 }
 
 /// Fit the complete finite footprint, including its highest visible terrain, with
@@ -614,6 +674,35 @@ fn overview_corners(origin: Vec2, extent: Vec2, sea: f32, summit: f32) -> [Vec3;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waterline_fixture_waits_for_deep_admitted_water() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry {
+            level_height: 1.0,
+            vertical_offset: 1.0,
+            ..default()
+        };
+        let spawn = HexCoord::ORIGIN.to_world(10.0);
+        let deep = HexCoord::from_axial(2, 0);
+        let bay = deep.to_world(10.0);
+        let mut terrain = ArenaTerrainView::default();
+        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
+        terrain.liquids.push(ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(HexCoord::from_axial(1, 0), 8),
+            top_level: 9,
+            substance: hex_core::SubstanceId::AIR,
+        });
+        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
+        terrain.liquids.push(ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(deep, 2),
+            top_level: 9,
+            substance: hex_core::SubstanceId::AIR,
+        });
+        let site = waterline_site(&terrain, geometry, spawn, bay, 10.0)
+            .expect("the admitted deep interval is suitable for both water views");
+        assert_eq!(HexCoord::from_world(site), deep);
+    }
 
     #[test]
     fn overview_fits_complete_published_bounds_with_margin() {
