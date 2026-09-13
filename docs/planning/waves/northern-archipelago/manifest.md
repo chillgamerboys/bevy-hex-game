@@ -270,3 +270,20 @@ reviews remain in `.context/northern-review/a9e1df7…/`; paired final-source im
 are under `32ef89b…`. Following documentation-only commits do not change runtime
 or package content. Optional island encounters remain deferred; no native game
 was opened automatically while the user was offline.
+
+
+## Player feedback: navigation and stronger waves
+
+Bounded follow-up on the same candidate, with two independently reviewable parts.
+Root owns the shared UI: repair M on published exploration overviews, add V to
+show a north-up wind arrow/speed from the existing core environment/time facts,
+and investigate Forest selection from the native start screen. The world lane
+owns only the ocean profile, crest presentation and directly affected tests/docs:
+raise the three amplitudes by 75% while retaining slow periods and common CPU/GPU
+sampling. No new gameplay authority or whole-map package compilation is needed.
+Keep the current native run intact; use focused input tests and windowless frames,
+then the user's native playtest. Account floor remains20% remaining.
+
+UI intake: user reports M does nothing in Northern and Forest selection does not
+respond. Linear read/search requires reauthentication, so no ticket was written.
+The local defect record and implementation can proceed within the user's request.
