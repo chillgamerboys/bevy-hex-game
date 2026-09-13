@@ -37,7 +37,7 @@ pub struct OceanWave {
 pub struct OceanSurfaceProfile {
     /// Static physical sea surface, also the displacement's mean height.
     pub mean_sea_level: f32,
-    /// The three approved slow swells.
+    /// The three slow swells; defaults have a combined maximum excursion of 3.5 units.
     pub waves: [OceanWave; 3],
     /// Positive depth at which swells reach their full amplitude.
     pub shore_depth: f32,
@@ -56,21 +56,21 @@ impl Default for OceanSurfaceProfile {
             waves: [
                 OceanWave {
                     direction: Vec2::new(0.94, 0.34),
-                    amplitude: 1.2,
+                    amplitude: 2.1,
                     wavelength: 110.0,
                     period: 18.0,
                     phase_radians: 0.0,
                 },
                 OceanWave {
                     direction: Vec2::new(-0.35, 0.94),
-                    amplitude: 0.6,
+                    amplitude: 1.05,
                     wavelength: 180.0,
                     period: 25.0,
                     phase_radians: 1.3,
                 },
                 OceanWave {
                     direction: Vec2::new(0.60, -0.80),
-                    amplitude: 0.2,
+                    amplitude: 0.35,
                     wavelength: 60.0,
                     period: 12.0,
                     phase_radians: 2.4,

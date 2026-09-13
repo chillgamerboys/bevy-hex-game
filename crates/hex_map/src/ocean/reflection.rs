@@ -257,6 +257,7 @@ mod tests {
     #[test]
     fn shore_interference_preserves_swell_envelope_and_wraps_without_a_jump() {
         let profile = OceanSurfaceProfile::default();
+        let envelope: f32 = profile.waves.iter().map(|wave| wave.amplitude).sum();
         let bed = coast();
         for seconds in 0_u16..900 {
             for at in [
@@ -269,7 +270,7 @@ mod tests {
                         .unwrap()
                         .height
                         .abs()
-                        <= 2.00001
+                        <= envelope + 0.00001
                 );
             }
         }

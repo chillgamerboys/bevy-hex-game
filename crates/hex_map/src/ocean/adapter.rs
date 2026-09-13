@@ -51,6 +51,34 @@ impl OceanEnvironmentSampler for OceanSurfaceAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn taller_swells_agree_for_camera_and_admitted_gameplay_sampling() {
+        let profile = OceanSurfaceProfile::default();
+        let bed = OceanBathymetry::default();
+        let adapter = OceanSurfaceAdapter::new(profile.clone(), bed.clone()).unwrap();
+        let column = OceanWaterColumn {
+            mean_height: profile.mean_sea_level,
+            bed_height: -140.0,
+            water_id: hex_core::SubstanceId(3),
+        };
+        let at = Vec2::splat(0.5);
+        for phase in [0.0, 7.0, 13.0, 31.0] {
+            let gameplay = adapter.surface_at(at, phase, column).unwrap();
+            let camera = super::super::sample_local_surface(
+                &profile,
+                &bed,
+                &super::super::OceanNearBoundary::default(),
+                at,
+                phase,
+            )
+            .unwrap();
+            assert!((gameplay.height - camera.height).abs() < 0.00001);
+            assert!(gameplay.normal.distance(camera.normal) < 0.00001);
+            assert!((gameplay.vertical_velocity - camera.vertical_velocity).abs() < 0.00001);
+        }
+    }
+
     #[test]
     fn adapter_keeps_exact_wet_bounds_without_decorative_or_residency_fallback() {
         let bed = OceanBathymetry {

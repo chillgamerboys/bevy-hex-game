@@ -254,7 +254,10 @@ mod tests {
     #[test]
     fn displacement_is_bounded_periodic_and_zero_on_shore() {
         let profile = OceanSurfaceProfile::default();
+        let envelope: f32 = profile.waves.iter().map(|wave| wave.amplitude).sum();
+        assert!((envelope - 3.5).abs() < 0.00001);
         let mut bed = OceanBathymetry::default();
+        let mut maximum_displacement = 0.0_f32;
         for phase in 0..900 {
             let a = sample_surface(
                 &profile,
@@ -263,9 +266,14 @@ mod tests {
                 f32::from(u16::try_from(phase).unwrap()),
             )
             .unwrap();
-            assert!(a.height.abs() <= 2.0001);
+            assert!(a.height.abs() <= envelope + 0.0001);
+            maximum_displacement = maximum_displacement.max(a.height.abs());
             assert!((a.normal.length() - 1.0).abs() < 0.0001);
         }
+        assert!(
+            maximum_displacement > 2.0,
+            "the taller profile exceeds the former envelope"
+        );
         let a = sample_surface(&profile, &bed, Vec2::ZERO, 2.0).unwrap();
         let b = sample_surface(&profile, &bed, Vec2::ZERO, 902.0).unwrap();
         assert!((a.height - b.height).abs() < 0.0001);
