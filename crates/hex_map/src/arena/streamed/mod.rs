@@ -179,8 +179,17 @@ pub(super) fn initialize(world: &mut World, content: Content) -> Result<(), Stri
         .iter()
         .filter_map(|c| pair(c.coordinate))
         .collect();
+    let mut anchors: BTreeMap<_, _> = overview
+        .anchors
+        .iter()
+        .map(|(name, point)| (name.clone(), Vec3::from_array(*point)))
+        .collect();
+    if let Some(bay) = anchors.get("bay").copied() {
+        anchors.insert("player_look_at".into(), bay);
+    }
     let view = ArenaTerrainView {
         selection,
+        anchors,
         spawns: [spawn, spawn],
         package_identity: Some(ArenaPackageIdentity {
             world_id: runtime.manifest().world_id.clone(),

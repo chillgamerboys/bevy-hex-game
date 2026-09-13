@@ -24,6 +24,8 @@ struct Lap {
     waiting_pumps: usize,
     publication_cpu_p95_ms: f64,
     publication_cpu_max_ms: f64,
+    active_pumps: usize,
+    active_publication_cpu_p95_ms: f64,
     parked_residents: usize,
     parked_sources: usize,
     parked_columns: usize,
@@ -48,12 +50,15 @@ struct Receipt {
 #[derive(Default)]
 struct Measurements {
     samples: Vec<f64>,
+    active_samples: Vec<f64>,
     peaks: Peaks,
     waiting_pumps: usize,
     saw_carve_retired: bool,
 }
 impl Measurements {
     fn pump(&mut self, world: &mut World, carved: TilePos) {
+        let previous_interest = world.resource::<StreamedArena>().interest_key;
+        let previous_revision = world.resource::<ArenaTerrainView>().revision;
         super::pump(world);
         let state = world.resource::<StreamedArena>();
         assert!(
@@ -84,6 +89,9 @@ impl Measurements {
             }
         }
         let view = world.resource::<ArenaTerrainView>();
+        if state.interest_key != previous_interest || view.revision != previous_revision {
+            self.active_samples.push(state.publication_ms);
+        }
         assert!(
             view.voxels.is_empty(),
             "streamed terrain must never expand into a dense voxel map"
@@ -270,6 +278,7 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
     let mut laps = Vec::new();
     for number in 1..=3 {
         let sample_start = measures.samples.len();
+        let active_start = measures.active_samples.len();
         let waits = measures.waiting_pumps;
         let steps = travel(&mut world, &points, &mut measures, carved);
         let view = world.resource::<ArenaTerrainView>();
@@ -279,12 +288,22 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
             "carve survives unload/reload on lap{number}"
         );
         let samples = measures.samples.get(sample_start..).expect("lap samples");
+        let active_samples = measures
+            .active_samples
+            .get(active_start..)
+            .expect("active lap samples");
+        assert!(
+            !active_samples.is_empty(),
+            "circuit must exercise active pumps"
+        );
         laps.push(Lap {
             number,
             simulated_steps: steps,
             waiting_pumps: measures.waiting_pumps - waits,
             publication_cpu_p95_ms: percentile95(samples),
             publication_cpu_max_ms: samples.iter().copied().fold(0.0, f64::max),
+            active_pumps: active_samples.len(),
+            active_publication_cpu_p95_ms: percentile95(active_samples),
             parked_residents: world
                 .resource::<StreamedArena>()
                 .runtime
@@ -338,13 +357,25 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
         }
         _ => unreachable!("three circuits"),
     };
-    let cpu_target = laps.iter().all(|lap| lap.publication_cpu_p95_ms < 2.0);
-    let receipt = Receipt { kind:"actual-northern-production-pump", package_fingerprint: overview.package_fingerprint,
-        adapter_source_fingerprint: hex_world_contracts::hash_serializable(&include_str!("mod.rs")).expect("source identity"),
-        simulated_speed:160.0, simulated_step_seconds:1.0/60.0, laps, peaks:measures.peaks,
-        revisited_carve_after_retirement:measures.saw_carve_retired, reset_restored_carve:true,
-        duel_and_fort_switches:true, parked_sources_growth_last_lap:growth, cpu_target_under_two_ms:cpu_target,
-        scope:"World authority/pump CPU and bounded cardinalities only. No renderer/GPU/FPS, actor flight physics, wave or native-feel claim." };
+    let cpu_target = laps
+        .iter()
+        .all(|lap| lap.publication_cpu_p95_ms < 2.0 && lap.active_publication_cpu_p95_ms < 2.0);
+    let receipt = Receipt {
+        kind: "actual-northern-production-pump",
+        package_fingerprint: overview.package_fingerprint,
+        adapter_source_fingerprint: hex_world_contracts::hash_serializable(&include_str!("mod.rs"))
+            .expect("source identity"),
+        simulated_speed: 160.0,
+        simulated_step_seconds: 1.0 / 60.0,
+        laps,
+        peaks: measures.peaks,
+        revisited_carve_after_retirement: measures.saw_carve_retired,
+        reset_restored_carve: true,
+        duel_and_fort_switches: true,
+        parked_sources_growth_last_lap: growth,
+        cpu_target_under_two_ms: cpu_target,
+        scope: "World authority/pump CPU and bounded cardinalities only. No renderer/GPU/FPS, actor flight physics, wave or native-feel claim.",
+    };
     let report = ron::ser::to_string_pretty(&receipt, ron::ser::PrettyConfig::default())
         .expect("receipt encoding");
     if let Some(path) = std::env::var_os("HEX_NORTHERN_BENCH_REPORT") {
@@ -353,7 +384,7 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
     writeln!(std::io::stdout().lock(), "{report}").expect("benchmark output");
     assert!(
         cpu_target,
-        "publication p95 exceeds2ms; receipt is retained as failed performance evidence"
+        "all-pump or active-pump publication p95 exceeds 2 ms; receipt is retained as failed performance evidence"
     );
     assert!(
         growth <= 0,
