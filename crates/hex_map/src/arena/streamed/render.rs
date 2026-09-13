@@ -9,7 +9,7 @@ use bevy::{
     prelude::*,
 };
 use hex_core::arena::{ArenaRenderStatus, ArenaStreamInterest};
-use hex_world_contracts::{ChunkId, ChunkPackage};
+use hex_world_contracts::{ChunkId, ChunkPackage, ColumnData, VoxelRun};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{mpsc, Arc, Mutex},
@@ -19,12 +19,17 @@ struct Completion {
     epoch: u64,
     target: ChunkId,
     revision: Option<u64>,
+    authority: BTreeMap<ChunkId, u64>,
+    retired: BTreeSet<ChunkId>,
+    objects: BTreeMap<String, BTreeSet<ChunkId>>,
     prepared: Result<Vec<PreparedChunk>, String>,
 }
 #[derive(Resource)]
 struct Renderer {
     presenter: TerrainPresenter,
     accepted: BTreeMap<ChunkId, u64>,
+    visible_objects: BTreeMap<String, BTreeSet<ChunkId>>,
+    publication_revision: u64,
     proxies: BTreeMap<ChunkId, (Entity, Handle<Mesh>)>,
     hidden_proxies: BTreeSet<ChunkId>,
     materials: Vec<Handle<StandardMaterial>>,
@@ -65,13 +70,89 @@ fn neighbors(c: ChunkId) -> impl Iterator<Item = ChunkId> {
             r: c.r + r,
         })
 }
-fn visual_package(state: &StreamedArena, c: ChunkId) -> Result<Arc<ChunkPackage>, String> {
-    let package = state
-        .edits
-        .presentation_package(c)
-        .map_err(|e| e.to_string())?;
-    // Water has one continuous ocean renderer; the V4 terrain presenter must not
-    // draw opaque liquid prisms through that surface.
+// A root record supplies the complete footprint; clipped influences alone cannot
+// prove that a tree crown and its support have all reached detailed presentation.
+fn complete_objects(
+    state: &StreamedArena,
+    detailed: &BTreeSet<ChunkId>,
+) -> BTreeMap<String, BTreeSet<ChunkId>> {
+    state
+        .runtime
+        .resident_chunks()
+        .flat_map(|p| {
+            p.package
+                .semantics
+                .objects
+                .iter()
+                .filter_map(|object| {
+                    let chunks: BTreeSet<_> = object
+                        .occupancy
+                        .iter()
+                        .map(|column| column.position.chunk())
+                        .chain(std::iter::once(object.origin.column.chunk()))
+                        .collect();
+                    chunks
+                        .is_subset(detailed)
+                        .then(|| (object.id.clone(), chunks))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn merged_visible_runs(
+    terrain: &[VoxelRun],
+    object: &[VoxelRun],
+    admitted: &[VoxelRun],
+) -> Vec<VoxelRun> {
+    let bounds: BTreeSet<_> = terrain
+        .iter()
+        .chain(object)
+        .chain(admitted)
+        .flat_map(|r| [r.bottom, r.top])
+        .collect();
+    let bounds: Vec<_> = bounds.into_iter().collect();
+    let mut result: Vec<VoxelRun> = Vec::new();
+    for pair in bounds.windows(2) {
+        let [bottom, top] = *pair else {
+            continue;
+        };
+        let at = |r: &&VoxelRun| r.bottom <= bottom && r.top > bottom;
+        let material = terrain.iter().find(at).map(|r| &r.material).or_else(|| {
+            let live = object.iter().find(at)?;
+            admitted
+                .iter()
+                .any(|r| r.bottom <= bottom && r.top > bottom && r.material == live.material)
+                .then_some(&live.material)
+        });
+        let Some(material) = material else {
+            continue;
+        };
+        if let Some(last) = result
+            .last_mut()
+            .filter(|r| r.top == bottom && &r.material == material)
+        {
+            last.top = top;
+        } else {
+            result.push(VoxelRun {
+                bottom,
+                top,
+                material: material.clone(),
+            });
+        }
+    }
+    result
+}
+
+fn visual_package(
+    state: &StreamedArena,
+    c: ChunkId,
+    objects: &BTreeMap<String, BTreeSet<ChunkId>>,
+) -> Result<Arc<ChunkPackage>, String> {
+    let source = state
+        .runtime
+        .resident_chunk(c)
+        .ok_or("render source is not resident")?;
     let solid: BTreeSet<_> = state
         .runtime
         .manifest()
@@ -80,11 +161,40 @@ fn visual_package(state: &StreamedArena, c: ChunkId) -> Result<Arc<ChunkPackage>
         .filter(|m| m.solid)
         .map(|m| m.id.as_str())
         .collect();
-    let mut package = (*package).clone();
-    for column in &mut package.columns {
-        column.runs.retain(|r| solid.contains(r.material.as_str()));
+    let mut admitted = BTreeMap::<_, Vec<VoxelRun>>::new();
+    for influence in &source.package.semantics.object_influences {
+        if objects.contains_key(&influence.id) {
+            for column in &influence.occupancy {
+                admitted
+                    .entry(column.position)
+                    .or_default()
+                    .extend(column.runs.iter().cloned());
+            }
+        }
     }
-    package.semantics.liquids.clear();
+    let mut package = (*source.package).clone();
+    package.columns = source
+        .package
+        .columns
+        .iter()
+        .filter_map(|column| {
+            let terrain = state.edits.terrain_column(column.position)?;
+            let object = state.edits.object_column(column.position);
+            let mut runs = merged_visible_runs(
+                &terrain.runs,
+                object.as_ref().map_or(&[], |c| c.runs.as_slice()),
+                admitted.get(&column.position).map_or(&[], Vec::as_slice),
+            );
+            runs.retain(|r| solid.contains(r.material.as_str()));
+            Some(ColumnData {
+                position: column.position,
+                runs,
+            })
+        })
+        .collect();
+    // This disposable source contains surviving geometry, never fresh gameplay
+    // promises for a carved object or partial root. Authority retains the source.
+    package.semantics = default();
     package.seal().map_err(|e| e.to_string())?;
     Ok(Arc::new(package))
 }
@@ -148,7 +258,7 @@ fn draw(world: &mut World) {
                             let valid = prepared.iter().all(|p| {
                                 if !desired.contains(&p.coordinate())
                                     || current_revision(&state, p.coordinate())
-                                        != Some(p.revision())
+                                        != completion.authority.get(&p.coordinate()).copied()
                                 {
                                     return false;
                                 }
@@ -159,12 +269,20 @@ fn draw(world: &mut World) {
                                 true
                             });
                             if valid {
+                                for chunk in &completion.retired {
+                                    renderer.presenter.remove(world, *chunk);
+                                    renderer.accepted.remove(chunk);
+                                }
                                 let mut published = BTreeMap::new();
                                 let mut failed = false;
                                 for p in prepared {
                                     match renderer.presenter.publish(world, p) {
                                         Ok(receipt) => {
-                                            published.insert(receipt.coordinate, receipt.revision);
+                                            if let Some(authority) =
+                                                completion.authority.get(&receipt.coordinate)
+                                            {
+                                                published.insert(receipt.coordinate, *authority);
+                                            }
                                         }
                                         Err(e) => {
                                             error!("Northern publication: {e}");
@@ -180,10 +298,7 @@ fn draw(world: &mut World) {
                                 // proxy and permanently recording a false success.
                                 if !failed {
                                     renderer.accepted.extend(published);
-                                    if completion.revision.is_none() {
-                                        renderer.presenter.remove(world, completion.target);
-                                        renderer.accepted.remove(&completion.target);
-                                    }
+                                    renderer.visible_objects = completion.objects;
                                 } else {
                                     renderer.accepted.remove(&completion.target);
                                 }
@@ -247,57 +362,75 @@ fn draw(world: &mut World) {
             } else {
                 state.edits.revision(target)
             };
-            let mut snapshots = BTreeMap::new();
-            let affected: Vec<_> = std::iter::once(target)
-                .chain(neighbors(target))
-                .filter(|c| {
-                    *c == target
-                        || (desired.contains(c) && renderer.presenter.package(*c).is_some())
-                })
+            let retired: BTreeSet<_> = renderer
+                .presenter
+                .receipts()
+                .map(|r| r.coordinate)
+                .filter(|c| !desired.contains(c))
                 .collect();
+            let mut next_detailed: BTreeSet<_> = renderer
+                .presenter
+                .receipts()
+                .map(|r| r.coordinate)
+                .filter(|c| desired.contains(c))
+                .collect();
+            if revision.is_some() {
+                next_detailed.insert(target);
+            }
+            let objects = complete_objects(&state, &next_detailed);
+            let mut affected: BTreeSet<_> = std::iter::once(target)
+                .chain(retired.iter().copied())
+                .flat_map(|c| std::iter::once(c).chain(neighbors(c)))
+                .filter(|c| next_detailed.contains(c))
+                .collect();
+            // The last arriving section makes all sections visible together; the
+            // first retiring section hides all surviving fragments in this same
+            // publication. It never exposes only a trunk or a sliver of crown.
+            let changed_objects = objects
+                .keys()
+                .chain(renderer.visible_objects.keys())
+                .filter(|id| objects.get(*id) != renderer.visible_objects.get(*id));
+            for id in changed_objects {
+                for chunk in objects
+                    .get(id)
+                    .or_else(|| renderer.visible_objects.get(id))
+                    .into_iter()
+                    .flatten()
+                {
+                    affected.extend(
+                        std::iter::once(*chunk)
+                            .chain(neighbors(*chunk))
+                            .filter(|c| next_detailed.contains(c)),
+                    );
+                }
+            }
+            renderer.publication_revision = renderer.publication_revision.saturating_add(1);
+            let render_revision = renderer.publication_revision;
+            let mut authority = BTreeMap::new();
+            let mut snapshots = BTreeMap::new();
             for c in &affected {
-                for n in std::iter::once(*c).chain(neighbors(*c)) {
-                    if let Some(p) = renderer.presenter.render_neighbor(n) {
+                for n in neighbors(*c) {
+                    if let Some(p) = renderer
+                        .presenter
+                        .render_neighbor(n)
+                        .filter(|_| next_detailed.contains(&n))
+                    {
                         snapshots.insert(n, p);
                     }
                 }
             }
-            snapshots.remove(&target);
-            // A previously rendered neighbor may already have newer live edits.
-            // Refresh its immutable snapshot now; otherwise rejecting its stale
-            // revision at completion would retry the same old package forever.
-            for c in affected.iter().filter(|c| **c != target) {
-                let Some(revision) = current_revision(&state, *c) else {
-                    continue;
+            for c in &affected {
+                let Some(authority_revision) = current_revision(&state, *c) else {
+                    return;
                 };
-                if snapshots.get(c).is_some_and(|old| old.revision == revision) {
-                    continue;
-                }
-                match visual_package(&state, *c) {
+                authority.insert(*c, authority_revision);
+                match visual_package(&state, *c, &objects) {
                     Ok(package) => {
                         snapshots.insert(
                             *c,
                             RenderNeighbor {
                                 package,
-                                revision,
-                                suppression: Arc::new(Vec::new()),
-                            },
-                        );
-                    }
-                    Err(e) => {
-                        error!("Northern neighbor render source: {e}");
-                        return;
-                    }
-                }
-            }
-            if let Some(revision) = revision {
-                match visual_package(&state, target) {
-                    Ok(package) => {
-                        snapshots.insert(
-                            target,
-                            RenderNeighbor {
-                                package,
-                                revision,
+                                revision: render_revision,
                                 suppression: Arc::new(Vec::new()),
                             },
                         );
@@ -339,6 +472,9 @@ fn draw(world: &mut World) {
                         epoch,
                         target,
                         revision,
+                        authority,
+                        retired,
+                        objects,
                         prepared,
                     });
                 }) {
@@ -397,6 +533,8 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
     Ok(Renderer {
         presenter,
         accepted: BTreeMap::new(),
+        visible_objects: BTreeMap::new(),
+        publication_revision: 0,
         proxies,
         hidden_proxies: BTreeSet::new(),
         materials: vec![material],
@@ -514,6 +652,143 @@ fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Opt
 mod tests {
     use super::*;
     use hex_schematic::v4::northern::NorthernOverview;
+
+    #[test]
+    fn northern_object_admission_preserves_carves_and_excludes_unadmitted_fragments() {
+        let run = |bottom, top, material: &str| VoxelRun {
+            bottom,
+            top,
+            material: material.into(),
+        };
+        let terrain = vec![run(0, 4, "rock")];
+        let blueprint = vec![run(4, 10, "timber"), run(12, 16, "foliage")];
+        let surviving = vec![
+            run(4, 6, "timber"),
+            run(7, 10, "timber"),
+            run(12, 16, "foliage"),
+        ];
+        assert_eq!(
+            merged_visible_runs(&terrain, &surviving, &[]),
+            terrain,
+            "an incomplete object's pieces must not be presented"
+        );
+        let visible = merged_visible_runs(&terrain, &surviving, &blueprint);
+        assert_eq!(
+            visible,
+            terrain
+                .iter()
+                .chain(&surviving)
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !visible.iter().any(|r| r.bottom <= 6 && r.top > 6),
+            "whole-footprint admission must not resurrect a carved cell"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires HEX_NORTHERN_WORLD pointing to the full-scale package"]
+    fn northern_actual_tree_is_never_visible_from_only_crown_chunks() {
+        use hex_core::arena::{ArenaMap, ArenaReset, ArenaSelection};
+        let mut world = World::new();
+        world.insert_resource(ArenaSelection {
+            map: ArenaMap::NorthernArchipelago,
+            ..default()
+        });
+        world.init_resource::<ArenaReset>();
+        world.init_resource::<super::super::super::ArenaInbox>();
+        world.init_resource::<crate::terrain_damage::TerrainDamageState>();
+        world.init_resource::<hex_core::DamagedVoxels>();
+        world.init_resource::<Messages<hex_core::TerrainImpactOutcome>>();
+        world.init_resource::<Messages<AppExit>>();
+        super::super::initialize(
+            &mut world,
+            super::super::super::load_content().expect("battle catalogs"),
+        )
+        .expect("actual package");
+        for _ in 0..1000 {
+            super::super::pump(&mut world);
+            let state = world.resource::<StreamedArena>();
+            if state.runtime.counts().queued_chunks == 0
+                && state.runtime.counts().in_flight_jobs == 0
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let state = world.resource::<StreamedArena>();
+        let all: BTreeSet<_> = state
+            .runtime
+            .resident_chunks()
+            .map(|p| p.coordinate)
+            .collect();
+        let objects = complete_objects(state, &all);
+        let chunks = objects
+            .get("northern/tree/0003")
+            .expect("complete bay tree footprint");
+        assert!(
+            chunks.len() > 1,
+            "reproduce a tree crossing the publication boundary"
+        );
+        let root = state
+            .runtime
+            .resident_chunks()
+            .find_map(|p| {
+                p.package
+                    .semantics
+                    .objects
+                    .iter()
+                    .find(|o| o.id == "northern/tree/0003")
+                    .cloned()
+            })
+            .expect("authored tree");
+        for removed in chunks {
+            let mut partial = all.clone();
+            partial.remove(removed);
+            let admitted = complete_objects(state, &partial);
+            assert!(!admitted.contains_key(&root.id));
+            for chunk in chunks.intersection(&partial) {
+                let package = visual_package(state, *chunk, &admitted).expect("partial view");
+                for column in root
+                    .occupancy
+                    .iter()
+                    .filter(|column| column.position.chunk() == *chunk)
+                {
+                    let presented = package
+                        .columns
+                        .iter()
+                        .find(|c| c.position == column.position)
+                        .expect("column");
+                    for run in &column.runs {
+                        // These crowns do not overlap another complete object.
+                        assert!(
+                            !presented.runs.iter().any(|r| r.material == run.material
+                                && r.bottom < run.top
+                                && r.top > run.bottom),
+                            "a partial tree must have no floating presentation fragment"
+                        );
+                    }
+                }
+            }
+        }
+        for chunk in chunks {
+            let package = visual_package(state, *chunk, &objects).expect("whole tree view");
+            let presenter = TerrainPresenter::with_limits(
+                state.runtime.manifest(),
+                RenderOrigin::default(),
+                state.overview.level_height,
+                PresentationLimits {
+                    max_local_hex: 2048,
+                    ..default()
+                },
+            )
+            .expect("presenter");
+            presenter
+                .prepare(&package, 1)
+                .expect("canonical render package");
+        }
+    }
 
     fn planar_overview() -> NorthernOverview {
         NorthernOverview {
