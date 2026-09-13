@@ -303,6 +303,91 @@ fn toggle() -> ActorIntent {
 }
 
 #[test]
+fn shore_step_is_not_replayed_by_boat_swimming_or_unloaded_water_ticks() {
+    let (mut stepped, world, terrain, geometry, environment) = fixture();
+    let mut shore = ArenaTerrainView {
+        voxels: HexCoord::ORIGIN
+            .within_radius(3)
+            .into_iter()
+            .map(|coord| (TilePos::new(coord, 0), SubstanceId(1)))
+            .collect(),
+        ..Default::default()
+    };
+    shore
+        .voxels
+        .insert(TilePos::new(HexCoord::from_axial(1, 0), 1), SubstanceId(1));
+    let mut shore_world = CollisionWorld::default();
+    shore_world.refresh(
+        &shore,
+        ArenaVoxelGeometry {
+            level_height: 0.35,
+            ..Default::default()
+        },
+    );
+    stepped.feet = Vec3::ZERO;
+    for _ in 0..90 {
+        stepped.body.tick_profile(
+            &mut stepped.feet,
+            Vec3::X,
+            false,
+            false,
+            &shore_world,
+            crate::controller::GroundProfile {
+                height: stepped.dimensions.y,
+                radius: stepped.dimensions.x * 0.5,
+                ..Default::default()
+            },
+        );
+        if stepped.step_rise_this_tick() > 0.3 {
+            break;
+        }
+    }
+    assert!((stepped.step_rise_this_tick() - 0.35).abs() < 0.001);
+
+    // Preserve the actual controller event while placing each transition at
+    // its relevant ocean fixture. No test invents a step_rise value.
+    for mode in ["boat", "swimming", "unloaded"] {
+        let mut actor = stepped.clone();
+        actor.feet = Vec3::Y * if mode == "boat" { DECK } else { -2.0 };
+        actor.previous_feet = actor.feet;
+        actor.grounded = false;
+        actor.body.grounded = false;
+        let mut admitted = terrain.clone();
+        if mode == "unloaded" {
+            admitted
+                .residency
+                .as_mut()
+                .expect("streamed ocean")
+                .ready
+                .clear();
+        }
+        let sea = context(&admitted, geometry, &environment);
+        if mode == "boat" {
+            assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+            assert!(actor.boat().expect("boat").active);
+        }
+        for _ in 0..3 {
+            assert!(tick_or_wait(
+                &mut actor,
+                ActorIntent::default(),
+                &sea,
+                &world
+            ));
+            assert!(
+                actor.step_rise_this_tick().abs() < f32::EPSILON,
+                "{mode} replayed the ground step"
+            );
+        }
+        if mode == "swimming" {
+            assert!(actor.swimming().expect("swim").active);
+        } else if mode == "unloaded" {
+            assert!(actor.free_flight().expect("flight").loading);
+            assert!((actor.feet.y + 2.0).abs() < f32::EPSILON);
+        }
+    }
+}
+
+#[test]
 fn transition_boat_deployment_cannot_reverse_motion_toward_the_camera() {
     let (mut actor, world, terrain, geometry, environment) = fixture();
     let sea = context(&terrain, geometry, &environment);

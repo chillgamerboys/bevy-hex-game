@@ -445,6 +445,9 @@ pub(crate) fn tick_or_wait(
     if actor.marine.is_none() || sea.environment.is_none() {
         return false;
     }
+    // This is a per-tick ground-controller event. Marine movement and loading
+    // waits must not replay the last shore step into presentation smoothing.
+    actor.body.step_rise = 0.0;
     let sample = sea.sample(actor.feet);
     breathing(actor, sample);
     if actor.hp <= 0.0 {
