@@ -145,7 +145,7 @@ pub(super) fn initialize(world: &mut World, content: Content) -> Result<(), Stri
     let anchor_column =
         local(anchor.position.column).ok_or("Northern spawn coordinate overflow")?;
     let anchor_level = i16::try_from(anchor.position.level)
-        .map_err(|_| "Northern spawn height exceeds its physical profile")?;
+        .map_err(|error| format!("Northern spawn height exceeds its physical profile: {error}"))?;
     let anchor_feet =
         anchor_column.to_world((f32::from(anchor_level) + 1.0) * overview.level_height);
     if anchor_feet.distance(spawn) > 0.01 {
@@ -306,9 +306,9 @@ fn validate_overview(
     }
     let [ox, oz] = overview.origin_xz;
     let width = u16::try_from(overview.width - 1)
-        .map_err(|_| "Northern overview width exceeds its grid bound")?;
+        .map_err(|error| format!("Northern overview width exceeds its grid bound: {error}"))?;
     let height = u16::try_from(overview.height - 1)
-        .map_err(|_| "Northern overview height exceeds its grid bound")?;
+        .map_err(|error| format!("Northern overview height exceeds its grid bound: {error}"))?;
     let end_x = ox + f32::from(width) * overview.spacing;
     let end_z = oz + f32::from(height) * overview.spacing;
     if ox > -1213.0
