@@ -925,7 +925,8 @@ impl ArenaSession {
 
     fn reset(&mut self, generation: u64, world: &ArenaTerrainView, geometry: ArenaVoxelGeometry) {
         let [human, bot] = world.spawns;
-        let aim = (bot - human).normalize_or_zero();
+        let look_at = world.anchors.get("player_look_at").copied().unwrap_or(bot);
+        let aim = (look_at - human).normalize_or_zero();
         let bot_enabled = self.bot_enabled;
         #[cfg(any(test, feature = "test-support"))]
         let baseline = self.baseline_bot.is_some();

@@ -538,3 +538,14 @@ fn player_prediction_stops_at_unknown_terrain_and_health_does_not_regenerate() {
         .iter()
         .all(|point| point.x <= impact.x + 0.001));
 }
+
+#[test]
+fn exploration_starts_facing_its_world_owned_view_target() {
+    let (mut session, mut view, geometry, _) = fixture();
+    let target = view.spawns[0] + Vec3::new(10.0, -2.0, 0.0);
+    view.anchors.insert("player_look_at".into(), target);
+    session.reset_with_setup(2, &view, geometry, &ArenaBattleSetup::default());
+    let actor = session.actors.first().expect("one explorer");
+    assert!(actor.aim.distance((target - actor.feet).normalize()) < 0.0001);
+    assert_eq!(session.actors.len(), 1);
+}
