@@ -31,9 +31,10 @@ VIEWS = (
     "northern-overview", "northern-bay", "northern-settlement",
     "northern-summit", "northern-waterline", "northern-underwater",
 )
-EXTRA_VIEWS = ("northern-boat",)
+EXTRA_VIEWS = ("northern-boat", "northern-bay-flat")
 MATRIX = "northern-six-v1"
 CRITERIA = {
+    "northern-bay-flat": "Zero-amplitude bay baseline; identical terrain, camera and depth absorption for a windowless wave-cost comparison.",
     "northern-boat": "Synthetic admitted-water B deployment: the player, voxel hull, sail and compact sailing HUD are readable; this does not establish travel or native feel.",
     "northern-overview": "All three clusters and the complete finite footprint have visible margins; distant island silhouettes remain coherent.",
     "northern-bay": "Unequal rocky bay arms, pale sand pocket, wooded ledges and a continuous sea boundary remain legible.",
@@ -93,7 +94,7 @@ def metadata_unchanged(package: dict) -> bool:
     return True
 
 
-def validate_native(path: Path, view: str, package: dict) -> dict:
+def validate_native(path: Path, view: str, package: dict, settle_frames: int = 4) -> dict:
     state = json.loads(path.read_text())
     expected = package["compiler_receipt"]
     if state.get("view") != view or [state.get("width"), state.get("height")] != arena.CANVAS:
@@ -114,8 +115,9 @@ def validate_native(path: Path, view: str, package: dict) -> dict:
     if view == "northern-boat" and not actors[0].get("boat", {}).get("active"):
         raise RuntimeError("Boat presentation fixture has not reached ordinary controller deployment.")
     ready = state.get("render_ready_frame")
-    if type(ready) is not int or state.get("frame", 0) < ready + 4:
-        raise RuntimeError(f"{view}: missing four settled render frames.")
+    if (type(ready) is not int or state.get("frame", 0) < ready + settle_frames
+            or state.get("capture_settle_frames") != settle_frames):
+        raise RuntimeError(f"{view}: missing {settle_frames} settled render frames.")
     if state.get("liquid_phase_seconds") != 0.0:
         raise RuntimeError(f"{view}: liquid presentation was not frozen at phase zero.")
     camera = state.get("camera") or {}
@@ -192,6 +194,7 @@ def capture(args: argparse.Namespace) -> int:
         "authored_contract": "docs/planning/waves/northern-archipelago/manifest.md",
         "composition": "Three distant clusters; eleven islands; a dominant snowy dormant crater; sheltered timber settlement; blue ocean with slow visual swells.",
         "camera_note": "Six external composition cameras, not native walking/first-person/third-person evidence.",
+        "capture_settle_frames": args.settle_frames,
         "requested_wave_phase_seconds": 0.0, "configured_sun_elevation_degrees": 18.0,
         "logical_canvas": arena.CANVAS, "device_scale": 1.0,
         "expected_views": views, "human_route": MOTION_ROUTE,
@@ -210,7 +213,8 @@ def capture(args: argparse.Namespace) -> int:
                 raise RuntimeError("Source or package changed during capture; this pack is stale.")
             png = pack / f"{view}.png"
             log = pack / f"{view}.log"
-            frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view)
+            frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view,
+                             HEX_ARENA_CAPTURE_SETTLE_FRAMES=str(args.settle_frames))
             row = {"view": view, "started_at": arena.utc_now(), "mechanical_status": "INCOMPLETE",
                    "static_review": "UNREVIEWED", "criterion": CRITERIA[view], "log": log.name,
                    "command": ["cargo", *arena.CARGO_ARGS], "cwd": str(ROOT),
@@ -226,7 +230,7 @@ def capture(args: argparse.Namespace) -> int:
                 raise RuntimeError(f"{view} exited with {row['exit_code']}; see {log}.")
             row.update(arena.png_info(png))
             row["coverage"] = png_coverage(png, tuple(arena.CANVAS))
-            row["native_state_receipt"] = validate_native(png.with_suffix(".json"), view, package)
+            row["native_state_receipt"] = validate_native(png.with_suffix(".json"), view, package, args.settle_frames)
             if row["sha256"] in seen:
                 raise RuntimeError(f"Unexpected identical captures: {view} and {seen[row['sha256']]}.")
             seen[row["sha256"]] = view
@@ -263,9 +267,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dirty-diagnostic", action="store_true", help="Permit explicitly UNAPPROVABLE-DIRTY scratch evidence.")
     parser.add_argument("--dry-run", action="store_true", help="Print source/commands/output without launching or writing.")
     parser.add_argument("--view", action="append", choices=(*VIEWS, *EXTRA_VIEWS), help="Explicit focused subset; repeat as needed. Default: all six.")
+    parser.add_argument("--settle-frames", type=int, default=4, help="Bounded settled render frames, 4–600; longer runs allow windowless timing comparisons.")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", args.label):
         parser.error("--label must be a short filename-safe identifier")
+    if not 4 <= args.settle_frames <= 600:
+        parser.error("--settle-frames must be between 4 and 600")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be finite and positive")
     for field in ("package", "target_dir"):

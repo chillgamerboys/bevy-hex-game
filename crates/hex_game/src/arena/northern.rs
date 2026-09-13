@@ -97,6 +97,7 @@ pub(super) fn fixture_view(view: &str) -> bool {
         view,
         "northern-overview"
             | "northern-bay"
+            | "northern-bay-flat"
             | "northern-settlement"
             | "northern-summit"
             | "northern-waterline"
@@ -235,6 +236,12 @@ fn configure(
             mean_sea_level: map.sea_level,
             ..default()
         };
+        // Capture-only baseline retains identical water membership and depth absorption.
+        if state.capture.is_some() && state.capture_view == "northern-bay-flat" {
+            for wave in &mut profile.waves {
+                wave.amplitude = 0.0;
+            }
+        }
         cache.package = Some(map.package_fingerprint);
         cache.boundary_center = None;
         cache.capture = None;
@@ -622,7 +629,7 @@ fn capture_pose(
                 actor.feet,
             )
         }
-        "northern-bay" => (spawn + Vec3::Y * 6.0, bay + Vec3::Y * 5.0, spawn),
+        "northern-bay" | "northern-bay-flat" => (spawn + Vec3::Y * 6.0, bay + Vec3::Y * 5.0, spawn),
         "northern-settlement" => {
             let site = anchor("settlement")?;
             (

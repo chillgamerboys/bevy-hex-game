@@ -61,9 +61,10 @@ fn spawn(
                 (1.2, 0.80),
             ] {
                 root.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(width, 0.22, 0.39))),
+                    Mesh3d(meshes.add(Cuboid::new(width, 0.40, 0.39))),
                     MeshMaterial3d(timber.clone()),
-                    Transform::from_xyz(0.0, 0.20, z),
+                    // Deck meets the physical feet; the keel sits just in the water.
+                    Transform::from_xyz(0.0, 0.15, z),
                     Pickable::IGNORE,
                 ));
             }

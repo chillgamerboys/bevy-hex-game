@@ -182,6 +182,7 @@ struct ViewState {
     suppress_high_jump: bool,
     capture: Option<PathBuf>,
     capture_view: String,
+    capture_settle_frames: u32,
     image: Option<Handle<Image>>,
     frames: u32,
     requested: bool,
@@ -218,6 +219,16 @@ impl Default for ViewState {
     fn default() -> Self {
         let capture = std::env::var_os("HEX_ARENA_CAPTURE").map(PathBuf::from);
         let capture_view = std::env::var("HEX_ARENA_VIEW").unwrap_or_else(|_| "first".into());
+        let capture_settle_frames = capture
+            .as_ref()
+            .and_then(|_| {
+                std::env::var("HEX_ARENA_CAPTURE_SETTLE_FRAMES")
+                    .ok()?
+                    .parse::<u32>()
+                    .ok()
+            })
+            .unwrap_or(4)
+            .clamp(4, 600);
         let started =
             capture.is_some() && !matches!(capture_view.as_str(), "start" | "observer-start");
         Self {
@@ -237,6 +248,7 @@ impl Default for ViewState {
             suppress_high_jump: true,
             capture,
             capture_view,
+            capture_settle_frames,
             image: None,
             frames: 0,
             requested: false,
@@ -1809,7 +1821,7 @@ fn capture_frame(
         exit.write(AppExit::error());
         return;
     }
-    if frames < ready_frame.saturating_add(4) {
+    if frames < ready_frame.saturating_add(state.capture_settle_frames) {
         return;
     }
     if liquid_clock
@@ -1959,6 +1971,7 @@ fn capture_frame(
         ("focus_anchor", serde_json::json!(state.capture_focus)),
         ("phase_reached_frame", serde_json::json!(state.capture_event_frame)),
         ("render_ready_frame", serde_json::json!(state.capture_ready_frame)),
+        ("capture_settle_frames", serde_json::json!(state.capture_settle_frames)),
         ("ocean_time_seconds", serde_json::json!(session.ocean_time().seconds)),
         ("liquid_phase_seconds", serde_json::json!(liquid_clock.as_ref().map(|clock| clock.phase_seconds()))),
         ("app_construction_to_render_ready_ms", serde_json::json!(state.capture_ready_elapsed_ms)),
