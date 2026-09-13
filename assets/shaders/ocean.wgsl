@@ -28,7 +28,13 @@ struct OceanParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var beds: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var near_water: texture_2d<f32>;
 
-struct OceanBed { bed: vec3<f32>, shelter: vec3<f32>, anchor: vec2<f32>, anchor_dx: vec2<f32>, anchor_dz: vec2<f32>, }
+struct OceanBed { bed: vec3<f32>, shelter: vec3<f32>, anchor: vec2<f32>, anchor_dx: vec2<f32>, anchor_dz: vec2<f32>, shore_distance: vec3<f32>, }
+
+fn shore_distance(at: vec2<f32>, anchor: vec2<f32>) -> vec3<f32> {
+    let offset = at-anchor;
+    let distance = length(offset);
+    return vec3<f32>(distance, offset/max(distance, 0.00001));
+}
 
 // Height and its exact bilinear X/Z derivatives. Manual loads avoid requiring
 // filterable RGBA32Float support and share the CPU grid interpolation precisely.
@@ -37,7 +43,7 @@ fn bed_sample(at: vec2<f32>) -> OceanBed {
     let position = (at - ocean.bath.xy) / ocean.bath.z;
     let maximum = vec2<f32>(dimensions - vec2<u32>(1u));
     if any(position < vec2<f32>(0.0)) || any(position > maximum) {
-        return OceanBed(vec3<f32>(-140.0, 0.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), vec2<f32>(-100000.0), vec2<f32>(0.0), vec2<f32>(0.0));
+        return OceanBed(vec3<f32>(-140.0, 0.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), vec2<f32>(-100000.0), vec2<f32>(0.0), vec2<f32>(0.0), vec3<f32>(100000.0, 0.0, 0.0));
     }
     let cell = min(vec2<i32>(floor(position)), vec2<i32>(dimensions) - vec2<i32>(2));
     let t = position - vec2<f32>(cell);
@@ -50,7 +56,17 @@ fn bed_sample(at: vec2<f32>) -> OceanBed {
     let value = mix(row0, row1, t.y);
     let dx = mix(b - a, d - c, t.y) / ocean.bath.z;
     let dz = (row1 - row0) / ocean.bath.z;
-    return OceanBed(vec3<f32>(value.x, dx.x, dz.x), vec3<f32>(value.y, dx.y, dz.y), value.zw, dx.zw, dz.zw);
+    // Distances to the four real anchors remain conservative across unrelated
+    // coasts. Distance to a blended anchor invents offshore reflection bands.
+    let sa = shore_distance(at, a.zw);
+    let sb = shore_distance(at, b.zw);
+    let sc = shore_distance(at, c.zw);
+    let sd = shore_distance(at, d.zw);
+    let srow0 = mix(sa, sb, t.x);
+    let srow1 = mix(sc, sd, t.x);
+    let svalue = mix(srow0, srow1, t.y);
+    let shore = vec3<f32>(svalue.x, svalue.y + mix(sb.x-sa.x, sd.x-sc.x, t.y)/ocean.bath.z, svalue.z + (srow1.x-srow0.x)/ocean.bath.z);
+    return OceanBed(vec3<f32>(value.x, dx.x, dz.x), vec3<f32>(value.y, dx.y, dz.y), value.zw, dx.zw, dz.zw, shore);
 }
 
 // Same pointy-hex cube rounding as the authoritative world coordinate query.
@@ -70,14 +86,11 @@ fn exact_water(at: vec2<f32>) -> f32 {
 }
 struct Reflection { weight: f32, gradient: vec2<f32>, anchor: vec2<f32>, anchor_dx: vec2<f32>, anchor_dz: vec2<f32>, }
 fn shore_reflection(at: vec2<f32>, bed: OceanBed) -> Reflection {
-    let offset = at-bed.anchor;
-    let distance = length(offset);
+    let distance = bed.shore_distance.x;
     let t = clamp((distance-2.0)/(ocean.effects.y-2.0), 0.0, 1.0);
     let strength = ocean.effects.x * ocean.effects.z;
     let weight = strength * (1.0-t*t*(3.0-2.0*t));
-    let direction = offset/max(distance, 0.00001);
-    let derivative = vec2<f32>(dot(direction, vec2<f32>(1.0,0.0)-bed.anchor_dx), dot(direction, vec2<f32>(0.0,1.0)-bed.anchor_dz));
-    return Reflection(weight, -strength*(6.0*t*(1.0-t)/(ocean.effects.y-2.0))*derivative, bed.anchor, bed.anchor_dx, bed.anchor_dz);
+    return Reflection(weight, -strength*(6.0*t*(1.0-t)/(ocean.effects.y-2.0))*bed.shore_distance.yz, bed.anchor, bed.anchor_dx, bed.anchor_dz);
 }
 fn wave(at: vec2<f32>, specification: vec4<f32>, rate: f32, phase_offset: f32, reflection: Reflection) -> vec4<f32> {
     let phase = specification.w * dot(specification.xy, at) - ocean.water.y * rate + phase_offset;
