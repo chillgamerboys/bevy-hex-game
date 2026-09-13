@@ -12,7 +12,7 @@ use hex_core::arena::{ArenaRenderStatus, ArenaStreamInterest};
 use hex_world_contracts::{ChunkId, ChunkPackage};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex, mpsc},
+    sync::{mpsc, Arc, Mutex},
 };
 
 struct Completion {
@@ -26,6 +26,7 @@ struct Renderer {
     presenter: TerrainPresenter,
     accepted: BTreeMap<ChunkId, u64>,
     proxies: BTreeMap<ChunkId, (Entity, Handle<Mesh>)>,
+    hidden_proxies: BTreeSet<ChunkId>,
     materials: Vec<Handle<StandardMaterial>>,
     sender: mpsc::Sender<Completion>,
     receiver: Mutex<mpsc::Receiver<Completion>>,
@@ -192,16 +193,27 @@ fn draw(world: &mut World) {
                     }
                 }
             }
-            for (chunk, (entity, _)) in &renderer.proxies {
-                let detailed = renderer.presenter.package(*chunk).is_some();
+            // The static seabed covers the whole finite world. Only the bounded
+            // detailed set changes visibility; do not touch thousands of distant
+            // proxy entities every frame or invalidate their visibility caches.
+            let detailed: BTreeSet<_> = renderer
+                .presenter
+                .receipts()
+                .map(|receipt| receipt.coordinate)
+                .collect();
+            for chunk in renderer.hidden_proxies.symmetric_difference(&detailed) {
+                let Some((entity, _)) = renderer.proxies.get(chunk) else {
+                    continue;
+                };
                 if let Some(mut v) = world.get_mut::<Visibility>(*entity) {
-                    *v = if detailed {
+                    *v = if detailed.contains(chunk) {
                         Visibility::Hidden
                     } else {
                         Visibility::Inherited
                     };
                 }
             }
+            renderer.hidden_proxies = detailed;
             let retired = renderer
                 .presenter
                 .receipts()
@@ -386,6 +398,7 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         presenter,
         accepted: BTreeMap::new(),
         proxies,
+        hidden_proxies: BTreeSet::new(),
         materials: vec![material],
         sender,
         receiver: Mutex::new(receiver),
@@ -457,11 +470,12 @@ fn proxy_sample(
     reason = "bounded finite chunk coordinates and fixed eight-step proxy topology"
 )]
 fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Option<Mesh> {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut colors = Vec::new();
-    let mut indices = Vec::new();
-    let mut high = false;
+    let steps = usize::try_from(PROXY_STEPS).ok()?;
+    let vertex_count = (steps + 1) * (steps + 1);
+    let mut positions = Vec::with_capacity(vertex_count);
+    let mut normals = Vec::with_capacity(vertex_count);
+    let mut colors = Vec::with_capacity(vertex_count);
+    let mut indices = Vec::with_capacity(steps * steps * 6);
     for r in 0..=PROXY_STEPS {
         for q in 0..=PROXY_STEPS {
             let x = (c.q * 16) as f32 + q as f32 * 2.0 - 0.5;
@@ -469,15 +483,14 @@ fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Opt
             let wx = 3.0_f32.sqrt() * (x + z * 0.5);
             let wz = z * 1.5;
             let sample = proxy_sample(map, wx, wz)?;
-            high |= sample.height > map.sea_level - 2.0;
             positions.push([wx, sample.height, wz]);
             normals.push(sample.normal);
             colors.push(sample.color);
         }
     }
-    if !high {
-        return None;
-    }
+    // Transparent water can reveal every submerged sample, including from below
+    // the surface. Retain the original sampled relief throughout the finite
+    // catalogue: a sea-level cutoff leaves an open sawtooth rim around islands.
     let stride = PROXY_STEPS + 1;
     for r in 0..PROXY_STEPS {
         for q in 0..PROXY_STEPS {
@@ -556,6 +569,10 @@ mod tests {
         let right = proxy(&map, ChunkId { q: 1, r: 0 }).expect("right land");
         assert_eq!(left.count_vertices(), 81);
         assert_eq!(left.indices().expect("triangles").len(), 384);
+        assert_shared_edge(&left, &right);
+    }
+
+    fn assert_shared_edge(left: &Mesh, right: &Mesh) {
         for attribute in [Mesh::ATTRIBUTE_POSITION, Mesh::ATTRIBUTE_NORMAL] {
             let bevy::mesh::VertexAttributeValues::Float32x3(a) =
                 left.attribute(attribute).expect("left attribute")
@@ -573,5 +590,63 @@ mod tests {
                 assert!(a.distance(b) < 0.00001, "shared edge discontinuity");
             }
         }
+    }
+
+    #[test]
+    fn northern_proxy_submerged_chunks_continue_the_shore_without_missing_faces() {
+        let mut map = planar_overview();
+        for (index, height) in map.bed_heights.iter_mut().enumerate() {
+            let column = u16::try_from(index % 25).expect("small test grid");
+            let wx = -64.0 + f32::from(column) * 8.0;
+            *height = 150.0 - wx;
+        }
+        let shore = proxy(&map, ChunkId { q: 0, r: 0 }).expect("partly exposed shore");
+        let deep = proxy(&map, ChunkId { q: 1, r: 0 }).expect("entirely submerged continuation");
+        assert_shared_edge(&shore, &deep);
+        let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
+            deep.attribute(Mesh::ATTRIBUTE_POSITION).expect("positions")
+        else {
+            panic!("float triples");
+        };
+        assert_eq!(positions.len(), 81, "bounded static topology");
+        for position in positions {
+            let [x, y, _] = *position;
+            assert!(y < map.sea_level - 2.0, "exercise the removed depth cutoff");
+            assert!(
+                (y - (150.0 - x)).abs() < 0.0001,
+                "preserve the actual submerged slope"
+            );
+        }
+        let indices: Vec<_> = deep.indices().expect("continuous seabed").iter().collect();
+        assert_eq!(indices.len(), 384);
+        let mut edges = BTreeMap::<(usize, usize), usize>::new();
+        let mut projected_area = 0.0;
+        for triangle in indices.chunks_exact(3) {
+            let [a, b, c] = triangle else {
+                panic!("three indices");
+            };
+            let [pa, pb, pc] = [a, b, c].map(|i| {
+                Vec3::from_array(*positions.get(*i).expect("valid triangle index")).with_y(0.0)
+            });
+            let signed_area = (pb - pa).cross(pc - pa).y * 0.5;
+            assert!(signed_area > 0.0, "upward-facing nondegenerate surface");
+            projected_area += signed_area;
+            for (a, b) in [(*a, *b), (*b, *c), (*c, *a)] {
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        assert!(
+            (projected_area - 384.0 * 3.0_f32.sqrt()).abs() < 0.001,
+            "cover the complete chunk footprint without missing triangles"
+        );
+        assert_eq!(
+            edges.values().filter(|count| **count == 1).count(),
+            32,
+            "only the four outer edges remain open for neighboring chunks"
+        );
+        assert!(
+            edges.values().all(|count| matches!(*count, 1 | 2)),
+            "no duplicated faces or interior cracks"
+        );
     }
 }
