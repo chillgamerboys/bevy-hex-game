@@ -19,7 +19,11 @@ fn object(
     let mut grounding = Vec::new();
     for (position, voxels) in cells {
         let mut runs: Vec<VoxelRun> = Vec::new();
+        let ground = source.surface(position).level;
         for (level, material) in voxels {
+            if level <= ground {
+                continue;
+            }
             if let Some(last) = runs.last_mut() {
                 if last.top == level && last.material == material {
                     last.top += 1;
@@ -32,7 +36,9 @@ fn object(
                 material: material.into(),
             });
         }
-        let ground = source.surface(position).level;
+        if runs.is_empty() {
+            continue;
+        }
         if runs.first().is_some_and(|r| r.bottom == ground + 1) {
             grounding.push(VoxelPosition {
                 column: position,
@@ -64,7 +70,7 @@ fn tree(
     let mut cells = Cells::new();
     let floor = source.surface(root).level + 1;
     let height = 48 + (index % 34) as i32;
-    let lean = if index % 2 == 0 { 1 } else { -1 };
+    let lean = if index.is_multiple_of(2) { 1 } else { -1 };
     for level in 0..height {
         let shift = if level > height * 2 / 3 { lean } else { 0 };
         add(

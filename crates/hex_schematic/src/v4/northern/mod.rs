@@ -1,4 +1,9 @@
 //! Full-scale, chunk-native Northern Archipelago authoring. No voxel expansion.
+#![expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "The fixed radius700,1400-level package and bounded finite authored dimensions fit integer/f32 publications; quantization deliberately rounds voxel levels."
+)]
 mod objects;
 #[cfg(test)]
 mod tests;
@@ -170,7 +175,7 @@ impl IslandSpec {
         let relief = noise(x, z) * 12.0 * (1.0 - s);
         let shape = if self.crater {
             let ring = (-((s - 0.29) / 0.20).powi(2)).exp();
-            (1.0 - s).powf(0.75) * (0.50 + 0.92 * ring) * (1.0 + 0.09 * (angle * 4.0).sin())
+            (1.0 - s).powf(0.75) * (0.41 + 0.7544 * ring) * (1.0 + 0.09 * (angle * 4.0).sin())
         } else {
             (1.0 - s).powf(0.90) * (1.0 + 0.10 * (angle * 3.0 + s * 9.0).sin())
         };
@@ -239,6 +244,12 @@ impl NorthernSpec {
         if (-595.0..=-533.0).contains(&x) && (-80.0..=10.0).contains(&z) {
             relative = relative.min(-3.0);
         }
+        // A dry, body-sized natural ledge overlooks the bay without moving the coastline.
+        let spawn_distance = (x + 646.0).hypot(z + 100.0);
+        if spawn_distance < 15.0 {
+            let blend = ((spawn_distance - 6.0) / 9.0).clamp(0.0, 1.0);
+            relative = 22.0 * (1.0 - blend) + relative * blend;
+        }
         // Settlement foundations and field form one reserved shallow valley terrace.
         if ((x + 6.0) / 64.0).powi(2) + ((z - 575.0) / 47.0).powi(2) < 1.0 {
             relative = 22.0;
@@ -264,7 +275,7 @@ impl NorthernSpec {
             "stone"
         };
         NorthernSurface {
-            level: ((140.0 + relative) / LEVEL_HEIGHT).floor() as i32 - 1,
+            level: (((140.0 + relative) / LEVEL_HEIGHT).floor() as i32).max(3) - 1,
             material,
         }
     }
@@ -314,7 +325,7 @@ impl NorthernCompiler {
                 .push(object);
         }
         let anchors = [
-            ("party_start", -636.0, -31.0),
+            ("party_start", -646.0, -100.0),
             ("bay", -563.0, -75.0),
             ("settlement", 0.0, 575.0),
             ("crater", -540.0, -250.0),

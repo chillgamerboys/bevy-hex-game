@@ -16,6 +16,9 @@ struct Receipt {
     objects: usize,
     trees: usize,
     buildings: usize,
+    solid_top_levels: [i32; 2],
+    sea_top_level: i32,
+    player_spawn: [f32; 3],
     elapsed_seconds: f64,
     strict: bool,
     presentation_reviewed: bool,
@@ -34,6 +37,8 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
     let mut columns = 0;
     let mut liquids = 0;
     let mut objects = 0;
+    let mut lowest = i32::MAX;
+    let mut highest = i32::MIN;
     for id in compiler.chunk_ids() {
         let Some(chunk) = compiler.chunk(id)? else {
             continue;
@@ -42,6 +47,16 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         liquids += chunk.semantics.liquids.len();
         objects += chunk.semantics.objects.len();
         for column in &chunk.columns {
+            if let Some(top) = column
+                .runs
+                .iter()
+                .filter(|r| r.material != "water")
+                .map(|r| r.top)
+                .max()
+            {
+                lowest = lowest.min(top);
+                highest = highest.max(top);
+            }
             if column.position.q.rem_euclid(8) == 0 && column.position.r.rem_euclid(8) == 0 {
                 if let Some(run) = column.runs.last() {
                     manifest.summary.push(MapSummaryCell {
@@ -85,6 +100,9 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         objects,
         trees: compiler.tree_count,
         buildings: 4,
+        solid_top_levels: [lowest, highest],
+        sea_top_level: hex_schematic::v4::northern::SEA_TOP,
+        player_spawn: overview.player_spawn,
         elapsed_seconds: started.elapsed().as_secs_f64(),
         strict: true,
         presentation_reviewed: false,

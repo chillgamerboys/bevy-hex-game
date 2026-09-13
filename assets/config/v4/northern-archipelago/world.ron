@@ -7,7 +7,7 @@
 (id:"old-southern-ridge",cluster:1,center:(570.0,-80.0),radii:(90.0,125.0),angle:0.2,peak:175.0,crater:false),
 (id:"old-western-skerry",cluster:1,center:(190.0,-100.0),radii:(30.0,27.0),angle:0.7,peak:35.0,crater:false),
 (id:"old-eastern-skerry",cluster:1,center:(600.0,-340.0),radii:(35.0,25.0),angle:-0.4,peak:41.0,crater:false),
-(id:"sheltered-island",cluster:2,center:(0.0,545.0),radii:(165.0,125.0),angle:0.1,peak:95.0,crater:false),
+(id:"sheltered-island",cluster:2,center:(0.0,505.0),radii:(165.0,125.0),angle:0.1,peak:95.0,crater:false),
 (id:"settlement-western-skerry",cluster:2,center:(-225.0,525.0),radii:(30.0,22.0),angle:0.0,peak:25.0,crater:false),
 (id:"settlement-southern-skerry",cluster:2,center:(165.0,725.0),radii:(30.0,25.0),angle:0.2,peak:37.0,crater:false),
 ])
