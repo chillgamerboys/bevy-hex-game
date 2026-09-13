@@ -1,4 +1,4 @@
-(version:1,id:"northern-archipelago",seed:20260912,full_dressing:false,islands:[
+(version:1,id:"northern-archipelago",seed:20260912,full_dressing:true,islands:[
 (id:"crater-island",cluster:0,center:(-540.0,-250.0),radii:(250.0,215.0),angle:0.12,peak:300.0,crater:true),
 (id:"western-skerry",cluster:0,center:(-820.0,-370.0),radii:(35.0,45.0),angle:0.7,peak:37.0,crater:false),
 (id:"bay-skerry",cluster:0,center:(-780.0,-35.0),radii:(30.0,25.0),angle:0.3,peak:23.0,crater:false),
