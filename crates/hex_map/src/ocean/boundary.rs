@@ -28,6 +28,51 @@ pub struct OceanNearBoundary {
 }
 
 impl OceanNearBoundary {
+    /// A bounded axial wet/dry mask. Unknown columns retain decorative distant
+    /// water; known dry columns never gain water after solid terrain is carved.
+    pub(super) fn mask(&self, sea: f32) -> Option<(IVec2, UVec2, Vec<f32>)> {
+        if self.known_columns.len() > 32_768 || self.columns.len() > 32_768 {
+            return None;
+        }
+        let Some(first) = self.known_columns.first() else {
+            return Some((IVec2::ZERO, UVec2::ONE, vec![0.0]));
+        };
+        let mut low = IVec2::new(first.x(), first.y());
+        let mut high = low;
+        for coord in &self.known_columns {
+            let at = IVec2::new(coord.x(), coord.y());
+            low = low.min(at);
+            high = high.max(at);
+        }
+        let size = IVec2::new(
+            high.x.checked_sub(low.x)?.checked_add(1)?,
+            high.y.checked_sub(low.y)?.checked_add(1)?,
+        );
+        if size.min_element() <= 0 || size.max_element() > 512 {
+            return None;
+        }
+        let width = usize::try_from(size.x).ok()?;
+        let height = usize::try_from(size.y).ok()?;
+        let mut values = vec![0.0; width.checked_mul(height)?];
+        let index = |coord: HexCoord| -> Option<usize> {
+            let at = IVec2::new(coord.x(), coord.y()) - low;
+            Some(usize::try_from(at.y).ok()? * width + usize::try_from(at.x).ok()?)
+        };
+        for coord in &self.known_columns {
+            values[index(*coord)?] = -1.0;
+        }
+        for column in &self.columns {
+            if self.known_columns.contains(&column.coordinate) && (column.top - sea).abs() < 0.01 {
+                values[index(column.coordinate)?] = 1.0;
+            }
+        }
+        Some((
+            low,
+            UVec2::new(u32::try_from(width).ok()?, u32::try_from(height).ok()?),
+            values,
+        ))
+    }
+
     pub(super) fn build(&self) -> Option<Mesh> {
         if self.columns.len() > 32_768 {
             return None;
@@ -119,6 +164,26 @@ fn append_side(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_mask_distinguishes_wet_dry_and_unknown_without_filling_carves() {
+        let wet = HexCoord::from_axial(-2, 3);
+        let dry = HexCoord::from_axial(0, 3);
+        let mut boundary = OceanNearBoundary {
+            columns: vec![OceanBoundaryColumn {
+                coordinate: wet,
+                bottom: -3.0,
+                top: 0.0,
+            }],
+            known_columns: [wet, dry].into_iter().collect(),
+            ..default()
+        };
+        let (origin, size, values) = boundary.mask(0.0).unwrap();
+        assert_eq!(origin, IVec2::new(-2, 3));
+        assert_eq!(size, UVec2::new(3, 1));
+        assert!(values[0] > 0.5 && values[1].abs() < 0.01 && values[2] < -0.5);
+        boundary.known_columns.insert(HexCoord::from_axial(600, 3));
+        assert!(boundary.mask(0.0).is_none());
+    }
     #[test]
     fn unknown_neighbors_do_not_invent_streaming_walls_and_known_dry_edges_close() {
         let column = OceanBoundaryColumn {

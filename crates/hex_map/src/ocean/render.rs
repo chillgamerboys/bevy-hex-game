@@ -19,6 +19,7 @@ struct OceanParams {
     wave2: Vec4,
     periods: Vec4,
     phase_offsets: Vec4,
+    near: Vec4,
     shallow: Vec4,
     deep: Vec4,
 }
@@ -33,6 +34,8 @@ struct OceanExtension {
         visibility(vertex, fragment)
     )]
     bathymetry: Handle<Image>,
+    #[texture(102, sample_type = "float", filterable = false)]
+    near_water: Handle<Image>,
 }
 impl MaterialExtension for OceanExtension {
     fn vertex_shader() -> ShaderRef {
@@ -66,6 +69,8 @@ struct Cache {
     boundary_revision: Option<u64>,
     material: Option<Handle<OceanMaterial>>,
     image: Option<Handle<Image>>,
+    near_image: Option<Handle<Image>>,
+    near_origin: IVec2,
     surface: Option<Entity>,
     boundary: Option<(Entity, Handle<Mesh>)>,
 }
@@ -89,7 +94,12 @@ pub fn install(app: &mut App) {
         );
 }
 
-fn parameters(profile: &OceanSurfaceProfile, bed: &OceanBathymetry, phase: f32) -> OceanParams {
+fn parameters(
+    profile: &OceanSurfaceProfile,
+    bed: &OceanBathymetry,
+    phase: f32,
+    near: IVec2,
+) -> OceanParams {
     let waves = profile.waves.map(|wave| {
         let direction = wave.direction.normalize();
         Vec4::new(
@@ -119,6 +129,7 @@ fn parameters(profile: &OceanSurfaceProfile, bed: &OceanBathymetry, phase: f32) 
             0.0,
         ),
         phase_offsets: Vec4::new(a.phase_radians, b.phase_radians, c.phase_radians, 0.0),
+        near: near.as_vec2().extend(0.0).extend(0.0),
         shallow: profile.shallow_color,
         deep: profile.deep_color,
     }
@@ -134,9 +145,17 @@ fn texture(bed: &OceanBathymetry) -> Image {
         TextureDimension::D2,
         bed.bed_heights
             .iter()
-            .flat_map(|height| height.to_le_bytes())
+            .enumerate()
+            .flat_map(|(index, height)| {
+                [
+                    *height,
+                    bed.shore_shelter.get(index).copied().unwrap_or(1.0),
+                ]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+            })
             .collect(),
-        TextureFormat::R32Float,
+        TextureFormat::Rg32Float,
         RenderAssetUsages::default(),
     )
 }
@@ -193,6 +212,35 @@ fn update(
     }
     let changed =
         cache.profile.as_ref() != Some(&profile) || cache.bed_revision != Some(bed.revision);
+    if changed || cache.boundary_revision != Some(boundary.revision) {
+        let Some((origin, size, values)) = boundary.mask(profile.mean_sea_level) else {
+            status.ready = false;
+            status.error = Some("Ocean exact wet mask exceeds its bounded dimensions.".into());
+            return;
+        };
+        let handle = images.add(Image::new(
+            Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            values.into_iter().flat_map(f32::to_le_bytes).collect(),
+            TextureFormat::R32Float,
+            RenderAssetUsages::default(),
+        ));
+        if let Some(old) = cache.near_image.replace(handle.clone()) {
+            images.remove(old.id());
+        }
+        cache.near_origin = origin;
+        if let Some(mut material) = cache
+            .material
+            .as_ref()
+            .and_then(|handle| materials.get_mut(handle))
+        {
+            material.extension.near_water = handle;
+        }
+    }
     if changed {
         let image = images.add(texture(&bed));
         if let Some(old) = cache.image.replace(image.clone()) {
@@ -203,22 +251,28 @@ fn update(
                 material.extension.bathymetry = image;
             }
         } else {
-            cache.material = Some(materials.add(OceanMaterial {
-                base: StandardMaterial {
-                    base_color: Color::WHITE,
-                    alpha_mode: AlphaMode::Blend,
-                    perceptual_roughness: 0.42,
-                    reflectance: 0.35,
-                    cull_mode: None,
-                    double_sided: true,
-                    opaque_render_method: OpaqueRendererMethod::Forward,
-                    ..default()
-                },
-                extension: OceanExtension {
-                    params: parameters(&profile, &bed, frame.phase_seconds),
-                    bathymetry: image,
-                },
-            }));
+            cache.material = Some(
+                materials.add(OceanMaterial {
+                    base: StandardMaterial {
+                        base_color: Color::WHITE,
+                        alpha_mode: AlphaMode::Blend,
+                        perceptual_roughness: 0.42,
+                        reflectance: 0.35,
+                        cull_mode: None,
+                        double_sided: true,
+                        opaque_render_method: OpaqueRendererMethod::Forward,
+                        ..default()
+                    },
+                    extension: OceanExtension {
+                        params: parameters(&profile, &bed, frame.phase_seconds, cache.near_origin),
+                        bathymetry: image,
+                        near_water: cache
+                            .near_image
+                            .clone()
+                            .expect("validated near-water texture"),
+                    },
+                }),
+            );
         }
         cache.profile = Some(profile.clone());
         cache.bed_revision = Some(bed.revision);
@@ -228,7 +282,7 @@ fn update(
         return;
     };
     if let Some(mut value) = materials.get_mut(&material) {
-        value.extension.params = parameters(&profile, &bed, frame.phase_seconds);
+        value.extension.params = parameters(&profile, &bed, frame.phase_seconds, cache.near_origin);
     }
     let position = Vec3::new(
         frame.camera_position.x,
@@ -301,7 +355,7 @@ mod tests {
         let mut profile = OceanSurfaceProfile::default();
         let bed = OceanBathymetry::default();
         for (at, seconds) in [(Vec2::ZERO, 0.0), (Vec2::new(17.0, -29.0), 7.0)] {
-            let uniforms = parameters(&profile, &bed, seconds);
+            let uniforms = parameters(&profile, &bed, seconds, IVec2::ZERO);
             assert!((uniforms.phase_offsets - Vec4::new(0.0, 1.3, 2.4, 0.0)).length() < 0.00001);
             let specifications = [uniforms.wave0, uniforms.wave1, uniforms.wave2];
             let mut height = profile.mean_sea_level;

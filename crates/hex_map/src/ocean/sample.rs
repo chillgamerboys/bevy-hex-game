@@ -1,4 +1,4 @@
-use super::{OceanBathymetry, OceanSurfaceProfile};
+use super::{OceanBathymetry, OceanNearBoundary, OceanSurfaceProfile};
 use bevy::prelude::*;
 
 /// Visual height, normal and color at a world position; never collision authority.
@@ -24,21 +24,60 @@ pub fn sample_surface(
     at: Vec2,
     seconds: f32,
 ) -> Option<OceanSurfaceSample> {
+    sample(profile, bed, at, seconds, false)
+}
+
+/// Uses known exact water occupancy at a local shore, including dry carved land.
+/// The continuous wave equation remains identical to GPU displacement; an exact
+/// wet hex that the coarse grid misclassifies still has its mean-height surface.
+#[must_use]
+pub fn sample_local_surface(
+    profile: &OceanSurfaceProfile,
+    bed: &OceanBathymetry,
+    near: &OceanNearBoundary,
+    at: Vec2,
+    seconds: f32,
+) -> Option<OceanSurfaceSample> {
+    if !at.is_finite() {
+        return None;
+    }
+    let coord = hex_core::HexCoord::from_world(Vec3::new(at.x, 0.0, at.y));
+    if near.known_columns.contains(&coord) {
+        if !near.columns.iter().any(|column| {
+            column.coordinate == coord && (column.top - profile.mean_sea_level).abs() < 0.01
+        }) {
+            return None;
+        }
+        return sample(profile, bed, at, seconds, true);
+    }
+    sample_surface(profile, bed, at, seconds)
+}
+
+fn sample(
+    profile: &OceanSurfaceProfile,
+    bed: &OceanBathymetry,
+    at: Vec2,
+    seconds: f32,
+    exact_wet: bool,
+) -> Option<OceanSurfaceSample> {
     if !profile.is_valid() || !at.is_finite() || !seconds.is_finite() {
         return None;
     }
     let (height, gradient) = bed.sample(at)?;
     let depth = profile.mean_sea_level - height;
-    if depth <= 0.0 {
+    if depth <= 0.0 && !exact_wet {
         return None;
     }
     let t = (depth / profile.shore_depth).clamp(0.0, 1.0);
-    let attenuation = t * t * (3.0 - 2.0 * t);
-    let slope = if depth < profile.shore_depth {
+    let depth_attenuation = t * t * (3.0 - 2.0 * t);
+    let depth_slope = if depth < profile.shore_depth {
         -gradient * (6.0 * t * (1.0 - t) / profile.shore_depth)
     } else {
         Vec2::ZERO
     };
+    let (shelter, shelter_slope) = bed.sample_shelter(at)?;
+    let attenuation = depth_attenuation * shelter;
+    let slope = depth_slope * shelter + shelter_slope * depth_attenuation;
     let mut wave_height = 0.0;
     let mut wave_gradient = Vec2::ZERO;
     for wave in &profile.waves {
@@ -61,19 +100,28 @@ pub fn sample_surface(
 }
 
 impl OceanBathymetry {
+    pub(super) fn sample(&self, at: Vec2) -> Option<(f32, Vec2)> {
+        self.sample_values(&self.bed_heights, at, -140.0)
+    }
+    pub(super) fn sample_shelter(&self, at: Vec2) -> Option<(f32, Vec2)> {
+        if self.shore_shelter.is_empty() {
+            return Some((1.0, Vec2::ZERO));
+        }
+        self.sample_values(&self.shore_shelter, at, 1.0)
+    }
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_precision_loss,
-        reason = "Finite grid coordinates are clamped to validated bounded texture dimensions before integer conversion."
+        reason = "Finite coordinates are clamped to bounded texture dimensions."
     )]
-    pub(super) fn sample(&self, at: Vec2) -> Option<(f32, Vec2)> {
+    fn sample_values(&self, values: &[f32], at: Vec2, outside: f32) -> Option<(f32, Vec2)> {
         if !(2..=2048).contains(&self.width)
             || !(2..=2048).contains(&self.height)
             || !self.origin_xz.is_finite()
             || !self.spacing.is_finite()
             || self.spacing <= 0.0
-            || usize::try_from(self.width.checked_mul(self.height)?).ok()? != self.bed_heights.len()
+            || usize::try_from(self.width.checked_mul(self.height)?).ok()? != values.len()
         {
             return None;
         }
@@ -83,13 +131,13 @@ impl OceanBathymetry {
             || position.x > (self.width - 1) as f32
             || position.y > (self.height - 1) as f32
         {
-            return Some((-140.0, Vec2::ZERO));
+            return Some((outside, Vec2::ZERO));
         }
         let x = (position.x.floor() as u32).min(self.width - 2);
         let z = (position.y.floor() as u32).min(self.height - 2);
         let t = position - Vec2::new(x as f32, z as f32);
         let read = |x: u32, z: u32| {
-            self.bed_heights
+            values
                 .get((z.checked_mul(self.width)?.checked_add(x)?) as usize)
                 .copied()
                 .filter(|height| height.is_finite())
@@ -112,6 +160,62 @@ impl OceanBathymetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exact_near_mask_preserves_zero_amplitude_wet_edges_and_dry_carves() {
+        use super::super::OceanBoundaryColumn;
+        use hex_core::HexCoord;
+        let mut profile = OceanSurfaceProfile::default();
+        for wave in &mut profile.waves {
+            wave.amplitude = 0.0;
+        }
+        let bed = OceanBathymetry {
+            bed_heights: vec![2.0; 4],
+            ..default()
+        };
+        let mut near = OceanNearBoundary {
+            known_columns: [HexCoord::ORIGIN].into_iter().collect(),
+            columns: vec![OceanBoundaryColumn {
+                coordinate: HexCoord::ORIGIN,
+                bottom: -3.0,
+                top: 0.0,
+            }],
+            ..default()
+        };
+        assert!(sample_surface(&profile, &bed, Vec2::ZERO, 0.0).is_none());
+        let wet = sample_local_surface(&profile, &bed, &near, Vec2::ZERO, 0.0).unwrap();
+        assert!(wet.height.abs() < 0.00001);
+        assert!((wet.normal - Vec3::Y).length() < 0.00001);
+        // Removing dry terrain does not add a water interval to the known column.
+        near.columns.clear();
+        assert!(sample_local_surface(
+            &profile,
+            &OceanBathymetry::default(),
+            &near,
+            Vec2::ZERO,
+            0.0
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn sheltered_wave_normal_includes_cached_exposure_gradient() {
+        let profile = OceanSurfaceProfile::default();
+        let bed = OceanBathymetry {
+            spacing: 100.0,
+            shore_shelter: vec![0.25, 0.8, 0.4, 1.0],
+            ..default()
+        };
+        let at = Vec2::splat(40.0);
+        let center = sample_surface(&profile, &bed, at, 3.0).unwrap();
+        let dx = (sample_surface(&profile, &bed, at + Vec2::X * 0.01, 3.0)
+            .unwrap()
+            .height
+            - sample_surface(&profile, &bed, at - Vec2::X * 0.01, 3.0)
+                .unwrap()
+                .height)
+            / 0.02;
+        assert!((dx + center.normal.x / center.normal.y).abs() < 0.0001);
+    }
     #[test]
     fn displacement_is_bounded_periodic_and_zero_on_shore() {
         let profile = OceanSurfaceProfile::default();

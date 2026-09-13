@@ -6,12 +6,13 @@ mod boundary;
 mod mesh;
 mod render;
 mod sample;
+mod shelter;
 
 use bevy::prelude::*;
 
 pub use boundary::{OceanBoundaryColumn, OceanNearBoundary};
 pub use render::{install, OceanRenderStatus};
-pub use sample::{sample_surface, OceanSurfaceSample};
+pub use sample::{sample_local_surface, sample_surface, OceanSurfaceSample};
 
 /// One analytic directional swell, with world-unit amplitude and wavelength.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,6 +118,9 @@ pub struct OceanBathymetry {
     pub height: u32,
     /// Initial bed heights in world Y, Z-major then X.
     pub bed_heights: Vec<f32>,
+    /// Cached shoreline-distance approximation, zero to one; empty means open sea.
+    /// This is visual shelter only, with no currents or directional wind simulation.
+    pub shore_shelter: Vec<f32>,
 }
 
 impl Default for OceanBathymetry {
@@ -128,6 +132,7 @@ impl Default for OceanBathymetry {
             width: 2,
             height: 2,
             bed_heights: vec![-140.0; 4],
+            shore_shelter: Vec::new(),
         }
     }
 }
@@ -147,6 +152,12 @@ impl OceanBathymetry {
                 .and_then(|n| usize::try_from(n).ok())
                 == Some(self.bed_heights.len())
             && self.bed_heights.iter().all(|height| height.is_finite())
+            && (self.shore_shelter.is_empty()
+                || (self.shore_shelter.len() == self.bed_heights.len()
+                    && self
+                        .shore_shelter
+                        .iter()
+                        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))))
     }
 }
 
