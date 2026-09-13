@@ -1,6 +1,6 @@
 # Northern Archipelago implementation
 
-Status: implementation in progress, no acceptance claim.
+Status: playable marine checkpoint; native acceptance pending and combined CI blocked by inherited lint failures.
 Base: user-selected expedition `13fdb5aca0948e6364aaa193a9bc7b846161460e`.
 Candidate: `wave/northern-archipelago`. Local work only; no dev/main or remote writes.
 Topology: one wave, because the new world, shared surface renderer and exploration controller have one meaningful combined runtime checkpoint. Root is the integration owner. Existing island-biomes PR212 is frozen V3; PR220 is the earlier V4 foundation already incorporated. Neither branch tip is imported. PR213/219 remain separate. Linear reconciliation unavailable; no tickets created.
@@ -244,3 +244,29 @@ diagnostics: 15 in the new streamed/ocean code and 517 in unchanged V3/preview
 files. The new diagnostics are repaired; their rerun and the paired windowless
 wave-cost comparison are the remaining automated checkpoint work. The full CI
 suite is not claimed passed. Native travel/boat/glider feel remains a user check.
+
+
+Final automated checkpoint at `32ef89b`: all 15 ocean tests pass after checked
+publication/shelter access. Canonical Clippy now reports 517 unchanged map
+V3/preview diagnostics plus two unfulfilled lint expectations in unchanged
+`hex_units` tests; `git diff` confirms those files match the wave base. No complete
+CI pass is claimed, and the remaining broad suites are deferred after that gate
+failure under the lean workflow.
+
+Three paired wave-on/flat bay runs each sampled 200 settled Update intervals after
+44 warmup frames. Median-run p95 was 23.9755 ms with waves and 23.9707 ms flat
+(+0.02%); p50 was 23.7786 / 23.7654 ms (+0.056%). Both modes retain identical
+bathymetry, depth prepass and optical absorption. These frozen-phase windowless
+Update start-to-start measurements include scheduler/render-submission waits,
+not native GPU execution or vsync. No compiler or other owned game run overlapped
+the timing samples. All six originals were inspected; the final-source bay still
+meets the reviewed composition and water-boundary criteria.
+
+Evidence is retained under the local `outputs/` directory: full-dressing package
+audit and geography tests; `actual-circuit-full-02.ron`; marine step and ocean test
+logs; `northern-selected-clippy-full-marine-02.log`; and
+`northern-wave-comparison-01.json`. Original seven-view images and independent
+reviews remain in `.context/northern-review/a9e1df7…/`; paired final-source images
+are under `32ef89b…`. Following documentation-only commits do not change runtime
+or package content. Optional island encounters remain deferred; no native game
+was opened automatically while the user was offline.

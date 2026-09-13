@@ -38,11 +38,11 @@ XZ `(0, 612)`. Non-crater angular relief fades at each island center to avoid
 undefined-azimuth height spikes. These terrain corrections use compiler identity
 `hex-northern/2` and require a newly compiled immutable package.
 
-`full_dressing:false` is the approved full-size first checkpoint: all terrain,
-water, island silhouettes, maximum mountain elevation, four buildings and one
-field, with trees around the bay and settlement. Set true only after the runtime
-and ocean checkpoint passes; this dresses the other sheltered low slopes using
-the same reserved structures and exact tree blueprints. The footprint never changes.
+`full_dressing:true` is now the default: the full-scale terrain/water checkpoint
+passed static review before expanding woodland to the other sheltered slopes. It
+authors 255 trees with the same reserved structures and exact tree blueprints.
+Setting false retains the earlier bay/settlement-only dressing for a diagnostic
+checkpoint. The footprint and terrain never change with this option.
 
 Rendering, ocean motion and runtime performance require the combined candidate's
 separate review. Compiler success alone makes no visual or native acceptance claim.
