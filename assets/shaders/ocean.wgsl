@@ -83,7 +83,6 @@ fn vertex(input: Vertex) -> VertexOutput {
 fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
     let bed = bed_sample(input.world_position.xz);
     let depth = ocean.water.x - bed.x;
-    if depth <= 0.0 && input.world_normal.y > 0.5 { discard; }
     var shading = input;
     if input.world_normal.y > 0.5 {
         let swell = surface(input.world_position.xz, bed);
@@ -95,6 +94,10 @@ fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> Fragment
     pbr.material.perceptual_roughness = 0.42;
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr, apply_pbr_lighting(pbr));
+    // StandardMaterial sampling uses implicit derivatives. Keep that work ahead
+    // of our nonuniform discard so shoreline fragments do not make its texture
+    // sampling violate WGSL derivative-uniformity requirements.
+    if depth <= 0.0 && input.world_normal.y > 0.5 { discard; }
 #ifdef OIT_ENABLED
     oit_draw(input.position, out.color);
     discard;
