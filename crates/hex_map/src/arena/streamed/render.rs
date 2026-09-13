@@ -743,6 +743,8 @@ mod tests {
                     .cloned()
             })
             .expect("authored tree");
+        let mut shared_voxels = 0;
+        let mut exclusive_voxels = 0;
         for removed in chunks {
             let mut partial = all.clone();
             partial.remove(removed);
@@ -761,17 +763,45 @@ mod tests {
                         .find(|c| c.position == column.position)
                         .expect("column");
                     for run in &column.runs {
-                        // These crowns do not overlap another complete object.
-                        assert!(
-                            !presented.runs.iter().any(|r| r.material == run.material
-                                && r.bottom < run.top
-                                && r.top > run.bottom),
-                            "a partial tree must have no floating presentation fragment"
-                        );
+                        let source = state
+                            .runtime
+                            .resident_chunk(*chunk)
+                            .expect("resident section");
+                        for level in run.bottom..run.top {
+                            let another_complete_object = source
+                                .package
+                                .semantics
+                                .object_influences
+                                .iter()
+                                .filter(|influence| {
+                                    influence.id != root.id && admitted.contains_key(&influence.id)
+                                })
+                                .any(|influence| {
+                                    influence.occupancy.iter().any(|other| {
+                                        other.position == column.position
+                                            && other.material_at(level)
+                                                == Some(run.material.as_str())
+                                    })
+                                });
+                            if another_complete_object {
+                                shared_voxels += 1;
+                                assert_eq!(presented.material_at(level), Some(run.material.as_str()),
+                                    "shared crown cells still belong to a complete neighboring tree");
+                            } else {
+                                exclusive_voxels += 1;
+                                assert_ne!(
+                                    presented.material_at(level),
+                                    Some(run.material.as_str()),
+                                    "an incomplete tree must have no exclusive floating fragment"
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
+        assert!(shared_voxels > 0, "exercise overlapping authored crowns");
+        assert!(exclusive_voxels > 0, "exercise removed tree fragments");
         for chunk in chunks {
             let package = visual_package(state, *chunk, &objects).expect("whole tree view");
             let presenter = TerrainPresenter::with_limits(
