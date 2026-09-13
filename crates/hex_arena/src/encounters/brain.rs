@@ -880,7 +880,11 @@ impl Brain {
             goblin_separation(
                 actor,
                 actors,
-                desired.with_y(0.0).normalize_or_zero(),
+                if moving {
+                    desired.with_y(0.0).normalize_or_zero()
+                } else {
+                    Vec3::ZERO
+                },
                 c.goblin_spacing,
             )
         } else if flight {
