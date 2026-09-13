@@ -91,6 +91,10 @@ pub fn plugin(app: &mut App) {
         .add_systems(Startup, initialize.in_set(ArenaSystems::PublishTerrain))
         .add_systems(PreUpdate, switch_mode.before(retain_announcements))
         .add_systems(PreUpdate, retain_announcements)
+        // Menus can select a map in Update immediately before driving ArenaTick.
+        // Commit the adapter change at that same boundary, before either adapter
+        // sees the reset; waiting for the next PreUpdate uses the old loader.
+        .add_systems(ArenaTick, switch_mode.before(ArenaSystems::ApplyTerrain))
         .add_systems(
             ArenaTick,
             apply_terrain

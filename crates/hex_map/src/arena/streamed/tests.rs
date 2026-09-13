@@ -182,6 +182,39 @@ fn test_world() -> World {
     .expect("actual Northern package initialization");
     world
 }
+
+#[test]
+#[ignore = "requires HEX_NORTHERN_WORLD pointing to the full-scale package"]
+fn actual_northern_menu_selection_commits_before_same_frame_reset() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(super::super::plugin);
+    app.update();
+    // Match the native menu: change selection in Update, then drive ArenaTick
+    // immediately, without another PreUpdate to change the world adapter.
+    for map in [
+        ArenaMap::NorthernArchipelago,
+        ArenaMap::Fort,
+        ArenaMap::NorthernArchipelago,
+        ArenaMap::Duel,
+    ] {
+        app.world_mut().resource_mut::<ArenaSelection>().map = map;
+        app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+        app.world_mut().run_schedule(ArenaTick);
+        let world = app.world();
+        assert_eq!(world.resource::<ArenaTerrainView>().selection.map, map);
+        assert_eq!(
+            world.contains_resource::<StreamedArena>(),
+            map.capabilities().streamed
+        );
+        assert_eq!(
+            world.contains_resource::<crate::VoxelMap>(),
+            !map.capabilities().streamed
+        );
+        assert!(world.resource::<Messages<AppExit>>().is_empty());
+    }
+}
+
 fn travel(
     world: &mut World,
     points: &[Vec3],
