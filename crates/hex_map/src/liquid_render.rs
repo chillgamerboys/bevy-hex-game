@@ -1254,12 +1254,20 @@ fn cap_transform(position: TilePos, level_height: f32) -> Transform {
 }
 
 fn surface_y(level: Level, level_height: f32) -> f32 {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "playable voxel levels are exactly representable in f32"
-    )]
-    let boundary = level.saturating_add(1) as f32 * level_height;
+    let boundary = liquid_boundary_height(level.saturating_add(1), level_height);
     boundary + cap_bias(level_height)
+}
+
+/// Exact world height of a liquid run boundary: bottom is inclusive and top is
+/// exclusive. Callers validate finite positive level height before meshing.
+/// Surface decoration bias is deliberately separate from this shared geometry.
+#[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Validated playable voxel levels are exactly representable in f32."
+)]
+pub fn liquid_boundary_height(boundary_level: Level, level_height: f32) -> f32 {
+    boundary_level as f32 * level_height
 }
 
 fn cap_bias(level_height: f32) -> f32 {

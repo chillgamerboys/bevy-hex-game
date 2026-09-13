@@ -54,6 +54,8 @@ pub mod generator;
 /// Turning generated terrain into tile entities.
 pub mod grid;
 mod liquid_render;
+/// Bounded, purely visual ocean surface and camera-water sampling.
+pub mod ocean;
 /// Versioned semantic-first procedural map generation and diagnostics.
 mod procedural;
 mod procedural_v2;
@@ -73,7 +75,7 @@ mod world_snapshot;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use hex_schematic::SchematicPlanV1;
-pub use liquid_render::LiquidVisualTime;
+pub use liquid_render::{liquid_boundary_height, LiquidVisualTime};
 pub use procedural::{
     CavesMetrics as CavesReportMetrics, CrystalAscentMetrics as CrystalAscentReportMetrics,
     DeepForestMetrics as DeepForestReportMetrics, DesertPlainMetrics as DesertPlainReportMetrics,

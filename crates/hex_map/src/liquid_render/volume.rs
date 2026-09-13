@@ -56,10 +56,6 @@ pub(super) fn water_boundary(
     Ok(batches)
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "finite voxel levels are exactly representable"
-)]
 fn append_cap(
     mesh: &mut RawMesh,
     coord: HexCoord,
@@ -70,7 +66,7 @@ fn append_cap(
     let cap = cap_geometry();
     let base = u32::try_from(mesh.positions.len())
         .map_err(|_overflow| LiquidPresentationError::MeshIndexOverflow)?;
-    let center = coord.to_world(level as f32 * height);
+    let center = coord.to_world(liquid_boundary_height(level, height));
     for position in &cap.positions {
         let p = center + Vec3::from_array(*position);
         mesh.positions.push(p.to_array());
@@ -97,10 +93,6 @@ fn append_cap(
     Ok(())
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "finite voxel levels are exactly representable"
-)]
 fn append_side(
     mesh: &mut RawMesh,
     coord: HexCoord,
@@ -115,11 +107,11 @@ fn append_side(
     let center = coord.to_world(0.0);
     let normal = rotation * Vec3::X;
     for (z, y) in [(-0.5, top), (0.5, top), (0.5, bottom), (-0.5, bottom)] {
-        let p =
-            center + rotation * Vec3::new(HEX_INRADIUS, y as f32 * height, z * HEX_CIRCUMRADIUS);
+        let face_y = liquid_boundary_height(y, height);
+        let p = center + rotation * Vec3::new(HEX_INRADIUS, face_y, z * HEX_CIRCUMRADIUS);
         mesh.positions.push(p.to_array());
         mesh.normals.push(normal.to_array());
-        mesh.uvs.push([z, y as f32 * height]);
+        mesh.uvs.push([z, face_y]);
     }
     mesh.indices
         .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -129,6 +121,33 @@ fn append_side(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn liquid_upper_and_lower_faces_use_the_same_exact_voxel_boundaries() {
+        let height = 0.35;
+        let topmost = 34;
+        assert!((liquid_boundary_height(topmost + 1, height) - 12.25).abs() < 0.00001);
+        assert!(
+            (liquid_boundary_height(topmost + 1, height)
+                - liquid_boundary_height(topmost, height)
+                - height)
+                .abs()
+                < 0.00001
+        );
+        #[cfg(feature = "arena-prototype")]
+        {
+            let geometry = hex_core::arena::ArenaVoxelGeometry {
+                level_height: height,
+                vertical_offset: height,
+                ..default()
+            };
+            assert!(
+                (geometry.top(TilePos::new(HexCoord::ORIGIN, topmost))
+                    - liquid_boundary_height(topmost + 1, height))
+                .abs()
+                    < 0.00001
+            );
+        }
+    }
     #[test]
     fn adjacent_water_culls_shared_faces_across_render_chunks() {
         let mut map = VoxelMap::new();

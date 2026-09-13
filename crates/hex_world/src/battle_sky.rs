@@ -26,6 +26,45 @@ impl Default for BattleSkyFrame {
         }
     }
 }
+
+/// Map-selected sky palette and scale, separate from camera/time frame inputs.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct BattleSkyProfile {
+    /// Linear-looking artistic horizon RGB, consumed by the procedural shader.
+    pub horizon_color: Vec3,
+    /// Zenith RGB.
+    pub zenith_color: Vec3,
+    /// Cloud RGB.
+    pub cloud_color: Vec3,
+    /// Fractional procedural cloud coverage.
+    pub cloud_coverage: f32,
+    /// Camera-centered dome radius; keep beyond the map's farthest visible terrain.
+    pub dome_radius: f32,
+}
+impl Default for BattleSkyProfile {
+    fn default() -> Self {
+        Self {
+            horizon_color: Vec3::new(0.12, 0.32, 0.68),
+            zenith_color: Vec3::new(0.025, 0.14, 0.50),
+            cloud_color: Vec3::new(0.60, 0.68, 0.77),
+            cloud_coverage: 0.22,
+            dome_radius: 1000.0,
+        }
+    }
+}
+impl BattleSkyProfile {
+    /// Cold clear late-afternoon atmosphere for the distant northern islands.
+    #[must_use]
+    pub fn northern() -> Self {
+        Self {
+            horizon_color: Vec3::new(0.25, 0.39, 0.57),
+            zenith_color: Vec3::new(0.055, 0.18, 0.38),
+            cloud_color: Vec3::new(0.65, 0.69, 0.74),
+            cloud_coverage: 0.29,
+            dome_radius: 20_000.0,
+        }
+    }
+}
 #[derive(Component)]
 struct BattleSkyDome;
 
@@ -35,18 +74,19 @@ pub fn install(app: &mut App) {
         crate::sky_material::plugin(app);
     }
     app.init_resource::<BattleSkyFrame>()
+        .init_resource::<BattleSkyProfile>()
         .add_systems(Startup, spawn)
         .add_systems(
             PostUpdate,
             update.before(bevy::transform::TransformSystems::Propagate),
         );
 }
-fn parameters(frame: &BattleSkyFrame) -> SkyParams {
+fn parameters(frame: &BattleSkyFrame, profile: &BattleSkyProfile) -> SkyParams {
     SkyParams {
-        horizon_color: Vec3::new(0.12, 0.32, 0.68),
-        zenith_color: Vec3::new(0.025, 0.14, 0.50),
-        cloud_color: Vec3::new(0.60, 0.68, 0.77),
-        cloud_coverage: 0.22,
+        horizon_color: profile.horizon_color,
+        zenith_color: profile.zenith_color,
+        cloud_color: profile.cloud_color,
+        cloud_coverage: profile.cloud_coverage,
         hex_scale: 28.0,
         cloud_softness: 0.32,
         cloud_roundness: 0.65,
@@ -73,13 +113,14 @@ fn spawn(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
+    profile: Res<BattleSkyProfile>,
 ) {
     commands.spawn((
         Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(48, 32))),
         MeshMaterial3d(materials.add(SkyMaterial {
-            params: parameters(&BattleSkyFrame::default()),
+            params: parameters(&BattleSkyFrame::default(), &profile),
         })),
-        Transform::from_scale(Vec3::splat(1000.0)),
+        Transform::from_scale(Vec3::splat(profile.dome_radius)),
         Visibility::Hidden,
         NotShadowCaster,
         Pickable::IGNORE,
@@ -89,6 +130,7 @@ fn spawn(
 }
 fn update(
     frame: Res<BattleSkyFrame>,
+    profile: Res<BattleSkyProfile>,
     mut domes: Query<
         (
             &mut Transform,
@@ -106,8 +148,9 @@ fn update(
             Visibility::Hidden
         };
         transform.translation = frame.center;
+        transform.scale = Vec3::splat(profile.dome_radius);
         if let Some(mut material) = materials.get_mut(&handle.0) {
-            material.params = parameters(&frame);
+            material.params = parameters(&frame, &profile);
         }
     }
 }
