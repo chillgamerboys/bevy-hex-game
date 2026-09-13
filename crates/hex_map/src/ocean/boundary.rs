@@ -59,11 +59,11 @@ impl OceanNearBoundary {
             Some(usize::try_from(at.y).ok()? * width + usize::try_from(at.x).ok()?)
         };
         for coord in &self.known_columns {
-            values[index(*coord)?] = -1.0;
+            *values.get_mut(index(*coord)?)? = -1.0;
         }
         for column in &self.columns {
             if self.known_columns.contains(&column.coordinate) && (column.top - sea).abs() < 0.01 {
-                values[index(column.coordinate)?] = 1.0;
+                *values.get_mut(index(column.coordinate)?)? = 1.0;
             }
         }
         Some((

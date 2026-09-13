@@ -17,8 +17,9 @@ impl OceanBathymetry {
         if !self.is_valid() || !sea.is_finite() || !range.is_finite() || range <= 0.0 {
             return Err("Shelter requires valid bathymetry, sea level and positive range");
         }
-        let width = usize::try_from(self.width).map_err(|_| "Invalid shelter width")?;
-        let height = usize::try_from(self.height).map_err(|_| "Invalid shelter height")?;
+        let width = usize::try_from(self.width).map_err(|_conversion| "Invalid shelter width")?;
+        let height =
+            usize::try_from(self.height).map_err(|_conversion| "Invalid shelter height")?;
         let mut distances: Vec<f32> = self
             .bed_heights
             .iter()
@@ -26,12 +27,11 @@ impl OceanBathymetry {
             .collect();
         // An unreachable finite anchor disables reflection outside the bounded shore search.
         let mut anchors = vec![self.origin_xz + Vec2::splat(-100_000.0); distances.len()];
-        for z in 0..height {
-            for x in 0..width {
-                if self.bed_heights[z * width + x] >= sea {
-                    anchors[z * width + x] =
-                        self.origin_xz + Vec2::new(x as f32, z as f32) * self.spacing;
-                }
+        for (index, (bed, anchor)) in self.bed_heights.iter().zip(&mut anchors).enumerate() {
+            if *bed >= sea {
+                let x = index % width;
+                let z = index / width;
+                *anchor = self.origin_xz + Vec2::new(x as f32, z as f32) * self.spacing;
             }
         }
         let diagonal = self.spacing * std::f32::consts::SQRT_2;
@@ -82,10 +82,18 @@ impl OceanBathymetry {
 }
 
 fn relax(at: usize, neighbor: usize, step: f32, distances: &mut [f32], anchors: &mut [Vec2]) {
-    let candidate = distances[neighbor] + step;
-    if candidate < distances[at] {
-        distances[at] = candidate;
-        anchors[at] = anchors[neighbor];
+    let Some((&neighbor_distance, &neighbor_anchor)) =
+        distances.get(neighbor).zip(anchors.get(neighbor))
+    else {
+        return;
+    };
+    let Some((distance, anchor)) = distances.get_mut(at).zip(anchors.get_mut(at)) else {
+        return;
+    };
+    let candidate = neighbor_distance + step;
+    if candidate < *distance {
+        *distance = candidate;
+        *anchor = neighbor_anchor;
     }
 }
 

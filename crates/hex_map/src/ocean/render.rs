@@ -270,28 +270,29 @@ fn update(
                 material.extension.bathymetry = image;
             }
         } else {
-            cache.material = Some(
-                materials.add(OceanMaterial {
-                    base: StandardMaterial {
-                        base_color: Color::WHITE,
-                        alpha_mode: AlphaMode::Blend,
-                        perceptual_roughness: 0.58,
-                        reflectance: 0.18,
-                        cull_mode: None,
-                        double_sided: true,
-                        opaque_render_method: OpaqueRendererMethod::Forward,
-                        ..default()
-                    },
-                    extension: OceanExtension {
-                        params: parameters(&profile, &bed, frame.phase_seconds, cache.near_origin),
-                        bathymetry: image,
-                        near_water: cache
-                            .near_image
-                            .clone()
-                            .expect("validated near-water texture"),
-                    },
-                }),
-            );
+            let Some(near_water) = cache.near_image.clone() else {
+                status.ready = false;
+                status.error =
+                    Some("Ocean near-water texture is not ready for publication.".into());
+                return;
+            };
+            cache.material = Some(materials.add(OceanMaterial {
+                base: StandardMaterial {
+                    base_color: Color::WHITE,
+                    alpha_mode: AlphaMode::Blend,
+                    perceptual_roughness: 0.58,
+                    reflectance: 0.18,
+                    cull_mode: None,
+                    double_sided: true,
+                    opaque_render_method: OpaqueRendererMethod::Forward,
+                    ..default()
+                },
+                extension: OceanExtension {
+                    params: parameters(&profile, &bed, frame.phase_seconds, cache.near_origin),
+                    bathymetry: image,
+                    near_water,
+                },
+            }));
         }
         cache.profile = Some(profile.clone());
         cache.bed_revision = Some(bed.revision);
