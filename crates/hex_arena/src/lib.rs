@@ -11,6 +11,7 @@ use hex_core::arena::{
     ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRequest, ArenaMaterials, ArenaReset,
     ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
+use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime};
 use hex_core::{
     TerrainBatchId, TerrainEdit, TerrainImpact, TerrainImpactOutcome, TerrainImpactResult, TilePos,
 };
@@ -40,7 +41,9 @@ mod glider;
 pub use exploration::FreeFlightSnapshot;
 mod hex_prisms;
 pub use glider::GliderSnapshot;
+mod marine;
 mod motion;
+pub use marine::{BoatSnapshot, SwimSnapshot};
 mod player_observation;
 pub use player_observation::{
     CombatFeedbackSnapshot, DiscoveredLandmark, EnemyHealthCueSnapshot, HitConfirmationSnapshot,
@@ -147,6 +150,8 @@ pub struct ActorIntent {
     pub glider_look: Vec3,
     /// Single F press edge toggling collision-aware exploration flight.
     pub flight_toggle: bool,
+    /// Single B press edge deploying or folding the exploration sailboat.
+    pub boat_toggle: bool,
     /// Free-flight rise/drop axis: Space is +1 and Ctrl is -1.
     pub flight_vertical: f32,
     /// Hold Shift for 160 units/s instead of the normal 80 units/s flight.
@@ -172,6 +177,7 @@ impl Default for ActorIntent {
             glider_toggle: false,
             glider_look: Vec3::NEG_Z,
             flight_toggle: false,
+            boat_toggle: false,
             flight_vertical: 0.0,
             flight_fast: false,
             cast_pressed: false,
@@ -439,6 +445,7 @@ pub struct Actor {
     body: Body,
     glider: glider::GliderState,
     free_flight: Option<exploration::FreeFlightState>,
+    marine: Option<marine::MarineState>,
     walking_speed: f32,
     dimensions: Vec3,
     expedition_role: Option<ExpeditionRole>,
@@ -485,6 +492,7 @@ impl Actor {
             body: Body::default(),
             glider: glider::GliderState::default(),
             free_flight: None,
+            marine: None,
             walking_speed: 5.90625,
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             expedition_role: None,
@@ -516,6 +524,7 @@ impl Actor {
         self.glider = glider::GliderState::default();
         self.body.airborne_momentum = None;
         if self.hp <= 0.0 {
+            self.marine = self.marine.as_ref().map(|_| marine::MarineState::default());
             if let Some(flight) = &mut self.free_flight {
                 *flight = exploration::FreeFlightState::default();
             }
@@ -770,6 +779,7 @@ pub struct ArenaSession {
     pub shields_raised: u64,
     progression: Option<progression::ProgressState>,
     exploration: bool,
+    ocean_environment: Option<OceanEnvironmentView>,
     player_knowledge: player_observation::PlayerKnowledge,
     collision: CollisionWorld,
     generation: Option<u64>,
@@ -810,6 +820,7 @@ impl Default for ArenaSession {
             shields_raised: 0,
             progression: None,
             exploration: false,
+            ocean_environment: None,
             player_knowledge: player_observation::PlayerKnowledge::default(),
             collision: CollisionWorld::default(),
             generation: None,
@@ -951,6 +962,7 @@ impl ArenaSession {
             if let Some(actor) = self.actors.first_mut() {
                 actor.configure_expedition_player();
                 actor.free_flight = Some(exploration::FreeFlightState::default());
+                actor.marine = Some(marine::MarineState::default());
             }
         }
         self.collision.refresh(world, geometry);
@@ -1231,6 +1243,7 @@ pub fn preview(
 /// Install the headless simulation in the caller-owned fixed arena schedule.
 pub fn plugin(app: &mut App) {
     app.init_resource::<ArenaSession>()
+        .init_resource::<OceanSimulationTime>()
         .init_resource::<ArenaInput>()
         .init_resource::<ArenaTuning>()
         .init_resource::<ArenaBattleSetup>()
@@ -1253,6 +1266,8 @@ fn simulate(
     reset: Res<ArenaReset>,
     setup: Res<ArenaBattleSetup>,
     burrow_policy: Res<ArenaBurrowMaterials>,
+    ocean: Option<Res<OceanEnvironmentView>>,
+    mut ocean_time: ResMut<OceanSimulationTime>,
     mut burrow_outcomes: MessageReader<ArenaBurrowOutcome>,
     mut burrows: MessageWriter<ArenaBurrowRequest>,
     mut outcomes: MessageReader<TerrainImpactOutcome>,
@@ -1273,10 +1288,20 @@ fn simulate(
         input.human.glider_toggle = false;
         input.human.glider_look = input.human.aim;
         input.human.flight_toggle = false;
+        input.human.boat_toggle = false;
         input.human.flight_vertical = 0.0;
         input.human.flight_fast = false;
     }
     session.install_burrow_policy(&burrow_policy);
+    session.ocean_environment = ocean
+        .as_deref()
+        .filter(|environment| {
+            session.is_exploration()
+                && view.package_identity.as_ref().is_some_and(|package| {
+                    package.manifest_fingerprint == environment.package_fingerprint
+                })
+        })
+        .cloned();
     for outcome in burrow_outcomes.read() {
         session.accept_burrow_outcome(outcome);
     }
@@ -1290,12 +1315,14 @@ fn simulate(
     input.human.high_jump = false;
     input.human.glider_toggle = false;
     input.human.flight_toggle = false;
+    input.human.boat_toggle = false;
     input.human.selected = None;
     if let Err(reason) = tuning.validate() {
         session.notice = reason;
         return;
     }
     let emitted = session.advance(human, &view, *geometry, *materials, &tuning);
+    *ocean_time = session.ocean_time();
     for request in emitted.burrows {
         burrows.write(request);
     }

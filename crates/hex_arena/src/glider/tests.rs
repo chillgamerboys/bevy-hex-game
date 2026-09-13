@@ -2,6 +2,78 @@ use super::*;
 use crate::{ArenaSession, ArenaTuning, Spell};
 use hex_core::{HexCoord, SubstanceId, TilePos};
 
+#[test]
+fn wind_relative_airspeed_changes_ground_travel_without_a_toggle_kick() {
+    let (mut actor, world, view, geometry) = fixture();
+    actor.body.control_velocity = Vec3::NEG_Z * 20.0;
+    actor.glider.wind = Vec3::NEG_Z * 10.0;
+    open(&mut actor, &world, &view, geometry);
+    assert!((actor.glider.snapshot().airspeed - 10.0).abs() < 0.0001);
+    assert!(actor.glider.velocity.distance(Vec3::NEG_Z * 20.0) < 0.0001);
+    let mut calm = GliderState {
+        velocity: Vec3::NEG_Z * 10.0,
+        ..Default::default()
+    };
+    let mut tailwind = GliderState {
+        velocity: Vec3::NEG_Z * 20.0,
+        wind: Vec3::NEG_Z * 10.0,
+        ..Default::default()
+    };
+    velocity_step(&mut calm);
+    velocity_step(&mut tailwind);
+    assert!((tailwind.velocity - calm.velocity).distance(Vec3::NEG_Z * 10.0) < 0.0001);
+    fold(&mut actor);
+    assert!(actor.body.control_velocity.distance(Vec3::NEG_Z * 20.0) < 0.0001);
+}
+
+#[test]
+fn grounded_canopy_can_open_without_altering_walking_or_jump() {
+    let (mut actor, mut world, mut view, geometry) = fixture();
+    for coord in HexCoord::ORIGIN.within_radius(5) {
+        view.voxels.insert(TilePos::new(coord, 0), SubstanceId(1));
+    }
+    view.revision += 1;
+    world.refresh(&view, geometry);
+    actor.feet = Vec3::Y * SKIN;
+    actor.grounded = true;
+    actor.body.grounded = true;
+    let mut closed = actor.clone();
+    open(&mut actor, &world, &view, geometry);
+    for _ in 0..30 {
+        crate::motion::tick(
+            &mut actor,
+            Vec3::X,
+            false,
+            false,
+            false,
+            &world,
+            &ArenaTuning::default().encounters,
+        );
+        crate::motion::tick(
+            &mut closed,
+            Vec3::X,
+            false,
+            false,
+            false,
+            &world,
+            &ArenaTuning::default().encounters,
+        );
+        finish(&mut actor, &view, geometry);
+        assert!(actor.feet.distance(closed.feet) < 0.0001);
+        assert!(actor.glider.open && actor.grounded);
+    }
+    crate::motion::tick(
+        &mut actor,
+        Vec3::X,
+        false,
+        true,
+        false,
+        &world,
+        &ArenaTuning::default().encounters,
+    );
+    assert!(!actor.grounded && actor.glider.open && actor.body.vertical_velocity > 0.0);
+}
+
 fn fixture() -> (Actor, CollisionWorld, ArenaTerrainView, ArenaVoxelGeometry) {
     let mut actor = Actor::spawn(0, Vec3::Y * 100.0, Vec3::NEG_Z);
     actor.configure_expedition_player();
@@ -165,15 +237,14 @@ fn repeated_airborne_high_jump_folds_and_requires_manual_reopening() {
 }
 
 #[test]
-fn grounded_legacy_dead_and_charging_actors_cannot_open() {
-    for mode in 0..4 {
+fn legacy_dead_and_charging_actors_cannot_open() {
+    for mode in 1..4 {
         let (mut actor, world, view, geometry) = fixture();
         let mut intent = ActorIntent {
             glider_toggle: true,
             ..Default::default()
         };
         match mode {
-            0 => actor.grounded = true,
             1 => actor.expedition_player = false,
             2 => actor.hp = 0.0,
             _ => intent.cast_held = true,
@@ -208,7 +279,7 @@ fn complete_body_sweep_folds_at_a_wall_and_preserves_tangential_motion() {
 }
 
 #[test]
-fn landing_and_liquid_entry_fold_without_changing_world_liquids() {
+fn landing_keeps_canopy_open_but_liquid_entry_folds_without_changing_water() {
     let (mut actor, mut world, mut view, geometry) = fixture();
     view.voxels
         .insert(TilePos::new(HexCoord::ORIGIN, 0), SubstanceId(1));
@@ -219,11 +290,12 @@ fn landing_and_liquid_entry_fold_without_changing_world_liquids() {
     open(&mut actor, &world, &view, geometry);
     for _ in 0..10 {
         tick(&mut actor, &world, airborne_profile());
-        if !actor.glider.open {
+        if actor.grounded {
             break;
         }
     }
-    assert!(actor.grounded && !actor.glider.open);
+    assert!(actor.grounded && actor.glider.open);
+    fold(&mut actor);
     actor.feet = Vec3::Y * 2.0;
     actor.grounded = false;
     open(&mut actor, &world, &view, geometry);

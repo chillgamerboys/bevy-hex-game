@@ -775,6 +775,13 @@ impl ArenaSession {
         let mut boosts = Vec::new();
         let human_id = self.human_actor_id();
         let player_tuning = self.player_tuning(tuning);
+        let environment = self.ocean_environment.clone();
+        let marine_world = crate::marine::MarineWorld {
+            terrain: world,
+            geometry,
+            environment: environment.as_ref(),
+            time: self.ocean_time(),
+        };
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             actor.previous_yaw = actor.body_yaw;
@@ -821,6 +828,11 @@ impl ArenaSession {
             if let Some(profile) = actor_tuning.player_profile {
                 actor.walking_speed = profile.walking_speed;
             }
+            if let Some(notice) =
+                crate::marine::prepare(actor, intent, &marine_world, &self.collision)
+            {
+                self.notice = notice.into();
+            }
             crate::exploration::prepare(actor, intent);
             crate::glider::prepare(actor, intent, &self.collision, world, geometry);
             let boosted = intent.high_jump
@@ -839,7 +851,9 @@ impl ArenaSession {
                 intents.get(&actor.id).map_or(Vec3::ZERO, |i| i.direction)
             };
             let flight = intents.get(&actor.id).is_some_and(|i| i.flight);
-            if !crate::exploration::tick_or_wait(actor, intent, &self.collision) {
+            if !crate::marine::tick_or_wait(actor, intent, &marine_world, &self.collision)
+                && !crate::exploration::tick_or_wait(actor, intent, &self.collision)
+            {
                 motion::tick_with_lunge(
                     actor,
                     direction,

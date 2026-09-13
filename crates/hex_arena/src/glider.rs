@@ -18,7 +18,7 @@ pub struct GliderSnapshot {
     pub open: bool,
     /// Persistent world-space motion; neither walking nor Dragon flight input.
     pub velocity: Vec3,
-    /// Total speed in world units per second.
+    /// Speed relative to the wind, in world units per second.
     pub airspeed: f32,
     /// Zero with full lift, one at or below the distinct stall speed.
     pub stall_fraction: f32,
@@ -32,6 +32,7 @@ pub(crate) struct GliderState {
     velocity: Vec3,
     look: Vec3,
     heading: Vec3,
+    pub(crate) wind: Vec3,
 }
 
 impl Default for GliderState {
@@ -41,13 +42,14 @@ impl Default for GliderState {
             velocity: Vec3::ZERO,
             look: Vec3::NEG_Z,
             heading: Vec3::NEG_Z,
+            wind: Vec3::ZERO,
         }
     }
 }
 
 impl GliderState {
     pub(crate) fn snapshot(&self) -> GliderSnapshot {
-        let airspeed = self.velocity.length();
+        let airspeed = (self.velocity - self.wind).length();
         GliderSnapshot {
             open: self.open,
             velocity: self.velocity,
@@ -88,6 +90,9 @@ fn acceleration(speed: f32, direction: Vec3) -> f32 {
 }
 
 fn velocity_step(state: &mut GliderState) {
+    // Keep persistent ground velocity, applying flight forces in the moving air.
+    // Changing wind or toggling the canopy supplies no instantaneous velocity.
+    state.velocity -= state.wind;
     let speed = state.velocity.length();
     let turn_degrees = 100.0 - 45.0 * (speed / MAX_SPEED).clamp(0.0, 1.0);
     // Heading stays bounded even when opening during a vertical fall or boost.
@@ -107,6 +112,7 @@ fn velocity_step(state: &mut GliderState) {
     // a forward launch kick. Diving recovers speed and then steering authority.
     state.velocity.y -= GRAVITY * (1.0 - lift(speed)) * STEP;
     state.velocity = state.velocity.clamp_length_max(MAX_SPEED);
+    state.velocity += state.wind;
 }
 
 pub(crate) fn fold(actor: &mut Actor) {
@@ -134,6 +140,7 @@ pub(crate) fn prepare(
 ) {
     if !actor.expedition_player
         || actor.species != Species::Human
+        || actor.boat().is_some_and(|boat| boat.active)
         || actor
             .free_flight
             .as_ref()
@@ -166,18 +173,18 @@ pub(crate) fn prepare(
     }
     if actor.glider.open {
         fold(actor);
-    } else if !actor.grounded
-        && world.clear(actor.feet, actor.dimensions.y, actor.dimensions.x * 0.5)
-    {
+    } else if world.clear(actor.feet, actor.dimensions.y, actor.dimensions.x * 0.5) {
         actor.glider.velocity = actor.body.control_velocity
             + actor.body.impulse_velocity
             + Vec3::Y * actor.body.vertical_velocity;
         actor.glider.heading = clamped_look(actor.glider.velocity.normalize_or(actor.glider.look));
         actor.glider.open = true;
-        actor.body.control_velocity = Vec3::ZERO;
-        actor.body.airborne_momentum = None;
-        actor.body.vertical_velocity = 0.0;
-        actor.body.impulse_velocity = Vec3::ZERO;
+        if !actor.grounded {
+            actor.body.control_velocity = Vec3::ZERO;
+            actor.body.airborne_momentum = None;
+            actor.body.vertical_velocity = 0.0;
+            actor.body.impulse_velocity = Vec3::ZERO;
+        }
     }
 }
 
@@ -204,21 +211,25 @@ pub(crate) fn tick(actor: &mut Actor, world: &CollisionWorld, profile: GroundPro
     actor.grounded = false;
     actor.body.grounded = false;
     if !contacts.is_empty() {
+        let mut blocking = false;
         for normal in contacts {
             actor.glider.velocity -= normal * actor.glider.velocity.dot(normal).min(0.0);
             if normal.y > 0.5 {
                 actor.grounded = true;
                 actor.body.grounded = true;
+            } else {
+                blocking = true;
             }
         }
-        fold(actor);
+        if blocking {
+            fold(actor);
+        }
     } else if actor.glider.velocity.y <= 0.0 {
         if let Some(feet) = world.ground(actor.feet, profile.height, profile.radius, SKIN * 8.0) {
             actor.feet = feet;
             actor.glider.velocity.y = 0.0;
             actor.grounded = true;
             actor.body.grounded = true;
-            fold(actor);
         }
     }
 }
@@ -229,6 +240,10 @@ pub(crate) fn finish(actor: &mut Actor, view: &ArenaTerrainView, geometry: Arena
         actor.clear_glider();
     } else if actor.glider.open && !crate::encounters::dry(actor, view, geometry) {
         fold(actor);
+    } else if actor.glider.open && actor.grounded {
+        actor.glider.velocity = actor.body.control_velocity
+            + actor.body.impulse_velocity
+            + Vec3::Y * actor.body.vertical_velocity;
     }
 }
 

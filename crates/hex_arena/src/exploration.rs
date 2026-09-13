@@ -25,8 +25,8 @@ pub struct FreeFlightSnapshot {
 pub(crate) struct FreeFlightState {
     pub(crate) active: bool,
     velocity: Vec3,
-    requested: Vec3,
-    loading: bool,
+    pub(crate) requested: Vec3,
+    pub(crate) loading: bool,
 }
 
 impl Actor {
@@ -176,7 +176,7 @@ fn input_velocity(intent: ActorIntent, aim: Vec3) -> Vec3 {
         }
 }
 
-fn ordinary_request(actor: &Actor, intent: ActorIntent) -> Vec3 {
+pub(crate) fn ordinary_request(actor: &Actor, intent: ActorIntent) -> Vec3 {
     if actor.glider.open {
         return actor.glider.snapshot().velocity
             + actor.body.impulse_velocity
