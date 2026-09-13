@@ -49,6 +49,7 @@ impl OceanNearBoundary {
             for neighbor in column
                 .coordinate
                 .within_radius(1)
+                .into_iter()
                 .filter(|neighbor| neighbor != &column.coordinate)
             {
                 if !self.known_columns.contains(&neighbor) {
@@ -130,16 +131,19 @@ mod tests {
             ..default()
         };
         assert_eq!(boundary.build().unwrap().count_vertices(), 7);
-        boundary.known_columns = HexCoord::ORIGIN.within_radius(1).collect();
+        boundary.known_columns = HexCoord::ORIGIN.within_radius(1).into_iter().collect();
         assert_eq!(boundary.build().unwrap().count_vertices(), 31);
         boundary.columns.push(OceanBoundaryColumn {
             coordinate: HexCoord::from_axial(1, 0),
             ..column
         });
+        boundary
+            .known_columns
+            .extend(HexCoord::from_axial(1, 0).within_radius(1));
         let indices = boundary.build().unwrap().indices().unwrap().len();
-        assert!(
-            indices < 2 * (18 + 36),
-            "internal shared water face must be absent"
+        assert_eq!(
+            indices, 96,
+            "two bottoms and ten exterior sides; no shared water face"
         );
     }
 }

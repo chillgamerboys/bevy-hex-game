@@ -13,7 +13,7 @@ pub(super) fn surface_mesh() -> Mesh {
         .map(|n| f32::from(n) * 4.0)
         .chain((1_u16..=48).map(|n| 256.0 + f32::from(n) * 16.0))
         .chain((1_u16..=48).map(|n| 1024.0 + f32::from(n) * 64.0))
-        .chain((1_u16..=32).map(|n| 4096.0 + f32::from(n) * 256.0));
+        .chain((1_u16..=32).map(|n| 4096.0 + f32::from(n) * ((HORIZON_RADIUS - 4096.0) / 32.0)));
     let mut data = MeshData::default();
     data.vertex(Vec3::ZERO, Vec3::Y);
     let mut previous = None;
