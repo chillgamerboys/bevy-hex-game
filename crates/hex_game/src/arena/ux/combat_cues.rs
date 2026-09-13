@@ -1,5 +1,5 @@
 //! Small event cues consume already-visible gameplay snapshots.
-use super::super::{hud, ArenaCamera, ViewState};
+use super::super::{ArenaCamera, ViewState, hud};
 use bevy::prelude::*;
 use hex_arena::{ArenaSession, ArenaTuning};
 
@@ -127,8 +127,11 @@ fn glider_status(
     let flight = session
         .human_actor_id()
         .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
-        .and_then(hex_arena::Actor::glider)
-        .filter(|flight| flight.open);
+        .and_then(|actor| {
+            actor
+                .glider()
+                .filter(|flight| flight.open && !actor.grounded)
+        });
     for (mut text, mut color, mut node) in &mut labels {
         let Some(flight) = flight else {
             super::set_display(&mut node, Display::None);

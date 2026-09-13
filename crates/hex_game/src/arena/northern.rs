@@ -8,12 +8,14 @@ use hex_core::arena::{
     ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
     ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
 };
+use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfile};
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
     OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary, OceanRenderStatus,
-    OceanSurfaceProfile, sample_local_surface, sample_surface,
+    OceanSurfaceAdapter, OceanSurfaceProfile, sample_local_surface, sample_surface,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 struct CapturePose {
@@ -26,7 +28,6 @@ struct CapturePose {
 pub(super) struct NorthernPresentation {
     package: Option<u64>,
     generation: Option<u64>,
-    phase: f32,
     boundary_center: Option<HexCoord>,
     boundary_revision: Option<u64>,
     capture: Option<CapturePose>,
@@ -66,7 +67,7 @@ pub(super) fn sun_direction() -> Vec3 {
 }
 
 pub(super) fn controls_text() -> &'static str {
-    "F: open/fold exploration flight · WASD + mouse: steer · Space/Ctrl: rise/drop · Shift: fast flight\nG: momentum glider · Fireball and Shield work in flight · High Jump returns to gravity"
+    "F: open/fold exploration flight · WASD + mouse: steer · Space/Ctrl: rise/drop · Shift: fast flight\nB: deploy/fold sailboat near water · W: sail/paddle · A/D: steer · S: brake\nSwimming: Space rises, Ctrl dives · 90 seconds of oxygen\nG: momentum glider · Fireball and Shield work in flight · High Jump returns to gravity"
 }
 
 pub(super) fn fixture_view(view: &str) -> bool {
@@ -153,6 +154,8 @@ pub(super) fn snapshot(
     reason = "Atomic map presentation setup joins immutable publication with four presentation resources."
 )]
 fn configure(
+    mut commands: Commands,
+    environment: Option<Res<OceanEnvironmentView>>,
     selection: Res<ArenaSelection>,
     reset: Res<ArenaReset>,
     state: Res<ViewState>,
@@ -175,6 +178,9 @@ fn configure(
         cache.enabled = enabled;
     }
     if !enabled {
+        if environment.is_some() {
+            commands.remove_resource::<OceanEnvironmentView>();
+        }
         cache.capture = None;
         return;
     }
@@ -209,9 +215,27 @@ fn configure(
         cache.boundary_center = None;
         cache.capture = None;
     }
+    if environment
+        .as_ref()
+        .is_none_or(|environment| environment.package_fingerprint != map.package_fingerprint)
+    {
+        match OceanSurfaceAdapter::new(profile.clone(), bath.clone()) {
+            Ok(adapter) => {
+                commands.insert_resource(OceanEnvironmentView {
+                    package_fingerprint: map.package_fingerprint,
+                    sampler: Arc::new(adapter),
+                    wind: OceanWindProfile::default(),
+                });
+            }
+            Err(error) => {
+                error!("Northern ocean environment: {error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        }
+    }
     if cache.generation != Some(reset.generation) {
         cache.generation = Some(reset.generation);
-        cache.phase = 0.0;
         cache.boundary_center = None;
     }
     if state.capture.is_some() && fixture_view(&state.capture_view) {
@@ -286,7 +310,7 @@ fn camera(
     reason = "Camera presentation joins exact local water, the visual ocean, sky and HUD-safe tint."
 )]
 fn present(
-    time: Res<Time>,
+    time: Res<OceanSimulationTime>,
     state: Res<ViewState>,
     view: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
@@ -303,21 +327,23 @@ fn present(
     if !frame.enabled {
         return;
     }
-    if state.started && !state.paused && state.capture.is_none() {
-        cache.phase += time.delta_secs();
-    }
     // Explicit frozen phase zero matches the existing arena capture contract.
     frame.phase_seconds = if state.capture.is_some() {
         0.0
     } else {
-        cache.phase.rem_euclid(900.0)
+        time.phase_seconds()
     };
     sky.enabled = true;
     sky.sun_direction = sun_direction();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Cloud translation uses the same elapsed run time; f32 precision is ample for its slow drift."
+    )]
+    let cloud_seconds = time.seconds as f32;
     sky.cloud_phase = if state.capture.is_some() {
         0.0
     } else {
-        cache.phase
+        cloud_seconds
     };
     let mut water = None;
     if let Ok((camera, mut fog)) = cameras.single_mut() {
@@ -349,6 +375,10 @@ fn present(
             Color::srgb(1.0, 0.76, 0.48)
         };
     }
+    sky.underwater_color = water.map(|color| {
+        let color = color.to_linear();
+        Vec3::new(color.red, color.green, color.blue)
+    });
     for (mut node, mut background) in &mut overlays {
         super::ux::set_display(
             &mut node,
@@ -371,7 +401,6 @@ fn camera_water(
     bath: &OceanBathymetry,
     boundary: &OceanNearBoundary,
     camera: Vec3,
-    phase: f32,
 ) -> Option<Color> {
     let sample = sample_local_surface(
         profile,

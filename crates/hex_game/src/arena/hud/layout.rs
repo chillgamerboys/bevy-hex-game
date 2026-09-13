@@ -194,6 +194,7 @@ pub(crate) fn setup(
                         health.spawn((text("", 24.0, INK), Label::Health));
                         health.spawn((text("", 24.0, INK), ux::combat_cues::PlayerLevel));
                         health.spawn((text("", 20.0, INK), ux::combat_cues::GliderStatus));
+                        health.spawn((text("", 20.0, INK), super::super::marine_visual::MarineStatus));
                     });
                 strip.spawn(row()).with_children(|bar| {
                     for (index, key, name) in [

@@ -113,6 +113,10 @@ pub(super) fn present(
             Color::srgb(1.0, 0.78, 0.50)
         };
     }
+    sky.underwater_color = water.map(|color| {
+        let color = color.to_linear();
+        Vec3::new(color.red, color.green, color.blue)
+    });
     for (mut node, mut background) in &mut overlays {
         super::ux::set_display(
             &mut node,

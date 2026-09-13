@@ -11,6 +11,7 @@ mod expedition_route_tests;
 #[cfg(all(test, feature = "test-support"))]
 mod forest_tests;
 mod glider_visual;
+mod marine_visual;
 #[cfg(feature = "test-support")]
 pub use encounter::{STRESS_VISIT_TICKS, configure_encounter_stress_tuning, stress_target_pose};
 mod golem;
@@ -434,6 +435,7 @@ pub fn run() -> AppExit {
     environment::install(&mut app);
     northern::install(&mut app);
     glider_visual::install(&mut app);
+    marine_visual::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
         .insert_resource(selection)
@@ -909,6 +911,7 @@ fn input(
     intent.human.glider_look = direction;
     intent.human.glider_toggle |= keys.just_pressed(KeyCode::KeyG);
     intent.human.flight_toggle |= keys.just_pressed(KeyCode::KeyF);
+    intent.human.boat_toggle |= keys.just_pressed(KeyCode::KeyB);
     intent.human.flight_vertical = f32::from(u8::from(keys.pressed(KeyCode::Space)))
         - f32::from(u8::from(
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),

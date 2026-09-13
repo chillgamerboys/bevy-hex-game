@@ -572,13 +572,13 @@ Camera movement never controls a creature.".into(),
             Label::Help => format!("WASD move / mouse look / Space jump / E High Jump
 Hold LMB for Fireball or RMB for Shield; release to cast.
 G opens or folds your glider; diving gains speed, climbing loses it.
-Casting folds the glider. High Jump keeps your charge. Movement speed is {} units/s.", if expedition.is_some() { "4.725" } else { "4.5" }),
+Casting folds the glider. High Jump keeps your charge. Movement speed is {} units/s.", if selection.map.capabilities().expedition_player { "5.906" } else { "4.5" }),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
             Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains; 3 Golems and 10 Wisps inhabit the lowlands.\nStart on the bridge. Hidden fountains are your only healing.".into(),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
-                ArenaMap::NorthernArchipelago => "Northern Archipelago: an open exploration map. F toggles free flight; Shift accelerates; Space/Ctrl rise/descend. No encounters or victory objective.".into(),
+                ArenaMap::NorthernArchipelago => "Northern Archipelago: an open exploration map. F toggles free flight; Shift accelerates; Space/Ctrl rise/descend. B deploys a sailboat near water; Space/Ctrl swim up/down. No encounters or victory objective.".into(),
                 ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),
             },
