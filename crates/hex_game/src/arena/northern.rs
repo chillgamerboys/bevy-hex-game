@@ -89,7 +89,7 @@ pub(super) fn sun_direction() -> Vec3 {
 }
 
 pub(super) fn controls_text() -> &'static str {
-    "F: open/fold exploration flight · WASD + mouse: steer · Space/Ctrl: rise/drop · Shift: fast flight\nB: deploy/fold sailboat near water · W: sail/paddle · A/D: steer · S: brake\nSwimming: Space rises, Ctrl dives · 90 seconds of oxygen\nG: momentum glider · Fireball and Shield work in flight · High Jump returns to gravity"
+    "M: minimap · V: wind direction/speed (arrow points downwind)\nF: open/fold exploration flight · WASD + mouse: steer · Space/Ctrl: rise/drop · Shift: fast flight\nB: deploy/fold sailboat near water · W: sail/paddle · A/D: steer · S: brake\nSwimming: Space rises, Ctrl dives · 90 seconds of oxygen\nG: momentum glider · Fireball and Shield work in flight · High Jump returns to gravity"
 }
 
 pub(super) fn fixture_view(view: &str) -> bool {

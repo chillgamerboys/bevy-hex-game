@@ -34,9 +34,15 @@ use actual ground velocity. G can open the glider on land without adding lift or
 changing walking/jumping. Landing leaves the canopy open; water, blocking walls
 and casting fold it.
 
+**V** independently toggles a north-up wind instrument showing the direction the
+wind blows toward and its current speed in units/s. It sits beside the minimap
+when M is enabled, or in the upper-right corner otherwise. It uses the same wind
+and simulation clock as sailing and gliding, and is available on land too.
+
 ## Water and residency
 
-Three absolute-coordinate swells remain within a two-unit displacement envelope.
+Three absolute-coordinate swells use amplitudes 2.1, 1.05 and 0.35 units, within a
+3.5-unit displacement envelope. Their periods remain 18, 25 and 12 seconds.
 Weak reflected waves near shores add interference; foam follows actual crests.
 Cached bed, shelter and shore-anchor samples supply matching CPU/GPU height,
 normal and vertical velocity. The boat, physical-eye breathing and rendering
@@ -55,6 +61,8 @@ An additional `--view northern-boat` stages the player at admitted water and sen
 B through the normal controller, then freezes a close boat/HUD frame. Its receipt
 records active boat state and simulation time; it is not evidence of native input
 or travel feel.
+Add `--navigation` with that boat view to display the map and wind instrument;
+the receipt records both visibility flags. Keyboard behavior has separate tests.
 
 A capture-only `--view northern-bay-flat` uses zero wave amplitudes with the same bay camera, bathymetry and depth absorption. `--settle-frames 244` adds a bounded settled sample for wave-cost comparisons (allowed range 4–600); receipts record the requested count. Update wall intervals include scheduler/render-submission waits and are not GPU or native frame timing.
 

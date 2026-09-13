@@ -1242,8 +1242,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.northern_world is not None:
             env["HEX_NORTHERN_WORLD"] = str(args.northern_world.resolve())
         if args.forest_world is not None:
-            if (args.map or "forest-massif") != "forest-massif":
-                raise RuntimeError("--forest-world requires the Forest map.")
+            # Packages remain available when the player changes maps at the ready screen.
             env["HEX_FOREST_WORLD"] = str(args.forest_world)
         if (args.map or "forest-massif") == "forest-massif":
             prepare_forest_package(env)

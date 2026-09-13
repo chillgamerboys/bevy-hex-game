@@ -179,6 +179,8 @@ def capture(args: argparse.Namespace) -> int:
     env, removed = arena.environment(args.target_dir)
     env.pop("HEX_FOREST_WORLD", None)
     env.update(HEX_NORTHERN_WORLD=str(args.package), HEX_ARENA_MAP="northern-archipelago")
+    if args.navigation:
+        env.update(HEX_ARENA_UI_MAP="1", HEX_ARENA_UI_WIND="1")
     pack.mkdir(parents=True, exist_ok=False)
     (pack / "staged.patch").write_bytes(staged)
     (pack / "unstaged.patch").write_bytes(unstaged)
@@ -268,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print source/commands/output without launching or writing.")
     parser.add_argument("--view", action="append", choices=(*VIEWS, *EXTRA_VIEWS), help="Explicit focused subset; repeat as needed. Default: all six.")
     parser.add_argument("--settle-frames", type=int, default=4, help="Bounded settled render frames, 4–600; longer runs allow windowless timing comparisons.")
+    parser.add_argument("--navigation", action="store_true", help="Show the optional map and wind instrument in HUD-bearing fixtures.")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", args.label):
         parser.error("--label must be a short filename-safe identifier")

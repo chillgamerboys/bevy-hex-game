@@ -4,6 +4,8 @@ from copy import deepcopy
 import io
 import math
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from arena import (GOLEM_VIEWS, WISP_VIEWS, WORM_VIEWS, WORM_OBSERVER_PRESETS,
@@ -44,6 +46,18 @@ def conversion_specimen(reset=False):
 
 
 class WormCaptureGuards(unittest.TestCase):
+    def test_northern_launch_keeps_both_packages_available_for_map_switching(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory).resolve()
+            with patch("arena.environment", return_value=({}, [])), patch("arena.run_cargo", return_value=0) as cargo:
+                result = main(["launch", "--map", "northern-archipelago", "--target-dir", str(package / "target"),
+                               "--forest-world", str(package), "--northern-world", str(package)])
+            self.assertEqual(result, 0)
+            env = cargo.call_args.args[0]
+            self.assertEqual(env["HEX_FOREST_WORLD"], str(package))
+            self.assertEqual(env["HEX_NORTHERN_WORLD"], str(package))
+            self.assertEqual(env["HEX_ARENA_MAP"], "northern-archipelago")
+
     def test_matrix_has_full_fort_two_body_angles_and_preserves_originals(self):
         self.assertEqual(len(WORM_VIEWS), 13)
         self.assertEqual(len({row[0] for row in WORM_VIEWS}), 13)

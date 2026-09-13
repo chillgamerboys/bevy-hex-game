@@ -847,3 +847,113 @@ fn actual_expedition_m_toggles_map_without_pausing_and_restart_clears_pin() {
     settle(&mut app);
     assert!(app.world().resource::<UxState>().pin.is_none());
 }
+
+#[derive(Debug)]
+struct WindOnlyFixture;
+impl hex_core::ocean::OceanEnvironmentSampler for WindOnlyFixture {
+    fn surface_at(
+        &self,
+        _: Vec2,
+        _: f32,
+        _: hex_core::ocean::OceanWaterColumn,
+    ) -> Option<hex_core::ocean::OceanSurfaceSample> {
+        None // This UI test never asks a fixture to authorize water or movement.
+    }
+}
+
+#[test]
+fn exploration_navigation_keys_use_published_overview_and_wind_without_progression() {
+    for (width, height, scale) in [(1280, 720, 2.0), (1600, 900, 1.0), (1920, 1080, 1.0)] {
+        let mut app = app(width, height, scale);
+        app.world_mut().resource_mut::<ArenaSelection>().map = ArenaMap::NorthernArchipelago;
+        app.world_mut().insert_resource(ArenaOverview {
+            width: 2,
+            height: 2,
+            min: Vec2::splat(-100.0),
+            max: Vec2::splat(100.0),
+            rgba: vec![128; 16],
+            ..default()
+        });
+        app.world_mut()
+            .insert_resource(hex_core::ocean::OceanEnvironmentView {
+                package_fingerprint: 1,
+                sampler: std::sync::Arc::new(WindOnlyFixture),
+                wind: hex_core::ocean::OceanWindProfile {
+                    heading_radians: std::f32::consts::FRAC_PI_2,
+                    speed: 10.0,
+                },
+            });
+        assert!(app.world().resource::<ArenaSession>().progress().is_none());
+        app.world_mut().resource_mut::<ViewState>().begin_play();
+        settle(&mut app);
+        key(&mut app, KeyCode::KeyM);
+        assert!(app.world().resource::<UxState>().map_visible);
+        assert!(!app.world().resource::<ViewState>().paused);
+        key(&mut app, KeyCode::KeyV);
+        assert!(app.world().resource::<UxState>().wind_visible);
+        settle(&mut app);
+        let map = app
+            .world_mut()
+            .query_filtered::<Entity, With<MiniMap>>()
+            .single(app.world())
+            .expect("minimap");
+        let wind = app
+            .world_mut()
+            .query_filtered::<Entity, With<super::wind::WindPanel>>()
+            .single(app.world())
+            .expect("wind instrument");
+        assert_visible(&mut app, map, "Exploration minimap");
+        assert_visible(&mut app, wind, "Wind beside minimap");
+        assert!(rect(app.world(), wind).max.x < rect(app.world(), map).min.x);
+        let arrow = app
+            .world_mut()
+            .query_filtered::<&UiTransform, With<super::wind::WindArrow>>()
+            .single(app.world())
+            .expect("wind arrow");
+        assert!(
+            (arrow.rotation * Vec2::NEG_Y - Vec2::X).length() < 1e-5,
+            "eastward wind points right on a north-up display"
+        );
+        let text = app
+            .world_mut()
+            .query_filtered::<&Text, With<super::wind::WindDetails>>()
+            .single(app.world())
+            .expect("wind speed");
+        assert!(
+            text.0.starts_with("E · 10.4"),
+            "shared initial gust: {}",
+            text.0
+        );
+        key(&mut app, KeyCode::KeyM);
+        assert!(!app.world().resource::<UxState>().map_visible);
+        assert!(app.world().resource::<UxState>().wind_visible);
+        assert_eq!(
+            app.world().get::<Node>(wind).expect("wind node").right,
+            px(24)
+        );
+        key(&mut app, KeyCode::Escape);
+        key(&mut app, KeyCode::KeyV);
+        assert!(
+            app.world().resource::<UxState>().wind_visible,
+            "pause ignores V"
+        );
+        assert_eq!(
+            app.world().get::<Node>(wind).expect("wind node").display,
+            Display::None
+        );
+        app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+        settle(&mut app);
+        assert!(!app.world().resource::<UxState>().wind_visible);
+        assert!(!app.world().resource::<UxState>().map_visible);
+    }
+}
+
+#[test]
+fn navigation_shortcuts_ignore_unavailable_overview_and_wind() {
+    let mut app = app(1600, 900, 1.0);
+    app.world_mut().resource_mut::<ViewState>().begin_play();
+    key(&mut app, KeyCode::KeyM);
+    key(&mut app, KeyCode::KeyV);
+    assert!(!app.world().resource::<UxState>().map_visible);
+    assert!(!app.world().resource::<UxState>().wind_visible);
+}

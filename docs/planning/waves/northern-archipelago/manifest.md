@@ -282,8 +282,29 @@ owns only the ocean profile, crest presentation and directly affected tests/docs
 raise the three amplitudes by 75% while retaining slow periods and common CPU/GPU
 sampling. No new gameplay authority or whole-map package compilation is needed.
 Keep the current native run intact; use focused input tests and windowless frames,
-then the user's native playtest. Account floor remains20% remaining.
+then the user's native playtest. Account floor remains 20% remaining.
 
 UI intake: user reports M does nothing in Northern and Forest selection does not
 respond. Linear read/search requires reauthentication, so no ticket was written.
 The local defect record and implementation can proceed within the user's request.
+
+Forest selection reached its asynchronous loader, but the new empty `seas` field
+changed canonical source serialization and rejected the reviewed package identity.
+Omitting empty sea lists restores the original Forest fingerprint `8f56a9974aaac54b`;
+nonempty Northern seas remain serialized and identity-bearing. Two focused schema
+tests pass, and the default Forest package was successfully reproduced and
+republished. All 444 original terrain chunks match apart from identity metadata.
+The launcher accepts both packages regardless of the initially selected map, and
+loading/failure status now appears above the start menu's scrolling content.
+
+M now depends on a published overview and human control rather than Forest-only
+progression. V independently toggles the north-up downwind arrow and current
+speed, using the same environment and simulation time as sailing and gliding.
+Two focused keyboard/layout regressions pass, including 1280×720 at 200% UI scale,
+1600×900 and 1920×1080, pause/reset and unavailable-map behavior. The first compile
+exposed an obsolete TextLayout constructor; the corrected rerun passes. Seven
+launcher/helper tests pass. Native input/feel remains the user's check.
+
+Swells now have amplitudes 2.1 / 1.05 / 0.35 units, a ±3.5-unit envelope, retaining
+the existing 18 / 25 / 12-second periods and shared CPU/GPU sampling. Focused ocean
+tests and fresh navigation/water captures follow on this combined candidate.

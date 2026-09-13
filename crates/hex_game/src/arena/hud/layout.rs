@@ -283,6 +283,7 @@ pub(crate) fn setup(
                 ux::spawn_map(map, false, 280.0);
                 map.spawn((text("", 18.0, INK), UxLabel::Pin));
             });
+            ux::wind::spawn(root);
         });
     // Recording status remains visible over menus as well as gameplay.
     commands.spawn((
@@ -336,6 +337,7 @@ pub(crate) fn setup(
     commands.spawn((overlay(),BackgroundColor(Color::srgba(0.01,0.02,0.035,0.8)),GlobalZIndex(20),StartPanel)).with_children(|overlay| {
         overlay.spawn((panel(),BackgroundColor(PANEL),ux::MenuPanel)).with_children(|p| {
             p.spawn(text("BATTLE MODE",36.0,INK));
+            p.spawn((Node {display:Display::None,flex_shrink:0.0,..default()},text("",22.0,Color::srgb(1.0,0.83,0.45)),UxLabel::MapStatus));
             p.spawn(scroll()).with_children(|p| {
                 p.spawn(scroll_content(row())).with_children(|r| {
                     button(r,"PLAY",Action::Control(ArenaControl::Player));
@@ -412,7 +414,7 @@ pub(crate) fn setup(
                                 p.spawn((Button, Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),border:UiRect::all(px(2)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,overflow:Overflow::clip(),..default() }, BackgroundColor(Color::srgb(0.12, 0.24, 0.29)), BorderColor::all(Color::NONE), Action::Fullscreen)).with_children(|b| {b.spawn((text("Fullscreen",26.0,INK),Label::WindowMode));});
                                 p.spawn(text("C switches first / third person.\nUI preferences persist; Restart resets only your run.",26.0,INK));
                             }
-                            Page::Controls => {p.spawn(text(format!("{}\n\nWASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nG   Open / fold glider (Expedition)\nCharging or High Jump folds the glider.\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nEsc / Tab   Pause / resume\nShift+R   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls", super::super::northern::controls_text()),26.0,INK));}
+                            Page::Controls => {p.spawn(text(format!("{}\n\nWASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nG   Open / fold glider (Expedition)\nCharging or High Jump folds the glider.\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nV   Toggle wind direction and speed (Ocean)\nEsc / Tab   Pause / resume\nShift+R   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls", super::super::northern::controls_text()),26.0,INK));}
                         }
                     });
                 }

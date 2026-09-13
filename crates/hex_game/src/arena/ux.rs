@@ -4,6 +4,7 @@ pub(super) mod icons;
 mod performance;
 #[cfg(test)]
 mod tests;
+pub(super) mod wind;
 use super::{hud, recording::Recorder, ArenaFrame, ViewState};
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -62,6 +63,7 @@ pub(super) enum UxLabel {
     Scale,
     MapSelection,
     Pin,
+    MapStatus,
 }
 #[derive(Component)]
 pub(super) struct PageBody(pub Page);
@@ -95,6 +97,7 @@ struct Preferences {
 pub(super) struct UxState {
     page: Page,
     map_visible: bool,
+    wind_visible: bool,
     scale: f32,
     generation: u64,
     pin: Option<Vec2>,
@@ -119,6 +122,7 @@ impl Default for UxState {
         Self {
             page: Page::Overview,
             map_visible: false,
+            wind_visible: false,
             scale: 1.0,
             generation: 0,
             pin: None,
@@ -144,7 +148,7 @@ impl UxState {
     pub(super) fn snapshot(&self) -> serde_json::Value {
         let mut samples: Vec<_> = self.timing_samples.iter().copied().collect();
         samples.sort_by(f64::total_cmp);
-        serde_json::json!({"page":self.page.name(),"scale":self.scale,"map_visible":self.map_visible,"destination":self.pin.map(|value| value.to_array()),"selected_landmark":self.selected_id,"ui_cpu_samples":samples.len(),"ui_cpu_p95_micros":samples.get(samples.len().saturating_sub(1)*95/100)})
+        serde_json::json!({"page":self.page.name(),"scale":self.scale,"map_visible":self.map_visible,"wind_visible":self.wind_visible,"destination":self.pin.map(|value| value.to_array()),"selected_landmark":self.selected_id,"ui_cpu_samples":samples.len(),"ui_cpu_p95_micros":samples.get(samples.len().saturating_sub(1)*95/100)})
     }
     pub(super) fn has_menu_focus(&self) -> bool {
         self.focus.is_some()
@@ -168,6 +172,7 @@ fn load(mut ux: ResMut<UxState>, state: Res<ViewState>) {
             _ => Page::Overview,
         };
         ux.map_visible = std::env::var("HEX_ARENA_UI_MAP").is_ok_and(|s| s == "1");
+        ux.wind_visible = std::env::var("HEX_ARENA_UI_WIND").is_ok_and(|s| s == "1");
         ux.scale = std::env::var("HEX_ARENA_UI_SCALE")
             .ok()
             .and_then(|s| s.parse::<f32>().ok())
@@ -205,6 +210,7 @@ pub(super) fn install(app: &mut App) {
             Update,
             (
                 present_map,
+                wind::present,
                 present_feedback,
                 present_menus,
                 reflow,
@@ -272,6 +278,7 @@ pub(super) fn controls(
     mut recorder: Option<ResMut<Recorder>>,
     reset: Res<ArenaReset>,
     overview: Option<Res<ArenaOverview>>,
+    ocean: Option<Res<hex_core::ocean::OceanEnvironmentView>>,
     geometry: Res<ArenaVoxelGeometry>,
     session: Res<ArenaSession>,
     maps: Query<(&Interaction, &MapCanvas, &RelativeCursorPosition), Changed<Interaction>>,
@@ -286,6 +293,7 @@ pub(super) fn controls(
         ux.selected_id = None;
         if state.capture.is_none() {
             ux.map_visible = false;
+            ux.wind_visible = false;
         }
         if state.capture.is_none() {
             ux.page = Page::Overview;
@@ -299,9 +307,20 @@ pub(super) fn controls(
     if !state.paused
         && state.started
         && keys.just_pressed(KeyCode::KeyM)
-        && session.expedition_progress().is_some()
+        && session.human_actor_id().is_some()
+        && overview
+            .as_ref()
+            .is_some_and(|map| map.width > 0 && map.height > 0 && !map.rgba.is_empty())
     {
         ux.map_visible = !ux.map_visible;
+    }
+    if !state.paused
+        && state.started
+        && keys.just_pressed(KeyCode::KeyV)
+        && session.human_actor_id().is_some()
+        && ocean.is_some()
+    {
+        ux.wind_visible = !ux.wind_visible;
     }
     if !state.paused {
         wheels.clear();
@@ -815,6 +834,21 @@ fn present_menus(
     }
     for (label, mut text, mut node) in &mut labels {
         let next = match label {
+            UxLabel::MapStatus => {
+                let status = state
+                    .forest_preparation
+                    .status()
+                    .or_else(|| state.northern_preparation.status());
+                set_display(
+                    &mut node,
+                    if status.is_some() {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    },
+                );
+                status.unwrap_or_default().into()
+            }
             UxLabel::Notice => {
                 set_display(
                     &mut node,
