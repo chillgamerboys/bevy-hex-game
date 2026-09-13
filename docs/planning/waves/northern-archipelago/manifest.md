@@ -35,7 +35,7 @@ lanes:
     selector: {concerns: [map_unit, map_generation, map_contracts, residual, clippy, docs, shipping], full: true}
     evidence: static-presentation
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: integrated-awaiting-combined-validation
     pr: null
   - id: L2
     title: Ocean surface presentation
@@ -55,7 +55,7 @@ lanes:
     selector: {concerns: [map_unit, map_generation, map_contracts, residual, clippy, docs, shipping], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: integrated-awaiting-combined-validation
     pr: null
   - id: L3
     title: Exploration controller
@@ -73,7 +73,7 @@ lanes:
     selector: {concerns: [map_unit, map_generation, map_contracts, residual, clippy, docs, shipping], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: integrated-awaiting-combined-validation
     pr: null
   - id: L4
     title: Streamed world adapter
@@ -92,7 +92,7 @@ lanes:
     selector: {concerns: [map_unit, map_generation, map_contracts, residual, clippy, docs, shipping], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: integrated-awaiting-combined-validation
     pr: null
   - id: L5
     title: Application composition
@@ -111,10 +111,16 @@ lanes:
     selector: {concerns: [map_unit, map_generation, map_contracts, residual, clippy, docs, shipping], full: true}
     evidence: motion-or-feel
     sizing: {model: inherited, effort: inherited}
-    state: queued
+    state: integrated-awaiting-combined-validation
     pr: null
 ```
 
 ## Acceptance
 
 First prove full scale and final ocean mesh with all silhouettes, tallest peak and one dressed sector before further decoration. Exact island/cluster/shore/bed/spawn facts come from typed generation output. Streaming queries, carve reload/reset, movement boundaries, pause and legacy regression checks are logic evidence. Fresh windowless whole-map/bay/settlement/snow/waterline captures establish static visuals. User's three short checks establish waves, fast crossing/reversal and walking/water/freeflight feel. Measure3 circuits; no memory growth after warmup; bounded queues; streaming/publication target<2ms CPU p95, wave-on/off frame regression<10%. Repository-selected combined gate once assembled; inherited V3 lint remains explicit.
+
+## Current integration checkpoint
+
+The combined code is under validation. L1 full-scale proxy package has 5,852 chunks, 11 islands, a 303.1-unit peak above sea, and a deepest bed 138.95 units below sea. The proxy has 63 trees, four buildings and a field; full dressing follows visual/runtime review. L2 wave CPU tests and L3 flight/collision tests passed. L4 sparse carve unload/reload tests passed; combined windowless capture and circuit performance remain pending.
+
+User steering during implementation: retain at least 20% account allowance; no automatic reset or timers. Increase ordinary expedition starting walking speed by 25% to 5.90625 units/s, in the current expedition and this candidate. Normal jump rise is now 1.38 units; actual controller tests verify three-voxel ledge traversal and four-voxel rejection from both directions. The user requested a restart of the current expedition once these small movement changes are ready; that authorizes its native relaunch independently of the archipelago review.

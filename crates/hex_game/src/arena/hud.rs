@@ -135,6 +135,28 @@ pub(super) fn buttons(
         // A new map needs its own publication before any Start event can apply.
         return;
     }
+    let cancels_northern = state.paused
+        && windows.iter().all(|window| window.focused)
+        && interactions.iter().any(|(interaction, action)| {
+            *interaction == Interaction::Pressed
+                && !matches!(
+                    action,
+                    Action::Map(ArenaMap::NorthernArchipelago) | Action::Fullscreen
+                )
+        });
+    if state.started || battle.control == ArenaControl::Spectator || cancels_northern {
+        state.northern_preparation.cancel_selection();
+    }
+    if state.northern_preparation.poll() {
+        apply_map_selection(
+            ArenaMap::NorthernArchipelago,
+            &mut state,
+            &mut reset,
+            &mut selection,
+            &mut battle,
+        );
+        return;
+    }
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed
             || !state.paused
@@ -148,14 +170,30 @@ pub(super) fn buttons(
         ) {
             state.forest_preparation.cancel_selection();
         }
+        if !matches!(
+            action,
+            Action::Map(ArenaMap::NorthernArchipelago) | Action::Fullscreen
+        ) {
+            state.northern_preparation.cancel_selection();
+        }
         match *action {
             Action::Map(map)
                 if !state.started
                     && selection.map != map
                     && !(battle.control == ArenaControl::Spectator
-                        && matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)) =>
+                        && matches!(
+                            map,
+                            ArenaMap::SevenRegions
+                                | ArenaMap::ForestMassif
+                                | ArenaMap::NorthernArchipelago
+                        )) =>
             {
                 if map == ArenaMap::ForestMassif && !state.forest_preparation.request() {
+                    continue;
+                }
+                if map == ArenaMap::NorthernArchipelago
+                    && !state.northern_preparation.request_for(map)
+                {
                     continue;
                 }
                 apply_map_selection(map, &mut state, &mut reset, &mut selection, &mut battle);
@@ -163,8 +201,10 @@ pub(super) fn buttons(
             Action::Control(control)
                 if !state.started
                     && battle.control != control
-                    && !(selection.map == ArenaMap::ForestMassif
-                        && control == ArenaControl::Spectator) =>
+                    && !(matches!(
+                        selection.map,
+                        ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago
+                    ) && control == ArenaControl::Spectator) =>
             {
                 battle.control = control;
                 if control == ArenaControl::Spectator {
@@ -280,12 +320,14 @@ fn apply_map_selection(
 ) {
     let previous = (!matches!(
         selection.map,
-        ArenaMap::SevenRegions | ArenaMap::ForestMassif
+        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago
     ))
     .then(|| super::player_preset(*selection, battle));
     selection.map = map;
-    if matches!(map, ArenaMap::SevenRegions | ArenaMap::ForestMassif)
-        || battle.control == ArenaControl::Spectator
+    if matches!(
+        map,
+        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago
+    ) || battle.control == ArenaControl::Spectator
     {
         battle.player_recipe = None;
     } else {
@@ -387,7 +429,7 @@ pub(super) fn update(
     for (content, mut node) in &mut mode_contents {
         set_display(
             &mut node,
-            if content.0 == battle.control && selection.map != ArenaMap::ForestMassif {
+            if content.0 == battle.control && !selection.map.capabilities().expedition_player {
                 Display::Flex
             } else {
                 Display::None
@@ -422,7 +464,7 @@ pub(super) fn update(
         if matches!(action, Action::Control(ArenaControl::Spectator)) {
             set_display(
                 &mut node,
-                if selection.map == ArenaMap::ForestMassif {
+                if selection.map.capabilities().expedition_player {
                     Display::None
                 } else {
                     Display::Flex
@@ -516,6 +558,7 @@ pub(super) fn update(
             Label::Team(slot) => format!("TEAM {}  /  {}", slot + 1, spectator::preset_for(&battle, *slot).map_or("Custom", BattlePreset::label)),
             Label::ObserverTeams => session.battle_summary().map_or_else(String::new, |summary| spectator::team_status(&summary)),
             Label::ObserverStatus => session.battle_summary().map_or_else(String::new, |summary| spectator::battle_status(&summary, state.observer.mode, state.paused)),
+            Label::Help if state.northern_preparation.status().is_some() => state.northern_preparation.status().unwrap_or_default().into(),
             Label::Help if state.forest_preparation.status().is_some() => state.forest_preparation.status().unwrap_or_default().into(),
             Label::Help if pending > 0 => format!("Preparing terrain: {pending} chunks remaining. Start unlocks when ready."),
             Label::Help if battle.control == ArenaControl::Spectator => "WASD pan / move / Q and E down and up / Shift fast
@@ -530,6 +573,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains; 3 Golems and 10 Wisps inhabit the lowlands.\nStart on the bridge. Hidden fountains are your only healing.".into(),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
+                ArenaMap::NorthernArchipelago => "Northern Archipelago: an open exploration map. F toggles free flight; Shift accelerates; Space/Ctrl rise/descend. No encounters or victory objective.".into(),
                 ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),
             },

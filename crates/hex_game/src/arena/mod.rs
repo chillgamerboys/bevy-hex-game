@@ -15,6 +15,7 @@ mod glider_visual;
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
 mod hud;
+mod northern;
 mod presentation;
 mod readability_capture;
 mod recording;
@@ -49,6 +50,7 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "fort" => ArenaMap::Fort,
         "seven-regions" => ArenaMap::SevenRegions,
         "forest-massif" => ArenaMap::ForestMassif,
+        "northern-archipelago" => ArenaMap::NorthernArchipelago,
         value => return Err(format!("Unknown arena map: {value}")),
     };
     if map == ArenaMap::ForestMassif && encounter.is_some_and(|value| value != "dragon") {
@@ -148,6 +150,7 @@ fn map_name(map: ArenaMap) -> &'static str {
         ArenaMap::Fort => "Fort",
         ArenaMap::SevenRegions => "Seven Regions",
         ArenaMap::ForestMassif => "Forest Massif",
+        ArenaMap::NorthernArchipelago => "Northern Archipelago",
     }
 }
 
@@ -163,6 +166,7 @@ fn encounter_name(encounter: ArenaEncounter) -> &'static str {
 #[derive(Resource)]
 struct ViewState {
     forest_preparation: bootstrap::Preparation,
+    northern_preparation: bootstrap::Preparation,
     started: bool,
     paused: bool,
     third_person: bool,
@@ -217,6 +221,7 @@ impl Default for ViewState {
             capture.is_some() && !matches!(capture_view.as_str(), "start" | "observer-start");
         Self {
             forest_preparation: Default::default(),
+            northern_preparation: Default::default(),
             started,
             paused: !started,
             third_person: false,
@@ -280,6 +285,7 @@ impl ViewState {
 
     fn begin_play(&mut self) {
         self.forest_preparation.cancel_selection();
+        self.northern_preparation.cancel_selection();
         self.started = true;
         self.paused = false;
         self.suppress_click = true;
@@ -298,6 +304,7 @@ impl ViewState {
 
     fn prepare_round(&mut self) {
         self.forest_preparation.cancel_selection();
+        self.northern_preparation.cancel_selection();
         self.started = false;
         self.previews = [true, false];
         self.fireball_guide_seen = false;
@@ -425,6 +432,7 @@ pub fn run() -> AppExit {
     recording::install(&mut app);
     ux::install(&mut app);
     environment::install(&mut app);
+    northern::install(&mut app);
     glider_visual::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
@@ -626,7 +634,7 @@ fn setup(
         Projection::Perspective(PerspectiveProjection {
             fov: 75.0_f32.to_radians(),
             near: 0.035,
-            far: 1_600.0,
+            far: 24_000.0,
             ..default()
         }),
         Transform::from_xyz(0.0, 6.0, 15.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
@@ -675,7 +683,7 @@ fn update_map_lighting(
     if !selection.is_changed() {
         return;
     }
-    let forest = selection.map == ArenaMap::ForestMassif;
+    let forest = selection.map.capabilities().natural_environment;
     if !forest && !*was_forest {
         return;
     }
@@ -699,7 +707,11 @@ fn update_map_lighting(
             Color::WHITE
         };
         let origin = if forest {
-            environment::sun_direction()
+            if selection.map == ArenaMap::NorthernArchipelago {
+                northern::sun_direction()
+            } else {
+                environment::sun_direction()
+            }
         } else {
             Vec3::new(-15.0, 30.0, 18.0)
         };
@@ -898,6 +910,13 @@ fn input(
     }
     intent.human.glider_look = direction;
     intent.human.glider_toggle |= keys.just_pressed(KeyCode::KeyG);
+    intent.human.flight_toggle |= keys.just_pressed(KeyCode::KeyF);
+    intent.human.flight_vertical = f32::from(u8::from(keys.pressed(KeyCode::Space)))
+        - f32::from(u8::from(
+            keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
+        ));
+    intent.human.flight_fast =
+        keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     intent.human.aim = current_aim;
     if state.suppress_click {
         state.casts.clear();
@@ -1489,6 +1508,8 @@ fn capture_frame(
         Option<Res<hex_core::arena::ArenaRenderStatus>>,
         Option<Res<ux::UxState>>,
         Option<Res<readability_capture::ReadabilityCapture>>,
+        Option<Res<hex_map::arena::streamed::StreamedArena>>,
+        Option<Res<hex_map::ocean::OceanRenderStatus>>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1499,7 +1520,15 @@ fn capture_frame(
         Res<hex_core::DamagedVoxels>,
     ),
 ) {
-    let (liquid_clock, render, ui, readability) = render_context;
+    let (liquid_clock, render, ui, readability, northern_world, ocean_status) = render_context;
+    if !northern::capture_ready(
+        &state.capture_view,
+        northern_world.as_deref(),
+        render.as_deref(),
+        ocean_status.as_deref(),
+    ) {
+        return;
+    }
     let Some(path) = state.capture.clone() else {
         return;
     };
@@ -1521,7 +1550,8 @@ fn capture_frame(
                     })
             })
         });
-    let authored_assets_ready = !needs_objects
+    let authored_assets_ready = view.selection.map == ArenaMap::NorthernArchipelago
+        || !needs_objects
         || (object_count > 0
             && chunk_count > 0
             && every_forest_object_ready
@@ -1863,6 +1893,7 @@ fn capture_frame(
         ("progress", serde_json::json!(session.progress())),
         ("expedition", serde_json::json!(session.expedition_progress())),
         ("package_identity", serde_json::json!(view.package_identity)),
+        ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref())),
         ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
         ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),
         ("readability_state", readability_capture::receipt(readability.as_deref())),

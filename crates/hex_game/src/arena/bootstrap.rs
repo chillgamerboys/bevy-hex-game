@@ -13,6 +13,7 @@ use hex_core::arena::ArenaMap;
 /// interest leaves any running preparation available as a cache for a later click.
 #[derive(Default)]
 pub(super) struct Preparation {
+    map: Option<ArenaMap>,
     completion: Option<Mutex<mpsc::Receiver<Result<(), String>>>>,
     requested: bool,
     ready: bool,
@@ -22,11 +23,17 @@ pub(super) struct Preparation {
 impl Preparation {
     /// True permits immediate selection; false leaves the old map published.
     pub fn request(&mut self) -> bool {
-        if !requires_preparation(
-            ArenaMap::ForestMassif,
-            std::env::var_os("HEX_FOREST_WORLD").as_deref(),
-        ) || self.ready
-        {
+        self.request_for(ArenaMap::ForestMassif)
+    }
+
+    pub fn request_for(&mut self, map: ArenaMap) -> bool {
+        self.map = Some(map);
+        let override_name = if map == ArenaMap::NorthernArchipelago {
+            "HEX_NORTHERN_WORLD"
+        } else {
+            "HEX_FOREST_WORLD"
+        };
+        if !requires_preparation(map, std::env::var_os(override_name).as_deref()) || self.ready {
             return true;
         }
         self.requested = true;
@@ -36,11 +43,11 @@ impl Preparation {
             // Waiting for a compiler is blocking work. Keep it off Bevy's shared
             // pools so choosing another map can still load that map's assets.
             match std::thread::Builder::new()
-                .name("forest-preparation".into())
+                .name("arena-package-preparation".into())
                 .spawn(move || {
                     // Closing the app can drop the receiver while the reusable
                     // package finishes; there is then no menu to notify.
-                    drop(send.send(prepare_default(ArenaMap::ForestMassif)));
+                    drop(send.send(prepare_default(map)));
                 }) {
                 Ok(_) => self.completion = Some(Mutex::new(receive)),
                 Err(error) => {
@@ -86,10 +93,10 @@ impl Preparation {
                 requested
             }
             Err(error) => {
-                bevy::log::error!("Forest preparation: {error}");
+                bevy::log::error!("Map preparation: {error}");
                 if requested {
                     self.error = Some(format!(
-                        "Forest preparation failed: {error}\nYour current map is available. Choose Forest to retry."
+                        "Map preparation failed: {error}\nYour current map is available. Select the map again to retry."
                     ));
                 }
                 false
@@ -100,7 +107,7 @@ impl Preparation {
     pub fn status(&self) -> Option<&str> {
         if self.requested && self.completion.is_some() {
             Some(
-                "Preparing Forest Expedition…\nYou can choose another map or start the current map while it builds.",
+                "Preparing map package…\nYou can choose another map or start the current map while it builds.",
             )
         } else {
             self.error.as_deref()
@@ -109,7 +116,8 @@ impl Preparation {
 }
 
 fn requires_preparation(map: ArenaMap, package_override: Option<&OsStr>) -> bool {
-    map == ArenaMap::ForestMassif && package_override.is_none()
+    matches!(map, ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago)
+        && package_override.is_none()
 }
 
 fn authoring_target(root: &std::path::Path, app_target: Option<&OsStr>) -> PathBuf {
@@ -137,7 +145,11 @@ fn authoring_target(root: &std::path::Path, app_target: Option<&OsStr>) -> PathB
 }
 
 pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
-    let package_override = std::env::var_os("HEX_FOREST_WORLD");
+    let package_override = std::env::var_os(if map == ArenaMap::NorthernArchipelago {
+        "HEX_NORTHERN_WORLD"
+    } else {
+        "HEX_FOREST_WORLD"
+    });
     if !requires_preparation(map, package_override.as_deref()) {
         return Ok(());
     }
@@ -146,11 +158,15 @@ pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let root = root
         .canonicalize()
-        .map_err(|error| format!("Forest asset root: {error}"))?;
+        .map_err(|error| format!("Map asset root: {error}"))?;
     // The child may build worldc; never inherit the currently running app target.
     let target = authoring_target(&root, std::env::var_os("CARGO_TARGET_DIR").as_deref());
     let status = Command::new("python3")
-        .arg(root.join("tools/forest_package.py"))
+        .arg(root.join(if map == ArenaMap::NorthernArchipelago {
+            "tools/northern_package.py"
+        } else {
+            "tools/forest_package.py"
+        }))
         .arg("ensure")
         .arg("--target-dir")
         .arg(&target)
@@ -159,10 +175,12 @@ pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_BUILD_JOBS", "2")
         .status()
-        .map_err(|error| format!("Cannot prepare Forest Expedition: {error}. Install Python 3 and run python3 tools/forest_package.py ensure."))?;
+        .map_err(|error| {
+            format!("Cannot prepare map: {error}. Install Python 3 and retry the map selection.")
+        })?;
     if !status.success() {
         return Err(format!(
-            "Forest Expedition preparation failed ({status}). Run python3 tools/forest_package.py ensure."
+            "Map preparation failed ({status}). See the package compiler output and retry the map selection."
         ));
     }
     Ok(())

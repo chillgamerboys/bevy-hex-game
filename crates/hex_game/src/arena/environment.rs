@@ -6,7 +6,7 @@ use hex_core::arena::{ArenaMap, ArenaSelection, ArenaTerrainView, ArenaVoxelGeom
 use hex_world::battle_sky::BattleSkyFrame;
 
 #[derive(Component)]
-struct UnderwaterTint;
+pub(super) struct UnderwaterTint;
 
 pub(super) fn sun_direction() -> Vec3 {
     let elevation = 37.145_f32.to_radians();
@@ -75,7 +75,7 @@ fn water_color(
         Color::srgb(0.07, 0.34, 0.56)
     })
 }
-fn present(
+pub(super) fn present(
     view: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
     selection: Res<ArenaSelection>,
@@ -86,7 +86,10 @@ fn present(
     mut cameras: Query<(&Transform, &mut DistanceFog), With<ArenaCamera>>,
     mut overlays: Query<(&mut Node, &mut BackgroundColor), With<UnderwaterTint>>,
 ) {
-    let forest = selection.map == ArenaMap::ForestMassif;
+    let forest = selection.map.capabilities().natural_environment;
+    if selection.map == ArenaMap::NorthernArchipelago {
+        return;
+    }
     let mut water = None;
     sky.enabled = forest;
     sky.sun_direction = sun_direction();

@@ -105,6 +105,43 @@ pub(super) fn capture_ready(
         })
 }
 
+/// Capture receipts describe admitted world facts; they do not claim motion performance.
+pub(super) fn snapshot(
+    streamed: Option<&StreamedArena>,
+    terrain: Option<&ArenaRenderStatus>,
+    ocean: Option<&OceanRenderStatus>,
+) -> serde_json::Value {
+    let Some(world) = streamed else {
+        return serde_json::Value::Null;
+    };
+    let counts = world.runtime.counts();
+    serde_json::json!({
+        "world_id": world.overview.world_id,
+        "source_fingerprint": world.overview.source_fingerprint,
+        "package_fingerprint": world.overview.package_fingerprint,
+        "islands": world.overview.islands.len(),
+        "trees": world.overview.tree_count,
+        "buildings": world.overview.building_count,
+        "sea_level": world.overview.sea_level,
+        "resident_chunks": counts.resident_chunks,
+        "peak_resident_chunks": world.peak_resident,
+        "queued_chunks": counts.queued_chunks,
+        "in_flight_jobs": counts.in_flight_jobs,
+        "source_chunks_retained": world.edits.resident_source_count(),
+        "last_publication_ms": world.publication_ms,
+        "failure": world.failure,
+        "terrain_pending": terrain.map(|value| value.pending_chunks),
+        "ocean": ocean.map(|value| serde_json::json!({
+            "ready": value.ready,
+            "surface_vertices": value.surface_vertices,
+            "boundary_vertices": value.boundary_vertices,
+            "bathymetry_revision": value.bathymetry_revision,
+            "error": value.error,
+            "phase_seconds": 0.0,
+        })),
+    })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Atomic map presentation setup joins immutable publication with four presentation resources."
