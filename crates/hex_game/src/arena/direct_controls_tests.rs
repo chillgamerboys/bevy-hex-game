@@ -2,6 +2,33 @@
 use super::*;
 use bevy::input::ButtonState;
 
+#[test]
+fn restart_requires_shift_and_plain_r_preserves_the_active_or_paused_run() {
+    for paused in [false, true] {
+        for shift in [KeyCode::ShiftLeft, KeyCode::ShiftRight] {
+            let (mut app, _) = ready(60);
+            app.world_mut().resource_mut::<ViewState>().paused = paused;
+            app.world_mut().resource_mut::<ArenaSession>().actors[0].hp = 20.0;
+            let generation = app.world().resource::<ArenaReset>().generation;
+            tap_key(&mut app, KeyCode::KeyR);
+            assert_eq!(app.world().resource::<ArenaReset>().generation, generation);
+            assert!(app.world().resource::<ViewState>().started);
+            assert!(app.world().resource::<ArenaSession>().actors[0].hp < 21.0);
+
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(shift);
+            tap_key(&mut app, KeyCode::KeyR);
+            assert_eq!(
+                app.world().resource::<ArenaReset>().generation,
+                generation + 1
+            );
+            let state = app.world().resource::<ViewState>();
+            assert!(!state.started && state.paused);
+        }
+    }
+}
+
 fn ready(hz: u32) -> (App, Entity) {
     let (mut app, window) = menu_app_at(hz);
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
@@ -64,15 +91,16 @@ fn direct_mouse_buttons_hold_then_release_their_own_spell() {
         frame(&mut app);
         assert!(charge(&app).is_none());
         assert_eq!(casts(&app, spell), 1);
-        assert!(app
-            .world()
-            .resource::<ArenaSession>()
-            .actors
-            .first()
-            .expect("human")
-            .cooldowns
-            .get(spell.index())
-            .is_some_and(|cd| *cd > 0.0));
+        assert!(
+            app.world()
+                .resource::<ArenaSession>()
+                .actors
+                .first()
+                .expect("human")
+                .cooldowns
+                .get(spell.index())
+                .is_some_and(|cd| *cd > 0.0)
+        );
     }
 }
 

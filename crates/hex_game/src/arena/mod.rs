@@ -754,9 +754,7 @@ fn input(
     let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     let mouse_events = buttons.read().copied().collect::<Vec<_>>();
     if state.capture.is_some() {
-        if state.capture_view == "encounter-worm-reset"
-            && state.started
-            && keys.just_pressed(KeyCode::KeyR)
+        if state.capture_view == "encounter-worm-reset" && state.started && restart_shortcut(&keys)
         {
             reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
         }
@@ -808,7 +806,7 @@ fn input(
             state.pause();
         }
     }
-    if window.focused && state.started && keys.just_pressed(KeyCode::KeyR) {
+    if window.focused && state.started && restart_shortcut(&keys) {
         reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
     }
     if window.focused
@@ -955,6 +953,11 @@ fn input(
             *enabled = !*enabled;
         }
     }
+}
+
+fn restart_shortcut(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.just_pressed(KeyCode::KeyR)
+        && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight))
 }
 
 // UI buttons run after input. Synchronize the cursor again so Start/Resume take
