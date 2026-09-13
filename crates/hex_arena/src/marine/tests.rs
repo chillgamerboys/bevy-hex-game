@@ -1,14 +1,14 @@
 use super::*;
-use crate::{ArenaBattleSetup, ArenaTuning};
-use hex_core::arena::{ArenaMap, ArenaResidency, ArenaSelection, ArenaSolidSpan};
+use crate::{plugin, ArenaBattleSetup, ArenaInput, ArenaOutcome, ArenaSession, ArenaTuning};
+use hex_core::arena::{
+    ArenaMap, ArenaMaterials, ArenaPackageIdentity, ArenaReset, ArenaResidency, ArenaSelection,
+    ArenaSolidSpan, ArenaTick,
+};
 use hex_core::ocean::{OceanEnvironmentSampler, OceanSurfaceSample, OceanWindProfile};
 use hex_core::SubstanceId;
 use std::{collections::BTreeSet, sync::Arc};
 
-#[test]
-fn fixed_schedule_consumes_boat_edges_casts_aboard_and_publishes_one_clock() {
-    use crate::{plugin, ArenaInput, ArenaSession};
-    use hex_core::arena::{ArenaMaterials, ArenaPackageIdentity, ArenaReset, ArenaTick};
+fn session_app() -> bevy_app::App {
     let (_, _, mut terrain, geometry, environment) = fixture();
     let land = HexCoord::from_axial(-10, 0);
     let dry = land.within_radius(3);
@@ -40,6 +40,12 @@ fn fixed_schedule_consumes_boat_edges_casts_aboard_and_publishes_one_clock() {
         .insert_resource(environment)
         .add_plugins(plugin);
     app.world_mut().run_schedule(ArenaTick);
+    app
+}
+
+#[test]
+fn fixed_schedule_consumes_boat_edges_casts_aboard_and_publishes_one_clock() {
+    let mut app = session_app();
     {
         let mut session = app.world_mut().resource_mut::<ArenaSession>();
         assert!(session.encounter.initialized);
@@ -89,6 +95,118 @@ fn fixed_schedule_consumes_boat_edges_casts_aboard_and_publishes_one_clock() {
     let visible_surface = 0.2 * session.ocean_time().phase_seconds().sin();
     assert!((player.feet.y - visible_surface - DECK).abs() < 0.0001);
     assert!((player.eye().y - visible_surface - DECK - 1.02).abs() < 0.0001);
+}
+
+#[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "terminal zeroes and restart constants must be preserved exactly"
+)]
+fn oxygen_death_freezes_the_empty_session_until_restart_refills_the_player() {
+    let mut app = session_app();
+    let [spawn, _] = app.world().resource::<ArenaTerrainView>().spawns;
+    let underwater = Vec3::Y * -2.0;
+    {
+        let mut session = app.world_mut().resource_mut::<ArenaSession>();
+        assert!(session.encounter.initialized);
+        assert!(!session.is_finished());
+        assert_eq!(session.actors.len(), 1);
+        let player = session.actors.first_mut().expect("explorer");
+        player.feet = underwater;
+        player.previous_feet = underwater;
+        player.grounded = false;
+        player.body.grounded = false;
+        player.body.vertical_velocity = -1.0;
+        player.body.control_velocity = Vec3::X;
+        player.body.airborne_momentum = Some(Vec3::X);
+        player.hp = 5.0 * STEP; // Less than one actual drowning tick.
+        let marine = player.marine.as_mut().expect("marine");
+        marine.swim.oxygen_seconds = STEP * 0.5;
+        marine.swim.active = true;
+        marine.velocity = Vec3::X;
+    }
+    app.world_mut().run_schedule(ArenaTick);
+    let death_clock = *app.world().resource::<OceanSimulationTime>();
+    {
+        let session = app.world().resource::<ArenaSession>();
+        assert_eq!(session.outcome, Some(ArenaOutcome::Draw));
+        assert!(session.is_finished());
+        let player = session.actors.first().expect("explorer");
+        assert_eq!(player.hp, 0.0);
+        assert_eq!(player.feet, underwater);
+        let swim = player.swimming().expect("swim");
+        assert_eq!(swim.oxygen_seconds, 0.0);
+        assert!(swim.submerged);
+        assert!(!swim.active);
+        assert!(!player.boat().expect("boat").active);
+        assert!(!player.glider().expect("glider").open);
+        assert!(!player.free_flight().expect("flight").active);
+        assert_eq!(player.marine.as_ref().expect("marine").velocity, Vec3::ZERO);
+        assert_eq!(player.body.vertical_velocity, 0.0);
+        assert_eq!(player.body.control_velocity, Vec3::ZERO);
+        assert_eq!(player.body.airborne_momentum, None);
+    }
+    // Esc/defeat cancels casts without refilling oxygen. Even extra fixed ticks
+    // with queued travel/cast edges cannot resume a terminal session.
+    app.world_mut()
+        .resource_mut::<ArenaSession>()
+        .cancel_charges();
+    for _ in 0..3 {
+        app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+            movement: Vec2::ONE,
+            jump: true,
+            high_jump: true,
+            glider_toggle: true,
+            flight_toggle: true,
+            boat_toggle: true,
+            flight_vertical: 1.0,
+            cast_pressed: true,
+            cast_released: true,
+            ..Default::default()
+        };
+        app.world_mut().run_schedule(ArenaTick);
+        let session = app.world().resource::<ArenaSession>();
+        let player = session.actors.first().expect("explorer");
+        assert_eq!(session.outcome, Some(ArenaOutcome::Draw));
+        assert_eq!(session.ocean_time(), death_clock);
+        assert_eq!(player.feet, underwater);
+        assert_eq!(player.hp, 0.0);
+        assert_eq!(player.swimming().expect("swim").oxygen_seconds, 0.0);
+        assert!(session.projectiles.is_empty());
+        assert_eq!(*app.world().resource::<OceanSimulationTime>(), death_clock);
+    }
+    // Restart uses the production generation path, including clearing queued edges.
+    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+        jump: true,
+        high_jump: true,
+        glider_toggle: true,
+        flight_toggle: true,
+        boat_toggle: true,
+        cast_pressed: true,
+        cast_released: true,
+        ..Default::default()
+    };
+    app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    app.world_mut().run_schedule(ArenaTick);
+    let session = app.world().resource::<ArenaSession>();
+    assert!(!session.is_finished());
+    assert_eq!(session.outcome, None);
+    assert_eq!(session.actors.len(), 1);
+    let player = session.actors.first().expect("explorer");
+    assert!((player.feet - spawn).length() < 0.001);
+    assert_eq!(player.hp, 100.0);
+    let swim = player.swimming().expect("swim");
+    assert_eq!(swim.oxygen_seconds, OXYGEN);
+    assert!(!swim.submerged && !swim.active);
+    assert!(!player.boat().expect("boat").active);
+    assert!(!player.glider().expect("glider").open);
+    assert!(!player.free_flight().expect("flight").active);
+    assert_eq!(session.ocean_time().generation, death_clock.generation + 1);
+    assert!(session.ocean_time().seconds < death_clock.seconds);
+    assert_eq!(
+        *app.world().resource::<OceanSimulationTime>(),
+        session.ocean_time()
+    );
 }
 
 #[derive(Debug)]

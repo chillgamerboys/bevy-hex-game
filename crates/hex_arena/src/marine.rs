@@ -78,6 +78,16 @@ impl Default for MarineState {
     }
 }
 
+impl MarineState {
+    pub(crate) fn stop_on_death(&mut self) {
+        self.boat = BoatSnapshot::default();
+        self.velocity = Vec3::ZERO;
+        self.swim.active = false;
+        // Preserve the last breathing facts for the terminal HUD. Only Restart
+        // constructs a fresh reserve; pausing or repeated cleanup cannot refill it.
+    }
+}
+
 impl Actor {
     /// Exploration boat facts; legacy maps and enemies return `None`.
     #[must_use]

@@ -524,7 +524,12 @@ impl Actor {
         self.glider = glider::GliderState::default();
         self.body.airborne_momentum = None;
         if self.hp <= 0.0 {
-            self.marine = self.marine.as_ref().map(|_| marine::MarineState::default());
+            if let Some(marine) = &mut self.marine {
+                marine.stop_on_death();
+                self.body.vertical_velocity = 0.0;
+                self.body.impulse_velocity = Vec3::ZERO;
+                self.body.control_velocity = Vec3::ZERO;
+            }
             if let Some(flight) = &mut self.free_flight {
                 *flight = exploration::FreeFlightState::default();
             }
