@@ -478,6 +478,7 @@ fn default_sky_params() -> SkyParams {
         lower_glow_angular_radius_radians: 0.0,
         lower_glow_strength: 0.0,
         cloud_phase_seconds: 0.0,
+        upper_hemisphere_clouds: 0.0,
     }
 }
 
@@ -1435,6 +1436,7 @@ pub(crate) fn sky_params(lighting: &ResolvedLighting) -> SkyParams {
         lower_glow_angular_radius_radians: lighting.lower_glow_angular_radius_degrees.to_radians(),
         lower_glow_strength: lighting.lower_glow_strength,
         cloud_phase_seconds: 0.0,
+        upper_hemisphere_clouds: 0.0,
     }
 }
 

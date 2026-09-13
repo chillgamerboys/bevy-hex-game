@@ -72,7 +72,7 @@ impl Default for OceanSurfaceProfile {
             ],
             shore_depth: 12.0,
             shallow_color: Vec4::new(0.035, 0.18, 0.23, 0.62),
-            deep_color: Vec4::new(0.008, 0.047, 0.090, 0.88),
+            deep_color: Vec4::new(0.008, 0.047, 0.090, 0.985),
         }
     }
 }

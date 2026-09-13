@@ -2,6 +2,7 @@
 #import bevy_pbr::{
     forward_io::{Vertex, VertexOutput, FragmentOutput},
     mesh_functions,
+    mesh_view_bindings::view,
     view_transformations::position_world_to_clip,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -91,7 +92,11 @@ fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> Fragment
     }
     var pbr = pbr_input_from_standard_material(shading, front);
     let color = mix(ocean.shallow, ocean.deep, clamp(depth / 40.0, 0.0, 1.0));
-    pbr.material.base_color = color;
+    // The decorative mesh is finite. Fade its far ring into the clear lower sky
+    // so high-altitude views never reveal the camera-centered circular boundary.
+    let camera_distance = length(input.world_position.xz - view.world_position.xz);
+    let horizon = 1.0 - smoothstep(ocean.water.w * 0.67, ocean.water.w, camera_distance);
+    pbr.material.base_color = vec4<f32>(color.rgb, color.a * horizon);
     pbr.material.perceptual_roughness = 0.42;
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr, apply_pbr_lighting(pbr));

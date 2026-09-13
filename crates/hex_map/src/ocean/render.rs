@@ -102,7 +102,12 @@ fn parameters(profile: &OceanSurfaceProfile, bed: &OceanBathymetry, phase: f32) 
     let [wave0, wave1, wave2] = waves;
     let [a, b, c] = profile.waves;
     OceanParams {
-        water: Vec4::new(profile.mean_sea_level, phase, profile.shore_depth, 0.0),
+        water: Vec4::new(
+            profile.mean_sea_level,
+            phase,
+            profile.shore_depth,
+            mesh::HORIZON_RADIUS,
+        ),
         bath: Vec4::new(bed.origin_xz.x, bed.origin_xz.y, bed.spacing, 0.0),
         wave0,
         wave1,

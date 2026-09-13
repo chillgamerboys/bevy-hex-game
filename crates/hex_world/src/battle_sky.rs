@@ -38,6 +38,8 @@ pub struct BattleSkyProfile {
     pub cloud_color: Vec3,
     /// Fractional procedural cloud coverage.
     pub cloud_coverage: f32,
+    /// Keep clouds above the horizon for open-ocean views; legacy maps may mirror them.
+    pub upper_hemisphere_clouds: bool,
     /// Camera-centered dome radius; keep beyond the map's farthest visible terrain.
     pub dome_radius: f32,
 }
@@ -48,6 +50,7 @@ impl Default for BattleSkyProfile {
             zenith_color: Vec3::new(0.025, 0.14, 0.50),
             cloud_color: Vec3::new(0.60, 0.68, 0.77),
             cloud_coverage: 0.22,
+            upper_hemisphere_clouds: false,
             dome_radius: 1000.0,
         }
     }
@@ -60,7 +63,8 @@ impl BattleSkyProfile {
             horizon_color: Vec3::new(0.25, 0.39, 0.57),
             zenith_color: Vec3::new(0.055, 0.18, 0.38),
             cloud_color: Vec3::new(0.65, 0.69, 0.74),
-            cloud_coverage: 0.29,
+            cloud_coverage: 0.18,
+            upper_hemisphere_clouds: true,
             dome_radius: 20_000.0,
         }
     }
@@ -107,6 +111,11 @@ fn parameters(frame: &BattleSkyFrame, profile: &BattleSkyProfile) -> SkyParams {
         lower_glow_angular_radius_radians: 0.0,
         lower_glow_strength: 0.0,
         cloud_phase_seconds: frame.cloud_phase,
+        upper_hemisphere_clouds: if profile.upper_hemisphere_clouds {
+            1.0
+        } else {
+            0.0
+        },
     }
 }
 fn spawn(
