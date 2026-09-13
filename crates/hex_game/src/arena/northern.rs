@@ -401,6 +401,7 @@ fn camera_water(
     bath: &OceanBathymetry,
     boundary: &OceanNearBoundary,
     camera: Vec3,
+    phase: f32,
 ) -> Option<Color> {
     let sample = sample_local_surface(
         profile,
