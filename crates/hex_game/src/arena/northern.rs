@@ -407,7 +407,7 @@ fn publish_boundary(
             || view
                 .residency
                 .as_ref()
-                .is_none_or(|r| r.at(coord) != ArenaAvailability::Ready)
+                .is_none_or(|r| r.at(coord, geometry) != ArenaAvailability::Ready)
         {
             continue;
         }

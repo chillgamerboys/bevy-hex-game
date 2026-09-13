@@ -53,6 +53,7 @@ pub(crate) struct CollisionWorld {
     barriers: Vec<crate::BarrierSnapshot>,
     pub min_y: f32,
     residency: Option<ArenaResidency>,
+    geometry: ArenaVoxelGeometry,
     probe_cache: probe_cache::ProbeCache,
 }
 
@@ -73,6 +74,7 @@ impl CollisionWorld {
             return;
         }
         self.residency = view.residency.clone();
+        self.geometry = geometry;
         self.min_y =
             geometry.min_level as f32 * geometry.level_height + geometry.vertical_offset - 10.0;
         let incremental = !view.full_rebuild
@@ -257,7 +259,7 @@ impl CollisionWorld {
     fn unavailable_span(&self, coord: HexCoord) -> Option<Span> {
         self.residency
             .as_ref()
-            .filter(|residency| residency.at(coord) != ArenaAvailability::Ready)
+            .filter(|residency| residency.at(coord, self.geometry) != ArenaAvailability::Ready)
             .map(|_| Span {
                 coord,
                 bottom: f32::NEG_INFINITY,
@@ -271,7 +273,7 @@ impl CollisionWorld {
             return false;
         };
         self.candidates(feet, feet + delta, radius).any(|span| {
-            residency.at(span.coord) == ArenaAvailability::Unloaded
+            residency.at(span.coord, self.geometry) == ArenaAvailability::Unloaded
                 && (contains(span, feet, height, radius)
                     || sweep_span(span, feet, delta, height, radius).is_some())
         })

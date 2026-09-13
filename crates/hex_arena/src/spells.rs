@@ -480,7 +480,7 @@ pub(super) fn available_wall_voxels(
         .filter(|pos| {
             geometry.contains_column(pos.coord)
                 && world.residency.as_ref().is_none_or(|residency| {
-                    residency.at(pos.coord) == hex_core::arena::ArenaAvailability::Ready
+                    residency.at(pos.coord, geometry) == hex_core::arena::ArenaAvailability::Ready
                 })
                 && (geometry.min_level..=geometry.max_level).contains(&pos.level)
                 && world.solid_at(*pos).is_none()

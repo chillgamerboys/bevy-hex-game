@@ -782,7 +782,7 @@ fn ready_voxel(view: &ArenaTerrainView, geometry: ArenaVoxelGeometry, pos: TileP
         && view
             .residency
             .as_ref()
-            .is_some_and(|r| r.at(pos.coord) == ArenaAvailability::Ready)
+            .is_some_and(|r| r.at(pos.coord, geometry) == ArenaAvailability::Ready)
 }
 
 fn commit(state: &mut StreamedArena, edits: Vec<VoxelEdit>) -> Result<(), String> {

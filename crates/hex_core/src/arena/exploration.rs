@@ -1,5 +1,5 @@
 //! Map capabilities and explicit local residency for continuous exploration.
-use super::ArenaMap;
+use super::{ArenaMap, ArenaVoxelGeometry};
 use crate::HexCoord;
 use bevy_ecs::prelude::Resource;
 use bevy_math::Vec3;
@@ -52,9 +52,14 @@ pub struct ArenaResidency {
     pub ready: BTreeSet<(i32, i32)>,
 }
 impl ArenaResidency {
-    /// Availability at an absolute axial coordinate.
+    /// Availability at an absolute axial coordinate in the published finite geometry.
+    /// Edge chunks include cells beyond the footprint; admitting the chunk never
+    /// admits those cells as empty, traversable air.
     #[must_use]
-    pub fn at(&self, coord: HexCoord) -> ArenaAvailability {
+    pub fn at(&self, coord: HexCoord, geometry: ArenaVoxelGeometry) -> ArenaAvailability {
+        if !geometry.contains_column(coord) {
+            return ArenaAvailability::OutsideWorld;
+        }
         let chunk = (coord.x().div_euclid(16), coord.y().div_euclid(16));
         if self.ready.contains(&chunk) {
             ArenaAvailability::Ready
@@ -73,4 +78,41 @@ pub struct ArenaStreamInterest {
     pub position: Vec3,
     /// Requested physical movement used for bounded ahead-of-travel prefetch.
     pub velocity: Vec3,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finite_boundary_precedes_loaded_chunk_admission() {
+        let geometry = ArenaVoxelGeometry {
+            radius: 700,
+            ..Default::default()
+        };
+        for (q, r) in [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)] {
+            let edge = HexCoord::from_axial(q * 700, r * 700);
+            let outside = HexCoord::from_axial(q * 701, r * 701);
+            let chunk = (edge.x().div_euclid(16), edge.y().div_euclid(16));
+            assert_eq!(
+                chunk,
+                (outside.x().div_euclid(16), outside.y().div_euclid(16))
+            );
+            let mut residency = ArenaResidency {
+                catalogue: BTreeSet::from([chunk]),
+                ready: BTreeSet::from([chunk]),
+            };
+            assert_eq!(residency.at(edge, geometry), ArenaAvailability::Ready);
+            assert_eq!(
+                residency.at(outside, geometry),
+                ArenaAvailability::OutsideWorld
+            );
+            residency.ready.clear();
+            assert_eq!(residency.at(edge, geometry), ArenaAvailability::Unloaded);
+            assert_eq!(
+                residency.at(outside, geometry),
+                ArenaAvailability::OutsideWorld
+            );
+        }
+    }
 }

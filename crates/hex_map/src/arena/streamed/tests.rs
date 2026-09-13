@@ -171,7 +171,11 @@ impl Measurements {
                 .max(view.object_columns.values().map(Vec::len).sum());
             self.peaks.liquid_runs = self.peaks.liquid_runs.max(view.liquids.len());
         }
-        self.saw_carve_retired |= view.residency.as_ref().expect("residency").at(carved.coord)
+        self.saw_carve_retired |= view
+            .residency
+            .as_ref()
+            .expect("residency")
+            .at(carved.coord, *world.resource::<ArenaVoxelGeometry>())
             != ArenaAvailability::Ready;
     }
     fn settle(&mut self, world: &mut World, carved: TilePos) {
@@ -197,7 +201,7 @@ impl Measurements {
             .residency
             .as_ref()
             .expect("residency")
-            .at(column)
+            .at(column, *world.resource::<ArenaVoxelGeometry>())
             != ArenaAvailability::Ready
         {
             assert!(

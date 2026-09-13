@@ -549,3 +549,127 @@ fn exploration_starts_facing_its_world_owned_view_target() {
     assert!(actor.aim.distance((target - actor.feet).normalize()) < 0.0001);
     assert_eq!(session.actors.len(), 1);
 }
+
+#[test]
+fn finite_boundary_blocks_flight_camera_and_projectiles_inside_a_loaded_edge_chunk() {
+    let (mut session, mut view, mut geometry, materials) = fixture();
+    geometry.radius = 700;
+    view.columns.clear();
+    let chunks: BTreeSet<_> = (42..=44)
+        .flat_map(|q| (-2..=2).map(move |r| (q, r)))
+        .collect();
+    view.residency = Some(ArenaResidency {
+        catalogue: chunks.clone(),
+        ready: chunks,
+    });
+    view.revision += 1;
+    session.collision.refresh(&view, geometry);
+    let inside = HexCoord::from_axial(700, 0);
+    let outside = HexCoord::from_axial(701, 0);
+    let start = inside.to_world(20.0);
+    let end = outside.to_world(20.0);
+    let boundary_x = (start.x + end.x) * 0.5;
+    let residency = view.residency.as_ref().expect("loaded edge chunk");
+    assert_eq!(
+        residency.at(inside, geometry),
+        hex_core::arena::ArenaAvailability::Ready
+    );
+    assert_eq!(
+        residency.at(outside, geometry),
+        hex_core::arena::ArenaAvailability::OutsideWorld
+    );
+    assert!(session.collision.clear(start, 1.2, 0.25));
+    assert!(!session.collision.clear(end, 1.2, 0.25));
+    assert!(
+        !session
+            .collision
+            .needs_terrain(start, end - start, 1.2, 0.25),
+        "finite edge must not request endless loading"
+    );
+    assert!(!session.collision.sight_clear(start, end));
+    let camera = session.camera_position(start, end);
+    let attack = session
+        .collision
+        .attack_sweep(start, end - start, 0.1)
+        .expect("sealed projectile boundary")
+        .0;
+    assert!(camera.x < boundary_x && attack.fraction < 1.0);
+    assert!(
+        (camera.x - (start + (end - start) * attack.fraction).x + 0.04).abs() < 0.001,
+        "camera and projectile share the same boundary contact"
+    );
+    assert!(crate::spells::available_wall_voxels(
+        &[TilePos::new(outside, 50)],
+        &view,
+        geometry,
+        &[],
+        &BTreeSet::new()
+    )
+    .is_empty());
+
+    fly(&mut session);
+    let actor = session.actors.first_mut().expect("player");
+    actor.feet = start;
+    actor.previous_feet = start;
+    actor.aim = Vec3::X;
+    let tuning = ArenaTuning::default();
+    let preview = crate::preview(&session, &view, &geometry, &tuning);
+    let predicted_impact = preview.impact.expect("finite boundary ends prediction");
+    assert!(predicted_impact.x < boundary_x);
+    let mut out = crate::CommandsOut::default();
+    session.release(
+        0,
+        Spell::Fireball,
+        &tuning,
+        45.0,
+        &view,
+        geometry,
+        materials,
+        &mut out,
+    );
+    for _ in 0..12 {
+        session.advance_projectiles(&view, geometry, materials, &mut out);
+        assert!(session
+            .projectiles
+            .iter()
+            .all(|shot| shot.position.x < boundary_x));
+    }
+    assert!(
+        session.projectiles.is_empty(),
+        "a real shot must stop at the same boundary"
+    );
+    assert!(
+        out.impacts.is_empty(),
+        "outside-world air has no damageable voxel"
+    );
+    let impact = session.effects.last().expect("contact effect");
+    assert!(
+        impact.center.distance(predicted_impact) < 0.02,
+        "preview and launch disagree: {:?} vs {:?}",
+        predicted_impact,
+        impact.center
+    );
+    for _ in 0..30 {
+        session.advance(
+            ActorIntent {
+                movement: Vec2::Y,
+                aim: Vec3::X,
+                glider_look: Vec3::X,
+                flight_fast: true,
+                ..Default::default()
+            },
+            &view,
+            geometry,
+            materials,
+            &tuning,
+        );
+        let actor = session.actors.first().expect("player");
+        assert!(actor.feet.x < boundary_x - 0.24);
+        assert!(session.collision.clear(actor.feet, 1.2, 0.25));
+        assert!(!actor.free_flight().expect("flight").loading);
+    }
+    assert!(
+        session.actors.first().expect("player").feet.x > start.x + 0.5,
+        "flight must reach the boundary instead of blocking the entire loaded edge chunk"
+    );
+}
