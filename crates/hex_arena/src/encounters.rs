@@ -50,7 +50,7 @@ pub(crate) struct EncounterState {
     expedition: Option<expedition::Control>,
     separation_stats: ActorSeparationStats,
     worms: BTreeMap<ActorId, worm::Controller>,
-    spawn_failed: bool,
+    pub(crate) spawn_failed: bool,
     pub parties: Vec<PartySnapshot>,
     runtime: Vec<PartyRuntime>,
     brains: BTreeMap<ActorId, brain::Brain>,
@@ -128,6 +128,10 @@ impl ArenaSession {
         geometry: ArenaVoxelGeometry,
         tuning: &ArenaTuning,
     ) {
+        if world.selection.map.capabilities().exploration {
+            self.initialize_exploration(world, geometry);
+            return;
+        }
         if self.accepted_battle.control == ArenaControl::Spectator {
             self.initialize_battle(world, geometry, tuning);
             return;
@@ -682,7 +686,7 @@ impl ArenaSession {
         if !self.encounter.initialized {
             self.initialize_encounter(world, geometry, tuning);
         }
-        if self.encounter.spawn_failed {
+        if self.encounter.spawn_failed || !self.encounter.initialized {
             return CommandsOut::default();
         }
         self.begin_simulation_tick();
@@ -817,8 +821,14 @@ impl ArenaSession {
             if let Some(profile) = actor_tuning.player_profile {
                 actor.walking_speed = profile.walking_speed;
             }
+            crate::exploration::prepare(actor, intent);
             crate::glider::prepare(actor, intent, &self.collision, world, geometry);
-            let boosted = intent.high_jump && actor.high_jump(actor_tuning);
+            let boosted = intent.high_jump
+                && !actor
+                    .free_flight
+                    .as_ref()
+                    .is_some_and(|flight| flight.active)
+                && actor.high_jump(actor_tuning);
             if boosted {
                 boosts.push((actor.id, actor.feet));
             }
@@ -829,21 +839,24 @@ impl ArenaSession {
                 intents.get(&actor.id).map_or(Vec3::ZERO, |i| i.direction)
             };
             let flight = intents.get(&actor.id).is_some_and(|i| i.flight);
-            motion::tick_with_lunge(
-                actor,
-                direction,
-                intent.run,
-                intent.jump && !boosted,
-                flight,
-                intents.get(&actor.id).is_some_and(|i| i.lunge),
-                &self.collision,
-                &actor_tuning.encounters,
-            );
+            if !crate::exploration::tick_or_wait(actor, intent, &self.collision) {
+                motion::tick_with_lunge(
+                    actor,
+                    direction,
+                    intent.run,
+                    intent.jump && !boosted,
+                    flight,
+                    intents.get(&actor.id).is_some_and(|i| i.lunge),
+                    &self.collision,
+                    &actor_tuning.encounters,
+                );
+            }
             if actor.feet.y < self.collision.min_y + 2.0 || !actor.feet.is_finite() {
                 actor.hp = 0.0;
                 actor.cancel_charge();
             }
             crate::glider::finish(actor, world, geometry);
+            crate::exploration::finish(actor);
             if actor.hp > 0.0 {
                 if let Some((spell, speed)) = actor.casting(intent, actor_tuning) {
                     casts.push((actor.id, spell, speed));
@@ -914,7 +927,7 @@ impl ArenaSession {
             self.finish_battle_tick();
         } else {
             self.outcome = match (human_alive, enemy) {
-                (true, None) if self.completed_run() => None,
+                (true, None) if self.exploration || self.completed_run() => None,
                 (true, None) => Some(ArenaOutcome::Winner(0)),
                 (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
                 (false, None) => Some(ArenaOutcome::Draw),
@@ -968,7 +981,7 @@ pub(super) fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGe
             && run.bottom.coord.to_world(actor.feet.y).distance(actor.feet)
                 < actor.dimensions.x.max(actor.dimensions.z) * 0.5 + 1.0
     };
-    if view.selection.map != ArenaMap::ForestMassif {
+    if !view.selection.map.capabilities().natural_environment {
         return !view.liquids.iter().any(overlaps);
     }
     // This world publishes liquid runs sorted by exact bottom identity. Query

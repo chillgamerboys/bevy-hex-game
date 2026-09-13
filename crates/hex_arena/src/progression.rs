@@ -251,7 +251,11 @@ impl ArenaSession {
     #[must_use]
     pub fn player_tuning(&self, base: &ArenaTuning) -> ArenaTuning {
         let Some(state) = &self.progression else {
-            return base.clone();
+            return if self.exploration {
+                ProgressState::default().tuning(base)
+            } else {
+                base.clone()
+            };
         };
         state.tuning(base)
     }
@@ -261,7 +265,9 @@ impl ArenaSession {
     pub fn player_walking_speed(&self) -> f32 {
         self.progression
             .as_ref()
-            .map_or(4.5, |state| state.walking_speed())
+            .map_or(if self.exploration { 4.725 } else { 4.5 }, |state| {
+                state.walking_speed()
+            })
     }
 
     /// Effective before/after values for one rank, independent of the current point balance.
@@ -301,7 +307,7 @@ impl ArenaSession {
     }
 
     pub(crate) fn player_fireball_mode(&self) -> FireballMode {
-        if self.progress().is_some_and(|p| !p.explosions_unlocked) {
+        if self.exploration || self.progress().is_some_and(|p| !p.explosions_unlocked) {
             FireballMode::ContactOnly
         } else {
             FireballMode::Explosive

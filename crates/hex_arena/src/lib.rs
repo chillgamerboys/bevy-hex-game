@@ -35,7 +35,9 @@ mod encounters;
 mod expedition;
 pub use encounters::ExpeditionRallySnapshot;
 pub use expedition::{DragonTier, ExpeditionRole};
+mod exploration;
 mod glider;
+pub use exploration::FreeFlightSnapshot;
 mod hex_prisms;
 pub use glider::GliderSnapshot;
 mod motion;
@@ -143,6 +145,12 @@ pub struct ActorIntent {
     pub glider_toggle: bool,
     /// Raw camera look direction for flight steering, before aim correction.
     pub glider_look: Vec3,
+    /// Single F press edge toggling collision-aware exploration flight.
+    pub flight_toggle: bool,
+    /// Free-flight rise/drop axis: Space is +1 and Ctrl is -1.
+    pub flight_vertical: f32,
+    /// Hold Shift for 160 units/s instead of the normal 80 units/s flight.
+    pub flight_fast: bool,
     /// Press edge, retained until the next fixed tick even for a quick tap.
     pub cast_pressed: bool,
     /// Release edge. Only an armed press can release a spell.
@@ -163,6 +171,9 @@ impl Default for ActorIntent {
             high_jump: false,
             glider_toggle: false,
             glider_look: Vec3::NEG_Z,
+            flight_toggle: false,
+            flight_vertical: 0.0,
+            flight_fast: false,
             cast_pressed: false,
             cast_released: false,
             cast_held: false,
@@ -427,6 +438,7 @@ pub struct Actor {
     cast_needs_release: bool,
     body: Body,
     glider: glider::GliderState,
+    free_flight: Option<exploration::FreeFlightState>,
     walking_speed: f32,
     dimensions: Vec3,
     expedition_role: Option<ExpeditionRole>,
@@ -472,6 +484,7 @@ impl Actor {
             cast_needs_release: false,
             body: Body::default(),
             glider: glider::GliderState::default(),
+            free_flight: None,
             walking_speed: 4.725,
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             expedition_role: None,
@@ -502,6 +515,11 @@ impl Actor {
     pub(crate) fn clear_glider(&mut self) {
         self.glider = glider::GliderState::default();
         self.body.airborne_momentum = None;
+        if self.hp <= 0.0 {
+            if let Some(flight) = &mut self.free_flight {
+                *flight = exploration::FreeFlightState::default();
+            }
+        }
     }
 
     /// Reserved hover layer for a flying swarm; other profiles return None.
@@ -751,6 +769,7 @@ pub struct ArenaSession {
     /// Number of shield impacts that added at least one safe cell since reset.
     pub shields_raised: u64,
     progression: Option<progression::ProgressState>,
+    exploration: bool,
     player_knowledge: player_observation::PlayerKnowledge,
     collision: CollisionWorld,
     generation: Option<u64>,
@@ -790,6 +809,7 @@ impl Default for ArenaSession {
             terrain_outcomes: 0,
             shields_raised: 0,
             progression: None,
+            exploration: false,
             player_knowledge: player_observation::PlayerKnowledge::default(),
             collision: CollisionWorld::default(),
             generation: None,
@@ -914,6 +934,7 @@ impl ArenaSession {
         *self = Self {
             actors: vec![Actor::spawn(0, human, aim), Actor::spawn(1, bot, -aim)],
             generation: Some(generation),
+            exploration: world.selection.map.capabilities().exploration,
             progression: (world.selection.map == hex_core::arena::ArenaMap::ForestMassif)
                 .then(progression::ProgressState::default),
             bot_enabled,
@@ -924,6 +945,13 @@ impl ArenaSession {
             cpu: cpu_diagnostics::CpuDiagnostics::enabled(cpu_profiling),
             ..Default::default()
         };
+        if self.exploration {
+            self.actors.truncate(1);
+            if let Some(actor) = self.actors.first_mut() {
+                actor.configure_expedition_player();
+                actor.free_flight = Some(exploration::FreeFlightState::default());
+            }
+        }
         self.collision.refresh(world, geometry);
     }
 
@@ -1243,6 +1271,9 @@ fn simulate(
         input.human.high_jump = false;
         input.human.glider_toggle = false;
         input.human.glider_look = input.human.aim;
+        input.human.flight_toggle = false;
+        input.human.flight_vertical = 0.0;
+        input.human.flight_fast = false;
     }
     session.install_burrow_policy(&burrow_policy);
     for outcome in burrow_outcomes.read() {
@@ -1257,6 +1288,7 @@ fn simulate(
     input.human.jump = false;
     input.human.high_jump = false;
     input.human.glider_toggle = false;
+    input.human.flight_toggle = false;
     input.human.selected = None;
     if let Err(reason) = tuning.validate() {
         session.notice = reason;

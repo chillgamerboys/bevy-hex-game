@@ -16,7 +16,7 @@ mod candidate_tests;
 mod probe_cache_tests;
 
 use bevy_math::Vec3;
-use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
+use hex_core::arena::{ArenaAvailability, ArenaResidency, ArenaTerrainView, ArenaVoxelGeometry};
 use hex_core::{HexCoord, TilePos};
 
 pub(crate) const SKIN: f32 = 0.0001;
@@ -52,6 +52,7 @@ pub(crate) struct CollisionWorld {
     static_attack: HashMap<HexCoord, Vec<Span>>,
     barriers: Vec<crate::BarrierSnapshot>,
     pub min_y: f32,
+    residency: Option<ArenaResidency>,
     probe_cache: probe_cache::ProbeCache,
 }
 
@@ -71,6 +72,7 @@ impl CollisionWorld {
         if self.revision == Some(view.revision) {
             return;
         }
+        self.residency = view.residency.clone();
         self.min_y =
             geometry.min_level as f32 * geometry.level_height + geometry.vertical_offset - 10.0;
         let incremental = !view.full_rebuild
@@ -203,7 +205,7 @@ impl CollisionWorld {
         };
         let cache_miss = match lookup {
             probe_cache::Lookup::Hit(spans) => {
-                return probe_cache::Candidates::Cached { spans, next: 0 }
+                return probe_cache::Candidates::Cached { spans, next: 0 };
             }
             probe_cache::Lookup::Miss => true,
             probe_cache::Lookup::Inactive => false,
@@ -221,11 +223,13 @@ impl CollisionWorld {
             QueryKind::Attack => &self.static_attack,
         };
         let mut candidates = coords.into_iter().flat_map(move |coord| {
-            [self.columns.get(&coord), extra.get(&coord)]
-                .into_iter()
-                .flatten()
-                .flatten()
-                .copied()
+            self.unavailable_span(coord).into_iter().chain(
+                [self.columns.get(&coord), extra.get(&coord)]
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .copied(),
+            )
         });
         if !cache_miss {
             return probe_cache::Candidates::Live(candidates);
@@ -245,6 +249,32 @@ impl CollisionWorld {
         let spans: Arc<[Span]> = spans.into();
         self.probe_cache.insert(key, spans.clone());
         probe_cache::Candidates::Cached { spans, next: 0 }
+    }
+
+    // An unavailable streamed column is a sealed prism at every elevation.
+    // Exact ready-but-empty columns remain air. Legacy complete views have no
+    // residency catalogue and retain their existing finite-map boundary rules.
+    fn unavailable_span(&self, coord: HexCoord) -> Option<Span> {
+        self.residency
+            .as_ref()
+            .filter(|residency| residency.at(coord) != ArenaAvailability::Ready)
+            .map(|_| Span {
+                coord,
+                bottom: f32::NEG_INFINITY,
+                top: f32::INFINITY,
+            })
+    }
+
+    /// Whether the requested complete body sweep needs unadmitted terrain.
+    pub(crate) fn needs_terrain(&self, feet: Vec3, delta: Vec3, height: f32, radius: f32) -> bool {
+        let Some(residency) = &self.residency else {
+            return false;
+        };
+        self.candidates(feet, feet + delta, radius).any(|span| {
+            residency.at(span.coord) == ArenaAvailability::Unloaded
+                && (contains(span, feet, height, radius)
+                    || sweep_span(span, feet, delta, height, radius).is_some())
+        })
     }
 
     /// Memoize candidate lists only while this immutable world borrow is held.

@@ -109,7 +109,7 @@ fn velocity_step(state: &mut GliderState) {
     state.velocity = state.velocity.clamp_length_max(MAX_SPEED);
 }
 
-fn fold(actor: &mut Actor) {
+pub(crate) fn fold(actor: &mut Actor) {
     if !actor.glider.open {
         return;
     }
@@ -132,7 +132,13 @@ pub(crate) fn prepare(
     view: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
 ) {
-    if !actor.expedition_player || actor.species != Species::Human {
+    if !actor.expedition_player
+        || actor.species != Species::Human
+        || actor
+            .free_flight
+            .as_ref()
+            .is_some_and(|flight| flight.active)
+    {
         return;
     }
     if actor.hp <= 0.0 {

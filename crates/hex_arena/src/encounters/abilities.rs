@@ -174,7 +174,8 @@ impl ArenaSession {
             {
                 actor.hp = (actor.hp + c.dragon_regen_rate * STEP).min(actor.max_hp);
             }
-            if !matches!(map, ArenaMap::Duel | ArenaMap::ForestMassif)
+            if map != ArenaMap::Duel
+                && !map.capabilities().expedition_player
                 && Some(actor.id) == human_id
                 && elapsed(self.tick, actor.last_activity_tick) >= c.human_regen_delay
                 && elapsed(self.tick, self.encounter.human_seen_tick) >= c.human_unseen_delay

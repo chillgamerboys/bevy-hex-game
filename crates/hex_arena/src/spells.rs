@@ -467,7 +467,7 @@ fn wall_candidates(
     volume.into_iter().collect()
 }
 
-fn available_wall_voxels(
+pub(super) fn available_wall_voxels(
     candidates: &[TilePos],
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
@@ -479,6 +479,9 @@ fn available_wall_voxels(
         .copied()
         .filter(|pos| {
             geometry.contains_column(pos.coord)
+                && world.residency.as_ref().is_none_or(|residency| {
+                    residency.at(pos.coord) == hex_core::arena::ArenaAvailability::Ready
+                })
                 && (geometry.min_level..=geometry.max_level).contains(&pos.level)
                 && world.solid_at(*pos).is_none()
                 && !world.edit_protected.get(&pos.coord).is_some_and(|ranges| {
