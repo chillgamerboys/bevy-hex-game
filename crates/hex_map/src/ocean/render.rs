@@ -1,4 +1,4 @@
-use super::{mesh, OceanBathymetry, OceanFrame, OceanNearBoundary, OceanSurfaceProfile};
+use super::{OceanBathymetry, OceanFrame, OceanNearBoundary, OceanSurfaceProfile, mesh};
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::NoFrustumCulling,
@@ -121,7 +121,8 @@ fn parameters(
             profile.shore_depth,
             mesh::HORIZON_RADIUS,
         ),
-        bath: Vec4::new(bed.origin_xz.x, bed.origin_xz.y, bed.spacing, 0.0),
+        // Beer-Lambert attenuation per world unit, independent of liquid physics.
+        bath: Vec4::new(bed.origin_xz.x, bed.origin_xz.y, bed.spacing, 0.035),
         wave0,
         wave1,
         wave2,
@@ -299,8 +300,17 @@ fn update(
     let Some(material) = cache.material.clone() else {
         return;
     };
+    let camera_underwater = super::sample_local_surface(
+        &profile,
+        &bed,
+        &boundary,
+        frame.camera_position.xz(),
+        frame.phase_seconds,
+    )
+    .is_some_and(|surface| frame.camera_position.y < surface.height);
     if let Some(mut value) = materials.get_mut(&material) {
         value.extension.params = parameters(&profile, &bed, frame.phase_seconds, cache.near_origin);
+        value.extension.params.effects.w = if camera_underwater { 1.0 } else { 0.0 };
         status.phase_seconds = Some(value.extension.params.water.y);
     }
     let position = Vec3::new(

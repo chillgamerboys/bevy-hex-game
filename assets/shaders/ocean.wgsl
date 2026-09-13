@@ -10,6 +10,12 @@
 #ifdef OIT_ENABLED
 #import bevy_core_pipeline::oit::oit_draw
 #endif
+#ifdef DEPTH_PREPASS
+#import bevy_pbr::{
+    prepass_utils::prepass_depth,
+    view_transformations::{depth_ndc_to_view_z, position_world_to_view},
+}
+#endif
 
 struct OceanParams {
     water: vec4<f32>,
@@ -141,6 +147,35 @@ fn vertex(input: Vertex) -> VertexOutput {
 #endif
     return out;
 }
+
+// The water between this surface fragment and the first opaque hit absorbs
+// light along the sight line, not merely according to the bed directly below
+// the fragment. Otherwise a shallow foreground patch exposes a remote seabed.
+fn optical_transmission(input: VertexOutput) -> f32 {
+#ifdef DEPTH_PREPASS
+    // Looking up through water exits into air; the camera already owns its
+    // underwater attenuation. Vertical boundary faces keep their volume color.
+    if ocean.effects.w > 0.5 || input.world_normal.y < 0.5 { return 1.0; }
+    let surface_view = position_world_to_view(input.world_position.xyz);
+    let scene_depth = prepass_depth(input.position, 0u);
+    var path = 200.0;
+    // Reversed depth zero is open sky beyond the finite seabed: a long water
+    // path, not a division by zero or unattenuated lower-sky transmission.
+    if scene_depth > 0.0 && scene_depth <= 1.0 {
+        let scene_z = depth_ndc_to_view_z(scene_depth);
+        if scene_z >= surface_view.z { return 1.0; }
+        if scene_z > -10000000.0 {
+            let ray_cosine = abs(surface_view.z)/max(length(surface_view), 0.00001);
+            path = clamp((surface_view.z-scene_z)/max(ray_cosine, 0.00001), 0.0, 300.0);
+        }
+    }
+    return exp(-ocean.bath.w*path);
+#else
+    // Legacy cameras without a depth prepass retain their existing material.
+    return 1.0;
+#endif
+}
+
 @fragment
 fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
     let bed = bed_sample(input.world_position.xz);
@@ -165,7 +200,9 @@ fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> Fragment
         foam = smoothstep(0.50, 0.85, crest_height) * mix(0.04, 0.09, shallow) * smoothstep(0.02,0.1,local_weight) * normal_detail;
     }
     var pbr = pbr_input_from_standard_material(shading, front);
-    let color = mix(ocean.shallow, ocean.deep, clamp(depth / 40.0, 0.0, 1.0));
+    let local_color = mix(ocean.shallow, ocean.deep, clamp(depth / 40.0, 0.0, 1.0));
+    let transmission = optical_transmission(input);
+    let color = vec4<f32>(mix(ocean.deep.rgb, local_color.rgb, transmission), 1.0-(1.0-local_color.a)*transmission);
     // Restrained cool crest accents keep long swells readable without white
     // patches covering the sea. Preserve depth-driven alpha, especially shallows.
     let highlighted = color.rgb * (1.0 + 0.08 * crest);
