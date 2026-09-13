@@ -1532,7 +1532,11 @@ fn capture_frame(
     let Some(path) = state.capture.clone() else {
         return;
     };
-    if state.requested || render.is_some_and(|status| status.pending_chunks > 0) {
+    if state.requested
+        || render
+            .as_ref()
+            .is_some_and(|status| status.pending_chunks > 0)
+    {
         return;
     }
     let (golem_prisms, wisp_prisms, worm_prisms, boulders, wisp_windups) = creature_meshes;
