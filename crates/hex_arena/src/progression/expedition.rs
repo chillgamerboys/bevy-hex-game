@@ -429,10 +429,10 @@ impl ArenaSession {
         else {
             return;
         };
-        for fountain in state
+        for (name, fountain) in state
             .fountains
-            .values_mut()
-            .filter(|fountain| !fountain.consumed)
+            .iter_mut()
+            .filter(|(_, fountain)| !fountain.consumed)
         {
             if player.hp >= player.max_hp {
                 break;
@@ -462,6 +462,7 @@ impl ArenaSession {
             if entered {
                 player.hp = (player.hp + 40.0).min(player.max_hp);
                 fountain.consumed = true;
+                self.player_knowledge.used_fountain(name);
             }
         }
     }

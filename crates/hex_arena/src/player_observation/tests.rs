@@ -572,7 +572,65 @@ fn spell_feedback_tracks_actual_charge_latch_pause_cooldown_and_reset() {
 }
 
 #[test]
-fn fountain_marker_is_observed_then_updates_only_when_consumption_is_observed() {
+fn personally_used_fountain_updates_known_state_without_another_sighting() {
+    let (mut session, mut view, geometry, observation) = fixture();
+    let at = TilePos::new(HexCoord::from_axial(4, 0), 1);
+    let unused = TilePos::new(HexCoord::from_axial(8, 0), 1);
+    let mut sites = ArenaExpeditionSites::default();
+    for (name, at) in [("forest_fountain_01", at), ("forest_fountain_02", unused)] {
+        sites
+            .fountains
+            .insert(name.into(), ArenaFountainVolume { cells: [at].into() });
+        view.liquids.push(ArenaSolidSpan {
+            bottom: at,
+            top_level: 1,
+            substance: SubstanceId(2),
+        });
+    }
+    session.register_expedition_sites(&sites);
+    view.expedition = Some(sites);
+    sample(&mut session, &view, geometry, observation, 5);
+    let known: BTreeMap<_, _> = session
+        .discovered_landmarks()
+        .into_iter()
+        .filter(|m| m.kind == LandmarkKind::Fountain)
+        .map(|m| (m.id.clone(), m))
+        .collect();
+    assert_eq!(known.len(), 2);
+    assert!(known.values().all(|m| !m.consumed));
+    let player = session.actors.first_mut().expect("player");
+    player.hp = 10.0;
+    player.feet = at
+        .coord
+        .to_world(geometry.top(at) - geometry.level_height + SKIN);
+    session.advance_fountains(&view, geometry);
+    assert!(session
+        .discovered_landmarks()
+        .iter()
+        .any(|m| m.id == "forest_fountain_01" && m.consumed));
+    sample(
+        &mut session,
+        &view,
+        geometry,
+        PlayerObservation {
+            direction: Vec3::NEG_X,
+            ..observation
+        },
+        1,
+    );
+    for marker in session
+        .discovered_landmarks()
+        .into_iter()
+        .filter(|m| m.kind == LandmarkKind::Fountain)
+    {
+        let previous = known.get(&marker.id).expect("previously observed pool");
+        assert_eq!(marker.position, previous.position);
+        assert_eq!(marker.consumed, marker.id == "forest_fountain_01");
+    }
+}
+
+#[test]
+fn using_an_undiscovered_fountain_does_not_bypass_visual_acquisition() {
     let (mut session, mut view, geometry, observation) = fixture();
     let at = TilePos::new(HexCoord::from_axial(4, 0), 1);
     let mut sites = ArenaExpeditionSites::default();
@@ -587,36 +645,24 @@ fn fountain_marker_is_observed_then_updates_only_when_consumption_is_observed() 
         top_level: 1,
         substance: SubstanceId(2),
     });
-    sample(&mut session, &view, geometry, observation, 5);
-    assert!(session
-        .discovered_landmarks()
-        .iter()
-        .any(|m| m.kind == LandmarkKind::Fountain && !m.consumed));
     let player = session.actors.first_mut().expect("player");
     player.hp = 10.0;
     player.feet = at
         .coord
         .to_world(geometry.top(at) - geometry.level_height + SKIN);
     session.advance_fountains(&view, geometry);
-    sample(
-        &mut session,
-        &view,
-        geometry,
-        PlayerObservation {
-            direction: Vec3::NEG_X,
-            ..observation
-        },
-        1,
-    );
-    assert!(session
+    assert!((session.actors.first().expect("healed player").hp - 50.0).abs() < SKIN);
+    assert!(session.discovered_landmarks().is_empty());
+    sample(&mut session, &view, geometry, observation, 4);
+    assert!(!session
         .discovered_landmarks()
         .iter()
-        .any(|m| m.kind == LandmarkKind::Fountain && !m.consumed));
+        .any(|m| m.kind == LandmarkKind::Fountain));
     sample(&mut session, &view, geometry, observation, 1);
     assert!(session
         .discovered_landmarks()
         .iter()
-        .any(|m| m.kind == LandmarkKind::Fountain && m.consumed));
+        .any(|m| m.id == "forest_fountain_01" && m.consumed));
 }
 
 #[test]

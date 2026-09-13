@@ -170,6 +170,18 @@ impl PlayerKnowledge {
         }
     }
 
+    pub(crate) fn used_fountain(&mut self, id: &str) {
+        // Personal use confirms consumption without a camera sighting. It does
+        // not discover a pool or replace any remembered position.
+        if let Some(known) = self
+            .landmarks
+            .get_mut(id)
+            .filter(|known| known.kind == LandmarkKind::Fountain)
+        {
+            known.consumed = true;
+        }
+    }
+
     fn admit(&mut self, landmark: DiscoveredLandmark) {
         let dwell = self.dwell.entry(landmark.id.clone()).or_default();
         *dwell = dwell.saturating_add(1).min(5);
