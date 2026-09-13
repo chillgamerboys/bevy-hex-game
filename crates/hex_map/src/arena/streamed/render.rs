@@ -12,7 +12,7 @@ use hex_core::arena::{ArenaRenderStatus, ArenaStreamInterest};
 use hex_world_contracts::{ChunkId, ChunkPackage};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
 };
 
 struct Completion {
@@ -393,61 +393,185 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         epoch: state.generation,
     })
 }
+const PROXY_STEPS: u32 = 8;
+
+struct ProxySample {
+    height: f32,
+    normal: [f32; 3],
+    color: [f32; 4],
+}
+
 #[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "bounded finite overview and chunk coordinates"
+    reason = "validated finite overview and bounded grid coordinates"
+)]
+fn proxy_sample(
+    map: &hex_schematic::v4::northern::NorthernOverview,
+    wx: f32,
+    wz: f32,
+) -> Option<ProxySample> {
+    let [origin_x, origin_z] = map.origin_xz;
+    let gx = ((wx - origin_x) / map.spacing).clamp(0.0, map.width.checked_sub(1)? as f32);
+    let gz = ((wz - origin_z) / map.spacing).clamp(0.0, map.height.checked_sub(1)? as f32);
+    let x = (gx.floor() as u32).min(map.width.checked_sub(2)?) as usize;
+    let z = (gz.floor() as u32).min(map.height.checked_sub(2)?) as usize;
+    let tx = gx - x as f32;
+    let tz = gz - z as f32;
+    let stride = map.width as usize;
+    let at = z * stride + x;
+    let corners = [at, at + 1, at + stride, at + stride + 1];
+    let [a, b, c, d] = corners.map(|i| map.bed_heights.get(i).copied());
+    let (a, b, c, d) = (a?, b?, c?, d?);
+    let row0 = a + (b - a) * tx;
+    let row1 = c + (d - c) * tx;
+    // Match the ocean's bilinear bed surface. Flooring samples or lowering the
+    // proxy separately lets the water mask expose a different coastline.
+    let height = row0 + (row1 - row0) * tz;
+    let dx = ((b - a) + ((d - c) - (b - a)) * tz) / map.spacing;
+    let dz = (row1 - row0) / map.spacing;
+    // A world-grid derivative gives both sides of every proxy seam the same
+    // normal; per-mesh smooth normals only know each chunk's interior faces.
+    let normal = Vec3::new(-dx, 1.0, -dz).normalize().to_array();
+    let [a, b, c, d] = corners.map(|i| {
+        let [r, g, b, a] = map
+            .surface_materials
+            .get(i)
+            .and_then(|i| map.materials.get(usize::from(*i)))
+            .map_or([110, 120, 125, 255], |m| m.color);
+        // Mesh vertex colors are linear, just like the exact terrain material.
+        let color = Color::srgba_u8(r, g, b, a).to_linear();
+        Vec4::new(color.red, color.green, color.blue, color.alpha)
+    });
+    let color = a.lerp(b, tx).lerp(c.lerp(d, tx), tz).to_array();
+    Some(ProxySample {
+        height,
+        normal,
+        color,
+    })
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "bounded finite chunk coordinates and fixed eight-step proxy topology"
 )]
 fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Option<Mesh> {
-    let [origin_x, origin_z] = map.origin_xz;
     let mut positions = Vec::new();
+    let mut normals = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
     let mut high = false;
-    for r in 0..=4 {
-        for q in 0..=4 {
-            let x = (c.q * 16) as f32 + q as f32 * 4.0 - 0.5;
-            let z = (c.r * 16) as f32 + r as f32 * 4.0 - 0.5;
+    for r in 0..=PROXY_STEPS {
+        for q in 0..=PROXY_STEPS {
+            let x = (c.q * 16) as f32 + q as f32 * 2.0 - 0.5;
+            let z = (c.r * 16) as f32 + r as f32 * 2.0 - 0.5;
             let wx = 3.0_f32.sqrt() * (x + z * 0.5);
             let wz = z * 1.5;
-            let gx = ((wx - origin_x) / map.spacing).clamp(0.0, map.width.saturating_sub(1) as f32)
-                as usize;
-            let gz = ((wz - origin_z) / map.spacing).clamp(0.0, map.height.saturating_sub(1) as f32)
-                as usize;
-            let at = gz * map.width as usize + gx;
-            let y = *map.bed_heights.get(at)?;
-            high |= y > map.sea_level - 2.0;
-            positions.push([wx, y - 0.25, wz]);
-            let color = map
-                .surface_materials
-                .get(at)
-                .and_then(|i| map.materials.get(usize::from(*i)))
-                .map_or([110, 120, 125, 255], |m| m.color);
-            let [r, g, b, a] = color;
-            // StandardMaterial converts exact terrain's sRGB palette to linear.
-            // Mesh vertex colors are already linear; raw byte/255 values make
-            // distant proxies much brighter than the matching fine terrain.
-            let linear = Color::srgba_u8(r, g, b, a).to_linear();
-            colors.push([linear.red, linear.green, linear.blue, linear.alpha]);
+            let sample = proxy_sample(map, wx, wz)?;
+            high |= sample.height > map.sea_level - 2.0;
+            positions.push([wx, sample.height, wz]);
+            normals.push(sample.normal);
+            colors.push(sample.color);
         }
     }
     if !high {
         return None;
     }
-    for r in 0..4 {
-        for q in 0..4 {
-            let a = (r * 5 + q) as u32;
-            indices.extend([a, a + 5, a + 1, a + 1, a + 5, a + 6]);
+    let stride = PROXY_STEPS + 1;
+    for r in 0..PROXY_STEPS {
+        for q in 0..PROXY_STEPS {
+            let a = r * stride + q;
+            indices.extend([a, a + stride, a + 1, a + 1, a + stride, a + stride + 1]);
         }
     }
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        .with_inserted_indices(Indices::U32(indices)),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-    .with_inserted_indices(Indices::U32(indices));
-    mesh.compute_smooth_normals();
-    Some(mesh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_schematic::v4::northern::NorthernOverview;
+
+    fn planar_overview() -> NorthernOverview {
+        NorthernOverview {
+            version: 1,
+            source_fingerprint: 0,
+            package_fingerprint: 0,
+            world_id: "proxy-test".into(),
+            hex_radius: 1.0,
+            level_height: 0.35,
+            vertical_offset: 0.35,
+            radius: 700,
+            level_bounds: [0, 1400],
+            sea_level: 140.0,
+            origin_xz: [-64.0, -64.0],
+            spacing: 8.0,
+            width: 25,
+            height: 25,
+            bed_heights: (0_u16..25)
+                .flat_map(|z| {
+                    (0_u16..25).map(move |x| {
+                        180.0 + 0.25 * (-64.0 + f32::from(x) * 8.0)
+                            - 0.1 * (-64.0 + f32::from(z) * 8.0)
+                    })
+                })
+                .collect(),
+            surface_materials: vec![0; 625],
+            materials: Vec::new(),
+            player_spawn: [0.0; 3],
+            anchors: BTreeMap::new(),
+            islands: Vec::new(),
+            tree_count: 0,
+            building_count: 0,
+        }
+    }
+
+    #[test]
+    fn northern_proxy_preserves_fractional_world_height_without_vertical_bias() {
+        let map = planar_overview();
+        for (x, z) in [(3.25, 5.75), (-17.0, 21.0), (64.0, -32.0)] {
+            let sample = proxy_sample(&map, x, z).expect("valid grid");
+            assert!((sample.height - (180.0 + 0.25 * x - 0.1 * z)).abs() < 0.0001);
+            assert!(
+                Vec3::from_array(sample.normal).distance(Vec3::new(-0.25, 1.0, 0.1).normalize())
+                    < 0.00001
+            );
+        }
+    }
+
+    #[test]
+    fn northern_proxy_neighbors_share_positions_and_normals() {
+        let map = planar_overview();
+        let left = proxy(&map, ChunkId { q: 0, r: 0 }).expect("left land");
+        let right = proxy(&map, ChunkId { q: 1, r: 0 }).expect("right land");
+        assert_eq!(left.count_vertices(), 81);
+        assert_eq!(left.indices().expect("triangles").len(), 384);
+        for attribute in [Mesh::ATTRIBUTE_POSITION, Mesh::ATTRIBUTE_NORMAL] {
+            let bevy::mesh::VertexAttributeValues::Float32x3(a) =
+                left.attribute(attribute).expect("left attribute")
+            else {
+                panic!("float triples");
+            };
+            let bevy::mesh::VertexAttributeValues::Float32x3(b) =
+                right.attribute(attribute).expect("right attribute")
+            else {
+                panic!("float triples");
+            };
+            for r in 0..9 {
+                let a = Vec3::from_array(*a.get(r * 9 + 8).expect("left edge"));
+                let b = Vec3::from_array(*b.get(r * 9).expect("right edge"));
+                assert!(a.distance(b) < 0.00001, "shared edge discontinuity");
+            }
+        }
+    }
 }
