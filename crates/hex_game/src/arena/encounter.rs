@@ -803,6 +803,19 @@ pub(super) fn camera(
         super::expedition_capture::camera(&session, &view, *geometry, &state.capture_view)
     {
         *camera = pose;
+    } else if state.capture_view == "expedition-dragon-summit" {
+        if let Some(actor) = session.actors.iter().find(|actor| {
+            actor.species == hex_arena::Species::Dragon
+                && actor.dragon_tier() == hex_arena::DragonTier::Summit
+        }) {
+            // Existing actor-owned summit palette, shown from a close front
+            // quarter. This external framing never moves or poses the creature.
+            *camera = feature_camera(
+                &session,
+                actor.center() + Vec3::Y * 0.3,
+                actor.body_rotation() * Vec3::new(3.2, 2.4, -4.8),
+            );
+        }
     } else if matches!(state.capture_view.as_str(), "overview" | "rear") {
         *camera = if session.is_forest_run() {
             forest_overview(*geometry, &view, state.capture_view == "rear")

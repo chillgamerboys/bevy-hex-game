@@ -125,6 +125,7 @@ EXPEDITION_VIEWS = (
     ("dragon-lower", "forest-landmark", "forest-massif", "dragon", "dragon_lower"),
     ("dragon-middle", "forest-landmark", "forest-massif", "dragon", "dragon_middle"),
     ("dragon-summit", "forest-landmark", "forest-massif", "dragon", "dragon_upper"),
+    ("dragon-summit-close", "expedition-dragon-summit", "forest-massif", "dragon", None),
     ("shadow-arena", "forest-landmark", "forest-massif", "dragon", "mountain_shadow"),
     ("shadow-gate", "forest-ground", "forest-massif", "dragon", "shadow_gate"),
     ("forest-fountain", "forest-landmark", "forest-massif", "dragon", "forest_fountain_01"),

@@ -99,7 +99,7 @@ pub(super) fn description(view: &str) -> Option<&'static str> {
         Fixture::Craters | Fixture::CratersRear => "SYNTHETIC_PRESENTATION: paired seven-column forest craters are cut exactly 2 and 8 voxel levels by a frame-20 TerrainImpact. Published object occupancy blocks the current sun ray at both centers. Ordinary ticks must report every removal, preserve floors/shade/water and refresh geometry. External composition camera; no casting, movement or natural-combat claim.",
         Fixture::TreeCut => "SYNTHETIC_PRESENTATION: frame 20 announces a small exact TerrainImpact notch in a tall forest object's trunk. Ordinary ticks must remove the notch while upper trunk/crown cells and water remain. External composition camera; unsupported geometry is deliberately retained. No natural-combat claim.",
         Fixture::WaterUnder => "SYNTHETIC_PRESENTATION: an external camera is placed inside a published river-water voxel, at least three voxel levels below the surface. No terrain, actor or liquid mutation; the camera-based underwater effect must use this actual camera pose. No swimming or movement claim.",
-        Fixture::WaterEdge => "SYNTHETIC_PRESENTATION: frame 20 removes a small riverbank inspection notch through TerrainImpact, exposing the unchanged adjacent water volume. The camera occupies dry air in the notch below the water surface. Ordinary ticks must report every solid removal and preserve every liquid span. No fluid draining, casting or movement claim.",
+        Fixture::WaterEdge => "SYNTHETIC_PRESENTATION: an external camera frames the real exposed water boundary from an adjacent dry bank below the water surface. A naturally low bank needs no edit; an obstructing higher bank receives a bounded TerrainImpact notch. Readiness requires a real retained bank support, every requested solid removal and unchanged liquid spans. No fluid draining, casting or movement claim.",
     })
 }
 
@@ -598,7 +598,6 @@ fn water_plan(
     });
     for span in water {
         let top = TilePos::new(span.bottom.coord, span.top_level);
-        let water_top = geometry.top(top);
         if fixture == Fixture::WaterUnder {
             let cell = TilePos::new(top.coord, top.level - 3);
             if terrain.solid_at(cell).is_some() {
@@ -629,50 +628,70 @@ fn water_plan(
             {
                 continue;
             }
-            let Some(bank_top) = terrain_surface(terrain, bank) else {
-                continue;
-            };
-            if !(top.level..=top.level + 6).contains(&bank_top.level) {
-                continue;
+            if let Some(plan) = bank_plan(terrain, geometry, top, bank) {
+                return Ok(plan);
             }
-            let desired = bank.to_world(water_top - 0.45);
-            let target = top.coord.to_world(water_top - 0.65);
-            let mut plan = base_plan(
-                terrain,
-                Framing {
-                    target,
-                    desired,
-                    exact: true,
-                    underwater: false,
-                },
-            );
-            for coord in bank.within_radius(1) {
-                if terrain
-                    .liquids
-                    .iter()
-                    .any(|liquid| liquid.bottom.coord == coord)
-                {
-                    continue;
-                }
-                for level in top.level - 7..=bank_top.level + 4 {
-                    let cell = TilePos::new(coord, level);
-                    if terrain.solid_at(cell).is_some() {
-                        plan.removed.insert(cell);
-                    }
-                }
-            }
-            if plan.removed.is_empty()
-                || retain(&mut plan, terrain, TilePos::new(bank, top.level - 8)).is_none()
-            {
-                continue;
-            }
-            return Ok(plan);
         }
     }
     Err(
         "No deep river column / supported bank suitable for the water fixture was published."
             .into(),
     )
+}
+
+/// The river has exposed sides over low banks as well as elevated bridge
+/// approaches. Derive the support from published occupancy instead of assuming
+/// an authored bank sits within a fixed number of levels above the water.
+fn bank_plan(
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    top: TilePos,
+    bank: HexCoord,
+) -> Option<Plan> {
+    let water_top = geometry.top(top);
+    let desired = bank.to_world(water_top - 0.45);
+    let camera_cell = geometry.voxel_at(desired)?;
+    let floor = terrain
+        .voxels
+        .range(TilePos::new(bank, i32::MIN)..=TilePos::new(bank, top.level - 8))
+        .next_back()
+        .map(|(cell, _)| *cell)?;
+    let mut plan = base_plan(
+        terrain,
+        Framing {
+            target: top.coord.to_world(water_top - 0.65),
+            desired,
+            exact: true,
+            underwater: false,
+        },
+    );
+    retain(&mut plan, terrain, floor)?;
+    if terrain.solid_at(camera_cell).is_none() {
+        // A dry bank nine levels below the river already exposes its actual
+        // transparent side. Do not fabricate damage just to fill a receipt.
+        return Some(plan);
+    }
+    for coord in bank.within_radius(1) {
+        if terrain
+            .liquids
+            .iter()
+            .any(|liquid| liquid.bottom.coord == coord)
+        {
+            continue;
+        }
+        let local_top = terrain_surface(terrain, coord)?.level;
+        // Keep the inspection cut finite even if a future map moves a cliff here.
+        if local_top - floor.level > 40 {
+            return None;
+        }
+        for level in floor.level + 1..=local_top.max(camera_cell.level + 4) {
+            let cell = TilePos::new(coord, level);
+            if terrain.solid_at(cell).is_some() {
+                plan.removed.insert(cell);
+            }
+        }
+    }
+    (plan.removed.contains(&camera_cell) && plan.removed.len() <= 320).then_some(plan)
 }
 
 #[cfg(test)]
