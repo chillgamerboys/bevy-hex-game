@@ -58,10 +58,38 @@ fn spawn_buildings_and_exact_tree_occupancy_are_supported() {
     let overview = compiler.overview();
     let [_, height, _] = overview.player_spawn;
     assert!(height > 142.0, "dryspawn {height}");
+    let (lowest, _) = overview
+        .bed_heights
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            let x = f64::from(overview.origin_xz[0])
+                + (*index % overview.width as usize) as f64 * f64::from(overview.spacing);
+            let z = f64::from(overview.origin_xz[1])
+                + (*index / overview.width as usize) as f64 * f64::from(overview.spacing);
+            nearest_hex(x, z)
+                .checked_distance(WorldHex::new(0, 0))
+                .expect("distance")
+                <= RADIUS as u64
+        })
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .expect("seabed samples");
+    let low_x = f64::from(overview.origin_xz[0])
+        + (lowest % overview.width as usize) as f64 * f64::from(overview.spacing);
+    let low_z = f64::from(overview.origin_xz[1])
+        + (lowest / overview.width as usize) as f64 * f64::from(overview.spacing);
+    compiler
+        .chunk(nearest_hex(low_x, low_z).chunk())
+        .expect("deepest seabed chunk has no empty substrate run")
+        .expect("in world");
     assert_eq!(
         overview.bed_heights.len(),
         overview.width as usize * overview.height as usize
     );
+    for influences in compiler.influences.values() {
+        union_object_occupancy(influences)
+            .expect("reserved structures and tree footprints never conflict");
+    }
     for object in compiler.objects.values().flatten() {
         object.validate().expect("blueprint");
         for contact in object.grounding.as_deref().unwrap_or_default() {

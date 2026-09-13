@@ -197,7 +197,7 @@ pub(super) fn compose(
         building(source, "cottage-east", 24.0, 575.0, 3, 4)?,
         building(source, "storehouse", 15.0, 552.0, 2, 4)?,
     ];
-    let root = nearest_hex(-20.0, 550.0);
+    let root = nearest_hex(-20.0, 540.0);
     let mut cells = Cells::new();
     for q in -5..=5 {
         for r in -4..=4 {

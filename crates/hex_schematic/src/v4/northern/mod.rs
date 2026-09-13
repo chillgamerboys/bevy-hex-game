@@ -406,6 +406,7 @@ impl NorthernCompiler {
                         material: surface.material.into(),
                     },
                 ];
+                runs.retain(|run| run.bottom < run.top);
                 if let Some(liquid) =
                     super::fill_sea_column(p, &mut runs, SEA_TOP - 1, "water", "northern/ocean")?
                 {
