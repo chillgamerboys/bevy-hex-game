@@ -2,6 +2,10 @@
 
 mod burrow;
 mod expedition;
+mod exploration;
+pub use exploration::{
+    ArenaAvailability, ArenaMapCapabilities, ArenaResidency, ArenaStreamInterest,
+};
 
 pub use burrow::{
     ArenaBurrowChange, ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRejection,
@@ -38,6 +42,8 @@ pub enum ArenaMap {
     SevenRegions,
     /// V4 forest camps, central river bridge and three mountain Dragons.
     ForestMassif,
+    /// Streamed northern islands with optional exploration flight and no encounters.
+    NorthernArchipelago,
 }
 
 /// Composition of the compact Fort encounter.
@@ -257,6 +263,9 @@ pub struct ArenaPackageIdentity {
 /// Complete immutable-by-convention occupancy projection; only the map producer writes it.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ArenaTerrainView {
+    /// Streamed maps explicitly distinguish unloaded columns from admitted air.
+    /// None retains the complete finite publication contract of legacy maps.
+    pub residency: Option<ArenaResidency>,
     /// Changes on reset or material mutation; partial HP changes do not alter collision.
     pub revision: u64,
     /// Every resident solid voxel keyed by its exact stack-safe identity.
@@ -304,16 +313,26 @@ impl ArenaTerrainView {
     /// Terrain takes precedence where initial solid contributors overlap.
     #[must_use]
     pub fn solid_at(&self, position: TilePos) -> Option<SubstanceId> {
-        self.voxels.get(&position).copied().or_else(|| {
-            self.object_columns
-                .get(&position.coord)?
-                .iter()
-                .find_map(|span| {
+        self.voxels
+            .get(&position)
+            .copied()
+            .or_else(|| {
+                self.columns.get(&position.coord)?.iter().find_map(|span| {
                     (span.bottom.level..=span.top_level)
                         .contains(&position.level)
                         .then_some(span.substance)
                 })
-        })
+            })
+            .or_else(|| {
+                self.object_columns
+                    .get(&position.coord)?
+                    .iter()
+                    .find_map(|span| {
+                        (span.bottom.level..=span.top_level)
+                            .contains(&position.level)
+                            .then_some(span.substance)
+                    })
+            })
     }
 }
 
