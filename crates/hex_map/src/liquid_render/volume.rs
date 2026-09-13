@@ -69,7 +69,7 @@ fn append_cap(
 ) -> Result<(), LiquidPresentationError> {
     let cap = cap_geometry();
     let base = u32::try_from(mesh.positions.len())
-        .map_err(|_| LiquidPresentationError::MeshIndexOverflow)?;
+        .map_err(|_overflow| LiquidPresentationError::MeshIndexOverflow)?;
     let center = coord.to_world(level as f32 * height);
     for position in &cap.positions {
         let p = center + Vec3::from_array(*position);
@@ -110,7 +110,7 @@ fn append_side(
     height: f32,
 ) -> Result<(), LiquidPresentationError> {
     let base = u32::try_from(mesh.positions.len())
-        .map_err(|_| LiquidPresentationError::MeshIndexOverflow)?;
+        .map_err(|_overflow| LiquidPresentationError::MeshIndexOverflow)?;
     let rotation = side_rotation(side);
     let center = coord.to_world(0.0);
     let normal = rotation * Vec3::X;
