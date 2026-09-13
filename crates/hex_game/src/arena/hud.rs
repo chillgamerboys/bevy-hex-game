@@ -604,14 +604,14 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                 milestone_status(e, ExpeditionReward::GolemShield))),
             Label::Health if expedition.is_some() => actor.map_or_else(String::new, |a| format!("{:.0} / {:.0} HP", a.hp, a.max_hp)),
             Label::Health => format!("{:03.0} HP", actor.map_or(100.0, |a| a.hp)),
-            Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nR to restart from level 1.".into(),
-            Label::Status if session.completed_run() => "VICTORY - THE MAP IS CLEAR\nKeep exploring and casting. R restarts your run.".into(),
+            Label::Status if forest_knocked_out => "RUN ENDED / YOU WERE KNOCKED OUT\nShift+R to restart from level 1.".into(),
+            Label::Status if session.completed_run() => "VICTORY - THE MAP IS CLEAR\nKeep exploring and casting. Shift+R restarts your run.".into(),
             Label::Status => {
                 if state.capture.is_some() && super::encounter::stress_view(&state.capture_view) {
                     "SYNTHETIC PERFORMANCE FIXTURE\nExtra HP / scripted party visits".into()
                 } else if let Some(outcome) = &session.outcome {
                     format!(
-                        "{}\nR to restart",
+                        "{}\nShift+R to restart",
                         match outcome {
                             ArenaOutcome::Winner(0) => "YOU WIN",
                             ArenaOutcome::Winner(_) => "YOU WERE KNOCKED OUT",

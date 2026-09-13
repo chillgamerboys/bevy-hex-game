@@ -34,7 +34,7 @@ def conversion_specimen(reset=False):
         "accepted_outcomes": 1, "rejected_outcomes": 0, "dirt": 2, "current_generation": 4+int(reset),
         "current_revision": 12+int(reset),
         "exposed_surface": None if reset else {"position": position, "top_center": [1, 2.2, 3], "camera": [1, 11.2, 3], "revision": 12, "frame": 20}, "restored_revision": 13 if reset else None,
-        "reset_key": {"key": "R", "frame": 19} if reset else None,
+        "reset_key": {"key": "Shift+R", "frame": 19} if reset else None,
         "conversion": {"actor": 0, "generation": 4, "sequence": 2, "frame": 15, "tick": 30, "revision": 12,
                        "changed": [{"position": position, "center": [1, 2, 3], "before": 3,
                                     "health_before": [2, 5], "health_after": [1, 2]}]},

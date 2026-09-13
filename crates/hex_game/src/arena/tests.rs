@@ -211,6 +211,13 @@ fn tap_key(app: &mut App, key: KeyCode) {
     *app.world_mut().resource_mut::<ButtonInput<KeyCode>>() = ButtonInput::default();
 }
 
+fn tap_restart(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    tap_key(app, KeyCode::KeyR);
+}
+
 fn press_action(app: &mut App, action: hud::Action) {
     let button = app.world_mut().spawn((Interaction::Pressed, action)).id();
     app.update();
@@ -435,7 +442,7 @@ fn keyboard_and_menu_reset_restore_the_round_and_return_to_frozen_ready_screen()
         }
         let generation = app.world().resource::<ArenaReset>().generation;
         if keyboard {
-            tap_key(&mut app, KeyCode::KeyR);
+            tap_restart(&mut app);
         } else {
             tap_key(&mut app, KeyCode::Tab);
             press_action(&mut app, hud::Action::Restart);
@@ -1095,7 +1102,7 @@ fn active_holds_cancel_for_pause_focus_reset_and_knockout() {
         match cancellation {
             "escape" => tap_key(&mut app, KeyCode::Escape),
             "tab" => tap_key(&mut app, KeyCode::Tab),
-            "reset" => tap_key(&mut app, KeyCode::KeyR),
+            "reset" => tap_restart(&mut app),
             "focus" => {
                 app.world_mut()
                     .get_mut::<Window>(window)

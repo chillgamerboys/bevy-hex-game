@@ -1,4 +1,4 @@
-//! Capture-only observation of public burrow outcomes and the ordinary R-key adapter.
+//! Capture-only observation of public burrow outcomes and the ordinary Shift+R adapter.
 
 use super::{ArenaCamera, ViewState};
 use bevy::prelude::*;
@@ -64,7 +64,7 @@ impl Evidence {
             "conversion": self.conversion, "current_cells": current_cells, "dirt":materials.dirt,
             "current_generation": reset.generation, "current_revision": view.revision,
             "accepted_outcomes":self.accepted_outcomes,"rejected_outcomes":self.rejected_outcomes,
-            "reset_key":self.reset_key_frame.map(|frame|serde_json::json!({"key":"R","frame":frame})),
+            "reset_key":self.reset_key_frame.map(|frame|serde_json::json!({"key":"Shift+R","frame":frame})),
             "restored_revision":self.restored_revision,
             "exposed_surface":self.exposed_surface,
             "boundary":"Capture-only public outcome/material/health observation; no terrain edits, actor poses or enemy HUD indicators are injected."
@@ -141,7 +141,7 @@ pub(super) fn observe(
     }
 }
 
-/// Press the same R key consumed by input(), only after an actual conversion has
+/// Press the same Shift+R chord consumed by input(), only after an actual conversion has
 /// had four app frames. InputPlugin's next frame clears this synthetic key state.
 pub(super) fn inject_reset_key(
     state: Res<ViewState>,
@@ -153,6 +153,7 @@ pub(super) fn inject_reset_key(
     }
     if evidence.reset_key_frame.is_some() {
         keys.reset(KeyCode::KeyR);
+        keys.reset(KeyCode::ShiftLeft);
         return;
     }
     if state.started
@@ -161,6 +162,7 @@ pub(super) fn inject_reset_key(
             .as_ref()
             .is_some_and(|conversion| state.frames >= conversion.frame.saturating_add(4))
     {
+        keys.press(KeyCode::ShiftLeft);
         keys.press(KeyCode::KeyR);
         evidence.reset_key_frame = Some(state.frames.saturating_add(1));
     }

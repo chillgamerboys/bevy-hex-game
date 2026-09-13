@@ -117,7 +117,7 @@ The paused menu contains existing spell tuning, resume/reset, window mode and
 quit. A win, death, draw or spectator timeout automatically opens the paused result
 menu and releases the cursor. A completed Fort/Duel/Seven Regions round cannot resume; choose RESTART
 to return to the ready screen or quit. There is no live HUD menu button. Menu
-clicks never become casts.
+clicks never become casts. **Shift+R** also restarts a run; plain **R** has no restart action.
 
 On the older maps, the same menu adjusts **High Jump height** from **2–8 units** in 0.5-unit steps and
 its cooldown from **0.5–20 seconds**. **Shadow reaction** defaults to **150 ms** and
@@ -391,7 +391,7 @@ reach. Existing explosion damage and knockback ignore cover.
 Player spell controls remain in the paused menu. Creature numbers and encounter
 behavior live in the encounters block of assets/config/arena.ron; there is no
 separate settings screen. Close and relaunch after editing this configuration
-file; R resets the current run using the values already loaded. Paused spell
+file; **Shift+R** resets the current run using the values already loaded. Paused spell
 tuning applies within the current application.
 
 The current pressure pass uses one Shadow, one Dragon, ten Goblins, or one Shaman

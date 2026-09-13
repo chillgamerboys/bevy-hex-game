@@ -146,7 +146,7 @@ fn high_jump_held_across_pause_focus_and_reset_requires_a_fresh_press() {
                 windows.single_mut(app.world_mut()).expect("window").focused = false;
                 app.update();
             }
-            "reset" => tap_key(&mut app, KeyCode::KeyR),
+            "reset" => tap_restart(&mut app),
             _ => tap_key(&mut app, KeyCode::Escape),
         }
         app.world_mut()

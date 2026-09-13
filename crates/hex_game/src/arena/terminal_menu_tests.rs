@@ -288,7 +288,7 @@ fn terminal_restart_button_and_r_return_to_ready_and_preserve_the_selected_party
         if button {
             press_action(&mut app, hud::Action::Restart);
         } else {
-            tap_key(&mut app, KeyCode::KeyR);
+            tap_restart(&mut app);
         }
         assert_eq!(
             app.world().resource::<ArenaReset>().generation,

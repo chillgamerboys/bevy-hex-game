@@ -721,7 +721,7 @@ def validate_worm_state(state: dict, view: str) -> None:
             require(now.get("material") == expected_material and now.get("published_health") == expected_health, "published material/health disagrees with conversion or reset")
         if reset:
             key = evidence.get("reset_key") or {}
-            require(key.get("key") == "R" and type(key.get("frame")) is int and key["frame"] >= conversion["frame"]+4 and key["frame"] <= reached, "missing ordinary post-conversion R-key reset")
+            require(key.get("key") == "Shift+R" and type(key.get("frame")) is int and key["frame"] >= conversion["frame"]+4 and key["frame"] <= reached, "missing ordinary post-conversion Shift+R reset")
             require(evidence.get("current_generation") == conversion["generation"]+1 and evidence.get("current_revision") != conversion["revision"] and evidence.get("restored_revision") == evidence.get("current_revision") and state.get("started") is False and state.get("paused") is True, "reset did not restore a new ready round")
         else:
             require(evidence.get("current_generation") == conversion["generation"] and evidence.get("current_revision", -1) >= conversion["revision"], "conversion belongs to another generation/publication")
@@ -1211,7 +1211,7 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--forest-review", action="store_true", help="Ten fixed Forest Massif map, biome, giant tree, bridge, massif and upgrade menu views.")
     review.add_argument("--expedition-review", action="store_true", help="Twenty-six expedition map, ground, bridge, Heart, Dragon, Shadow, fountain, reward and HUD views; reward states are explicit synthetic presentation fixtures.")
     review.add_argument("--wisp-performance", action="store_true", help="Two separate synthetic Fort/Duel 12-vs-12 Wisp workloads: validated HP 1000, 1440 ticks, first 120 excluded; no injected impacts or actor HP mutation.")
-    review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and R-key reset views.")
+    review.add_argument("--worm-review", action="store_true", help="Thirteen ordinary Worm menu, full Fort, body, emergence, windup, Boulder, acknowledged earth conversion and Shift+R reset views.")
     review.add_argument("--wisp-review", action="store_true", help="Twelve Wisp body, dim-light, windup, Ember, layered swarm and menu views from ordinary accepted recipes.")
     review.add_argument("--golem-review", action="store_true", help="Fourteen natural Fort-player and Duel Golem-vs-Dragon observer body, charge, beam, slam and Stone Swipe views; missing natural phase admission fails.")
     review.add_argument("--spectator-review", action="store_true", help="Fourteen Fort/Duel observer menu, whole-map orbit, close two-azimuth, free and terminal views.")
