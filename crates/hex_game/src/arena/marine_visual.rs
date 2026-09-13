@@ -194,11 +194,23 @@ fn wind_heading(wind: Vec3) -> &'static str {
     let x = wind.x;
     let north = -wind.z;
     if x.abs() > north.abs() * 2.414 {
-        if x > 0.0 { "E" } else { "W" }
+        if x > 0.0 {
+            "E"
+        } else {
+            "W"
+        }
     } else if north.abs() > x.abs() * 2.414 {
-        if north > 0.0 { "N" } else { "S" }
+        if north > 0.0 {
+            "N"
+        } else {
+            "S"
+        }
     } else if x > 0.0 {
-        if north > 0.0 { "NE" } else { "SE" }
+        if north > 0.0 {
+            "NE"
+        } else {
+            "SE"
+        }
     } else if north > 0.0 {
         "NW"
     } else {

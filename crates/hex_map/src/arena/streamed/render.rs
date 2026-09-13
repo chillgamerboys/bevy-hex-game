@@ -312,7 +312,7 @@ fn draw(world: &mut World) {
                                     renderer.terrain_edges.extend(completion.edges);
                                     for (chunk, mesh) in completion.proxies {
                                         if let Some((_, handle)) = renderer.proxies.get(&chunk) {
-                                            if let Some(old) =
+                                            if let Some(mut old) =
                                                 world.resource_mut::<Assets<Mesh>>().get_mut(handle)
                                             {
                                                 *old = mesh;

@@ -349,7 +349,11 @@ impl NorthernSpec {
         let material = if relative > 210.0 {
             "snow"
         } else if relative < -1.0 {
-            if rockness > 0.2 { "slate" } else { "stone" }
+            if rockness > 0.2 {
+                "slate"
+            } else {
+                "stone"
+            }
         } else if relative < 4.0 && bay < 1.3 {
             "sand"
         } else if relative < 130.0 && rockness > -0.05 {

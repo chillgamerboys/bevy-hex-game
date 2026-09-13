@@ -12,11 +12,37 @@ python3 tools/arena.py launch --map northern-archipelago --northern-world /absol
 
 The helper invokes Cargo and preserves its asset root. Play begins on dry ground above the crater bay. Normal expedition movement, Fireball, Shield, High Jump and G gliding remain available. F opens/folds exploration flight; mouse and WASD steer, Space/Ctrl rise/descend, and Shift raises flight speed from 80 to 160 units/s. Flight is collision-aware and holds the last safe position while required terrain is loading. Exiting caps retained momentum at the glider limit. M toggles the cached north-up overview; the paused Map page supports a personal destination pin.
 
-The latest movement tuning raises expedition starting walking speed to 5.90625 units/s and normal jump rise to 1.38 units (three-voxel ledges, below four). Restart restores the starting position, original terrain and exploration state. Pause preserves them.
+The latest movement tuning raises expedition starting walking speed to 5.90625 units/s and normal jump rise to 1.38 units (three-voxel ledges, below four). **Shift+R** or Restart in Esc restores the starting position, original terrain and exploration state. Plain R has no restart action. Pause preserves the run.
+
+## Sailing, swimming and wind
+
+**B** deploys or folds a portable sailboat beside clear water at least 0.7 units
+deep. W steers toward the view and provides slow paddling; A/D turn, S brakes.
+The sail adds propulsion along the wind and loses momentum across or against it.
+Speed is capped at 24 units/s. Opening equipment supplies no momentum; the hull
+and physical player sweep against solids and wait at unloaded boundaries. Spells
+remain available aboard. F and High Jump fold the boat.
+
+Swimming uses WASD, Space to rise and Ctrl to dive. The physical eye has a
+**90-second oxygen reserve**; breathing replenishes it over six seconds without
+healing. Empty oxygen costs 10 HP/s. The compact air indicator appears while
+submerged or recovering. The third-person camera never determines breathing.
+
+The prevailing wind is approximately 10 units/s with slow gusts. Glider lift,
+stall and airspeed use velocity relative to that wind; collision and streaming
+use actual ground velocity. G can open the glider on land without adding lift or
+changing walking/jumping. Landing leaves the canopy open; water, blocking walls
+and casting fold it.
 
 ## Water and residency
 
-Ocean swells affect rendering and camera tint only. Three absolute-coordinate waves have a combined amplitude bound of two units and fade into shallow shoreline water. Rivers and fountains retain zero displacement. No currents, buoyancy, gravity-driven liquid motion, draining or refilling have been added. Water cannot be carved.
+Three absolute-coordinate swells remain within a two-unit displacement envelope.
+Weak reflected waves near shores add interference; foam follows actual crests.
+Cached bed, shelter and shore-anchor samples supply matching CPU/GPU height,
+normal and vertical velocity. The boat, physical-eye breathing and rendering
+share one pause/reset-aware simulation clock. Rivers and fountains retain zero
+displacement. No currents, water-volume solver, gravity-driven liquid motion,
+draining or refilling have been added. Water cannot be carved.
 
 The world retains at most 512 fine source chunks, two source workers and two admitted products per pump. Body and predicted travel dependencies take priority over optional detail. At most 256 detailed terrain chunks are presented; coarse terrain silhouettes and the decorative ocean horizon remain visible at distance. Neither proxy geometry nor unloaded chunks grant collision clearance. Sparse carved cells survive retirement and reload, but not Restart.
 
@@ -25,5 +51,9 @@ The world retains at most 512 fine source chunks, two source workers and two adm
 Compile the source with `python3 tools/northern_package.py --output /new/package/directory --target-dir /absolute/pure/target`. The companion `northern-overview.ron` is validated against its manifest before it supplies map facts.
 
 Use `python3 tools/northern_review.py --package /absolute/package/directory --target-dir /absolute/shared/cargo-target --label checkpoint-01` for six windowless composition captures. The helper requires a clean committed candidate by default, records source/package identities and refuses to overwrite an earlier pack. `--dirty-diagnostic` permits explicitly unapprovable scratch evidence.
+An additional `--view northern-boat` stages the player at admitted water and sends
+B through the normal controller, then freezes a close boat/HUD frame. Its receipt
+records active boat state and simulation time; it is not evidence of native input
+or travel feel.
 
 Static captures establish visible geography, geometry, water boundaries and composition. Native motion and feel remain separate user checks: watch the bay swells, fly between clusters with a fast reversal, then walk through the settlement and enter/leave the water. See the [wave manifest](../planning/waves/northern-archipelago/manifest.md) for validation status and the remaining acceptance gates.

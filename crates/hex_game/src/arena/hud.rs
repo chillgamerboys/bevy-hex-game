@@ -515,8 +515,9 @@ pub(super) fn update(
     // External landscape cameras never grant player observations. Their spell
     // readiness is intentionally inactive, so keep that combat strip out of the
     // composition evidence instead of presenting it as unavailable gameplay.
-    let composition_capture =
-        state.capture.is_some() && super::northern::fixture_view(&state.capture_view);
+    let composition_capture = state.capture.is_some()
+        && super::northern::fixture_view(&state.capture_view)
+        && state.capture_view != "northern-boat";
     for (mut node, pause, start, combat, observer) in &mut panels {
         set_display(
             &mut node,

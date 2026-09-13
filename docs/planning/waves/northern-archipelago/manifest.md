@@ -129,7 +129,7 @@ The first actual-package three-circuit authority benchmark passed residency, que
 
 User steering during implementation: retain at least 20% account allowance; no automatic reset or timers. Increase ordinary expedition starting walking speed by 25% to 5.90625 units/s, in the current expedition and this candidate. Normal jump rise is now 1.38 units; actual controller tests verify three-voxel ledge traversal and four-voxel rejection from both directions. The user requested a restart of the current expedition once these small movement changes are ready; that authorizes its native relaunch independently of the archipelago review.
 
-Deferred user request: allow G to open the glider on land for appearance only, with no lift or movement benefit until airborne. This is recorded for a later change; current glider opening still requires being airborne.
+The deferred ground-glider request is implemented in this candidate: G opens on land without lift or changed walking/jumping, and landing leaves the canopy open. The isolated original expedition checkout remains an earlier source checkpoint; the current candidate launcher uses this implementation.
 
 
 ## Offline marine extension — September 12
@@ -167,3 +167,34 @@ must not hold the marine checkpoint open.
 
 Restart now requires **Shift+R**; the Esc button remains. The original expedition
 checkout has the same source fix. The native run was left untouched as promised.
+
+
+Marine integration checkpoint: the shared core sampler tests (4), ocean tests
+(13), gameplay filters (48) and three focused transition regressions pass. Strict
+arena library Clippy passes. Combined application checks pass; fresh final renders
+and user motion/feel checks are still pending. These are focused checks, not the
+selector's complete combined gate.
+
+The package02 six-view review passed overview, settlement and summit. It rejected
+close coarse/fine terrain edges and partial tree fragments. Exact package terrain
+matches the authored surface throughout 110,080 surveyed bay columns; local
+coarse interpolation differs by less than about three units near the shore. A
+boundary cut was admitting six crown columns without the rest of their tree.
+Atomic object publication and a true hex-edge transition are under validation.
+The underwater bright strip was independently traced to downward rays reaching
+an unfogged sky beyond the finite seabed; camera-water sky attenuation repairs
+that presentation path without adding walls or modifying water occupancy.
+
+The optional enemy pass is deferred from this marine checkpoint. A proposed
+follow-up is three distant parties (3 baby Goblins, 3 Wisps, 3 Goblins), validated
+world-owned deployment regions and small exact-collision residency interests. It
+requires an explicit XP-only policy: current progression presence selects Forest
+presentation and can engage its clear rewards. No Northern enemies or Forest
+rewards are enabled by the marine change.
+
+Reference review: [Cube World's official travel description](https://www.cubeworld.com/)
+treats the boat as portable exploration equipment. Its small voxel hull is also
+visible in [archived boating imagery](https://www.timetoloot.com/game/other-games/cube-world-resurfaces-for-full-release/).
+This candidate uses a compact stepped timber hull and portable deployment, with
+the user's requested sail, directional wind and conserved momentum as separate
+mechanics. It copies no game assets.

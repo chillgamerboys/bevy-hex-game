@@ -91,16 +91,15 @@ fn direct_mouse_buttons_hold_then_release_their_own_spell() {
         frame(&mut app);
         assert!(charge(&app).is_none());
         assert_eq!(casts(&app, spell), 1);
-        assert!(
-            app.world()
-                .resource::<ArenaSession>()
-                .actors
-                .first()
-                .expect("human")
-                .cooldowns
-                .get(spell.index())
-                .is_some_and(|cd| *cd > 0.0)
-        );
+        assert!(app
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .first()
+            .expect("human")
+            .cooldowns
+            .get(spell.index())
+            .is_some_and(|cd| *cd > 0.0));
     }
 }
 

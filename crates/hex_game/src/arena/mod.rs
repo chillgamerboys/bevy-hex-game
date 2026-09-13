@@ -13,7 +13,7 @@ mod forest_tests;
 mod glider_visual;
 mod marine_visual;
 #[cfg(feature = "test-support")]
-pub use encounter::{STRESS_VISIT_TICKS, configure_encounter_stress_tuning, stress_target_pose};
+pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
 mod hud;
 mod northern;

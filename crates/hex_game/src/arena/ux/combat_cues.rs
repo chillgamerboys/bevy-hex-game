@@ -1,5 +1,5 @@
 //! Small event cues consume already-visible gameplay snapshots.
-use super::super::{ArenaCamera, ViewState, hud};
+use super::super::{hud, ArenaCamera, ViewState};
 use bevy::prelude::*;
 use hex_arena::{ArenaSession, ArenaTuning};
 

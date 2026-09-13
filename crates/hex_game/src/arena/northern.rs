@@ -1,18 +1,18 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
-use super::{ArenaCamera, ArenaFrame, ViewState, environment::UnderwaterTint};
+use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
 use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
-use hex_core::HexCoord;
 use hex_core::arena::{
     ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
     ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
 };
 use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfile};
+use hex_core::HexCoord;
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
-    OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary, OceanRenderStatus,
-    OceanSurfaceAdapter, OceanSurfaceProfile, sample_local_surface, sample_surface,
+    sample_local_surface, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
+    OceanNearBoundary, OceanRenderStatus, OceanSurfaceAdapter, OceanSurfaceProfile,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
 use std::sync::Arc;
