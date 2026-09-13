@@ -191,16 +191,23 @@ fn building(
 pub(super) fn compose(
     source: &NorthernSpec,
 ) -> Result<(Vec<ObjectInstance>, usize), ContractError> {
-    let mut objects = vec![
-        building(source, "longhouse", -18.0, 570.0, 4, 10)?,
-        building(source, "cottage-west", -42.0, 590.0, 3, 4)?,
-        building(source, "cottage-east", 24.0, 575.0, 3, 4)?,
-        building(source, "storehouse", 15.0, 552.0, 2, 4)?,
-    ];
-    let root = nearest_hex(-20.0, 540.0);
+    let mut objects = BUILDING_SITES
+        .iter()
+        .map(|site| {
+            building(
+                source,
+                site.name,
+                site.xz[0],
+                site.xz[1],
+                site.half_width,
+                site.half_length,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let root = nearest_hex(FIELD_SITE.xz[0], FIELD_SITE.xz[1]);
     let mut cells = Cells::new();
-    for q in -5..=5 {
-        for r in -4..=4 {
+    for q in -FIELD_SITE.half_width..=FIELD_SITE.half_width {
+        for r in -FIELD_SITE.half_length..=FIELD_SITE.half_length {
             let p = WorldHex::new(root.q + q, root.r + r);
             let floor = source.surface(p).level + 1;
             add(&mut cells, p, floor, floor + 1, "soil");
@@ -228,6 +235,16 @@ pub(super) fn compose(
                 continue;
             }
             if ((x + 6.0) / 79.0).powi(2) + ((z - 575.0) / 62.0).powi(2) < 1.0 {
+                continue;
+            }
+            // Reserve the real player's dry observation area and the view of
+            // the central water patch before any tree blueprints are authored.
+            let [sx, sz] = SPAWN_XZ;
+            let [bx, bz] = BAY_XZ;
+            let t = (((x - sx) * (bx - sx) + (z - sz) * (bz - sz))
+                / ((bx - sx).powi(2) + (bz - sz).powi(2)))
+            .clamp(0.0, 1.0);
+            if (x - sx - t * (bx - sx)).hypot(z - sz - t * (bz - sz)) < 15.0 {
                 continue;
             }
             let surface = source.surface(p);

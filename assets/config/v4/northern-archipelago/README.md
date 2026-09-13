@@ -29,6 +29,15 @@ chunk semantics. Trees and buildings use complete exact package object occupancy
 including cross-chunk influences and real grounding contacts. Their stable asset
 names request occupancy presentation, not absent external catalogue blueprints.
 
+The bay banks and widening outlet blend into the mountain; the player starts on
+the actual dry slope with a reserved view of the central water surface. The bay
+observation anchor is at mean sea level. The settlement follows a blended valley,
+with small exact foundations under individual buildings instead of a single flat
+ellipse. Its cultivated field occupies the open southern approach near world
+XZ `(0, 612)`. Non-crater angular relief fades at each island center to avoid
+undefined-azimuth height spikes. These terrain corrections use compiler identity
+`hex-northern/2` and require a newly compiled immutable package.
+
 `full_dressing:false` is the approved full-size first checkpoint: all terrain,
 water, island silhouettes, maximum mountain elevation, four buildings and one
 field, with trees around the bay and settlement. Set true only after the runtime

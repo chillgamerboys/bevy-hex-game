@@ -165,3 +165,118 @@ fn eleven_separate_land_components_and_cluster_shore_gaps() {
         );
     }
 }
+
+#[test]
+fn dry_spawn_has_a_clear_physical_eye_view_over_central_bay_water() {
+    let compiler = NorthernCompiler::new(spec()).expect("compiler");
+    let spawn = compiler
+        .anchors
+        .iter()
+        .find(|a| a.id.ends_with("/party_start"))
+        .expect("spawn");
+    let bay = compiler
+        .anchors
+        .iter()
+        .find(|a| a.id.ends_with("/bay"))
+        .expect("bay");
+    assert_eq!(
+        bay.position.level,
+        SEA_TOP - 1,
+        "observation target is the visible water surface"
+    );
+    let [sx, sz] = world_xz(spawn.position.column);
+    let feet = (spawn.position.level + 1) as f64 * LEVEL_HEIGHT;
+    assert!(feet > 145.0, "dry supported bay overlook");
+    for i in 0..16 {
+        let angle = f64::from(i) * std::f64::consts::TAU / 16.0;
+        let p = nearest_hex(sx + angle.cos() * 0.25, sz + angle.sin() * 0.25);
+        assert_eq!(
+            compiler.source.surface(p).level,
+            spawn.position.level,
+            "the entire physical body radius shares the supported spawn surface"
+        );
+    }
+    let [bx, bz] = world_xz(bay.position.column);
+    for (tx, tz) in [(bx, bz), (bx - 14.0, bz + 8.0), (bx + 14.0, bz + 10.0)] {
+        let target = nearest_hex(tx, tz);
+        assert!(
+            compiler.source.surface(target).level < SEA_TOP - 1,
+            "central patch contains sea water"
+        );
+        for i in 1..=400 {
+            let t = f64::from(i) / 400.0;
+            let p = nearest_hex(sx + (tx - sx) * t, sz + (tz - sz) * t);
+            let y = (feet + 1.02) * (1.0 - t) + 140.0 * t;
+            let ground = (compiler.source.surface(p).level + 1) as f64 * LEVEL_HEIGHT;
+            assert!(
+                y > ground + 0.05,
+                "physical-eye ray blocked at {p:?}: ray {y}, ground {ground}"
+            );
+            for object in compiler.influences.get(&p.chunk()).into_iter().flatten() {
+                for column in object
+                    .occupancy
+                    .iter()
+                    .filter(|column| column.position == p)
+                {
+                    assert!(
+                        column
+                            .runs
+                            .iter()
+                            .all(|run| y < f64::from(run.bottom) * LEVEL_HEIGHT
+                                || y >= f64::from(run.top) * LEVEL_HEIGHT),
+                        "tree blocks the spawn view"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn settlement_has_small_supported_pads_and_continuous_valley_transitions() {
+    let source = spec();
+    for site in BUILDING_SITES.iter().chain(std::iter::once(&FIELD_SITE)) {
+        let root = nearest_hex(site.xz[0], site.xz[1]);
+        let level = source.surface(root).level;
+        for q in -site.half_width..=site.half_width {
+            for r in -site.half_length..=site.half_length {
+                assert_eq!(
+                    source.surface(WorldHex::new(root.q + q, root.r + r)).level,
+                    level,
+                    "{} has one exact supported foundation height",
+                    site.name
+                );
+            }
+        }
+    }
+    let mut largest_step = 0;
+    let mut heights = std::collections::BTreeSet::new();
+    for q in -280..=-40 {
+        for r in 275..=475 {
+            let p = WorldHex::new(q, r);
+            let [x, z] = world_xz(p);
+            if ((x + 6.0) / 120.0).hypot((z - 575.0) / 105.0) > 1.3 {
+                continue;
+            }
+            let level = source.surface(p).level;
+            heights.insert(level);
+            for n in p.neighbors().expect("neighbors") {
+                largest_step = largest_step.max((source.surface(n).level - level).abs());
+            }
+        }
+    }
+    assert!(
+        largest_step <= 12,
+        "artificial pad wall: {} world units",
+        f64::from(largest_step) * LEVEL_HEIGHT
+    );
+    assert!(
+        heights.len() > 100,
+        "the surrounding valley retains varied terrain"
+    );
+    let field = nearest_hex(FIELD_SITE.xz[0], FIELD_SITE.xz[1]);
+    assert!(
+        world_xz(field)[1] > 600.0,
+        "field occupies the open settlement approach"
+    );
+}

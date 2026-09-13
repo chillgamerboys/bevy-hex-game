@@ -19,6 +19,109 @@ pub const SEA_TOP: i32 = 400;
 /// Exact axial region radius, approximately 2425 by 2100 world units.
 pub const RADIUS: i64 = 700;
 const REGION: &str = "northern";
+const SPAWN_XZ: [f64; 2] = [-646.0, -100.0];
+const BAY_XZ: [f64; 2] = [-563.0, -75.0];
+
+#[derive(Clone, Copy)]
+struct SettlementSite {
+    name: &'static str,
+    xz: [f64; 2],
+    half_width: i64,
+    half_length: i64,
+    elevation: f64,
+}
+const BUILDING_SITES: [SettlementSite; 4] = [
+    SettlementSite {
+        name: "longhouse",
+        xz: [-18.0, 570.0],
+        half_width: 4,
+        half_length: 10,
+        elevation: 21.0,
+    },
+    SettlementSite {
+        name: "cottage-west",
+        xz: [-42.0, 590.0],
+        half_width: 3,
+        half_length: 4,
+        elevation: 19.0,
+    },
+    SettlementSite {
+        name: "cottage-east",
+        xz: [24.0, 575.0],
+        half_width: 3,
+        half_length: 4,
+        elevation: 23.0,
+    },
+    SettlementSite {
+        name: "storehouse",
+        xz: [15.0, 552.0],
+        half_width: 2,
+        half_length: 4,
+        elevation: 25.0,
+    },
+];
+const FIELD_SITE: SettlementSite = SettlementSite {
+    name: "cultivation",
+    xz: [0.0, 612.0],
+    half_width: 5,
+    half_length: 4,
+    elevation: 16.0,
+};
+
+fn smoothstep(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+fn bay_radius(x: f64, z: f64) -> f64 {
+    let a = (x + 563.0) / 64.0;
+    let b = (z + 72.0) / 60.0;
+    a.hypot(b) * (1.0 + 0.08 * (b.atan2(a) * 3.0 + 1.0).sin())
+}
+fn bay_elevation(mut terrain: f64, x: f64, z: f64) -> f64 {
+    let radius = bay_radius(x, z);
+    if radius < 1.9 {
+        let bed = 12.0 * (radius - 1.0);
+        let weight = 1.0 - smoothstep((radius - 0.8) / 1.1);
+        terrain = terrain.min(terrain + (bed - terrain) * weight);
+    }
+    // The broad outlet widens toward the sea, with unequal, sloping rocky arms.
+    // Both its upstream end and its banks blend into the composed mountain.
+    if (-125.0..65.0).contains(&z) {
+        let center_x = -563.0 + 6.0 * ((z + 72.0) * 0.025).sin();
+        let width = 31.0 + (z + 72.0).max(0.0) * 0.08;
+        let radius = (x - center_x).abs() / width;
+        let bed = -6.0 + 12.0 * radius.powi(2);
+        let weight = (1.0 - smoothstep((radius - 0.65) / 0.9)) * smoothstep((z + 125.0) / 55.0);
+        terrain = terrain.min(terrain + (bed - terrain) * weight);
+    }
+    terrain
+}
+fn settlement_elevation(terrain: f64, p: WorldHex, x: f64, z: f64) -> f64 {
+    let radius = ((x + 6.0) / 100.0).hypot((z - 575.0) / 90.0);
+    if radius >= 1.5 {
+        return terrain;
+    }
+    let floor = 22.0 + 1.8 * ((x + 6.0) * 0.04).sin() + 1.2 * ((z - 575.0) * 0.06).sin();
+    let weight = 1.0 - smoothstep((radius - 0.2) / 1.1);
+    let valley = terrain.min(terrain + (floor - terrain) * weight);
+    // Small exact foundations share the blueprint footprint. The intervening
+    // ground stays rolling, and the valley fades into the existing island.
+    let Some((site, distance)) = BUILDING_SITES
+        .iter()
+        .chain(std::iter::once(&FIELD_SITE))
+        .map(|site| {
+            let root = nearest_hex(site.xz[0], site.xz[1]);
+            let dq = ((p.q - root.q).abs() - site.half_width).max(0) as f64;
+            let dr = ((p.r - root.r).abs() - site.half_length).max(0) as f64;
+            (site, dq.max(dr) * 1.5)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+    else {
+        return valley;
+    };
+    let pad_weight = 1.0 - smoothstep(distance / 9.0);
+    valley + (site.elevation - valley) * pad_weight
+}
 
 /// One source-authored island, independent of publication and storage chunks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -177,7 +280,10 @@ impl IslandSpec {
             let ring = (-((s - 0.29) / 0.20).powi(2)).exp();
             (1.0 - s).powf(0.75) * (0.41 + 0.7544 * ring) * (1.0 + 0.09 * (angle * 4.0).sin())
         } else {
-            (1.0 - s).powf(0.90) * (1.0 + 0.10 * (angle * 3.0 + s * 9.0).sin())
+            // Angular variation must vanish at the origin: azimuth is undefined
+            // there and otherwise creates abrupt needle-like height jumps.
+            let angular_weight = smoothstep(s / 0.22);
+            (1.0 - s).powf(0.90) * (1.0 + 0.10 * angular_weight * (angle * 3.0 + s * 9.0).sin())
         };
         self.peak * shape + relief
     }
@@ -236,34 +342,15 @@ impl NorthernSpec {
             }
             relative = relative.max(island.elevation(x, z));
         }
-        // Bay's offset submerged pocket and unequal arms are carved into the same mountain.
-        let bay = ((x + 563.0) / 64.0).powi(2) + ((z + 72.0) / 60.0).powi(2);
-        if bay < 1.0 {
-            relative = relative.min(-8.0 * (1.0 - bay).sqrt());
-        }
-        if (-595.0..=-533.0).contains(&x) && (-80.0..=10.0).contains(&z) {
-            relative = relative.min(-3.0);
-        }
-        // A dry, body-sized natural ledge overlooks the bay without moving the coastline.
-        let spawn_distance = (x + 646.0).hypot(z + 100.0);
-        if spawn_distance < 15.0 {
-            let blend = ((spawn_distance - 6.0) / 9.0).clamp(0.0, 1.0);
-            relative = 22.0 * (1.0 - blend) + relative * blend;
-        }
-        // Settlement foundations and field form one reserved shallow valley terrace.
-        if ((x + 6.0) / 64.0).powi(2) + ((z - 575.0) / 47.0).powi(2) < 1.0 {
-            relative = 22.0;
-        }
+        let bay = bay_radius(x, z);
+        relative = bay_elevation(relative, x, z);
+        relative = settlement_elevation(relative, p, x, z);
         let rockness = noise(x + 38.0, z - 14.0);
         let material = if relative > 210.0 {
             "snow"
         } else if relative < -1.0 {
-            if rockness > 0.2 {
-                "slate"
-            } else {
-                "stone"
-            }
-        } else if relative < 4.0 && bay < 1.6 {
+            if rockness > 0.2 { "slate" } else { "stone" }
+        } else if relative < 4.0 && bay < 1.3 {
             "sand"
         } else if relative < 130.0 && rockness > -0.05 {
             "moss"
@@ -325,8 +412,8 @@ impl NorthernCompiler {
                 .push(object);
         }
         let anchors = [
-            ("party_start", -646.0, -100.0),
-            ("bay", -563.0, -75.0),
+            ("party_start", SPAWN_XZ[0], SPAWN_XZ[1]),
+            ("bay", BAY_XZ[0], BAY_XZ[1]),
             ("settlement", 0.0, 575.0),
             ("crater", -540.0, -250.0),
             ("old_mountains", 350.0, -300.0),
@@ -339,7 +426,11 @@ impl NorthernCompiler {
                 region_id: REGION.into(),
                 position: VoxelPosition {
                     column: p,
-                    level: source.surface(p).level,
+                    level: if id == "bay" {
+                        SEA_TOP - 1
+                    } else {
+                        source.surface(p).level
+                    },
                 },
                 role: if id == "party_start" || id == "settlement" {
                     AnchorRole::Gameplay
@@ -467,7 +558,7 @@ impl NorthernCompiler {
         WorldManifest {
             schema_version: SCHEMA_VERSION,
             world_id: self.source.id.clone(),
-            compiler_version: "hex-northern/1".into(),
+            compiler_version: "hex-northern/2".into(),
             source_fingerprint: self.source_fingerprint,
             materials: self.materials.clone(),
             regions: vec![RegionDescriptor {
