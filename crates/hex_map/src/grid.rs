@@ -2106,8 +2106,8 @@ fn terrain_mesh_from_runs(
                             reason = "bounded resident voxel levels"
                         )]
                         let low = level as f32 * level_height;
-                        let seam = level_height * 0.045;
-                        let value = if level.rem_euclid(4) == 0 { 0.74 } else { 0.86 };
+                        let seam = level_height * 0.13;
+                        let value = if level.rem_euclid(4) == 0 { 0.55 } else { 0.70 };
                         combined.tint = Some([value, value, value, 1.0]);
                         combined.side(
                             run.position.coord,
@@ -2120,9 +2120,9 @@ fn terrain_mesh_from_runs(
                         )?;
                         let value = match level.rem_euclid(4) {
                             0 => 1.00,
-                            1 => 0.98,
-                            2 => 0.95,
-                            _ => 1.02,
+                            1 => 0.90,
+                            2 => 1.06,
+                            _ => 0.96,
                         };
                         combined.tint = Some([value, value * 0.99, value * 0.98, 1.0]);
                         combined.side(
