@@ -112,6 +112,10 @@ fn wave(at: vec2<f32>, specification: vec4<f32>, rate: f32, phase_offset: f32, r
 }
 // Displacement followed by X/Z derivative, including shore attenuation.
 fn surface(at: vec2<f32>, sample: OceanBed) -> vec4<f32> {
+    // A supported flat profile needs no trigonometry or reflected-wave work.
+    if ocean.wave0.z == 0.0 && ocean.wave1.z == 0.0 && ocean.wave2.z == 0.0 {
+        return vec4<f32>(0.0);
+    }
     let bed = sample.bed;
     let depth = ocean.water.x - bed.x;
     let t = clamp(depth / ocean.water.z, 0.0, 1.0);
