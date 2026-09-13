@@ -33,6 +33,7 @@ pub(super) struct NorthernPresentation {
     capture: Option<CapturePose>,
     capture_view: String,
     enabled: bool,
+    boat_fixture_tick: Option<u64>,
 }
 
 #[derive(Component)]
@@ -79,6 +80,7 @@ pub(super) fn fixture_view(view: &str) -> bool {
             | "northern-summit"
             | "northern-waterline"
             | "northern-underwater"
+            | "northern-boat"
     )
 }
 
@@ -159,6 +161,7 @@ fn configure(
     selection: Res<ArenaSelection>,
     reset: Res<ArenaReset>,
     state: Res<ViewState>,
+    session: Res<ArenaSession>,
     streamed: Option<Res<StreamedArena>>,
     terrain: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
@@ -242,6 +245,7 @@ fn configure(
         if cache.capture.is_none() || cache.capture_view != state.capture_view {
             cache.capture = capture_pose(
                 &state.capture_view,
+                &session,
                 &streamed,
                 &profile,
                 &bath,
@@ -328,7 +332,7 @@ fn present(
         return;
     }
     // Explicit frozen phase zero matches the existing arena capture contract.
-    frame.phase_seconds = if state.capture.is_some() {
+    frame.phase_seconds = if state.capture.is_some() && state.capture_view != "northern-boat" {
         0.0
     } else {
         time.phase_seconds()
@@ -558,6 +562,7 @@ fn cue(
 )]
 fn capture_pose(
     view: &str,
+    session: &ArenaSession,
     streamed: &StreamedArena,
     profile: &OceanSurfaceProfile,
     bath: &OceanBathymetry,
@@ -584,6 +589,18 @@ fn capture_pose(
     let anchor = |name: &str| map.anchors.get(name).copied().map(Vec3::from_array);
     let bay = anchor("bay")?.with_y(map.sea_level);
     let (position, target, interest) = match view {
+        "northern-boat" => {
+            let actor = session
+                .human_actor_id()
+                .and_then(|id| session.actors.iter().find(|actor| actor.id == id))?;
+            let boat = actor.boat().filter(|boat| boat.active)?;
+            let side = boat.heading.cross(Vec3::Y);
+            (
+                actor.feet - boat.heading * 5.5 + side * 4.0 + Vec3::Y * 3.0,
+                actor.feet + Vec3::Y * 0.8,
+                actor.feet,
+            )
+        }
         "northern-bay" => (spawn + Vec3::Y * 6.0, bay + Vec3::Y * 5.0, spawn),
         "northern-settlement" => {
             let site = anchor("settlement")?;
@@ -752,4 +769,108 @@ mod tests {
         assert!(1528.0 / (2.0 * half_width) > 0.38);
         assert_eq!(pose.interest, interest);
     }
+}
+
+/// Explicit windowless fixture: move the player to admitted water and press B.
+/// The normal controller owns deployment; this is presentation staging, not travel evidence.
+pub(super) fn stage_boat_capture(world: &mut World, view: &str) -> Result<(), String> {
+    use hex_core::ocean::{OceanSurfaceState, OceanWaterColumn};
+    if view != "northern-boat" || boat_capture_ready(world.resource::<ArenaSession>(), view) {
+        return Ok(());
+    }
+    let tick = world.resource::<ArenaSession>().tick;
+    if tick < 2 {
+        return Ok(());
+    }
+    if let Some(attempt) = world.resource::<NorthernPresentation>().boat_fixture_tick {
+        if tick > attempt + 2 {
+            return Err(format!(
+                "Boat fixture did not deploy: {}",
+                world.resource::<ArenaSession>().notice
+            ));
+        }
+        return Ok(());
+    }
+    let Some(streamed) = world.get_resource::<StreamedArena>() else {
+        return Ok(());
+    };
+    let Some(environment) = world.get_resource::<OceanEnvironmentView>() else {
+        return Ok(());
+    };
+    let map = &streamed.overview;
+    let Some(bay) = map.anchors.get("bay").copied().map(Vec3::from_array) else {
+        return Err("Boat fixture requires the authored bay".into());
+    };
+    let spawn = Vec3::from_array(map.player_spawn);
+    let terrain = world.resource::<ArenaTerrainView>();
+    let geometry = *world.resource::<ArenaVoxelGeometry>();
+    let Some(first_water) = waterline_site(terrain, geometry, spawn, bay, map.sea_level) else {
+        return Ok(());
+    };
+    let site = first_water.lerp(bay, 0.35);
+    let coord = HexCoord::from_world(site);
+    let available = terrain
+        .residency
+        .as_ref()
+        .map_or(ArenaAvailability::OutsideWorld, |residency| {
+            residency.at(coord, geometry)
+        });
+    let start = terrain
+        .liquids
+        .partition_point(|span| span.bottom.coord < coord);
+    let column = terrain
+        .liquids
+        .iter()
+        .skip(start)
+        .take_while(|span| span.bottom.coord == coord)
+        .last()
+        .map(|span| OceanWaterColumn {
+            mean_height: geometry.top(hex_core::TilePos::new(coord, span.top_level)),
+            bed_height: geometry.top(span.bottom) - geometry.level_height,
+            water_id: span.substance,
+        });
+    let OceanSurfaceState::ReadyWet(surface) = environment.sample(
+        Vec2::new(site.x, site.z),
+        world.resource::<ArenaSession>().ocean_time(),
+        available,
+        column,
+    ) else {
+        return Ok(());
+    };
+    let feet = site.with_y(surface.height + 0.2);
+    let heading = (bay - site).with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let mut session = world.resource_mut::<ArenaSession>();
+    let human = session
+        .human_actor_id()
+        .ok_or("Boat fixture requires a player")?;
+    let actor = session
+        .actors
+        .iter_mut()
+        .find(|actor| actor.id == human)
+        .ok_or("Missing boat fixture player")?;
+    actor.feet = feet;
+    actor.previous_feet = feet;
+    actor.aim = heading;
+    let intent = hex_arena::ActorIntent {
+        boat_toggle: true,
+        aim: heading,
+        ..default()
+    };
+    world.resource_mut::<hex_arena::ArenaInput>().human = intent;
+    if let Some((_, recorded)) = world.resource_mut::<ViewState>().capture_inputs.last_mut() {
+        *recorded = intent;
+    }
+    world
+        .resource_mut::<NorthernPresentation>()
+        .boat_fixture_tick = Some(tick);
+    Ok(())
+}
+
+pub(super) fn boat_capture_ready(session: &ArenaSession, view: &str) -> bool {
+    view == "northern-boat"
+        && session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+            .and_then(hex_arena::Actor::boat)
+            .is_some_and(|boat| boat.active)
 }

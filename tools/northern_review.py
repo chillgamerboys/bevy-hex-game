@@ -31,8 +31,10 @@ VIEWS = (
     "northern-overview", "northern-bay", "northern-settlement",
     "northern-summit", "northern-waterline", "northern-underwater",
 )
+EXTRA_VIEWS = ("northern-boat",)
 MATRIX = "northern-six-v1"
 CRITERIA = {
+    "northern-boat": "Synthetic admitted-water B deployment: the player, voxel hull, sail and compact sailing HUD are readable; this does not establish travel or native feel.",
     "northern-overview": "All three clusters and the complete finite footprint have visible margins; distant island silhouettes remain coherent.",
     "northern-bay": "Unequal rocky bay arms, pale sand pocket, wooded ledges and a continuous sea boundary remain legible.",
     "northern-settlement": "Longhouse, cottages, shed and field have readable scale, supported foundations and sheltered woodland.",
@@ -109,6 +111,8 @@ def validate_native(path: Path, view: str, package: dict) -> dict:
             or actors[0].get("species") != "Human" or actors[0].get("hp", 0) <= 0
             or state.get("terminal_menu_outcome") is not None):
         raise RuntimeError(f"{view}: expected one living exploration player, no enemies and no terminal menu.")
+    if view == "northern-boat" and not actors[0].get("boat", {}).get("active"):
+        raise RuntimeError("Boat presentation fixture has not reached ordinary controller deployment.")
     ready = state.get("render_ready_frame")
     if type(ready) is not int or state.get("frame", 0) < ready + 4:
         raise RuntimeError(f"{view}: missing four settled render frames.")
@@ -151,7 +155,7 @@ def capture(args: argparse.Namespace) -> int:
     initial, staged, unstaged = arena.source_state()
     if initial["dirty"] and not args.dirty_diagnostic:
         raise RuntimeError("Commit the candidate before capture, or explicitly use --dirty-diagnostic for UNAPPROVABLE-DIRTY scratch.")
-    views = tuple(view for view in VIEWS if not args.view or view in args.view)
+    views = tuple(view for view in (*VIEWS, *EXTRA_VIEWS) if view in args.view) if args.view else VIEWS
     state_id = initial["head"]
     if args.dirty_diagnostic:
         state_id += "-UNAPPROVABLE-DIRTY-" + initial["state_sha256"][:12]
@@ -253,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=900.0, help="Seconds per frame including Cargo work; no native fallback.")
     parser.add_argument("--dirty-diagnostic", action="store_true", help="Permit explicitly UNAPPROVABLE-DIRTY scratch evidence.")
     parser.add_argument("--dry-run", action="store_true", help="Print source/commands/output without launching or writing.")
-    parser.add_argument("--view", action="append", choices=VIEWS, help="Explicit focused subset; repeat as needed. Default: all six.")
+    parser.add_argument("--view", action="append", choices=(*VIEWS, *EXTRA_VIEWS), help="Explicit focused subset; repeat as needed. Default: all six.")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", args.label):
         parser.error("--label must be a short filename-safe identifier")

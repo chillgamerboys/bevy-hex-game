@@ -1090,6 +1090,12 @@ fn drive_simulation(world: &mut World) {
                 }
             }
         }
+        if let Err(error) = northern::stage_boat_capture(world, &view) {
+            error!("Northern boat presentation fixture failed: {error}");
+            world.resource_mut::<ViewState>().requested = true;
+            world.write_message(AppExit::error());
+            return;
+        }
         if let Err(error) = expedition_capture::stage(world, frame, &view) {
             error!("Expedition presentation fixture failed: {error}");
             world.resource_mut::<ViewState>().requested = true;
@@ -1249,6 +1255,12 @@ fn drive_simulation(world: &mut World) {
         {
             // Keep the actual held charge stable while render assets warm up.
             // Screenshot readiness may arrive long after the target input frame.
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
+        if capture && northern::boat_capture_ready(world.resource::<ArenaSession>(), &view) {
             let mut state = world.resource_mut::<ViewState>();
             state.capture_event_frame = Some(frame);
             state.accumulator = 0.0;
@@ -1849,7 +1861,9 @@ fn capture_frame(
             "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
             "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
             "idle_mouth": actor.eye().to_array(), "beam": beam, "flying": actor.flying, "grounded": actor.grounded,
-            "flight_layer": actor.flight_layer()
+            "flight_layer": actor.flight_layer(),
+            "boat": actor.boat().map(|boat| serde_json::json!({"active":boat.active,"heading":boat.heading.to_array(),"velocity":boat.velocity.to_array(),"normal":boat.surface_normal.to_array(),"wind":boat.wind.to_array()})),
+            "swimming": actor.swimming().map(|swim| serde_json::json!({"active":swim.active,"oxygen_seconds":swim.oxygen_seconds,"submerged":swim.submerged}))
         })
     }).collect::<Vec<_>>();
     let projectiles = session.projectiles.iter().map(|projectile|serde_json::json!({
@@ -1945,6 +1959,7 @@ fn capture_frame(
         ("focus_anchor", serde_json::json!(state.capture_focus)),
         ("phase_reached_frame", serde_json::json!(state.capture_event_frame)),
         ("render_ready_frame", serde_json::json!(state.capture_ready_frame)),
+        ("ocean_time_seconds", serde_json::json!(session.ocean_time().seconds)),
         ("liquid_phase_seconds", serde_json::json!(liquid_clock.as_ref().map(|clock| clock.phase_seconds()))),
         ("app_construction_to_render_ready_ms", serde_json::json!(state.capture_ready_elapsed_ms)),
         ("camera", serde_json::json!(cameras.single().ok().map(|camera| serde_json::json!({"position": camera.translation.to_array(), "rotation": camera.rotation.to_array()})))),
