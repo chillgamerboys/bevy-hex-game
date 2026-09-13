@@ -130,6 +130,12 @@ pub(crate) fn fold(actor: &mut Actor) {
     actor.body.impulse_velocity = Vec3::ZERO;
 }
 
+/// Ground motion may acquire new horizontal speed on the same tick as takeoff.
+/// Leave vertical/impulse channels for the first flight step to consume once.
+pub(crate) fn ground_takeoff(actor: &mut Actor) {
+    actor.glider.velocity = actor.body.control_velocity;
+}
+
 /// Apply G/casting transitions before High Jump can modify ballistic velocity.
 pub(crate) fn prepare(
     actor: &mut Actor,

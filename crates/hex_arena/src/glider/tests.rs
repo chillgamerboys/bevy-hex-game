@@ -3,6 +3,39 @@ use crate::{ArenaSession, ArenaTuning, Spell};
 use hex_core::{HexCoord, SubstanceId, TilePos};
 
 #[test]
+fn transition_ground_open_glider_keeps_same_tick_walk_and_jump_momentum() {
+    let (mut actor, mut world, mut view, geometry) = fixture();
+    for coord in HexCoord::ORIGIN.within_radius(5) {
+        view.voxels.insert(TilePos::new(coord, 0), SubstanceId(1));
+    }
+    view.revision += 1;
+    world.refresh(&view, geometry);
+    actor.feet = Vec3::Y * SKIN;
+    actor.grounded = true;
+    actor.body.grounded = true;
+    open(&mut actor, &world, &view, geometry);
+    crate::motion::tick(
+        &mut actor,
+        Vec3::X,
+        false,
+        true,
+        false,
+        &world,
+        &ArenaTuning::default().encounters,
+    );
+    let takeoff = actor.body.control_velocity + Vec3::Y * actor.body.vertical_velocity;
+    assert!(takeoff.x > 5.0 && takeoff.y > 5.0);
+    finish(&mut actor, &view, geometry);
+    let mut flying = actor.clone();
+    tick(&mut flying, &world, airborne_profile());
+    assert!(flying.glider.velocity.x > takeoff.x - 0.2);
+    // Folding before the first airborne tick must preserve the same takeoff too.
+    fold(&mut actor);
+    let folded = actor.body.control_velocity + Vec3::Y * actor.body.vertical_velocity;
+    assert!(folded.distance(takeoff) < 0.0001);
+}
+
+#[test]
 fn wind_relative_airspeed_changes_ground_travel_without_a_toggle_kick() {
     let (mut actor, world, view, geometry) = fixture();
     actor.body.control_velocity = Vec3::NEG_Z * 20.0;

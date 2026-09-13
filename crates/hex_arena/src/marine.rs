@@ -234,9 +234,20 @@ pub(crate) fn prepare(
     {
         return Some("Fold free flight before deploying the boat near water.");
     }
-    let heading = actor.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let approach = actor.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let incoming = if actor.glider.open {
+        actor.glider.snapshot().velocity
+            + actor.body.impulse_velocity
+            + Vec3::Y * actor.body.vertical_velocity
+    } else {
+        body_velocity(actor)
+    }
+    .with_y(0.0)
+    .clamp_length_max(BOAT_SPEED);
+    // Mounting cannot redirect existing travel toward a backward camera view.
+    let heading = incoming.normalize_or(approach);
     for distance in [0.0, 0.6, 1.2] {
-        let candidate = actor.feet + heading * distance;
+        let candidate = actor.feet + approach * distance;
         let OceanSurfaceState::ReadyWet(surface) = sea.sample(candidate) else {
             continue;
         };
@@ -253,9 +264,7 @@ pub(crate) fn prepare(
             || hull_positions(feet, heading).into_iter().any(|point| !matches!(sea.sample(point), OceanSurfaceState::ReadyWet(s) if s.mean_height - s.bed_height >= 0.7))
         { continue; }
         crate::glider::fold(actor);
-        let velocity = body_velocity(actor)
-            .with_y(0.0)
-            .clamp_length_max(BOAT_SPEED);
+        let velocity = incoming;
         if let Some(state) = &mut actor.marine {
             state.boat = BoatSnapshot {
                 active: true,

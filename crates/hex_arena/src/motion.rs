@@ -75,10 +75,14 @@ pub(crate) fn tick_with_lunge(
                 return;
             }
         }
+        let grounded_glider = actor.glider.open && actor.grounded;
         actor
             .body
             .tick_profile(&mut actor.feet, direction, run, jump, world, profile);
         actor.grounded = actor.body.grounded;
+        if grounded_glider && !actor.grounded {
+            crate::glider::ground_takeoff(actor);
+        }
         return;
     }
     if !shapes::clear(world, actor, actor.feet, actor.body_yaw) {

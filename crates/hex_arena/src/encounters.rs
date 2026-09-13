@@ -851,8 +851,15 @@ impl ArenaSession {
                 intents.get(&actor.id).map_or(Vec3::ZERO, |i| i.direction)
             };
             let flight = intents.get(&actor.id).is_some_and(|i| i.flight);
-            if !crate::marine::tick_or_wait(actor, intent, &marine_world, &self.collision)
-                && !crate::exploration::tick_or_wait(actor, intent, &self.collision)
+            if !crate::marine::tick_or_wait(
+                actor,
+                ActorIntent {
+                    high_jump: boosted,
+                    ..intent
+                },
+                &marine_world,
+                &self.collision,
+            ) && !crate::exploration::tick_or_wait(actor, intent, &self.collision)
             {
                 motion::tick_with_lunge(
                     actor,

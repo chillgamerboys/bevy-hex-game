@@ -185,6 +185,78 @@ fn toggle() -> ActorIntent {
 }
 
 #[test]
+fn transition_boat_deployment_cannot_reverse_motion_toward_the_camera() {
+    let (mut actor, world, terrain, geometry, environment) = fixture();
+    let sea = context(&terrain, geometry, &environment);
+    actor.aim = Vec3::NEG_X;
+    actor.body.control_velocity = Vec3::X * 12.0;
+    assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+    assert!(actor.boat().expect("boat").heading.dot(Vec3::X) > 0.999);
+    boat_tick(
+        &mut actor,
+        ActorIntent {
+            movement: Vec2::Y,
+            ..Default::default()
+        },
+        &sea,
+        &world,
+    );
+    assert!(actor.boat().expect("boat").velocity.x > 11.0);
+    assert!(actor.boat().expect("boat").heading.dot(Vec3::X) > 0.999);
+}
+
+#[test]
+fn transition_cooldown_rejected_high_jump_cannot_bypass_swimming_drag() {
+    let mut velocities = Vec::new();
+    for press in [false, true] {
+        let (mut actor, _, terrain, geometry, environment) = fixture();
+        actor.feet.y = -5.0;
+        actor.body.vertical_velocity = 10.0;
+        let state = actor.marine.as_mut().expect("marine");
+        state.swim.active = true;
+        state.velocity = Vec3::Y * 10.0;
+        if let Some(cooldown) = actor.cooldowns.get_mut(crate::Spell::HighJump.index()) {
+            *cooldown = 1.0;
+        }
+        let mut session = ArenaSession::default();
+        session.reset_with_setup(1, &terrain, geometry, &ArenaBattleSetup::default());
+        session.actors = vec![actor];
+        session.encounter.initialized = true;
+        session.ocean_environment = Some(environment);
+        let materials = hex_core::arena::ArenaMaterials {
+            stone: SubstanceId(1),
+            grass: SubstanceId(3),
+            dirt: SubstanceId(4),
+            bedrock: SubstanceId(5),
+            fire: hex_core::ElementId(1),
+        };
+        session.advance(
+            ActorIntent {
+                high_jump: press,
+                ..Default::default()
+            },
+            &terrain,
+            geometry,
+            materials,
+            &ArenaTuning::default(),
+        );
+        velocities.push(
+            session
+                .actors
+                .first()
+                .expect("player")
+                .body
+                .vertical_velocity,
+        );
+    }
+    assert!(velocities.iter().all(|velocity| *velocity < 9.9));
+    assert!(velocities
+        .first()
+        .zip(velocities.last())
+        .is_some_and(|(normal, rejected)| (normal - rejected).abs() < 0.0001));
+}
+
+#[test]
 fn portable_boat_toggle_preserves_speed_and_never_ratchets_altitude() {
     let (mut actor, world, terrain, geometry, environment) = fixture();
     let sea = context(&terrain, geometry, &environment);
