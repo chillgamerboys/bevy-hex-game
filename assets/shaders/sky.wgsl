@@ -33,6 +33,8 @@ struct SkyParams {
     lower_glow_strength: f32,
     cloud_phase_seconds: f32,
     upper_hemisphere_clouds: f32,
+    underwater_color: vec3<f32>,
+    underwater_strength: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyParams;
@@ -264,5 +266,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Clouds composite last so a dense cloud can obscure a celestial disc and halo.
     color = mix(color, sky.cloud_color, clamp(mask * hemisphere, 0.0, 1.0));
+    // Rays below the horizon cannot hit an ocean surface above the camera.
+    // At the finite seabed boundary they reach this dome: apply the same far
+    // water fog as opaque geometry instead of exposing a bright strip of air.
+    // Looking upward retains a muted sky window; no geometry or water is added.
+    let air_window = smoothstep(-0.02, 0.30, dir.y);
+    let submerged_fog = sky.underwater_strength * (1.0 - 0.35 * air_window);
+    color = mix(color, sky.underwater_color, submerged_fog);
     return vec4<f32>(color, 1.0);
 }

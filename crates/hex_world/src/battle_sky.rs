@@ -15,6 +15,8 @@ pub struct BattleSkyFrame {
     pub sun_direction: Vec3,
     /// Cloud animation seconds; a constant freezes deterministic review captures.
     pub cloud_phase: f32,
+    /// Water fog at the actual camera; None preserves the ordinary atmosphere.
+    pub underwater_color: Option<Vec3>,
 }
 impl Default for BattleSkyFrame {
     fn default() -> Self {
@@ -23,6 +25,7 @@ impl Default for BattleSkyFrame {
             center: Vec3::ZERO,
             sun_direction: Vec3::Y,
             cloud_phase: 0.0,
+            underwater_color: None,
         }
     }
 }
@@ -111,6 +114,8 @@ fn parameters(frame: &BattleSkyFrame, profile: &BattleSkyProfile) -> SkyParams {
         lower_glow_angular_radius_radians: 0.0,
         lower_glow_strength: 0.0,
         cloud_phase_seconds: frame.cloud_phase,
+        underwater_color: frame.underwater_color.unwrap_or(Vec3::ZERO),
+        underwater_strength: f32::from(u8::from(frame.underwater_color.is_some())),
         upper_hemisphere_clouds: if profile.upper_hemisphere_clouds {
             1.0
         } else {

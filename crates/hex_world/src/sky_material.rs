@@ -40,6 +40,8 @@ pub(crate) struct SkyParams {
     pub lower_glow_strength: f32,
     pub cloud_phase_seconds: f32,
     pub upper_hemisphere_clouds: f32,
+    pub underwater_color: Vec3,
+    pub underwater_strength: f32,
 }
 
 /// Material that renders the procedural sky onto the dome.
