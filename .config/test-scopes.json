@@ -285,6 +285,10 @@
       "concerns": ["map_unit", "map_generation", "map_contracts"],
       "required_ignored_patterns": [
         "*arena::forest::tests::authored_forest_publication_and_v4_edit_roundtrip",
+        "*arena::real_world_tests::*finite_expedition_blast_carves_objects_bedrock_and_preserves_water_then_resets",
+        "*arena::streamed::tests::*actual_northern_menu_selection_commits_before_same_frame_reset",
+        "*arena::streamed::tests::*actual_northern_three_circuits_carve_restart_and_map_switch",
+        "*arena::streamed::render::tests::northern_actual_tree_is_never_visible_from_only_crown_chunks",
         "*procedural::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",
         "*procedural::tests::procedural_radius_benchmark_meets_the_radius_40_target",
         "*procedural_v2::hills::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks",

@@ -70,6 +70,37 @@ the three disjoint identity sets still union to the full ordinary set. CI runs t
 completeness preflight before executing the partitions, then publishes separate JUnit,
 timing JSON, and logs for all three ordinary concerns.
 
+### Explicit compiled-package arena gates
+
+The map ignored-test inventory also retains these four `hex_map` library gates,
+which belong to the `map-unit` target partition. Registration does not promote
+them into ordinary CI or make ordinary selection depend on a local package.
+
+| Exact Rust test identity | Explicit package prerequisite |
+|---|---|
+| `arena::streamed::tests::actual_northern_menu_selection_commits_before_same_frame_reset` | `HEX_NORTHERN_WORLD`, current full-scale Northern package |
+| `arena::streamed::tests::actual_northern_three_circuits_carve_restart_and_map_switch` | `HEX_NORTHERN_WORLD`, current full-scale Northern package; explicit CPU/residency benchmark |
+| `arena::streamed::render::tests::northern_actual_tree_is_never_visible_from_only_crown_chunks` | `HEX_NORTHERN_WORLD`, current full-scale Northern package |
+| `arena::real_world_tests::finite_expedition_blast_carves_objects_bedrock_and_preserves_water_then_resets` | `HEX_FOREST_WORLD`, current compiled Forest expedition package |
+
+Run an individual gate with its absolute package directory and exact identity:
+
+```sh
+HEX_NORTHERN_WORLD=/absolute/path/to/compiled-northern \
+cargo test --package hex_map --features arena-prototype --lib \
+  arena::streamed::tests::actual_northern_menu_selection_commits_before_same_frame_reset \
+  -- --ignored --exact
+```
+
+Record the source commit, package fingerprint and execution profile with the
+result. Use the appropriate benchmark profile when collecting performance
+evidence. The existing
+`arena::forest::tests::authored_forest_publication_and_v4_edit_roundtrip` requires
+the **legacy** package built by `tools/forest_world.py compile`; it must not be
+bundled with the current Forest expedition gate under one package assumption.
+Missing package input is an unmet explicit gate, not a skipped success. The
+ordinary completeness check only lists these identities and requires no package.
+
 Every canonical Rust test run first lists the exact selected identities. A zero-test
 selection fails before execution, even if the underlying runner would otherwise return
 success. Cargo's libtest followups also sum every final passed/failed result, so selecting
