@@ -77,7 +77,9 @@ pub struct OceanSurfaceSample {
     pub height: f32,
     /// Unit upward surface normal, matching the rendered displacement derivative.
     pub normal: Vec3,
-    /// Analytic rate of change of surface height, in world units per second.
+    /// Continuous rate of change of surface height, in world units per second.
+    /// The stepped water lab reports zero: discrete jumps change contact position
+    /// and must not turn into unbounded launch impulses.
     pub vertical_velocity: f32,
     /// Exact undisplaced liquid upper face copied from the supplied column.
     pub mean_height: f32,
@@ -90,7 +92,12 @@ pub struct OceanSurfaceSample {
 /// World-owned, immutable surface implementation shared through an [`Arc`].
 pub trait OceanEnvironmentSampler: Debug + Send + Sync {
     /// Local wind; existing worlds retain their original time-only profile.
-    fn wind_at(&self, _position: Vec3, time: OceanSimulationTime, profile: OceanWindProfile) -> Vec2 {
+    fn wind_at(
+        &self,
+        _position: Vec3,
+        time: OceanSimulationTime,
+        profile: OceanWindProfile,
+    ) -> Vec2 {
         profile.velocity_at(time)
     }
 

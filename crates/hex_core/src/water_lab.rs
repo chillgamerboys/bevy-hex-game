@@ -83,7 +83,8 @@ impl WaterLabSettings {
     /// Wave phase derived from the same completed tick used by contact queries.
     #[must_use]
     pub fn phase(self, seconds: f32) -> f32 {
-        self.frozen_phase.unwrap_or((seconds - self.phase_origin).rem_euclid(900.0))
+        self.frozen_phase
+            .unwrap_or((seconds - self.phase_origin).rem_euclid(900.0))
     }
 }
 
