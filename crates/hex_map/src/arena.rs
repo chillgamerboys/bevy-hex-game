@@ -27,9 +27,13 @@ use crate::{Column, VoxelMap};
 mod burrow;
 #[cfg(test)]
 mod burrow_tests;
+mod expedition;
+mod forest;
+mod overview;
 #[cfg(test)]
 mod real_world_tests;
 mod render;
+pub mod streamed;
 #[cfg(test)]
 mod tests;
 mod worlds;
@@ -39,6 +43,7 @@ const GROUND_LEVEL: i32 = 8;
 #[derive(Resource, Default)]
 struct ArenaWorldState {
     generation: u64,
+    forest: Option<forest::ForestRuntime>,
     burrow_sequences: BTreeMap<u8, u64>,
     changed: BTreeSet<HexCoord>,
     render_dirty: BTreeSet<HexCoord>,
@@ -84,7 +89,12 @@ pub fn plugin(app: &mut App) {
         .add_message::<TerrainImpactOutcome>()
         .add_message::<AppExit>()
         .add_systems(Startup, initialize.in_set(ArenaSystems::PublishTerrain))
+        .add_systems(PreUpdate, switch_mode.before(retain_announcements))
         .add_systems(PreUpdate, retain_announcements)
+        // Menus can select a map in Update immediately before driving ArenaTick.
+        // Commit the adapter change at that same boundary, before either adapter
+        // sees the reset; waiting for the next PreUpdate uses the old loader.
+        .add_systems(ArenaTick, switch_mode.before(ArenaSystems::ApplyTerrain))
         .add_systems(
             ArenaTick,
             apply_terrain
@@ -97,7 +107,7 @@ pub fn plugin(app: &mut App) {
                 .in_set(ArenaSystems::PublishTerrain)
                 .run_if(resource_exists::<VoxelMap>),
         )
-        .add_plugins(render::plugin);
+        .add_plugins((overview::plugin, render::plugin, streamed::plugin));
 }
 
 /// Preserve the last simulated tick's effects while the complete tick schedule is
@@ -165,6 +175,26 @@ fn load_content() -> Result<Content, String> {
     })
 }
 
+fn switch_mode(world: &mut World) {
+    let requested = world.resource::<ArenaSelection>().map;
+    let current = world
+        .get_resource::<ArenaTerrainView>()
+        .map(|view| view.selection.map);
+    if current == Some(requested)
+        || (!requested.capabilities().streamed
+            && !world.contains_resource::<streamed::StreamedArena>())
+    {
+        return;
+    }
+    if world.contains_resource::<Assets<Mesh>>() {
+        render::clear_world(world);
+        streamed::clear_render(world);
+    }
+    world.remove_resource::<streamed::StreamedArena>();
+    world.remove_resource::<VoxelMap>();
+    initialize(world);
+}
+
 fn initialize(world: &mut World) {
     let content = match load_content() {
         Ok(content) => content,
@@ -175,6 +205,13 @@ fn initialize(world: &mut World) {
         }
     };
     let selection = *world.resource::<ArenaSelection>();
+    if selection.map.capabilities().streamed {
+        if let Err(error) = streamed::initialize(world, content) {
+            error!("Northern initialization: {error}");
+            world.write_message(AppExit::error());
+        }
+        return;
+    }
     let recipe = match worlds::build(
         selection,
         content.materials,
@@ -188,9 +225,23 @@ fn initialize(world: &mut World) {
             return;
         }
     };
+    let forest = match recipe
+        .forest_source
+        .as_ref()
+        .map(|source| forest::ForestRuntime::new(source.clone()))
+        .transpose()
+    {
+        Ok(forest) => forest,
+        Err(error) => {
+            error!("{error}");
+            world.write_message(AppExit::error());
+            return;
+        }
+    };
     let generation = world.resource::<ArenaReset>().generation;
     world.insert_resource(ArenaWorldState {
         generation,
+        forest,
         render_dirty: recipe.map.columns().map(|(coord, _)| coord).collect(),
         original: Some(recipe.clone()),
         presentation_dirty: true,
@@ -316,6 +367,19 @@ fn apply_terrain(
                 return;
             }
         };
+        state.forest = match recipe
+            .forest_source
+            .as_ref()
+            .map(|source| forest::ForestRuntime::new(source.clone()))
+            .transpose()
+        {
+            Ok(forest) => forest,
+            Err(error) => {
+                error!("{error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        };
         recipe.view.selection = *selection;
         state.changed.extend(map.columns().map(|(coord, _)| coord));
         state.generation = reset.generation;
@@ -355,7 +419,12 @@ fn apply_terrain(
             TerrainEdit::Clear { .. } => SubstanceId::AIR,
         };
         if current == replacement
-            || (!current.is_air() && !substances.is_diggable(current))
+            || (!current.is_air()
+                && if state.forest.as_ref().is_some_and(|f| f.finite.is_some()) {
+                    !substances.is_solid(current)
+                } else {
+                    !substances.is_diggable(current)
+                })
             || substances.get(replacement).is_none()
         {
             continue;
@@ -388,18 +457,55 @@ fn apply_terrain(
             });
             continue;
         }
-        let resolved = damage.apply(
-            impact,
-            &mut map,
-            &substances,
-            &damage_table,
-            &mut damaged,
-            |pos| {
-                !geometry.contains_column(pos.coord)
-                    || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
-                    || protected(&state, pos)
-            },
-        );
+        let resolved = if let Some(forest) = state.forest.as_ref().filter(|f| f.finite.is_some()) {
+            damage.apply_finite(
+                impact,
+                |pos| {
+                    if forest.pending_carves.contains(&pos) {
+                        return SubstanceId::AIR;
+                    }
+                    // Terrain edits earlier in this tick override the immutable source.
+                    let terrain = map.get(pos);
+                    if !terrain.is_air() {
+                        return terrain;
+                    }
+                    forest
+                        .finite
+                        .as_ref()
+                        .and_then(|session| session.object_at(forest::world_position(pos)))
+                        .and_then(|name| forest::material_id(name, &substances).ok())
+                        .unwrap_or(SubstanceId::AIR)
+                },
+                &substances,
+                &damage_table,
+                &mut damaged,
+                |pos| {
+                    !geometry.contains_column(pos.coord)
+                        || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
+                },
+            )
+        } else {
+            damage.apply(
+                impact,
+                &mut map,
+                &substances,
+                &damage_table,
+                &mut damaged,
+                |pos| {
+                    !geometry.contains_column(pos.coord)
+                        || !(geometry.min_level..=geometry.max_level).contains(&pos.level)
+                        || protected(&state, pos)
+                },
+            )
+        };
+        if let Some(forest) = state.forest.as_mut().filter(|f| f.finite.is_some()) {
+            for pos in &resolved.destroyed {
+                map.set(*pos, SubstanceId::AIR);
+            }
+            forest
+                .pending_carves
+                .extend(resolved.destroyed.iter().copied());
+        }
         state
             .changed
             .extend(resolved.destroyed.iter().map(|pos| pos.coord));
@@ -447,14 +553,27 @@ fn apply_terrain(
         burrows.outcomes.write(outcome);
     }
     if !state.changed.is_empty() {
+        let changed = state.changed.clone();
+        if let Some(forest) = &mut state.forest {
+            if let Err(error) = forest.commit_projection(&map, &changed, &substances, &art) {
+                // Never publish a staging projection whose authoritative transaction failed.
+                outcomes.clear();
+                state.changed.clear();
+                error!("V4 terrain transaction rejected: {error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        }
         let before = presentation.features().len();
+        let finite = state.forest.as_ref().is_some_and(|f| f.finite.is_some());
         presentation.retain_features(|feature| {
-            feature.kind == crate::procedural_v3::FeatureKind::Tree
+            finite
+                || feature.kind == crate::procedural_v3::FeatureKind::Tree
                 || !state.changed.contains(&feature.root.coord)
                 || (substances.is_solid(map.get(feature.root))
                     && map.get(feature.root.above()).is_air())
         });
-        state.presentation_dirty |= presentation.features().len() != before;
+        state.presentation_dirty |= finite || presentation.features().len() != before;
     }
 }
 
@@ -503,6 +622,13 @@ fn publish_terrain(
                 publish_column(&mut view, *coord, column, &substances);
             }
         }
+    }
+    if let Some(finite) = state
+        .forest
+        .as_ref()
+        .and_then(|forest| forest.finite.as_ref())
+    {
+        forest::publish_carves(&mut view, finite, &changed);
     }
     view.revision = revision;
     view.dirty_columns.clone_from(&changed);

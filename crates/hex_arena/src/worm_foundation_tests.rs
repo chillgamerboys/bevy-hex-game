@@ -221,6 +221,22 @@ fn worm_configuration_rejects_unsupported_length_depth_and_nonfinite_boulders() 
             ..valid.clone()
         },
         EncounterTuning {
+            worm_escape_depth_levels: 1,
+            ..valid.clone()
+        },
+        EncounterTuning {
+            worm_escape_depth_levels: 9,
+            ..valid.clone()
+        },
+        EncounterTuning {
+            worm_escape_seconds: 4.1,
+            ..valid.clone()
+        },
+        EncounterTuning {
+            worm_escape_distance: f32::NAN,
+            ..valid.clone()
+        },
+        EncounterTuning {
             worm_boulder_gravity: f32::NAN,
             ..valid.clone()
         },

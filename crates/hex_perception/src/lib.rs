@@ -19,6 +19,7 @@ mod knowledge;
 mod runtime;
 mod sight;
 mod snapshots;
+pub mod v4;
 
 pub use illumination::{
     resolve_illumination_at, LightSourceSnapshot, ResolvedIllumination, ResolvedLight,

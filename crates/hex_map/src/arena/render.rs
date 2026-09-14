@@ -6,6 +6,8 @@ use bevy::transform::TransformSystems;
 
 use super::*;
 
+mod forest_chunks;
+
 #[derive(Resource, Default)]
 struct RenderCache {
     mesh: Option<Handle<Mesh>>,
@@ -13,17 +15,34 @@ struct RenderCache {
     columns: BTreeMap<HexCoord, Entity>,
     presentations: Vec<Entity>,
     features: BTreeMap<crate::procedural_v3::FeatureId, Entity>,
+    mask_revisions: BTreeMap<crate::procedural_v3::FeatureId, u64>,
     generation: Option<u64>,
+    forest: forest_chunks::ForestRender,
+}
+
+impl RenderCache {
+    fn clear_legacy_terrain(&mut self, commands: &mut Commands) {
+        for (_, root) in std::mem::take(&mut self.columns) {
+            commands.entity(root).despawn();
+        }
+    }
 }
 
 pub(super) fn plugin(app: &mut App) {
     if app.world().contains_resource::<AssetServer>() {
         app.add_plugins(crate::liquid_render::arena_plugin);
     }
+    app.init_resource::<hex_core::arena::ArenaRenderStatus>()
+        .init_resource::<hex_core::arena::ArenaFountainVisuals>();
     app.init_resource::<RenderCache>().add_systems(
         PostUpdate,
-        (refresh, refresh_presentations)
+        (
+            refresh,
+            refresh_presentations,
+            crate::liquid_render::sync_fountain_materials,
+        )
             .chain()
+            .in_set(hex_core::PresentationSystems::PublishObjects)
             .before(TransformSystems::Propagate)
             .run_if(resource_exists::<VoxelMap>),
     );
@@ -38,11 +57,31 @@ fn refresh(
     substances: Res<SubstanceTable>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut status: ResMut<hex_core::arena::ArenaRenderStatus>,
 ) {
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         // Logical tests intentionally do not install a renderer or asset storage.
         return;
     };
+    if state.forest.is_some() {
+        // The resident renderer owns its own entities. Retire the old map's
+        // column hierarchy while retaining reusable legacy mesh/material assets.
+        cache.clear_legacy_terrain(&mut commands);
+        forest_chunks::refresh(
+            &mut commands,
+            &mut cache.forest,
+            &mut state,
+            &map,
+            *geometry,
+            &substances,
+            &mut meshes,
+            &mut materials,
+            &mut status,
+        );
+        return;
+    }
+    cache.forest.clear(&mut commands, &mut meshes);
+    status.pending_chunks = 0;
     if state.render_dirty.is_empty() {
         return;
     }
@@ -116,6 +155,7 @@ fn refresh_presentations(
     substances: Res<SubstanceTable>,
     catalog: Res<RuntimeArtCatalog>,
     projection: Res<crate::procedural_v3::MapPresentationProjection>,
+    view: Res<ArenaTerrainView>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     liquid_materials: Option<ResMut<Assets<crate::liquid_render::LiquidMaterial>>>,
     phase: Option<Res<crate::liquid_render::LiquidVisualTime>>,
@@ -124,6 +164,17 @@ fn refresh_presentations(
         return;
     }
     if cache.generation == Some(state.generation) {
+        if let Some(forest) = &state.forest {
+            for (id, mask) in &forest.masks {
+                if cache.mask_revisions.get(id) == Some(&mask.revision) {
+                    continue;
+                }
+                if let Some(entity) = cache.features.get(id).copied() {
+                    commands.entity(entity).insert(mask.clone());
+                    cache.mask_revisions.insert(*id, mask.revision);
+                }
+            }
+        }
         // Only nonblocking decorations can lose support. Keep every unaffected
         // object and liquid mesh, material, and root stable during a local edit.
         cache.features.retain(|id, entity| {
@@ -166,7 +217,13 @@ fn refresh_presentations(
             &substances,
             geometry.level_height,
             phase.as_ref().map_or(0.0, |clock| clock.phase_seconds()),
+            if state.forest.is_some() {
+                crate::liquid_render::WaterSurfaceStyle::Translucent
+            } else {
+                crate::liquid_render::WaterSurfaceStyle::Opaque
+            },
             Some(&projection),
+            &crate::liquid_render::FountainWater::from_view(state.generation, &view),
         ) {
             Ok(roots) => roots,
             Err(error) => {
@@ -188,9 +245,24 @@ fn refresh_presentations(
             return;
         }
     };
+    cache.mask_revisions.clear();
+    if let Some(forest) = state
+        .forest
+        .as_ref()
+        .filter(|forest| forest.finite.is_some())
+    {
+        for (id, entity) in projection.features().keys().zip(&features) {
+            // Usually pristine; retain any accepted damage that preceded the
+            // first presentation, and reset publication receipts on Restart.
+            let mask = forest.masks.get(id).cloned().unwrap_or_default();
+            cache.mask_revisions.insert(*id, mask.revision);
+            commands.entity(*entity).insert(mask);
+        }
+    }
     roots.extend(crate::crystal_render::spawn_prepared(
         &mut commands,
         prepared,
+        hex_core::ReviewCrystalLightProfile::Current,
     ));
     for root in std::mem::replace(&mut cache.presentations, roots) {
         commands.entity(root).despawn();
@@ -245,6 +317,7 @@ fn hex_prism() -> Mesh {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::world::CommandQueue;
     use bevy::mesh::VertexAttributeValues;
 
     use super::*;
@@ -295,4 +368,95 @@ mod tests {
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 4);
     }
+
+    #[test]
+    fn forest_entry_retires_legacy_columns_and_children_but_keeps_reusable_assets() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .add_plugins(super::super::plugin);
+        app.update();
+        let columns = app.world().resource::<RenderCache>().columns.clone();
+        assert_eq!(
+            columns.len(),
+            469,
+            "fixture publishes the real Duel terrain"
+        );
+        let mut query = app.world_mut().query_filtered::<Entity, With<Mesh3d>>();
+        let children: Vec<_> = query.iter(app.world()).collect();
+        assert!(children.len() >= columns.len());
+        let mesh = app
+            .world()
+            .resource::<RenderCache>()
+            .mesh
+            .clone()
+            .expect("shared mesh");
+        let materials = app.world().resource::<RenderCache>().materials.clone();
+        let unrelated = app
+            .world_mut()
+            .spawn(Name::new("unrelated scene root"))
+            .id();
+
+        // Exercise the same resource transition invoked before resident terrain
+        // publication, without requiring a compiled map or a GPU in this test.
+        let mut queue = CommandQueue::default();
+        app.world_mut()
+            .resource_scope(|world, mut cache: Mut<RenderCache>| {
+                cache.clear_legacy_terrain(&mut Commands::new(&mut queue, world));
+            });
+        queue.apply(app.world_mut());
+        assert!(app.world().resource::<RenderCache>().columns.is_empty());
+        for entity in columns.values().chain(children.iter()) {
+            assert!(
+                app.world().get_entity(*entity).is_err(),
+                "retired terrain descendant remains"
+            );
+        }
+        assert!(app.world().get_entity(unrelated).is_ok());
+        assert!(app.world().resource::<Assets<Mesh>>().get(&mesh).is_some());
+        assert_eq!(app.world().resource::<RenderCache>().materials, materials);
+
+        // Returning to the legacy publication can reuse the retained handles.
+        app.world_mut()
+            .resource_mut::<ArenaWorldState>()
+            .render_dirty
+            .extend(columns.keys().copied());
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderCache>().columns.len(),
+            columns.len()
+        );
+        assert_eq!(app.world().resource::<RenderCache>().mesh, Some(mesh));
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            materials.len()
+        );
+    }
+}
+
+/// Retire legacy presentation when selecting the independently streamed world.
+pub(super) fn clear_world(world: &mut World) {
+    let Some(mut cache) = world.remove_resource::<RenderCache>() else {
+        return;
+    };
+    for entity in cache
+        .columns
+        .values()
+        .copied()
+        .chain(cache.presentations.iter().copied())
+        .chain(cache.features.values().copied())
+        .collect::<Vec<_>>()
+    {
+        if world.get_entity(entity).is_ok() {
+            world.despawn(entity);
+        }
+    }
+    world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+        let mut commands = world.commands();
+        cache.forest.clear(&mut commands, &mut meshes);
+    });
+    world.flush();
+    world.insert_resource(RenderCache::default());
 }

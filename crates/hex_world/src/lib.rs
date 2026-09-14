@@ -9,6 +9,9 @@
 
 use bevy::prelude::*;
 
+/// Standalone fixed-time sky for Battle Mode without the tactical camera.
+pub mod battle_sky;
+
 /// Pan/orbit camera and the sky dome.
 pub mod camera;
 /// Adaptive tree fading and explicit review-only interior cutaways.
@@ -22,7 +25,9 @@ mod sky_material;
 pub mod test_support;
 
 pub use camera::{CameraMode, CameraSystems, PanOrbitCamera};
-pub use sky::TimeOfDay;
+pub use sky::{clear_environment_map_cache, TimeOfDay};
+#[cfg(feature = "dev-time-preview")]
+pub use sky::{reset_presentation_time_override, PresentationTimeOverride};
 
 /// Enables a full-interior cutaway for one deterministic review capture.
 ///

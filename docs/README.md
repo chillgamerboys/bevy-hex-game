@@ -26,11 +26,13 @@ doc or the code, not drift.
 | Running Sandbox multiplayer on one local network | [development/lan-multiplayer-testing.md](development/lan-multiplayer-testing.md) |
 | Running Direct multiplayer between remote testers | [development/remote-multiplayer-testing.md](development/remote-multiplayer-testing.md) |
 | Adding or reviewing map tests | [development/map-testing.md](development/map-testing.md) |
+| Comparing Grand V3 lighting, voxel-height, or palette candidates | [development/grand-v3-visual-experiments.md](development/grand-v3-visual-experiments.md) |
 | Taking ownership of the map | [development/onboarding.md](development/onboarding.md) |
 | Changing game values without writing Rust | [development/config.md](development/config.md) |
 | Deciding what a mechanic should do | [design/game.md](design/game.md) |
 | Writing code that touches terrain | [systems/map.md](systems/map.md) and [`crates/hex_map/CLAUDE.md`](../crates/hex_map/CLAUDE.md) |
 | Building V3 recipes or composing biome patches | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
+| Changing authored interiors, exact roof metadata, or review cutaways | [systems/interiors.md](systems/interiors.md) |
 | Authoring colours, voxel styles, plants, props, or static effects | [design/visual-language.md](design/visual-language.md), then [systems/asset-workshop.md](systems/asset-workshop.md) |
 | Writing code that touches turns or movement | [systems/combat.md](systems/combat.md) |
 | Changing enemy decision policy or AI diagnostics | [systems/ai.md](systems/ai.md) |
@@ -38,6 +40,7 @@ doc or the code, not drift.
 | Writing code that casts a spell or reshapes terrain | [systems/casting.md](systems/casting.md) |
 | Working on saved characters, Sandbox, deployment, or deterministic test support | [systems/creator-and-sandbox.md](systems/creator-and-sandbox.md) |
 | Wondering who owns a fact that crosses the boundary | [contracts.md](contracts.md) |
+| Changing gameplay illumination, light domains, or authored light sources | [systems/lighting.md](systems/lighting.md), then [systems/perception.md](systems/perception.md) |
 | Writing code that reveals terrain or units | [systems/perception.md](systems/perception.md) |
 | Changing Map/Third Person/First Person camera behavior or obstruction presentation | [systems/camera.md](systems/camera.md) |
 | Looking at a wrong window | [development/troubleshooting.md](development/troubleshooting.md) |
@@ -54,14 +57,16 @@ doc or the code, not drift.
 | [systems/ui.md](systems/ui.md) | UI contributors and reviewers | Typed view/intent boundary, responsive presentation, semantic scaling, focus, and verification contracts | Shared presentation |
 | [systems/map.md](systems/map.md) | Anyone touching terrain | The voxel model: columns, runs, surfaces, headroom, and the rules everything else depends on | World owner |
 | [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | World owner |
+| [systems/interiors.md](systems/interiors.md) | Anyone authoring interiors or review cutaways | Exact floor, entrance, and roof ownership; light-domain membership; and review-only roof/feature reconciliation | World owner |
 | [systems/asset-workshop.md](systems/asset-workshop.md) | Artists and tooling contributors | Voxel-style and object schemas, editing behavior, persistence, review output, and the isolated editor boundary | Both, jointly |
 | [systems/combat.md](systems/combat.md) | Anyone touching turns or movement | The turn loop as built: two tempos, what a turn costs, committing a move, what height buys | Gameplay owner |
 | [systems/ai.md](systems/ai.md) | Anyone touching enemy decisions | Authorized observations, compact legal choices, deterministic algorithm dispatch, and bounded diagnostics | Gameplay owner |
 | [systems/party.md](systems/party.md) | Anyone touching selection or formations | Stable party controls, Group/Solo mode, preset editing, and Campaign-slot party lifetime | Gameplay owner |
 | [systems/casting.md](systems/casting.md) | Anyone touching spells or terrain magic | What makes a cast legal, the volume it affects, who decides what the material does, and persistent effects | Gameplay owner |
 | [systems/creator-and-sandbox.md](systems/creator-and-sandbox.md) | Anyone touching creators or temporary encounters | Saved blueprints, readiness, Sandbox setup/deployment, frozen snapshots, test-support boundary, and typed return routing | Gameplay owner |
+| [systems/lighting.md](systems/lighting.md) | Anyone changing gameplay illumination or authored light sources | Illumination tiers, exact light domains and upper-dome ranges, and separation from physical-light presentation | World owner |
 | [systems/perception.md](systems/perception.md) | Anyone touching sight, fog, AI, or hidden information | Illumination, faction sight, remembered terrain, presentation, and the boundary between them | World owner (gameplay adapters: gameplay owner) |
-| [systems/camera.md](systems/camera.md) | Anyone touching gameplay cameras or obstruction presentation | Three-view cycle and exact Map restoration, tactical First Person, player-owned full-range look, third-person radius-only prism collision, composable model hiding, separate whole-tree fading, and review-only cave cutaways | World owner (`hex_objects` material adapter: shared presentation) |
+| [systems/camera.md](systems/camera.md) | Anyone touching gameplay cameras or obstruction presentation | Three-view cycle and exact Map restoration, tactical First Person, player-owned full-range look, third-person radius-only prism collision, composable model hiding, separate whole-tree fading, and review-only authored-interior cutaways | World owner (`hex_objects` material adapter: shared presentation) |
 | [systems/sky.md](systems/sky.md) | Anyone touching presentation | How the sky is drawn, and the four choices in the shader that are not obvious | World owner |
 | [design/game.md](design/game.md) | Everyone | The game this is heading toward: lattices, elements, spells, damage, and the questions deliberately left open | The designer; open questions close only on purpose |
 | [design/visual-language.md](design/visual-language.md) | Artists, designers, rendering contributors | The canonical art palette, how it grows, and the boundary between colour, material, lighting, and UI | The designer; tooling is shared |
@@ -74,6 +79,7 @@ doc or the code, not drift.
 | [development/lan-multiplayer-testing.md](development/lan-multiplayer-testing.md) | Same-network testers and multiplayer reviewers | Zero-configuration mDNS/DNS-SD discovery procedure and LAN acceptance route | Shared integration/testing |
 | [development/remote-multiplayer-testing.md](development/remote-multiplayer-testing.md) | Remote testers and multiplayer reviewers | Temporary Tailscale procedure for exercising the real Direct transport without public addressing or router configuration | Shared integration/testing |
 | [development/map-testing.md](development/map-testing.md) | Map contributors and reviewers | Unit/generation/publication partitions, owner fixtures, corpus budgets, scope selection, and stress/visual boundaries | World owner |
+| [development/grand-v3-visual-experiments.md](development/grand-v3-visual-experiments.md) | Map and art reviewers | Deterministic isolated one-factor Grand V3 visual experiment packs and their evidence boundary | World owner / shared presentation |
 | [development/wave-7-tempo-decision.md](development/wave-7-tempo-decision.md) | Gameplay contributors and reviewers | Bounded evidence and rationale for retaining the shipped movement/action tempo during Wave 7 | Gameplay owner |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |

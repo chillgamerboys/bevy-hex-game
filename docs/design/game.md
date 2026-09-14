@@ -399,8 +399,8 @@ properties and elevations:
 
 ### Crystal Ascent landmark
 
-Crystal Ascent is a vertical transition biome intended to become one landmark inside
-a larger authored world. A monumental aperture enters at the bottom into an open,
+Crystal Ascent is a vertical transition biome that also serves as the central landmark
+inside Crystal Mountain. A monumental aperture enters at the bottom into an open,
 dark chamber dominated by one large cyan crystal. The playable route does not cross
 the central void: it coils upward in three broad circuits along the enclosing walls,
 contracts inward like a Gothic cathedral, and emerges through an oculus into a wooded
@@ -425,6 +425,48 @@ characters cannot enter it and sight cannot pass through its interior. Small cry
 are presentation and illumination fixtures rather than blockers. Map, Third Person,
 and First Person remain ordinary camera choices; no automatic gameplay cutaway is
 introduced for the tower.
+
+### Arid biomes
+
+The Arid family treats desert as several tactical spaces rather than one palette
+swap. **Desert Transition** crosses connected grass, sparse dirt ecotone, and sand so
+a larger authored world can make climate change legible. **Desert Plain** keeps long
+sightlines over modest weathered relief. **Dunes** replaces that openness with broad,
+parallel ridges and sheltered troughs while preserving ordinary one-level traversal
+from floor to crest.
+
+**Desert Oasis Rings** is the large desert composition: a green, palm-lined oasis
+sits inside one ring of lower dunes and a second alternating ring of taller dunes and
+open sand. Its pool is local still water, not the source or outlet of a cross-biome
+river. The dry composite therefore reads as a destination surrounded by successive
+belts of cover and high ground without inventing a desert watershed.
+
+Date palms use exact authored visual volumes and one blocking root each. Their count
+is stable while seed variation changes placement and rotation; reserved routes and
+the oasis shoreline remain clear. Sand and dunes do not shift during play, the water
+does not simulate redistribution, and no heat, thirst, concealment, or sandstorm rule
+is implied by these biomes.
+
+### Coastal island biomes
+
+The Coastal island family separates three useful scales. **Sandy Islets** is a small
+continuous sea containing five low, disconnected sand islands; one primary island
+supports the ordinary actor route while the others establish distance and silhouette.
+**Wooded Island** is one broad connected landmass whose two-column sand fringe gives
+way to rolling grass, soil, and existing broadleaf trees. Both remain focused maps
+rather than miniature composites.
+
+**Ocean Archipelagoes** is the large composition: open sea surrounds three pairs of
+sandy satellite islands, one sandy landing, and a six-cell wooded heart. The landing
+and heart share the map's sole ordinary dry inter-biome crossing. The six remote dry
+components are intentionally scenic and unreachable by ordinary movement. They may
+be seen from Map and character cameras, but this content does not imply swimming,
+boats, teleportation, or a new water-traversal rule.
+
+Island seed variation changes bounded relief, shoreline detail, and eligible tree
+placement without changing the number or connectivity of land components. Water is
+one still ocean at level 8; beaches reuse sand, wooded interiors reuse grass and soil,
+and vegetation reuses the broadleaf object family.
 
 ### Magic shapes the world; the world decides how
 

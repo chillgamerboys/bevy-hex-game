@@ -1,11 +1,14 @@
-//! Frozen before spectator targeting, from accepted Duel runtime at 27338de.
+//! Historical spawn contracts and deterministic current-rule Duel replay.
 //!
-//! Reuses the existing stationary, sprinting, and covered-charge unit fixtures.
-//! Terrain is their fixed published view: emitted world requests are counted but
-//! no replacement map HP/damage consumer is invented here. Real-world settlement
-//! remains the responsibility of the existing application integration tests.
-//! Integers quantize physical values to 0.001 units and seconds to milliseconds.
-//! There is deliberately no environment flag to regenerate expected results.
+//! The retained 27338de artifact predates gravity-aware human aim and removal of
+//! Area Blast. Its later combat snapshots are historical evidence, not current
+//! expected behavior. Keep exact initial body/spawn contracts, compare complete
+//! current runs for determinism, and assert each scenario's observable behavior.
+//! Do not regenerate old snapshots to silently bless unrelated combat changes.
+//!
+//! Terrain is a fixed published view: requests are counted but not settled here.
+//! Real world mutation remains covered by application integration tests. Integers
+//! quantize physical values to 0.001 units and time to milliseconds.
 
 use super::*;
 use serde::{Deserialize, Serialize};
@@ -261,28 +264,180 @@ fn run(scenario: Scenario) -> FrozenRun {
     }
 }
 
+fn snapshot(run: &FrozenRun, step: u64) -> &Snapshot {
+    run.snapshots
+        .iter()
+        .find(|state| state.input_step == step)
+        .expect("recorded step")
+}
+
+fn actor(state: &Snapshot, id: u8) -> &FrozenActor {
+    state
+        .actors
+        .iter()
+        .find(|actor| actor.id == id)
+        .expect("duel actor")
+}
+
 fn verify(scenario: Scenario) {
     let expected: Vec<FrozenRun> =
-        ron::from_str(include_str!("duel_goldens.ron")).expect("frozen Duel fixtures parse");
-    let accepted = expected
+        ron::from_str(include_str!("duel_goldens.ron")).expect("historical Duel fixtures parse");
+    let historical = expected
         .into_iter()
-        .find(|expected| expected.name == scenario.name())
-        .expect("one frozen run per scenario");
+        .find(|run| run.name == scenario.name())
+        .expect("historical scenario");
     let actual = run(scenario);
-    assert_eq!(actual, accepted, "accepted Duel behavior changed");
+    assert_eq!(
+        actual,
+        run(scenario),
+        "identical seeded input must replay exactly"
+    );
+    assert_eq!(actual.initial_seed, historical.initial_seed);
+    let initial = snapshot(&actual, 1);
+    let old_initial = snapshot(&historical, 1);
+    assert_eq!(initial.tick, old_initial.tick);
+    assert_eq!(initial.actors.len(), old_initial.actors.len());
+    for body in &initial.actors {
+        let old_body = actor(old_initial, body.id);
+        assert_eq!(
+            body.previous_feet_milli, old_body.previous_feet_milli,
+            "accepted spawn"
+        );
+        assert_eq!(
+            body.dimensions_milli, old_body.dimensions_milli,
+            "accepted body dimensions"
+        );
+        assert_eq!(body.hp_milli, old_body.hp_milli, "accepted initial HP");
+    }
+    for state in &actual.snapshots {
+        assert_eq!(state.actors.len(), 2);
+        for body in &state.actors {
+            assert!((0..=100_000).contains(&body.hp_milli));
+            assert_ne!(body.selected, "Area Blast");
+            assert!(body
+                .charge
+                .as_ref()
+                .is_none_or(
+                    |(spell, elapsed)| (spell == "Shield" || spell == "Fireball")
+                        && (0..=750).contains(elapsed)
+                ));
+        }
+        for shot in &state.shots {
+            assert!(shot.spell == "Shield" || shot.spell == "Fireball");
+        }
+        for stats in &state.stats {
+            assert!(stats.self_damage_milli <= stats.damage_received_milli);
+            assert!(stats.useful_fireballs <= stats.resolved_fireballs);
+            assert_eq!(
+                stats.casts.get(2).copied(),
+                Some(0),
+                "escape-off replay has no High Jump inputs"
+            );
+        }
+    }
+    for pair in actual.snapshots.windows(2) {
+        let [earlier, later] = pair else {
+            continue;
+        };
+        assert!(later.tick >= earlier.tick);
+        for previous in &earlier.actors {
+            assert!(
+                actor(later, previous.id).hp_milli <= previous.hp_milli,
+                "Duel has no regeneration"
+            );
+        }
+        for (before, after) in earlier.stats.iter().zip(&later.stats) {
+            assert!(after.damage_dealt_milli >= before.damage_dealt_milli);
+            assert!(after.resolved_fireballs >= before.resolved_fireballs);
+            assert!(before
+                .casts
+                .iter()
+                .zip(after.casts)
+                .all(|(before, after)| after >= *before));
+        }
+    }
+    match scenario {
+        Scenario::Stationary => {
+            let final_state = snapshot(&actual, 1800);
+            assert!(
+                actor(final_state, 0).hp_milli < 100_000,
+                "stationary human must face effective attacks"
+            );
+            assert!(
+                final_state.terrain_impacts > 0,
+                "ordinary Fireballs still announce terrain damage"
+            );
+            assert!(final_state
+                .stats
+                .get(1)
+                .is_some_and(|stats| stats.resolved_fireballs > 0 && stats.useful_fireballs > 0));
+        }
+        Scenario::Sprinting => {
+            let early = snapshot(&actual, 13);
+            assert_ne!(
+                actor(initial, 0).feet_milli,
+                actor(early, 0).feet_milli,
+                "held sprint moves human"
+            );
+            assert!(
+                early.shots.is_empty(),
+                "initial cooldown forbids early attacks"
+            );
+            assert!(early
+                .stats
+                .iter()
+                .all(|stats| stats.casts.iter().all(|count| *count == 0)));
+            assert!(
+                snapshot(&actual, 1800)
+                    .stats
+                    .get(1)
+                    .is_some_and(|stats| stats.resolved_fireballs > 0),
+                "cooldown admission resumes attacks"
+            );
+        }
+        Scenario::Covered => {
+            let covered = snapshot(&actual, 90);
+            assert!(
+                actor(covered, 1)
+                    .charge
+                    .as_ref()
+                    .is_some_and(|(spell, elapsed)| spell == "Fireball" && *elapsed >= 500),
+                "bot precharges while sight is blocked"
+            );
+            assert!(
+                covered
+                    .stats
+                    .iter()
+                    .all(|stats| stats.casts.iter().all(|count| *count == 0)),
+                "blind-fire-off prevents releases behind cover"
+            );
+            assert_eq!(actor(covered, 0).hp_milli, 100_000);
+            assert!(
+                covered.memory_age_ms.is_some_and(|age| age > 0),
+                "remembered contact ages behind cover"
+            );
+            assert!(
+                snapshot(&actual, 240)
+                    .stats
+                    .get(1)
+                    .is_some_and(|stats| stats.casts.get(1).is_some_and(|count| *count > 0)),
+                "reopening the lane admits prepared Fireball"
+            );
+        }
+    }
 }
 
 #[test]
-fn accepted_duel_stationary_default_seed_matches_frozen_runtime() {
+fn accepted_duel_stationary_spawn_and_current_combat_replay() {
     verify(Scenario::Stationary);
 }
 
 #[test]
-fn accepted_duel_sprinting_target_matches_frozen_runtime() {
+fn accepted_duel_sprinting_spawn_and_current_combat_replay() {
     verify(Scenario::Sprinting);
 }
 
 #[test]
-fn accepted_duel_covered_charge_matches_frozen_runtime() {
+fn accepted_duel_covered_spawn_and_current_combat_replay() {
     verify(Scenario::Covered);
 }

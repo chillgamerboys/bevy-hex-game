@@ -33,6 +33,28 @@ fn tick(app: &mut App) {
     app.world_mut().run_schedule(ArenaTick);
 }
 
+// Leave a real Fireball impact pending, before world publication, for scheduling tests.
+fn queue_ground_fireball(app: &mut App) {
+    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+        aim: Vec3::NEG_Y,
+        selected: Some(Spell::Fireball),
+        cast_pressed: true,
+        cast_released: true,
+        ..default()
+    };
+    for _ in 0..60 {
+        tick(app);
+        if !app
+            .world()
+            .resource::<Messages<hex_core::TerrainImpact>>()
+            .is_empty()
+        {
+            return;
+        }
+    }
+    panic!("downward Fireball did not announce a terrain impact");
+}
+
 #[test]
 fn third_person_body_hiding_matches_the_actual_camera_beside_a_wall() {
     use bevy::ecs::system::RunSystemOnce;
@@ -159,6 +181,7 @@ fn menu_app_at(frame_hz: u32) -> (App, Entity) {
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
+        .add_message::<MouseButtonInput>()
         .add_message::<MouseWheel>()
         .add_message::<AppExit>()
         .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
@@ -186,6 +209,13 @@ fn tap_key(app: &mut App, key: KeyCode) {
         .press(key);
     app.update();
     *app.world_mut().resource_mut::<ButtonInput<KeyCode>>() = ButtonInput::default();
+}
+
+fn tap_restart(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    tap_key(app, KeyCode::KeyR);
 }
 
 fn press_action(app: &mut App, action: hud::Action) {
@@ -412,7 +442,7 @@ fn keyboard_and_menu_reset_restore_the_round_and_return_to_frozen_ready_screen()
         }
         let generation = app.world().resource::<ArenaReset>().generation;
         if keyboard {
-            tap_key(&mut app, KeyCode::KeyR);
+            tap_restart(&mut app);
         } else {
             tap_key(&mut app, KeyCode::Tab);
             press_action(&mut app, hud::Action::Restart);
@@ -549,15 +579,13 @@ fn enabled_bot_damages_a_player_from_normal_arena_spawns() {
 #[test]
 fn paused_last_tick_cast_survives_message_expiry_then_refreshes_before_movement() {
     let mut app = app(60);
+    // Isolate loss of terrain support from the Fireball's self-knockback.
+    app.world_mut()
+        .resource_mut::<ArenaTuning>()
+        .fireball_knockback = 0.0;
     let original = app.world().resource::<ArenaTerrainView>().clone();
     let initial_feet = original.spawns.first().copied().unwrap_or_default();
-    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-        selected: Some(Spell::AreaBlast),
-        cast_pressed: true,
-        cast_released: true,
-        ..default()
-    };
-    tick(&mut app);
+    queue_ground_fireball(&mut app);
     assert_eq!(
         app.world().resource::<ArenaTerrainView>().voxels,
         original.voxels
@@ -575,7 +603,7 @@ fn paused_last_tick_cast_survives_message_expiry_then_refreshes_before_movement(
     assert!(session
         .actors
         .first()
-        .is_some_and(|a| a.feet.y < initial_feet.y && a.hp > 99.9));
+        .is_some_and(|a| a.feet.y < initial_feet.y && a.hp > 0.0));
     assert!(app.world().resource::<ArenaTerrainView>().voxels.len() < original.voxels.len());
     app.update();
     assert_eq!(app.world().resource::<ArenaSession>().terrain_outcomes, 1);
@@ -647,6 +675,10 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
     let mut positions = Vec::new();
     for hz in [30, 60, 144] {
         let mut app = app(hz);
+        // Exclude bootstrap's partial render interval. Distribute nanosecond
+        // rounding so every cadence supplies exactly one measured second.
+        app.world_mut().resource_mut::<ViewState>().accumulator = 0.0;
+        let initial_tick = app.world().resource::<ArenaSession>().tick;
         app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
             movement: Vec2::Y,
             aim: Vec3::X,
@@ -655,10 +687,26 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
             cast_released: true,
             ..default()
         };
-        for _ in 0..hz {
+        for frame in 0..u64::from(hz) {
+            let nanos =
+                (frame + 1) * 1_000_000_000 / u64::from(hz) - frame * 1_000_000_000 / u64::from(hz);
+            app.world_mut()
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::from_nanos(nanos),
+                ));
             app.update();
         }
         let session = app.world().resource::<ArenaSession>();
+        assert_eq!(session.tick - initial_tick, 120, "{hz} Hz");
+        assert_eq!(
+            session
+                .round_summary()
+                .actors
+                .first()
+                .and_then(|actor| actor.casts.get(1))
+                .copied(),
+            Some(1),
+        );
         positions.push(session.actors.first().map_or(Vec3::ZERO, |a| a.feet));
         assert!(session
             .actors
@@ -668,7 +716,10 @@ fn render_rates_preserve_one_second_walk_and_queued_click_is_consumed_once() {
     }
     for pair in positions.windows(2) {
         if let [a, b] = pair {
-            assert!(a.distance(*b) < 0.06);
+            assert!(
+                a.distance(*b) < 0.001,
+                "equal simulation durations: {a:?} vs {b:?}"
+            );
         }
     }
 }
@@ -679,6 +730,7 @@ fn focus_loss_clears_edges_and_resume_click_cannot_cast() {
     app.init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
         .add_message::<CursorMoved>()
+        .add_message::<MouseButtonInput>()
         .add_message::<MouseWheel>()
         .add_systems(PreUpdate, (input, sync_cursor).chain());
     let window = app
@@ -747,29 +799,20 @@ fn every_paused_tuning_control_remains_valid_and_sizes_are_independent() {
     }
     tuning = ArenaTuning::default();
     hud::change(&mut tuning, 0, 1.0);
-    assert_eq!(
-        (tuning.shield_size, tuning.fireball_size, tuning.blast_size),
-        (2, 1, 1)
-    );
+    assert_eq!((tuning.shield_size, tuning.fireball_size), (2, 1));
 }
 
 #[test]
-fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
+fn repeated_large_fireballs_measure_mutation_and_collision_refresh_cost() {
     let mut app = app(60);
-    app.world_mut().resource_mut::<ArenaTuning>().blast_size = 2;
+    app.world_mut().resource_mut::<ArenaTuning>().fireball_size = 2;
     let mut costs = Vec::new();
     let mut destruction = Vec::new();
     for frame in 0..360 {
         if frame % 30 == 0 {
             app.world_mut().resource_mut::<ArenaReset>().generation += 1;
             tick(&mut app);
-            app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-                selected: Some(Spell::AreaBlast),
-                cast_pressed: true,
-                cast_released: true,
-                ..default()
-            };
-            tick(&mut app);
+            queue_ground_fireball(&mut app);
         }
         let before = app.world().resource::<ArenaTerrainView>().voxels.len();
         let start = std::time::Instant::now();
@@ -790,7 +833,7 @@ fn repeated_large_blasts_measure_mutation_and_collision_refresh_cost() {
             "cpu_frame_median_ms":costs.get(costs.len()/2),
             "cpu_frame_p95_ms":costs.get(costs.len()*95/100),
             "cpu_frame_max_ms":costs.last(), "destruction_max_ms":destruction.last(),
-            "method":"headless CPU app update, 120Hz simulation, large blasts, no GPU"
+            "method":"headless CPU app update, 120Hz simulation, large Fireballs, no GPU"
         })
     );
 }
@@ -926,8 +969,8 @@ fn release_frame_aim_survives_camera_motion_before_the_next_fixed_tick() {
 }
 
 #[test]
-fn selection_and_pause_discard_queued_release_aim_before_a_fixed_tick() {
-    for key in [KeyCode::Digit1, KeyCode::Escape] {
+fn pause_keys_discard_queued_release_aim_before_a_fixed_tick() {
+    for key in [KeyCode::Tab, KeyCode::Escape] {
         let (mut app, _) = menu_app_at(480);
         app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
         {
@@ -952,9 +995,7 @@ fn selection_and_pause_discard_queued_release_aim_before_a_fixed_tick() {
         tap_key(&mut app, key);
         let input = &app.world().resource::<ArenaInput>().human;
         assert!(!input.cast_pressed && !input.cast_released);
-        if key == KeyCode::Escape {
-            tap_key(&mut app, KeyCode::Escape);
-        }
+        tap_key(&mut app, key);
         assert!(
             app.world()
                 .resource::<ArenaInput>()
@@ -1027,14 +1068,15 @@ fn held_charge_progress_uses_physics_time_at_all_render_rates() {
 }
 
 #[test]
-fn fresh_press_can_arm_a_spell_selected_in_the_same_render_frame() {
+fn fresh_right_press_arms_shield_without_a_selection_key() {
     let (mut app, _) = menu_app();
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
     tap_key(&mut app, KeyCode::Enter);
     app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::Digit1);
-    charge_with_mouse(&mut app);
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Right);
+    app.update();
+    clear_mouse_edges(&mut app);
     let charge = app
         .world()
         .resource::<ArenaSession>()
@@ -1051,8 +1093,8 @@ fn fresh_press_can_arm_a_spell_selected_in_the_same_render_frame() {
 }
 
 #[test]
-fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
-    for cancellation in ["escape", "tab", "focus", "reset", "selection", "knockout"] {
+fn active_holds_cancel_for_pause_focus_reset_and_knockout() {
+    for cancellation in ["escape", "tab", "focus", "reset", "knockout"] {
         let (mut app, window) = menu_app();
         app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
         tap_key(&mut app, KeyCode::Enter);
@@ -1060,8 +1102,7 @@ fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
         match cancellation {
             "escape" => tap_key(&mut app, KeyCode::Escape),
             "tab" => tap_key(&mut app, KeyCode::Tab),
-            "reset" => tap_key(&mut app, KeyCode::KeyR),
-            "selection" => tap_key(&mut app, KeyCode::Digit1),
+            "reset" => tap_restart(&mut app),
             "focus" => {
                 app.world_mut()
                     .get_mut::<Window>(window)
@@ -1107,16 +1148,6 @@ fn active_holds_cancel_for_pause_focus_reset_selection_and_knockout() {
                 .is_empty(),
             "release after {cancellation} must stay cancelled"
         );
-        if cancellation == "selection" {
-            charge_with_mouse(&mut app);
-            assert!(app
-                .world()
-                .resource::<ArenaSession>()
-                .actors
-                .first()
-                .and_then(|actor| actor.charge())
-                .is_some_and(|charge| charge.spell == Spell::Shield));
-        }
     }
 }
 
@@ -1268,7 +1299,6 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
         ("shield-charge-full-third", Spell::Shield, 1.0),
         ("fireball-charge-partial-third", Spell::Fireball, 0.52),
         ("fireball-charge-full-first", Spell::Fireball, 1.0),
-        ("blast-armed-first", Spell::AreaBlast, 0.87),
     ] {
         let mut app = app(60);
         for frame in 1..=capture_frame_index(view) {
@@ -1295,7 +1325,7 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
             .and_then(|actor| actor.charge())
             .expect("capture must retain an authoritative charge");
         assert_eq!(charge.spell, spell);
-        if spell != Spell::AreaBlast {
+        {
             assert!(
                 (charge.elapsed / app.world().resource::<ArenaTuning>().charge_seconds
                     - expected_progress)
@@ -1306,6 +1336,76 @@ fn capture_charge_scenarios_are_driven_by_authoritative_input() {
             );
         }
         assert!(session.projectiles.is_empty());
+    }
+}
+
+#[test]
+fn capture_charge_waits_for_authority_and_survives_delayed_render_readiness() {
+    for (view, charge_seconds) in [
+        ("fireball-charge-partial-first", 0.75),
+        ("fireball-charge-full-third", 1.5),
+        ("shield-charge-partial-third", 1.5),
+        ("shield-charge-full-first", 0.75),
+    ] {
+        let mut app = app(60);
+        app.world_mut().resource_mut::<ArenaTuning>().charge_seconds = charge_seconds;
+        {
+            let mut state = app.world_mut().resource_mut::<ViewState>();
+            state.capture = Some(PathBuf::from("unused-charge-capture.png"));
+            state.capture_view = view.into();
+            state.frames = 0;
+        }
+        let mut frozen = None;
+        // No renderer is installed: simulate assets becoming ready much later
+        // than the nominal capture frame, using the real capture/tick driver.
+        for _ in 0..180 {
+            app.update();
+            if app
+                .world()
+                .resource::<ViewState>()
+                .capture_event_frame
+                .is_some()
+            {
+                let session = app.world().resource::<ArenaSession>();
+                let charge = session
+                    .actors
+                    .first()
+                    .and_then(|actor| actor.charge())
+                    .expect("held charge");
+                let actual = (session.tick, charge.elapsed.to_bits());
+                assert_eq!(actual, *frozen.get_or_insert(actual), "{view}");
+            }
+        }
+        assert!(frozen.is_some(), "{view}: charge phase never reached");
+        let session = app.world().resource::<ArenaSession>();
+        let tuning = app.world().resource::<ArenaTuning>();
+        assert!(capture_charge_ready(session, tuning, view));
+        assert_eq!(tuning.charge_seconds.to_bits(), charge_seconds.to_bits());
+        let charge = session
+            .actors
+            .first()
+            .and_then(|actor| actor.charge())
+            .expect("held charge");
+        let (spell, target) = capture_charge_target(view).expect("charge fixture");
+        assert_eq!(charge.spell, spell);
+        assert!(
+            (charge.elapsed / charge_seconds - target).abs() < 0.02,
+            "{view}: {charge:?}"
+        );
+        assert!(session.projectiles.is_empty());
+        let state = app.world().resource::<ViewState>();
+        assert_eq!(
+            state
+                .capture_inputs
+                .iter()
+                .filter(|(_, intent)| intent.cast_pressed)
+                .count(),
+            1
+        );
+        assert!(state
+            .capture_inputs
+            .iter()
+            .all(|(_, intent)| !intent.cast_released));
     }
 }
 
@@ -1349,417 +1449,22 @@ fn partial_preview_capture_clips_cells_through_world_authority() {
     );
 }
 
-#[cfg(feature = "test-support")]
-#[test]
-fn charge_bar_and_release_guidance_fit_below_crosshair_and_hide_when_cancelled() {
-    use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
-
-    for (width, height) in [(1600, 900), (1280, 720)] {
-        for (spell, ticks) in [
-            (Spell::Shield, 60),
-            (Spell::Fireball, 120),
-            (Spell::AreaBlast, 60),
-        ] {
-            let mut fixture = app(120);
-            fixture.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-                selected: Some(spell),
-                cast_pressed: true,
-                cast_held: true,
-                ..default()
-            };
-            for _ in 0..ticks {
-                tick(&mut fixture);
-            }
-            let session = fixture
-                .world_mut()
-                .remove_resource::<ArenaSession>()
-                .expect("charged authority fixture");
-            let charge = session
-                .actors
-                .first()
-                .and_then(|actor| actor.charge())
-                .expect("armed spell");
-            let mut ui = App::new();
-            ui.add_plugins(HeadlessUiPlugin::new(width, height))
-                .insert_resource(ViewState {
-                    started: true,
-                    paused: false,
-                    capture: None,
-                    ..default()
-                })
-                .insert_resource(session)
-                .init_resource::<ArenaTuning>()
-                .add_systems(Startup, hud::setup)
-                .add_systems(Update, hud::update);
-            for _ in 0..8 {
-                ui.update();
-            }
-            let snapshot = ui_tree_snapshot(ui.world_mut());
-            let nodes = snapshot
-                .nodes
-                .iter()
-                .filter(|node| node.name.starts_with("Charge "))
-                .collect::<Vec<_>>();
-            assert_eq!(nodes.len(), if spell == Spell::AreaBlast { 2 } else { 4 });
-            let panel = nodes
-                .iter()
-                .find(|node| node.name == "Charge panel")
-                .expect("visible charge panel");
-            assert!((panel.center.x - snapshot.metrics.logical_size.x * 0.5).abs() < 1.0);
-            for node in &nodes {
-                let bounds = Rect::from_center_size(node.center, node.size);
-                assert!(
-                    node.fully_visible
-                        && bounds.min.y > snapshot.metrics.logical_size.y * 0.5
-                        && bounds.max.cmple(snapshot.metrics.logical_size).all(),
-                    "{width}x{height}: {node:?}"
-                );
-            }
-            let label = nodes
-                .iter()
-                .find(|node| node.name == "Charge guidance")
-                .expect("release guidance");
-            let glyphs = label
-                .rendered_text_bounds
-                .expect("release guidance has real glyphs");
-            let panel_bounds = Rect::from_center_size(panel.center, panel.size);
-            assert!(
-                glyphs.min.cmpge(panel_bounds.min).all()
-                    && glyphs.max.cmple(panel_bounds.max + Vec2::splat(1.0)).all()
-            );
-            let text = ui
-                .world_mut()
-                .query::<(&hud::Label, &Text)>()
-                .iter(ui.world())
-                .find_map(|(label, text)| {
-                    matches!(label, hud::Label::Charge).then_some(text.0.clone())
-                })
-                .expect("charge label");
-            assert!(text.contains("Release to cast"));
-            if spell == Spell::AreaBlast {
-                assert!(!text.contains('%'));
-            } else {
-                let track = nodes
-                    .iter()
-                    .find(|node| node.name == "Charge track")
-                    .expect("charge track");
-                let fill = nodes
-                    .iter()
-                    .find(|node| node.name == "Charge fill")
-                    .expect("charge fill");
-                let progress = charge.elapsed / ui.world().resource::<ArenaTuning>().charge_seconds;
-                assert!((fill.size.x / track.size.x - progress).abs() < 0.01);
-            }
-            ui.world_mut().resource_mut::<ViewState>().pause();
-            for _ in 0..2 {
-                ui.update();
-            }
-            assert!(ui_tree_snapshot(ui.world_mut())
-                .nodes
-                .iter()
-                .all(|node| !node.name.starts_with("Charge ")));
-            ui.world_mut()
-                .resource_mut::<ArenaSession>()
-                .cancel_charges();
-            ui.world_mut().resource_mut::<ViewState>().begin_play();
-            for _ in 0..2 {
-                ui.update();
-            }
-            assert!(ui_tree_snapshot(ui.world_mut())
-                .nodes
-                .iter()
-                .all(|node| !node.name.starts_with("Charge ")));
-        }
-    }
-}
-
-#[cfg(feature = "test-support")]
-#[test]
-fn start_and_pause_controls_fit_computed_layout_at_supported_window_sizes() {
-    use hex_ui::test_support::{ui_tree_snapshot, HeadlessUiPlugin};
-
-    for (width, height, control) in [
-        (1600, 900, hex_arena::ArenaControl::Player),
-        (1280, 720, hex_arena::ArenaControl::Player),
-        (1600, 900, hex_arena::ArenaControl::Spectator),
-        (1280, 720, hex_arena::ArenaControl::Spectator),
-    ] {
-        let mut app = App::new();
-        app.add_plugins(HeadlessUiPlugin::new(width, height))
-            .insert_resource(ViewState {
-                started: false,
-                paused: true,
-                capture: None,
-                ..default()
-            })
-            .insert_resource(hex_arena::ArenaBattleSetup {
-                control,
-                rosters: vec![
-                    hex_arena::TeamRoster::from_preset(1, hex_arena::BattlePreset::ShamanParty),
-                    hex_arena::TeamRoster::from_preset(2, hex_arena::BattlePreset::Wisps12),
-                ],
-                ..default()
-            })
-            .init_resource::<ArenaSession>()
-            .init_resource::<ArenaTuning>()
-            .add_systems(Startup, hud::setup)
-            .add_systems(Update, hud::update);
-        for _ in 0..8 {
-            app.update();
-        }
-
-        // Every interactive action belongs to an overlay; live play has no Menu button.
-        let overlay = |world: &World, mut entity: Entity| loop {
-            if world.get::<hud::StartPanel>(entity).is_some() {
-                break "start";
-            }
-            if world.get::<hud::PausePanel>(entity).is_some() {
-                break "pause";
-            }
-            entity = world
-                .get::<ChildOf>(entity)
-                .expect("arena actions must belong to start or pause panels")
-                .parent();
-        };
-        let parameters = app
-            .world_mut()
-            .query::<(Entity, &hud::Label, &ChildOf)>()
-            .iter(app.world())
-            .filter_map(|(entity, label, parent)| match label {
-                hud::Label::Parameter(index) => Some((entity, *index, parent.parent())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(parameters.len(), 12);
-        for (entity, index, row) in parameters {
-            assert_eq!(overlay(app.world(), entity), "pause");
-            app.world_mut()
-                .entity_mut(entity)
-                .insert(Name::new(format!("Arena pause parameter {index}")));
-            app.world_mut()
-                .entity_mut(row)
-                .insert(Name::new(format!("Arena pause row {index}")));
-        }
-        let team_labels = app
-            .world_mut()
-            .query::<(Entity, &hud::Label)>()
-            .iter(app.world())
-            .filter_map(|(entity, label)| match label {
-                hud::Label::Team(slot) => Some((entity, *slot)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        for (entity, slot) in team_labels {
-            app.world_mut()
-                .entity_mut(entity)
-                .insert(Name::new(format!("Arena start team {slot}")));
-        }
-        let actions = app
-            .world_mut()
-            .query::<(Entity, &hud::Action, &Children)>()
-            .iter(app.world())
-            .map(|(entity, action, children)| {
-                let phase = overlay(app.world(), entity);
-                let label = match action {
-                    hud::Action::Start => "start".into(),
-                    hud::Action::Resume => "resume".into(),
-                    hud::Action::Restart => "restart".into(),
-                    hud::Action::Fullscreen => "fullscreen".into(),
-                    hud::Action::Quit => "quit".into(),
-                    hud::Action::Change(index, amount) => format!("change {index} {amount}"),
-                    hud::Action::Control(control) => format!("control {control:?}"),
-                    hud::Action::Roster(slot, step) => format!("roster {slot} {step}"),
-                    hud::Action::Map(map) => format!("map {map:?}"),
-                    hud::Action::Encounter(encounter) => format!("encounter {encounter:?}"),
-                    hud::Action::PlayerRecipe(recipe) => format!("player recipe {recipe:?}"),
-                };
-                if phase == "start" {
-                    assert!(!matches!(
-                        action,
-                        hud::Action::Resume | hud::Action::Restart | hud::Action::Change(..)
-                    ));
-                } else {
-                    assert!(!matches!(action, hud::Action::Start));
-                }
-                (entity, phase, label, children.iter().collect::<Vec<_>>())
-            })
-            .collect::<Vec<_>>();
-        let start_actions = actions
-            .iter()
-            .filter(|(_, phase, _, _)| *phase == "start")
-            .count();
-        let pause_actions = actions
-            .iter()
-            .filter(|(_, phase, _, _)| *phase == "pause")
-            .count();
-        assert_eq!(start_actions, 19); // Two modes, three maps, seven recipes, four roster arrows, three actions.
-        assert_eq!(
-            actions
-                .iter()
-                .filter(|(_, phase, label, _)| *phase == "start" && label == "start")
-                .count(),
-            1
-        );
-        assert_eq!(pause_actions, 28); // Twelve +/- pairs plus the four pause-menu actions.
-        for required in ["resume", "restart", "fullscreen", "quit"] {
-            assert_eq!(
-                actions
-                    .iter()
-                    .filter(|(_, phase, label, _)| *phase == "pause" && label == required)
-                    .count(),
-                1
-            );
-        }
-        for (entity, phase, label, children) in actions {
-            let name = format!("Arena {phase} action {label}");
-            app.world_mut()
-                .entity_mut(entity)
-                .insert(Name::new(name.clone()));
-            assert_eq!(children.len(), 1, "each button has one text label");
-            for child in children {
-                app.world_mut()
-                    .entity_mut(child)
-                    .insert(Name::new(format!("{name} glyphs")));
-            }
-        }
-
-        for (started, phase, expected) in [
-            (
-                false,
-                "start",
-                (start_actions
-                    - if control == hex_arena::ArenaControl::Spectator {
-                        7
-                    } else {
-                        4
-                    })
-                    * 2
-                    + if control == hex_arena::ArenaControl::Spectator {
-                        2
-                    } else {
-                        0
-                    },
-            ),
-            (true, "pause", 24 + pause_actions * 2),
-        ] {
-            {
-                let mut state = app.world_mut().resource_mut::<ViewState>();
-                state.started = started;
-                state.paused = true;
-            }
-            for _ in 0..8 {
-                app.update();
-            }
-            let snapshot = ui_tree_snapshot(app.world_mut());
-            let viewport = Rect::from_corners(Vec2::ZERO, snapshot.metrics.logical_size);
-            let contains = |outer: Rect, inner: Rect| {
-                let tolerance = Vec2::splat(1.0);
-                (inner.min + tolerance).cmpge(outer.min).all()
-                    && inner.max.cmple(outer.max + tolerance).all()
-            };
-            let observed = snapshot
-                .nodes
-                .iter()
-                .filter(|node| node.name.starts_with("Arena "))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                observed.len(),
-                expected,
-                "wrong visible controls for {phase}"
-            );
-            for node in &observed {
-                assert!(node.name.starts_with(&format!("Arena {phase} ")));
-                let bounds = Rect::from_center_size(node.center, node.size);
-                assert!(
-                    node.size.cmpgt(Vec2::ZERO).all()
-                        && node.fully_visible
-                        && contains(viewport, bounds),
-                    "{} must fit at {width}x{height}: {node:?}",
-                    node.name
-                );
-                if node.name.contains(" parameter ")
-                    || node.name.ends_with(" glyphs")
-                    || node.name.contains(" start team ")
-                {
-                    let glyphs = node
-                        .rendered_text_bounds
-                        .expect("real text layout must produce visible glyphs");
-                    assert!(
-                        contains(viewport, glyphs) && contains(bounds, glyphs),
-                        "{} glyphs must fit their node at {width}x{height}: {node:?}",
-                        node.name
-                    );
-                }
-            }
-            if !started && control == hex_arena::ArenaControl::Player {
-                let mut creatures = observed
-                    .iter()
-                    .filter(|node| {
-                        (node.name.starts_with("Arena start action encounter ")
-                            || node.name.starts_with("Arena start action player recipe "))
-                            && !node.name.ends_with(" glyphs")
-                    })
-                    .map(|node| Rect::from_center_size(node.center, node.size))
-                    .collect::<Vec<_>>();
-                creatures.sort_by(|left, right| {
-                    left.min
-                        .y
-                        .total_cmp(&right.min.y)
-                        .then(left.min.x.total_cmp(&right.min.x))
-                });
-                assert_eq!(creatures.len(), 7, "seven Fort creature choices");
-                for row in creatures.chunks(4) {
-                    for pair in row.windows(2) {
-                        let [left, right] = pair else { unreachable!() };
-                        assert!((left.min.y - right.min.y).abs() < 0.5);
-                        assert!(left.max.x <= right.min.x);
-                    }
-                }
-                let upper = creatures.first().expect("upper creature row");
-                let lower = creatures.last().expect("lower creature row");
-                assert!(upper.max.y < lower.min.y, "two distinct creature rows");
-            }
-            let mut rows = observed
-                .iter()
-                .filter(|node| node.name.starts_with("Arena pause row "))
-                .map(|node| Rect::from_center_size(node.center, node.size))
-                .collect::<Vec<_>>();
-            rows.sort_by(|left, right| left.min.y.total_cmp(&right.min.y));
-            for pair in rows.windows(2) {
-                let [upper, lower] = pair else { unreachable!() };
-                assert!(
-                    upper.max.y <= lower.min.y + 0.5,
-                    "parameter rows overlap at {width}x{height}: {upper:?}, {lower:?}"
-                );
-            }
-        }
-        app.world_mut().resource_mut::<ViewState>().begin_play();
-        for _ in 0..2 {
-            app.update();
-        }
-        let live = ui_tree_snapshot(app.world_mut());
-        assert!(
-            live.nodes
-                .iter()
-                .all(|node| !node.name.starts_with("Arena ")),
-            "live play must hide start/pause controls, including any Menu button"
-        );
-    }
-}
+// Responsive menu and spell-card layout regressions live in ux/tests.rs.
 
 #[path = "terrain_preservation_tests.rs"]
 mod terrain_preservation_tests;
 
 #[test]
-fn trajectory_toggle_uses_new_selection_before_its_physics_tick() {
+fn trajectory_toggle_uses_same_frame_right_gesture_before_its_physics_tick() {
     let (mut app, _) = menu_app_at(480);
     tap_key(&mut app, KeyCode::Enter);
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
-    {
-        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keys.press(KeyCode::Digit1);
-        keys.press(KeyCode::KeyT);
-    }
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Right);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyT);
     app.update();
     assert_eq!(app.world().resource::<ViewState>().previews, [false, false]);
 }
@@ -1865,7 +1570,7 @@ fn native_selection_defaults_and_invalid_capabilities_are_explicit() {
     assert_eq!(
         launch_selection(None, None).unwrap(),
         ArenaSelection {
-            map: ArenaMap::Fort,
+            map: ArenaMap::ForestMassif,
             encounter: ArenaEncounter::Dragon
         }
     );
@@ -1874,8 +1579,42 @@ fn native_selection_defaults_and_invalid_capabilities_are_explicit() {
         ArenaMap::Duel
     );
     assert!(launch_selection(Some("seven-regions"), None).is_ok());
+    assert!(launch_selection(Some("forest-massif"), None).is_ok());
+    assert!(launch_selection(Some("forest-massif"), Some("goblins")).is_err());
     assert!(launch_selection(Some("grand"), None).is_err());
     assert!(launch_selection(None, Some("unknown")).is_err());
+}
+
+#[test]
+fn pending_terrain_blocks_start_and_resume_without_blocking_the_menu() {
+    let (mut app, window) = menu_app();
+    app.insert_resource(hex_core::arena::ArenaRenderStatus { pending_chunks: 8 });
+    tap_key(&mut app, KeyCode::Enter);
+    press_action(&mut app, hud::Action::Start);
+    assert!(!app.world().resource::<ViewState>().started);
+    assert!(
+        app.world()
+            .get::<CursorOptions>(window)
+            .expect("cursor")
+            .visible
+    );
+    app.world_mut()
+        .resource_mut::<hex_core::arena::ArenaRenderStatus>()
+        .pending_chunks = 0;
+    press_action(&mut app, hud::Action::Start);
+    assert!(app.world().resource::<ViewState>().started);
+    tap_key(&mut app, KeyCode::Escape);
+    app.world_mut()
+        .resource_mut::<hex_core::arena::ArenaRenderStatus>()
+        .pending_chunks = 2;
+    press_action(&mut app, hud::Action::Resume);
+    tap_key(&mut app, KeyCode::Escape);
+    assert!(app.world().resource::<ViewState>().paused);
+    app.world_mut()
+        .resource_mut::<hex_core::arena::ArenaRenderStatus>()
+        .pending_chunks = 0;
+    press_action(&mut app, hud::Action::Resume);
+    assert!(!app.world().resource::<ViewState>().paused);
 }
 
 #[test]
@@ -2320,3 +2059,9 @@ mod duel_party_tests;
 
 #[path = "terminal_menu_tests.rs"]
 mod terminal_menu_tests;
+
+#[path = "high_jump_tests.rs"]
+mod high_jump_tests;
+
+#[path = "direct_controls_tests.rs"]
+mod direct_controls_tests;

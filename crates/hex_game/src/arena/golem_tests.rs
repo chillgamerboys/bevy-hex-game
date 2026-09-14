@@ -56,7 +56,7 @@ fn golem_menu_restart_preserves_override_and_original_selection_clears_it() {
     // Choices cannot change a running encounter.
     press_action(&mut fixture, hud::Action::Encounter(ArenaEncounter::Dragon));
     assert_eq!(*fixture.world().resource::<ArenaBattleSetup>(), accepted);
-    tap_key(&mut fixture, KeyCode::KeyR);
+    tap_restart(&mut fixture);
     assert_eq!(
         *fixture
             .world()

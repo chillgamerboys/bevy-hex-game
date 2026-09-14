@@ -1213,10 +1213,16 @@ mod tests {
         let styles = shipped_style_catalog();
 
         assert_eq!(palette.swatches().len(), 24);
-        assert_eq!(styles.styles().len(), 8);
+        assert_eq!(styles.styles().len(), 14);
         for style_name in [
             "crystal/cyan-body",
             "crystal/cyan-glow",
+            "expedition/crystal",
+            "expedition/crystal-tip",
+            "expedition/mossy-stone",
+            "expedition/stone",
+            "expedition/stone-edge",
+            "expedition/stone-recess",
             "plant/foliage-dark",
             "plant/foliage-light",
             "plant/foliage-mid",
@@ -1254,7 +1260,7 @@ mod tests {
                 .color()
                 .to_array()
                 .map(f32::to_bits),
-            [0.896_243_8, 0.959_346_6, 0.991_156_4].map(f32::to_bits)
+            [0.93, 0.99, 1.0].map(f32::to_bits)
         );
     }
 

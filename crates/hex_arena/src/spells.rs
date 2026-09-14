@@ -14,12 +14,16 @@ use crate::{
 #[cfg(test)]
 use hex_core::arena::ARENA_MAX_LEVEL;
 
+mod motion;
+pub(crate) use motion::ForecastMotion;
+
 const PROJECTILE_RADIUS: f32 = 0.06;
 pub(super) const MAX_FLIGHT_SECONDS: f32 = 8.0;
 pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShotParameters {
+    mode: crate::FireballMode,
     gravity: f32,
     collision_radius: f32,
     appearance: crate::ProjectileAppearance,
@@ -45,6 +49,12 @@ pub(crate) struct PendingWall {
 }
 
 impl Projectile {
+    /// Frozen contact or radial response; rewards never mutate an in-flight shot.
+    #[must_use]
+    pub fn fireball_mode(&self) -> crate::FireballMode {
+        self.parameters.mode
+    }
+
     /// Frozen rendering identity, never inferred from a living source actor.
     #[must_use]
     pub fn appearance(&self) -> crate::ProjectileAppearance {
@@ -94,7 +104,7 @@ fn ember_contact_voxel(
     let inside = impact.point - impact.normal * (shot.collision_radius() + SKIN * 4.0);
     geometry
         .voxel_at(inside)
-        .filter(|pos| world.voxels.contains_key(pos))
+        .filter(|pos| world.solid_at(*pos).is_some())
 }
 
 fn projectile(
@@ -104,6 +114,8 @@ fn projectile(
     id: u64,
     launch_speed: f32,
 ) -> Projectile {
+    let profile_tuning = actor.expedition_tuning(tuning);
+    let tuning = profile_tuning.as_ref();
     Projectile {
         id,
         owner: actor.id,
@@ -113,6 +125,7 @@ fn projectile(
         spell,
         age: 0.0,
         parameters: ShotParameters {
+            mode: crate::FireballMode::Explosive,
             gravity: tuning.projectile_gravity,
             collision_radius: PROJECTILE_RADIUS,
             appearance: if spell == Spell::Shield {
@@ -171,6 +184,7 @@ fn creature_projectile(
         spell: Spell::Fireball,
         age: 0.0,
         parameters: ShotParameters {
+            mode: crate::FireballMode::Explosive,
             gravity: spec.gravity,
             collision_radius: spec.collision_radius,
             appearance: spec.appearance,
@@ -442,7 +456,8 @@ fn wall_candidates(
     };
     let (width, height) = dimensions;
     let mut volume = BTreeSet::new();
-    for offset in -(width / 2)..=width / 2 {
+    let start = -(width / 2);
+    for offset in start..start + width {
         let coord =
             HexCoord::from_axial(base.coord.x() + dq * offset, base.coord.y() + dr * offset);
         for rise in 0..height {
@@ -452,7 +467,7 @@ fn wall_candidates(
     volume.into_iter().collect()
 }
 
-fn available_wall_voxels(
+pub(super) fn available_wall_voxels(
     candidates: &[TilePos],
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
@@ -464,8 +479,11 @@ fn available_wall_voxels(
         .copied()
         .filter(|pos| {
             geometry.contains_column(pos.coord)
+                && world.residency.as_ref().is_none_or(|residency| {
+                    residency.at(pos.coord, geometry) == hex_core::arena::ArenaAvailability::Ready
+                })
                 && (geometry.min_level..=geometry.max_level).contains(&pos.level)
-                && !world.voxels.contains_key(pos)
+                && world.solid_at(*pos).is_none()
                 && !world.edit_protected.get(&pos.coord).is_some_and(|ranges| {
                     ranges
                         .iter()
@@ -508,11 +526,14 @@ impl ArenaSession {
         spell: Spell,
         tuning: &ArenaTuning,
         launch_speed: f32,
-        world: &ArenaTerrainView,
-        geometry: ArenaVoxelGeometry,
-        materials: ArenaMaterials,
-        out: &mut CommandsOut,
+        _world: &ArenaTerrainView,
+        _geometry: ArenaVoxelGeometry,
+        _materials: ArenaMaterials,
+        _out: &mut CommandsOut,
     ) {
+        if spell == Spell::HighJump {
+            return;
+        }
         if self.encounter.initialized {
             self.refresh_support_buffs(tuning);
         }
@@ -521,31 +542,20 @@ impl ArenaSession {
         };
         self.combat_cue(owner, actor.eye(), CombatCueKind::Release);
         self.record_cast(owner, spell);
-        if spell == Spell::AreaBlast {
-            self.explode(
-                actor.center(),
-                owner,
-                actor.team,
-                spell,
-                tuning.blast_radius(),
-                tuning.blast_damage * actor.damage_multiplier,
-                tuning.blast_knockback,
-                tuning.terrain_power,
-                None,
-                None,
-                false,
-                true,
-                world,
-                geometry,
-                materials,
-                out,
-            );
+        let player_tuning;
+        let effective = if Some(owner) == self.human_actor_id() {
+            player_tuning = self.player_tuning(tuning);
+            &player_tuning
         } else {
-            let mut shot = projectile(&actor, spell, tuning, self.next_projectile, launch_speed);
-            shot.parameters.min_y = self.collision.min_y.min(-10.0);
-            self.next_projectile += 1;
-            self.projectiles.push(shot);
+            tuning
+        };
+        let mut shot = projectile(&actor, spell, effective, self.next_projectile, launch_speed);
+        if Some(owner) == self.human_actor_id() {
+            shot.parameters.mode = self.player_fireball_mode();
         }
+        shot.parameters.min_y = self.collision.min_y.min(-10.0);
+        self.next_projectile += 1;
+        self.projectiles.push(shot);
     }
 
     pub(super) fn advance_projectiles(
@@ -598,6 +608,9 @@ impl ArenaSession {
                         // Ordinary swept movement resolves the impulse next tick.
                         actor.body.impulse_velocity += direction * shot.parameters.shield_push;
                     }
+                    if let Some(victim) = impact.actor {
+                        self.record_player_hit(shot.owner, victim);
+                    }
                     let candidates = wall_candidates(
                         impact,
                         shot.parameters.direction,
@@ -625,9 +638,11 @@ impl ArenaSession {
                             radius: 0.4,
                             age: 0.0,
                             lifetime: EMERGENCE_SECONDS,
-                            kind: Spell::Shield,
+                            kind: crate::VisualEffectKind::Shield,
                         });
                     }
+                } else if shot.parameters.mode == crate::FireballMode::ContactOnly {
+                    self.contact_fireball(&shot, impact, world, geometry, materials, out);
                 } else {
                     self.explode(
                         impact.point,
@@ -691,7 +706,7 @@ impl ArenaSession {
                     radius: 0.65,
                     age: 0.0,
                     lifetime: 0.25,
-                    kind: Spell::Shield,
+                    kind: crate::VisualEffectKind::Shield,
                 });
             } else {
                 survivors.push(wall);
@@ -700,7 +715,65 @@ impl ArenaSession {
         self.pending_walls = survivors;
     }
 
-    fn explode(
+    fn contact_fireball(
+        &mut self,
+        shot: &Projectile,
+        impact: Impact,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        materials: ArenaMaterials,
+        out: &mut CommandsOut,
+    ) {
+        let mut damaged = None;
+        if let Some(actor) = impact
+            .actor
+            .and_then(|id| self.actors.iter_mut().find(|a| a.id == id))
+        {
+            if actor.hp > 0.0 && (actor.id == shot.owner || actor.team != shot.parameters.team) {
+                let removed = actor.hp.min(shot.parameters.damage);
+                actor.hp -= removed;
+                let direction = (shot.parameters.direction + Vec3::Y * 0.35).normalize_or(Vec3::Y);
+                actor.body.impulse_velocity += direction * shot.parameters.knockback;
+                if direction.y > 0.0 && shot.parameters.knockback > 0.0 {
+                    actor.body.grounded = false;
+                }
+                damaged = Some((actor.id, removed));
+            }
+        }
+        if let Some((victim, amount)) = damaged {
+            self.record_damage(shot.owner, victim, amount);
+        }
+        self.record_fireball_impact(
+            shot.owner,
+            damaged.is_some_and(|(id, amount)| id != shot.owner && amount > 0.0),
+        );
+        if impact.actor.is_none() && impact.barrier.is_none() {
+            let inside = impact.point - impact.normal * (shot.collision_radius() + SKIN * 4.0);
+            if let Some(pos) = geometry
+                .voxel_at(inside)
+                .filter(|pos| world.solid_at(*pos).is_some())
+            {
+                let request = TerrainImpact {
+                    batch: TerrainBatchId(self.next_impact),
+                    volume: vec![pos],
+                    kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
+                    power: shot.parameters.terrain_power,
+                };
+                self.next_impact += 1;
+                self.pending_impacts.insert(request.batch, request.clone());
+                out.impacts.push(request);
+            }
+        }
+        self.effects.push(VisualEffect {
+            center: impact.point,
+            radius: 0.16,
+            age: 0.0,
+            lifetime: 0.15,
+            kind: crate::VisualEffectKind::FireballContact,
+        });
+    }
+
+    pub(super) fn explode(
         &mut self,
         center: Vec3,
         owner: u8,
@@ -723,7 +796,7 @@ impl ArenaSession {
         let mut useful_fireball = false;
         for actor in &mut self.actors {
             if actor.hp <= 0.0
-                || ((spell == Spell::AreaBlast || owner_immune) && actor.id == owner)
+                || (owner_immune && actor.id == owner)
                 || (actor.id != owner && actor.team == owner_team)
             {
                 continue;
@@ -779,7 +852,7 @@ impl ArenaSession {
             radius,
             age: 0.0,
             lifetime: 0.45,
-            kind: spell,
+            kind: spell.into(),
         });
     }
 }
@@ -797,14 +870,18 @@ pub(super) fn preview(
     else {
         return Preview::default();
     };
+    let tuning = session.player_tuning(tuning);
     preview_actor(
         actor,
         &session.actors,
         &session.collision,
         world,
         geometry,
-        tuning,
-        tuning.launch_speed(actor.charge().map_or(0.0, |charge| charge.elapsed)),
+        &tuning,
+        tuning.spell_launch_speed(
+            actor.selected,
+            actor.charge().map_or(0.0, |charge| charge.elapsed),
+        ),
     )
 }
 
@@ -818,7 +895,7 @@ pub(super) fn preview_actor(
     tuning: &ArenaTuning,
     launch_speed: f32,
 ) -> Preview {
-    if actor.selected == Spell::AreaBlast {
+    if actor.selected == Spell::HighJump {
         return Preview {
             impact: Some(actor.center()),
             valid: true,
@@ -946,7 +1023,30 @@ pub(crate) fn forecast_spell(
     tuning: &ArenaTuning,
     launch_speed: f32,
 ) -> SpellForecast {
-    if caster.selected == Spell::AreaBlast {
+    forecast_spell_with_motion(
+        caster,
+        observed,
+        None,
+        collision,
+        world,
+        geometry,
+        tuning,
+        launch_speed,
+    )
+}
+
+/// Optional observed-only motion path used by the Shadow against the human.
+pub(crate) fn forecast_spell_with_motion(
+    caster: &Actor,
+    observed: &[ForecastBody],
+    motion: Option<&ForecastMotion>,
+    collision: &CollisionWorld,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &ArenaTuning,
+    launch_speed: f32,
+) -> SpellForecast {
+    if caster.selected == Spell::HighJump {
         return SpellForecast {
             impact: Some(ForecastImpact {
                 point: caster.center(),
@@ -958,7 +1058,7 @@ pub(crate) fn forecast_spell(
         };
     }
     let shot = projectile(caster, caster.selected, tuning, 0, launch_speed);
-    forecast_projectile(caster, observed, collision, world, geometry, shot)
+    forecast_projectile(caster, observed, motion, collision, world, geometry, shot)
 }
 
 pub(crate) fn forecast_creature_projectile(
@@ -971,12 +1071,13 @@ pub(crate) fn forecast_creature_projectile(
     geometry: ArenaVoxelGeometry,
 ) -> SpellForecast {
     let shot = creature_projectile(caster, direction, spec, 0, collision.min_y.min(-10.0));
-    forecast_projectile(caster, observed, collision, world, geometry, shot)
+    forecast_projectile(caster, observed, None, collision, world, geometry, shot)
 }
 
 fn forecast_projectile(
     caster: &Actor,
     observed: &[ForecastBody],
+    motion: Option<&ForecastMotion>,
     collision: &CollisionWorld,
     world: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
@@ -1014,8 +1115,13 @@ fn forecast_projectile(
                 body.previous_yaw = body.body_yaw;
                 body.body_yaw = fact.yaw
                     + fact.yaw_velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
-                body.feet = fact.feet
-                    + fact.velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0));
+                body.feet = motion.filter(|path| path.id == fact.id).map_or_else(
+                    || {
+                        fact.feet
+                            + fact.velocity * (shot.age + STEP).min(fact.predict_seconds.max(0.0))
+                    },
+                    |path| path.feet_at(shot.age + STEP),
+                );
             }
         }
         if let Some(hit) = advance_shot(&mut shot, collision, &bodies, false) {
@@ -1048,6 +1154,36 @@ fn forecast_projectile(
 mod tests {
     use super::*;
     use crate::collision::voxel_overlaps_body;
+
+    #[test]
+    fn authored_shadow_and_troll_projectiles_freeze_their_own_profile() {
+        for (role, expected) in [
+            (crate::ExpeditionRole::MountainShadow, 30.0_f32),
+            (crate::ExpeditionRole::Troll, 35.0_f32),
+        ] {
+            let mut actor = Actor::spawn(7, Vec3::ZERO, Vec3::X);
+            actor.configure_expedition(role, &crate::EncounterTuning::default());
+            let altered = ArenaTuning {
+                fireball_damage: 99.0,
+                projectile_gravity: 12.0,
+                ..Default::default()
+            };
+            let shot = projectile(&actor, Spell::Fireball, &altered, 0, 45.0);
+            assert_eq!(shot.parameters.damage.to_bits(), expected.to_bits());
+            assert_eq!(shot.parameters.gravity.to_bits(), 12.0_f32.to_bits());
+            assert_eq!(shot.fireball_mode(), crate::FireballMode::Explosive);
+            let mut observation = ForecastBody::human(actor.id, actor.feet, Vec3::ZERO, 0.0);
+            observation.species = actor.species;
+            observation.dimensions = actor.dimensions;
+            assert_eq!(
+                observation
+                    .reconstruct()
+                    .expect("observed body")
+                    .body_dimensions(),
+                actor.body_dimensions()
+            );
+        }
+    }
 
     #[test]
     fn ballistic_step_matches_analytic_parabola_and_downhill_has_more_reach() {
@@ -1115,6 +1251,33 @@ mod tests {
         let contact = advance_shot(&mut shot, &CollisionWorld::default(), &[target], false)
             .expect("moving actor crosses the ray");
         assert!(contact.actor == Some(1) && (4.0..5.0).contains(&contact.point.x));
+    }
+
+    #[test]
+    fn even_width_shields_contain_exact_columns_in_every_hex_orientation() {
+        for angle in 0_u8..6 {
+            let direction =
+                bevy_math::Quat::from_rotation_y(f32::from(angle) * std::f32::consts::PI / 3.0)
+                    * Vec3::NEG_Z;
+            for (width, height) in [(5, 5), (6, 5), (6, 6), (7, 6), (8, 7), (9, 9)] {
+                let cells = wall_candidates(
+                    shield_impact(Vec3::ZERO, Vec3::Y),
+                    direction,
+                    (width, height),
+                    ArenaVoxelGeometry::default(),
+                );
+                let columns: std::collections::BTreeSet<_> =
+                    cells.iter().map(|cell| cell.coord).collect();
+                assert_eq!(
+                    columns.len(),
+                    usize::try_from(width).expect("positive width")
+                );
+                assert_eq!(
+                    cells.len(),
+                    usize::try_from(width * height).expect("positive volume")
+                );
+            }
+        }
     }
 
     #[test]
@@ -1455,6 +1618,181 @@ mod camera_mask_tests {
             session.aim_from_camera(0, origin, direction).x < 0.0,
             "an actor nearer than the canopy still wins aim arbitration"
         );
+    }
+}
+
+#[cfg(test)]
+mod carved_object_tests {
+    use super::*;
+    use hex_core::arena::{ArenaSolidSpan, ArenaStaticSpan};
+    use hex_core::{ElementId, SubstanceId};
+
+    #[test]
+    fn contact_damage_targets_one_object_cell_and_carving_opens_all_consumers() {
+        let geometry = ArenaVoxelGeometry::default();
+        let object = TilePos::new(HexCoord::ORIGIN, 2);
+        let mut view = ArenaTerrainView {
+            revision: 1,
+            full_rebuild: true,
+            ..Default::default()
+        };
+        for coord in HexCoord::ORIGIN.within_radius(4) {
+            let floor = TilePos::new(coord, 0);
+            view.voxels.insert(floor, SubstanceId(1));
+            view.columns.insert(
+                coord,
+                vec![ArenaSolidSpan {
+                    bottom: floor,
+                    top_level: 0,
+                    substance: SubstanceId(1),
+                }],
+            );
+        }
+        let object_span = ArenaSolidSpan {
+            bottom: TilePos::new(object.coord, 1),
+            top_level: 3,
+            substance: SubstanceId(5),
+        };
+        view.object_columns.insert(object.coord, vec![object_span]);
+        view.static_spans.push(ArenaStaticSpan {
+            bottom: object_span.bottom,
+            top_level: object_span.top_level,
+            blocks_movement: true,
+            blocks_sight: true,
+            blocks_projectiles: true,
+        });
+        let material = ArenaMaterials {
+            stone: SubstanceId(1),
+            grass: SubstanceId(2),
+            dirt: SubstanceId(3),
+            bedrock: SubstanceId(4),
+            fire: ElementId(1),
+        };
+        let tuning = ArenaTuning::default();
+        let actor = Actor::spawn(0, Vec3::new(-3.0, SKIN, 0.0), Vec3::X);
+        let mut shot = projectile(&actor, Spell::Fireball, &tuning, 0, 45.0);
+        shot.parameters.mode = crate::FireballMode::ContactOnly;
+        let mut session = ArenaSession::default();
+        session.actors = vec![actor];
+        session.projectiles = vec![shot];
+        session.collision.refresh(&view, geometry);
+        let mut commands = CommandsOut::default();
+        for _ in 0..60 {
+            session.advance_projectiles(&view, geometry, material, &mut commands);
+        }
+        assert_eq!(commands.impacts.len(), 1);
+        assert_eq!(
+            commands.impacts.first().expect("one contact").volume,
+            [object]
+        );
+        assert!(session
+            .effects
+            .iter()
+            .all(|effect| effect.kind != crate::VisualEffectKind::Fireball));
+        assert!(
+            available_wall_voxels(&[object], &view, geometry, &[], &BTreeSet::new()).is_empty()
+        );
+        // The world accepts exactly this one removed cell and publishes both masks.
+        view.object_columns.insert(
+            object.coord,
+            vec![
+                ArenaSolidSpan {
+                    bottom: object_span.bottom,
+                    top_level: 1,
+                    ..object_span
+                },
+                ArenaSolidSpan {
+                    bottom: TilePos::new(object.coord, 3),
+                    top_level: 3,
+                    ..object_span
+                },
+            ],
+        );
+        view.static_spans = vec![
+            ArenaStaticSpan {
+                bottom: object_span.bottom,
+                top_level: 1,
+                blocks_movement: true,
+                blocks_sight: true,
+                blocks_projectiles: true,
+            },
+            ArenaStaticSpan {
+                bottom: TilePos::new(object.coord, 3),
+                top_level: 3,
+                blocks_movement: true,
+                blocks_sight: true,
+                blocks_projectiles: true,
+            },
+        ];
+        view.revision += 1;
+        view.full_rebuild = false;
+        view.dirty_columns.insert(object.coord);
+        session.collision.refresh(&view, geometry);
+        let center = geometry.center(object);
+        assert!(session
+            .collision
+            .sight_clear(center - Vec3::X * 2.0, center + Vec3::X * 2.0));
+        assert!(session
+            .collision
+            .attack_sweep(center - Vec3::X * 2.0, Vec3::X * 4.0, 0.01)
+            .is_none());
+        assert!(session.collision.clear(center - Vec3::Y * 0.05, 0.1, 0.05));
+        assert_eq!(
+            available_wall_voxels(&[object], &view, geometry, &[], &BTreeSet::new()),
+            [object]
+        );
+        assert!(
+            view.solid_at(TilePos::new(object.coord, 3)).is_some(),
+            "unsupported crown survives"
+        );
+    }
+
+    #[test]
+    fn explosion_transaction_contains_terrain_and_object_cells_once() {
+        let geometry = ArenaVoxelGeometry::default();
+        let object = TilePos::new(HexCoord::ORIGIN, 2);
+        let floor = TilePos::new(HexCoord::ORIGIN, 0);
+        let mut view = ArenaTerrainView::default();
+        view.voxels.insert(floor, SubstanceId(1));
+        // Overlap at floor exercises transaction deduplication too.
+        view.object_columns.insert(
+            object.coord,
+            vec![ArenaSolidSpan {
+                bottom: floor,
+                top_level: 3,
+                substance: SubstanceId(5),
+            }],
+        );
+        let material = ArenaMaterials {
+            stone: SubstanceId(1),
+            grass: SubstanceId(2),
+            dirt: SubstanceId(3),
+            bedrock: SubstanceId(4),
+            fire: ElementId(1),
+        };
+        let mut session = ArenaSession::default();
+        let mut commands = CommandsOut::default();
+        session.explode(
+            geometry.center(object),
+            0,
+            0,
+            Spell::Fireball,
+            2.5,
+            35.0,
+            8.0,
+            2,
+            None,
+            None,
+            false,
+            true,
+            &view,
+            geometry,
+            material,
+            &mut commands,
+        );
+        let volume = &commands.impacts.first().expect("mixed transaction").volume;
+        assert!(volume.contains(&floor) && volume.contains(&object));
+        assert_eq!(volume.len(), volume.iter().collect::<BTreeSet<_>>().len());
     }
 }
 

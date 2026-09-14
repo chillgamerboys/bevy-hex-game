@@ -871,6 +871,21 @@ impl fmt::Display for ObjectInstanceError {
 
 impl std::error::Error for ObjectInstanceError {}
 
+/// World-published sparse removals from one immutable authored blueprint.
+///
+/// Coordinates use the blueprint's unrotated local frame. Missing cells survive;
+/// removed cells never occlude newly exposed faces. Producers advance `revision`
+/// only when this instance changes. The renderer may partition local coordinates
+/// into bounded sections, rebaking a removed cell's section and its neighbors.
+/// This component owns no damage, support, or collapse behavior.
+#[derive(Component, Debug, Default, Clone, PartialEq, Eq)]
+pub struct ObjectCarveMask {
+    /// Accepted world revision for these removals.
+    pub revision: u64,
+    /// Removed local cells only; never the complete surviving blueprint.
+    pub removed: BTreeSet<LocalVoxelCoord>,
+}
+
 /// Renderer-neutral request to place one authored object at an exact world voxel.
 #[derive(Component, Reflect, Debug, Clone, PartialEq)]
 #[reflect(opaque)]
@@ -1479,30 +1494,49 @@ mod tests {
         let manifest: ObjectCatalogFile =
             ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
                 .expect("shipped object manifest should parse");
-        let objects = [
-            include_str!("../../../assets/art/objects/plant/old-growth.ron"),
-            include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
-            include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
-            include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
-            include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
-            include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
-            include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
-            include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-cathedral-heart.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
-            include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
-            include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
-            include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
-        ]
-        .into_iter()
-        .map(|source| {
-            let object: ObjectBlueprint =
-                ron::from_str(source).expect("shipped object should parse");
-            (object.id.clone(), object)
-        })
-        .collect::<BTreeMap<_, _>>();
+        let object_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/art/objects");
+        let objects = manifest
+            .ids()
+            .iter()
+            .map(|asset_id| {
+                let path = object_root.join(format!("{}.ron", asset_id.as_str()));
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+                let object: ObjectBlueprint = ron::from_str(&source)
+                    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+                assert_eq!(
+                    &object.id, asset_id,
+                    "blueprint path must match its identity"
+                );
+                (object.id.clone(), object)
+            })
+            .collect::<BTreeMap<_, _>>();
         let expected_ids = [
+            "plant/date-palm",
+            "plant/forest-ancient-1",
+            "plant/forest-ancient-2",
+            "plant/forest-ancient-3",
+            "plant/forest-broadleaf-1",
+            "plant/forest-broadleaf-2",
+            "plant/forest-broadleaf-3",
+            "plant/forest-expedition-ancient-1",
+            "plant/forest-expedition-ancient-2",
+            "plant/forest-expedition-ancient-3",
+            "plant/forest-expedition-heart",
+            "plant/forest-expedition-landmark-1",
+            "plant/forest-expedition-landmark-2",
+            "plant/forest-expedition-landmark-3",
+            "plant/forest-expedition-understory-broadleaf-1",
+            "plant/forest-expedition-understory-broadleaf-2",
+            "plant/forest-expedition-understory-broadleaf-3",
+            "plant/forest-expedition-understory-pine-1",
+            "plant/forest-expedition-understory-pine-2",
+            "plant/forest-expedition-understory-pine-3",
+            "plant/forest-heart",
+            "plant/forest-pine-1",
+            "plant/forest-pine-2",
+            "plant/forest-pine-3",
             "plant/old-growth",
             "plant/small-broadleaf",
             "plant/snowy-old-growth",
@@ -1515,6 +1549,31 @@ mod tests {
             "prop/crystal-cathedral-heart",
             "prop/crystal-low-cluster",
             "prop/crystal-spire",
+            "prop/expedition-arena-buttress-0",
+            "prop/expedition-arena-buttress-1",
+            "prop/expedition-arena-buttress-3",
+            "prop/expedition-arena-buttress-4",
+            "prop/expedition-arena-buttress-5",
+            "prop/expedition-arena-open-gate",
+            "prop/expedition-arena-wall-crown",
+            "prop/expedition-bridge-portal-east",
+            "prop/expedition-bridge-portal-west",
+            "prop/expedition-bridge-rail-north-0",
+            "prop/expedition-bridge-rail-north-1",
+            "prop/expedition-bridge-rail-north-2",
+            "prop/expedition-bridge-rail-north-3",
+            "prop/expedition-bridge-rail-south-0",
+            "prop/expedition-bridge-rail-south-1",
+            "prop/expedition-bridge-rail-south-2",
+            "prop/expedition-bridge-rail-south-3",
+            "prop/expedition-crystal-cluster",
+            "prop/expedition-crystal-fan",
+            "prop/expedition-crystal-needle",
+            "prop/expedition-fountain-rim",
+            "prop/expedition-rock-arch",
+            "prop/expedition-rock-pillar",
+            "prop/expedition-rock-ridge",
+            "prop/expedition-rock-slab",
             "prop/grass-tuft",
             "prop/snowy-grass-tuft",
         ]
@@ -1523,8 +1582,22 @@ mod tests {
 
         let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
             .expect("shipped authored object graph should resolve");
-        assert_eq!(resolved.objects().len(), 14);
-        assert_eq!(resolved.styles().styles().len(), 8);
+        assert_eq!(resolved.objects().len(), 63);
+        assert_eq!(resolved.styles().styles().len(), 14);
+
+        let expedition_heart = resolved
+            .object(&id("plant/forest-expedition-heart"))
+            .expect("expedition Heart should resolve");
+        assert_eq!(expedition_heart.category, ObjectCategory::Plant);
+        assert_eq!(expedition_heart.bounds.height, 172);
+        assert!(expedition_heart.blocker_footprint.len() > 1);
+
+        let palm = resolved
+            .object(&id("plant/date-palm"))
+            .expect("date palm should resolve");
+        assert_eq!(palm.bounds.radius, 2);
+        assert_eq!(palm.bounds.height, 11);
+        assert_eq!(palm.blocker_footprint, [LocalAxialCoord::new(0, 0)]);
 
         let small = resolved
             .object(&id("plant/small-broadleaf"))
@@ -1791,12 +1864,77 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                5_183_140_313_222_150_403,
-                10_433_221_081_678_676_936,
-                4_689_356_606_817_881_777,
+                9_966_260_057_205_757_992,
+                17_319_223_087_185_095_027,
+                16_357_189_345_045_999_986,
             )
         );
+        // Explicit authored roster: the 25 legacy blueprints remain byte-semantically
+        // unchanged, with 38 deterministic expedition blueprints added.
         let expected_object_fingerprints = BTreeMap::from([
+            (id("plant/date-palm"), 17_225_330_407_669_589_318),
+            (id("plant/forest-ancient-1"), 8_974_253_312_034_340_120),
+            (id("plant/forest-ancient-2"), 11_655_165_404_023_837_512),
+            (id("plant/forest-ancient-3"), 6_029_170_694_562_739_770),
+            (id("plant/forest-broadleaf-1"), 5_313_502_138_503_942_542),
+            (id("plant/forest-broadleaf-2"), 2_889_820_918_951_926_379),
+            (id("plant/forest-broadleaf-3"), 2_283_163_377_877_197_961),
+            (
+                id("plant/forest-expedition-ancient-1"),
+                1_858_439_021_045_733_138,
+            ),
+            (
+                id("plant/forest-expedition-ancient-2"),
+                8_298_335_089_602_804_634,
+            ),
+            (
+                id("plant/forest-expedition-ancient-3"),
+                17_283_025_157_237_757_730,
+            ),
+            (
+                id("plant/forest-expedition-heart"),
+                16_890_608_362_553_751_209,
+            ),
+            (
+                id("plant/forest-expedition-landmark-1"),
+                9_913_278_377_727_603_037,
+            ),
+            (
+                id("plant/forest-expedition-landmark-2"),
+                1_891_893_116_683_024_562,
+            ),
+            (
+                id("plant/forest-expedition-landmark-3"),
+                4_663_744_922_505_567_101,
+            ),
+            (
+                id("plant/forest-expedition-understory-broadleaf-1"),
+                1_417_218_857_408_461_484,
+            ),
+            (
+                id("plant/forest-expedition-understory-broadleaf-2"),
+                255_329_228_016_002_176,
+            ),
+            (
+                id("plant/forest-expedition-understory-broadleaf-3"),
+                15_732_327_220_183_394_008,
+            ),
+            (
+                id("plant/forest-expedition-understory-pine-1"),
+                18_240_309_684_301_320_925,
+            ),
+            (
+                id("plant/forest-expedition-understory-pine-2"),
+                15_048_806_083_624_618_322,
+            ),
+            (
+                id("plant/forest-expedition-understory-pine-3"),
+                9_605_923_770_576_218_925,
+            ),
+            (id("plant/forest-heart"), 11_745_545_847_835_901_379),
+            (id("plant/forest-pine-1"), 12_976_925_326_507_750_357),
+            (id("plant/forest-pine-2"), 4_903_958_033_079_649_345),
+            (id("plant/forest-pine-3"), 17_709_339_372_302_169_034),
             (id("plant/old-growth"), 18_215_252_645_504_955_369),
             (id("plant/small-broadleaf"), 692_655_780_260_542_668),
             (id("plant/snowy-old-growth"), 16_803_730_044_443_536_229),
@@ -1812,6 +1950,94 @@ mod tests {
             ),
             (id("prop/crystal-low-cluster"), 1_307_286_824_627_267_907),
             (id("prop/crystal-spire"), 1_248_030_652_803_885_799),
+            (
+                id("prop/expedition-arena-buttress-0"),
+                16_666_096_604_914_219_787,
+            ),
+            (
+                id("prop/expedition-arena-buttress-1"),
+                15_585_570_633_055_084_077,
+            ),
+            (
+                id("prop/expedition-arena-buttress-3"),
+                5_380_140_411_824_460_279,
+            ),
+            (
+                id("prop/expedition-arena-buttress-4"),
+                4_040_423_672_703_312_675,
+            ),
+            (
+                id("prop/expedition-arena-buttress-5"),
+                15_760_422_448_737_804_506,
+            ),
+            (
+                id("prop/expedition-arena-open-gate"),
+                18_025_756_259_765_719_195,
+            ),
+            (
+                id("prop/expedition-arena-wall-crown"),
+                7_077_205_824_426_530_377,
+            ),
+            (
+                id("prop/expedition-bridge-portal-east"),
+                11_278_275_154_776_033_132,
+            ),
+            (
+                id("prop/expedition-bridge-portal-west"),
+                2_553_324_842_234_827_020,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-0"),
+                5_936_367_129_680_989_079,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-1"),
+                16_252_360_530_451_192_656,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-2"),
+                13_012_068_504_447_639_010,
+            ),
+            (
+                id("prop/expedition-bridge-rail-north-3"),
+                10_899_755_509_310_944_413,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-0"),
+                14_682_734_963_540_393_659,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-1"),
+                7_857_261_863_834_674_397,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-2"),
+                7_157_735_480_716_514_695,
+            ),
+            (
+                id("prop/expedition-bridge-rail-south-3"),
+                12_809_180_038_782_189_345,
+            ),
+            (
+                id("prop/expedition-crystal-cluster"),
+                704_571_486_011_432_236,
+            ),
+            (
+                id("prop/expedition-crystal-fan"),
+                15_964_398_395_597_708_005,
+            ),
+            (
+                id("prop/expedition-crystal-needle"),
+                7_998_991_165_253_609_506,
+            ),
+            (
+                id("prop/expedition-fountain-rim"),
+                5_105_790_508_708_505_978,
+            ),
+            (id("prop/expedition-rock-arch"), 6_972_437_197_940_900_258),
+            (id("prop/expedition-rock-pillar"), 4_120_596_701_052_424_668),
+            (id("prop/expedition-rock-ridge"), 17_250_004_459_234_619_866),
+            (id("prop/expedition-rock-slab"), 9_474_829_001_293_181_435),
             (id("prop/grass-tuft"), 8_128_471_665_006_116_358),
             (id("prop/snowy-grass-tuft"), 10_601_105_736_077_673_696),
         ]);

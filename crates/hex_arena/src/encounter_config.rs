@@ -45,6 +45,12 @@ pub struct EncounterTuning {
     pub worm_segments: u8,
     /// Shallow resting depth, one or two voxel levels.
     pub worm_depth_levels: u8,
+    /// Maximum per-column depth while escaping damaged ground.
+    pub worm_escape_depth_levels: u8,
+    /// Minimum horizontal relocation before ordinary recovery emergence.
+    pub worm_escape_distance: f32,
+    /// Maximum buried travel time before safe recovery fallback.
+    pub worm_escape_seconds: f32,
     /// Initial Worm HP.
     pub worm_hp: f32,
     /// Voluntary shallow-earth travel speed.
@@ -297,6 +303,9 @@ impl Default for EncounterTuning {
             golem_swipe_terrain_power: 8,
             worm_segments: 4,
             worm_depth_levels: 2,
+            worm_escape_depth_levels: 8,
+            worm_escape_distance: 3.5,
+            worm_escape_seconds: 4.0,
             worm_hp: 320.0,
             worm_speed: 2.2,
             worm_turn_speed: 1.2,
@@ -329,7 +338,7 @@ impl Default for EncounterTuning {
             wisp_ember_knockback: 1.5,
             wisp_ember_terrain_power: 1,
             golem_hp: 320.0,
-            golem_speed: 2.0,
+            golem_speed: 3.2,
             golem_slam_damage: 35.0,
             golem_slam_range: hex_core::config::HEX_SMALL_DIAMETER * 4.0,
             golem_slam_windup: 0.8,
@@ -354,7 +363,7 @@ impl Default for EncounterTuning {
             dragon_length: 3.5,
             dragon_width: 1.732_050_8,
             dragon_ground_speed: 7.5,
-            dragon_flight_speed: 3.0,
+            dragon_flight_speed: 6.0,
             dragon_cruise_height: 2.0,
             dragon_turn_speed: 2.0,
             breath_damage: 45.0,
@@ -450,6 +459,8 @@ impl EncounterTuning {
             self.worm_turn_speed,
             self.worm_rise_speed,
             self.worm_surface_interval,
+            self.worm_escape_distance,
+            self.worm_escape_seconds,
             self.worm_exposed_watch,
             self.worm_boulder_damage,
             self.worm_boulder_radius,
@@ -561,6 +572,9 @@ impl EncounterTuning {
         }
         if !matches!(self.worm_segments, 4 | 6)
             || !matches!(self.worm_depth_levels, 1 | 2)
+            || !(self.worm_depth_levels..=8).contains(&self.worm_escape_depth_levels)
+            || self.worm_escape_distance > 8.0
+            || self.worm_escape_seconds > 4.0
             || self.worm_boulder_collision_radius > 0.5
             || !(1..=10).contains(&self.worm_boulder_terrain_power)
         {

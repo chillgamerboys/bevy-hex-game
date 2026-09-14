@@ -63,5 +63,11 @@
             opacity: 1.0,
             emission: None,
         ),
+        "expedition/crystal":(display_name:"Crystal",base_swatch:"crystal/cyan-body",surface_mode:Opaque,opacity:1.0,emission:Some((swatch:"crystal/cyan-body",strength:0.8))),
+        "expedition/crystal-tip":(display_name:"Crystal Tip",base_swatch:"crystal/cyan-glow",surface_mode:Opaque,opacity:1.0,emission:Some((swatch:"crystal/cyan-glow",strength:1.2))),
+        "expedition/mossy-stone":(display_name:"Mossy Stone",base_swatch:"plant/foliage-mid",surface_mode:Opaque,opacity:1.0,emission:None),
+        "expedition/stone":(display_name:"Stone",base_swatch:"terrain/stone",surface_mode:Opaque,opacity:1.0,emission:None),
+        "expedition/stone-edge":(display_name:"Stone Edge",base_swatch:"structure/worked-stone",surface_mode:Opaque,opacity:1.0,emission:None),
+        "expedition/stone-recess":(display_name:"Stone Recess",base_swatch:"terrain/basalt",surface_mode:Opaque,opacity:1.0,emission:None),
     },
 )

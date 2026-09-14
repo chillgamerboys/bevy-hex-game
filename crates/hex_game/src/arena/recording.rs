@@ -1,0 +1,482 @@
+//! Asynchronous, opt-in native recording. It observes the run and never drives it.
+
+mod backend;
+#[cfg(target_os = "macos")]
+mod macos;
+
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
+
+use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, WindowCloseRequested};
+use hex_arena::ArenaSession;
+use hex_core::arena::{ArenaReset, ArenaTerrainView};
+use serde_json::{json, Value};
+
+use super::{ArenaFrame, ViewState};
+
+const QUIT_QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Local recording control and read-only HUD state; filesystem work runs elsewhere.
+#[derive(Resource)]
+pub(super) struct Recorder {
+    commands: mpsc::SyncSender<backend::Command>,
+    responses: Mutex<mpsc::Receiver<backend::Response>>,
+    supported: bool,
+    active: bool,
+    finalizing: bool,
+    started: Option<Instant>,
+    status: String,
+    toggle: bool,
+    open_folder: bool,
+    quit: bool,
+    quit_sent: bool,
+    quit_requested: Option<Instant>,
+    last_run: Option<RunMarker>,
+}
+
+impl Recorder {
+    pub(super) fn request_toggle(&mut self) {
+        if self.supported && !self.quit {
+            self.toggle = true;
+        }
+    }
+    pub(super) fn request_open_folder(&mut self) {
+        self.open_folder = true;
+    }
+    pub(super) fn request_quit(&mut self) {
+        self.quit = true;
+        self.quit_requested.get_or_insert_with(Instant::now);
+    }
+    pub(super) fn status_text(&self) -> &str {
+        &self.status
+    }
+    pub(super) fn is_recording(&self) -> bool {
+        self.started.is_some()
+    }
+    pub(super) fn is_starting(&self) -> bool {
+        self.active && self.started.is_none() && !self.finalizing
+    }
+    pub(super) fn is_finalizing(&self) -> bool {
+        self.finalizing
+    }
+    pub(super) fn elapsed_seconds(&self) -> f64 {
+        self.started
+            .map_or(0.0, |started| started.elapsed().as_secs_f64())
+    }
+    pub(super) fn can_record(&self) -> bool {
+        self.supported && !self.quit
+    }
+
+    fn send(&mut self, command: backend::Command) -> bool {
+        match self.commands.try_send(command) {
+            Ok(()) => true,
+            Err(error) => {
+                self.status = format!("Recorder unavailable: {error}");
+                false
+            }
+        }
+    }
+
+    fn dispatch_quit(&mut self, now: Instant) -> Option<AppExit> {
+        if self.quit_sent {
+            return None;
+        }
+        self.finalizing = self.active;
+        match self.commands.try_send(backend::Command::Quit) {
+            Ok(()) => {
+                self.quit_sent = true;
+                self.status = "Finalizing recording before quitting…".into();
+                None
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                let requested = *self.quit_requested.get_or_insert(now);
+                if now.saturating_duration_since(requested) < QUIT_QUEUE_TIMEOUT {
+                    self.status = "Waiting for the recorder before quitting…".into();
+                    None
+                } else {
+                    self.status =
+                        "Recorder quit queue timed out; recording may be incomplete.".into();
+                    error!("{}", self.status);
+                    Some(AppExit::error())
+                }
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                self.status =
+                    "Recorder disconnected before quit; recording may be incomplete.".into();
+                error!("{}", self.status);
+                Some(AppExit::error())
+            }
+        }
+    }
+
+    fn receive(&mut self) -> Vec<backend::Response> {
+        match self.responses.get_mut() {
+            Ok(receiver) => receiver.try_iter().take(16).collect(),
+            Err(_) => {
+                self.status = "Recorder status channel failed.".into();
+                Vec::new()
+            }
+        }
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        // The worker also finalizes on channel EOF, including abnormal app exit.
+        drop(self.commands.try_send(backend::Command::Quit));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RunMarker {
+    generation: u64,
+    paused: bool,
+    dead: bool,
+    finished: bool,
+}
+
+pub(super) fn install(app: &mut App) {
+    #[cfg(target_os = "macos")]
+    macos::install(app);
+    let (commands, responses) = backend::launch();
+    app.insert_resource(Recorder {
+        commands,
+        responses: Mutex::new(responses),
+        supported: false,
+        active: false,
+        finalizing: false,
+        started: None,
+        status: "Checking recording support…".into(),
+        toggle: false,
+        open_folder: false,
+        quit: false,
+        quit_sent: false,
+        quit_requested: None,
+        last_run: None,
+    })
+    .add_systems(
+        Update,
+        update.after(ArenaFrame::Tick).before(ArenaFrame::Present),
+    );
+}
+
+fn snapshot(
+    view: &ViewState,
+    session: &ArenaSession,
+    reset: &ArenaReset,
+    terrain: &ArenaTerrainView,
+) -> Value {
+    json!({
+        "generation": reset.generation, "tick": session.tick, "paused": view.paused,
+        "started": view.started, "map": format!("{:?}", terrain.selection.map),
+        "encounter": format!("{:?}", terrain.selection.encounter),
+        "package": terrain.package_identity,
+        "player": player(session).map(|actor|
+            json!({"hp": actor.hp, "max_hp": actor.max_hp, "position": actor.feet.to_array()})),
+    })
+}
+
+fn update(
+    mut recorder: ResMut<Recorder>,
+    view: Res<ViewState>,
+    session: Res<ArenaSession>,
+    reset: Res<ArenaReset>,
+    terrain: Res<ArenaTerrainView>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut closing: MessageReader<WindowCloseRequested>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for response in recorder.receive() {
+        match response {
+            backend::Response::Supported(supported, message) => {
+                recorder.supported = supported;
+                recorder.status = message;
+            }
+            backend::Response::Started => {
+                recorder.started = Some(Instant::now());
+                if !recorder.finalizing {
+                    recorder.status = "Recording video · F9 adds a bookmark".into();
+                }
+            }
+            backend::Response::Status(message) => recorder.status = message,
+            backend::Response::Finished(message) | backend::Response::Failed(message) => {
+                recorder.active = false;
+                recorder.finalizing = false;
+                recorder.started = None;
+                recorder.status = message;
+            }
+            backend::Response::Quit(outcome) => {
+                if let Err(message) = &outcome {
+                    recorder.status = format!("Recording could not be finalized: {message}");
+                    error!(%message, "Recording finalization failed during quit");
+                }
+                exit.write(quit_exit(&outcome));
+            }
+        }
+    }
+    let command_quit = cfg!(target_os = "macos")
+        && windows.iter().any(|window| window.focused)
+        && keys.just_pressed(KeyCode::KeyQ)
+        && keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
+    if closing.read().next().is_some() || command_quit {
+        recorder.request_quit();
+    }
+    if recorder.quit && !recorder.quit_sent {
+        if let Some(outcome) = recorder.dispatch_quit(Instant::now()) {
+            exit.write(outcome);
+        }
+        return;
+    }
+    if std::mem::take(&mut recorder.open_folder) {
+        recorder.send(backend::Command::OpenFolder);
+    }
+    if std::mem::take(&mut recorder.toggle) && !recorder.quit {
+        if recorder.active {
+            if recorder.send(backend::Command::Stop) {
+                recorder.finalizing = true;
+                recorder.status = "Finalizing recording…".into();
+            }
+        } else if view.capture.is_some() {
+            recorder.status = "Recording is unavailable in windowless capture mode.".into();
+        } else if let Ok(window) = windows.single() {
+            let command = backend::Command::Start {
+                pid: std::process::id(),
+                title: window.title.clone(),
+                snapshot: snapshot(&view, &session, &reset, &terrain),
+            };
+            if recorder.send(command) {
+                recorder.active = true;
+                recorder.finalizing = false;
+                recorder.status = "Starting recorder; macOS may request screen permission…".into();
+            }
+        } else {
+            recorder.status = "Recording needs exactly one battle window.".into();
+        }
+    }
+    let marker = RunMarker {
+        generation: reset.generation,
+        paused: view.paused,
+        dead: player(&session).is_some_and(|actor| actor.hp <= 0.0),
+        finished: session.is_finished(),
+    };
+    if recorder.active {
+        for kind in changed_events(recorder.last_run, marker) {
+            recorder.send(backend::Command::Event {
+                kind: kind.into(),
+                snapshot: snapshot(&view, &session, &reset, &terrain),
+            });
+        }
+        if keys.just_pressed(KeyCode::F9)
+            && recorder.is_recording()
+            && !recorder.finalizing
+            && recorder.send(backend::Command::Event {
+                kind: "bookmark".into(),
+                snapshot: snapshot(&view, &session, &reset, &terrain),
+            })
+        {
+            recorder.status = "Saving bookmark…".into();
+        }
+    }
+    recorder.last_run = Some(marker);
+}
+
+fn player(session: &ArenaSession) -> Option<&hex_arena::Actor> {
+    session
+        .human_actor_id()
+        .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+}
+
+fn quit_exit(outcome: &Result<(), String>) -> AppExit {
+    if outcome.is_ok() {
+        AppExit::Success
+    } else {
+        AppExit::error()
+    }
+}
+
+fn changed_events(previous: Option<RunMarker>, current: RunMarker) -> Vec<&'static str> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    if previous.generation != current.generation {
+        return vec!["restart"];
+    }
+    let mut events = Vec::with_capacity(3);
+    if previous.dead != current.dead && current.dead {
+        events.push("player_death");
+    }
+    if previous.paused != current.paused {
+        events.push(if current.paused { "pause" } else { "resume" });
+    }
+    if previous.finished != current.finished && current.finished {
+        events.push("run_finished");
+    }
+    events
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_finalization_never_reports_a_successful_quit() {
+        assert_eq!(quit_exit(&Ok(())), AppExit::Success);
+        assert_ne!(quit_exit(&Err("disk full".into())), AppExit::Success);
+    }
+
+    #[test]
+    fn spectator_actor_zero_is_not_recorded_as_a_player() {
+        use hex_arena::{ArenaBattleSetup, BattlePreset};
+        use hex_core::arena::{ArenaMap, ArenaSelection, ArenaTick};
+        for spectator in [false, true] {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(ArenaSelection {
+                    map: ArenaMap::Duel,
+                    ..default()
+                });
+            if spectator {
+                app.insert_resource(ArenaBattleSetup::spectator(
+                    BattlePreset::Shadow,
+                    BattlePreset::Shadow,
+                    1,
+                ));
+            }
+            app.add_plugins((hex_map::arena::plugin, hex_arena::plugin));
+            app.update();
+            app.world_mut().run_schedule(ArenaTick);
+            let session = app.world().resource::<ArenaSession>();
+            assert!(
+                session.actors.iter().any(|actor| actor.id == 0),
+                "real actor-zero admission"
+            );
+            assert_eq!(player(session).is_none(), spectator);
+            let state = snapshot(
+                &ViewState::default(),
+                session,
+                app.world().resource::<ArenaReset>(),
+                app.world().resource::<ArenaTerrainView>(),
+            );
+            assert_eq!(
+                state.get("player").expect("metadata player").is_null(),
+                spectator
+            );
+        }
+    }
+
+    #[test]
+    fn run_events_keep_simultaneous_death_pause_and_outcome_and_restart_once() {
+        let before = RunMarker {
+            generation: 4,
+            paused: false,
+            dead: false,
+            finished: false,
+        };
+        let terminal = RunMarker {
+            generation: 4,
+            paused: true,
+            dead: true,
+            finished: true,
+        };
+        assert_eq!(
+            changed_events(Some(before), terminal),
+            vec!["player_death", "pause", "run_finished"]
+        );
+        assert!(changed_events(Some(terminal), terminal).is_empty());
+        assert_eq!(
+            changed_events(
+                Some(terminal),
+                RunMarker {
+                    generation: 5,
+                    ..before
+                }
+            ),
+            vec!["restart"]
+        );
+    }
+
+    fn queued_recorder(sender: mpsc::SyncSender<backend::Command>) -> Recorder {
+        let (_, responses) = mpsc::channel();
+        Recorder {
+            commands: sender,
+            responses: Mutex::new(responses),
+            supported: true,
+            active: false,
+            finalizing: false,
+            started: None,
+            status: String::new(),
+            toggle: false,
+            open_folder: false,
+            quit: false,
+            quit_sent: false,
+            quit_requested: None,
+            last_run: None,
+        }
+    }
+
+    #[test]
+    fn recording_state_waits_for_native_start_and_toggle_only_requests_work() {
+        let (sender, receiver) = mpsc::sync_channel(8);
+        let mut recorder = queued_recorder(sender);
+        recorder.request_toggle();
+        assert!(recorder.toggle);
+        assert!(!recorder.is_recording());
+        assert!(receiver.try_recv().is_err());
+        recorder.request_quit();
+        assert!(!recorder.can_record());
+    }
+
+    #[test]
+    fn full_quit_queue_retries_without_exiting_then_sends_exactly_once() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        assert!(sender.try_send(backend::Command::Stop).is_ok());
+        let mut recorder = queued_recorder(sender);
+        recorder.active = true;
+        recorder.request_quit();
+        let requested = recorder.quit_requested.expect("quit request time");
+        assert_eq!(recorder.dispatch_quit(requested), None);
+        assert!(recorder.finalizing);
+        assert!(!recorder.quit_sent);
+        recorder.request_quit();
+        assert_eq!(recorder.quit_requested, Some(requested));
+        assert!(matches!(receiver.try_recv(), Ok(backend::Command::Stop)));
+        assert_eq!(
+            recorder.dispatch_quit(requested + Duration::from_secs(1)),
+            None
+        );
+        assert!(recorder.quit_sent);
+        assert!(matches!(receiver.try_recv(), Ok(backend::Command::Quit)));
+        assert_eq!(
+            recorder.dispatch_quit(requested + Duration::from_secs(2)),
+            None
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn full_quit_queue_has_a_fixed_deadline_and_disconnection_fails_immediately() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        assert!(sender.try_send(backend::Command::Stop).is_ok());
+        let mut recorder = queued_recorder(sender);
+        recorder.request_quit();
+        let requested = recorder.quit_requested.expect("quit request time");
+        assert_eq!(
+            recorder.dispatch_quit(requested + QUIT_QUEUE_TIMEOUT - Duration::from_nanos(1)),
+            None
+        );
+        recorder.request_quit();
+        assert_eq!(
+            recorder.dispatch_quit(requested + QUIT_QUEUE_TIMEOUT),
+            Some(AppExit::error())
+        );
+        assert!(!recorder.quit_sent);
+        drop(receiver);
+        assert_eq!(recorder.dispatch_quit(requested), Some(AppExit::error()));
+        assert!(recorder.status.contains("disconnected"));
+    }
+}

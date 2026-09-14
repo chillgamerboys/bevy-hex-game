@@ -1,4 +1,4 @@
-//! Accepted M01 walk/jump/step behavior, extracted from lab revision 9ffc6bf.
+//! M01 jump/step/collision behavior with one Human/Shadow movement speed.
 //! The arena combines input and persistent impulse velocity before sweeping and
 //! removes the inspection controller's fly/recovery behavior.
 
@@ -7,9 +7,9 @@ use bevy_math::{Vec3, Vec3Swizzles};
 use crate::collision::{slide_with_contacts, CollisionWorld, SKIN};
 use crate::{BODY_HEIGHT, BODY_RADIUS, STEP};
 
-const GRAVITY: f32 = 17.333_334;
-const WALK: f32 = 3.5;
-const RUN: f32 = 7.0;
+pub(crate) const GRAVITY: f32 = 17.333_334;
+const WALK: f32 = 4.5;
+const RUN: f32 = 4.5;
 const STEP_HEIGHT: f32 = 0.4;
 const JUMP_HEIGHT: f32 = 3.25 * 0.4;
 
@@ -19,6 +19,10 @@ pub(crate) struct Body {
     pub impulse_velocity: Vec3,
     pub grounded: bool,
     pub step_rise: f32,
+    /// Voluntary horizontal motion from the last accepted controller sample.
+    pub(crate) control_velocity: Vec3,
+    /// Momentum retained after folding the player glider, separate from knockback.
+    pub(crate) airborne_momentum: Option<Vec3>,
     coyote: f32,
     jump_buffer: f32,
 }
@@ -45,6 +49,16 @@ impl Default for GroundProfile {
 }
 
 impl Body {
+    /// Raise ballistic velocity without stacking boosts or losing horizontal impulse.
+    pub(crate) fn boost(&mut self, height: f32) {
+        self.vertical_velocity =
+            (self.vertical_velocity + self.impulse_velocity.y).max((2.0 * GRAVITY * height).sqrt());
+        self.impulse_velocity.y = 0.0;
+        self.grounded = false;
+        self.coyote = 0.0;
+        self.jump_buffer = 0.0;
+    }
+
     pub fn tick(
         &mut self,
         feet: &mut Vec3,
@@ -73,6 +87,8 @@ impl Body {
         if !world.clear(*feet, profile.height, profile.radius) {
             self.vertical_velocity = 0.0;
             self.impulse_velocity = Vec3::ZERO;
+            self.control_velocity = Vec3::ZERO;
+            self.airborne_momentum = None;
             return;
         }
         self.jump_buffer = (self.jump_buffer - STEP).max(0.0);
@@ -105,9 +121,22 @@ impl Body {
         }
         self.impulse_velocity.y = 0.0;
         let direction = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero();
-        let horizontal = (direction * (if run { profile.run } else { profile.walk })
-            + self.impulse_velocity)
-            * STEP;
+        let requested = direction * (if run { profile.run } else { profile.walk });
+        if self.grounded {
+            self.airborne_momentum = None;
+        }
+        self.control_velocity = if let Some(momentum) = &mut self.airborne_momentum {
+            // Folding supplies neither a walking-speed boost nor an abrupt brake.
+            // Small airborne steering becomes available again at walking speed.
+            if momentum.length() < profile.walk {
+                *momentum += (requested - *momentum).clamp_length_max(6.0 * STEP);
+            }
+            *momentum *= (-0.18 * STEP).exp();
+            *momentum
+        } else {
+            requested
+        };
+        let horizontal = (self.control_velocity + self.impulse_velocity) * STEP;
         let vertical = if !self.grounded || self.vertical_velocity > 0.0 {
             let delta = self.vertical_velocity * STEP - 0.5 * GRAVITY * STEP * STEP;
             self.vertical_velocity -= GRAVITY * STEP;
@@ -159,6 +188,10 @@ impl Body {
         // clipped by actual contact normals. Opposing input cannot be discarded
         // at a wall before an outward impulse gets applied.
         for normal in contacts {
+            self.control_velocity -= normal * self.control_velocity.dot(normal).min(0.0);
+            if let Some(momentum) = &mut self.airborne_momentum {
+                *momentum -= normal * momentum.dot(normal).min(0.0);
+            }
             self.impulse_velocity -= normal * self.impulse_velocity.dot(normal).min(0.0);
             if normal.y.abs() > 0.5 && self.vertical_velocity * normal.y < 0.0 {
                 self.vertical_velocity = 0.0;
@@ -197,19 +230,60 @@ mod tests {
     }
 
     #[test]
-    fn walking_running_and_diagonals_preserve_m01_speed() {
+    fn default_walk_run_and_diagonals_share_four_point_five_speed() {
         let world = floor(30);
-        for (direction, run, expected) in [
-            (Vec3::X, false, WALK),
-            (Vec3::X + Vec3::Z, false, WALK),
-            (Vec3::X, true, RUN),
+        for (direction, run) in [
+            (Vec3::X, false),
+            (Vec3::X + Vec3::Z, false),
+            (Vec3::X, true),
+            (Vec3::X + Vec3::Z, true),
         ] {
             let mut body = Body::default();
             let mut feet = Vec3::ZERO;
             for _ in 0..120 {
                 body.tick(&mut feet, direction, run, false, &world);
             }
-            assert!((feet.xz().length() - expected).abs() < 0.001);
+            assert!((feet.xz().length() - 4.5).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn human_shadow_share_one_speed_and_creatures_keep_movement_profiles() {
+        let world = floor(30);
+        let tuning = crate::EncounterTuning::default();
+        for (species, walk, run) in [
+            (crate::Species::Human, 4.5, 4.5),
+            (crate::Species::Shadow, 4.5, 4.5),
+            (
+                crate::Species::Goblin,
+                tuning.goblin_walk,
+                tuning.goblin_run,
+            ),
+            (
+                crate::Species::Shaman,
+                tuning.shaman_walk,
+                tuning.shaman_run,
+            ),
+        ] {
+            for (request_run, expected) in [(false, walk), (true, run)] {
+                let mut actor = crate::Actor::spawn(1, Vec3::ZERO, Vec3::X);
+                actor.species = species;
+                for _ in 0..120 {
+                    crate::motion::tick(
+                        &mut actor,
+                        Vec3::X,
+                        request_run,
+                        false,
+                        false,
+                        &world,
+                        &tuning,
+                    );
+                }
+                assert!(
+                    (actor.feet.x - expected).abs() < 0.001,
+                    "{species:?}, run={request_run}"
+                );
+            }
         }
     }
 
@@ -275,6 +349,50 @@ mod tests {
     }
 
     #[test]
+    fn reported_bridge_stride_steps_without_ever_embedding_the_player() {
+        let geometry = ArenaVoxelGeometry {
+            radius: 187,
+            level_height: 0.35,
+            ..Default::default()
+        };
+        for sign in [-1_i16, 1] {
+            let step = HexCoord::from_axial(i32::from(sign) * 24, 0);
+            let mut view = ArenaTerrainView::default();
+            for coord in step.within_radius(3) {
+                view.voxels.insert(TilePos::new(coord, 45), SubstanceId(1));
+            }
+            view.voxels.insert(TilePos::new(step, 46), SubstanceId(1));
+            let mut world = CollisionWorld::default();
+            world.refresh(&view, geometry);
+            let direction = Vec3::X * -f32::from(sign);
+            let mut feet = Vec3::new(f32::from(sign) * 42.685_158, 15.750_1, 0.0);
+            let mut body = Body::default();
+            assert!(world.clear(feet, BODY_HEIGHT, BODY_RADIUS));
+            let original = feet;
+            body.tick(&mut feet, direction, true, false, &world);
+            assert!(
+                world.clear(feet, BODY_HEIGHT, BODY_RADIUS),
+                "first reported stride embedded: {feet:?}"
+            );
+            assert!(
+                feet.y > original.y + 0.3,
+                "must take the actual0.35 step: {feet:?}"
+            );
+            let target = step.to_world(geometry.top(TilePos::new(step, 46)));
+            for _ in 0..40 {
+                let direction = (target - feet).with_y(0.0);
+                body.tick(&mut feet, direction, true, false, &world);
+                assert!(
+                    world.clear(feet, BODY_HEIGHT, BODY_RADIUS),
+                    "later stride embedded: {feet:?}"
+                );
+            }
+            assert!((feet.y - target.y).abs() < 0.001);
+            assert!(feet.with_y(0.0).distance(target.with_y(0.0)) < 0.1);
+        }
+    }
+
+    #[test]
     fn one_level_step_is_accepted_but_two_levels_require_a_jump() {
         let make_world = |levels| {
             let mut view = ArenaTerrainView {
@@ -317,6 +435,116 @@ mod tests {
             body.tick(&mut feet, Vec3::X, false, tick == 0, &high);
         }
         assert!(feet.x > 2.0);
+    }
+
+    fn expedition_ledge(levels: i32, sign: f32) -> CollisionWorld {
+        let geometry = ArenaVoxelGeometry {
+            level_height: 0.35,
+            ..Default::default()
+        };
+        let mut view = ArenaTerrainView::default();
+        for coord in HexCoord::ORIGIN.within_radius(12) {
+            let top = if coord.to_world(0.0).x * sign > 0.9 {
+                levels
+            } else {
+                0
+            };
+            for level in 0..=top {
+                view.voxels
+                    .insert(TilePos::new(coord, level), SubstanceId(1));
+            }
+        }
+        let mut world = CollisionWorld::default();
+        world.refresh(&view, geometry);
+        world
+    }
+
+    #[test]
+    fn expedition_jump_traverses_three_voxel_ledge_and_lands_on_top() {
+        for sign in [-1.0, 1.0] {
+            let world = expedition_ledge(3, sign);
+            let mut actor = crate::Actor::spawn(0, Vec3::ZERO, Vec3::X * sign);
+            actor.configure_expedition_player();
+            let tuning = crate::EncounterTuning::default();
+            // Approach the full-height ledge on foot first: ordinary stepping cannot climb it.
+            for _ in 0..60 {
+                crate::motion::tick(
+                    &mut actor,
+                    Vec3::X * sign,
+                    false,
+                    false,
+                    false,
+                    &world,
+                    &tuning,
+                );
+            }
+            assert!(actor.feet.x * sign < 0.63 && actor.feet.y.abs() < 0.001);
+            for tick in 0..180 {
+                crate::motion::tick(
+                    &mut actor,
+                    Vec3::X * sign,
+                    false,
+                    tick == 0,
+                    false,
+                    &world,
+                    &tuning,
+                );
+                assert!(
+                    world.clear(actor.feet, actor.dimensions.y, actor.dimensions.x * 0.5),
+                    "embedded on three-voxel jump: {:?}",
+                    actor.feet
+                );
+            }
+            assert!(
+                actor.feet.x * sign > 3.0,
+                "did not cross ledge: {:?}",
+                actor.feet
+            );
+            assert!(
+                (actor.feet.y - 1.05).abs() < 0.001 && actor.grounded,
+                "did not land on plateau: {:?}",
+                actor.feet
+            );
+        }
+    }
+
+    #[test]
+    fn expedition_jump_cannot_traverse_four_voxel_ledge() {
+        for sign in [-1.0, 1.0] {
+            let world = expedition_ledge(4, sign);
+            for approach in [0.0, 0.4, 0.8, 1.2] {
+                let mut actor =
+                    crate::Actor::spawn(0, Vec3::X * (-approach * sign), Vec3::X * sign);
+                actor.configure_expedition_player();
+                let tuning = crate::EncounterTuning::default();
+                for tick in 0..180 {
+                    crate::motion::tick(
+                        &mut actor,
+                        Vec3::X * sign,
+                        false,
+                        tick == 0,
+                        false,
+                        &world,
+                        &tuning,
+                    );
+                    assert!(
+                        world.clear(actor.feet, actor.dimensions.y, actor.dimensions.x * 0.5),
+                        "embedded on four-voxel jump: {:?}",
+                        actor.feet
+                    );
+                    assert!(
+                        actor.feet.x * sign < 0.63,
+                        "crossed four-voxel ledge from {approach}: {:?}",
+                        actor.feet
+                    );
+                }
+                assert!(
+                    actor.feet.y.abs() < 0.001 && actor.grounded,
+                    "did not return to lower floor: {:?}",
+                    actor.feet
+                );
+            }
+        }
     }
 
     #[test]

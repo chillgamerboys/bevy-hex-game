@@ -31,7 +31,10 @@ struct SkyParams {
     moon_halo_strength: f32,
     lower_glow_angular_radius_radians: f32,
     lower_glow_strength: f32,
-    _padding: f32,
+    cloud_phase_seconds: f32,
+    upper_hemisphere_clouds: f32,
+    underwater_color: vec3<f32>,
+    underwater_strength: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyParams;
@@ -217,9 +220,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // an edge case: the gameplay camera looks *down*, so most of the sky on screen is
     // below the horizon. Be clear about what this costs — it does not extend the
     // pattern downwards, it **mirrors** it, so the lower sky is a reflection of the
-    // upper one and the two meet in a fold at `dir.y == 0`. The fold is normally off
-    // screen or behind terrain; it is visible if you orbit until the horizon is in
-    // frame, and is the thing to revisit if this ever needs to look right there.
+    // upper one and the two meet in a fold at `dir.y == 0`. Open-ocean profiles
+    // suppress this lower mask below; legacy tactical skies retain their reflection.
     let theta = acos(clamp(abs(dir.y), 0.0, 1.0));
     // The radial unit vector directly, rather than `atan2` then `cos`/`sin` of it:
     // identical result, and it has no undefined case at the pole where `dir.xz` is
@@ -230,7 +232,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (horizontal_len > 1e-6) {
         radial = horizontal / horizontal_len;
     }
-    let p = radial * theta * sky.hex_scale;
+    let p = radial * theta * sky.hex_scale
+        + vec2<f32>(0.012, 0.004) * sky.cloud_phase_seconds;
 
     // Accumulate cloud density over the cell the pixel is in and its six neighbours,
     // so a cloud spanning several present cells is one continuous mass.
@@ -257,8 +260,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // artistic softening on top of that analytic width.
     let w = max(fwidth(density), 0.001) + sky.cloud_softness;
     let mask = smoothstep(0.5 - w, 0.5 + w, density);
+    // A mirrored lower sky otherwise shows giant false cloud reflections through
+    // transparent water. Fade to a clear horizon, without a sharp cloud cutoff.
+    let hemisphere = mix(1.0, smoothstep(0.0, 0.12, dir.y), sky.upper_hemisphere_clouds);
 
     // Clouds composite last so a dense cloud can obscure a celestial disc and halo.
-    color = mix(color, sky.cloud_color, clamp(mask, 0.0, 1.0));
+    color = mix(color, sky.cloud_color, clamp(mask * hemisphere, 0.0, 1.0));
+    // Rays below the horizon cannot hit an ocean surface above the camera.
+    // At the finite seabed boundary they reach this dome: apply the same far
+    // water fog as opaque geometry instead of exposing a bright strip of air.
+    // Looking upward retains a muted sky window; no geometry or water is added.
+    let air_window = smoothstep(-0.02, 0.30, dir.y);
+    let submerged_fog = sky.underwater_strength * (1.0 - 0.35 * air_window);
+    color = mix(color, sky.underwater_color, submerged_fog);
     return vec4<f32>(color, 1.0);
 }

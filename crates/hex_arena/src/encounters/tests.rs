@@ -11,6 +11,10 @@ mod duel_player_tests;
 #[path = "visibility_tests.rs"]
 mod visibility_tests;
 
+#[path = "liquid_query_tests.rs"]
+mod liquid_query_tests;
+#[path = "probe_cache_tests.rs"]
+mod probe_cache_tests;
 #[path = "recovery_tests.rs"]
 mod recovery_tests;
 
@@ -448,9 +452,7 @@ fn duel_outcomes_ignore_all_encounter_tuning_and_keep_two_actor_identity() {
     for tick in 0..1800 {
         let input = ActorIntent {
             aim: Vec3::X,
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: tick % 90 == 0,
-            cast_released: tick % 90 == 0,
+            high_jump: tick % 90 == 0,
             ..Default::default()
         };
         let ca = a.advance(input, &view, geometry, materials, &tuning);
@@ -669,7 +671,7 @@ fn shaman_waits_for_reaction_charges_then_cancels_if_cover_closes_before_release
 }
 
 #[test]
-fn dragon_damage_triggers_retreat_flight_then_regeneration_and_landing() {
+fn dragon_critical_health_triggers_escape_flight_then_regeneration_and_landing() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
     pose(&mut session, 1, Vec3::ZERO, Vec3::NEG_Z);
     pose(&mut session, 0, Vec3::NEG_Z * 8.0, Vec3::Z);
@@ -687,7 +689,10 @@ fn dragon_damage_triggers_retreat_flight_then_regeneration_and_landing() {
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
     assert!(dragon.flying && dragon.feet.y > 0.3);
     assert!((dragon.hp - 70.0).abs() < 0.001);
-    assert!(!session.barriers().is_empty());
+    assert!(
+        session.barriers().is_empty(),
+        "critical escape keeps moving"
+    );
     session.bot_enabled = false;
     ticks(&mut session, 500, &view, geometry, materials, &tuning);
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
@@ -1104,8 +1109,8 @@ fn returning_shadow_defends_only_nearby_visible_contact_and_keeps_homeward_motio
             .get(&1)
             .expect("shadow")
             .casts
-            .get(Spell::AreaBlast.index()),
-        Some(&1)
+            .get(Spell::HighJump.index()),
+        Some(&0)
     );
     let shadow = session.actors.iter().find(|a| a.id == 1).expect("shadow");
     assert!(
@@ -1227,3 +1232,6 @@ fn breath_chips_intersected_hex_face_even_when_its_center_is_outside_the_cone() 
         .all(|i| i.power == tuning.encounters.breath_terrain_power));
     assert!(impacts.iter().all(|i| !i.volume.contains(&outside)));
 }
+
+#[path = "troll_tests.rs"]
+mod troll_tests;

@@ -19,7 +19,7 @@ use hex_assets::{
 use hex_core::{
     GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexSpan, HexTile,
     PresentationOcclusion, PresentationOcclusionReason, ResolvedMapSeed, Screen, SimSeeds,
-    SubstanceId, TilePos, TraversalBlockers, TraversalProfile, UnitId,
+    SubstanceId, TerrainRenderBatch, TilePos, TraversalBlockers, TraversalProfile, UnitId,
 };
 use hex_gameplay_model::{
     CampaignSlotId, CreatorNavigation, MainMenuModel, MainMenuRoute, SandboxBackResult,
@@ -1397,6 +1397,7 @@ fn deployment_marker_material(color: Color) -> StandardMaterial {
 fn on_deployment_tile_clicked(
     click: On<Pointer<Click>>,
     tiles: DeploymentTileQuery,
+    terrain_batches: Query<&TerrainRenderBatch>,
     table: Option<Res<SubstanceTable>>,
     blockers: Option<Res<TraversalBlockers>>,
     mut session: Option<ResMut<DeploymentSession>>,
@@ -1404,7 +1405,20 @@ fn on_deployment_tile_clicked(
     if click.button != PointerButton::Primary {
         return;
     }
-    let Ok((pos, _, _, _)) = tiles.get(click.event_target()) else {
+    let target = if tiles.get(click.event_target()).is_ok() {
+        Some(click.event_target())
+    } else {
+        click.event.hit.position.and_then(|position| {
+            terrain_batches
+                .get(click.event_target())
+                .ok()?
+                .resolve_hit(position, click.event.hit.normal)
+        })
+    };
+    let Some(target) = target else {
+        return;
+    };
+    let Ok((pos, _, _, _)) = tiles.get(target) else {
         return;
     };
     let Some(session) = session.as_deref_mut() else {
@@ -2248,7 +2262,12 @@ mod tests {
         )
     }
 
-    fn trigger_primary_click(app: &mut App, target: Entity) {
+    fn trigger_primary_hit(
+        app: &mut App,
+        target: Entity,
+        position: Option<Vec3>,
+        normal: Option<Vec3>,
+    ) {
         let window = app.world_mut().spawn_empty().id();
         let target_window = bevy::window::WindowRef::Entity(window)
             .normalize(Some(window))
@@ -2259,12 +2278,16 @@ mod tests {
         };
         let click = Click {
             button: PointerButton::Primary,
-            hit: HitData::new(target, 0.0, None, None),
+            hit: HitData::new(target, 0.0, position, normal),
             duration: Duration::from_millis(1),
             count: 1,
         };
         app.world_mut()
             .trigger(Pointer::new(PointerId::Mouse, location, click, target));
+    }
+
+    fn trigger_primary_click(app: &mut App, target: Entity) {
+        trigger_primary_hit(app, target, None, None);
     }
 
     fn sandbox_navigation_app(initial: Screen) -> App {
@@ -2698,6 +2721,81 @@ mod tests {
             SandboxDeploymentStage::Review
         );
         assert!(app.world().resource::<DeploymentSession>().complete());
+    }
+
+    #[test]
+    fn deployment_batch_cap_hit_resolves_without_a_normal_but_side_hit_fails_closed() {
+        let fixture = content_fixture().expect("the shipped content fixture should resolve");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_observer(on_deployment_tile_clicked)
+            .insert_resource(fixture.substances.clone())
+            .insert_resource(deployment_session(
+                map_definition(),
+                vec![RosterChoice::Template("hedge-mage".to_owned())],
+                vec![RosterChoice::Template("raider".to_owned())],
+            ));
+        let grass = fixture
+            .substances
+            .id("grass")
+            .expect("the fixture has standable grass");
+        let cap_position = TilePos::new(HexCoord::from_axial(8, -3), 0);
+        let side_position = TilePos::new(HexCoord::from_axial(-7, 2), 0);
+        let span = HexSpan::new(0.0, 0.4);
+        let cap_logical = app
+            .world_mut()
+            .spawn((HexTile, cap_position, span, grass, Headroom(10)))
+            .id();
+        let side_logical = app
+            .world_mut()
+            .spawn((HexTile, side_position, span, grass, Headroom(10)))
+            .id();
+        let batch = app
+            .world_mut()
+            .spawn(TerrainRenderBatch::new(
+                hex_core::TerrainChunkRoot { q: 0, r: 0 },
+                grass,
+                vec![
+                    hex_core::TerrainPickRun::new(cap_logical, cap_position, span),
+                    hex_core::TerrainPickRun::new(side_logical, side_position, span),
+                ],
+            ))
+            .id();
+
+        trigger_primary_hit(
+            &mut app,
+            batch,
+            Some(cap_position.coord.to_world(span.top)),
+            None,
+        );
+        let party_slot = SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::One);
+        let enemy_slot = SandboxDeploymentSlot::new(SandboxSide::Enemies, SandboxSlotIndex::One);
+        assert_eq!(
+            app.world()
+                .resource::<DeploymentSession>()
+                .deployment
+                .placement(party_slot),
+            Some(cap_position),
+            "the exact top plane should resolve through the render batch"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DeploymentSession>()
+                .deployment
+                .active_slot(),
+            Some(enemy_slot)
+        );
+
+        let mut side_hit = side_position.coord.to_world(span.centre());
+        side_hit.x += 0.5 * hex_core::config::HEX_SMALL_DIAMETER;
+        trigger_primary_hit(&mut app, batch, Some(side_hit), None);
+        let deployment = &app.world().resource::<DeploymentSession>().deployment;
+        assert_eq!(deployment.placement(enemy_slot), None);
+        assert_eq!(
+            deployment.active_slot(),
+            Some(enemy_slot),
+            "an unprovable normal-free side hit must leave deployment unchanged"
+        );
     }
 
     #[test]

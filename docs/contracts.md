@@ -21,17 +21,39 @@ Detail lives in the doc named in the last column. Where a contract is *asked* ra
 than agreed, the fallback the gameplay side ships without it is in
 [boundary.md](planning/boundary.md).
 
+## V4 world platform
+
+These fresh interfaces are implemented in the opt-in V4 explorer on the V4 foundation
+wave. They do not replace the shipped V3 rows below or promise V3 save compatibility.
+The implementation and ownership are specified in
+[world-platform-v4.md](systems/world-platform-v4.md).
+
+| Contract | Publisher | Consumer | Status |
+| --- | --- | --- | --- |
+| `WorldSpec` / `RegionSpec`, resolved boundary inputs | world authoring | deterministic regional compiler | partial — V4 authoring tool |
+| `WorldManifest`, `RegionDescriptor`, `ChunkPackage`, stable integer identities | world compiler | world runtime and summary atlas | partial — V4 pipeline |
+| `WorldQuery`, explicit availability, `ResidencyRequest` and pins | world runtime / operation owners | movement, sight, edits and presentation | partial — V4 consumers |
+| `WorldEditTransaction`, `WorldObjectEditTransaction`, partition revisions and deltas | gameplay/tool requester → world authority | local projections, persistence and reconnect | partial — V4 runtime and loopback acceptance |
+| Opaque owner attachments in the atomic world checkpoint | owning gameplay adapter → persistence | restored gameplay owner | partial — V4 explorer actor checkpoints |
+| Observer facts, remembered supports/landmarks and exact visible absence | world perception | principal-private knowledge and atlas | partial — V4 explorer; production gameplay fog consumer remains separate |
+
+`hex_world_contracts` is a shared vocabulary boundary, not a second world authority.
+Encounter scheduling and action-point rules remain gameplay-owned and are not encoded
+in the terrain compiler or residency clock.
+
 ## Terrain and geometry
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
 | `HexTile` + `TilePos`, `RunBottom`, `HexSpan`, `SubstanceId`, `Headroom` on every material-run entity | world | gameplay | live | [systems/map.md](systems/map.md) |
+| `TerrainRenderBatch` / `TerrainPickRun` — bounded disposable combined-mesh lookup from a world-space pointer hit to its exact logical material-run entity; chunk and entity ids remain outside saves and fingerprints | world | gameplay picking / presentation tooling | live | [systems/map.md](systems/map.md) |
 | `TraversalProfile` / `TraversalEndpoint` — standability and step predicates | core | both | live | [systems/map.md](systems/map.md) |
 | `MapAnchorId` / `MapAnchors` — named exact surfaces | world | gameplay | live | [systems/map.md](systems/map.md) |
+| `MapObservationAnchors` — named exact scenic surfaces that are never placement or movement targets | world | review presentation | live | [systems/map.md](systems/map.md), [systems/camera.md](systems/camera.md) |
 | `SpecialMovementRegions` — deliberately opaque region ids | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `TerrainReady` — terrain built and validated | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `MapViewHint` — generated camera framing | world | presentation | live | [systems/map.md](systems/map.md) |
-| `InteriorRegions` / `CutawayOccluder` — interior membership plus review-only roof metadata | world | presentation tooling | live | [systems/map.md](systems/map.md) |
+| `InteriorRegions` / `CutawayOccluder` — interior membership plus review-only roof metadata | world | presentation tooling | live | [systems/map.md](systems/map.md), [systems/interiors.md](systems/interiors.md) |
 | `ResolvedMapSeed` — the seed a session actually used | game | world | live | [development/config.md](development/config.md) |
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
@@ -52,8 +74,8 @@ than agreed, the fallback the gameplay side ships without it is in
 |---|---|---|---|---|
 | `UnitId` + `Faction` on unit entities — stable identity and shared side vocabulary | gameplay | perception / combat / presentation | live | [systems/combat.md](systems/combat.md) |
 | `MovingTo` + `Busy` — bounded exact-surface domain movement and legality; never reconstructed from animation components | gameplay | combat / AI / presentation | live | [systems/combat.md](systems/combat.md) |
-| `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
-| `GameplayLight` + derived `LightDomain` — fixed authored V3 sources, including Cave fixtures and Crystal Ascent landing/heart pairs, published and consumed | world | perception | live | [systems/perception.md](systems/perception.md) |
+| `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/lighting.md](systems/lighting.md), [systems/perception.md](systems/perception.md) |
+| `GameplayLight` + derived `LightDomain` — fixed authored V3 sources, including Cave fixtures, Crystal Ascent landing/heart pairs, and Crystal Mountain's paired Bright-4/Dim-18 tunnel crystals, published and consumed | world | perception | live | [systems/lighting.md](systems/lighting.md), [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
 | Exact paired sight bundle — head center to target top center plus six matching standing-body-top-corner to target-corner strict-interior rays; one observer owns the three-of-six threshold; character LOS alone omits a run's exposed top voxel when its top is within one level of that observer's support and the run continues below it, while the raw symmetric kernel retains full runs | core / gameplay | perception | live | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
@@ -179,6 +201,18 @@ spans, non-solid liquid spans, edit-protected level intervals and latest-revisio
 dirty columns. Full rebuild marks resets; consumers missing a revision rebuild
 rather than assuming the latest delta is complete. World publication commits the
 selection before actor reset. Only the world writes these facts.
+
+`ArenaTerrainView.expedition` is an optional passive authored-site extension.
+`ArenaExpeditionSites` publishes named encounter deployment surfaces, stack-safe
+route junctions and bidirectional ribbons, and exact fountain liquid volumes.
+World validates support, full route width/grade, endpoints and references before
+publishing the complete snapshot. Gameplay owns roster/profile selection, complete
+body-pose admission, route orders and perception, fountain healing and consumption.
+The data contains no enemy stats, defeat gates, healing amounts or reward state.
+Legacy packages leave the field absent. A published route never authorizes movement
+through later terrain or actor obstructions. The
+[expedition wave](planning/waves/forest-expedition/manifest.md) tracks producer and
+consumer implementation; the vocabulary alone does not enable the new encounters.
 
 ArenaVoxelGeometry publishes vertical_offset and inclusive min/max levels.
 Upper-face height is level*level_height+vertical_offset: accepted Duel uses 0,

@@ -3,7 +3,7 @@
 use super::{ArenaCamera, ViewState};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use hex_arena::{preview, ArenaSession, ArenaTuning, Species, Spell};
+use hex_arena::{preview, ArenaSession, ArenaTuning, ExpeditionRole, Species, Spell};
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 
 #[derive(Component)]
@@ -122,7 +122,7 @@ pub(super) fn actors(
             *visibility = actor_visibility;
             continue;
         }
-        let (cloth, skin) = match actor.species {
+        let (mut cloth, mut skin) = match actor.species {
             Species::Human => (Color::srgb(0.12, 0.57, 0.68), Color::srgb(0.83, 0.67, 0.48)),
             Species::Shadow => (Color::srgb(0.83, 0.22, 0.16), Color::srgb(0.83, 0.67, 0.48)),
             Species::Dragon => (
@@ -135,15 +135,43 @@ pub(super) fn actors(
             Species::Wisp => (Color::srgb(1.0, 0.45, 0.1), Color::srgb(1.0, 0.85, 0.4)),
             Species::Worm => (Color::srgb(0.69, 0.43, 0.27), Color::srgb(0.60, 0.36, 0.24)),
         };
+        match actor.expedition_role() {
+            Some(ExpeditionRole::BabyGoblin) => {
+                cloth = Color::srgb(0.47, 0.37, 0.19);
+                skin = Color::srgb(0.54, 0.70, 0.29);
+            }
+            Some(ExpeditionRole::Troll) => {
+                cloth = Color::srgb(0.39, 0.16, 0.10);
+                skin = Color::srgb(0.24, 0.38, 0.19);
+            }
+            Some(ExpeditionRole::MountainShadow) => {
+                cloth = Color::srgb(0.24, 0.16, 0.36);
+                skin = Color::srgb(0.50, 0.42, 0.61);
+            }
+            _ => {}
+        }
+        let summit = actor.dragon_tier() == hex_arena::DragonTier::Summit;
+        if summit {
+            cloth = Color::srgb(0.22, 0.11, 0.38);
+            skin = Color::srgb(0.64, 0.82, 0.92);
+        }
         let palette = [
             if super::spectator::active(&session) {
                 super::spectator::team_color(&session, actor.team)
             } else {
                 cloth
             },
-            Color::srgb(0.055, 0.075, 0.095),
+            if summit {
+                Color::srgb(0.43, 0.57, 0.76)
+            } else {
+                Color::srgb(0.055, 0.075, 0.095)
+            },
             skin,
-            Color::srgb(1.0, 0.62, 0.15),
+            if summit {
+                Color::srgb(0.67, 0.95, 1.0)
+            } else {
+                Color::srgb(1.0, 0.62, 0.15)
+            },
         ]
         .map(|base_color| {
             materials.add(StandardMaterial {
@@ -244,10 +272,13 @@ pub(super) fn effects(
     state: Res<ViewState>,
     mut gizmos: Gizmos,
 ) {
-    let color = |spell| match spell {
-        Spell::Shield => Color::srgb(0.36, 0.85, 0.95),
-        Spell::Fireball => Color::srgb(1.0, 0.37, 0.07),
-        Spell::AreaBlast => Color::srgb(0.70, 0.40, 1.0),
+    let color = |kind| match kind {
+        hex_arena::VisualEffectKind::Shield => Color::srgb(0.36, 0.85, 0.95),
+        hex_arena::VisualEffectKind::Fireball | hex_arena::VisualEffectKind::FireballContact => {
+            Color::srgb(1.0, 0.37, 0.07)
+        }
+        hex_arena::VisualEffectKind::RadialBurst => Color::srgb(0.70, 0.40, 1.0),
+        hex_arena::VisualEffectKind::HighJump => Color::srgb(0.36, 0.85, 0.95),
     };
     for projectile in &session.projectiles {
         if projectile.appearance() == hex_arena::ProjectileAppearance::Boulder {
@@ -261,7 +292,7 @@ pub(super) fn effects(
             );
             continue;
         }
-        let c = color(projectile.spell);
+        let c = color(projectile.spell.into());
         gizmos.sphere(Isometry3d::from_translation(projectile.position), 0.13, c);
         let start = projectile.position - projectile.velocity.normalize_or_zero() * 0.8;
         for offset in [Vec3::ZERO, Vec3::Y * 0.025, Vec3::X * 0.025] {
@@ -270,6 +301,18 @@ pub(super) fn effects(
     }
     for effect in &session.effects {
         let progress = (effect.age / effect.lifetime.max(0.01)).clamp(0.0, 1.0);
+        if effect.kind == hex_arena::VisualEffectKind::FireballContact {
+            let reach = effect.radius * (1.0 - progress * 0.6);
+            let c = color(effect.kind).with_alpha(1.0 - progress);
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                gizmos.line(
+                    effect.center - axis * reach,
+                    effect.center + axis * reach,
+                    c,
+                );
+            }
+            continue;
+        }
         let radius = effect.radius * (0.3 + progress * 0.7);
         let c = color(effect.kind).with_alpha(1.0 - progress);
         gizmos.sphere(Isometry3d::from_translation(effect.center), radius, c);
@@ -287,15 +330,24 @@ pub(super) fn effects(
     };
     let enabled = match actor.selected {
         Spell::Shield => state.previews.first().copied().unwrap_or(false),
-        Spell::Fireball => state.previews.get(1).copied().unwrap_or(false),
-        Spell::AreaBlast => false,
+        Spell::Fireball => {
+            state.previews.get(1).copied().unwrap_or(false)
+                && session
+                    .progress()
+                    .is_none_or(|progress| progress.fireball_guide_unlocked)
+                && (session.progress().is_none()
+                    || actor
+                        .charge()
+                        .is_some_and(|charge| charge.spell == Spell::Fireball))
+        }
+        Spell::HighJump => false,
     };
     if !enabled || state.paused {
         return;
     }
     let predicted = preview(&session, &view, &geometry, &tuning);
     let c = if predicted.valid {
-        color(actor.selected)
+        color(actor.selected.into())
     } else {
         Color::srgba(1.0, 0.45, 0.26, 0.7)
     };
@@ -321,10 +373,14 @@ pub(super) fn effects(
                 gizmos.line(center + a, center + b, c);
             }
         }
-    } else if let Some(impact) = predicted.impact {
+    } else if let Some(impact) = predicted.impact.filter(|_| {
+        session
+            .progress()
+            .is_none_or(|progress| progress.explosions_unlocked)
+    }) {
         gizmos.sphere(
             Isometry3d::from_translation(impact),
-            tuning.fireball_radius(),
+            session.player_tuning(&tuning).fireball_radius(),
             c.with_alpha(0.5),
         );
     }
@@ -443,16 +499,23 @@ pub(super) fn solid_effects(
     for effect in &session.effects {
         let progress = (effect.age / effect.lifetime.max(0.01)).clamp(0.0, 1.0);
         let material = match effect.kind {
-            Spell::Shield => &assets.shield_wave,
-            Spell::Fireball => &assets.fire_wave,
-            Spell::AreaBlast => &assets.blast_wave,
+            hex_arena::VisualEffectKind::FireballContact => continue,
+            hex_arena::VisualEffectKind::Shield => &assets.shield_wave,
+            hex_arena::VisualEffectKind::Fireball => &assets.fire_wave,
+            hex_arena::VisualEffectKind::RadialBurst => &assets.blast_wave,
+            hex_arena::VisualEffectKind::HighJump => &assets.shield_wave,
         };
         commands.spawn((
             TransientEffect,
             Mesh3d(assets.sphere.clone()),
             MeshMaterial3d(material.clone()),
-            Transform::from_translation(effect.center)
-                .with_scale(Vec3::splat(effect.radius * (0.3 + progress * 0.7))),
+            Transform::from_translation(effect.center).with_scale(
+                if effect.kind == hex_arena::VisualEffectKind::HighJump {
+                    Vec3::new(1.0, 0.18, 1.0) * effect.radius * (0.5 + progress * 0.5)
+                } else {
+                    Vec3::splat(effect.radius * (0.3 + progress * 0.7))
+                },
+            ),
         ));
     }
 }

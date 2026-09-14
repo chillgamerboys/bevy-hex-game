@@ -1,17 +1,25 @@
 //! Explicit world/gameplay contracts for the isolated real-time arena experiment.
 
 mod burrow;
+mod expedition;
+mod exploration;
+pub use exploration::{
+    ArenaAvailability, ArenaMapCapabilities, ArenaResidency, ArenaStreamInterest,
+};
 
 pub use burrow::{
     ArenaBurrowChange, ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRejection,
     ArenaBurrowRequest, ArenaBurrowResult, MAX_ARENA_BURROW_CELLS,
+};
+pub use expedition::{
+    ArenaEncounterSite, ArenaExpeditionRoute, ArenaExpeditionSites, ArenaFountainVolume,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
-use bevy_math::Vec3;
+use bevy_math::{Vec2, Vec3};
 
 use crate::{ElementId, HexCoord, SubstanceId, TilePos};
 
@@ -32,6 +40,10 @@ pub enum ArenaMap {
     Fort,
     /// Three separate encounters in the authored seven-region world.
     SevenRegions,
+    /// V4 forest camps, central river bridge and three mountain Dragons.
+    ForestMassif,
+    /// Streamed northern islands with optional exploration flight and no encounters.
+    NorthernArchipelago,
 }
 
 /// Composition of the compact Fort encounter.
@@ -174,9 +186,26 @@ impl ArenaVoxelGeometry {
                         result.push(*pos);
                     }
                 }
+                if let Some(spans) = view.object_columns.get(&coord) {
+                    for span in spans {
+                        let lower = self
+                            .voxel_at(center - Vec3::Y * (radius + self.level_height))
+                            .map_or(span.bottom.level, |pos| pos.level);
+                        let upper = self
+                            .voxel_at(center + Vec3::Y * (radius + self.level_height))
+                            .map_or(span.top_level, |pos| pos.level);
+                        for level in span.bottom.level.max(lower)..=span.top_level.min(upper) {
+                            let position = TilePos::new(coord, level);
+                            if self.center(position).distance_squared(center) <= radius * radius {
+                                result.push(position);
+                            }
+                        }
+                    }
+                }
             }
         }
         result.sort_unstable();
+        result.dedup();
         result
     }
 }
@@ -192,7 +221,7 @@ pub struct ArenaSolidSpan {
     pub substance: SubstanceId,
 }
 
-/// Indestructible authored-object occupancy, separate from terrain HP.
+/// Authored-object collision occupancy, with damage policy supplied separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArenaStaticSpan {
     /// Lowest occupied voxel and horizontal identity.
@@ -217,9 +246,26 @@ pub struct ArenaDeploymentRegion {
     pub surfaces: BTreeSet<TilePos>,
 }
 
+/// Identity of the accepted runtime package behind an arena publication.
+/// This is passive provenance; material edits change the view revision, not its
+/// original source identity. Legacy non-package arenas publish no identity.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ArenaPackageIdentity {
+    /// Stable identity from the loaded, validated world manifest.
+    pub world_id: String,
+    /// Canonical fingerprint from that exact accepted manifest.
+    pub manifest_fingerprint: u64,
+    /// XXH3-64 of the exact bounded arena-sites.ron bytes decoded for this world.
+    /// Absent for legacy packages without an expedition companion.
+    pub sites_fingerprint: Option<u64>,
+}
+
 /// Complete immutable-by-convention occupancy projection; only the map producer writes it.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ArenaTerrainView {
+    /// Streamed maps explicitly distinguish unloaded columns from admitted air.
+    /// None retains the complete finite publication contract of legacy maps.
+    pub residency: Option<ArenaResidency>,
     /// Changes on reset or material mutation; partial HP changes do not alter collision.
     pub revision: u64,
     /// Every resident solid voxel keyed by its exact stack-safe identity.
@@ -228,8 +274,16 @@ pub struct ArenaTerrainView {
     pub spawns: [Vec3; 2],
     /// Recipe belonging to this publication, never an uncommitted menu choice.
     pub selection: ArenaSelection,
+    /// Accepted runtime package identity, retained across edits and cached resets.
+    /// None for arena recipes that do not load a V4 runtime package.
+    pub package_identity: Option<ArenaPackageIdentity>,
     /// Authored region and encounter sites in the published world coordinate space.
     pub anchors: BTreeMap<String, Vec3>,
+    /// Optional authored expedition geometry. World validates all supporting
+    /// surfaces and route ribbons before publication; gameplay owns roster,
+    /// activation, movement orders, healing amounts and reward state.
+    /// Absent on legacy packages and non-expedition maps.
+    pub expedition: Option<ArenaExpeditionSites>,
     /// Optional authored spectator sides, in roster order. No gameplay-generated
     /// search may escape these surfaces onto unrelated floors or rooftops.
     pub battle_deployment: Option<[ArenaDeploymentRegion; 2]>,
@@ -242,13 +296,84 @@ pub struct ArenaTerrainView {
     pub dirty_columns: BTreeSet<HexCoord>,
     /// A reset or recipe change requires rebuilding every collision column.
     pub full_rebuild: bool,
-    /// Static object query geometry; not terrain and never a terrain damage target.
+    /// Static object query geometry, refreshed with the same dirty columns as terrain.
     pub static_spans: Vec<ArenaStaticSpan>,
+    /// Compact damageable authored-object material runs. Empty on legacy maps.
+    /// Removed cells must be absent here and in `static_spans` at the same revision.
+    pub object_columns: BTreeMap<HexCoord, Vec<ArenaSolidSpan>>,
     /// Non-solid liquid volumes used for dry spawn and route validation.
     pub liquids: Vec<ArenaSolidSpan>,
     /// Inclusive protected edit-level intervals per column, including authored
     /// object supports and liquid topology. Placement previews use the same facts.
     pub edit_protected: BTreeMap<HexCoord, Vec<(i32, i32)>>,
+}
+
+impl ArenaTerrainView {
+    /// Material occupying an exact cell, including destructible authored objects.
+    /// Terrain takes precedence where initial solid contributors overlap.
+    #[must_use]
+    pub fn solid_at(&self, position: TilePos) -> Option<SubstanceId> {
+        self.voxels
+            .get(&position)
+            .copied()
+            .or_else(|| {
+                self.columns.get(&position.coord)?.iter().find_map(|span| {
+                    (span.bottom.level..=span.top_level)
+                        .contains(&position.level)
+                        .then_some(span.substance)
+                })
+            })
+            .or_else(|| {
+                self.object_columns
+                    .get(&position.coord)?
+                    .iter()
+                    .find_map(|span| {
+                        (span.bottom.level..=span.top_level)
+                            .contains(&position.level)
+                            .then_some(span.substance)
+                    })
+            })
+    }
+}
+
+/// Cached, world-owned overview of the authored arena geography.
+///
+/// This disposable image contains no actor or discovery state. Consumers place
+/// their own markers using world X/Z within `min` and `max`. The default empty
+/// image indicates that the selected world has no overview.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ArenaOverview {
+    /// Accepted reset generation belonging to this complete image.
+    pub generation: u64,
+    /// Image width in pixels; zero when unavailable.
+    pub width: u32,
+    /// Image height in pixels; zero when unavailable.
+    pub height: u32,
+    /// Minimum world X/Z corner; minimum Z is north and image row zero.
+    pub min: Vec2,
+    /// Maximum world X/Z corner, exclusive at the far image edge.
+    pub max: Vec2,
+    /// Row-major, straight-alpha sRGB bytes, four bytes per pixel.
+    pub rgba: Vec<u8>,
+}
+
+/// Disposable terrain presentation work remaining before a map can be shown complete.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct ArenaRenderStatus {
+    /// Number of queued terrain chunks; zero permits the ready screen to start.
+    pub pending_chunks: usize,
+}
+
+/// Disposable fountain appearance supplied by game integration to map rendering.
+///
+/// This is never a healing or collision authority. The simulation owns consumed
+/// state; the world's published fountain cells define which liquid is styled.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct ArenaFountainVisuals {
+    /// Reset generation belonging to this snapshot; stale generations are ignored.
+    pub generation: u64,
+    /// Names of unconsumed fountains whose actual water should glow.
+    pub charged: BTreeSet<String>,
 }
 
 /// Accepted material identities published from the same content catalog as damage rules.

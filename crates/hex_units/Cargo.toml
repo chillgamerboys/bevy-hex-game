@@ -14,6 +14,7 @@ hex_anim = { workspace = true }
 hex_ai = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts" }
 # A unit carries its lattice. `LatticeSpec`/`LatticeState`/`LatticeStats` go on at spawn,
 # keyed by archetype — an enemy's lattice is its entire stat block, so this is not a
 # decoration on a unit, it is most of what one is.

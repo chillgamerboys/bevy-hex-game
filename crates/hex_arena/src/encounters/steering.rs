@@ -1,7 +1,13 @@
 //! Bounded creature travel using the production body, including confirmed landings.
 
 use super::*;
+#[cfg(any(test, feature = "test-support"))]
+use crate::cpu_diagnostics::{self, ProbeCounter, ProbeKind};
 use bevy_math::Quat;
+
+#[cfg(test)]
+#[path = "steering_kernel_tests.rs"]
+mod kernel_tests;
 
 /// Frozen pre-recovery movement for the accepted Shadow's patrol/home phases.
 /// Active Shadow combat already returns through its unchanged Bot controller.
@@ -39,14 +45,24 @@ impl ShadowTravel {
             || tick.saturating_sub(self.decided) >= 24
             || actor.feet.distance(self.last_feet) > 2.0
         {
+            #[cfg(any(test, feature = "test-support"))]
+            cpu_diagnostics::decision(
+                tick.saturating_sub(self.decided) >= 24,
+                self.revision != world.revision,
+                actor.feet.distance(self.last_feet) > 2.0,
+            );
             self.direction = Vec3::ZERO;
             if desired.length_squared() >= 0.001 {
+                #[cfg(any(test, feature = "test-support"))]
+                let mut probe = ProbeCounter::new(ProbeKind::Walk);
                 let mut best = f32::NEG_INFINITY;
                 for angle in [0.0, 0.65, -0.65, 1.3, -1.3] {
                     let direction = Quat::from_rotation_y(angle) * desired;
                     let mut body = actor.clone();
                     let mut safe = true;
                     for _ in 0..12 {
+                        #[cfg(any(test, feature = "test-support"))]
+                        probe.step();
                         motion::tick(&mut body, direction, true, false, flight, world, tuning);
                         if !shapes::clear(world, &body, body.feet, body.body_yaw)
                             || (!flight
@@ -179,6 +195,12 @@ impl Steering {
             return (Vec3::ZERO, false);
         }
         if tick >= self.next_decision || self.revision != world.revision {
+            #[cfg(any(test, feature = "test-support"))]
+            cpu_diagnostics::decision(
+                tick >= self.next_decision,
+                self.revision != world.revision,
+                false,
+            );
             self.direction = steer(actor, desired, flight, run, world, view, geometry, tuning);
             self.next_decision = tick + 24;
             self.revision = world.revision;
@@ -204,6 +226,8 @@ impl Steering {
             && tick >= self.next_recovery
         {
             self.next_recovery = tick + 60 + u64::from(actor.id % 5);
+            #[cfg(any(test, feature = "test-support"))]
+            cpu_diagnostics::recovery();
             let descent = descent_route(actor, desired, world, view, geometry, tuning);
             let route = descent
                 .map(|(direction, duration)| (direction, duration, false))
@@ -267,7 +291,9 @@ impl Steering {
 }
 
 pub(super) fn contained(actor: &Actor, geometry: ArenaVoxelGeometry) -> bool {
-    if matches!(actor.species, Species::Wisp | Species::Worm) {
+    if matches!(actor.species, Species::Wisp | Species::Worm)
+        || actor.expedition_role() == Some(ExpeditionRole::Dragon)
+    {
         let low = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.min_level))
             - geometry.level_height;
         let high = geometry.top(TilePos::new(HexCoord::ORIGIN, geometry.max_level));
@@ -327,7 +353,12 @@ fn flight_step_safe(
     geometry: ArenaVoxelGeometry,
 ) -> bool {
     if contained(previous, geometry) {
-        return volume_safe(next, world, view, geometry) && flight_supported(next, world);
+        // Expedition Dragons can follow gliding targets over deep valleys. The
+        // resident volume and swept body remain authoritative; nearby ground is
+        // only a cruise constraint for the older low-flight controllers.
+        return volume_safe(next, world, view, geometry)
+            && (next.expedition_role() == Some(ExpeditionRole::Dragon)
+                || flight_supported(next, world));
     }
     // Real knockback is not erased by an AI boundary. Once pushed outside,
     // permit clear inward progress even before the complete long body reenters.
@@ -359,6 +390,30 @@ pub(super) fn flight_goal(
     }
     body.feet = floor + Vec3::Y * tuning.dragon_cruise_height;
     volume_safe(&body, world, view, geometry).then_some(body.feet)
+}
+
+/// A disclosed airborne target may require more than ordinary ground-following.
+/// Callers pass their own sight or remembered goal, never a hidden live position.
+pub(super) fn pursuit_flight_goal(
+    actor: &Actor,
+    desired: Vec3,
+    world: &CollisionWorld,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &EncounterTuning,
+) -> Option<Vec3> {
+    let cruise = flight_goal(actor, desired, world, view, geometry, tuning);
+    let feet = desired - Vec3::Y * (actor.dimensions.y * 0.5);
+    if actor.expedition_role() == Some(ExpeditionRole::Dragon)
+        && cruise.is_none_or(|cruise| feet.y > cruise.y + tuning.breath_range * 0.5)
+    {
+        let mut body = actor.clone();
+        body.feet = feet;
+        if volume_safe(&body, world, view, geometry) {
+            return Some(feet);
+        }
+    }
+    cruise
 }
 
 pub(super) fn retreat_goal(
@@ -432,8 +487,12 @@ fn walk_route(
     geometry: ArenaVoxelGeometry,
     tuning: &EncounterTuning,
 ) -> Option<Actor> {
+    #[cfg(any(test, feature = "test-support"))]
+    let mut probe = ProbeCounter::new(ProbeKind::Walk);
     let mut body = actor.clone();
     for _ in 0..ticks {
+        #[cfg(any(test, feature = "test-support"))]
+        probe.step();
         let previous = body.clone();
         motion::tick(&mut body, direction, run, false, flight, world, tuning);
         if !(if flight {
@@ -455,6 +514,8 @@ fn descent_route(
     geometry: ArenaVoxelGeometry,
     tuning: &EncounterTuning,
 ) -> Option<(Vec3, u16)> {
+    #[cfg(any(test, feature = "test-support"))]
+    let mut probe = ProbeCounter::new(ProbeKind::Descent);
     let forward = desired.with_y(0.0).normalize_or_zero();
     // A downward ledge needs a proved landing, not an upward jump. Three
     // directions share the existing staggered recovery deadline and 120-tick cap.
@@ -463,6 +524,8 @@ fn descent_route(
         let mut body = actor.clone();
         let mut airborne = false;
         for tick in 0_u16..120 {
+            #[cfg(any(test, feature = "test-support"))]
+            probe.step();
             motion::tick(&mut body, direction, true, false, false, world, tuning);
             if !volume_safe(&body, world, view, geometry) {
                 break;
@@ -492,6 +555,8 @@ fn jump_route(
     tuning: &EncounterTuning,
     advancing_only: bool,
 ) -> Option<(Vec3, u16)> {
+    #[cfg(any(test, feature = "test-support"))]
+    let mut probe = ProbeCounter::new(ProbeKind::Jump);
     let forward = desired.with_y(0.0).normalize_or_zero();
     let mut best = None;
     for angle in [0.0, 0.65, -0.65, 1.3, -1.3, std::f32::consts::PI] {
@@ -501,6 +566,8 @@ fn jump_route(
         }
         let mut body = actor.clone();
         for tick in 0_u16..180 {
+            #[cfg(any(test, feature = "test-support"))]
+            probe.step();
             motion::tick(&mut body, direction, true, tick == 0, false, world, tuning);
             if !volume_safe(&body, world, view, geometry) {
                 break;
@@ -532,6 +599,8 @@ fn detour(
     geometry: ArenaVoxelGeometry,
     tuning: &EncounterTuning,
 ) -> Vec3 {
+    #[cfg(any(test, feature = "test-support"))]
+    cpu_diagnostics::detour();
     let mut best = (f32::NEG_INFINITY, Vec3::ZERO);
     for angle in [
         std::f32::consts::FRAC_PI_2,

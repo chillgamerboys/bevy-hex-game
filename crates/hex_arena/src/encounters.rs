@@ -9,6 +9,14 @@ use std::collections::BTreeMap;
 mod abilities;
 mod battle_runtime;
 mod brain;
+mod expedition;
+#[cfg(any(test, feature = "test-support"))]
+mod route_probe;
+#[cfg(any(test, feature = "test-support"))]
+pub use route_probe::DryRouteProbeFailure;
+mod separation;
+use separation::separate_many;
+pub use separation::ActorSeparationStats;
 mod steering;
 #[cfg(test)]
 mod tests;
@@ -39,8 +47,10 @@ struct PartyRuntime {
 #[derive(Debug, Default)]
 pub(crate) struct EncounterState {
     pub initialized: bool,
+    expedition: Option<expedition::Control>,
+    separation_stats: ActorSeparationStats,
     worms: BTreeMap<ActorId, worm::Controller>,
-    spawn_failed: bool,
+    pub(crate) spawn_failed: bool,
     pub parties: Vec<PartySnapshot>,
     runtime: Vec<PartyRuntime>,
     brains: BTreeMap<ActorId, brain::Brain>,
@@ -54,6 +64,12 @@ pub(crate) struct EncounterState {
 }
 
 impl ArenaSession {
+    /// Deterministic work counters for the latest encounter actor-separation tick.
+    #[must_use]
+    pub const fn actor_separation_stats(&self) -> ActorSeparationStats {
+        self.encounter.separation_stats
+    }
+
     /// Active direct-attack barriers; transparent to sight, movement and cameras.
     #[must_use]
     pub fn barriers(&self) -> &[BarrierSnapshot] {
@@ -112,9 +128,22 @@ impl ArenaSession {
         geometry: ArenaVoxelGeometry,
         tuning: &ArenaTuning,
     ) {
+        if world.selection.map.capabilities().exploration {
+            self.initialize_exploration(world, geometry);
+            return;
+        }
         if self.accepted_battle.control == ArenaControl::Spectator {
             self.initialize_battle(world, geometry, tuning);
             return;
+        }
+        if world.selection.map == ArenaMap::ForestMassif {
+            if let Some(sites) = &world.expedition {
+                if let Err(message) = self.initialize_expedition(sites, world, geometry, tuning) {
+                    self.notice = message;
+                    self.refuse_player_encounter();
+                }
+                return;
+            }
         }
         let c = &tuning.encounters;
         self.encounter = EncounterState {
@@ -152,7 +181,34 @@ impl ArenaSession {
             human.previous_feet = feet;
         }
         self.actors = vec![human];
-        let specs: Vec<(Vec3, Vec<Species>)> = if world.selection.map == ArenaMap::SevenRegions {
+        let specs: Vec<(Vec3, Vec<Species>)> = if world.selection.map == ArenaMap::ForestMassif {
+            let camps = [
+                ("forest_outer_a", vec![Species::Goblin; 2]),
+                ("forest_outer_b", vec![Species::Goblin; 3]),
+                ("forest_middle", vec![Species::Goblin; 4]),
+                (
+                    "forest_deep_a",
+                    [vec![Species::Shaman], vec![Species::Goblin; 5]].concat(),
+                ),
+                (
+                    "forest_deep_b",
+                    [vec![Species::Shaman], vec![Species::Goblin; 6]].concat(),
+                ),
+                ("dragon_lower", vec![Species::Dragon]),
+                ("dragon_middle", vec![Species::Dragon]),
+                ("dragon_upper", vec![Species::Dragon]),
+            ];
+            let mut specs = Vec::new();
+            for (name, roster) in camps {
+                let Some(home) = world.anchors.get(name).copied() else {
+                    self.notice = format!("Forest–Massif is missing required camp {name}.");
+                    self.refuse_player_encounter();
+                    return;
+                };
+                specs.push((home, roster));
+            }
+            specs
+        } else if world.selection.map == ArenaMap::SevenRegions {
             [
                 ("mountains_high_pass", vec![Species::Dragon]),
                 ("fort_fort_courtyard", BattlePreset::ShamanParty.members()),
@@ -335,7 +391,7 @@ impl ArenaSession {
             });
         }
         if self.encounter.spawn_failed
-            && (world.selection.map == ArenaMap::Duel
+            && (matches!(world.selection.map, ArenaMap::Duel | ArenaMap::ForestMassif)
                 || self.accepted_battle.player_recipe.is_some_and(|recipe| {
                     BattlePreset::WISP_SWARMS.contains(&recipe) || recipe == BattlePreset::Worm
                 }))
@@ -405,6 +461,11 @@ impl ArenaSession {
                 human.aim = (home - human.eye()).normalize_or(Vec3::NEG_Z);
             }
         }
+        if world.selection.map == ArenaMap::ForestMassif && self.encounter.spawn_failed {
+            self.refuse_player_encounter();
+            return;
+        }
+        self.register_forest_roster();
         self.publish_parties();
     }
 
@@ -437,6 +498,7 @@ impl ArenaSession {
         if !self.encounter.initialized || amount <= 0.0 {
             return;
         }
+        self.rally_on_player_damage(owner, victim);
         let Some(actor) = self.actors.iter().find(|a| a.id == victim) else {
             return;
         };
@@ -529,6 +591,9 @@ impl ArenaSession {
             // A disclosed target takes priority over home/escort formation for
             // Goblin parties. Lost contact still uses the ordinary search rules.
             let goblin_pursuit = visible && members.iter().any(|a| a.species == Species::Goblin);
+            let dragon_party = members.iter().any(|a| a.species == Species::Dragon);
+            let dragon_pursuit = visible && dragon_party;
+            let dragon_search = dragon_party && elapsed(self.tick, p.last_sight) <= p.search;
             if visible {
                 let velocity = p
                     .knowledge
@@ -545,7 +610,7 @@ impl ArenaSession {
                     observed: None,
                 });
                 p.last_sight = self.tick;
-                if p.snapshot.phase == PartyPhase::Dormant || goblin_pursuit {
+                if p.snapshot.phase == PartyPhase::Dormant || goblin_pursuit || dragon_pursuit {
                     p.snapshot.phase = PartyPhase::Active;
                 }
                 if p.snapshot.phase == PartyPhase::Active {
@@ -590,6 +655,8 @@ impl ArenaSession {
                     .any(|a| a.feet.distance(p.snapshot.home) > p.leash);
                 if !worm_pursuit
                     && !goblin_pursuit
+                    && !dragon_pursuit
+                    && !dragon_search
                     && (exceeded || elapsed(self.tick, p.last_sight) > p.search)
                 {
                     p.snapshot.phase = PartyPhase::Returning;
@@ -619,7 +686,7 @@ impl ArenaSession {
         if !self.encounter.initialized {
             self.initialize_encounter(world, geometry, tuning);
         }
-        if self.encounter.spawn_failed {
+        if self.encounter.spawn_failed || !self.encounter.initialized {
             return CommandsOut::default();
         }
         self.begin_simulation_tick();
@@ -632,7 +699,19 @@ impl ArenaSession {
             .retain(|b| b.remaining > 0.0 && b.hp > 0.0);
         self.collision.sync_barriers(&self.encounter.barriers);
         self.prepare_worms(world, geometry);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::EncounterSetup);
         self.observe_parties(tuning);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::ObserveParties);
+        self.advance_rally(world, geometry, tuning);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::Rally);
+        #[cfg(any(test, feature = "test-support"))]
+        let steering_scope = self.cpu.begin_brains();
+        // All brains read one immutable world; discard candidate memoization
+        // before live movement or any subsequent simulation phase.
+        let probe_scope = self.collision.probe_scope();
         let mut brains = std::mem::take(&mut self.encounter.brains);
         let mut intents = BTreeMap::new();
         let mut plans = Vec::new();
@@ -687,8 +766,22 @@ impl ArenaSession {
                 }
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.record_probe_cache(probe_scope.stats());
+        drop(probe_scope);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.finish_brains(steering_scope);
         let mut casts = Vec::new();
+        let mut boosts = Vec::new();
         let human_id = self.human_actor_id();
+        let player_tuning = self.player_tuning(tuning);
+        let environment = self.ocean_environment.clone();
+        let marine_world = crate::marine::MarineWorld {
+            terrain: world,
+            geometry,
+            environment: environment.as_ref(),
+            time: self.ocean_time(),
+        };
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             actor.previous_yaw = actor.body_yaw;
@@ -698,6 +791,7 @@ impl ArenaSession {
             actor.attack = None;
             actor.beam = None;
             if actor.hp <= 0.0 {
+                actor.clear_glider();
                 actor.attack = None;
                 actor.cancel_charge();
                 continue;
@@ -716,7 +810,7 @@ impl ArenaSession {
             if intent.aim.is_finite() && intent.aim.length_squared() > 0.0001 {
                 actor.aim = intent.aim.normalize();
             }
-            if let Some(spell) = intent.selected {
+            if let Some(spell) = intent.selected.filter(|spell| *spell != Spell::HighJump) {
                 if spell != actor.selected && actor.charge.is_some() {
                     actor.cancel_charge();
                 }
@@ -725,6 +819,31 @@ impl ArenaSession {
             for cd in &mut actor.cooldowns {
                 *cd = (*cd - STEP).max(0.0);
             }
+            let profile_tuning = actor.expedition_tuning(tuning);
+            let actor_tuning = if Some(actor.id) == human_id {
+                &player_tuning
+            } else {
+                &profile_tuning
+            };
+            if let Some(profile) = actor_tuning.player_profile {
+                actor.walking_speed = profile.walking_speed;
+            }
+            if let Some(notice) =
+                crate::marine::prepare(actor, intent, &marine_world, &self.collision)
+            {
+                self.notice = notice.into();
+            }
+            crate::exploration::prepare(actor, intent);
+            crate::glider::prepare(actor, intent, &self.collision, world, geometry);
+            let boosted = intent.high_jump
+                && !actor
+                    .free_flight
+                    .as_ref()
+                    .is_some_and(|flight| flight.active)
+                && actor.high_jump(actor_tuning);
+            if boosted {
+                boosts.push((actor.id, actor.feet));
+            }
             let forward = actor.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
             let direction = if Some(actor.id) == human_id {
                 forward * intent.movement.y + forward.cross(Vec3::Y) * intent.movement.x
@@ -732,43 +851,66 @@ impl ArenaSession {
                 intents.get(&actor.id).map_or(Vec3::ZERO, |i| i.direction)
             };
             let flight = intents.get(&actor.id).is_some_and(|i| i.flight);
-            motion::tick_with_lunge(
+            if !crate::marine::tick_or_wait(
                 actor,
-                direction,
-                intent.run,
-                intent.jump,
-                flight,
-                intents.get(&actor.id).is_some_and(|i| i.lunge),
+                ActorIntent {
+                    high_jump: boosted,
+                    ..intent
+                },
+                &marine_world,
                 &self.collision,
-                &tuning.encounters,
-            );
+            ) && !crate::exploration::tick_or_wait(actor, intent, &self.collision)
+            {
+                motion::tick_with_lunge(
+                    actor,
+                    direction,
+                    intent.run,
+                    intent.jump && !boosted,
+                    flight,
+                    intents.get(&actor.id).is_some_and(|i| i.lunge),
+                    &self.collision,
+                    &actor_tuning.encounters,
+                );
+            }
             if actor.feet.y < self.collision.min_y + 2.0 || !actor.feet.is_finite() {
                 actor.hp = 0.0;
                 actor.cancel_charge();
             }
+            crate::glider::finish(actor, world, geometry);
+            crate::exploration::finish(actor);
             if actor.hp > 0.0 {
-                if let Some((spell, speed)) = actor.casting(intent, tuning) {
+                if let Some((spell, speed)) = actor.casting(intent, actor_tuning) {
                     casts.push((actor.id, spell, speed));
                 }
             }
         }
-        separate_many(&mut self.actors, &self.collision);
+        for (id, origin) in boosts {
+            self.record_high_jump(id, origin);
+        }
+        self.encounter.separation_stats = separate_many(&mut self.actors, &self.collision);
         self.move_worms(&intents, world, geometry, materials, tuning, &mut out);
         self.separate_worms(world, geometry, materials, &mut out);
         self.refresh_worm_heads(world, geometry);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::MovementAndSeparation);
         self.advance_projectiles(world, geometry, materials, &mut out);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(crate::ArenaCpuPhase::Projectiles);
         self.advance_support(tuning, world.selection.map);
         // Existing incoming damage resolves before simultaneous new releases.
         casts.retain(|(id, _, _)| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
         for (id, spell, speed) in casts {
             if let Some(actor) = self.actors.iter_mut().find(|a| a.id == id) {
+                let profile_tuning = actor.expedition_tuning(tuning);
                 let cooldown = if actor.species == Species::Shaman {
                     match spell {
                         Spell::Shield => tuning.encounters.shaman_shield_cooldown,
                         _ => tuning.encounters.shaman_fireball_cooldown,
                     }
+                } else if Some(id) == human_id {
+                    player_tuning.cooldown(spell)
                 } else {
-                    tuning.cooldown(spell)
+                    profile_tuning.cooldown(spell)
                 };
                 if let Some(cd) = actor.cooldowns.get_mut(spell.index()) {
                     *cd = cooldown;
@@ -783,8 +925,12 @@ impl ArenaSession {
         }
         self.advance_abilities(&mut brains, world, geometry, materials, tuning, &mut out);
         self.encounter.brains = brains;
+        self.cancel_dead_rally();
         self.advance_walls(world, geometry, materials, &mut out);
         self.publish_parties();
+        self.reconcile_progression();
+        self.advance_milestones(world, geometry);
+        self.advance_fountains(world, geometry);
         self.pending_burrows
             .retain(|id, _| self.actors.iter().any(|a| a.id == *id && a.hp > 0.0));
         out.burrows.retain(|request| {
@@ -802,6 +948,7 @@ impl ArenaSession {
             self.finish_battle_tick();
         } else {
             self.outcome = match (human_alive, enemy) {
+                (true, None) if self.exploration || self.completed_run() => None,
                 (true, None) => Some(ArenaOutcome::Winner(0)),
                 (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
                 (false, None) => Some(ArenaOutcome::Draw),
@@ -823,6 +970,8 @@ impl ArenaSession {
                 brain.active = None;
             }
         }
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.finish(self.tick);
         out
     }
 }
@@ -835,8 +984,11 @@ fn elapsed(tick: u64, since: u64) -> f32 {
     tick.saturating_sub(since) as f32 * STEP
 }
 
-fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> bool {
-    !view.liquids.iter().any(|run| {
+pub(super) fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> bool {
+    if view.liquids.is_empty() {
+        return true;
+    }
+    let overlaps = |run: &hex_core::arena::ArenaSolidSpan| {
         let bottom = geometry.top(run.bottom) - geometry.level_height;
         let top = geometry.top(TilePos::new(run.bottom.coord, run.top_level));
         if matches!(
@@ -849,7 +1001,42 @@ fn dry(actor: &Actor, view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> 
             && actor.feet.y + actor.dimensions.y > bottom + SKIN
             && run.bottom.coord.to_world(actor.feet.y).distance(actor.feet)
                 < actor.dimensions.x.max(actor.dimensions.z) * 0.5 + 1.0
-    })
+    };
+    if !view.selection.map.capabilities().natural_environment {
+        return !view.liquids.iter().any(overlaps);
+    }
+    // This world publishes liquid runs sorted by exact bottom identity. Query
+    // only nearby columns without rebuilding or reinterpreting its occupancy.
+    let reach = actor.dimensions.x.max(actor.dimensions.z) * 0.5 + 1.0;
+    let mut radius = 1;
+    let mut covered = 0.0;
+    while covered < reach {
+        radius += 1;
+        covered += hex_core::config::HEX_SMALL_DIAMETER * 0.5;
+    }
+    let coords = HexCoord::from_world(actor.feet).within_radius(radius);
+    let wet = liquid_candidates(&view.liquids, &coords).any(overlaps);
+    !wet
+}
+
+// `within_radius` enumerates contiguous axial rows in coordinate order. Search
+// each exact row once; every candidate and its order match per-column searches.
+// This keeps the same neighborhood allocation and stores no cross-query state.
+fn liquid_candidates<'a>(
+    liquids: &'a [hex_core::arena::ArenaSolidSpan],
+    coords: &'a [HexCoord],
+) -> impl Iterator<Item = &'a hex_core::arena::ArenaSolidSpan> {
+    coords
+        .chunk_by(|a, b| a.x() == b.x())
+        .filter_map(|row| row.first().zip(row.last()))
+        .flat_map(move |(first, last)| {
+            let start = liquids.partition_point(|run| run.bottom.coord < *first);
+            liquids
+                .get(start..)
+                .unwrap_or(&[])
+                .iter()
+                .take_while(move |run| run.bottom.coord <= *last)
+        })
 }
 
 fn safe_spawn(
@@ -944,37 +1131,6 @@ fn body_overlap(a: &Actor, b: &Actor) -> Option<Vec3> {
     best.map(|axis| axis * (depth * 0.5 + SKIN))
 }
 
-fn separate_many(actors: &mut [Actor], world: &CollisionWorld) {
-    for _ in 0..4 {
-        let mut changed = false;
-        for i in 0..actors.len() {
-            let (left, right) = actors.split_at_mut(i + 1);
-            let Some(a) = left.last_mut() else {
-                continue;
-            };
-            if a.hp <= 0.0 {
-                continue;
-            }
-            for b in right.iter_mut().filter(|a| a.hp > 0.0) {
-                if a.species == Species::Worm || b.species == Species::Worm {
-                    continue;
-                }
-                if let Some(push) = body_overlap(a, b) {
-                    let fa = shapes::slide(world, a, a.feet, push).0;
-                    let fb = shapes::slide(world, b, b.feet, -push).0;
-                    changed |= fa.distance_squared(a.feet) > SKIN * SKIN
-                        || fb.distance_squared(b.feet) > SKIN * SKIN;
-                    a.feet = fa;
-                    b.feet = fb;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-}
-
 /// Per-actor counters for the selected map encounter.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EncounterActorStats {
@@ -1022,57 +1178,6 @@ impl ArenaSession {
                 && dry(a, view, geometry)
                 && (a.flying || shapes::ground(&self.collision, a, a.feet, 0.05).is_some())
         })
-    }
-
-    /// Clone an actor and continuously drive authored waypoints through the actual
-    /// movement controller. At most 3,600 ticks and 32 waypoints; no live mutation.
-    #[cfg(any(test, feature = "test-support"))]
-    #[must_use]
-    pub fn probe_dry_route(
-        &self,
-        id: ActorId,
-        waypoints: &[Vec3],
-        view: &ArenaTerrainView,
-        geometry: ArenaVoxelGeometry,
-        tuning: &ArenaTuning,
-    ) -> bool {
-        if waypoints.len() > 32 {
-            return false;
-        }
-        let Some(mut actor) = self.actors.iter().find(|a| a.id == id).cloned() else {
-            return false;
-        };
-        let mut ticks = 0;
-        for point in waypoints {
-            while actor.feet.with_y(0.0).distance(point.with_y(0.0)) > 0.3 {
-                if ticks >= 3600 {
-                    return false;
-                }
-                let before = actor.feet;
-                let direction = (point - actor.feet).with_y(0.0).normalize_or_zero();
-                motion::tick(
-                    &mut actor,
-                    direction,
-                    true,
-                    false,
-                    false,
-                    &self.collision,
-                    &tuning.encounters,
-                );
-                ticks += 1;
-                if !shapes::clear(&self.collision, &actor, actor.feet, actor.body_yaw)
-                    || !dry(&actor, view, geometry)
-                    || actor.feet.y < before.y - 0.45
-                    || shapes::ground(&self.collision, &actor, actor.feet, 0.45).is_none()
-                {
-                    return false;
-                }
-            }
-            if (actor.feet.y - point.y).abs() > 0.45 {
-                return false;
-            }
-        }
-        shapes::ground(&self.collision, &actor, actor.feet, 0.05).is_some()
     }
 }
 
@@ -1232,7 +1337,7 @@ pub struct CreatureDecisionSnapshot {
     pub direction: [f32; 3],
     /// Flight requested this tick.
     pub flying: bool,
-    /// Remaining damage-refreshed retreat time.
+    /// Compatibility escape indicator: one simulation step while critical, zero otherwise.
     pub retreat_seconds: f32,
     /// Following a jump with a previously verified landing.
     pub jump_recovery: bool,
@@ -1276,3 +1381,5 @@ impl ArenaSession {
             .collect()
     }
 }
+
+pub use expedition::ExpeditionRallySnapshot;

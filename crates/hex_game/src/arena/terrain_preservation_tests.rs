@@ -164,7 +164,7 @@ fn shield_publication_preserves_existing_material_and_remaining_voxel_health() {
 }
 
 #[test]
-fn mature_shield_waits_for_real_blast_then_fills_the_destroyed_original_candidate() {
+fn mature_shield_revalidates_world_damage_then_fills_the_destroyed_original_candidate() {
     let mut app = app(120);
     let geometry = *app.world().resource::<ArenaVoxelGeometry>();
     let materials = *app.world().resource::<ArenaMaterials>();
@@ -190,7 +190,7 @@ fn mature_shield_waits_for_real_blast_then_fills_the_destroyed_original_candidat
         .expect("human");
     let center = actor.center();
     let eye = actor.eye();
-    let radius = app.world().resource::<ArenaTuning>().blast_radius();
+    let radius = 4.0;
     let top = original
         .wall_voxels
         .iter()
@@ -242,29 +242,15 @@ fn mature_shield_waits_for_real_blast_then_fills_the_destroyed_original_candidat
     }
     assert!(ready, "stop one tick before the ordinary emergence commits");
     assert_eq!(app.world().resource::<ArenaSession>().shields_raised, 0);
-    app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
-        aim,
-        selected: Some(Spell::AreaBlast),
-        cast_pressed: true,
-        cast_released: true,
-        ..default()
-    };
-    tick(&mut app);
-    assert_eq!(app.world().resource::<ArenaSession>().shields_raised, 0);
-    assert!(
-        app.world().resource::<Messages<TerrainEdit>>().is_empty(),
-        "mature shield must wait for the announced blast"
-    );
-    assert_eq!(
-        app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .get(&destroyed),
-        Some(&materials.grass)
-    );
-
-    // This tick applies the real blast, publishes the changed terrain, and only
-    // then admits the mature shield. Its edits remain queued until the next tick.
+    let volume = geometry.sphere(app.world().resource::<ArenaTerrainView>(), center, radius);
+    app.world_mut().write_message(hex_core::TerrainImpact {
+        batch: hex_core::TerrainBatchId(9_000_001),
+        volume,
+        kind: hex_core::TerrainDamageKind::Elemental(materials.fire),
+        power: 2,
+    });
+    // World damage publishes before this tick completes emergence. The shield
+    // revalidates the original footprint and queues only newly available cells.
     tick(&mut app);
     let outcomes: Vec<_> = app
         .world_mut()
@@ -275,9 +261,9 @@ fn mature_shield_waits_for_real_blast_then_fills_the_destroyed_original_candidat
     let outcome = outcomes
         .into_iter()
         .next()
-        .expect("real Area Blast outcome");
+        .expect("real terrain damage outcome");
     let TerrainImpactResult::Applied(voxels) = outcome.result else {
-        panic!("Area Blast must reach the candidate through the real world consumer");
+        panic!("Terrain damage must reach the candidate through the real world consumer");
     };
     let removed = voxels
         .iter()
@@ -292,7 +278,8 @@ fn mature_shield_waits_for_real_blast_then_fills_the_destroyed_original_candidat
         .resource::<ArenaTerrainView>()
         .voxels
         .contains_key(&destroyed));
-    assert_eq!(app.world().resource::<ArenaSession>().terrain_outcomes, 1);
+    // This fixture announces a world-owned impact directly, outside spell correlation.
+    assert_eq!(app.world().resource::<ArenaSession>().terrain_outcomes, 0);
     assert_eq!(app.world().resource::<ArenaSession>().shields_raised, 1);
     assert!(app
         .world()

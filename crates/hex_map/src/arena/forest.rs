@@ -1,0 +1,1065 @@
+//! V4 authority behind the finite forest arena. Legacy voxel storage is a staging
+//! and collision projection; every material change commits to V4 before publication.
+
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use hex_assets::{HexObjectRotation, ObjectAssetId};
+use hex_world_contracts::{
+    LiquidKind, ResidencyRequest, VoxelEdit, VoxelPosition, WorldEditTransaction, WorldHex,
+};
+use hex_world_runtime::{
+    FileChunkSource, FiniteWorldSession, IoLimits, RuntimeConfig, WorldRuntime,
+};
+
+use super::*;
+use crate::procedural_v3::{
+    FeatureId, FeatureKind, FillMaterialRole, LiquidFlowState, MapPresentationProjection,
+    MaterializedLiquidVoxel, PlannedFeature,
+};
+
+#[path = "expedition_file.rs"]
+mod expedition_file;
+
+pub(super) fn asset_root() -> PathBuf {
+    std::env::var_os("BEVY_ASSET_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
+}
+
+pub(super) struct ForestRuntime {
+    pub runtime: WorldRuntime,
+    next_edit: u64,
+    pub finite: Option<FiniteWorldSession>,
+    pub pending_carves: BTreeSet<TilePos>,
+    pub masks: BTreeMap<FeatureId, hex_assets::ObjectCarveMask>,
+    object_ids: BTreeMap<WorldHex, BTreeSet<FeatureId>>,
+    objects: BTreeMap<FeatureId, hex_world_contracts::ObjectInstance>,
+}
+
+impl ForestRuntime {
+    pub fn new(source: Arc<FileChunkSource>) -> Result<Self, String> {
+        let count = source.manifest().chunks.len();
+        let mut runtime = WorldRuntime::new(
+            source,
+            RuntimeConfig {
+                max_resident_chunks: count,
+                max_unsaved_chunks: count,
+                max_publications_per_pump: 32,
+                max_unsaved_transactions: 16_384,
+                max_unsaved_transaction_bytes: 256 * 1024 * 1024,
+                ..default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        runtime
+            .set_interests(vec![ResidencyRequest {
+                id: "forest-battle-session".into(),
+                center: WorldHex::new(0, 0),
+                radius: 187,
+                retention_radius: 187,
+                priority: 255,
+            }])
+            .map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while runtime.resident_chunks().count() < count {
+            let update = runtime.pump();
+            if let Some(failure) = update.failures.first() {
+                return Err(format!(
+                    "Forest chunk {:?}: {}",
+                    failure.coordinate, failure.error
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err("Forest V4 residency timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let mut objects = BTreeMap::new();
+        let mut object_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        let mut max_level = 128;
+        for product in runtime.resident_chunks() {
+            for column in &product.package.columns {
+                for run in &column.runs {
+                    max_level = max_level.max(run.top + 32);
+                }
+            }
+            for object in &product.package.semantics.objects {
+                let id = FeatureId(u32::try_from(objects.len()).map_err(|e| e.to_string())?);
+                for column in &object.occupancy {
+                    object_ids.entry(column.position).or_default().insert(id);
+                    for run in &column.runs {
+                        max_level = max_level.max(run.top + 32);
+                    }
+                }
+                objects.insert(id, object.clone());
+            }
+        }
+        let finite = (runtime.manifest().world_id == "forest-massif-expedition")
+            .then(|| FiniteWorldSession::new(&runtime, 0, max_level))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            runtime,
+            next_edit: 0,
+            finite,
+            pending_carves: BTreeSet::new(),
+            masks: BTreeMap::new(),
+            object_ids,
+            objects,
+        })
+    }
+
+    pub fn commit_projection(
+        &mut self,
+        map: &VoxelMap,
+        changed: &BTreeSet<HexCoord>,
+        substances: &SubstanceTable,
+        art: &RuntimeArtCatalog,
+    ) -> Result<(), String> {
+        let mut edits = BTreeMap::new();
+        let mut revisions = BTreeMap::new();
+        for coord in changed {
+            let global = WorldHex::new(i64::from(coord.x()), i64::from(coord.y()));
+            let product = self
+                .runtime
+                .resident_chunk(global.chunk())
+                .ok_or("Unloaded forest edit")?;
+            let column = if let Some(finite) = &self.finite {
+                finite.terrain_column(global)
+            } else {
+                product
+                    .package
+                    .columns
+                    .iter()
+                    .find(|column| column.position == global)
+                    .cloned()
+            }
+            .ok_or("Forest edit outside package")?;
+            let old_top = column.runs.iter().map(|run| run.top).max().unwrap_or(0);
+            let new_top = map.column(*coord).map_or(0, Column::top);
+            for level in 0..old_top.max(new_top) {
+                let old = column
+                    .runs
+                    .iter()
+                    .find(|run| (run.bottom..run.top).contains(&level));
+                let old_id = old
+                    .map(|run| material_id(&run.material, substances))
+                    .transpose()?
+                    .unwrap_or(SubstanceId::AIR);
+                let new = map.get(TilePos::new(*coord, level));
+                if old_id == new {
+                    continue;
+                }
+                let material = if new.is_air() {
+                    None
+                } else {
+                    Some(
+                        match substances.name(new).ok_or("Unknown staged material")? {
+                            "dirt" => "soil",
+                            other => other,
+                        }
+                        .to_owned(),
+                    )
+                };
+                edits.insert(
+                    VoxelPosition {
+                        column: global,
+                        level,
+                    },
+                    material,
+                );
+                revisions.insert(
+                    global.chunk(),
+                    self.finite
+                        .as_ref()
+                        .and_then(|finite| finite.revision(global.chunk()))
+                        .unwrap_or(product.revision),
+                );
+            }
+        }
+        for pos in &self.pending_carves {
+            let at = world_position(*pos);
+            edits.insert(at, None);
+            revisions.insert(
+                at.column.chunk(),
+                self.finite
+                    .as_ref()
+                    .and_then(|finite| finite.revision(at.column.chunk()))
+                    .ok_or("Carve requires finite session")?,
+            );
+        }
+        if edits.is_empty() {
+            return Ok(());
+        }
+        let edits = edits
+            .into_iter()
+            .map(|(position, material)| VoxelEdit { position, material })
+            .collect();
+        self.next_edit = self.next_edit.saturating_add(1);
+        let transaction = WorldEditTransaction {
+            id: format!("battle-edit-{}", self.next_edit),
+            expected_revisions: revisions,
+            edits,
+        };
+        if let Some(finite) = &mut self.finite {
+            finite
+                .apply_transaction(&transaction)
+                .map_err(|error| error.to_string())?;
+            for pos in std::mem::take(&mut self.pending_carves) {
+                let at = world_position(pos);
+                for id in self.object_ids.get(&at.column).into_iter().flatten() {
+                    let Some(object) = self.objects.get(id) else {
+                        continue;
+                    };
+                    if object
+                        .occupancy
+                        .binary_search_by_key(&at.column, |column| column.position)
+                        .ok()
+                        .and_then(|index| object.occupancy.get(index))
+                        .and_then(|column| column.material_at(at.level))
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    let object_id =
+                        ObjectAssetId::new(object.asset.clone()).map_err(|e| e.to_string())?;
+                    let blueprint = art
+                        .object(&object_id)
+                        .ok_or("Carved object lacks blueprint")?;
+                    let unturned = hex_assets::LocalVoxelCoord {
+                        q: i32::try_from(at.column.q - object.origin.column.q)
+                            .map_err(|e| e.to_string())?
+                            + blueprint.origin.q,
+                        r: i32::try_from(at.column.r - object.origin.column.r)
+                            .map_err(|e| e.to_string())?
+                            + blueprint.origin.r,
+                        level: at.level - object.origin.level + blueprint.origin.level,
+                    };
+                    let inverse = HexObjectRotation::new((6 - object.rotation) % 6)
+                        .map_err(|e| e.to_string())?;
+                    let cell = inverse
+                        .rotate_voxel(unturned, blueprint.origin)
+                        .ok_or("Carve inverse rotation overflow")?;
+                    let mask = self.masks.entry(*id).or_default();
+                    mask.removed.insert(cell);
+                    mask.revision = self.next_edit;
+                }
+            }
+        } else {
+            self.runtime
+                .apply_transaction(&transaction)
+                .map_err(|error| error.to_string())?;
+            self.runtime.pump();
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn world_position(pos: TilePos) -> VoxelPosition {
+    VoxelPosition {
+        column: WorldHex::new(i64::from(pos.coord.x()), i64::from(pos.coord.y())),
+        level: pos.level,
+    }
+}
+
+pub(super) fn material_id(name: &str, substances: &SubstanceTable) -> Result<SubstanceId, String> {
+    // Physics/durability vocabulary remains compatible with battle. Presentation
+    // keeps the original V4 names and colors, including distinct forest floors.
+    let name = match name {
+        "soil" | "pine-floor" => "dirt",
+        "moss" | "foliage" => "grass",
+        "timber" | "limestone" => "stone",
+        "spring-water" => "water",
+        other => other,
+    };
+    substances
+        .id(name)
+        .ok_or_else(|| format!("Forest material {name} has no battle policy"))
+}
+
+fn local(column: WorldHex) -> Result<HexCoord, String> {
+    Ok(HexCoord::from_axial(
+        i32::try_from(column.q).map_err(|error| error.to_string())?,
+        i32::try_from(column.r).map_err(|error| error.to_string())?,
+    ))
+}
+
+fn position(voxel: VoxelPosition) -> Result<TilePos, String> {
+    Ok(TilePos::new(local(voxel.column)?, voxel.level))
+}
+
+pub(super) fn build(
+    selection: ArenaSelection,
+    substances: &SubstanceTable,
+    art: &RuntimeArtCatalog,
+) -> Result<worlds::WorldRecipe, String> {
+    let path = std::env::var_os("HEX_FOREST_WORLD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| asset_root().join("assets/config/v4/forest-massif/expedition/compiled"));
+    let source = Arc::new(
+        FileChunkSource::open_workspace(&path, IoLimits::default()).map_err(|error| {
+            format!(
+                "Forest V4 package {}: {error}. Run python3 tools/forest_package.py compile (or ensure to build missing prerequisites).",
+                path.display()
+            )
+        })?,
+    );
+    let expedition = source.manifest().world_id == "forest-massif-expedition";
+    if !expedition && source.manifest().world_id != "forest-massif-battle" {
+        return Err("Forest selection requires a Forest battle or expedition package".into());
+    }
+    let backend = ForestRuntime::new(source.clone())?;
+    let mut map = VoxelMap::new();
+    let mut anchors = BTreeMap::new();
+    let mut liquids = BTreeMap::new();
+    let mut features = BTreeMap::new();
+    let mut max_level = 128;
+    for product in backend.runtime.resident_chunks() {
+        for column in &product.package.columns {
+            let coord = local(column.position)?;
+            let mut projected = Column::new();
+            for run in &column.runs {
+                if run.bottom < 0 {
+                    return Err("Forest recipe requires nonnegative terrain".into());
+                }
+                let material = material_id(&run.material, substances)?;
+                for level in run.bottom..run.top {
+                    projected.set(level, material);
+                }
+                max_level = max_level.max(run.top + 32);
+            }
+            map.insert_column(coord, projected);
+        }
+        for anchor in &product.package.semantics.anchors {
+            let Some(name) = anchor.id.strip_prefix("forest/anchor/") else {
+                continue;
+            };
+            anchors.insert(name.to_owned(), position(anchor.position)?);
+        }
+        for liquid in &product.package.semantics.liquids {
+            let coord = local(liquid.column)?;
+            let downstream = liquid
+                .downstream
+                .first()
+                .copied()
+                .map(position)
+                .transpose()?;
+            for level in liquid.bottom..liquid.top {
+                liquids.insert(
+                    TilePos::new(coord, level),
+                    MaterializedLiquidVoxel {
+                        material: FillMaterialRole::Water,
+                        flow: match liquid.kind {
+                            LiquidKind::Standing => LiquidFlowState::Still,
+                            LiquidKind::Directed => LiquidFlowState::Current,
+                            LiquidKind::Waterfall => LiquidFlowState::Fall,
+                        },
+                        downstream,
+                    },
+                );
+            }
+        }
+        for object in &product.package.semantics.objects {
+            let mut root = position(object.origin)?;
+            root.level -= 1;
+            let id = FeatureId(u32::try_from(features.len()).map_err(|error| error.to_string())?);
+            features.insert(
+                id,
+                PlannedFeature {
+                    root,
+                    kind: if object.asset.starts_with("plant/") {
+                        FeatureKind::Tree
+                    } else {
+                        FeatureKind::TallGrass
+                    },
+                    object_id: ObjectAssetId::new(object.asset.clone())
+                        .map_err(|error| error.to_string())?,
+                    rotation: HexObjectRotation::new(object.rotation)
+                        .map_err(|error| error.to_string())?,
+                    blocker_footprint: BTreeSet::from([root]),
+                },
+            );
+            for column in &object.occupancy {
+                for run in &column.runs {
+                    max_level = max_level.max(run.top + 32);
+                }
+            }
+        }
+    }
+    let geometry = ArenaVoxelGeometry {
+        radius: 187,
+        level_height: 0.35,
+        vertical_offset: 0.35,
+        max_level,
+        ..default()
+    };
+    let anchors: BTreeMap<_, _> = anchors
+        .into_iter()
+        .map(|(name, pos)| (name, pos.coord.to_world(geometry.top(pos))))
+        .collect();
+    let companion = expedition_file::load(&path, source.manifest(), geometry)?;
+    let sites = companion.sites;
+    let required: &[&str] = if expedition {
+        &["party_start", "bridge_center", "bridge_west", "bridge_east"]
+    } else {
+        &[
+            "party_start",
+            "hostile_start",
+            "forest_outer_a",
+            "forest_outer_b",
+            "forest_middle",
+            "forest_deep_a",
+            "forest_deep_b",
+            "dragon_lower",
+            "dragon_middle",
+            "dragon_upper",
+            "ancient_tree",
+            "bridge_west",
+            "bridge_east",
+        ]
+    };
+    for &name in required {
+        if !anchors.contains_key(name) {
+            return Err(format!("Forest lacks {name}"));
+        }
+    }
+    let hostile_start = anchors
+        .get("hostile_start")
+        .copied()
+        .or_else(|| {
+            sites.as_ref()?.encounters.values().next().map(|site| {
+                let at = site.deployment.preferred;
+                at.coord.to_world(geometry.top(at))
+            })
+        })
+        .ok_or("Forest lacks a hostile support candidate")?;
+    let mut view = ArenaTerrainView {
+        revision: 1,
+        selection,
+        spawns: [
+            *anchors.get("party_start").ok_or("Missing start")?,
+            hostile_start,
+        ],
+        anchors,
+        package_identity: Some(companion.identity),
+        expedition: sites,
+        full_rebuild: true,
+        ..default()
+    };
+    for (coord, column) in map.columns() {
+        publish_column(&mut view, coord, column, substances);
+        view.dirty_columns.insert(coord);
+        for run in crate::runs(column)
+            .into_iter()
+            .filter(|run| !substances.is_solid(run.substance))
+        {
+            view.liquids.push(ArenaSolidSpan {
+                bottom: TilePos::new(coord, run.bottom),
+                top_level: run.top - 1,
+                substance: run.substance,
+            });
+        }
+    }
+    view.liquids.sort_by_key(|span| span.bottom);
+    let presentation =
+        MapPresentationProjection::from_snapshot_parts(liquids, features, BTreeMap::new());
+    worlds::project_static(&mut view, &presentation, geometry, art)?;
+    // Legacy presentations intentionally leave TallGrass nonblocking. V4 props
+    // instead carry authoritative occupancy and need their own exact projection.
+    for product in backend.runtime.resident_chunks() {
+        for object in &product.package.semantics.objects {
+            if !object.asset.starts_with("plant/") {
+                project_prop(
+                    &mut view,
+                    object,
+                    &source.manifest().materials,
+                    geometry,
+                    art,
+                )?;
+            }
+        }
+    }
+    if !expedition {
+        // Preserve V4's material admission even where several names share one battle
+        // durability class. The projection must never offer an edit V4 forbids.
+        for product in backend.runtime.resident_chunks() {
+            // Publish the same world-owned exclusions used by V4 edit admission.
+            // Exact grounded crowns leave their understorey air available to Shield;
+            // old packages retain whole-column exclusions until regenerated.
+            for object in &product.package.semantics.object_influences {
+                for (position, ranges) in object.terrain_edit_protection() {
+                    if position.chunk() != product.coordinate {
+                        continue;
+                    }
+                    for (bottom, top) in ranges {
+                        let clipped = (bottom.max(geometry.min_level), top.min(geometry.max_level));
+                        if clipped.0 <= clipped.1 {
+                            view.edit_protected
+                                .entry(local(position)?)
+                                .or_default()
+                                .push(clipped);
+                        }
+                    }
+                }
+            }
+            for anchor in &product.package.semantics.anchors {
+                if anchor.role != hex_world_contracts::AnchorRole::Observation {
+                    view.edit_protected
+                        .entry(local(anchor.position.column)?)
+                        .or_default()
+                        .push((anchor.position.level, anchor.position.level + 2));
+                }
+            }
+            for column in &product.package.columns {
+                let coord = local(column.position)?;
+                for run in &column.runs {
+                    let immutable = backend
+                        .runtime
+                        .manifest()
+                        .materials
+                        .iter()
+                        .find(|material| material.id == run.material)
+                        .is_some_and(|material| !material.diggable);
+                    if immutable {
+                        view.edit_protected
+                            .entry(coord)
+                            .or_default()
+                            .push((run.bottom, run.top - 1));
+                    }
+                }
+            }
+        }
+        // The one built crossing is an authored reservation: explosions cannot remove
+        // its only support and strand the run. Ordinary bank/bed physics is unchanged.
+        for (coord, column) in map.columns() {
+            if coord.y().abs() <= 4 && coord.x().abs() <= 26 {
+                view.edit_protected
+                    .entry(coord)
+                    .or_default()
+                    .push((0, column.top().saturating_sub(1)));
+            }
+        }
+    }
+    if expedition {
+        // Legacy projection reserves supports and whole water columns. Expedition
+        // live play protects only the actual liquid cells; all solid contributors
+        // and supports are eligible for the finite carve transaction.
+        view.edit_protected.clear();
+        for liquid in &view.liquids {
+            view.edit_protected
+                .entry(liquid.bottom.coord)
+                .or_default()
+                .push((liquid.bottom.level, liquid.top_level));
+        }
+        for product in backend.runtime.resident_chunks() {
+            for column in &product.package.semantics.occupancy {
+                let coord = local(column.position)?;
+                let spans = column
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        Ok(ArenaSolidSpan {
+                            bottom: TilePos::new(coord, run.bottom),
+                            top_level: run.top - 1,
+                            substance: material_id(&run.material, substances)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                view.object_columns.insert(coord, spans);
+            }
+        }
+    }
+    // Forest FeatureVoxels declares opaque foliage solid in the V4 package.
+    // Continuous collision must preserve that exact exported canopy occupancy.
+    for span in &mut view.static_spans {
+        span.blocks_movement |= span.blocks_sight;
+        if expedition {
+            span.blocks_projectiles |= span.blocks_sight;
+        }
+    }
+    compact_static(&mut view);
+    super::expedition::validate(&view, geometry, substances)?;
+    Ok(worlds::WorldRecipe {
+        map,
+        geometry,
+        view,
+        presentation,
+        forest_source: Some(source),
+    })
+}
+
+/// V4 props currently admit opaque/cutout geometry only. Verify the public art
+/// artifact against the compiled solid cells before publishing any collision.
+fn project_prop(
+    view: &mut ArenaTerrainView,
+    source: &hex_world_contracts::ObjectInstance,
+    materials: &[hex_world_contracts::MaterialSpec],
+    geometry: ArenaVoxelGeometry,
+    art: &RuntimeArtCatalog,
+) -> Result<(), String> {
+    let id = ObjectAssetId::new(source.asset.clone()).map_err(|error| error.to_string())?;
+    let blueprint = art
+        .object(&id)
+        .ok_or_else(|| format!("Missing Forest prop {}", source.asset))?;
+    let rotation = HexObjectRotation::new(source.rotation).map_err(|error| error.to_string())?;
+    let mut visible = BTreeSet::new();
+    for placement in &blueprint.placements {
+        let style = art
+            .style(&placement.style)
+            .ok_or_else(|| format!("Missing Forest prop style {}", placement.style))?;
+        if !matches!(
+            style.authored().surface_mode(),
+            hex_assets::VoxelSurfaceMode::Opaque | hex_assets::VoxelSurfaceMode::Cutout
+        ) {
+            return Err(format!(
+                "Forest prop {} requires opaque or cutout geometry",
+                source.id
+            ));
+        }
+        let rotated = rotation
+            .rotate_voxel(placement.position, blueprint.origin)
+            .ok_or("Forest prop rotation overflow")?;
+        let q = source
+            .origin
+            .column
+            .q
+            .checked_add(i64::from(rotated.q) - i64::from(blueprint.origin.q))
+            .ok_or("Forest prop q overflow")?;
+        let r = source
+            .origin
+            .column
+            .r
+            .checked_add(i64::from(rotated.r) - i64::from(blueprint.origin.r))
+            .ok_or("Forest prop r overflow")?;
+        let level = source
+            .origin
+            .level
+            .checked_add(rotated.level)
+            .and_then(|level| level.checked_sub(blueprint.origin.level))
+            .ok_or("Forest prop level overflow")?;
+        let voxel = VoxelPosition {
+            column: WorldHex::new(q, r),
+            level,
+        };
+        position(voxel)?;
+        if !(geometry.min_level..=geometry.max_level).contains(&level) {
+            return Err(format!(
+                "Forest prop {} exceeds arena vertical bounds",
+                source.id
+            ));
+        }
+        visible.insert(voxel);
+    }
+    let mut compiled = BTreeSet::new();
+    for column in &source.occupancy {
+        for run in &column.runs {
+            if !materials
+                .iter()
+                .any(|material| material.id == run.material && material.solid)
+            {
+                return Err(format!(
+                    "Forest prop {} has nonsolid or unknown occupancy",
+                    source.id
+                ));
+            }
+            let length = i64::from(run.top) - i64::from(run.bottom);
+            if length <= 0 || length > visible.len() as i64 {
+                return Err(format!(
+                    "Forest prop {} has mismatched occupancy",
+                    source.id
+                ));
+            }
+            for level in run.bottom..run.top {
+                let voxel = VoxelPosition {
+                    column: column.position,
+                    level,
+                };
+                if !visible.contains(&voxel) || !compiled.insert(voxel) {
+                    return Err(format!(
+                        "Forest prop {} has mismatched occupancy",
+                        source.id
+                    ));
+                }
+            }
+        }
+    }
+    if visible != compiled {
+        return Err(format!(
+            "Forest prop {} has mismatched occupancy",
+            source.id
+        ));
+    }
+    let instance = hex_assets::ObjectInstance::new(
+        id,
+        position(source.origin)?,
+        geometry.level_height,
+        rotation,
+    )
+    .map_err(|error| error.to_string())?;
+    worlds::project_instance(view, art, &instance, false)
+}
+
+fn compact_static(view: &mut ArenaTerrainView) {
+    view.static_spans.sort_by_key(|span| {
+        (
+            span.bottom.coord,
+            span.blocks_movement,
+            span.blocks_projectiles,
+            span.blocks_sight,
+            span.bottom.level,
+        )
+    });
+    let mut compact: Vec<hex_core::arena::ArenaStaticSpan> = Vec::new();
+    for span in std::mem::take(&mut view.static_spans) {
+        if let Some(last) = compact.last_mut() {
+            if last.bottom.coord == span.bottom.coord
+                && last.blocks_movement == span.blocks_movement
+                && last.blocks_projectiles == span.blocks_projectiles
+                && last.blocks_sight == span.blocks_sight
+                && span.bottom.level <= last.top_level + 1
+            {
+                last.top_level = last.top_level.max(span.top_level);
+                continue;
+            }
+        }
+        compact.push(span);
+    }
+    view.static_spans = compact;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_world_contracts::{QueryResult, WorldQuery};
+
+    fn prop_fixture(
+        asset: &str,
+        turn: u8,
+    ) -> (
+        hex_world_contracts::ObjectInstance,
+        Vec<hex_world_contracts::MaterialSpec>,
+    ) {
+        let content = load_content().expect("accepted content");
+        let id = ObjectAssetId::new(asset).expect("id");
+        let blueprint = content.art.object(&id).expect("real authored prop");
+        let rotation = HexObjectRotation::new(turn).expect("rotation");
+        let mut columns: BTreeMap<WorldHex, Vec<hex_world_contracts::VoxelRun>> = BTreeMap::new();
+        for cell in &blueprint.placements {
+            let cell = rotation
+                .rotate_voxel(cell.position, blueprint.origin)
+                .expect("bounded rotation");
+            columns
+                .entry(WorldHex::new(
+                    3 + i64::from(cell.q - blueprint.origin.q),
+                    -2 + i64::from(cell.r - blueprint.origin.r),
+                ))
+                .or_default()
+                .push(hex_world_contracts::VoxelRun {
+                    bottom: 20 + cell.level - blueprint.origin.level,
+                    top: 21 + cell.level - blueprint.origin.level,
+                    material: "stone".into(),
+                });
+        }
+        (
+            hex_world_contracts::ObjectInstance {
+                id: "fixture/prop".into(),
+                region_id: "fixture".into(),
+                asset: asset.into(),
+                origin: VoxelPosition {
+                    column: WorldHex::new(3, -2),
+                    level: 20,
+                },
+                rotation: turn,
+                occupancy: columns
+                    .into_iter()
+                    .map(|(position, runs)| hex_world_contracts::ColumnData { position, runs })
+                    .collect(),
+                grounding: None,
+            },
+            vec![hex_world_contracts::MaterialSpec {
+                id: "stone".into(),
+                solid: true,
+                diggable: true,
+                color: [128, 128, 128, 255],
+            }],
+        )
+    }
+
+    #[test]
+    fn forest_props_publish_exact_rotated_actor_projectile_sight_and_edit_masks() {
+        let content = load_content().expect("content");
+        for turn in 0..6 {
+            let (source, materials) = prop_fixture("prop/cave-moss", turn);
+            let mut view = ArenaTerrainView::default();
+            project_prop(&mut view, &source, &materials, default(), &content.art)
+                .expect("exact prop");
+            let expected: BTreeSet<_> = source
+                .occupancy
+                .iter()
+                .flat_map(|column| {
+                    column.runs.iter().flat_map(|run| {
+                        (run.bottom..run.top).map(|level| {
+                            TilePos::new(local(column.position).expect("local"), level)
+                        })
+                    })
+                })
+                .collect();
+            assert_eq!(expected.len(), 4, "real asymmetric authored fixture");
+            assert_eq!(
+                view.static_spans
+                    .iter()
+                    .map(|span| span.bottom)
+                    .collect::<BTreeSet<_>>(),
+                expected
+            );
+            for span in &view.static_spans {
+                assert_eq!(span.bottom.level, span.top_level);
+                assert!(span.blocks_movement && span.blocks_projectiles && span.blocks_sight);
+                assert!(view
+                    .edit_protected
+                    .get(&span.bottom.coord)
+                    .expect("authored prop cell is protected")
+                    .contains(&(span.bottom.level, span.bottom.level)));
+            }
+        }
+    }
+
+    #[test]
+    fn forest_prop_geometry_mismatch_and_transparency_reject_before_publication() {
+        let content = load_content().expect("content");
+        let (original, materials) = prop_fixture("prop/cave-moss", 2);
+        let mut changed = original.clone();
+        changed.occupancy.pop();
+        let mut nonsolid = materials.clone();
+        nonsolid.first_mut().expect("fixture material").solid = false;
+        let (transparent, _) = prop_fixture("prop/crystal-spire", 0);
+        let mut oversized = original.clone();
+        oversized
+            .occupancy
+            .first_mut()
+            .expect("fixture column")
+            .runs
+            .first_mut()
+            .expect("fixture run")
+            .top = i32::MAX;
+        for (source, policy) in [
+            (&changed, &materials),
+            (&original, &nonsolid),
+            (&transparent, &materials),
+            (&oversized, &materials),
+        ] {
+            let mut view = ArenaTerrainView::default();
+            assert!(project_prop(&mut view, source, policy, default(), &content.art).is_err());
+            assert!(view.static_spans.is_empty() && view.edit_protected.is_empty());
+        }
+    }
+
+    #[test]
+    fn forest_prop_protection_rejects_shield_assignment_and_leaves_adjacent_air_editable() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(plugin);
+        app.update();
+        let (source, materials) = prop_fixture("prop/grass-tuft", 0);
+        let content = load_content().expect("content");
+        let mut view = ArenaTerrainView::default();
+        project_prop(&mut view, &source, &materials, default(), &content.art).expect("V4 prop");
+        let hit = position(source.origin).expect("inside arena");
+        let clear = hit.above();
+        {
+            let mut state = app.world_mut().resource_mut::<ArenaWorldState>();
+            let recipe = state.original.as_mut().expect("initialized world");
+            recipe.view.static_spans.extend(view.static_spans);
+            recipe.view.edit_protected.extend(view.edit_protected);
+        }
+        let stone = app.world().resource::<ArenaMaterials>().stone;
+        for pos in [hit, clear] {
+            app.world_mut().write_message(TerrainEdit::Set {
+                pos,
+                substance: stone,
+            });
+        }
+        app.world_mut().run_schedule(ArenaTick);
+        let map = app.world().resource::<VoxelMap>();
+        assert!(
+            map.get(hit).is_air(),
+            "Shield must not replace exact prop geometry"
+        );
+        assert_eq!(
+            map.get(clear),
+            stone,
+            "air above the one-voxel prop remains usable"
+        );
+
+        let feature = PlannedFeature {
+            root: TilePos::new(hit.coord, hit.level - 1),
+            kind: FeatureKind::TallGrass,
+            object_id: ObjectAssetId::new("prop/grass-tuft").expect("id"),
+            rotation: default(),
+            blocker_footprint: BTreeSet::new(),
+        };
+        let legacy = MapPresentationProjection::from_snapshot_parts(
+            BTreeMap::new(),
+            BTreeMap::from([(FeatureId(1), feature)]),
+            BTreeMap::new(),
+        );
+        let mut legacy_view = ArenaTerrainView::default();
+        worlds::project_static(&mut legacy_view, &legacy, default(), &content.art)
+            .expect("legacy grass");
+        assert!(
+            legacy_view.static_spans.is_empty(),
+            "legacy grass retains its original semantics"
+        );
+    }
+
+    /// Full authored fixture test is explicit so ordinary small arena checks do
+    /// not quietly depend on an operator's generated world workspace.
+    #[test]
+    #[ignore = "requires HEX_FOREST_WORLD pointing to the legacy package built by tools/forest_world.py compile"]
+    fn authored_forest_publication_and_v4_edit_roundtrip() {
+        let content = load_content().expect("accepted content");
+        let selection = ArenaSelection {
+            map: hex_core::arena::ArenaMap::ForestMassif,
+            ..default()
+        };
+        let mut recipe =
+            build(selection, &content.substances, &content.art).expect("complete V4 map");
+        assert_eq!(recipe.map.columns().count(), 105_469);
+        assert_eq!(recipe.view.anchors.len(), 13);
+        assert!(recipe.geometry.max_level > 260);
+        assert!(recipe
+            .view
+            .liquids
+            .windows(2)
+            .all(|pair| pair.first().expect("pair").bottom <= pair.last().expect("pair").bottom));
+        for name in [
+            "party_start",
+            "forest_outer_a",
+            "forest_outer_b",
+            "forest_middle",
+            "forest_deep_a",
+            "forest_deep_b",
+            "dragon_lower",
+            "dragon_middle",
+            "dragon_upper",
+        ] {
+            let feet = recipe.view.anchors.get(name).expect("named support");
+            let support = recipe
+                .geometry
+                .voxel_at(*feet - Vec3::Y * 0.01)
+                .expect("inside map");
+            assert!(
+                content.substances.is_solid(recipe.map.get(support)),
+                "{name}"
+            );
+        }
+        for pos in [
+            TilePos::new(HexCoord::from_axial(-132, 5), 40),
+            TilePos::new(HexCoord::from_axial(-109, 100), 40),
+            TilePos::new(HexCoord::from_axial(-109, 100), 41),
+        ] {
+            assert!(
+                recipe
+                    .view
+                    .edit_protected
+                    .get(&pos.coord)
+                    .is_some_and(|ranges| ranges
+                        .iter()
+                        .any(|(low, high)| (*low..=*high).contains(&pos.level))),
+                "V4 semantic protection must be published before a spell: {pos:?}"
+            );
+        }
+        let source = recipe.forest_source.clone().expect("V4 source");
+        let mut backend = ForestRuntime::new(source).expect("resident authority");
+        let pos = TilePos::new(HexCoord::from_axial(-5, 50), 100);
+        assert!(recipe.map.get(pos).is_air());
+        recipe.map.set(pos, content.materials.stone);
+        backend
+            .commit_projection(
+                &recipe.map,
+                &BTreeSet::from([pos.coord]),
+                &content.substances,
+                &content.art,
+            )
+            .expect("V4 shield assignment");
+        let query = VoxelPosition {
+            column: WorldHex::new(-5, 50),
+            level: 100,
+        };
+        assert_eq!(
+            backend.runtime.voxel(query),
+            QueryResult::Ready(Some("stone".into()))
+        );
+        recipe.map.set(pos, SubstanceId::AIR);
+        backend
+            .commit_projection(
+                &recipe.map,
+                &BTreeSet::from([pos.coord]),
+                &content.substances,
+                &content.art,
+            )
+            .expect("V4 destruction");
+        assert_eq!(backend.runtime.voxel(query), QueryResult::Ready(None));
+    }
+}
+
+/// Cut spans only in dirty columns. Occupancy and damage queries use the same mask.
+pub(super) fn publish_carves(
+    view: &mut ArenaTerrainView,
+    finite: &FiniteWorldSession,
+    changed: &BTreeSet<HexCoord>,
+) {
+    for coord in changed {
+        if let Some(spans) = view.object_columns.get_mut(coord) {
+            let mut next = Vec::new();
+            for span in spans.iter() {
+                let mut begin = None;
+                for level in span.bottom.level..=span.top_level.saturating_add(1) {
+                    let survives = level <= span.top_level
+                        && !finite.object_removed(world_position(TilePos::new(*coord, level)));
+                    if survives && begin.is_none() {
+                        begin = Some(level);
+                    }
+                    if !survives {
+                        if let Some(bottom) = begin.take() {
+                            next.push(ArenaSolidSpan {
+                                bottom: TilePos::new(*coord, bottom),
+                                top_level: level - 1,
+                                substance: span.substance,
+                            });
+                        }
+                    }
+                }
+            }
+            *spans = next;
+        }
+    }
+    let mut next = Vec::with_capacity(view.static_spans.len());
+    for span in &view.static_spans {
+        if !changed.contains(&span.bottom.coord) {
+            next.push(*span);
+            continue;
+        }
+        let mut begin = None;
+        for level in span.bottom.level..=span.top_level.saturating_add(1) {
+            let survives = level <= span.top_level
+                && !finite.object_removed(world_position(TilePos::new(span.bottom.coord, level)));
+            if survives && begin.is_none() {
+                begin = Some(level);
+            }
+            if !survives {
+                if let Some(bottom) = begin.take() {
+                    next.push(hex_core::arena::ArenaStaticSpan {
+                        bottom: TilePos::new(span.bottom.coord, bottom),
+                        top_level: level - 1,
+                        ..*span
+                    });
+                }
+            }
+        }
+    }
+    view.static_spans = next;
+}

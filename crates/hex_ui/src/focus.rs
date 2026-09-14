@@ -141,6 +141,22 @@ fn prepare_buttons(world: &mut World) {
             entity.insert(AccessibleLabel::new(label));
         }
     }
+
+    // Sliders and future composite widgets are focusable without being Buttons.
+    // Preserve their authored index as well so `sync_focusability` can remove
+    // them from native tab navigation whenever an ancestor is hidden.
+    let untracked = {
+        let mut query = world.query_filtered::<(Entity, &TabIndex), Without<LogicalTabIndex>>();
+        query
+            .iter(world)
+            .map(|(entity, index)| (entity, index.0))
+            .collect::<Vec<_>>()
+    };
+    for (entity, logical_index) in untracked {
+        world
+            .entity_mut(entity)
+            .insert(LogicalTabIndex(logical_index));
+    }
 }
 
 fn sync_focusability(world: &mut World) {

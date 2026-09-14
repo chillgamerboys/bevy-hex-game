@@ -92,7 +92,7 @@ fn observer_menu_resets_roster_and_returns_to_player_with_human_identity() {
     press_action(&mut fixture, hud::Action::Start);
     press_action(&mut fixture, hud::Action::Roster(1, 1));
     assert_eq!(accepted, *fixture.world().resource::<ArenaBattleSetup>());
-    tap_key(&mut fixture, KeyCode::KeyR);
+    tap_restart(&mut fixture);
     assert!(!fixture.world().resource::<ViewState>().started);
     assert_eq!(
         accepted,

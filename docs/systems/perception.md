@@ -8,8 +8,9 @@ compile against one boundary without reaching into one another's crates.
 > **Status:** authoritative illumination, obstruction-aware pooled faction sight,
 > Unknown/Remembered/Observed map knowledge, and the live-map tactical shroud are
 > live.
-> V3 Caves and Crystal Ascent publish fixed local gameplay lights into that live
-> pipeline.
+> V3 Caves, Crystal Ascent, Crystal Mountain's tunnel, and Grand V3 Baseline's tunnel
+> publish fixed local gameplay lights into that live pipeline;
+> [lighting](lighting.md) owns their exact tier and domain contracts.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
 > consume that authority. Authored cave crystals and restrained physical lights
 > present those sources without becoming gameplay authority. Unknown-frontier
@@ -88,6 +89,11 @@ transitions after leaving the route. Exterior daylight therefore does not leak
 through the entrance or summit aperture under the domain contract. Authored emissive
 crystal meshes and restrained physical point lights communicate these rules at their
 exact sites, but they never implement gameplay illumination.
+
+Grand V3 embeds that exact landmark and joins it to its generated tunnel in one Dark
+domain. Crystal Ascent's lower threshold is internal; only the roofed foot threshold
+and summit terminal meet the exterior. Tunnel alcove crystals publish Bright-radius-4
+and Dim-radius-18 pairs, while renderer lights remain presentation-only.
 
 ## Sight
 
@@ -306,6 +312,13 @@ change restarts at observation; ambient or local-light changes reuse the surface
 and restart at illumination; unit positions and `perception.ron` changes restart at
 observation. Exact occupancy is published after restore and before the first setup
 observation, so missing or malformed material never produces a one-frame clear map.
+Target enumeration conservatively materializes only the union of active observers'
+maximum-radius horizontal disks. Exact LOS corridors use a bounded occupancy cache
+covering those observers and a one-column fringe; unsafe coordinates or an oversized
+cache fall back to the canonical uncached exact query rather than changing visibility.
+The nearest in-range observer is tried first as an ordering optimization, but every
+remaining observer is still tested after a blocked result and one observer still owns
+the complete seven-ray bundle.
 Unchanged gameplay frames run only the change detector. Every update-stage system
 belongs to `PausableSystems`, while the setup pass still resolves one complete initial
 frame before view framing.

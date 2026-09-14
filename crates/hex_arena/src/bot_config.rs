@@ -46,6 +46,10 @@ pub struct BotTuning {
     pub sprint_distance: f32,
     /// Shared brief reaction gap after a spell release.
     pub reaction_seconds: f32,
+    /// Delay after a new visual acquisition, separate from the post-cast gap.
+    pub acquisition_seconds: f32,
+    /// Bounded crater recovery through the ordinary movement and spell rules.
+    pub escape: crate::bot::EscapeTuning,
 }
 
 impl Default for BotTuning {
@@ -71,6 +75,8 @@ impl Default for BotTuning {
             waypoint_distance: 0.25,
             sprint_distance: 14.0,
             reaction_seconds: 0.35,
+            acquisition_seconds: 0.15,
+            escape: Default::default(),
         }
     }
 }
@@ -78,6 +84,7 @@ impl Default for BotTuning {
 impl BotTuning {
     /// Reject nonfinite and unbounded policy values before simulation admission.
     pub fn validate(&self) -> Result<(), String> {
+        self.escape.validate()?;
         for (name, value, minimum, maximum) in [
             ("memory_seconds", self.memory_seconds, 0.2, 10.0),
             ("cue_memory_seconds", self.cue_memory_seconds, 0.2, 5.0),
@@ -97,6 +104,7 @@ impl BotTuning {
             ("waypoint_distance", self.waypoint_distance, 0.1, 0.5),
             ("sprint_distance", self.sprint_distance, 5.0, 30.0),
             ("reaction_seconds", self.reaction_seconds, 0.0, 1.0),
+            ("acquisition_seconds", self.acquisition_seconds, 0.0, 0.5),
         ] {
             if !value.is_finite() || !(minimum..=maximum).contains(&value) {
                 return Err(format!(

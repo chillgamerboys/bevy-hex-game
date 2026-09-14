@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "palette_id": "p01-muted-earth",
+  "colors": {
+    "crystal/cyan-body": [0.18, 0.52, 0.58],
+    "crystal/cyan-glow": [0.62, 0.87, 0.88],
+    "liquid/foam": [0.82, 0.86, 0.86],
+    "liquid/lava": [0.72, 0.25, 0.08],
+    "liquid/water": [0.16, 0.31, 0.43],
+    "plant/foliage-dark": [0.16, 0.27, 0.13],
+    "plant/foliage-light": [0.34, 0.43, 0.22],
+    "plant/foliage-mid": [0.24, 0.35, 0.17],
+    "plant/grass-dark": [0.34, 0.43, 0.19],
+    "plant/grass-light": [0.46, 0.53, 0.25],
+    "plant/trunk": [0.27, 0.18, 0.11],
+    "structure/metal": [0.31, 0.32, 0.32],
+    "structure/worked-stone": [0.48, 0.47, 0.44],
+    "terrain/basalt": [0.23, 0.23, 0.22],
+    "terrain/bedrock": [0.28, 0.26, 0.26],
+    "terrain/dirt": [0.43, 0.33, 0.24],
+    "terrain/grass": [0.40, 0.52, 0.30],
+    "terrain/gravel": [0.44, 0.41, 0.35],
+    "terrain/ice": [0.55, 0.68, 0.72],
+    "terrain/sand": [0.68, 0.59, 0.40],
+    "terrain/snow": [0.80, 0.82, 0.80],
+    "terrain/stone": [0.53, 0.51, 0.48],
+    "unit/hostile": [0.30, 0.40, 0.66],
+    "unit/player": [0.78, 0.27, 0.20]
+  }
+}

@@ -8,7 +8,7 @@ description = "Voxel storage, terrain generation, tile spawning, and map setting
 
 [features]
 default = []
-arena-prototype = ["dep:ron"]
+arena-prototype = ["dep:ron", "dep:hex_world_runtime"]
 
 # A leaf crate. Nothing depends on it except the binary, so gameplay, camera, sky,
 # and screens cannot import its implementation. The ECS component contract still
@@ -23,6 +23,9 @@ bevy = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
 hex_multiplayer = { workspace = true }
+hex_schematic = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts" }
+hex_world_runtime = { path = "../hex_world_runtime", optional = true }
 rand = { workspace = true }
 ron = { workspace = true, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -39,3 +42,7 @@ workspace = true
 [[test]]
 name = "contracts"
 path = "tests/contracts.rs"
+
+[[test]]
+name = "schematic_compile"
+path = "tests/schematic_compile.rs"

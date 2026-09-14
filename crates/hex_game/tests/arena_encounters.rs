@@ -422,7 +422,7 @@ fn profile_combat(selection: ArenaSelection) {
         {
             let mut input = fixture.world_mut().resource_mut::<ArenaInput>();
             input.human.aim = aim;
-            input.human.selected = Some(Spell::AreaBlast);
+            input.human.selected = Some(Spell::Fireball);
             input.human.cast_pressed = pose_valid && step % 240 == 0;
             input.human.cast_released = pose_valid && step % 240 == 0;
         }

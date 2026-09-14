@@ -11,9 +11,12 @@ It renders on the inside of a large inverted sphere — the *sky dome* — spawn
 the dome draws from within, and `follow_camera` pins the dome's translation to the
 camera every frame. Because the camera stays permanently at the dome's centre, the
 sky depends only on view *orientation*: clouds stay fixed on the celestial dome
-while panning and re-orient only while orbiting. The dome radius (500) is inside the
-camera's far plane and well outside the terrain and max zoom, and it is a
-`NotShadowCaster` — a 500-unit sphere would otherwise shadow the whole map.
+while panning and re-orient only while orbiting. The dome radius is at least 500 world
+units. Large generated Map views expand it to `1.5 ×` the active orbit radius so the
+complete framed terrain remains in front of the sky; Character and First Person views
+normally retain the 500-unit radius. Generated-map framing enlarges the perspective
+far plane in tandem, keeping the expanded dome inside the camera depth range. The dome
+is a `NotShadowCaster` — a sphere at either scale would otherwise shadow the whole map.
 
 Choices worth knowing:
 

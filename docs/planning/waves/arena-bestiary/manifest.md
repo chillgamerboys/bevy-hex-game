@@ -1,5 +1,38 @@
 # Arena spectator battles and sequential bestiary — local continuation wave
 
+## 2026-09-11 Shadow experiment continuation
+
+**Superseded:** see the [High Jump amendment](#high-jump-replaces-area-blast-and-excavation--2026-09-11-amendment) and [validation report](shadow-experiment.md). The original proposal below is historical.
+
+Approved continuation from `e0b2be9` on `fix/arena-golem-worm-response`.
+Root integrates one local candidate; no remote changes or `dev` merge. Existing
+local shared-checkout exception applies. Budget overrides broad repeated gates:
+check account usage before stages and checkpoint at 16% remaining.
+
+The shared foundation is a world-published read-only terrain damage projection in
+`hex_core::arena`, including partial-health revisions and shared pure health
+resolution. Root commits the foundation before its consumers. World owns its
+publication and all real mutations; gameplay owns disposable forecast copies.
+
+Continuation ownership: world worker owns `hex_map` damage/publication; root owns
+the shared core contract, reaction/configuration and menu integration; gameplay
+worker owns only new `hex_arena/src/bot/escape*` files. The world worker may prepare
+the core contract for coordinator review/commit. No Cargo or commits by workers.
+Gameplay escape depends on the agreed foundation API; reaction/menu work can run
+alongside world publication. Combine in order: contract, world, gameplay/menu.
+
+Locked behavior: reaction defaults to 150 ms, independently adjustable 0–500 ms
+in 50 ms steps in the existing menu; zero is Off. Escape uses ordinary movement
+and charged Fireballs, no Shield lifting. Forecast at most two shots, ten HP
+self-damage, no lethal release; attempt at most three shots/six seconds. Search
+six directions within six units with 1.5-second rollouts, distributed across ticks.
+
+Combined acceptance: focused damage-publication, escape and acquisition tests;
+paused menu Off/150/500 ms, reset/click suppression; strict arena lint and real
+Fort/Duel application regressions. Human control feel, difficulty and general
+crater coverage remain native playtest claims. Validation details will be recorded
+in `shadow-experiment.md`; no broad captures or calibration tournaments planned.
+
 Status: local implementation and automated validation are complete. All seven enemy profiles and spectator battles have recorded machine calibration. Final Worm comparison is 6/8 against Goblins and 0/8 against Shadow with three unresolved Fort timeouts. Wisp static review passes at cef8c12; Worm13 static review and sustained Seven Regions10 native stress pass at 1bf41f2. All 29 combined repository checks pass at 25fa64d. Human motion, feel and balance remain in review.
 Coordinator: root. Branch: experiment/spell-combat-arena.
 Accepted local base: 127d1ce2058de9ba79da9717b7e37df4b9913502. Parent encounter
@@ -431,3 +464,113 @@ range. Focused Goblin, hidden-history and search-return checks replace another
 broad validation cycle at the user's request. The user explicitly authorized final
 PR publication and immediate merge without further approval; earlier draft/no-merge
 status above is historical. The PR records the exact-head validation waiver.
+
+### Golem/Worm response repair — 2026-09-09
+
+Following the merged PR #221 playtest, the user requested focused repairs and a
+hard stop below 20% remaining Codex usage. Work is isolated on
+`fix/arena-golem-worm-response` from verified `github/dev`. Root owns Worm state,
+application regression coverage and the single Cargo lane; the bounded Golem lane
+owns only `golem_brain.rs` and `golem_tests.rs`. No new world mutation or tuning API.
+
+The Golem lane removes the full-stall timer requirement when its existing local
+body sweep confirms destructible obstruction. The Worm lane retries stationary
+exposure after retraction cannot reach a valid shallow travel band, preserving
+full-body admission and observed-only attacks. Focused tests precede local commit;
+no new broad capture or balance campaign is part of this repair.
+
+The response candidate passes 45 Worm and 32 Golem library tests, strict arena
+Clippy, and the actual-map stationary-human Worm release check on Fort and Duel.
+See [response-repair.md](response-repair.md) for scope and remaining limitations.
+
+### Jump prediction, Golem pace and deeper Worm escape — 2026-09-11
+
+Approved on `fix/arena-golem-worm-response`: Shadow/human-only controller forecasts,
+Golem speed 3.2, then Worm emergency depth up to eight levels with 3.5-unit relocation
+and four seconds of buried travel. Root owns configuration, Golem pace,
+world-composition tests and the only Cargo lane. A bounded Worm lane owns
+`encounters/worm.rs` and its focused tests. The bounded Shadow lane owns
+`bot.rs`, `spells.rs` and its private forecast helper/tests. No world mutation API
+changes. Stop/checkpoint at 16% remaining usage; initial reading 27%. Run focused
+arena tests/lint and Fort/Duel checks, not broad captures or calibration.
+
+The candidate passes five Shadow jump checks, hidden-history isolation, 33 Golem
+checks, 49 Worm checks, strict arena Clippy and the Fort/Duel crater application
+regression. Full-rise preflight and the existing directional detours address
+blocked emergence and a nearby body obstructing the head. Remaining Fort firing
+angle/navigation limits and the precise synthetic setup are recorded in
+[quick-combat-fixes.md](quick-combat-fixes.md). Final usage: 25% remaining.
+Code stays local; native playtest and any later PR/merge remain separate.
+
+
+### High Jump replaces Area Blast and excavation — 2026-09-11 amendment
+
+This approved revision supersedes the opening **Shadow experiment continuation**
+section's Fireball excavation, terrain-damage projection and charge-cancellation
+requirements. Its earlier foundation remains historical; the combined candidate
+removes that unused projection/publication code rather than retaining another
+world contract. Existing world mutation and collision ownership are unchanged.
+
+Human and Shadow receive an independent immediate High Jump on key 3, replacing
+Area Blast. It defaults to four world units and a seven-second cooldown, works in
+the air, preserves projectile selection/charge, and neither damages nor edits
+terrain. Normal collision, ceiling and knockback rules remain. The paused menu
+uses twelve rows: two projectile sizes, High Jump height (2–8), launch settings,
+three cooldowns (High Jump 0.5–20), Fireball damage/impulse, Shadow reaction
+(0–500 ms, 50 ms steps, default 150), and escape On/Off. Values survive session
+reset/map changes; paused time does not advance reaction deadlines.
+
+Shadow recovery now changes movement only. It tests six local directions within
+six units, preferring walking, normal jumping, then High Jump; it admits supported
+landings, commits airborne routes and revalidates changed terrain or knockback.
+One candidate runs per tick with at most two seconds of movement forecast. Full
+replanning remains bounded to twice per second, attempts to six seconds, and
+unchanged failed locations are suppressed. No Fireball excavation, Shield lifting,
+teleport, player-position privilege or new navigation framework is introduced.
+
+Root owns gameplay/configuration integration, the sole Cargo lane and the actual
+validation report. The bounded presentation lane owns native key edges, menu/HUD,
+cosmetic High Jump effects, application tests and launcher capture names. It also
+updates the two current controls/behavior guides and this amendment. Golem radial
+slam visuals retain a separate effect kind; removal of Area Blast does not remove
+creature attacks. Local commits only; no automatic PR or merge. Checkpoint at
+16% remaining usage. Native control feel and crater coverage remain playtest work.
+
+Validation complete for the High Jump amendment: 326 arena tests, 99 application
+checks (2 existing ignored), strict arena lint and workspace formatting pass.
+See [shadow-experiment.md](shadow-experiment.md) for scope, measurements and native
+playtest limits. Usage remains above the 16% checkpoint threshold.
+
+### Direct spell controls and fixed walking speed — 2026-09-11 continuation
+
+Approved continuation from `68df079` on `fix/arena-golem-worm-response`.
+The sprint/stamina proposal is superseded: Human and Shadow use 4.5 units/s for
+all movement requests; creature movement and spectator camera speed remain intact.
+LMB owns Fireball, RMB owns Shield, first button wins until release, and E triggers
+High Jump. One authoritative charge remains; no new world or networking contract.
+
+Reuse this local combined wave and its shared-checkout exception. Root owns native
+input/gesture queue, application integration/tests and final validation/commit.
+The gameplay worker owns controller defaults and focused arena movement/escape
+regressions only. The presentation worker owns HUD labels/highlighting, current
+controls guides, and the scoped direct-control application fixtures. No worker Cargo runs or commits; root is the sole Cargo
+runner. No new shared foundation is required. Keep changes local, check usage
+between stages, and stop/checkpoint at 16% remaining.
+
+Acceptance: focused controller/escape and native gesture tests, layout and Fort/Duel
+application regressions, strict arena lint and formatting. Native control feel
+remains a human playtest. No stamina, enemy rebalance, visual redesign or remote PR.
+
+Direct-controls validation complete: 327 arena tests, 107 application checks
+(two existing ignored), strict arena lint and workspace formatting pass.
+See [direct-controls.md](direct-controls.md) for fixture corrections and native
+playtest limits. Usage reports 19% remaining; commit remains local.
+
+### Lean development policy — 2026-09-11
+
+The user-approved [temporary workflow](../../../development/lean-until-reset.md)
+supersedes the earlier 16% usage stops: checkpoint at 7%, preserving the 5% floor.
+Check once per small task, reuse recent readings, prioritize focused checks and
+native playtests, and prefer one agent. Required merge checks remain in force.
+This delivery changes guidance only; links and whitespace checked, no game tests
+needed. Future playable changes record their specific pending playtests here.

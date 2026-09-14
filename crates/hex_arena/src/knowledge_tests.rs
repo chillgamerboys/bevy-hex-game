@@ -146,18 +146,26 @@ fn actual_splash_damage_is_capped_and_accounted_without_changing_caster_immunity
     let victim = session.actors.get_mut(1).expect("victim");
     victim.feet = Vec3::X;
     victim.hp = 2.0;
-    session.advance(
-        ActorIntent {
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: true,
-            cast_released: true,
-            ..Default::default()
-        },
+    let owner = session.actors.first().expect("caster").clone();
+    session.explode(
+        owner.center(),
+        owner.id,
+        owner.team,
+        Spell::Fireball,
+        4.0,
+        45.0,
+        11.0,
+        tuning.terrain_power,
+        None,
+        None,
+        true,
+        false,
         &world,
         geometry,
         materials,
-        &tuning,
+        &mut CommandsOut::default(),
     );
+    session.advance(ActorIntent::default(), &world, geometry, materials, &tuning);
     let summary = session.round_summary();
     assert_eq!(summary.winner, Some(0));
     assert!(summary.complete);
@@ -173,7 +181,7 @@ fn actual_splash_damage_is_capped_and_accounted_without_changing_caster_immunity
     );
     assert_eq!(
         summary.actors.first().expect("caster").first_damage_tick,
-        Some(1)
+        Some(0)
     );
     assert!((summary.actors.get(1).expect("victim").damage_received - 2.0).abs() < SKIN);
 }

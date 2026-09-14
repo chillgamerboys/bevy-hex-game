@@ -6,6 +6,7 @@ default-members = ["crates/hex_game"]
 # Dependency versions live here so the crates can't drift apart. Each crate
 # opts in with `foo = { workspace = true }` and states its own features.
 [workspace.dependencies]
+hex_schematic = { path = "crates/hex_schematic" }
 hex_core = { path = "crates/hex_core" }
 hex_arena = { path = "crates/hex_arena" }
 hex_lattice = { path = "crates/hex_lattice" }
@@ -53,6 +54,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 rand = "0.8.5"
 rcgen = "=0.13.2"
 ron = "0.12.2"
+rustix = { version = "1.1.4", features = ["fs"] }
 sha2 = "=0.10.9"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 x509-parser = "=0.17.0"
@@ -182,6 +184,12 @@ debug = false
 # <https://github.com/bevyengine/bevy/issues/14291>
 [profile.dev.package.wgpu-types]
 debug-assertions = false
+
+# Rust 1.97 debug stripping can misalign a Mach-O dylib string table.
+# Keep the Bevy development dylib intact for current Apple linkers; static
+# shipping builds do not include it. https://github.com/rust-lang/rust/issues/157750
+[profile.dev.package.bevy_dylib]
+strip = "none"
 
 [profile.release]
 # Whole-program optimization. Costs compile time; this is the profile we ship,

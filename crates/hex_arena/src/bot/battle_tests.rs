@@ -164,6 +164,7 @@ fn charged_shadow_release_damages_real_low_and_capsule_profiles() {
 #[test]
 fn switching_to_new_target_cancels_armed_release_without_cross_id_velocity() {
     let (mut fixture, mut bot) = battle_fixture(Species::Goblin);
+    fixture.tuning.bot.acquisition_seconds = 0.15;
     fixture.actor_mut(CASTER).cooldowns = [600.0; 3];
     decide_battle(&fixture, &mut bot, 1);
     fixture.actor_mut(TARGET).feet.z += 0.3;
@@ -184,6 +185,11 @@ fn switching_to_new_target_cancels_armed_release_without_cross_id_velocity() {
         .push(profile(9, 42, Species::Dragon, Vec3::new(7.0, SKIN, -2.0)));
 
     let intent = decide_battle(&fixture, &mut bot, 25);
+    assert_eq!(
+        bot.acquired_at,
+        Some(25),
+        "target switch starts a new deadline"
+    );
     assert!(
         !intent.cast_pressed && !intent.cast_held && !intent.cast_released,
         "changing an armed target requires a neutral cancellation sample"
@@ -207,6 +213,12 @@ fn switching_to_new_target_cancels_armed_release_without_cross_id_velocity() {
         [0.0_f32.to_bits(); 3]
     );
     assert!(fixture.session.projectiles.is_empty());
+    bot.tick = 42;
+    bot.update_acquisition(&fixture.tuning);
+    assert!(!bot.acquisition_ready());
+    bot.tick = 43;
+    bot.update_acquisition(&fixture.tuning);
+    assert!(bot.acquisition_ready());
 }
 
 #[test]

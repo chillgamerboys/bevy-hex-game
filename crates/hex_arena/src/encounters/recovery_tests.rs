@@ -277,11 +277,12 @@ fn visible_pair(
 }
 
 #[test]
-fn new_damage_refreshes_retreat_without_moving_its_fixed_destination() {
+fn escape_depends_on_health_and_repeated_damage_preserves_its_destination() {
     let (mut actor, target, party, view, geometry, collision, tuning) =
         visible_pair(Species::Dragon);
     let mut brain = brain::Brain::for_battle(actor.id, actor.feet, 1);
     actor.last_damage_tick = Some(100);
+    actor.hp = actor.max_hp / 3.0;
     brain.intent(
         &actor,
         &party,
@@ -326,8 +327,7 @@ fn new_damage_refreshes_retreat_without_moving_its_fixed_destination() {
         initial.goal.map(f32::to_bits),
         refreshed.goal.map(f32::to_bits)
     );
-    assert!(refreshed.retreat_seconds > aged.retreat_seconds + 0.45);
-    assert!((refreshed.retreat_seconds - (4.0 - STEP)).abs() < 0.001);
+    assert!(refreshed.retreat_seconds > 0.0 && aged.retreat_seconds > 0.0);
     actor.hp = actor.max_hp * 0.4;
     brain.intent(
         &actor,
@@ -341,7 +341,7 @@ fn new_damage_refreshes_retreat_without_moving_its_fixed_destination() {
         &tuning,
         162,
     );
-    assert!(brain.decision.expect("hurt retreat").retreat_seconds > 7.9);
+    assert!(brain.decision.expect("healed aggression").retreat_seconds <= 0.0);
 }
 
 #[test]

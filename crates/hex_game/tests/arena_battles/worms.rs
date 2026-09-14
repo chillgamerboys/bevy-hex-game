@@ -362,3 +362,182 @@ fn actual_duel_worms_naturally_convert_earth_expose_the_head_and_deal_boulder_da
     );
     assert!(damaged, "the actual released boulder removes hostile HP");
 }
+
+#[test]
+fn player_worm_answers_a_nearby_visible_human_on_each_real_map() {
+    for map in [ArenaMap::Fort, ArenaMap::Duel] {
+        let setup = ArenaBattleSetup {
+            player_recipe: Some(BattlePreset::Worm),
+            ..Default::default()
+        };
+        let mut fixture = app(map, setup);
+        for _ in 0..120 {
+            fixture.world_mut().run_schedule(ArenaTick);
+            if fixture
+                .world()
+                .resource::<ArenaSession>()
+                .actors
+                .iter()
+                .any(|a| a.species == Species::Worm && a.worm().is_some_and(|s| s.exposed))
+            {
+                break;
+            }
+        }
+        let session = fixture.world().resource::<ArenaSession>();
+        let worm = session
+            .actors
+            .iter()
+            .find(|a| a.species == Species::Worm)
+            .expect("Worm");
+        let view = fixture.world().resource::<ArenaTerrainView>();
+        let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+        let point = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z]
+            .into_iter()
+            .find_map(|direction| {
+                session.visible_supported_actor_pose(
+                    0,
+                    worm.id,
+                    worm.feet + direction * 8.0,
+                    view,
+                    geometry,
+                )
+            })
+            .expect("dry visible approach");
+        let mut session = fixture.world_mut().resource_mut::<ArenaSession>();
+        let human = session
+            .actors
+            .iter_mut()
+            .find(|a| a.id == 0)
+            .expect("human");
+        human.feet = point;
+        human.previous_feet = point;
+        human.hp = 1000.0;
+        human.max_hp = 1000.0;
+        let mut fired = false;
+        for _ in 0..1800 {
+            fixture.world_mut().run_schedule(ArenaTick);
+            let session = fixture.world().resource::<ArenaSession>();
+            fired |= session
+                .projectiles
+                .iter()
+                .any(|p| p.source_ability() == Some(CreatureAbility::WormBoulder));
+            if fired {
+                break;
+            }
+        }
+        let session = fixture.world().resource::<ArenaSession>();
+        assert!(
+            fired,
+            "{map:?}: no boulder; parties={:?}; actors={:?}",
+            session.parties(),
+            session.actors
+        );
+        assert_real_map_crater_escape(&mut fixture, map);
+    }
+}
+
+fn assert_real_map_crater_escape(fixture: &mut App, map: ArenaMap) {
+    let session = fixture.world().resource::<ArenaSession>();
+    let worm = session
+        .actors
+        .iter()
+        .find(|actor| actor.species == Species::Worm)
+        .expect("Worm");
+    let id = worm.id;
+    let before = worm.feet;
+    let tail = worm.body_hex_prisms().last().expect("tail");
+    let base = before + tail.offset;
+    let coord = HexCoord::from_world(base);
+    let last_projectile = session
+        .projectiles
+        .iter()
+        .map(|shot| shot.id)
+        .max()
+        .unwrap_or(0);
+    let geometry = *fixture.world().resource::<ArenaVoxelGeometry>();
+    let view = fixture.world().resource::<ArenaTerrainView>();
+    let top = view
+        .voxels
+        .keys()
+        .filter(|pos| pos.coord == coord && geometry.top(**pos) <= base.y + EPSILON)
+        .map(|pos| pos.level)
+        .max()
+        .expect("supporting terrain");
+    let removed: Vec<_> = view
+        .voxels
+        .keys()
+        .filter(|pos| pos.coord == coord && pos.level <= top && pos.level > top - 4)
+        .copied()
+        .collect();
+    assert_eq!(removed.len(), 4, "four-level ordinary crater");
+    for pos in &removed {
+        fixture
+            .world_mut()
+            .write_message(TerrainEdit::Clear { pos: *pos });
+    }
+    let mut descended = false;
+    let mut relocated = false;
+    let mut fired = false;
+    let mut visible_target_placed = false;
+    for _ in 0..3600 {
+        fixture.world_mut().run_schedule(ArenaTick);
+        let session = fixture.world().resource::<ArenaSession>();
+        let worm = session
+            .actors
+            .iter()
+            .find(|actor| actor.id == id)
+            .expect("Worm");
+        descended |= worm.feet.y < before.y - geometry.level_height;
+        relocated |= (worm.feet - before).with_y(0.0).length() >= 3.5;
+        fired = session.projectiles.iter().any(|shot| {
+            shot.id > last_projectile
+                && shot.owner == id
+                && shot.source_ability() == Some(CreatureAbility::WormBoulder)
+        });
+        if fired {
+            break;
+        }
+        if descended
+            && relocated
+            && !visible_target_placed
+            && worm.worm().is_some_and(|state| state.exposed)
+        {
+            // Escape can put authored cover between the actors. Counterfire
+            // requires a real sighting, so place this synthetic target on dry,
+            // visible footing again; the Worm's pose and AI stay untouched.
+            let view = fixture.world().resource::<ArenaTerrainView>();
+            let point = [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z]
+                .into_iter()
+                .find_map(|direction| {
+                    session.visible_supported_actor_pose(
+                        0,
+                        id,
+                        worm.feet + direction * 8.0,
+                        view,
+                        geometry,
+                    )
+                });
+            if let Some(point) = point {
+                let mut session = fixture.world_mut().resource_mut::<ArenaSession>();
+                let human = session
+                    .actors
+                    .iter_mut()
+                    .find(|actor| actor.id == 0)
+                    .expect("human");
+                human.feet = point;
+                human.previous_feet = point;
+                visible_target_placed = true;
+            }
+        }
+    }
+    assert!(
+        descended && relocated && fired,
+        "{map:?}: crater recovery descend={descended} relocate={relocated} fire={fired} placed={visible_target_placed}; {}",
+        actor_snapshot(fixture)
+    );
+    let terrain = fixture.world().resource::<ArenaTerrainView>();
+    assert!(
+        removed.iter().all(|pos| !terrain.voxels.contains_key(pos)),
+        "lost terrain must never be rebuilt by recovery"
+    );
+}

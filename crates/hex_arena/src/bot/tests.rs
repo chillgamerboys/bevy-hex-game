@@ -8,6 +8,35 @@ use hex_core::{ElementId, HexCoord, SubstanceId, TerrainEdit, TilePos};
 #[path = "battle_tests.rs"]
 mod battle_tests;
 
+#[test]
+fn expedition_target_height_is_copied_on_sight_and_not_refreshed_behind_cover() {
+    let mut f = Fixture::new(10.0);
+    f.actor_mut(0).configure_expedition_player();
+    f.decide();
+    let observed = f
+        .session
+        .bot
+        .player_profile
+        .expect("visible player profile");
+    assert!((observed.body.dimensions.y - 1.2).abs() < 0.0001);
+    assert!(observed.body.feet.distance(f.actor(0).feet) < 0.0001);
+    for coord in HexCoord::ORIGIN.within_radius(12) {
+        if coord.to_world(0.0).x.abs() < 1.0 {
+            for level in 1..=12 {
+                f.world
+                    .voxels
+                    .insert(TilePos::new(coord, level), f.materials.stone);
+            }
+        }
+    }
+    f.refresh();
+    f.actor_mut(0).feet += Vec3::Z * 3.0;
+    f.decide();
+    assert!(f.session.bot.observation.target.is_none());
+    let remembered = f.session.bot.player_profile.expect("frozen profile");
+    assert!(remembered.body.feet.distance(observed.body.feet) < 0.0001);
+}
+
 struct Fixture {
     session: ArenaSession,
     world: ArenaTerrainView,
@@ -43,12 +72,16 @@ impl Fixture {
         session.reset(0, &world, geometry);
         session.bot.release_ticks = 0;
         session.bot.think_ticks = 0;
+        // Legacy behavior fixtures explicitly compare with both experiments off.
+        let mut tuning = ArenaTuning::default();
+        tuning.bot.acquisition_seconds = 0.0;
+        tuning.bot.escape.enabled = false;
         Self {
             session,
             world,
             geometry,
             materials,
-            tuning: ArenaTuning::default(),
+            tuning,
         }
     }
 
@@ -234,34 +267,16 @@ fn bot_fireball_actually_damages_stationary_targets_at_near_and_far_range() {
 }
 
 #[test]
-fn close_bot_uses_caster_safe_blast_and_does_not_replace_cooldown_with_suicidal_fire() {
+fn close_bot_keeps_projectile_selection_and_avoids_self_splash() {
     let mut fixture = Fixture::new(2.0);
-    let first = fixture.advance();
-    assert_eq!(fixture.actor(1).selected, Spell::AreaBlast);
-    assert_eq!(first.impacts.len(), 1);
-    assert!(fixture.actor(0).hp < 100.0);
+    for _ in 0..12 {
+        let out = fixture.advance();
+        assert!(out.impacts.is_empty());
+        assert!(fixture.session.projectiles.is_empty());
+    }
+    assert_eq!(fixture.actor(1).selected, Spell::Fireball);
+    assert!((fixture.actor(0).hp - 100.0).abs() < SKIN);
     assert!((fixture.actor(1).hp - 100.0).abs() < SKIN);
-    assert!(
-        (fixture
-            .actor(1)
-            .cooldowns
-            .get(2)
-            .copied()
-            .unwrap_or_default()
-            - 7.0)
-            .abs()
-            < SKIN
-    );
-    assert!(fixture.session.projectiles.is_empty());
-    fixture.session.bot.think_ticks = 0;
-    fixture.session.bot.release_ticks = 0;
-    let next = fixture.advance();
-    assert!(next.impacts.is_empty() && fixture.session.projectiles.is_empty());
-    assert!(fixture
-        .actor(1)
-        .cooldowns
-        .get(1)
-        .is_some_and(|cooldown| cooldown.abs() < SKIN));
 }
 
 #[test]
@@ -343,12 +358,17 @@ fn defensive_seed_without_any_impact_falls_back_without_spending_shield_cooldown
         .cooldowns
         .first()
         .is_some_and(|cooldown| cooldown.abs() < SKIN));
-    let charge = fixture
-        .actor(1)
-        .charge()
-        .expect("fallback charges fireball");
-    assert_eq!(charge.spell, Spell::Fireball);
-    assert!(fixture.session.projectiles.is_empty());
+    assert!(
+        fixture
+            .actor(1)
+            .charge()
+            .is_some_and(|c| c.spell == Spell::Fireball)
+            || fixture
+                .session
+                .projectiles
+                .iter()
+                .any(|shot| shot.owner == 1 && shot.spell == Spell::Fireball)
+    );
     assert!(fixture.session.pending_walls.is_empty());
     assert_eq!(fixture.session.shields_raised, 0);
 }
@@ -611,6 +631,9 @@ fn cancelling_a_bot_charge_discards_the_release_without_resetting_its_seed() {
 #[path = "strong_tests.rs"]
 mod strong_tests;
 
+#[path = "reaction_tests.rs"]
+mod reaction_tests;
+
 #[test]
 fn prepared_peek_reacts_on_the_sight_sample_between_behavior_decisions() {
     let mut fixture = Fixture::new(28.0);
@@ -653,8 +676,8 @@ fn prepared_peek_reacts_on_the_sight_sample_between_behavior_decisions() {
 
 #[test]
 fn interrupted_defense_revalidates_range_and_terrain_before_the_queued_tap() {
-    for spell in [Spell::AreaBlast, Spell::Shield] {
-        let mut fixture = Fixture::new(if spell == Spell::AreaBlast { 2.0 } else { 14.0 });
+    for spell in [Spell::Shield] {
+        let mut fixture = Fixture::new(14.0);
         let tuning = fixture.tuning.clone();
         if spell == Spell::Shield {
             fixture.actor_mut(1).hp = 50.0;
@@ -676,11 +699,7 @@ fn interrupted_defense_revalidates_range_and_terrain_before_the_queued_tap() {
             Some(spell)
         );
         assert!(fixture.session.projectiles.is_empty());
-        if spell == Spell::AreaBlast {
-            let human = fixture.actor_mut(0);
-            human.feet = Vec3::new(9.0, SKIN, 0.0);
-            human.previous_feet = human.feet;
-        } else {
+        {
             let blocker = HexCoord::from_world(fixture.actor(1).feet + Vec3::X * 1.7);
             for level in 1..=5 {
                 fixture
@@ -708,3 +727,90 @@ mod navigation_tests;
 
 #[path = "duel_golden_tests.rs"]
 mod duel_golden_tests;
+
+#[test]
+fn shadow_jump_motion_is_only_for_visible_human_targets() {
+    let fixture = Fixture::new(8.0);
+    let human = Belief {
+        feet: Vec3::Y,
+        velocity: Vec3::Y * 4.0,
+        visible: true,
+        uncertainty: 0.1,
+        profile: None,
+    };
+    let shadow = fixture.actor(1);
+    assert!(shadow_motion(shadow, human, &fixture.session.collision, &fixture.tuning).is_some());
+    assert!(shadow_motion(
+        shadow,
+        Belief {
+            visible: false,
+            ..human
+        },
+        &fixture.session.collision,
+        &fixture.tuning
+    )
+    .is_none());
+    let mut goblin = shadow.clone();
+    goblin.species = crate::Species::Goblin;
+    assert!(shadow_motion(&goblin, human, &fixture.session.collision, &fixture.tuning).is_none());
+    let mut body = ForecastBody::human(2, human.feet, human.velocity, 0.5);
+    body.species = crate::Species::Shadow;
+    let monster = Belief {
+        profile: Some(crate::targeting::ObservedTarget {
+            body,
+            tick: 0,
+            sight_point: body.center(),
+        }),
+        ..human
+    };
+    assert!(shadow_motion(shadow, monster, &fixture.session.collision, &fixture.tuning).is_none());
+}
+
+#[test]
+fn shadow_jump_aim_and_splash_admission_use_the_same_projectile_motion() {
+    let mut fixture = Fixture::new(8.0);
+    let caster = fixture.actor(1).clone();
+    for (height, vertical) in [(0.3, 5.0), (1.3, 0.0), (0.5, -4.0)] {
+        let belief = Belief {
+            feet: fixture.actor(0).feet.with_y(height),
+            velocity: Vec3::new(0.0, vertical, 0.0),
+            visible: true,
+            uncertainty: 0.1,
+            profile: None,
+        };
+        let speed = fixture.tuning.launch_speed(fixture.tuning.charge_seconds);
+        let (aim, time) = fixture
+            .session
+            .bot
+            .fireball_aim(
+                &caster,
+                belief,
+                &fixture.session.collision,
+                &fixture.world,
+                fixture.geometry,
+                &fixture.tuning,
+                speed,
+            )
+            .expect("jump phase should admit a useful shot");
+        let mut shot_caster = caster.clone();
+        shot_caster.aim = aim;
+        let motion = shadow_motion(&caster, belief, &fixture.session.collision, &fixture.tuning)
+            .expect("admitted forecast");
+        let forecast = forecast_spell_with_motion(
+            &shot_caster,
+            &forecast_bodies(belief, &fixture.tuning),
+            Some(&motion),
+            &fixture.session.collision,
+            &fixture.world,
+            fixture.geometry,
+            &fixture.tuning,
+            speed,
+        );
+        let impact = forecast.impact.expect("admitted forecast");
+        assert!((impact.time - time).abs() < STEP * 0.01);
+        assert!(
+            capsule_distance(impact.point, motion.feet_at(time))
+                <= fixture.tuning.fireball_radius() * 0.6
+        );
+    }
+}

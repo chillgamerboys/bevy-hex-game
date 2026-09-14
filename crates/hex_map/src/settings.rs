@@ -23,7 +23,7 @@ use serde::{Deserialize, Deserializer};
 /// Highest level admitted by the frozen V1 and V2 generators.
 pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
 /// Highest occupied voxel level admitted by V3 settings and semantic volumes.
-pub(crate) const MAX_V3_LEVEL: Level = 256;
+pub(crate) const MAX_V3_LEVEL: Level = 384;
 const SKY_UPPER_VERTICAL_BUDGET: Level = 20;
 /// Fixed shell, woodland crown, and clear-space budget above the stair rise.
 pub(crate) const CRYSTAL_ASCENT_CROWN_VERTICAL_BUDGET: Level = 24;
@@ -38,6 +38,12 @@ pub const V3_MOUNTAIN_RANGE_REGION_COUNT: usize = 30;
 const RING19_RADIUS: u32 = 55;
 const MACRO_RADIUS: u32 = 77;
 const MACRO_CELL_RADIUS: u32 = 3;
+/// Exact world radius derived by the first schematic-to-voxel contract.
+pub const V3_SCHEMATIC_GRID_RADIUS: u32 = 187;
+/// Exact spacing between adjacent coarse-cell centres in the first schematic compiler.
+pub const V3_SCHEMATIC_CELL_PITCH: u32 = 22;
+/// Only Grand V3 template revision admitted by the first schematic compiler.
+pub const V3_GRAND_V3_TEMPLATE_REVISION: u32 = 3;
 const MACRO_RECIPE_VALIDATION_RADIUS: u32 = 12;
 const RING19_RECIPE_VALIDATION_RADIUS: u32 = 40;
 const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
@@ -60,6 +66,27 @@ const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_CO
     (V3EnvironmentSettings::Frozen, "Mountains", 0),
     (V3EnvironmentSettings::Frozen, "Mountains", 0),
     (V3EnvironmentSettings::Frozen, "Mountains", 0),
+];
+const DESERT_OASIS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
+    (V3EnvironmentSettings::Arid, "Oasis", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 1),
+    (V3EnvironmentSettings::Arid, "Dunes", 2),
+    (V3EnvironmentSettings::Arid, "Dunes", 3),
+    (V3EnvironmentSettings::Arid, "Dunes", 4),
+    (V3EnvironmentSettings::Arid, "Dunes", 5),
+    (V3EnvironmentSettings::Arid, "Dunes", 0),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 1),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 2),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 3),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 4),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
+    (V3EnvironmentSettings::Arid, "Dunes", 5),
+    (V3EnvironmentSettings::Arid, "DesertPlain", 0),
 ];
 const TWO_RINGS_INTERNAL_HYDROLOGY: [(u8, u8, u32, Level); 8] = [
     (16, 5, 3, 29),
@@ -487,6 +514,261 @@ pub enum V3LayoutSettings {
     Ring19(V3Ring19Settings),
     /// Authored logical biomes over a radius-three graph of atomic macro cells.
     Macro(MacroLayoutSettings),
+    /// A validated coarse schematic compiled into one complete V3 voxel world.
+    Schematic(V3SchematicLayoutSettings),
+}
+
+/// Strict identity of a schematic template supported by the V3 map compiler.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V3SchematicTemplate {
+    /// The approved radius-eight Grand V3 semantic map.
+    GrandV3,
+}
+
+/// Designer-facing contract for one schematic-to-voxel compilation.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3SchematicLayoutSettings {
+    /// Exact semantic template family.
+    pub template: V3SchematicTemplate,
+    /// Exact approved revision of that template.
+    pub template_revision: u32,
+    /// Distance between neighboring coarse-cell centres in voxel hexes.
+    pub cell_pitch: u32,
+    /// Versioned mapping from schematic facts to terrain levels.
+    pub terrain_profile: V3SchematicTerrainProfile,
+}
+
+impl V3SchematicLayoutSettings {
+    /// Derives the complete voxel-world radius from the radius-eight schematic.
+    ///
+    /// Half a cell pitch remains beyond the outermost coarse-cell centres, matching
+    /// the established nearest-centre ownership used by V3 composite layouts.
+    pub fn derived_grid_radius(&self) -> Result<u32, String> {
+        u32::from(hex_schematic::SCHEMATIC_RADIUS)
+            .checked_mul(self.cell_pitch)
+            .and_then(|centres| centres.checked_add(self.cell_pitch / 2))
+            .ok_or_else(|| "V3 Schematic derived grid radius overflowed u32".to_owned())
+    }
+
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        match self.template {
+            V3SchematicTemplate::GrandV3 => {
+                if self.template_revision != V3_GRAND_V3_TEMPLATE_REVISION {
+                    return Err(format!(
+                        "V3 Schematic GrandV3 template_revision must be exactly {V3_GRAND_V3_TEMPLATE_REVISION}"
+                    ));
+                }
+            }
+        }
+        if self.cell_pitch != V3_SCHEMATIC_CELL_PITCH {
+            return Err(format!(
+                "V3 Schematic cell_pitch must be exactly {V3_SCHEMATIC_CELL_PITCH}"
+            ));
+        }
+        self.terrain_profile.validate()?;
+        let derived = self.derived_grid_radius()?;
+        if derived != V3_SCHEMATIC_GRID_RADIUS {
+            return Err(format!(
+                "V3 Schematic canonical settings must derive grid radius {V3_SCHEMATIC_GRID_RADIUS}, got {derived}"
+            ));
+        }
+        if grid_radius != derived {
+            return Err(format!(
+                "procedural V3 Schematic requires grid_radius exactly {derived}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Versioned vertical profile used to compile one schematic plan.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V3SchematicTerrainProfile {
+    /// First dramatic Grand V3 profile, preserving the approved Crystal heights.
+    GrandV3BasicV1(V3GrandV3BasicTerrainProfile),
+}
+
+impl V3SchematicTerrainProfile {
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::GrandV3BasicV1(profile) => profile.validate(),
+        }
+    }
+}
+
+/// Exact level mapping for the first dramatic Grand V3 terrain compiler.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3GrandV3BasicTerrainProfile {
+    /// Standing sea-water level.
+    pub sea_level: Level,
+    /// Representative dry level for schematic sea islands.
+    pub island_level: Level,
+    /// Representative beach level.
+    pub beach_level: Level,
+    /// Representative marine-shore level.
+    pub shore_level: Level,
+    /// Representative temperate valley level.
+    pub valley_level: Level,
+    /// Representative plateau level.
+    pub plateau_level: Level,
+    /// Representative hill level.
+    pub hill_level: Level,
+    /// Lowest ordinary mountain datum outside the high-core influence.
+    pub mountain_floor: Level,
+    /// Lowest massif datum outside the high-core influence.
+    pub massif_floor: Level,
+    /// Exact datum shared by the approved high landmark cluster.
+    pub high_core_level: Level,
+    /// Datum reduction for each coarse cell away from the high core.
+    pub high_gradient_per_cell: Level,
+    /// Standing-water level of the authored mountain lake.
+    pub mountain_lake_level: Level,
+    /// Ground datum of the authored frozen woods.
+    pub frozen_woods_level: Level,
+    /// Lowest dry surface on the scenic mountain-lake island.
+    pub lake_island_min_level: Level,
+    /// Highest dry surface on the scenic mountain-lake island.
+    pub lake_island_max_level: Level,
+    /// Lowest bench level inside a locked sharp-peak region.
+    pub sharp_peak_bench_min: Level,
+    /// Highest bench level inside a locked sharp-peak region.
+    pub sharp_peak_bench_max: Level,
+    /// Lowest authored sharp summit.
+    pub sharp_peak_min: Level,
+    /// Highest authored sharp summit.
+    pub sharp_peak_max: Level,
+    /// Standing-water level of the lower valley lake.
+    pub valley_lake_level: Level,
+    /// Exact lower-chamber and tunnel-floor level of Crystal Ascent.
+    pub crystal_base_level: Level,
+    /// Exact rise from Crystal Ascent's chamber to its upper-exit walking datum.
+    ///
+    /// Decorative shell and rib surfaces may extend above this level.
+    pub crystal_rise_levels: Level,
+}
+
+impl V3GrandV3BasicTerrainProfile {
+    /// Canonical immutable values of the first dramatic terrain profile.
+    #[must_use]
+    pub const fn canonical() -> Self {
+        Self {
+            sea_level: 8,
+            island_level: 12,
+            beach_level: 10,
+            shore_level: 12,
+            valley_level: 16,
+            plateau_level: 20,
+            hill_level: 20,
+            mountain_floor: 28,
+            massif_floor: 48,
+            high_core_level: 150,
+            high_gradient_per_cell: 18,
+            mountain_lake_level: 150,
+            frozen_woods_level: 152,
+            lake_island_min_level: 151,
+            lake_island_max_level: 158,
+            sharp_peak_bench_min: 150,
+            sharp_peak_bench_max: 166,
+            sharp_peak_min: 178,
+            sharp_peak_max: 192,
+            valley_lake_level: 15,
+            crystal_base_level: 6,
+            crystal_rise_levels: 144,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let expected = Self::canonical();
+        for (field, actual, canonical) in [
+            ("sea_level", self.sea_level, expected.sea_level),
+            ("island_level", self.island_level, expected.island_level),
+            ("beach_level", self.beach_level, expected.beach_level),
+            ("shore_level", self.shore_level, expected.shore_level),
+            ("valley_level", self.valley_level, expected.valley_level),
+            ("plateau_level", self.plateau_level, expected.plateau_level),
+            ("hill_level", self.hill_level, expected.hill_level),
+            (
+                "mountain_floor",
+                self.mountain_floor,
+                expected.mountain_floor,
+            ),
+            ("massif_floor", self.massif_floor, expected.massif_floor),
+            (
+                "high_core_level",
+                self.high_core_level,
+                expected.high_core_level,
+            ),
+            (
+                "high_gradient_per_cell",
+                self.high_gradient_per_cell,
+                expected.high_gradient_per_cell,
+            ),
+            (
+                "mountain_lake_level",
+                self.mountain_lake_level,
+                expected.mountain_lake_level,
+            ),
+            (
+                "frozen_woods_level",
+                self.frozen_woods_level,
+                expected.frozen_woods_level,
+            ),
+            (
+                "lake_island_min_level",
+                self.lake_island_min_level,
+                expected.lake_island_min_level,
+            ),
+            (
+                "lake_island_max_level",
+                self.lake_island_max_level,
+                expected.lake_island_max_level,
+            ),
+            (
+                "sharp_peak_bench_min",
+                self.sharp_peak_bench_min,
+                expected.sharp_peak_bench_min,
+            ),
+            (
+                "sharp_peak_bench_max",
+                self.sharp_peak_bench_max,
+                expected.sharp_peak_bench_max,
+            ),
+            (
+                "sharp_peak_min",
+                self.sharp_peak_min,
+                expected.sharp_peak_min,
+            ),
+            (
+                "sharp_peak_max",
+                self.sharp_peak_max,
+                expected.sharp_peak_max,
+            ),
+            (
+                "valley_lake_level",
+                self.valley_lake_level,
+                expected.valley_lake_level,
+            ),
+            (
+                "crystal_base_level",
+                self.crystal_base_level,
+                expected.crystal_base_level,
+            ),
+            (
+                "crystal_rise_levels",
+                self.crystal_rise_levels,
+                expected.crystal_rise_levels,
+            ),
+        ] {
+            if actual != canonical {
+                return Err(format!(
+                    "V3 Schematic GrandV3BasicV1 {field} must be exactly {canonical}, got {actual}"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One authored radius-three macro world.
@@ -508,8 +790,111 @@ pub struct MacroLayoutSettings {
     /// Authored inland origins for directed rivers that would otherwise begin at a seam.
     #[serde(default)]
     pub headwaters: Vec<MacroHeadwaterSettings>,
+    /// Explicit ordinary surface apertures independent of the canonical route.
+    #[serde(default)]
+    pub walker_connections: Vec<MacroWalkerConnectionSettings>,
+    /// Whole-world features which cross one or more logical biome instances.
+    #[serde(default)]
+    pub spanning_features: Vec<MacroSpanningFeatureSettings>,
+    /// Stable world-level names for anchors produced inside logical instances.
+    #[serde(default)]
+    pub anchor_aliases: Vec<MacroAnchorAliasSettings>,
     /// Ordered logical instances crossed by the canonical ordinary-walker route.
     pub critical_route: Vec<String>,
+}
+
+/// One explicit ordinary surface aperture between adjacent Macro instances.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroWalkerConnectionSettings {
+    /// First logical instance name.
+    pub first_instance: String,
+    /// Second logical instance name.
+    pub second_instance: String,
+    /// Exact width of the single resolved surface aperture.
+    pub width: u32,
+    /// Exact shared support-surface level of the aperture.
+    pub level: Level,
+}
+
+/// One feature authored once across the complete Macro world.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroSpanningFeatureSettings {
+    /// A roofed, level passage through an ordered sequence of instances.
+    Tunnel(MacroTunnelSettings),
+}
+
+/// Designer-facing contract for one cross-instance tunnel.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroTunnelSettings {
+    /// Stable feature name used by diagnostics, IDs, and fingerprints.
+    pub name: String,
+    /// Whether this feature replaces the legacy surface `critical_route`.
+    pub canonical_route: bool,
+    /// Ordered logical instances crossed from the world boundary to the destination.
+    pub instance_route: Vec<String>,
+    /// Exact outer-world side and owning instance for the entrance.
+    pub boundary_terminal: MacroBoundaryTerminalSettings,
+    /// Instance-local anchor where the tunnel terminates.
+    pub destination_anchor: MacroAnchorReferenceSettings,
+    /// Exact support-surface level throughout the tunnel.
+    pub floor_level: Level,
+    /// Exact lane count across every tunnel seam.
+    pub width: u32,
+    /// Number of clear voxel levels above the support surface.
+    pub clearance: u32,
+    /// Minimum number of solid voxel levels retained above the clearance.
+    pub roof_thickness: u32,
+}
+
+/// One Macro world-boundary terminal before exact lanes are resolved.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroBoundaryTerminalSettings {
+    /// Logical instance which owns the inside cells of the terminal.
+    pub instance: String,
+    /// Outer side through which the feature enters the complete world.
+    pub side: MacroBoundarySideSettings,
+}
+
+/// Clockwise world sides available to Macro boundary terminals.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroBoundarySideSettings {
+    /// East.
+    East,
+    /// South-east.
+    SouthEast,
+    /// South-west.
+    SouthWest,
+    /// West.
+    West,
+    /// North-west.
+    NorthWest,
+    /// North-east.
+    NorthEast,
+}
+
+/// One anchor produced by a named Macro instance.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroAnchorReferenceSettings {
+    /// Logical instance which produces the anchor.
+    pub instance: String,
+    /// Stable instance-local anchor name.
+    pub anchor: String,
+}
+
+/// One stable world-level alias for an instance-local anchor.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroAnchorAliasSettings {
+    /// Stable world-level anchor name published to consumers.
+    pub alias: String,
+    /// Logical instance which produces the source anchor.
+    pub instance: String,
+    /// Stable instance-local source anchor name.
+    pub anchor: String,
 }
 
 /// One logical biome occupying one or more connected atomic macro cells.
@@ -658,6 +1043,12 @@ pub struct V3Ring7Settings {
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V3Ring19Settings {
+    /// Fixed semantic roster and whole-world validation profile.
+    ///
+    /// The default preserves the original shipped Two Rings wire shape. New
+    /// profiles must remain additive in the settings fingerprint.
+    #[serde(default)]
+    pub profile: V3Ring19ProfileSettings,
     /// Exactly nineteen regions in the fixed semantic slot order.
     pub regions: Vec<Ring19RegionSettings>,
     /// Default contract for every reciprocal internal seam.
@@ -671,6 +1062,16 @@ pub struct V3Ring19Settings {
     /// Directed liquid exits through exact outer boundary sides.
     #[serde(default)]
     pub boundary_outlets: Vec<Ring19BoundaryOutletSettings>,
+}
+
+/// Fixed semantic contracts admitted by the radius-55 Ring19 layout.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V3Ring19ProfileSettings {
+    /// The original mixed-biome, mountain-fed watershed.
+    #[default]
+    TwoRings,
+    /// A local central oasis surrounded by two dry desert rings.
+    DesertOasis,
 }
 
 /// One semantic region in the fixed Ring19 slot order.
@@ -768,6 +1169,8 @@ pub enum V3EnvironmentSettings {
     Coastal,
     /// Rocky lower slopes transitioning to snow and ice above the snowline.
     Alpine,
+    /// Sand, sparse vegetation, dunes, and isolated still-water oases.
+    Arid,
 }
 
 /// V3 geometry recipes.
@@ -803,6 +1206,18 @@ pub enum V3RecipeSettings {
     DeepMountain(V3DeepMountainSettings),
     /// A monumental authored stair tower around an open crystal shaft.
     CrystalAscent(V3CrystalAscentSettings),
+    /// Connected grassland grading through a dry ecotone into open sand.
+    DesertTransition(V3DesertTransitionSettings),
+    /// Bare, gently rolling sand without authored structures or vegetation.
+    DesertPlain(V3DesertPlainSettings),
+    /// Deterministic traversable sand ridges and troughs.
+    Dunes(V3DunesSettings),
+    /// A local still-water pool, green shore, and blocking date palms.
+    Oasis(V3OasisSettings),
+    /// Separated sandy land components in one shallow ocean footprint.
+    SandyIslets(V3SandyIsletsSettings),
+    /// One broad island with a sandy fringe and wooded grass interior.
+    WoodedIsland(V3WoodedIslandSettings),
 }
 
 /// V3 Hills parameters, intentionally independent from the frozen V2 payload.
@@ -893,6 +1308,58 @@ pub struct V3PrairieSettings {
     pub grass_coverage_percent: u8,
 }
 
+/// V3 grass-to-desert transition parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DesertTransitionSettings {
+    /// Base surface level before modest rolling variation.
+    pub base_level: Level,
+    /// Maximum height above the base surface.
+    pub max_relief: Level,
+    /// Width of the mixed dirt-and-grass ecotone in local columns.
+    pub transition_width: u8,
+    /// Target percentage of the patch assigned to the dry side.
+    pub dry_coverage_percent: u8,
+}
+
+/// V3 open-desert parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DesertPlainSettings {
+    /// Base surface level before modest rolling variation.
+    pub base_level: Level,
+    /// Maximum height above the base surface.
+    pub max_relief: Level,
+}
+
+/// V3 traversable dune-field parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DunesSettings {
+    /// Surface level at the bottom of each dune trough.
+    pub base_level: Level,
+    /// Exact target height of a full dune ridge above its trough.
+    pub ridge_height: Level,
+    /// Target spacing between successive ridge centres.
+    pub ridge_spacing: u8,
+    /// Exact authored ridge count before mask and seam clipping.
+    pub ridge_count: u8,
+}
+
+/// V3 local-oasis parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3OasisSettings {
+    /// Dry surface datum surrounding the pool.
+    pub base_level: Level,
+    /// Radius of the connected local still-water pool.
+    pub pool_radius: u8,
+    /// Exact target count of date palms outside protected routes.
+    pub palm_count: u8,
+    /// Width of the grass-and-soil ring surrounding the pool.
+    pub grass_ring_width: u8,
+}
+
 /// V3 Shallow Sea parameters.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -921,6 +1388,37 @@ pub struct V3ShoreSettings {
     pub tree_coverage_percent: u8,
     /// Highest authored cliff rise above sea level.
     pub cliff_height: Level,
+}
+
+/// V3 separated sandy-islet parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3SandyIsletsSettings {
+    /// Exact still-water surface level surrounding every islet.
+    pub sea_level: Level,
+    /// Target percentage of horizontal columns occupied by dry land.
+    pub land_coverage_percent: u8,
+    /// Exact requested count of separated dry land components.
+    pub islet_count: u8,
+    /// Highest authored dry-surface rise above sea level.
+    pub max_relief: Level,
+}
+
+/// V3 broad wooded-island parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3WoodedIslandSettings {
+    /// Exact still-water surface level surrounding the island.
+    pub sea_level: Level,
+    /// Target percentage of horizontal columns occupied by dry land.
+    pub land_coverage_percent: u8,
+    /// Highest authored dry-surface rise above sea level.
+    pub max_relief: Level,
+    /// Target broadleaf-canopy coverage over eligible inland columns.
+    ///
+    /// Exact non-overlapping object roots are placed at half this percentage
+    /// because each accepted broadleaf silhouette spans multiple columns.
+    pub tree_coverage_percent: u8,
 }
 
 /// V3 Deep Mountain parameters.
@@ -1448,6 +1946,28 @@ impl ProceduralV3Settings {
                         patch.recipe
                     ));
                 }
+                match &patch.recipe {
+                    V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                        if !patch.overlays.is_empty()
+                            || !matches!(patch.mask, PatchMaskSettings::WholeWorld) =>
+                    {
+                        return Err(
+                            "V3 Single island recipes require a WholeWorld mask without overlays"
+                                .to_owned(),
+                        );
+                    }
+                    V3RecipeSettings::SandyIslets(_) if grid_radius != 24 => {
+                        return Err(
+                            "V3 Single SandyIslets requires grid_radius exactly 24".to_owned()
+                        );
+                    }
+                    V3RecipeSettings::WoodedIsland(_) if grid_radius != 40 => {
+                        return Err(
+                            "V3 Single WoodedIsland requires grid_radius exactly 40".to_owned()
+                        );
+                    }
+                    _ => {}
+                }
                 match &patch.mask {
                     PatchMaskSettings::WholeWorld | PatchMaskSettings::Explicit(_) => {}
                     PatchMaskSettings::GeneratedRegion => {
@@ -1484,6 +2004,7 @@ impl ProceduralV3Settings {
                 }
                 macro_layout.validate()
             }
+            V3LayoutSettings::Schematic(schematic) => schematic.validate(grid_radius),
         }
     }
 }
@@ -1536,18 +2057,25 @@ impl MacroLayoutSettings {
                     instance.name
                 ));
             }
-            if matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)) {
-                return Err(format!(
-                    "V3 Macro instance {:?} uses CrystalAscent, whose union-mask implementation is unavailable",
-                    instance.name
-                ));
+            if let V3RecipeSettings::CrystalAscent(crystal_ascent) = &instance.recipe {
+                if instance.environment != V3EnvironmentSettings::TemperateGrassland {
+                    return Err(format!(
+                        "V3 Macro instance {:?}: V3 CrystalAscent requires the TemperateGrassland environment",
+                        instance.name
+                    ));
+                }
+                crystal_ascent
+                    .validate_landmark()
+                    .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
+            } else {
+                validate_v3_recipe(
+                    &instance.recipe,
+                    instance.environment,
+                    MACRO_RECIPE_VALIDATION_RADIUS,
+                )
+                .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
             }
-            validate_v3_recipe(
-                &instance.recipe,
-                instance.environment,
-                MACRO_RECIPE_VALIDATION_RADIUS,
-            )
-            .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
+            validate_macro_island_elevation(instance)?;
             if !matches!(
                 &instance.recipe,
                 V3RecipeSettings::Hills(_)
@@ -1558,7 +2086,10 @@ impl MacroLayoutSettings {
                     | V3RecipeSettings::ShallowSea(_)
                     | V3RecipeSettings::Beach(_)
                     | V3RecipeSettings::Shore(_)
+                    | V3RecipeSettings::SandyIslets(_)
+                    | V3RecipeSettings::WoodedIsland(_)
                     | V3RecipeSettings::DeepMountain(_)
+                    | V3RecipeSettings::CrystalAscent(_)
             ) {
                 return Err(format!(
                     "V3 Macro instance {:?} uses a recipe whose union-mask implementation is unavailable",
@@ -1623,11 +2154,287 @@ impl MacroLayoutSettings {
             ));
         }
 
+        if !self.spanning_features.is_empty()
+            && self.instances.iter().any(|instance| {
+                matches!(
+                    instance.recipe,
+                    V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                )
+            })
+        {
+            return Err(
+                "V3 Macro spanning features do not yet support SandyIslets or WoodedIsland instances"
+                    .to_owned(),
+            );
+        }
+
         let adjacency = macro_instance_adjacency(self.instances.len(), &owners)?;
         validate_macro_adjacency(&self.instances, &adjacency)?;
         self.validate_liquid_connections(&names, &adjacency)?;
         self.validate_headwaters(&names)?;
+        self.validate_walker_connections(&names, &adjacency)?;
+        self.validate_spanning_features(&names, &adjacency, &owners)?;
+        self.validate_anchor_aliases(&names)?;
         self.validate_critical_route(&names, &adjacency)
+    }
+
+    fn validate_walker_connections(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+    ) -> Result<(), String> {
+        let mut occupied_seams = BTreeSet::new();
+        for connection in &self.walker_connections {
+            let first =
+                self.macro_instance_index(names, &connection.first_instance, "walker connection")?;
+            let second =
+                self.macro_instance_index(names, &connection.second_instance, "walker connection")?;
+            if first == second
+                || !adjacency
+                    .get(first)
+                    .is_some_and(|neighbors| neighbors.contains(&second))
+            {
+                return Err(format!(
+                    "V3 Macro walker connection {:?} -> {:?} must use one external instance seam",
+                    connection.first_instance, connection.second_instance
+                ));
+            }
+            for index in [first, second] {
+                let instance = self.instances.get(index).ok_or_else(|| {
+                    format!("V3 Macro walker connection resolved invalid instance index {index}")
+                })?;
+                if !matches!(instance.access, MacroAccessSettings::Land) {
+                    return Err(format!(
+                        "V3 Macro walker connection instance {:?} must use Land access",
+                        instance.name
+                    ));
+                }
+            }
+            validate_macro_walker_width(connection.width)?;
+            if !(0..=MAX_V3_LEVEL).contains(&connection.level) {
+                return Err(format!(
+                    "V3 Macro walker connection level must be between 0 and {MAX_V3_LEVEL}"
+                ));
+            }
+            let seam = ordered_index_pair(first, second);
+            if !occupied_seams.insert(seam) {
+                return Err(format!(
+                    "V3 Macro instances {:?} and {:?} have more than one explicit walker connection",
+                    connection.first_instance, connection.second_instance
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_spanning_features(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+        owners: &BTreeMap<(i32, i32, i32), usize>,
+    ) -> Result<(), String> {
+        if self.spanning_features.len() > 1 {
+            return Err(
+                "V3 Macro currently supports exactly one canonical spanning feature".to_owned(),
+            );
+        }
+        let mut feature_names = BTreeSet::new();
+        for feature in &self.spanning_features {
+            match feature {
+                MacroSpanningFeatureSettings::Tunnel(tunnel) => {
+                    if !tunnel.canonical_route {
+                        return Err(format!(
+                            "V3 Macro tunnel {:?} must own the canonical route in the initial spanning-feature implementation",
+                            tunnel.name
+                        ));
+                    }
+                    if !is_stable_identifier(&tunnel.name) {
+                        return Err(format!(
+                            "V3 Macro tunnel name {:?} must be a lowercase stable identifier",
+                            tunnel.name
+                        ));
+                    }
+                    if !feature_names.insert(tunnel.name.as_str()) {
+                        return Err(format!(
+                            "V3 Macro contains duplicate spanning-feature name {:?}",
+                            tunnel.name
+                        ));
+                    }
+                    self.validate_tunnel(tunnel, names, adjacency, owners)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_tunnel(
+        &self,
+        tunnel: &MacroTunnelSettings,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+        owners: &BTreeMap<(i32, i32, i32), usize>,
+    ) -> Result<(), String> {
+        if tunnel.instance_route.len() < 2 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} instance_route must contain at least two instances",
+                tunnel.name
+            ));
+        }
+        let mut route = Vec::<usize>::with_capacity(tunnel.instance_route.len());
+        let mut visited = BTreeSet::new();
+        for name in &tunnel.instance_route {
+            let index = self.macro_instance_index(names, name, "tunnel instance_route")?;
+            if !visited.insert(index) {
+                return Err(format!(
+                    "V3 Macro tunnel {:?} repeats instance {name:?}",
+                    tunnel.name
+                ));
+            }
+            let instance = self.instances.get(index).ok_or_else(|| {
+                format!(
+                    "V3 Macro tunnel {:?} resolved invalid instance index {index}",
+                    tunnel.name
+                )
+            })?;
+            if matches!(instance.access, MacroAccessSettings::Aquatic) {
+                return Err(format!(
+                    "V3 Macro tunnel {:?} may not cross Aquatic instance {name:?}",
+                    tunnel.name
+                ));
+            }
+            if let Some(previous) = route.last().copied() {
+                if !adjacency
+                    .get(previous)
+                    .is_some_and(|neighbors| neighbors.contains(&index))
+                {
+                    return Err(format!(
+                        "V3 Macro tunnel {:?} consecutive instances are not adjacent at {name:?}",
+                        tunnel.name
+                    ));
+                }
+            }
+            route.push(index);
+        }
+
+        let boundary_instance = self.macro_instance_index(
+            names,
+            &tunnel.boundary_terminal.instance,
+            "tunnel boundary_terminal",
+        )?;
+        if route.first().copied() != Some(boundary_instance) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} boundary_terminal must belong to the first instance_route entry",
+                tunnel.name
+            ));
+        }
+        let delta = macro_boundary_delta(tunnel.boundary_terminal.side);
+        let owns_boundary = owners.iter().any(|(cell, owner)| {
+            *owner == boundary_instance
+                && cube_tuple_radius((cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2))
+                    > MACRO_CELL_RADIUS
+        });
+        if !owns_boundary {
+            return Err(format!(
+                "V3 Macro tunnel {:?} boundary_terminal {:?} does not reach the authored world side {:?}",
+                tunnel.name, tunnel.boundary_terminal.instance, tunnel.boundary_terminal.side
+            ));
+        }
+
+        let destination_instance = self.macro_instance_index(
+            names,
+            &tunnel.destination_anchor.instance,
+            "tunnel destination_anchor",
+        )?;
+        if route.last().copied() != Some(destination_instance) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} destination_anchor must belong to the last instance_route entry",
+                tunnel.name
+            ));
+        }
+        if !is_stable_identifier(&tunnel.destination_anchor.anchor) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} destination anchor {:?} must be a lowercase stable identifier",
+                tunnel.name, tunnel.destination_anchor.anchor
+            ));
+        }
+        if tunnel.width != 4 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} width must be exactly 4",
+                tunnel.name
+            ));
+        }
+        if tunnel.floor_level != 6 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} floor_level must be exactly 6",
+                tunnel.name
+            ));
+        }
+        if tunnel.clearance != 6 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} clearance must be exactly 6",
+                tunnel.name
+            ));
+        }
+        if tunnel.roof_thickness < 3 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} roof_thickness must be at least 3",
+                tunnel.name
+            ));
+        }
+        let highest_reserved = i64::from(tunnel.floor_level)
+            .checked_add(i64::from(tunnel.clearance))
+            .and_then(|level| level.checked_add(i64::from(tunnel.roof_thickness)))
+            .ok_or_else(|| {
+                format!(
+                    "V3 Macro tunnel {:?} vertical reservation overflows",
+                    tunnel.name
+                )
+            })?;
+        if highest_reserved > i64::from(MAX_V3_LEVEL) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} floor, clearance, and roof must remain at or below level {MAX_V3_LEVEL}",
+                tunnel.name
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_anchor_aliases(&self, names: &BTreeMap<&str, usize>) -> Result<(), String> {
+        let mut aliases = BTreeSet::new();
+        for alias in &self.anchor_aliases {
+            if !is_stable_identifier(&alias.alias) {
+                return Err(format!(
+                    "V3 Macro anchor alias {:?} must be a lowercase stable identifier",
+                    alias.alias
+                ));
+            }
+            if !aliases.insert(alias.alias.as_str()) {
+                return Err(format!(
+                    "V3 Macro contains duplicate anchor alias {:?}",
+                    alias.alias
+                ));
+            }
+            self.macro_instance_index(names, &alias.instance, "anchor alias")?;
+            if !is_stable_identifier(&alias.anchor) {
+                return Err(format!(
+                    "V3 Macro anchor alias {:?} source {:?} must be a lowercase stable identifier",
+                    alias.alias, alias.anchor
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn macro_instance_index(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        name: &str,
+        label: &str,
+    ) -> Result<usize, String> {
+        names
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("V3 Macro {label} references unknown instance {name:?}"))
     }
 
     fn validate_liquid_connections(
@@ -1666,6 +2473,19 @@ impl MacroLayoutSettings {
                     "V3 Macro liquid connection {first_name:?} -> {second_name:?} must use one external instance seam"
                 ));
             }
+            let touches_island = [first, second].into_iter().any(|index| {
+                self.instances.get(index).is_some_and(|instance| {
+                    matches!(
+                        instance.recipe,
+                        V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                    )
+                })
+            });
+            if touches_island && (directed || width != 0 || level != 8) {
+                return Err(format!(
+                    "V3 Macro island seam {first_name:?} <-> {second_name:?} requires one full-width Standing connection at level 8"
+                ));
+            }
             if directed || width != 0 {
                 validate_macro_liquid_width(width)?;
             }
@@ -1682,6 +2502,31 @@ impl MacroLayoutSettings {
             }
             if directed {
                 directed_edges.push((first, second));
+            }
+        }
+        for (first, neighbors) in adjacency.iter().enumerate() {
+            for &second in neighbors.iter().filter(|&&second| first < second) {
+                let touches_island = [first, second].into_iter().any(|index| {
+                    self.instances.get(index).is_some_and(|instance| {
+                        matches!(
+                            instance.recipe,
+                            V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+                        )
+                    })
+                });
+                if touches_island && !occupied_seams.contains(&(first, second)) {
+                    let first_name = self
+                        .instances
+                        .get(first)
+                        .map_or("<invalid>", |instance| instance.name.as_str());
+                    let second_name = self
+                        .instances
+                        .get(second)
+                        .map_or("<invalid>", |instance| instance.name.as_str());
+                    return Err(format!(
+                        "V3 Macro island seam {first_name:?} <-> {second_name:?} requires one full-width Standing connection at level 8"
+                    ));
+                }
             }
         }
         if !directed_graph_is_acyclic(self.instances.len(), directed_edges) {
@@ -1798,8 +2643,24 @@ impl MacroLayoutSettings {
         names: &BTreeMap<&str, usize>,
         adjacency: &[BTreeSet<usize>],
     ) -> Result<(), String> {
+        if self.critical_route.is_empty() {
+            return if self.spanning_features.len() == 1
+                && self.spanning_features.iter().all(|feature| match feature {
+                    MacroSpanningFeatureSettings::Tunnel(tunnel) => tunnel.canonical_route,
+                }) {
+                Ok(())
+            } else {
+                Err("V3 Macro empty critical_route requires exactly one spanning feature and it must own the canonical route".to_owned())
+            };
+        }
         if self.critical_route.len() < 2 {
             return Err("V3 Macro critical_route must contain at least two instances".to_owned());
+        }
+        if !self.spanning_features.is_empty() {
+            return Err(
+                "V3 Macro cannot combine a legacy critical_route with a spanning feature"
+                    .to_owned(),
+            );
         }
         let mut previous: Option<usize> = None;
         let mut visited = BTreeSet::new();
@@ -1836,6 +2697,30 @@ impl MacroLayoutSettings {
     }
 }
 
+fn validate_macro_island_elevation(instance: &MacroBiomeInstanceSettings) -> Result<(), String> {
+    let expected = match &instance.recipe {
+        V3RecipeSettings::SandyIslets(settings) => Some((
+            settings.sea_level,
+            settings.sea_level.saturating_add(settings.max_relief),
+        )),
+        V3RecipeSettings::WoodedIsland(settings) => Some((
+            settings.sea_level.saturating_add(1),
+            settings.sea_level.saturating_add(settings.max_relief),
+        )),
+        _ => None,
+    };
+    let Some((expected_low, expected_high)) = expected else {
+        return Ok(());
+    };
+    if instance.elevation.low != expected_low || instance.elevation.high != expected_high {
+        return Err(format!(
+            "V3 Macro island instance {:?} elevation must match its intrinsic coastal range {expected_low}..={expected_high}",
+            instance.name
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MacroBiomeKind {
     Hills,
@@ -1853,6 +2738,12 @@ enum MacroBiomeKind {
     Shore,
     DeepMountain,
     CrystalAscent,
+    DesertTransition,
+    DesertPlain,
+    Dunes,
+    Oasis,
+    SandyIslets,
+    WoodedIsland,
 }
 
 impl MacroBiomeKind {
@@ -1873,6 +2764,12 @@ impl MacroBiomeKind {
             V3RecipeSettings::Shore(_) => Self::Shore,
             V3RecipeSettings::DeepMountain(_) => Self::DeepMountain,
             V3RecipeSettings::CrystalAscent(_) => Self::CrystalAscent,
+            V3RecipeSettings::DesertTransition(_) => Self::DesertTransition,
+            V3RecipeSettings::DesertPlain(_) => Self::DesertPlain,
+            V3RecipeSettings::Dunes(_) => Self::Dunes,
+            V3RecipeSettings::Oasis(_) => Self::Oasis,
+            V3RecipeSettings::SandyIslets(_) => Self::SandyIslets,
+            V3RecipeSettings::WoodedIsland(_) => Self::WoodedIsland,
         }
     }
 }
@@ -1896,7 +2793,19 @@ struct MacroAdjacencyRegistry {
     neighbor_rules: &'static [MacroNeighborRule],
 }
 
-const COASTAL_NEIGHBORS: &[MacroBiomeKind] = &[MacroBiomeKind::Beach, MacroBiomeKind::Shore];
+const COASTAL_NEIGHBORS: &[MacroBiomeKind] = &[
+    MacroBiomeKind::Beach,
+    MacroBiomeKind::Shore,
+    MacroBiomeKind::SandyIslets,
+    MacroBiomeKind::WoodedIsland,
+];
+const SANDY_ISLET_NEIGHBORS: &[MacroBiomeKind] = &[
+    MacroBiomeKind::ShallowSea,
+    MacroBiomeKind::SandyIslets,
+    MacroBiomeKind::WoodedIsland,
+];
+const WOODED_ISLAND_NEIGHBORS: &[MacroBiomeKind] =
+    &[MacroBiomeKind::ShallowSea, MacroBiomeKind::SandyIslets];
 const MOUNTAIN_NEIGHBORS: &[MacroBiomeKind] = &[MacroBiomeKind::Mountains];
 const INLAND_GREEN_NEIGHBORS: &[MacroBiomeKind] =
     &[MacroBiomeKind::Forest, MacroBiomeKind::Prairie];
@@ -1922,6 +2831,20 @@ const MACRO_NEIGHBOR_RULES: &[MacroNeighborRule] = &[
         requires_any: INLAND_GREEN_NEIGHBORS,
         requires_all: SHALLOW_SEA_NEIGHBOR,
         minimum_neighbors: 2,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::SandyIslets,
+        allowed_only: SANDY_ISLET_NEIGHBORS,
+        requires_any: &[],
+        requires_all: SHALLOW_SEA_NEIGHBOR,
+        minimum_neighbors: 1,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::WoodedIsland,
+        allowed_only: WOODED_ISLAND_NEIGHBORS,
+        requires_any: &[],
+        requires_all: SHALLOW_SEA_NEIGHBOR,
+        minimum_neighbors: 1,
     },
     MacroNeighborRule {
         subject: MacroBiomeKind::DeepMountain,
@@ -2106,6 +3029,34 @@ fn macro_instance_adjacency(
         }
     }
     Ok(adjacency)
+}
+
+const fn ordered_index_pair(first: usize, second: usize) -> (usize, usize) {
+    if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+const fn macro_boundary_delta(side: MacroBoundarySideSettings) -> (i32, i32, i32) {
+    match side {
+        MacroBoundarySideSettings::East => (1, 0, -1),
+        MacroBoundarySideSettings::SouthEast => (0, 1, -1),
+        MacroBoundarySideSettings::SouthWest => (-1, 1, 0),
+        MacroBoundarySideSettings::West => (-1, 0, 1),
+        MacroBoundarySideSettings::NorthWest => (0, -1, 1),
+        MacroBoundarySideSettings::NorthEast => (1, -1, 0),
+    }
+}
+
+fn validate_macro_walker_width(width: u32) -> Result<(), String> {
+    if !(2..=MAX_SEAM_PORT_WIDTH).contains(&width) {
+        return Err(format!(
+            "V3 Macro walker width must be between 2 and {MAX_SEAM_PORT_WIDTH}"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_macro_liquid_width(width: u32) -> Result<(), String> {
@@ -2508,7 +3459,10 @@ impl V3Ring7Settings {
 
 impl V3Ring19Settings {
     fn validate(&self) -> Result<(), String> {
-        self.validate_two_rings_contract()
+        match self.profile {
+            V3Ring19ProfileSettings::TwoRings => self.validate_two_rings_contract(),
+            V3Ring19ProfileSettings::DesertOasis => self.validate_desert_oasis_contract(),
+        }
     }
 
     fn validate_structure(&self) -> Result<(), String> {
@@ -2628,8 +3582,11 @@ impl V3Ring19Settings {
             }
             boundary_sources.insert(source);
         }
-        if self.boundary_outlets.is_empty() {
-            return Err("V3 Ring19 requires at least one explicit boundary outlet".to_owned());
+        if !self.liquid_connections.is_empty() && self.boundary_outlets.is_empty() {
+            return Err(
+                "V3 Ring19 cross-region liquid requires at least one explicit boundary outlet"
+                    .to_owned(),
+            );
         }
         if !directed_graph_is_acyclic(V3_RING19_REGION_COUNT, directed_edges) {
             return Err("V3 Ring19 directed liquid connections must be acyclic".to_owned());
@@ -2649,6 +3606,9 @@ impl V3Ring19Settings {
     }
 
     pub(crate) fn validate_two_rings_contract(&self) -> Result<(), String> {
+        if self.profile != V3Ring19ProfileSettings::TwoRings {
+            return Err("V3 Ring19 Two Rings requires profile TwoRings".to_owned());
+        }
         self.validate_structure()?;
 
         for (index, (actual, (environment, recipe, rotation_turns))) in
@@ -2752,6 +3712,88 @@ impl V3Ring19Settings {
         }
         Ok(())
     }
+
+    pub(crate) fn validate_desert_oasis_contract(&self) -> Result<(), String> {
+        if self.profile != V3Ring19ProfileSettings::DesertOasis {
+            return Err("V3 Ring19 Desert Oasis requires profile DesertOasis".to_owned());
+        }
+        self.validate_structure()?;
+
+        for (index, (actual, (environment, recipe, rotation_turns))) in
+            self.regions.iter().zip(DESERT_OASIS_REGIONS).enumerate()
+        {
+            let expected_recipe = desert_oasis_expected_recipe(index);
+            if actual.environment != environment
+                || actual.recipe != expected_recipe
+                || actual.rotation_turns != rotation_turns
+            {
+                return Err(format!(
+                    "V3 Ring19 Desert Oasis slot {index} requires {environment:?} \
+                     {expected_recipe:?} ({recipe}) at rotation {rotation_turns}, got {:?} {:?} \
+                     at rotation {}",
+                    actual.environment, actual.recipe, actual.rotation_turns
+                ));
+            }
+            if !actual.overlays.is_empty() {
+                return Err(format!(
+                    "V3 Ring19 Desert Oasis slot {index} does not admit overlays"
+                ));
+            }
+        }
+
+        if self.seam_defaults.elevation
+            != (EdgeElevationSettings {
+                preferred: 17,
+                min: 15,
+                max: 19,
+            })
+            || self.seam_defaults.walker != (WalkerPortSettings { count: 2, width: 2 })
+            || !matches!(self.seam_defaults.liquid, EdgeLiquidSettings::Dry)
+            || self.seam_defaults.approach_depth != 3
+        {
+            return Err(
+                "V3 Ring19 Desert Oasis seam defaults require elevation 15..=19 (preferred 17), \
+                 two width-two walker ports, Dry liquid, and approach depth three"
+                    .to_owned(),
+            );
+        }
+        if !self.liquid_connections.is_empty() || !self.boundary_outlets.is_empty() {
+            return Err(
+                "V3 Ring19 Desert Oasis requires zero cross-region liquid connections and zero \
+                 boundary outlets; Oasis water remains local"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn desert_oasis_expected_recipe(index: usize) -> V3RecipeSettings {
+    match index {
+        0 => V3RecipeSettings::Oasis(V3OasisSettings {
+            base_level: 15,
+            pool_radius: 5,
+            palm_count: 12,
+            grass_ring_width: 3,
+        }),
+        1..=6 => V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: 15,
+            ridge_height: 4,
+            ridge_spacing: 10,
+            ridge_count: 3,
+        }),
+        7 | 9 | 11 | 13 | 15 | 17 => V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: 15,
+            ridge_height: 6,
+            ridge_spacing: 12,
+            ridge_count: 4,
+        }),
+        8 | 10 | 12 | 14 | 16 | 18 => V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+            base_level: 15,
+            max_relief: 2,
+        }),
+        _ => unreachable!("Ring19 Desert Oasis slot index is bounded by structural validation"),
+    }
 }
 
 const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
@@ -2771,6 +3813,12 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
         V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
+        V3RecipeSettings::DesertTransition(_) => "DesertTransition",
+        V3RecipeSettings::DesertPlain(_) => "DesertPlain",
+        V3RecipeSettings::Dunes(_) => "Dunes",
+        V3RecipeSettings::Oasis(_) => "Oasis",
+        V3RecipeSettings::SandyIslets(_) => "SandyIslets",
+        V3RecipeSettings::WoodedIsland(_) => "WoodedIsland",
     }
 }
 
@@ -2895,6 +3943,18 @@ fn validate_v3_recipe(
         (V3RecipeSettings::Shore(_), _) => {
             Err("V3 Shore requires the Coastal environment".to_owned())
         }
+        (V3RecipeSettings::SandyIslets(settings), V3EnvironmentSettings::Coastal) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::SandyIslets(_), _) => {
+            Err("V3 SandyIslets requires the Coastal environment".to_owned())
+        }
+        (V3RecipeSettings::WoodedIsland(settings), V3EnvironmentSettings::Coastal) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::WoodedIsland(_), _) => {
+            Err("V3 WoodedIsland requires the Coastal environment".to_owned())
+        }
         (V3RecipeSettings::DeepMountain(settings), V3EnvironmentSettings::Alpine) => {
             if settings.treeline < 5
                 || settings.treeline >= settings.snowline
@@ -2917,6 +3977,26 @@ fn validate_v3_recipe(
         (V3RecipeSettings::CrystalAscent(_), _) => {
             Err("V3 CrystalAscent requires the TemperateGrassland environment".to_owned())
         }
+        (V3RecipeSettings::DesertTransition(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::DesertTransition(_), _) => {
+            Err("V3 DesertTransition requires the Arid environment".to_owned())
+        }
+        (V3RecipeSettings::DesertPlain(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::DesertPlain(_), _) => {
+            Err("V3 DesertPlain requires the Arid environment".to_owned())
+        }
+        (V3RecipeSettings::Dunes(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::Dunes(_), _) => Err("V3 Dunes requires the Arid environment".to_owned()),
+        (V3RecipeSettings::Oasis(settings), V3EnvironmentSettings::Arid) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::Oasis(_), _) => Err("V3 Oasis requires the Arid environment".to_owned()),
     }
 }
 
@@ -3532,11 +4612,199 @@ impl V3PrairieSettings {
     }
 }
 
+impl V3DesertTransitionSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_landform(
+            grid_radius,
+            self.base_level,
+            self.max_relief,
+            "DesertTransition",
+        )?;
+        if !(1..=4).contains(&self.max_relief) {
+            return Err("V3 DesertTransition max_relief must be between 1 and 4".to_owned());
+        }
+        if !(5..=12).contains(&self.transition_width) {
+            return Err("V3 DesertTransition transition_width must be between 5 and 12".to_owned());
+        }
+        if !(40..=70).contains(&self.dry_coverage_percent) {
+            return Err(
+                "V3 DesertTransition dry_coverage_percent must be between 40 and 70".to_owned(),
+            );
+        }
+        let footprint_width = grid_radius.saturating_mul(2).saturating_add(1);
+        if u32::from(self.transition_width).saturating_add(6) > footprint_width {
+            return Err(
+                "V3 DesertTransition transition_width must leave three columns on each side"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl V3DesertPlainSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_landform(grid_radius, self.base_level, self.max_relief, "DesertPlain")?;
+        if !(1..=4).contains(&self.max_relief) {
+            return Err("V3 DesertPlain max_relief must be between 1 and 4".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl V3DunesSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_landform(grid_radius, self.base_level, self.ridge_height, "Dunes")?;
+        if !(3..=8).contains(&self.ridge_height) {
+            return Err("V3 Dunes ridge_height must be between 3 and 8".to_owned());
+        }
+        if !(8..=16).contains(&self.ridge_spacing) {
+            return Err("V3 Dunes ridge_spacing must be between 8 and 16".to_owned());
+        }
+        if !(3..=7).contains(&self.ridge_count) {
+            return Err("V3 Dunes ridge_count must be between 3 and 7".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl V3OasisSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_arid_base(grid_radius, self.base_level, "Oasis")?;
+        if !(3..=6).contains(&self.pool_radius) {
+            return Err("V3 Oasis pool_radius must be between 3 and 6".to_owned());
+        }
+        if !(8..=18).contains(&self.palm_count) {
+            return Err("V3 Oasis palm_count must be between 8 and 18".to_owned());
+        }
+        if !(2..=4).contains(&self.grass_ring_width) {
+            return Err("V3 Oasis grass_ring_width must be between 2 and 4".to_owned());
+        }
+        let reserved_radius = u32::from(self.pool_radius)
+            .saturating_add(u32::from(self.grass_ring_width))
+            .saturating_add(4);
+        if reserved_radius > grid_radius {
+            return Err(
+                "V3 Oasis pool and grass ring must leave four columns for dry approaches"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl V3SandyIsletsSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_coastal_island(grid_radius, self.sea_level, self.max_relief, "SandyIslets")?;
+        if !(18..=40).contains(&self.land_coverage_percent) {
+            return Err(
+                "V3 SandyIslets land_coverage_percent must be between 18 and 40".to_owned(),
+            );
+        }
+        if !(1..=9).contains(&self.islet_count) {
+            return Err("V3 SandyIslets islet_count must be between 1 and 9".to_owned());
+        }
+        if !(1..=4).contains(&self.max_relief) {
+            return Err("V3 SandyIslets max_relief must be between 1 and 4".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl V3WoodedIslandSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        validate_coastal_island(grid_radius, self.sea_level, self.max_relief, "WoodedIsland")?;
+        if !(50..=80).contains(&self.land_coverage_percent) {
+            return Err(
+                "V3 WoodedIsland land_coverage_percent must be between 50 and 80".to_owned(),
+            );
+        }
+        if !(3..=8).contains(&self.max_relief) {
+            return Err("V3 WoodedIsland max_relief must be between 3 and 8".to_owned());
+        }
+        if !(18..=35).contains(&self.tree_coverage_percent) {
+            return Err(
+                "V3 WoodedIsland tree_coverage_percent must be between 18 and 35".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_coastal_island(
+    grid_radius: u32,
+    sea_level: Level,
+    max_relief: Level,
+    recipe: &str,
+) -> Result<(), String> {
+    if !(12..=40).contains(&grid_radius) {
+        return Err(format!(
+            "procedural V3 {recipe} requires grid_radius from 12 through 40"
+        ));
+    }
+    if sea_level != 8 {
+        return Err(format!("V3 {recipe} sea_level must be exactly 8"));
+    }
+    let Some(highest_surface) = sea_level.checked_add(max_relief) else {
+        return Err(format!("V3 {recipe} level relationship overflows Level"));
+    };
+    if highest_surface > MAX_V3_LEVEL {
+        return Err(format!(
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_arid_landform(
+    grid_radius: u32,
+    base_level: Level,
+    max_relief: Level,
+    recipe: &str,
+) -> Result<(), String> {
+    validate_arid_base(grid_radius, base_level, recipe)?;
+    if !(1..=8).contains(&max_relief) {
+        return Err(format!("V3 {recipe} relief must be between 1 and 8"));
+    }
+    let Some(highest_surface) = base_level.checked_add(max_relief) else {
+        return Err(format!("V3 {recipe} level relationship overflows Level"));
+    };
+    if highest_surface > MAX_V3_LEVEL {
+        return Err(format!(
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_arid_base(grid_radius: u32, base_level: Level, recipe: &str) -> Result<(), String> {
+    if !(12..=RING19_RADIUS).contains(&grid_radius) {
+        return Err(format!(
+            "procedural V3 {recipe} requires grid_radius from 12 through {RING19_RADIUS}"
+        ));
+    }
+    if base_level < 5 {
+        return Err(format!(
+            "V3 {recipe} base_level must leave room for bedrock and strata"
+        ));
+    }
+    if base_level > MAX_V3_LEVEL {
+        return Err(format!(
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
+        ));
+    }
+    Ok(())
+}
+
 impl V3CrystalAscentSettings {
     fn validate(&self, grid_radius: u32) -> Result<(), String> {
         if grid_radius != 40 {
             return Err("procedural V3 CrystalAscent requires grid_radius exactly 40".to_owned());
         }
+        self.validate_landmark()
+    }
+
+    fn validate_landmark(&self) -> Result<(), String> {
         if self.base_level < 5 {
             return Err(
                 "V3 CrystalAscent base_level must leave room for bedrock and strata".to_owned(),
@@ -4126,6 +5394,8 @@ mod tests {
         include_str!("../../../assets/config/worlds/procedural-two-rings.ron");
     const V3_MACRO_RON: &str =
         include_str!("../../../assets/config/worlds/procedural-mountain-range.ron");
+    const V3_OCEAN_ARCHIPELAGO_RON: &str =
+        include_str!("../../../assets/config/worlds/procedural-ocean-archipelagoes.ron");
     const V1_HILLS_RON: &str = r#"
 (
     grid_radius: 12,
@@ -4174,6 +5444,44 @@ mod tests {
                 north_west: WorldBoundary,
                 north_east: WorldBoundary,
             ),
+        )),
+    )),
+)
+"#;
+    const V3_SCHEMATIC_RON: &str = r#"
+(
+    grid_radius: 187,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Schematic((
+            template: GrandV3,
+            template_revision: 3,
+            cell_pitch: 22,
+            terrain_profile: GrandV3BasicV1((
+                sea_level: 8,
+                island_level: 12,
+                beach_level: 10,
+                shore_level: 12,
+                valley_level: 16,
+                plateau_level: 20,
+                hill_level: 20,
+                mountain_floor: 28,
+                massif_floor: 48,
+                high_core_level: 150,
+                high_gradient_per_cell: 18,
+                mountain_lake_level: 150,
+                frozen_woods_level: 152,
+                lake_island_min_level: 151,
+                lake_island_max_level: 158,
+                sharp_peak_bench_min: 150,
+                sharp_peak_bench_max: 166,
+                sharp_peak_min: 178,
+                sharp_peak_max: 192,
+                valley_lake_level: 15,
+                crystal_base_level: 6,
+                crystal_rise_levels: 144,
+            )),
         )),
     )),
 )
@@ -4322,6 +5630,7 @@ mod tests {
             rotation_turns: 0,
         };
         V3Ring19Settings {
+            profile: V3Ring19ProfileSettings::TwoRings,
             regions: vec![region; V3_RING19_REGION_COUNT],
             seam_defaults: SharedEdgeSettings {
                 elevation: EdgeElevationSettings {
@@ -4348,6 +5657,40 @@ mod tests {
         }
     }
 
+    fn valid_desert_ring19() -> V3Ring19Settings {
+        let regions = (0..V3_RING19_REGION_COUNT)
+            .map(|index| {
+                let recipe = desert_oasis_expected_recipe(index);
+                let (_, _, rotation_turns) = DESERT_OASIS_REGIONS
+                    .get(index)
+                    .copied()
+                    .expect("the fixed desert roster covers all nineteen slots");
+                Ring19RegionSettings {
+                    environment: V3EnvironmentSettings::Arid,
+                    recipe,
+                    overlays: Vec::new(),
+                    rotation_turns,
+                }
+            })
+            .collect();
+        V3Ring19Settings {
+            profile: V3Ring19ProfileSettings::DesertOasis,
+            regions,
+            seam_defaults: SharedEdgeSettings {
+                elevation: EdgeElevationSettings {
+                    preferred: 17,
+                    min: 15,
+                    max: 19,
+                },
+                walker: WalkerPortSettings { count: 2, width: 2 },
+                liquid: EdgeLiquidSettings::Dry,
+                approach_depth: 3,
+            },
+            liquid_connections: Vec::new(),
+            boundary_outlets: Vec::new(),
+        }
+    }
+
     fn shipped_ring19_settings() -> MapSettings {
         ron::from_str(V3_RING19_RON).expect("the shipped Two Rings settings should parse")
     }
@@ -4364,6 +5707,69 @@ mod tests {
             panic!("the shipped Mountain Range settings should use V3 Macro");
         };
         layout
+    }
+
+    fn macro_layout_mut(settings: &mut MapSettings) -> &mut MacroLayoutSettings {
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Macro(layout),
+        })) = &mut settings.terrain
+        else {
+            panic!("the shipped Mountain Range settings should use V3 Macro");
+        };
+        layout
+    }
+
+    fn macro_with_contract_extensions() -> MapSettings {
+        let mut settings = shipped_macro_settings();
+        let layout = macro_layout_mut(&mut settings);
+        let crystal = layout
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the shipped Macro fixture contains hills-center");
+        crystal.environment = V3EnvironmentSettings::TemperateGrassland;
+        crystal.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        });
+        layout.walker_connections = vec![MacroWalkerConnectionSettings {
+            first_instance: "hills-center".to_owned(),
+            second_instance: "prairie-route".to_owned(),
+            width: 4,
+            level: 150,
+        }];
+        layout.spanning_features =
+            vec![MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "crystal_mountain.tunnel".to_owned(),
+                canonical_route: true,
+                instance_route: [
+                    "hills-lower-outer",
+                    "hills-lower",
+                    "waterfall-lower",
+                    "hills-center",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-lower-outer".to_owned(),
+                    side: MacroBoundarySideSettings::NorthWest,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-center".to_owned(),
+                    anchor: "crystal_ascent.lower_entry".to_owned(),
+                },
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+            })];
+        layout.anchor_aliases = vec![MacroAnchorAliasSettings {
+            alias: "crystal_mountain.ascent_threshold".to_owned(),
+            instance: "hills-center".to_owned(),
+            anchor: "crystal_ascent.lower_entry".to_owned(),
+        }];
+        layout.critical_route.clear();
+        settings
     }
 
     fn named_macro_instances(
@@ -4721,6 +6127,136 @@ mod tests {
     }
 
     #[test]
+    fn macro_island_neighbors_admit_sea_sandy_clusters_and_the_wooded_heart() {
+        let settings = shipped_macro_settings();
+        let mut instances = named_macro_instances(
+            macro_layout(&settings),
+            &["shallow-sea", "beach-lower", "shore-center", "beach-upper"],
+        );
+        let [sea, sandy_cluster, sandy_landing, wooded_heart] = instances.as_mut_slice() else {
+            panic!("the island adjacency fixture needs exactly four instances");
+        };
+        sea.environment = V3EnvironmentSettings::Coastal;
+        sea.recipe = V3RecipeSettings::ShallowSea(V3ShallowSeaSettings { sea_level: 8 });
+        for sandy in [sandy_cluster, sandy_landing] {
+            sandy.environment = V3EnvironmentSettings::Coastal;
+            sandy.recipe = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 2,
+                max_relief: 3,
+            });
+        }
+        wooded_heart.environment = V3EnvironmentSettings::Coastal;
+        wooded_heart.recipe = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+
+        validate_macro_adjacency(
+            &instances,
+            &adjacency_for_pairs(instances.len(), &[(0, 1), (0, 2), (0, 3), (1, 2), (2, 3)]),
+        )
+        .expect("the locked archipelago sea, sandy, and wooded adjacencies should validate");
+    }
+
+    #[test]
+    fn macro_islands_reject_spanning_features_until_reservations_are_supported() {
+        let mut settings: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+            .expect("the shipped Ocean Archipelagoes settings should parse");
+        let feature = macro_layout(&macro_with_contract_extensions())
+            .spanning_features
+            .first()
+            .cloned()
+            .expect("the spanning fixture should publish one tunnel");
+        macro_layout_mut(&mut settings).spanning_features = vec![feature];
+
+        let error = settings
+            .validate()
+            .expect_err("island Macro recipes must fail closed around spanning reservations");
+        assert!(
+            error.contains("spanning features do not yet support SandyIslets or WoodedIsland"),
+            "unexpected island-spanning diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn macro_island_elevation_must_match_recipe_authored_levels() {
+        for instance_name in ["home-landing", "wooded-heart"] {
+            let mut settings: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+                .expect("the shipped Ocean Archipelagoes settings should parse");
+            let instance = macro_layout_mut(&mut settings)
+                .instances
+                .iter_mut()
+                .find(|instance| instance.name == instance_name)
+                .unwrap_or_else(|| panic!("missing island instance {instance_name}"));
+            instance.elevation.low = instance.elevation.low.saturating_add(1);
+
+            let error = settings
+                .validate()
+                .expect_err("Macro island elevation drift must fail before generation");
+            assert!(
+                error.contains("elevation must match its intrinsic coastal range"),
+                "unexpected island elevation diagnostic: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn macro_island_seams_require_exact_level_eight_standing_water() {
+        let mut missing: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+            .expect("the shipped Ocean Archipelagoes settings should parse");
+        let connections = &mut macro_layout_mut(&mut missing).liquid_connections;
+        let index = connections
+            .iter()
+            .position(|connection| match connection {
+                MacroLiquidConnectionSettings::Standing {
+                    first_instance,
+                    second_instance,
+                    ..
+                } => first_instance == "open-sea" && second_instance == "east-islets",
+                MacroLiquidConnectionSettings::Directed { .. } => false,
+            })
+            .expect("the shipped ocean should connect east-islets");
+        connections.remove(index);
+        let error = missing
+            .validate()
+            .expect_err("an undeclared island water seam must fail settings validation");
+        assert!(
+            error.contains("requires one full-width Standing connection at level 8"),
+            "unexpected missing island seam diagnostic: {error}"
+        );
+
+        let mut wrong_level: MapSettings = ron::from_str(V3_OCEAN_ARCHIPELAGO_RON)
+            .expect("the shipped Ocean Archipelagoes settings should parse");
+        let connection = macro_layout_mut(&mut wrong_level)
+            .liquid_connections
+            .iter_mut()
+            .find(|connection| match connection {
+                MacroLiquidConnectionSettings::Standing {
+                    first_instance,
+                    second_instance,
+                    ..
+                } => first_instance == "home-landing" && second_instance == "wooded-heart",
+                MacroLiquidConnectionSettings::Directed { .. } => false,
+            })
+            .expect("the shipped ocean should connect the playable island seam");
+        let MacroLiquidConnectionSettings::Standing { level, .. } = connection else {
+            panic!("the island seam should remain Standing");
+        };
+        *level = 9;
+        let error = wrong_level
+            .validate()
+            .expect_err("an island Standing seam at the wrong level must fail");
+        assert!(
+            error.contains("requires one full-width Standing connection at level 8"),
+            "unexpected wrong-level island seam diagnostic: {error}"
+        );
+    }
+
+    #[test]
     fn macro_forbidden_adjacencies_are_symmetric_and_diagnostic() {
         let settings = shipped_macro_settings();
         let layout = macro_layout(&settings);
@@ -4978,6 +6514,13 @@ mod tests {
             .validate_structure()
             .expect("an independent boundary-only Volcano outlet is valid");
 
+        let mut completely_dry = valid_ring19();
+        completely_dry.liquid_connections.clear();
+        completely_dry.boundary_outlets.clear();
+        completely_dry
+            .validate_structure()
+            .expect("a profile may own a completely dry Ring19 liquid graph");
+
         let mut cycle = valid_ring19();
         cycle.liquid_connections = vec![
             Ring19LiquidConnectionSettings {
@@ -5079,6 +6622,150 @@ mod tests {
     }
 
     #[test]
+    fn ring19_profile_defaults_to_two_rings_and_desert_oasis_is_exactly_dry() {
+        let shipped = shipped_ring19_settings();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(shipped_ring),
+        })) = &shipped.terrain
+        else {
+            panic!("the shipped fixture should remain Ring19");
+        };
+        assert_eq!(
+            shipped_ring.profile,
+            V3Ring19ProfileSettings::TwoRings,
+            "omitting the additive profile field preserves the shipped contract"
+        );
+
+        valid_desert_ring19()
+            .validate_desert_oasis_contract()
+            .expect("the canonical dry Desert Oasis roster should validate");
+
+        let mut wrong_slot = valid_desert_ring19();
+        wrong_slot
+            .regions
+            .get_mut(8)
+            .expect("the fixture has slot 8")
+            .recipe = V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: 15,
+            ridge_height: 6,
+            ridge_spacing: 12,
+            ridge_count: 4,
+        });
+        assert!(
+            wrong_slot.validate_desert_oasis_contract().is_err(),
+            "the fixed alternating outer roster must reject a substituted recipe"
+        );
+
+        let mut wrong_oasis = valid_desert_ring19();
+        let V3RecipeSettings::Oasis(oasis) = &mut wrong_oasis
+            .regions
+            .get_mut(0)
+            .expect("the fixture has slot zero")
+            .recipe
+        else {
+            unreachable!("slot zero is the canonical Oasis")
+        };
+        oasis.palm_count = 13;
+        assert!(
+            wrong_oasis.validate_desert_oasis_contract().is_err(),
+            "the central Oasis payload is part of the fixed profile"
+        );
+
+        let mut wrong_inner_dunes = valid_desert_ring19();
+        let V3RecipeSettings::Dunes(dunes) = &mut wrong_inner_dunes
+            .regions
+            .get_mut(1)
+            .expect("the fixture has slot one")
+            .recipe
+        else {
+            unreachable!("slot one is a canonical inner dune")
+        };
+        dunes.ridge_height = 5;
+        assert!(
+            wrong_inner_dunes.validate_desert_oasis_contract().is_err(),
+            "the inner dune payload is part of the fixed profile"
+        );
+
+        let mut wrong_outer_dunes = valid_desert_ring19();
+        let V3RecipeSettings::Dunes(dunes) = &mut wrong_outer_dunes
+            .regions
+            .get_mut(7)
+            .expect("the fixture has slot seven")
+            .recipe
+        else {
+            unreachable!("slot seven is a canonical outer dune")
+        };
+        dunes.ridge_spacing = 11;
+        assert!(
+            wrong_outer_dunes.validate_desert_oasis_contract().is_err(),
+            "the outer dune payload is part of the fixed profile"
+        );
+
+        let mut wrong_plain = valid_desert_ring19();
+        let V3RecipeSettings::DesertPlain(plain) = &mut wrong_plain
+            .regions
+            .get_mut(8)
+            .expect("the fixture has slot eight")
+            .recipe
+        else {
+            unreachable!("slot eight is a canonical outer plain")
+        };
+        plain.max_relief = 3;
+        assert!(
+            wrong_plain.validate_desert_oasis_contract().is_err(),
+            "the open-desert payload is part of the fixed profile"
+        );
+
+        let mut wrong_rotation = valid_desert_ring19();
+        wrong_rotation
+            .regions
+            .get_mut(2)
+            .expect("the fixture has slot two")
+            .rotation_turns = 0;
+        assert!(
+            wrong_rotation.validate_desert_oasis_contract().is_err(),
+            "each fixed slot owns its exact rotation"
+        );
+
+        let mut wrong_order = valid_desert_ring19();
+        wrong_order.regions.swap(7, 8);
+        assert!(
+            wrong_order.validate_desert_oasis_contract().is_err(),
+            "the alternating outer roster owns an exact slot order"
+        );
+
+        let mut cross_region_water = valid_desert_ring19();
+        cross_region_water.liquid_connections = vec![
+            Ring19LiquidConnectionSettings {
+                source_region: 0,
+                sink_region: 1,
+                width: 2,
+                level: 15,
+            },
+            Ring19LiquidConnectionSettings {
+                source_region: 1,
+                sink_region: 7,
+                width: 2,
+                level: 15,
+            },
+        ];
+        cross_region_water.boundary_outlets = vec![Ring19BoundaryOutletSettings {
+            source_region: 7,
+            side: Ring19BoundarySide::NorthEast,
+            width: 2,
+            level: 15,
+        }];
+        assert!(
+            cross_region_water.validate_desert_oasis_contract().is_err(),
+            "oasis water must remain local rather than entering Ring19 seams"
+        );
+
+        let mut wrong_profile = valid_desert_ring19();
+        wrong_profile.profile = V3Ring19ProfileSettings::TwoRings;
+        assert!(wrong_profile.validate_desert_oasis_contract().is_err());
+    }
+
+    #[test]
     fn additive_v3_recipe_settings_validate_without_loosening_environments() {
         let volcano = V3RecipeSettings::Volcano(V3VolcanoSettings {
             base_level: 12,
@@ -5116,6 +6803,353 @@ mod tests {
         assert!(
             validate_v3_recipe(&prairie, V3EnvironmentSettings::Frozen, 20).is_err(),
             "Prairie remains temperate-only"
+        );
+    }
+
+    #[test]
+    fn arid_recipe_settings_are_strict_bounded_and_arid_only() {
+        let recipes = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 3,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 2,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 6,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 5,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+        for recipe in &recipes {
+            validate_v3_recipe(recipe, V3EnvironmentSettings::Arid, 24)
+                .unwrap_or_else(|error| panic!("canonical {recipe:?} should validate: {error}"));
+            assert!(
+                validate_v3_recipe(recipe, V3EnvironmentSettings::Coastal, 24).is_err(),
+                "{recipe:?} must remain Arid-only"
+            );
+        }
+
+        let invalid = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 5,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 0,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 2,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 7,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+        for recipe in &invalid {
+            assert!(
+                validate_v3_recipe(recipe, V3EnvironmentSettings::Arid, 24).is_err(),
+                "out-of-range {recipe:?} must fail closed"
+            );
+        }
+
+        let overflow = V3RecipeSettings::Dunes(V3DunesSettings {
+            base_level: MAX_V3_LEVEL,
+            ridge_height: 3,
+            ridge_spacing: 12,
+            ridge_count: 5,
+        });
+        assert!(validate_v3_recipe(&overflow, V3EnvironmentSettings::Arid, 24).is_err());
+
+        for source in [
+            "DesertTransition((base_level: 15, max_relief: 3, transition_width: 8, dry_coverage_percent: 55, typoed_field: 1))",
+            "DesertPlain((base_level: 15, max_relief: 2, typoed_field: 1))",
+            "Dunes((base_level: 15, ridge_height: 6, ridge_spacing: 12, ridge_count: 5, typoed_field: 1))",
+            "Oasis((base_level: 15, pool_radius: 5, palm_count: 12, grass_ring_width: 3, typoed_field: 1))",
+        ] {
+            ron::from_str::<V3RecipeSettings>(source)
+                .expect_err("arid recipe payloads must reject unknown fields");
+        }
+    }
+
+    #[test]
+    fn coastal_island_settings_are_strict_bounded_and_coastal_only() {
+        let sandy = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+            sea_level: 8,
+            land_coverage_percent: 28,
+            islet_count: 5,
+            max_relief: 3,
+        });
+        let wooded = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+
+        for (recipe, radius) in [(&sandy, 24), (&wooded, 40), (&sandy, 12), (&wooded, 12)] {
+            validate_v3_recipe(recipe, V3EnvironmentSettings::Coastal, radius)
+                .unwrap_or_else(|error| panic!("canonical {recipe:?} should validate: {error}"));
+            assert!(
+                validate_v3_recipe(recipe, V3EnvironmentSettings::TemperateGrassland, radius)
+                    .is_err(),
+                "{recipe:?} must remain Coastal-only"
+            );
+        }
+
+        for recipe in [
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 18,
+                islet_count: 1,
+                max_relief: 1,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 40,
+                islet_count: 9,
+                max_relief: 4,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 50,
+                max_relief: 3,
+                tree_coverage_percent: 18,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 80,
+                max_relief: 8,
+                tree_coverage_percent: 35,
+            }),
+        ] {
+            validate_v3_recipe(&recipe, V3EnvironmentSettings::Coastal, 24)
+                .unwrap_or_else(|error| panic!("inclusive bound {recipe:?} should pass: {error}"));
+        }
+
+        for recipe in [
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 7,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 17,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 41,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 0,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 10,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 0,
+            }),
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 5,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 7,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 49,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 81,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 2,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 17,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 9,
+                tree_coverage_percent: 26,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 36,
+            }),
+        ] {
+            assert!(
+                validate_v3_recipe(&recipe, V3EnvironmentSettings::Coastal, 24).is_err(),
+                "out-of-range {recipe:?} must fail closed"
+            );
+        }
+
+        for source in [
+            "SandyIslets((sea_level: 8, land_coverage_percent: 28, islet_count: 5, max_relief: 3, typoed_field: 1))",
+            "WoodedIsland((sea_level: 8, land_coverage_percent: 68, max_relief: 6, tree_coverage_percent: 26, typoed_field: 1))",
+        ] {
+            ron::from_str::<V3RecipeSettings>(source)
+                .expect_err("coastal island recipe payloads must reject unknown fields");
+        }
+
+        for radius in [11, 41] {
+            assert!(
+                validate_v3_recipe(&sandy, V3EnvironmentSettings::Coastal, radius).is_err(),
+                "SandyIslets radius {radius} must fail outside Single/Macro recipe bounds"
+            );
+            assert!(
+                validate_v3_recipe(&wooded, V3EnvironmentSettings::Coastal, radius).is_err(),
+                "WoodedIsland radius {radius} must fail outside Single/Macro recipe bounds"
+            );
+        }
+    }
+
+    #[test]
+    fn coastal_island_recipes_are_single_and_macro_only() {
+        fn single(recipe: V3RecipeSettings, grid_radius: u32) -> MapSettings {
+            MapSettings {
+                grid_radius,
+                level_height: 0.4,
+                terrain: TerrainSettings::Procedural(ProceduralSettings::V3(
+                    ProceduralV3Settings {
+                        layout: V3LayoutSettings::Single(PatchSpec {
+                            environment: V3EnvironmentSettings::Coastal,
+                            recipe,
+                            overlays: Vec::new(),
+                            mask: PatchMaskSettings::WholeWorld,
+                            edges: world_boundary_edges(),
+                        }),
+                    },
+                )),
+            }
+        }
+
+        let sandy = V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+            sea_level: 8,
+            land_coverage_percent: 28,
+            islet_count: 5,
+            max_relief: 3,
+        });
+        let wooded = V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+            sea_level: 8,
+            land_coverage_percent: 68,
+            max_relief: 6,
+            tree_coverage_percent: 26,
+        });
+        single(sandy.clone(), 24)
+            .validate()
+            .expect("SandyIslets should be a supported Single recipe");
+        single(wooded.clone(), 40)
+            .validate()
+            .expect("WoodedIsland should be a supported Single recipe");
+        assert!(single(sandy.clone(), 23).validate().is_err());
+        assert!(single(sandy.clone(), 40).validate().is_err());
+        assert!(single(wooded.clone(), 24).validate().is_err());
+        assert!(single(wooded.clone(), 39).validate().is_err());
+
+        let mut explicit = single(sandy.clone(), 24);
+        let TerrainSettings::Procedural(ProceduralSettings::V3(explicit_v3)) =
+            &mut explicit.terrain
+        else {
+            panic!("island Single fixture should remain V3");
+        };
+        let V3LayoutSettings::Single(explicit_patch) = &mut explicit_v3.layout else {
+            panic!("island Single fixture should remain Single");
+        };
+        explicit_patch.mask = PatchMaskSettings::Explicit(vec![CubeCoord { x: 0, y: 0, z: 0 }]);
+        assert!(explicit.validate().is_err());
+
+        let mut overlaid = single(wooded.clone(), 40);
+        let TerrainSettings::Procedural(ProceduralSettings::V3(overlaid_v3)) =
+            &mut overlaid.terrain
+        else {
+            panic!("island Single fixture should remain V3");
+        };
+        let V3LayoutSettings::Single(overlaid_patch) = &mut overlaid_v3.layout else {
+            panic!("island Single fixture should remain Single");
+        };
+        overlaid_patch.overlays.push(NamedOverlaySettings {
+            name: "unexpected".to_owned(),
+            kind: V3OverlaySettings::Vegetation,
+        });
+        assert!(overlaid.validate().is_err());
+
+        validate_v3_recipe(&sandy, V3EnvironmentSettings::Coastal, 12)
+            .expect("SandyIslets should admit Macro's radius-12 recipe context");
+        validate_v3_recipe(&wooded, V3EnvironmentSettings::Coastal, 12)
+            .expect("WoodedIsland should admit Macro's radius-12 recipe context");
+
+        let mut ring7 = valid_ring7();
+        ring7.forest.environment = V3EnvironmentSettings::Coastal;
+        ring7.forest.recipe = sandy;
+        assert!(
+            ring7.validate(33).is_err(),
+            "Ring7 must retain its fixed recipe roster"
+        );
+
+        let mut ring19 = valid_desert_ring19();
+        let Some(center) = ring19.regions.first_mut() else {
+            panic!("the Ring19 fixture must have a center region");
+        };
+        center.environment = V3EnvironmentSettings::Coastal;
+        center.recipe = wooded;
+        assert!(
+            ring19.validate().is_err(),
+            "Ring19 must retain its profile-selected recipe roster"
         );
     }
 
@@ -5301,6 +7335,148 @@ mod tests {
     }
 
     #[test]
+    fn schematic_layout_parses_the_exact_grand_v3_contract() {
+        let settings: MapSettings = ron::from_str(V3_SCHEMATIC_RON)
+            .expect("the canonical Grand V3 schematic settings should deserialize");
+        assert_eq!(settings.grid_radius, V3_SCHEMATIC_GRID_RADIUS);
+
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &settings.terrain else {
+            panic!("the schematic fixture must dispatch to procedural V3");
+        };
+        let V3LayoutSettings::Schematic(schematic) = &v3.layout else {
+            panic!("the schematic fixture must dispatch to the Schematic layout");
+        };
+        assert_eq!(schematic.template, V3SchematicTemplate::GrandV3);
+        assert_eq!(schematic.template_revision, V3_GRAND_V3_TEMPLATE_REVISION);
+        assert_eq!(schematic.cell_pitch, V3_SCHEMATIC_CELL_PITCH);
+        assert_eq!(
+            schematic.derived_grid_radius(),
+            Ok(V3_SCHEMATIC_GRID_RADIUS)
+        );
+        assert_eq!(
+            schematic.terrain_profile,
+            V3SchematicTerrainProfile::GrandV3BasicV1(V3GrandV3BasicTerrainProfile::canonical())
+        );
+
+        let template = hex_schematic::grand_v3_reference_template()
+            .expect("the embedded Grand V3 template should remain valid");
+        assert_eq!(template.id.as_str(), "template/grand-v3");
+        assert_eq!(
+            template.revision, V3_GRAND_V3_TEMPLATE_REVISION,
+            "the map contract and packaged template revision must move together"
+        );
+        assert_eq!(
+            u32::from(template.radius),
+            u32::from(hex_schematic::SCHEMATIC_RADIUS)
+        );
+    }
+
+    #[test]
+    fn schematic_layout_rejects_noncanonical_identity_and_radius_values() {
+        for (old, replacement, expected) in [
+            (
+                "grid_radius: 187",
+                "grid_radius: 186",
+                "requires grid_radius exactly 187",
+            ),
+            (
+                "template_revision: 3",
+                "template_revision: 2",
+                "template_revision must be exactly 3",
+            ),
+            (
+                "cell_pitch: 22",
+                "cell_pitch: 21",
+                "cell_pitch must be exactly 22",
+            ),
+        ] {
+            let source = V3_SCHEMATIC_RON.replacen(old, replacement, 1);
+            let error = ron::from_str::<MapSettings>(&source)
+                .expect_err("a noncanonical schematic contract must fail");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {replacement}: {error}"
+            );
+        }
+
+        let unknown_template = V3_SCHEMATIC_RON.replacen("GrandV3,", "GrandV4,", 1);
+        ron::from_str::<MapSettings>(&unknown_template)
+            .expect_err("unknown schematic template identities must fail");
+        let unknown_profile = V3_SCHEMATIC_RON.replacen("GrandV3BasicV1((", "GrandV3BasicV2((", 1);
+        ron::from_str::<MapSettings>(&unknown_profile)
+            .expect_err("unknown schematic terrain-profile versions must fail");
+
+        let overflowing = V3SchematicLayoutSettings {
+            template: V3SchematicTemplate::GrandV3,
+            template_revision: V3_GRAND_V3_TEMPLATE_REVISION,
+            cell_pitch: u32::MAX,
+            terrain_profile: V3SchematicTerrainProfile::GrandV3BasicV1(
+                V3GrandV3BasicTerrainProfile::canonical(),
+            ),
+        };
+        assert!(
+            overflowing.derived_grid_radius().is_err(),
+            "derived radii must use checked integer arithmetic"
+        );
+    }
+
+    #[test]
+    fn schematic_layout_is_strict_and_freezes_every_basic_v1_level() {
+        let unknown_layout = V3_SCHEMATIC_RON.replacen(
+            "cell_pitch: 22,",
+            "cell_pitch: 22,\n            typoed_layout_field: 1,",
+            1,
+        );
+        ron::from_str::<MapSettings>(&unknown_layout)
+            .expect_err("schematic layout payloads must reject unknown fields");
+
+        let unknown_profile = V3_SCHEMATIC_RON.replacen(
+            "sea_level: 8,",
+            "sea_level: 8,\n                typoed_profile_field: 1,",
+            1,
+        );
+        ron::from_str::<MapSettings>(&unknown_profile)
+            .expect_err("schematic terrain profiles must reject unknown fields");
+
+        for (field, canonical) in [
+            ("sea_level", 8),
+            ("island_level", 12),
+            ("beach_level", 10),
+            ("shore_level", 12),
+            ("valley_level", 16),
+            ("plateau_level", 20),
+            ("hill_level", 20),
+            ("mountain_floor", 28),
+            ("massif_floor", 48),
+            ("high_core_level", 150),
+            ("high_gradient_per_cell", 18),
+            ("mountain_lake_level", 150),
+            ("frozen_woods_level", 152),
+            ("lake_island_min_level", 151),
+            ("lake_island_max_level", 158),
+            ("sharp_peak_bench_min", 150),
+            ("sharp_peak_bench_max", 166),
+            ("sharp_peak_min", 178),
+            ("sharp_peak_max", 192),
+            ("valley_lake_level", 15),
+            ("crystal_base_level", 6),
+            ("crystal_rise_levels", 144),
+        ] {
+            let source = V3_SCHEMATIC_RON.replacen(
+                &format!("{field}: {canonical},"),
+                &format!("{field}: {},", canonical + 1),
+                1,
+            );
+            let error = ron::from_str::<MapSettings>(&source)
+                .expect_err("every BasicV1 level is part of the versioned contract");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error after changing {field}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn crystal_ascent_validates_supported_rises_and_reserved_ceiling() {
         for rise_levels in [100, 144, 200] {
             crystal_ascent_settings(6, rise_levels)
@@ -5320,14 +7496,14 @@ mod tests {
             );
         }
 
-        crystal_ascent_settings(32, 200)
+        crystal_ascent_settings(160, 200)
             .validate()
             .expect("a crown ending exactly at the inclusive V3 ceiling should validate");
-        let error = crystal_ascent_settings(33, 200)
+        let error = crystal_ascent_settings(161, 200)
             .validate()
             .expect_err("reserved crown headroom above the V3 ceiling must fail");
         assert!(
-            error.contains("cannot exceed level 256"),
+            error.contains("cannot exceed level 384"),
             "unexpected error: {error}"
         );
 
@@ -5362,31 +7538,193 @@ mod tests {
     }
 
     #[test]
-    fn crystal_ascent_is_rejected_by_the_current_macro_composer() {
+    fn crystal_ascent_macro_validation_is_radius_neutral_but_still_strict() {
         let mut settings = shipped_macro_settings();
-        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
-            layout: V3LayoutSettings::Macro(layout),
-        })) = &mut settings.terrain
-        else {
-            panic!("the shipped Mountain Range settings should use V3 Macro")
-        };
+        let layout = macro_layout_mut(&mut settings);
         let instance = layout
             .instances
-            .first_mut()
-            .expect("the shipped Macro fixture has at least one instance");
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the shipped Macro fixture contains hills-center");
         instance.environment = V3EnvironmentSettings::TemperateGrassland;
         instance.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
             base_level: 6,
             rise_levels: 144,
         });
 
+        settings
+            .validate()
+            .expect("Macro accepts radius-neutral CrystalAscent landmark settings");
+        let crystal = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        assert!(
+            crystal.validate(39).is_err(),
+            "standalone CrystalAscent must retain its exact radius-40 contract"
+        );
+        assert!(crystal.validate(40).is_ok());
+
+        let layout = macro_layout_mut(&mut settings);
+        let instance = layout
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the mutated Macro fixture retains hills-center");
+        instance.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 99,
+        });
         let error = settings
             .validate()
-            .expect_err("Macro must reject CrystalAscent until union-mask composition lands");
+            .expect_err("Macro must retain radius-neutral rise validation");
+        assert!(error.contains("rise_levels must be between 100 and 200"));
+    }
+
+    #[test]
+    fn macro_extensions_validate_canonical_routes_levels_and_stable_aliases() {
+        let settings = macro_with_contract_extensions();
+        settings
+            .validate()
+            .expect("the approved Macro extension vocabulary should validate");
+
+        let mut missing_canonical = settings.clone();
+        macro_layout_mut(&mut missing_canonical)
+            .spanning_features
+            .clear();
+        let error = missing_canonical
+            .validate()
+            .expect_err("an empty critical route needs one canonical spanning feature");
+        assert!(error.contains("exactly one spanning feature"));
+
+        let mut noncanonical = settings.clone();
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = macro_layout_mut(&mut noncanonical)
+            .spanning_features
+            .first_mut()
+            .expect("the fixture has one tunnel");
+        tunnel.canonical_route = false;
+        let error = noncanonical
+            .validate()
+            .expect_err("the initial spanning pass cannot accept a noncanonical tunnel");
+        assert!(error.contains("must own the canonical route"), "{error}");
+
+        let mut multiple = settings.clone();
+        let second = macro_layout(&multiple)
+            .spanning_features
+            .first()
+            .expect("the fixture has one tunnel")
+            .clone();
+        macro_layout_mut(&mut multiple)
+            .spanning_features
+            .push(second);
+        let error = multiple
+            .validate()
+            .expect_err("one canonical tunnel plus another feature must fail settings validation");
         assert!(
-            error.contains("CrystalAscent, whose union-mask implementation is unavailable"),
-            "unexpected error: {error}"
+            error.contains("exactly one canonical spanning feature"),
+            "{error}"
         );
+
+        for (label, mutate) in [
+            (
+                "width",
+                (|tunnel: &mut MacroTunnelSettings| tunnel.width = 3)
+                    as fn(&mut MacroTunnelSettings),
+            ),
+            ("floor_level", |tunnel: &mut MacroTunnelSettings| {
+                tunnel.floor_level = 7;
+            }),
+            ("clearance", |tunnel: &mut MacroTunnelSettings| {
+                tunnel.clearance = 5;
+            }),
+            ("roof_thickness", |tunnel: &mut MacroTunnelSettings| {
+                tunnel.roof_thickness = 2;
+            }),
+        ] {
+            let mut invalid = settings.clone();
+            let MacroSpanningFeatureSettings::Tunnel(tunnel) = macro_layout_mut(&mut invalid)
+                .spanning_features
+                .first_mut()
+                .expect("the fixture has one tunnel");
+            mutate(tunnel);
+            let error = invalid
+                .validate()
+                .expect_err("unsupported tunnel geometry must fail during settings validation");
+            assert!(error.contains(label), "{label}: {error}");
+        }
+
+        for level in [-1, MAX_V3_LEVEL + 1] {
+            let mut invalid = settings.clone();
+            macro_layout_mut(&mut invalid)
+                .walker_connections
+                .first_mut()
+                .expect("the fixture has one walker connection")
+                .level = level;
+            let error = invalid
+                .validate()
+                .expect_err("an explicit walker level outside the V3 ceiling must fail");
+            assert!(error.contains("walker connection level"), "{error}");
+        }
+
+        let mut invalid_alias = settings.clone();
+        macro_layout_mut(&mut invalid_alias)
+            .anchor_aliases
+            .first_mut()
+            .expect("the fixture has one alias")
+            .alias = "Invalid Alias".to_owned();
+        let error = invalid_alias
+            .validate()
+            .expect_err("world-level aliases must be stable identifiers");
+        assert!(error.contains("anchor alias"), "{error}");
+
+        let mut invalid_boundary = settings.clone();
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = macro_layout_mut(&mut invalid_boundary)
+            .spanning_features
+            .first_mut()
+            .expect("the fixture has one tunnel");
+        tunnel.boundary_terminal.side = MacroBoundarySideSettings::East;
+        let error = invalid_boundary
+            .validate()
+            .expect_err("the terminal owner must reach its declared world side");
+        assert!(
+            error.contains("does not reach the authored world side"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn macro_extension_ron_is_defaulted_and_rejects_unknown_fields() {
+        let legacy = shipped_macro_settings();
+        let layout = macro_layout(&legacy);
+        assert!(layout.walker_connections.is_empty());
+        assert!(layout.spanning_features.is_empty());
+        assert!(layout.anchor_aliases.is_empty());
+
+        ron::from_str::<MacroWalkerConnectionSettings>(
+            r#"(
+                first_instance: "crystal-ascent",
+                second_instance: "summit-forest",
+                width: 4,
+                level: 150,
+                typoed_field: 1,
+            )"#,
+        )
+        .expect_err("Macro walker connections must reject unknown fields");
+        ron::from_str::<MacroSpanningFeatureSettings>(
+            r#"Tunnel((
+                name: "crystal_mountain.tunnel",
+                canonical_route: true,
+                instance_route: ["outer-mountain", "inner-mountain", "crystal-ascent"],
+                boundary_terminal: (instance: "outer-mountain", side: West),
+                destination_anchor: (instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+                typoed_field: 1,
+            ))"#,
+        )
+        .expect_err("Macro tunnels must reject unknown fields");
     }
 
     #[test]
@@ -6172,21 +8510,21 @@ mod tests {
         );
 
         V3HillsSettings {
-            valley_level: 244,
+            valley_level: 372,
             max_relief: 12,
             hills_per_bank: 3,
         }
         .validate(40)
-        .expect("V3 should admit a surface exactly at its independent level-256 ceiling");
+        .expect("V3 should admit a surface exactly at its independent level-384 ceiling");
         let v3_error = V3HillsSettings {
-            valley_level: 245,
+            valley_level: 373,
             max_relief: 12,
             hills_per_bank: 3,
         }
         .validate(40)
         .expect_err("V3 must reject a surface above its independent level ceiling");
         assert!(
-            v3_error.contains("cannot exceed level 256"),
+            v3_error.contains("cannot exceed level 384"),
             "unexpected error: {v3_error}"
         );
     }

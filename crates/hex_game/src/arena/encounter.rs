@@ -191,7 +191,7 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
     let cast_requested = pose_valid && step.is_multiple_of(240);
     world.resource_mut::<hex_arena::ArenaInput>().human = ActorIntent {
         aim,
-        selected: Some(Spell::AreaBlast),
+        selected: Some(Spell::Fireball),
         cast_pressed: cast_requested,
         cast_released: cast_requested,
         ..default()
@@ -363,11 +363,13 @@ pub(super) fn capture_intent(
         movement,
         aim: direction,
         jump: movement != Vec2::ZERO && frame.is_multiple_of(45),
+        high_jump: false,
         run: distance > 8.0,
         selected: Some(Spell::Fireball),
         cast_pressed: attack && cycle == 45,
         cast_held: attack && (45..76).contains(&cycle),
         cast_released: attack && cycle == 76,
+        ..Default::default()
     }
 }
 
@@ -595,6 +597,57 @@ pub(super) fn overview(
     frame_bounds(minimum, maximum, rear)
 }
 
+fn forest_overview(geometry: ArenaVoxelGeometry, view: &ArenaTerrainView, rear: bool) -> Transform {
+    if view.columns.is_empty() {
+        return overview(geometry, view, rear);
+    }
+    let forward = Vec3::new(
+        if rear { 0.65 } else { -0.65 },
+        -0.85,
+        if rear { 0.75 } else { -0.75 },
+    )
+    .normalize();
+    let right = forward.cross(Vec3::Y).normalize();
+    let up = right.cross(forward);
+    let tangent = (75.0_f32.to_radians() * 0.5).tan();
+    // Fit occupied spans instead of empty corners of the map's rectangular volume.
+    // Solve camera-plane translation as well as distance so perspective does not
+    // leave the distant half of this broad, flat map surrounded by unused sky.
+    let horizontal = tangent * 16.0 / 9.0 * 0.90;
+    let vertical = tangent * 0.66;
+    let mut lower = Vec2::splat(f32::NEG_INFINITY);
+    let mut upper = Vec2::splat(f32::INFINITY);
+    let spans = view
+        .columns
+        .values()
+        .flatten()
+        .map(|span| (span.bottom, span.top_level))
+        .chain(
+            view.static_spans
+                .iter()
+                .map(|span| (span.bottom, span.top_level)),
+        );
+    for (bottom, top_level) in spans {
+        for height in [
+            geometry.top(bottom) - geometry.level_height,
+            geometry.top(hex_core::TilePos::new(bottom.coord, top_level)),
+        ] {
+            let point = bottom.coord.to_world(height);
+            let depth = point.dot(forward);
+            let plane = Vec2::new(point.dot(right), point.dot(up));
+            let spread = Vec2::new(horizontal, vertical) * depth;
+            lower = lower.max(plane - spread);
+            upper = upper.min(plane + spread);
+        }
+    }
+    let distance = ((lower.x - upper.x) / (2.0 * horizontal))
+        .max((lower.y - upper.y) / (2.0 * vertical))
+        + 4.0;
+    let center = (lower + upper) * 0.5;
+    Transform::from_translation(right * center.x + up * center.y - forward * distance)
+        .looking_to(forward, Vec3::Y)
+}
+
 pub(super) fn frame_bounds(minimum: Vec3, maximum: Vec3, rear: bool) -> Transform {
     let center = (minimum + maximum) * 0.5;
     let forward = Vec3::new(
@@ -733,6 +786,7 @@ pub(super) fn camera(
     state: Res<ViewState>,
     view: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
+    readability: Option<Res<super::readability_capture::ReadabilityCapture>>,
     mut cameras: Query<&mut Transform, With<ArenaCamera>>,
 ) {
     if !state.external_camera() {
@@ -741,8 +795,120 @@ pub(super) fn camera(
     let Ok(mut camera) = cameras.single_mut() else {
         return;
     };
-    if matches!(state.capture_view.as_str(), "overview" | "rear") {
-        *camera = overview(*geometry, &view, state.capture_view == "rear");
+    if let Some(pose) =
+        super::readability_capture::camera(readability.as_deref(), &state.capture_view)
+    {
+        *camera = pose;
+    } else if let Some(pose) =
+        super::expedition_capture::camera(&session, &view, *geometry, &state.capture_view)
+    {
+        *camera = pose;
+    } else if state.capture_view == "expedition-dragon-summit" {
+        if let Some(actor) = session.actors.iter().find(|actor| {
+            actor.species == hex_arena::Species::Dragon
+                && actor.dragon_tier() == hex_arena::DragonTier::Summit
+        }) {
+            // Existing actor-owned summit palette, shown from a close front
+            // quarter. This external framing never moves or poses the creature.
+            *camera = feature_camera(
+                &session,
+                actor.center() + Vec3::Y * 0.3,
+                actor.body_rotation() * Vec3::new(3.2, 2.4, -4.8),
+            );
+        }
+    } else if matches!(state.capture_view.as_str(), "overview" | "rear") {
+        *camera = if session.is_forest_run() {
+            forest_overview(*geometry, &view, state.capture_view == "rear")
+        } else {
+            overview(*geometry, &view, state.capture_view == "rear")
+        };
+    } else if matches!(
+        state.capture_view.as_str(),
+        "forest-landmark" | "forest-landmark-rear" | "forest-ground" | "forest-ground-rear"
+    ) {
+        if let Some(anchor) = state
+            .capture_focus
+            .as_ref()
+            .and_then(|name| forest_focus(&view, *geometry, name))
+        {
+            let ground_view = state.capture_view.starts_with("forest-ground");
+            let rear = state.capture_view.ends_with("-rear");
+            let focus = state.capture_focus.as_deref();
+            if matches!(focus, Some("bridge_west" | "bridge_east")) && !ground_view {
+                if let Some(center) = view.anchors.get("bridge_center") {
+                    // Look across the river below the deck crest so both arch
+                    // haunches, banks and portals remain visible in silhouette.
+                    let side = if rear { -1.0 } else { 1.0 };
+                    let target = *center - Vec3::Y;
+                    let mut position = target + Vec3::new(0.0, -2.0, 62.0 * side);
+                    // The river bends east of x=0 on both sides of the bridge.
+                    // Center the external review eye on its published water row
+                    // instead of leaving it beneath a bank's overhanging trees.
+                    let mut west = f32::INFINITY;
+                    let mut east = f32::NEG_INFINITY;
+                    for water in &view.liquids {
+                        let point = water.bottom.coord.to_world(
+                            geometry
+                                .top(hex_core::TilePos::new(water.bottom.coord, water.top_level)),
+                        );
+                        if (point.z - position.z).abs() < 1.0 && point.y < target.y - 3.0 {
+                            west = west.min(point.x);
+                            east = east.max(point.x);
+                        }
+                    }
+                    if west.is_finite() {
+                        position.x = (west + east) * 0.5;
+                    }
+                    *camera = Transform::from_translation(position).looking_at(target, Vec3::Y);
+                    return;
+                }
+            }
+            if let Some(name) = focus.filter(|name| name.contains("_fountain_")) {
+                *camera = fountain_camera(&session, &view, *geometry, name, anchor);
+                return;
+            }
+            if focus == Some("shadow_gate") {
+                if let Some(center) = forest_focus(&view, *geometry, "mountain_shadow") {
+                    let outward = (anchor - center).with_y(0.0).normalize_or_zero();
+                    *camera = feature_camera(
+                        &session,
+                        anchor + Vec3::Y * 4.0,
+                        outward * 26.0 + Vec3::Y * 7.0,
+                    );
+                    return;
+                }
+            }
+            let (mut offset, rise) = match state.capture_focus.as_deref() {
+                _ if ground_view => (Vec3::new(12.0, 2.0, 15.0), 1.3),
+                Some("ancient_tree") => (Vec3::new(85.0, 55.0, 90.0), 26.0),
+                Some("bridge_west" | "bridge_east") => (Vec3::new(75.0, 62.0, 80.0), 0.0),
+                Some("dragon_upper") => (Vec3::new(-150.0, 90.0, 160.0), -18.0),
+                Some("dragon_lower" | "dragon_middle") => (Vec3::new(55.0, 38.0, 60.0), 0.0),
+                Some("mountain_shadow") => (Vec3::new(9.0, 30.0, 12.0), 2.0),
+                Some(name) if name.contains("_fountain_") => (Vec3::new(6.0, 4.0, 7.0), 0.0),
+                Some("forest_deep_a" | "forest_deep_b") => (Vec3::new(55.0, 45.0, 60.0), 12.0),
+                Some("forest_middle") => (Vec3::new(35.0, 30.0, 40.0), 6.0),
+                _ => (Vec3::new(24.0, 21.0, 28.0), 3.0),
+            };
+            if rear {
+                offset.x = -offset.x;
+                offset.z = -offset.z;
+            }
+            let target = anchor + Vec3::Y * rise;
+            let mut position = target + offset;
+            if ground_view {
+                let column = hex_core::HexCoord::from_world(position);
+                if let Some(level) = view
+                    .columns
+                    .get(&column)
+                    .and_then(|spans| spans.iter().map(|s| s.top_level).max())
+                {
+                    position.y = geometry.top(hex_core::TilePos::new(column, level)) + 1.8;
+                }
+                position = session.camera_position(target, position);
+            }
+            *camera = Transform::from_translation(position).looking_at(target, Vec3::Y);
+        }
     } else if state.capture_view == "encounter-landmark" {
         if let Some(anchor) = state
             .capture_focus
@@ -767,6 +933,82 @@ pub(super) fn camera(
             *camera = close_camera(target, actor.body_rotation(), &state.capture_view);
         }
     }
+}
+
+/// External composition camera with an unobstructed route from a clear subject
+/// point. Cliff-side pools need an alternative azimuth instead of a camera buried
+/// in the mountain. This is not a shipped player-camera movement probe.
+pub(super) fn feature_camera(session: &ArenaSession, target: Vec3, offset: Vec3) -> Transform {
+    let mut best = target;
+    let mut longest = 0.0;
+    for degrees in [0.0_f32, 45.0, -45.0, 90.0, -90.0, 135.0, -135.0, 180.0] {
+        let desired = target + Quat::from_rotation_y(degrees.to_radians()) * offset;
+        let position = session.camera_position(target, desired);
+        let distance = position.distance_squared(target);
+        if distance > longest {
+            best = position;
+            longest = distance;
+        }
+        if position.distance_squared(desired) < 0.001 {
+            break;
+        }
+    }
+    Transform::from_translation(best).looking_at(target, Vec3::Y)
+}
+
+/// Frame the upper spring through its open approach or from above its cliff
+/// pocket. The charged and spent views share this external composition camera.
+pub(super) fn fountain_camera(
+    session: &ArenaSession,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    name: &str,
+    anchor: Vec3,
+) -> Transform {
+    let target = anchor + Vec3::Y * 0.4;
+    if name.starts_with("mountain_") {
+        if let Some(turn) = view
+            .expedition
+            .as_ref()
+            .and_then(|sites| sites.route_nodes.get(&format!("{name}_turn")))
+        {
+            let approach = (turn.coord.to_world(geometry.top(*turn)) - anchor)
+                .with_y(0.0)
+                .normalize_or(Vec3::Z);
+            for (distance, height) in [(9.0, 12.0), (6.0, 18.0), (1.0, 20.0)] {
+                let desired = target + approach * distance + Vec3::Y * height;
+                let position = session.camera_position(target, desired);
+                if position.distance_squared(desired) < 0.001 {
+                    return Transform::from_translation(position).looking_at(target, Vec3::Y);
+                }
+            }
+        }
+        return feature_camera(session, target, Vec3::new(1.0, 20.0, 1.0));
+    }
+    feature_camera(session, target, Vec3::new(6.0, 4.0, 7.0))
+}
+
+/// Explicit review target from published world facts; never a HUD map marker.
+pub(super) fn forest_focus(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    name: &str,
+) -> Option<Vec3> {
+    view.anchors.get(name).copied().or_else(|| {
+        let fountain = view.expedition.as_ref()?.fountains.get(name)?;
+        let mut minimum = Vec3::splat(f32::INFINITY);
+        let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+        for cell in &fountain.cells {
+            let point = cell.coord.to_world(geometry.top(*cell));
+            minimum = minimum.min(point);
+            maximum = maximum.max(point);
+        }
+        (!fountain.cells.is_empty()).then_some(Vec3::new(
+            (minimum.x + maximum.x) * 0.5,
+            maximum.y,
+            (minimum.z + maximum.z) * 0.5,
+        ))
+    })
 }
 
 #[derive(Resource)]

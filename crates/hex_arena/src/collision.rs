@@ -2,13 +2,21 @@
 //! This cache consumes only the arena's world-owned complete voxel projection.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
+
+mod probe_cache;
+#[cfg(any(test, feature = "test-support"))]
+pub use probe_cache::ProbeCacheStats;
 
 #[cfg(test)]
 #[path = "collision_candidates_tests.rs"]
 mod candidate_tests;
+#[cfg(test)]
+#[path = "collision_probe_cache_tests.rs"]
+mod probe_cache_tests;
 
 use bevy_math::Vec3;
-use hex_core::arena::{ArenaTerrainView, ArenaVoxelGeometry};
+use hex_core::arena::{ArenaAvailability, ArenaResidency, ArenaTerrainView, ArenaVoxelGeometry};
 use hex_core::{HexCoord, TilePos};
 
 pub(crate) const SKIN: f32 = 0.0001;
@@ -44,6 +52,9 @@ pub(crate) struct CollisionWorld {
     static_attack: HashMap<HexCoord, Vec<Span>>,
     barriers: Vec<crate::BarrierSnapshot>,
     pub min_y: f32,
+    residency: Option<ArenaResidency>,
+    geometry: ArenaVoxelGeometry,
+    probe_cache: probe_cache::ProbeCache,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +73,8 @@ impl CollisionWorld {
         if self.revision == Some(view.revision) {
             return;
         }
+        self.residency = view.residency.clone();
+        self.geometry = geometry;
         self.min_y =
             geometry.min_level as f32 * geometry.level_height + geometry.vertical_offset - 10.0;
         let incremental = !view.full_rebuild
@@ -128,29 +141,41 @@ impl CollisionWorld {
             }
             *spans = merged;
         }
-        // Authored object masks are immutable between complete publications.
-        if !incremental {
+        // Object removals and terrain edits share the accepted revision and dirty
+        // columns. Clear empty buckets too, so the last carved cell cannot leave
+        // an invisible movement, sight, or attack blocker behind.
+        if incremental {
+            for coord in &view.dirty_columns {
+                self.static_movement.remove(coord);
+                self.static_sight.remove(coord);
+                self.static_attack.remove(coord);
+            }
+        } else {
             self.static_movement.clear();
             self.static_sight.clear();
             self.static_attack.clear();
-            for volume in &view.static_spans {
-                let span = Span {
-                    coord: volume.bottom.coord,
-                    bottom: geometry.top(volume.bottom) - geometry.level_height,
-                    top: geometry.top(TilePos::new(volume.bottom.coord, volume.top_level)),
-                };
-                if volume.blocks_movement {
-                    self.static_movement
-                        .entry(span.coord)
-                        .or_default()
-                        .push(span);
-                }
-                if volume.blocks_sight {
-                    self.static_sight.entry(span.coord).or_default().push(span);
-                }
-                if volume.blocks_projectiles {
-                    self.static_attack.entry(span.coord).or_default().push(span);
-                }
+        }
+        for volume in view
+            .static_spans
+            .iter()
+            .filter(|volume| !incremental || view.dirty_columns.contains(&volume.bottom.coord))
+        {
+            let span = Span {
+                coord: volume.bottom.coord,
+                bottom: geometry.top(volume.bottom) - geometry.level_height,
+                top: geometry.top(TilePos::new(volume.bottom.coord, volume.top_level)),
+            };
+            if volume.blocks_movement {
+                self.static_movement
+                    .entry(span.coord)
+                    .or_default()
+                    .push(span);
+            }
+            if volume.blocks_sight {
+                self.static_sight.entry(span.coord).or_default().push(span);
+            }
+            if volume.blocks_projectiles {
+                self.static_attack.entry(span.coord).or_default().push(span);
             }
         }
         self.revision = Some(view.revision);
@@ -169,8 +194,26 @@ impl CollisionWorld {
             ring += 1;
             covered += FACE;
         }
-        let mut coords = HexCoord::from_world(start)
-            .line_between(HexCoord::from_world(end))
+        let start = HexCoord::from_world(start);
+        let end = HexCoord::from_world(end);
+        let key = probe_cache::Key { start, end, ring };
+        // Small movement queries repeat throughout body/landing probes. Long
+        // rays and nonmovement masks retain their original lazy query path.
+        let lookup = if matches!(kind, QueryKind::Movement) && ring <= 2 && start.distance(end) <= 1
+        {
+            self.probe_cache.lookup(key)
+        } else {
+            probe_cache::Lookup::Inactive
+        };
+        let cache_miss = match lookup {
+            probe_cache::Lookup::Hit(spans) => {
+                return probe_cache::Candidates::Cached { spans, next: 0 };
+            }
+            probe_cache::Lookup::Miss => true,
+            probe_cache::Lookup::Inactive => false,
+        };
+        let mut coords = start
+            .line_between(end)
             .into_iter()
             .flat_map(|coord| coord.within_radius(ring))
             .collect::<Vec<_>>();
@@ -181,13 +224,64 @@ impl CollisionWorld {
             QueryKind::Sight => &self.static_sight,
             QueryKind::Attack => &self.static_attack,
         };
-        coords.into_iter().flat_map(move |coord| {
-            [self.columns.get(&coord), extra.get(&coord)]
-                .into_iter()
-                .flatten()
-                .flatten()
-                .copied()
+        let mut candidates = coords.into_iter().flat_map(move |coord| {
+            self.unavailable_span(coord).into_iter().chain(
+                [self.columns.get(&coord), extra.get(&coord)]
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .copied(),
+            )
+        });
+        if !cache_miss {
+            return probe_cache::Candidates::Live(candidates);
+        }
+        let mut spans = Vec::new();
+        for span in candidates.by_ref() {
+            spans.push(span);
+            if spans.len() > probe_cache::MAX_ENTRY_SPANS {
+                #[cfg(any(test, feature = "test-support"))]
+                self.probe_cache.oversized();
+                return probe_cache::Candidates::Overflow {
+                    prefix: spans.into_iter(),
+                    rest: candidates,
+                };
+            }
+        }
+        let spans: Arc<[Span]> = spans.into();
+        self.probe_cache.insert(key, spans.clone());
+        probe_cache::Candidates::Cached { spans, next: 0 }
+    }
+
+    // An unavailable streamed column is a sealed prism at every elevation.
+    // Exact ready-but-empty columns remain air. Legacy complete views have no
+    // residency catalogue and retain their existing finite-map boundary rules.
+    fn unavailable_span(&self, coord: HexCoord) -> Option<Span> {
+        self.residency
+            .as_ref()
+            .filter(|residency| residency.at(coord, self.geometry) != ArenaAvailability::Ready)
+            .map(|_| Span {
+                coord,
+                bottom: f32::NEG_INFINITY,
+                top: f32::INFINITY,
+            })
+    }
+
+    /// Whether the requested complete body sweep needs unadmitted terrain.
+    pub(crate) fn needs_terrain(&self, feet: Vec3, delta: Vec3, height: f32, radius: f32) -> bool {
+        let Some(residency) = &self.residency else {
+            return false;
+        };
+        self.candidates(feet, feet + delta, radius).any(|span| {
+            residency.at(span.coord, self.geometry) == ArenaAvailability::Unloaded
+                && (contains(span, feet, height, radius)
+                    || sweep_span(span, feet, delta, height, radius).is_some())
         })
+    }
+
+    /// Memoize candidate lists only while this immutable world borrow is held.
+    pub(crate) fn probe_scope(&self) -> probe_cache::ProbeScope<'_> {
+        self.probe_cache.scope()
     }
 
     pub(crate) fn candidates(
@@ -344,7 +438,11 @@ fn sweep_span(span: Span, feet: Vec3, delta: Vec3, height: f32, radius: f32) -> 
             return None;
         }
     }
-    if exit < 0.0 || !(-SKIN..=1.0).contains(&enter) || normal.dot(delta) >= 0.0 {
+    // `clear` admits the world-space skin immediately outside the solid.
+    // A short stride can start inside the expanded sweep plane by that skin;
+    // compare its negative entry distance, not its normalized travel fraction.
+    let incoming = -normal.dot(delta);
+    if exit < 0.0 || enter > 1.0 || incoming <= 0.0 || enter * incoming < -SKIN {
         return None;
     }
     Some(Hit {
@@ -402,6 +500,27 @@ mod tests {
                 .expect("each prism face must block the sweep");
             assert!((hit.fraction - (10.0 - FACE - 0.25) / 20.0).abs() < 0.00001);
             assert!(hit.normal.dot(axis) > 0.99);
+        }
+    }
+
+    #[test]
+    fn short_strides_intercept_faces_inside_the_accepted_world_space_skin() {
+        for sign in [-1.0_f32, 1.0] {
+            let span = Span {
+                coord: HexCoord::from_axial(if sign < 0.0 { -24 } else { 24 }, 0),
+                bottom: 15.75,
+                top: 16.1,
+            };
+            // Exact valid pre-step pose reported by both authored bridge probes.
+            let start = Vec3::new(sign * 42.685_158, 15.750_1, 0.0);
+            assert!(!contains(span, start, 0.8, 0.25));
+            for stride in [0.005, 0.0375, 0.05] {
+                let hit = sweep_span(span, start, Vec3::X * (-sign * stride), 0.8, 0.25)
+                    .expect("every short inward stride must intercept the admitted skin face");
+                assert!(hit.fraction.abs() < f32::EPSILON);
+                assert!(hit.normal.dot(Vec3::X * sign) > 0.99);
+            }
+            assert!(sweep_span(span, start, Vec3::X * sign * 0.0375, 0.8, 0.25).is_none());
         }
     }
 

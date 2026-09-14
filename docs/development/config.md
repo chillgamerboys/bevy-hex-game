@@ -6,6 +6,7 @@ you do not need to recompile the game.
 
 | File | Controls |
 |---|---|
+| `schematics/grand-v3-template.ron` | Offline radius-eight schematic facts, locked landmarks, bounded region envelopes, and seeded variation limits; it does not generate voxel terrain |
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
 | `terrain_damage.ron` | Boolean element × substance damage admission; every missing pair resists |
@@ -77,6 +78,74 @@ several frames never admits a mixed revision.
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
 
+## Planning the Grand V3 world
+
+`assets/config/schematics/grand-v3-template.ron` is the strict, traced radius-eight
+world-plan template. It is a packaged planning input rather than a hot-reloaded gameplay
+setting: it owns coarse geography and authorship constraints. The map-owned
+`Schematic(GrandV3, revision 3, pitch 22, GrandV3BasicV1)` layout consumes the same
+pure generator at runtime and owns voxel scale, elevation, materials, hydrology, ordinary
+routes, Crystal Ascent integration, and baseline vegetation. The final-palette,
+radius-to-height, and partial-voxel plant experiments remain later profiles; changing those
+experiments must not silently change the accepted revision-3 map contract.
+
+Revision 2 is the approved source transcription; revision 3 preserves its geography while
+making the sealed waterfall-gorge land cell and outer Peak-backdrop shelves 127, 128, 214, and 215
+Scenic instead of promising unavailable ordinary routes. Revision 1 was an approximate
+trace and must not be used as visual or semantic evidence. Review projections use the fixed flat-top
+source orientation (`x = 1.5q`, `y = sqrt(3)(r + q/2)`) with no whole-plan rotation. The
+locked north-eastern formation contains exactly twelve peaks in two six-cell chains, the
+mountain lake and its island, the frozen three-cell core plus its mountain-shore contact,
+the waterfall opening, and the straight `q = 1` Crystal Ascent tunnel. River route cells
+remain land with a river overlay until the route reaches the sea.
+
+Generate a labelled blank tracing grid, one validated seed, or the fixed twelve-seed
+approval gallery with:
+
+```sh
+cargo run -p hex_schematic -- grid \
+  --output .context/schematic-grid
+
+cargo run -p hex_schematic -- generate \
+  --template assets/config/schematics/grand-v3-template.ron \
+  --seed 42 \
+  --output .context/schematic-seed-42
+
+cargo run -p hex_schematic -- gallery \
+  --template assets/config/schematics/grand-v3-template.ron \
+  --first-seed 0 \
+  --output .context/schematic-gallery-0
+```
+
+Output destinations must not already exist. Each command validates all typed outputs in
+a sibling staging directory and publishes the complete directory with one atomic
+no-replace rename, so a failed or racing run cannot leave a partial plan or gallery looking
+reviewable or replace another publisher's output. `generate` writes
+`plan.ron`, `metrics.ron`, `composite.svg`, and `diagnostics.svg`; `gallery` writes those
+four files for a canonical reference-artifact `reference/` bundle and twelve consecutive
+seed bundles, plus a self-contained `contact-sheet.svg` and `index.html` at the gallery
+root. A reference artifact preserves the template's original authorship; it is not marked
+as an exhausted-candidate fallback. Regenerate all reference and seed bundles whenever the
+template revision changes; a gallery from revision 1 is deliberately stale.
+
+Reload and validate an existing plan without trusting its SVG projection:
+
+```sh
+cargo run -p hex_schematic -- validate \
+  --template assets/config/schematics/grand-v3-template.ron \
+  --plan .context/schematic-seed-42/plan.ron \
+  --metrics .context/schematic-seed-42/metrics.ron
+```
+
+Omit `--plan` and `--metrics` to validate only the template.
+
+RON parsing rejects unknown fields, duplicate or non-canonical cells, malformed cube
+coordinates, and unsupported schema versions. SVG colors, patterns, and labels are a
+debug palette for review; only the RON model and validator establish correctness.
+The scheduled stress workflow runs the ignored 10,000-seed release corpus, including
+validity, fallback, semantic uniqueness, island-bucket, consecutive-seed diversity,
+50 ms p95 generation, and Linux peak-memory gates.
+
 ## Deterministic review captures
 
 Renderer captures are compiled only with the default-off `map-review` feature. Normal
@@ -99,11 +168,15 @@ The optional review overrides are:
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
+| `HEX_REVIEW_LOOK_AT_ANCHOR` | Frames an exact generated gameplay or observation anchor without moving an actor |
+| `HEX_REVIEW_LOOK_AT_OFFSET` | Sets the look-at camera's finite world-space `x,y,z` offset from that anchor |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
+| `HEX_REVIEW_FOG` | Review-only shroud profile: `current`, `none`, `dimmed`, `observed-only`, or `softened`; hostile concealment remains authoritative in every mode |
 
-`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
-`HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
+`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`,
+`HEX_REVIEW_LOOK_AT_ANCHOR`, `HEX_REVIEW_LOOK_AT_OFFSET`, `HEX_REVIEW_CUTAWAY`, and
+`HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
 The focus override resolves the anchor's full `TilePos`, not just its horizontal
 coordinate, so it can target an underground floor beneath a surface. It also applies
 the selected actor's normal solidity and headroom rules. An unknown anchor or one the
@@ -115,6 +188,11 @@ overlay reads `ResolvedIllumination`. Its diagnostic caps are physically separat
 and render-ordered above tactical fog caps, so both translucent projections compose
 deterministically; it never changes gameplay light, physical lights, faction
 knowledge, ordinary fog behavior, or picking.
+
+Look-at framing never relocates an actor. It may resolve either an ordinary gameplay
+`MapAnchor` or a scenic `MapObservationAnchor`; the latter can intentionally name a
+blocked or nonstandable surface. A duplicate name across those namespaces fails closed.
+Observation anchors are review-only generated metadata and do not enter Snapshot V1.
 
 For example, this exposes the complete generated cave network for a top-down overview:
 
@@ -359,12 +437,183 @@ terrain: Procedural((
 ```
 
 `rise_levels` accepts 100 through 200. `base_level`, the rise, the crown, and its
-reserved headroom must all fit at or below V3's level-256 ceiling. That ceiling does
+reserved headroom must all fit at or below V3's level-384 ceiling. That ceiling does
 not change the retained V1/V2 validation limits. The landmark's three stair circuits,
 four-wide routes, entrance, chamber, shaft, oculus, lights, and summit clearing are
-recipe invariants rather than additional tuning fields. Crystal Ascent currently
-requires `TemperateGrassland`, rejects overlays and Macro placement, and varies only
-crystal presentation and summit trees with the scenario seed.
+recipe invariants rather than additional tuning fields. Crystal Ascent requires
+`TemperateGrassland`, rejects overlays, and varies only crystal presentation and
+summit trees with the scenario seed. The standalone world still owns the complete
+radius-40 footprint. Macro may dispatch the recipe only through Crystal Mountain's
+specialized landmark mask: it must contain the complete radius-32 authored site and
+may retain the protruding fringe inherited from the landmark's central seven atomic
+cells. In composite mode that outside-site fringe is authored at the level-150 crown
+rather than clipped or filled at the standalone base level. An arbitrary Macro
+instance still cannot stretch, clip, or relocate the landmark.
+
+**Compose Crystal Mountain with a cross-biome tunnel.** The selectable configuration
+uses a radius-three `Macro` layout over a radius-77 map. Four logical instances
+own all 37 atomic cells: the central seven-cell Crystal Ascent landmark, five
+consecutive radius-two Forest cells at level 149–151, the remaining radius-two inner
+mountain wall, and the complete radius-three outer ridge. Crystal Ascent keeps
+`base_level: 6`, `rise_levels: 144`, and `rotation_turns: 0`.
+
+Macro's defaulted extensions separate surface connectivity from a feature that crosses
+several biomes:
+
+- `walker_connections` declares ordinary surface ports without making them part of the
+  legacy `critical_route`; Crystal Mountain aligns the exact authored four-wide
+  Crystal summit terminal and inward trail with the Forest approach at level 150;
+- `spanning_features` declares the ordered instance route and exact dimensions of the
+  level-6, four-wide tunnel from the world boundary to Crystal Ascent's lower aperture;
+  and
+- `anchor_aliases` publishes stable world-level names for an instance anchor.
+
+An empty `critical_route` is valid only when exactly one spanning feature supplies the
+canonical route. Existing Macro files omit all three defaulted collections and keep
+their former settings fingerprint byte-for-byte. The tunnel's instance order is
+`outer-mountain`, `inner-mountain`, then `crystal-ascent`; its six clear levels and
+three solid roof levels are validated independently from the surface walker port. See
+the shipped `config/worlds/procedural-crystal-mountain.ron` for the complete cell
+roster. The new fields have this exact shape:
+
+```ron
+walker_connections: [
+    (first_instance: "crystal-ascent", second_instance: "summit-forest", width: 4, level: 150),
+],
+spanning_features: [
+    Tunnel((
+        name: "crystal_mountain.tunnel",
+        canonical_route: true,
+        instance_route: ["outer-mountain", "inner-mountain", "crystal-ascent"],
+        boundary_terminal: (instance: "outer-mountain", side: West),
+        destination_anchor: (instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+        floor_level: 6,
+        width: 4,
+        clearance: 6,
+        roof_thickness: 3,
+    )),
+],
+anchor_aliases: [
+    (alias: "crystal_mountain.ascent_threshold", instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+],
+critical_route: [],
+```
+
+Walker widths are `2..=4`. The initial tunnel implementation is deliberately fixed at
+width `4`, floor level `6`, and clearance `6`, with a roof thickness of at least `3`.
+A tunnel route contains at least two unique, pairwise-adjacent non-aquatic instances.
+Its boundary terminal belongs to the first route instance, its destination to the
+last, and the complete vertical reservation must remain inside V3's level-384 ceiling.
+
+The configuration resolves into exact geometry before ordinary fragments are
+decorated. The authored destination is constructed first; the global planner reserves
+the tunnel ribbon, widened mouth, and crystal alcoves in every crossed patch so local
+liquids and vegetation cannot occupy them. Composition then merges the fragments,
+carves the passage once, retains the authored summit approach, publishes review
+anchors, and runs the normal final classification and validation pass. At each crossed
+biome boundary, only the declared four subsurface lane pairs remain ordinary;
+incidental level-6 seam contacts beside the ribbon are closed under a world-owned
+special-movement region.
+
+The eight-wide open boundary apron is exterior. Its first roofed four-wide row and the
+four-wide summit threshold are the eight registered entrances of one world-owned
+interior containing the tunnel and Crystal Ascent. Crystal Ascent's lower aperture is
+therefore an internal handoff, not a second light domain or exterior entrance.
+
+**Use V3 Arid terrain.** `Arid` admits four recipes and no overlays. The first three
+shipped `Single` configurations are radius 12; Oasis is the central patch of the
+Ring19 map below. Their authored settings are:
+
+```ron
+recipe: DesertTransition((
+    base_level: 15,
+    max_relief: 3,
+    transition_width: 8,
+    dry_coverage_percent: 55,
+)),
+
+recipe: DesertPlain((base_level: 15, max_relief: 2)),
+
+recipe: Dunes((
+    base_level: 15,
+    ridge_height: 6,
+    ridge_spacing: 12,
+    ridge_count: 5,
+)),
+
+recipe: Oasis((
+    base_level: 15,
+    pool_radius: 5,
+    palm_count: 12,
+    grass_ring_width: 3,
+)),
+```
+
+Desert Transition accepts relief `1..=4`, transition width `5..=12`, and dry
+coverage `40..=70` percent. Desert Plain accepts relief `1..=4`. Dunes accepts ridge
+height `3..=8`, spacing `8..=16`, and count `3..=7`. Oasis accepts pool radius
+`3..=6`, exact palm count `8..=18`, and green-ring width `2..=4`; its pool and ring
+must leave four dry approach columns. Each recipe requires `base_level >= 5`, must
+remain under the V3 ceiling, and rejects unknown fields.
+
+The material bands, requested ridge dimensions, local oasis footprint, and exact
+date-palm count are deterministic setting consequences. Named streams vary rolling
+relief, bounded dune warp, and palm selection/rotation without changing those
+contracts. Oasis uses a connected local Still-water body with no seam connection.
+
+**Compose Desert Oasis Rings.** The selectable radius-55 Ring19 file sets
+`profile: DesertOasis`: slot 0 is Oasis; slots 1–6 are the six rotated inner Dunes;
+slots 7–18 alternate taller Dunes and Desert Plain. Seam defaults remain level
+`15..=19` with preferred level 17, two width-two walker ports, and depth-three
+approaches. Every seam is Dry, while both `liquid_connections` and
+`boundary_outlets` are empty because the central pool is intentionally local. Only
+this profile admits that empty hydrology contract; the original defaulted
+`TwoRings` profile and fingerprint remain unchanged.
+
+The four selectable scenario names are **Desert Transition**, **Desert Plain**,
+**Dunes**, and **Desert Oasis Rings**. Each ships with configured seed `1592598566`;
+Sandbox regeneration changes only the pending resolved seed.
+
+**Use V3 Coastal island terrain.** The two focused `Single` configurations use the
+existing `Coastal` environment and reject overlays:
+
+```ron
+recipe: SandyIslets((
+    sea_level: 8,
+    land_coverage_percent: 32,
+    islet_count: 5,
+    max_relief: 3,
+)),
+
+recipe: WoodedIsland((
+    sea_level: 8,
+    land_coverage_percent: 65,
+    max_relief: 8,
+    tree_coverage_percent: 25,
+)),
+```
+
+Sandy Islets requires sea level 8, dry coverage `18..=40` percent, `1..=9`
+separated islets, and relief `1..=4`; its shipped radius-24 map fixes five components.
+Wooded Island requires sea level 8, dry coverage `50..=80` percent, relief `3..=8`,
+and broadleaf canopy coverage `18..=35` percent; its shipped radius-40 map has one
+connected island and an exact two-column sand fringe. Because each accepted tree
+silhouette spans several columns, exact non-overlapping roots are placed at half the
+configured canopy percentage. Unknown fields and non-Coastal pairings fail settings
+validation.
+
+**Compose Ocean Archipelagoes.** The radius-77 Macro file claims all 37 atomic cells
+with 24 sea cells, three two-cell scenic Sandy Islets instances, one sandy landing,
+and one six-cell Wooded Island heart. Ten `Standing` seam declarations keep the
+level-8 ocean continuous. Exactly one width-four walker connection excludes its
+protected causeway footprint from the otherwise full standing-water coast between the landing and
+wooded heart; remote dry components remain scenic and publish no ordinary
+cross-water route.
+
+The selectable scenario names are **Sandy Islets**, **Wooded Island**, and **Ocean
+Archipelagoes**. Each uses configured review seed `1592598566`; Sandbox regeneration
+changes only the pending resolved seed. Seed variation may alter bounded detail, not
+the authored land-component roster or Macro instance topology.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,
@@ -639,10 +888,10 @@ boundary and never enter the shipping asset loader. Local saved creations belong
 the per-user data directory's `creations.ron`, not the shipped asset tree.
 
 `sandbox_maps.ron` owns the deployable Sandbox map list. Its `schema_version` is
-checked on load. Every distinct
-supported shipped environment appears once. Each entry has a stable ID, display name,
-tactical description and tags, renderer-generated preview asset, scenario, optional
-generation seed, and one hidden actor-staging region per side. A staging center is
+checked on load. Every distinct supported shipped environment appears at least once;
+separate recipe and layout experiences may share an environment. Each entry has a
+stable ID, display name, tactical description and tags, renderer-generated preview
+asset, scenario, optional generation seed, and one hidden actor-staging region per side. A staging center is
 either `Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated
 exact surface, with a bounded path-cost `radius`. These fields are retained as stable
 compatibility metadata so Loading can stage the frozen roster before guided

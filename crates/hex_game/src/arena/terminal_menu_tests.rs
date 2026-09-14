@@ -26,6 +26,91 @@ fn install_hud(app: &mut App) {
         .expect("update actual arena HUD");
 }
 
+#[test]
+fn shadow_menu_tuning_is_live_bounded_and_survives_reset_and_map_selection() {
+    let (mut app, _) = menu_app();
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    install_hud(&mut app);
+    press_action(&mut app, hud::Action::Start);
+    tap_key(&mut app, KeyCode::Escape);
+    let paused_tick = app.world().resource::<ArenaSession>().tick;
+    assert!(
+        (app.world()
+            .resource::<ArenaTuning>()
+            .bot
+            .acquisition_seconds
+            - 0.15)
+            .abs()
+            < 0.001
+    );
+    for (steps, direction, expected, label) in [
+        (4, -1.0, 0.0, "Off"),
+        (3, 1.0, 0.15, "150 ms"),
+        (12, 1.0, 0.5, "500 ms"),
+    ] {
+        for _ in 0..steps {
+            press_action(&mut app, hud::Action::Change(10, direction));
+        }
+        assert!(
+            (app.world()
+                .resource::<ArenaTuning>()
+                .bot
+                .acquisition_seconds
+                - expected)
+                .abs()
+                < 0.001
+        );
+        assert_eq!(app.world().resource::<ArenaSession>().tick, paused_tick);
+        app.world_mut()
+            .run_system_once(hud::update)
+            .expect("updated parameter text");
+        let mut labels = app.world_mut().query::<(&hud::Label, &Text)>();
+        assert!(labels
+            .iter(app.world())
+            .any(
+                |(kind, text)| matches!(kind, hud::Label::Parameter(10)) && text.0.contains(label)
+            ));
+    }
+    press_action(&mut app, hud::Action::Change(11, -1.0));
+    assert!(!app.world().resource::<ArenaTuning>().bot.escape.enabled);
+    press_action(&mut app, hud::Action::Change(11, 1.0));
+    assert!(app.world().resource::<ArenaTuning>().bot.escape.enabled);
+    press_action(&mut app, hud::Action::Change(2, 1.0));
+    press_action(&mut app, hud::Action::Change(7, -1.0));
+    assert!((app.world().resource::<ArenaTuning>().high_jump_height - 4.5).abs() < 0.001);
+    assert!((app.world().resource::<ArenaTuning>().high_jump_cooldown - 6.5).abs() < 0.001);
+    press_action(&mut app, hud::Action::Resume);
+    assert!(!app.world().resource::<ViewState>().paused);
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .iter()
+        .all(|a| a.charge().is_none()));
+    tap_key(&mut app, KeyCode::Escape);
+    press_action(&mut app, hud::Action::Restart);
+    press_action(&mut app, hud::Action::Map(ArenaMap::Fort));
+    assert_eq!(app.world().resource::<ArenaSelection>().map, ArenaMap::Fort);
+    assert!((app.world().resource::<ArenaTuning>().high_jump_height - 4.5).abs() < 0.001);
+    assert!((app.world().resource::<ArenaTuning>().high_jump_cooldown - 6.5).abs() < 0.001);
+
+    assert!(
+        (app.world()
+            .resource::<ArenaTuning>()
+            .bot
+            .acquisition_seconds
+            - 0.5)
+            .abs()
+            < 0.001
+    );
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .actors
+        .iter()
+        .all(|a| a.charge().is_none()));
+}
+
 fn assert_terminal_menu(app: &mut App, window: Entity, expected_title: &str) {
     let state = app.world().resource::<ViewState>();
     assert!(state.started && state.paused && state.suppress_click);
@@ -203,7 +288,7 @@ fn terminal_restart_button_and_r_return_to_ready_and_preserve_the_selected_party
         if button {
             press_action(&mut app, hud::Action::Restart);
         } else {
-            tap_key(&mut app, KeyCode::KeyR);
+            tap_restart(&mut app);
         }
         assert_eq!(
             app.world().resource::<ArenaReset>().generation,
@@ -350,4 +435,137 @@ fn terminal_menu_flushes_the_last_tick_terrain_queue_without_an_extra_living_tic
     let frozen = app.world().resource::<ArenaSession>().tick;
     app.update();
     assert_eq!(app.world().resource::<ArenaSession>().tick, frozen);
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+#[ignore = "requires HEX_FOREST_WORLD pointing at the compiled expedition and companion"]
+fn expedition_defeat_restart_pointer_does_not_activate_quit() {
+    use bevy::input::{mouse::MouseButtonInput, ButtonState};
+    use hex_ui::test_support::HeadlessUiPlugin;
+
+    for (width, height) in [(1600, 900), (1280, 720), (1920, 1080)] {
+        let mut app = App::new();
+        app.add_plugins(HeadlessUiPlugin::new(width, height))
+            .insert_resource(ViewState {
+                started: false,
+                paused: true,
+                capture: None,
+                ..default()
+            })
+            .insert_resource(ArenaSelection {
+                map: ArenaMap::ForestMassif,
+                ..default()
+            })
+            .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
+            .add_systems(Startup, hud::setup)
+            .add_systems(
+                Update,
+                (hud::buttons, drive_simulation, hud::update).chain(),
+            );
+        for _ in 0..8 {
+            app.update();
+        }
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .expect("one primary window");
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("window")
+            .focused = true;
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+        app.world_mut().resource_mut::<ViewState>().begin_play();
+        app.world_mut()
+            .resource_mut::<ArenaSession>()
+            .actors
+            .first_mut()
+            .expect("player")
+            .hp = 0.0;
+        for _ in 0..8 {
+            app.update();
+        }
+        assert!(app.world().resource::<ArenaSession>().is_finished());
+        assert!(app.world().resource::<ViewState>().paused);
+        let (restart, position, restart_size) = app
+            .world_mut()
+            .query::<(
+                Entity,
+                &hud::Action,
+                &bevy::ui::UiGlobalTransform,
+                &ComputedNode,
+            )>()
+            .iter(app.world())
+            .find_map(|(entity, action, transform, node)| {
+                matches!(action, hud::Action::Restart).then_some((
+                    entity,
+                    transform.affine().translation,
+                    node.size(),
+                ))
+            })
+            .expect("restart control");
+        let generation = app.world().resource::<ArenaReset>().generation;
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("window")
+            .set_physical_cursor_position(Some(position.into()));
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
+        app.update();
+        assert_eq!(
+            app.world().get::<Interaction>(restart),
+            Some(&Interaction::Pressed)
+        );
+        assert_eq!(
+            app.world().resource::<ArenaReset>().generation,
+            generation + 1
+        );
+        assert!(!app.world().resource::<ArenaSession>().is_finished());
+        assert!(
+            app.world().resource::<Messages<AppExit>>().is_empty(),
+            "restart click must not quit at {width}x{height}"
+        );
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Released,
+            window,
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Messages<AppExit>>().is_empty(),
+            "restart release must not quit"
+        );
+        let old_restart = Rect::from_center_size(position, restart_size);
+        for (action, transform, node) in app
+            .world_mut()
+            .query::<(&hud::Action, &bevy::ui::UiGlobalTransform, &ComputedNode)>()
+            .iter(app.world())
+        {
+            if matches!(action, hud::Action::Quit) && node.size().min_element() > 0.0 {
+                let quit = Rect::from_center_size(transform.affine().translation, node.size());
+                assert!(quit.max.x <= old_restart.min.x || old_restart.max.x <= quit.min.x || quit.max.y <= old_restart.min.y || old_restart.max.y <= quit.min.y,
+                    "new Quit must not overlap any part of Restart at {width}x{height}: {old_restart:?}, {quit:?}");
+            }
+        }
+        // A rapid second press follows the real UI focus/hitbox path after the
+        // replacement menu was laid out, rather than directly invoking an action.
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Messages<AppExit>>().is_empty(),
+            "a repeated restart click must not land on Quit in the new menu"
+        );
+        assert!(
+            app.world().resource::<ViewState>().started,
+            "repeated click selects Start at {width}x{height}"
+        );
+    }
 }

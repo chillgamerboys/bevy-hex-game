@@ -87,7 +87,6 @@ impl Brain {
                 PartyPhase::Active | PartyPhase::Returning
             )
             && desired.length() > 0.35
-            && self.steering.blocked_ticks(tick) >= 48
             && tick.is_multiple_of(12)
             && self.ready(CreatureAbility::GolemSwipe)
             && super::super::abilities::golem_swipe_blocked(
@@ -98,6 +97,9 @@ impl Brain {
                 geometry,
             )
         {
+            // Local body contact is sufficient pressure to clear the route.
+            // Sliding forward and stationary attacks reset steering's general
+            // progress clock, so waiting for a full stall can starve this swipe.
             input.aim = desired.normalize_or(actor.aim);
             return Some(Request {
                 kind: CreatureAbility::GolemSwipe,

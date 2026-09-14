@@ -21,6 +21,7 @@ pub(super) struct WorldRecipe {
     pub geometry: ArenaVoxelGeometry,
     pub view: ArenaTerrainView,
     pub presentation: MapPresentationProjection,
+    pub forest_source: Option<std::sync::Arc<hex_world_runtime::FileChunkSource>>,
 }
 
 pub(super) fn load_art(palette: &ArtPalette) -> Result<RuntimeArtCatalog, String> {
@@ -47,12 +48,74 @@ pub(super) fn load_art(palette: &ArtPalette) -> Result<RuntimeArtCatalog, String
         include_str!("../../../../assets/art/objects/prop/crystal-spire.ron"),
         include_str!("../../../../assets/art/objects/prop/grass-tuft.ron"),
         include_str!("../../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-ancient-1.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-ancient-2.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-ancient-3.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-heart.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-landmark-1.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-landmark-2.ron"),
+        include_str!("../../../../assets/art/objects/plant/forest-expedition-landmark-3.ron"),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-broadleaf-1.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-broadleaf-2.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-broadleaf-3.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-pine-1.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-pine-2.ron"
+        ),
+        include_str!(
+            "../../../../assets/art/objects/plant/forest-expedition-understory-pine-3.ron"
+        ),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-0.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-1.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-3.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-4.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-buttress-5.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-open-gate.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-arena-wall-crown.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-portal-east.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-portal-west.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-0.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-1.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-2.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-north-3.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-0.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-1.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-2.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-bridge-rail-south-3.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-crystal-cluster.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-crystal-fan.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-crystal-needle.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-fountain-rim.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-arch.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-pillar.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-ridge.ron"),
+        include_str!("../../../../assets/art/objects/prop/expedition-rock-slab.ron"),
     ];
     let mut objects = BTreeMap::new();
     for source in sources {
         let object: ObjectBlueprint =
             ron::from_str(source).map_err(|error| format!("Arena object blueprint: {error}"))?;
         objects.insert(object.id.clone(), object);
+    }
+    for id in manifest.ids() {
+        if !objects.contains_key(id) {
+            let path = super::forest::asset_root()
+                .join("assets/art/objects")
+                .join(format!("{}.ron", id.as_str()));
+            let source = std::fs::read_to_string(&path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let object: ObjectBlueprint =
+                ron::from_str(&source).map_err(|error| error.to_string())?;
+            objects.insert(object.id.clone(), object);
+        }
     }
     RuntimeArtCatalog::from_sources(palette, &styles, &manifest, objects)
         .map_err(|error| format!("Arena accepted art graph: {error}"))
@@ -64,6 +127,9 @@ pub(super) fn build(
     substances: &SubstanceTable,
     art: &RuntimeArtCatalog,
 ) -> Result<WorldRecipe, String> {
+    if selection.map == ArenaMap::ForestMassif {
+        return super::forest::build(selection, substances, art);
+    }
     let (map, geometry, anchors, presentation) = match selection.map {
         ArenaMap::Duel => {
             let geometry = ArenaVoxelGeometry::default();
@@ -78,6 +144,10 @@ pub(super) fn build(
                 MapPresentationProjection::default(),
             )
         }
+        ArenaMap::NorthernArchipelago => {
+            return Err("Northern must load through the streamed adapter".into())
+        }
+        ArenaMap::ForestMassif => return Err("Forest must load through its V4 adapter".into()),
         ArenaMap::Fort | ArenaMap::SevenRegions => {
             let (source, seed) = match selection.map {
                 ArenaMap::Fort => (
@@ -171,6 +241,7 @@ pub(super) fn build(
         geometry,
         view,
         presentation,
+        forest_source: None,
     })
 }
 
@@ -186,7 +257,9 @@ fn battle_deployment(
         // Both sides share the open west courtyard. The adventure starts lie
         // outside/inside the curtain wall and would require gate/keep routing.
         ArenaMap::Fort => ([(-4, 2), (-2, -2)], 15),
-        ArenaMap::SevenRegions => return Ok(None),
+        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago => {
+            return Ok(None)
+        }
     };
     let regions = centers.map(|(q, r)| {
         let preferred = TilePos::new(HexCoord::from_axial(q, r), level);
@@ -317,7 +390,7 @@ fn contains_straight_run(region: &ArenaDeploymentRegion, count: i32) -> bool {
 #[path = "burrow_world_tests.rs"]
 mod burrow_tests;
 
-fn project_static(
+pub(super) fn project_static(
     view: &mut ArenaTerrainView,
     presentation: &MapPresentationProjection,
     geometry: ArenaVoxelGeometry,
@@ -395,7 +468,7 @@ fn protect(view: &mut ArenaTerrainView, coord: HexCoord, bottom: i32, top: i32) 
 /// Explicit arena object policy: woody plant parts collide; opaque/cutout canopy
 /// blocks sight and projectiles. Grass and moss are excluded by their feature kind.
 /// Crystal structural cells collide only where their authored style is opaque.
-fn project_instance(
+pub(super) fn project_instance(
     view: &mut ArenaTerrainView,
     art: &RuntimeArtCatalog,
     instance: &ObjectInstance,

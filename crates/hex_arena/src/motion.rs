@@ -48,7 +48,7 @@ pub(crate) fn tick_with_lunge(
     }
     if actor.species != Species::Dragon {
         actor.body_yaw = (-actor.aim.x).atan2(-actor.aim.z);
-        let profile = match actor.species {
+        let mut profile = match actor.species {
             Species::Goblin => GroundProfile {
                 height: actor.dimensions.y,
                 radius: actor.dimensions.x * 0.5,
@@ -63,10 +63,26 @@ pub(crate) fn tick_with_lunge(
             },
             _ => GroundProfile::default(),
         };
+        if actor.species == Species::Human && actor.expedition_player {
+            profile.height = actor.dimensions.y;
+            profile.radius = actor.dimensions.x * 0.5;
+            profile.walk = actor.walking_speed;
+            profile.run = actor.walking_speed;
+            // Clear three expedition voxels (1.05), remaining below four (1.40).
+            profile.jump_height = 1.38;
+            if actor.glider.open && !actor.grounded {
+                crate::glider::tick(actor, world, profile);
+                return;
+            }
+        }
+        let grounded_glider = actor.glider.open && actor.grounded;
         actor
             .body
             .tick_profile(&mut actor.feet, direction, run, jump, world, profile);
         actor.grounded = actor.body.grounded;
+        if grounded_glider && !actor.grounded {
+            crate::glider::ground_takeoff(actor);
+        }
         return;
     }
     if !shapes::clear(world, actor, actor.feet, actor.body_yaw) {
