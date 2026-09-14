@@ -303,6 +303,128 @@ fn toggle() -> ActorIntent {
 }
 
 #[test]
+fn water_lab_floats_two_thirds_deep_and_toggles_boat_without_ratchet() {
+    #[derive(Debug)]
+    struct SteppedSea;
+    impl OceanEnvironmentSampler for SteppedSea {
+        fn surface_at(
+            &self,
+            _at: Vec2,
+            phase: f32,
+            column: OceanWaterColumn,
+        ) -> Option<OceanSurfaceSample> {
+            Some(OceanSurfaceSample {
+                height: column.mean_height + 0.4 * phase.sin().round(),
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            })
+        }
+    }
+    let mut app = session_app();
+    {
+        let mut terrain = app.world_mut().resource_mut::<ArenaTerrainView>();
+        terrain.selection.map = ArenaMap::WaterLab;
+        terrain.package_identity = None;
+        terrain.anchors.insert("water_lab_swim".into(), Vec3::ZERO);
+    }
+    {
+        let mut environment = app.world_mut().resource_mut::<OceanEnvironmentView>();
+        environment.package_fingerprint = hex_core::water_lab::WATER_LAB_ID;
+        environment.sampler = Arc::new(SteppedSea);
+        environment.wind.speed = 0.0;
+    }
+    app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    app.world_mut().run_schedule(ArenaTick);
+    let terrain = app.world().resource::<ArenaTerrainView>().clone();
+    let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+    assert!(app
+        .world_mut()
+        .resource_mut::<ArenaSession>()
+        .reset_water_lab_pose(hex_core::water_lab::LabStart::Swim, &terrain, geometry));
+    for _ in 0..120 {
+        app.world_mut().run_schedule(ArenaTick);
+    }
+    for _ in 0..20 {
+        let actor = app
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .first()
+            .unwrap();
+        let surface = 0.4
+            * app
+                .world()
+                .resource::<OceanSimulationTime>()
+                .phase_seconds()
+                .sin()
+                .round();
+        assert!((actor.feet.y + actor.dimensions.y * (2.0 / 3.0) - surface).abs() < 0.0001);
+        assert!(actor.eye().y > surface);
+        app.world_mut().resource_mut::<ArenaInput>().human = toggle();
+        app.world_mut().run_schedule(ArenaTick);
+        assert!(
+            app.world()
+                .resource::<ArenaSession>()
+                .actors
+                .first()
+                .unwrap()
+                .boat()
+                .unwrap()
+                .active
+        );
+        app.world_mut().resource_mut::<ArenaInput>().human = toggle();
+        app.world_mut().run_schedule(ArenaTick);
+        for _ in 0..120 {
+            app.world_mut().run_schedule(ArenaTick);
+        }
+        let actor = app
+            .world()
+            .resource::<ArenaSession>()
+            .actors
+            .first()
+            .unwrap();
+        assert!(!actor.boat().unwrap().active);
+        let surface = 0.4
+            * app
+                .world()
+                .resource::<OceanSimulationTime>()
+                .phase_seconds()
+                .sin()
+                .round();
+        assert!((actor.feet.y + 0.8 - surface).abs() < 0.0001);
+        assert!(body_velocity(actor).length() < 0.001);
+    }
+}
+
+#[test]
+fn water_lab_swimming_speed_is_below_walk_and_wind_scale_is_glider_only() {
+    let (mut actor, world, terrain, geometry, environment) = fixture();
+    let sea = context(&terrain, geometry, &environment);
+    actor.marine.as_mut().unwrap().lab = true;
+    actor.marine.as_mut().unwrap().glider_wind_scale = 0.45;
+    actor.feet.y = -0.8;
+    for _ in 0..360 {
+        tick_or_wait(
+            &mut actor,
+            ActorIntent {
+                movement: Vec2::Y,
+                ..Default::default()
+            },
+            &sea,
+            &world,
+        );
+    }
+    assert!((body_velocity(&actor).with_y(0.0).length() - actor.walking_speed * 0.85).abs() < 0.01);
+    prepare(&mut actor, ActorIntent::default(), &sea, &world);
+    assert!((actor.glider.wind.length() / sea.wind(actor.feet).length() - 0.45).abs() < 0.00001);
+    assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+    assert!((actor.boat().unwrap().wind.length() - sea.wind(actor.feet).length()).abs() < 0.00001);
+}
+
+#[test]
 fn shore_step_is_not_replayed_by_boat_swimming_or_unloaded_water_ticks() {
     let (mut stepped, world, terrain, geometry, environment) = fixture();
     let mut shore = ArenaTerrainView {

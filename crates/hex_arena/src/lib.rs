@@ -968,6 +968,9 @@ impl ArenaSession {
                 actor.configure_expedition_player();
                 actor.free_flight = Some(exploration::FreeFlightState::default());
                 actor.marine = Some(marine::MarineState::default());
+                if let Some(marine) = &mut actor.marine {
+                    marine.lab = world.selection.map == hex_core::arena::ArenaMap::WaterLab;
+                }
             }
         }
         self.collision.refresh(world, geometry);
@@ -1271,7 +1274,10 @@ fn simulate(
     reset: Res<ArenaReset>,
     setup: Res<ArenaBattleSetup>,
     burrow_policy: Res<ArenaBurrowMaterials>,
-    ocean: Option<Res<OceanEnvironmentView>>,
+    environment: (
+        Option<Res<OceanEnvironmentView>>,
+        Option<Res<hex_core::water_lab::WaterLabSettings>>,
+    ),
     mut ocean_time: ResMut<OceanSimulationTime>,
     mut burrow_outcomes: MessageReader<ArenaBurrowOutcome>,
     mut burrows: MessageWriter<ArenaBurrowRequest>,
@@ -1297,14 +1303,25 @@ fn simulate(
         input.human.flight_vertical = 0.0;
         input.human.flight_fast = false;
     }
+    let (ocean, lab_settings) = environment;
+    for actor in &mut session.actors {
+        if let Some(marine) = &mut actor.marine {
+            if marine.lab {
+                marine.glider_wind_scale = lab_settings
+                    .as_ref()
+                    .map_or(1.0, |settings| settings.glider_wind_scale);
+            }
+        }
+    }
     session.install_burrow_policy(&burrow_policy);
     session.ocean_environment = ocean
         .as_deref()
         .filter(|environment| {
             session.is_exploration()
-                && view.package_identity.as_ref().is_some_and(|package| {
+                && (view.package_identity.as_ref().is_some_and(|package| {
                     package.manifest_fingerprint == environment.package_fingerprint
-                })
+                }) || (view.selection.map == hex_core::arena::ArenaMap::WaterLab
+                    && environment.package_fingerprint == hex_core::water_lab::WATER_LAB_ID))
         })
         .cloned();
     for outcome in burrow_outcomes.read() {
