@@ -111,7 +111,7 @@ pub(crate) fn build(
         shore_coord,
         map.surface(shore_coord).ok_or("Missing lab beach")?,
     )));
-    let water_start = HexCoord::from_axial(12, 0).to_world(SEA_LEVEL);
+    let water_start = HexCoord::from_axial(-18, 0).to_world(SEA_LEVEL);
     let launch_coord = HexCoord::from_axial(-2, -6);
     let launch = launch_coord.to_world(
         geometry.top(TilePos::new(
@@ -264,7 +264,7 @@ fn propagation(
         distance += 2.0;
     }
     let mut gain = (0.8 + 0.85 * shallow) * (-loss).exp();
-    if (at.y - 3.0).abs() < 5.2 && (-18.0..18.0).contains(&at.x) {
+    if (at.y - 3.0).abs() < 5.2 && at.x > -18.0 {
         let progress = ((at.x + 16.0) / 32.0).clamp(0.0, 1.0);
         let bank = ((at.y - 3.0).abs() / 5.2).powi(2);
         gain *= (1.0 - progress * progress).powi(2) * (-progress * bank * 2.0).exp();

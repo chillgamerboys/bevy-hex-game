@@ -465,7 +465,7 @@ fn present(
             }
             "water-lab-overview" => (Vec3::new(0.0, 135.0, 55.0), Vec3::new(0.0, 4.0, 0.0)),
             "water-lab-reverse" => (Vec3::new(32.0, 18.0, -20.0), Vec3::new(8.0, 8.0, -5.0)),
-            "water-lab-channel" => (Vec3::new(22.0, 14.0, 9.0), Vec3::new(0.0, 8.0, 3.0)),
+            "water-lab-channel" => (Vec3::new(-22.0, 15.0, 12.0), Vec3::new(-3.0, 8.0, 3.0)),
             _ => (Vec3::new(28.0, 16.0, 21.0), Vec3::new(4.0, 8.0, 0.0)),
         };
         for mut camera in &mut cameras {
