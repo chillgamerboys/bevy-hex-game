@@ -203,7 +203,7 @@ pub(super) fn buttons(
                     && battle.control != control
                     && !(matches!(
                         selection.map,
-                        ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago
+                        ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago | ArenaMap::WaterLab
                     ) && control == ArenaControl::Spectator) =>
             {
                 battle.control = control;
@@ -320,13 +320,19 @@ fn apply_map_selection(
 ) {
     let previous = (!matches!(
         selection.map,
-        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago
+        ArenaMap::SevenRegions
+            | ArenaMap::ForestMassif
+            | ArenaMap::NorthernArchipelago
+            | ArenaMap::WaterLab
     ))
     .then(|| super::player_preset(*selection, battle));
     selection.map = map;
     if matches!(
         map,
-        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago
+        ArenaMap::SevenRegions
+            | ArenaMap::ForestMassif
+            | ArenaMap::NorthernArchipelago
+            | ArenaMap::WaterLab
     ) || battle.control == ArenaControl::Spectator
     {
         battle.player_recipe = None;
@@ -579,6 +585,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains; 3 Golems and 10 Wisps inhabit the lowlands.\nStart on the bridge. Hidden fountains are your only healing.".into(),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
+                ArenaMap::WaterLab => "Water Lab: shore, swimming, boat and glider comparisons. F1 toggles lab controls. B deploys/folds the boat; G glider; F free flight.".into(),
                 ArenaMap::NorthernArchipelago => "Northern Archipelago: an open exploration map. F toggles free flight; Shift accelerates; Space/Ctrl rise/descend. B deploys a sailboat near water; Space/Ctrl swim up/down. No encounters or victory objective.".into(),
                 ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),

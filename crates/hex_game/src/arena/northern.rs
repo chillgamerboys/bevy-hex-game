@@ -203,7 +203,7 @@ fn configure(
         cache.enabled = enabled;
     }
     if !enabled {
-        if environment.is_some() {
+        if environment.is_some() && selection.map != ArenaMap::WaterLab {
             commands.remove_resource::<OceanEnvironmentView>();
         }
         cache.capture = None;

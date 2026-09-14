@@ -57,7 +57,7 @@ CHARGE_VIEWS = (
     "shield-partial-preview-first", "shield-partial-preview-third",
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
-MAPS = ("duel", "fort", "seven-regions", "forest-massif", "northern-archipelago")
+MAPS = ("duel", "fort", "seven-regions", "forest-massif", "northern-archipelago", "water-lab")
 ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12", "worm")
 PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 10,
                   "shaman-party": ["Shaman", *(["Goblin"] * 5)], "golem": ["Golem"],
@@ -989,6 +989,8 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 
 
 def capture(args: argparse.Namespace) -> int:
+    if args.map == "water-lab":
+        raise RuntimeError("Use tools/water_lab_review.py for the finite Water Lab capture matrix.")
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v3-terminal" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance

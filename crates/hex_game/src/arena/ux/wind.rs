@@ -93,7 +93,13 @@ pub(super) fn present(
     let Some(ocean) = ocean else {
         return;
     };
-    let velocity = ocean.wind.velocity_at(session.ocean_time());
+    let velocity = ocean.wind_at(
+        session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+            .map_or(Vec3::ZERO, |actor| actor.feet),
+        session.ocean_time(),
+    );
     // Camera yaw turns left-positive; UI rotation turns clockwise-positive.
     // Up means downwind lies ahead of the current look direction, in either camera mode.
     let heading = velocity.x.atan2(-velocity.y) + state.yaw;
