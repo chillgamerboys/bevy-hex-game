@@ -4,7 +4,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::PrimitiveTopology;
 use bevy::transform::TransformSystems;
 use hex_core::arena::ArenaTerrainView;
-use hex_core::ocean::OceanWaterColumn;
+use hex_core::ocean::{OceanEnvironmentView, OceanWaterColumn};
 use hex_core::water_lab::LabStyle;
 
 #[derive(Resource, Default)]
@@ -29,7 +29,7 @@ const CORNERS: [Vec3; 6] = [
 ];
 
 fn color(
-    surface: LabSurface,
+    settings: WaterLabSettings,
     coord: HexCoord,
     column: OceanWaterColumn,
     height: f32,
@@ -38,44 +38,46 @@ fn color(
     let point = coord.to_world(0.0);
     let depth = ((column.mean_height - column.bed_height) / 6.0).clamp(0.0, 1.0);
     let mut rgb = Vec3::new(0.045, 0.36, 0.38).lerp(Vec3::new(0.012, 0.095, 0.20), depth);
-    if surface.settings.style != LabStyle::Depth {
-        let crest = ((height - column.mean_height) / 1.2).clamp(0.0, 1.0);
-        rgb = rgb.lerp(Vec3::new(0.46, 0.72, 0.73), crest * crest);
+    if settings.style != LabStyle::Depth {
+        let amplitude = wave_parameters(settings.wave).0.max(0.4);
+        let crest = ((height - column.mean_height) / (amplitude * 1.4)).clamp(0.0, 1.0);
+        let shore = if settings.style == LabStyle::Patterns {
+            1.0 - depth
+        } else {
+            1.0
+        };
+        rgb = rgb.lerp(Vec3::new(0.46, 0.72, 0.73), crest * crest * shore);
     }
-    if surface.settings.style == LabStyle::Patterns {
-        let variation =
-            ((point.x * 0.34 + point.z * 0.19).sin() * (point.z * 0.27).cos()).signum() * 0.025;
-        rgb += Vec3::splat(variation);
-        if (point.z - 3.0).abs() < 2.2 && point.x.abs() < 17.0 {
-            let stripe = (point.x * 0.7 - surface.settings.phase(time) * 2.0)
-                .sin()
-                .max(0.0)
-                .powi(6);
-            rgb = rgb.lerp(Vec3::new(0.23, 0.60, 0.58), stripe * 0.6);
-        }
+    if settings.style == LabStyle::Patterns {
+        let t = settings.phase(time);
+        // Continuous oblique ribbons: no sign threshold, grid parity or static checker.
+        let bend = (point.z * 0.23 + t * 0.4).sin() * 1.7;
+        let ribbons = (point.x * 0.46 + point.z * 0.31 + bend - t * 1.25).sin();
+        let shimmer = ((ribbons + 1.0) * 0.5).powi(3);
+        let drift = (point.x * 0.13 - point.z * 0.27 + t * 0.75).sin() * 0.5 + 0.5;
+        rgb = rgb.lerp(
+            Vec3::new(0.15, 0.44, 0.47).lerp(Vec3::new(0.32, 0.59, 0.58), drift),
+            0.12 + shimmer * 0.22,
+        );
     }
     [rgb.x.max(0.0), rgb.y.max(0.0), rgb.z.max(0.0), 1.0]
 }
 
 fn mesh(
     view: &ArenaTerrainView,
-    geometry: ArenaVoxelGeometry,
-    surface: LabSurface,
+    settings: WaterLabSettings,
+    environment: &OceanEnvironmentView,
     time: f32,
 ) -> Mesh {
     let columns: BTreeMap<_, _> = view
-        .liquids
-        .iter()
-        .map(|span| {
-            let col = OceanWaterColumn {
-                mean_height: geometry.top(TilePos::new(span.bottom.coord, span.top_level)),
-                bed_height: geometry.top(span.bottom) - geometry.level_height,
-                water_id: span.substance,
-            };
-            (
-                span.bottom.coord,
-                (col, surface.height(span.bottom.coord, time, col)),
-            )
+        .columns
+        .keys()
+        .filter_map(|coord| {
+            let point = coord.to_world(0.0);
+            let at = Vec2::new(point.x, point.z);
+            let col = environment.sampler.inundation_column_at(at)?;
+            let sample = environment.sampler.surface_at(at, time, col)?;
+            (sample.height > col.bed_height + 0.001).then_some((*coord, (col, sample.height)))
         })
         .collect();
     let mut positions = Vec::with_capacity(columns.len() * 30);
@@ -89,7 +91,7 @@ fn mesh(
     };
     for (coord, (column, height)) in &columns {
         let center = coord.to_world(*height);
-        let tint = color(surface, *coord, *column, *height, time);
+        let tint = color(settings, *coord, *column, *height, time);
         for (a, b) in CORNERS.into_iter().zip(CORNERS.into_iter().cycle().skip(1)) {
             triangle(center, center + a, center + b, tint);
             let neighbour = HexCoord::from_world(center + a + b);
@@ -132,7 +134,7 @@ fn render(
     frame: Res<WaterLabFrame>,
     settings: Res<WaterLabSettings>,
     view: Option<Res<ArenaTerrainView>>,
-    geometry: Option<Res<ArenaVoxelGeometry>>,
+    environment: Option<Res<OceanEnvironmentView>>,
     mut cache: ResMut<Cache>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -147,18 +149,14 @@ fn render(
         cache.last = None;
         return;
     }
-    let (Some(view), Some(geometry)) = (view, geometry) else {
+    let (Some(view), Some(environment)) = (view, environment) else {
         return;
     };
     let key = (view.revision, *settings, frame.seconds.to_bits());
     if cache.last == Some(key) {
         return;
     }
-    let surface = LabSurface {
-        settings: *settings,
-        level_height: geometry.level_height,
-    };
-    let batch = mesh(&view, *geometry, surface, frame.seconds);
+    let batch = mesh(&view, *settings, &environment, frame.seconds);
     if let Some(handle) = &cache.mesh {
         if let Some(mut existing) = meshes.get_mut(handle) {
             *existing = batch;
