@@ -561,14 +561,21 @@ pub(crate) fn tick_or_wait(
         boat_tick(actor, intent, sea, world);
         return true;
     }
+    let lab = actor.marine.as_ref().is_some_and(|state| state.lab);
+    let floating = lab
+        && intent.flight_vertical >= -0.01
+        && !intent.high_jump
+        && actor.body.vertical_velocity <= 2.5;
+    let following = floating && actor.marine.as_ref().is_some_and(|state| state.swim.active);
     let surface = match sample {
         OceanSurfaceState::ReadyWet(surface)
-            if actor.feet.y
-                < (if actor.marine.as_ref().is_some_and(|state| state.lab) {
-                    surface.height
-                } else {
-                    surface.mean_height
-                }) - 0.05
+            if (following
+                || actor.feet.y
+                    < (if lab {
+                        surface.height
+                    } else {
+                        surface.mean_height
+                    }) - 0.05)
                 && actor.feet.y + actor.dimensions.y > surface.bed_height =>
         {
             surface
@@ -603,7 +610,6 @@ pub(crate) fn tick_or_wait(
         .clamp_length_max(1.0);
     let vertical = intent.flight_vertical.clamp(-1.0, 1.0);
     // A gentle control-only return to breathing depth; no water-volume solver.
-    let lab = actor.marine.as_ref().is_some_and(|state| state.lab);
     let immersion = if lab {
         actor.dimensions.y * (2.0 / 3.0)
     } else {
@@ -631,11 +637,13 @@ pub(crate) fn tick_or_wait(
     }
     velocity += actor.body.impulse_velocity;
     let mut delta = velocity * STEP;
-    if lab && vertical.abs() <= 0.01 {
+    if floating {
         let target_height = match sea.sample(actor.feet + delta) {
             OceanSurfaceState::ReadyWet(next) => next.height,
             _ => surface.height,
         };
+        // Space means surface, just like hands-free floating. It must not pump
+        // the player out of the water and hand alternating ticks to gravity.
         delta.y = target_height - immersion - actor.feet.y;
         velocity.y = 0.0;
     }

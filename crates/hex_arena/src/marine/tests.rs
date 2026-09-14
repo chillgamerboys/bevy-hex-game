@@ -797,3 +797,70 @@ fn pause_preserves_marine_state_and_reset_or_legacy_map_removes_it() {
         .iter()
         .all(|actor| actor.boat().is_none() && actor.swimming().is_none()));
 }
+
+#[test]
+fn lab_space_and_hands_free_follow_identical_extreme_steps_and_release_dive() {
+    #[derive(Debug)]
+    struct Storm;
+    impl OceanEnvironmentSampler for Storm {
+        fn surface_at(
+            &self,
+            _: Vec2,
+            phase: f32,
+            column: OceanWaterColumn,
+        ) -> Option<OceanSurfaceSample> {
+            Some(OceanSurfaceSample {
+                height: column.mean_height + (phase.sin() * 12.0).round() * 0.4,
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            })
+        }
+    }
+    let (mut idle, world, terrain, geometry, mut environment) = fixture();
+    environment.sampler = Arc::new(Storm);
+    idle.feet.y = -0.8;
+    idle.marine.as_mut().unwrap().lab = true;
+    let mut space = idle.clone();
+    for tick in 0..720 {
+        let sea = MarineWorld {
+            time: OceanSimulationTime::from_fixed_tick(1, tick, f64::from(STEP)),
+            ..context(&terrain, geometry, &environment)
+        };
+        for (actor, vertical) in [(&mut idle, 0.0), (&mut space, 1.0)] {
+            assert!(tick_or_wait(
+                actor,
+                ActorIntent {
+                    flight_vertical: vertical,
+                    ..Default::default()
+                },
+                &sea,
+                &world
+            ));
+            let OceanSurfaceState::ReadyWet(surface) = sea.sample(actor.feet) else {
+                panic!("expected sea");
+            };
+            assert!((actor.feet.y + 0.8 - surface.height).abs() < 0.0001);
+            assert!(actor.eye().y > surface.height);
+        }
+        assert!(idle.feet.distance(space.feet) < 0.0001);
+    }
+    let sea = context(&terrain, geometry, &environment);
+    idle.feet.y = -0.8;
+    for _ in 0..90 {
+        tick_or_wait(
+            &mut idle,
+            ActorIntent {
+                flight_vertical: -1.0,
+                ..Default::default()
+            },
+            &sea,
+            &world,
+        );
+    }
+    assert!(idle.eye().y < 0.0, "Ctrl still dives");
+    tick_or_wait(&mut idle, ActorIntent::default(), &sea, &world);
+    assert!((idle.feet.y + 0.8).abs() < 0.0001);
+}
