@@ -10,7 +10,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-VIEWS = ("overview", "shore", "reverse", "channel", "swim-first", "swim-third", "boat-first", "glider-third", "controls")
+VIEWS = ("overview", "shore", "reverse", "channel", "swim-first", "swim-third", "boat-first", "boat-third", "glider-first", "glider-third", "controls")
 
 
 def git(*args):
@@ -79,7 +79,12 @@ def main():
         for path in paths:
             receipt = json.loads(path.with_suffix(".json").read_text())
             lab = receipt.get("water_lab", receipt.get("lab", {}))
-            if not lab.get("enabled") or lab.get("wave", "").lower() != args.wave:
+            if (not lab.get("enabled")
+                    or lab.get("wave", "").lower() != args.wave
+                    or lab.get("style", "").lower() != args.style
+                    or lab.get("wind", "").lower() != args.wind
+                    or abs(lab.get("glider_wind_scale", -1.0) - args.glider_wind) > 1e-5
+                    or lab.get("frozen") != (not view.startswith("motion"))):
                 raise RuntimeError(f"{view}: wrong actual map or preset")
             hashes.append({"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
         if len(paths) > 1 and len({row["sha256"] for row in hashes}) != len(paths):
