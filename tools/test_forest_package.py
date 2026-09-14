@@ -1,5 +1,7 @@
 """First launch builds missing content once; complete packages never invoke Cargo."""
 import json
+import re
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
@@ -13,6 +15,18 @@ import forest_package as package
 
 class ExpeditionBootstrap(unittest.TestCase):
     generation = {"world_id": "forest-massif-expedition", "package_fingerprint": "000000000000002a"}
+
+    def test_reviewed_art_verification_is_available_from_candidate_history(self):
+        generation = json.loads((package.CONTENT / "generation.json").read_text())
+        revision = generation.get("art_verification_revision", generation["source_revision"])
+        subprocess.run(["git", "merge-base", "--is-ancestor", revision, "HEAD"],
+                       cwd=package.ROOT, check=True)
+        source = (package.CONTENT / "world.ron").read_text()
+        paths = set(re.findall(r'source_path:"([^"]+)"', source))
+        self.assertTrue(paths, "the published package must identify its exact artwork")
+        for path in paths:
+            committed = subprocess.check_output(["git", "show", f"{revision}:{path}"], cwd=package.ROOT)
+            self.assertEqual(committed, (package.ROOT / path).read_bytes(), path)
 
     def publish(self, output):
         output.mkdir(exist_ok=True)

@@ -24,7 +24,8 @@ formations and 36 bright crystal formations. The bridge keeps its half width 4 t
 ribbon within a half width 5 deck, including the side departure toward the Shadow.
 
 The 14 Goblin camps use the locked 107-Goblin distribution. World metadata exposes
-19 encounter sites, 42 traversable route segments and six fountain volumes.
+25 encounter sites, 49 traversable route segments and six fountain volumes,
+including the three lowland Golems and three Wisp packs.
 Gameplay owns enemy profiles, XP, rewards and healing state; `arena-sites.ron`
 contains only exact world support, clearance and water facts. The player starts
 at bridge center `(0,0,58)`. Dragon shelves are at levels 80, 160 and 260. The Shadow
@@ -53,13 +54,17 @@ ignored `compiled/` package workspace. Both commands accept `--output PATH` and
 obtain public terrain facts from `worldc survey`, reproduce exact placements,
 check current and committed art bytes, and compare the generated source with the
 reviewed source. Then they survey the final package and check every expected
-object interval, 4,908 ground contacts, 8,002 gameplay support/clearance positions,
+object interval, 4,908 ground contacts, 9,497 gameplay support/clearance positions,
 and all six water volumes. `compile` emits the strict `arena-sites.ron` companion
 bound to the final manifest fingerprint; `verify` checks that companion without
 changing it. Neither command parses private package storage.
 
-Expected package fingerprint is `a538263d612e891f`. `generation.json` binds exact
-artwork to commit `89940ef4cb040a30506be21206c31dbdabd3f087`.
+Expected package fingerprint is `8f56a9974aaac54b`. `generation.json` retains the
+original exported provenance `89940ef4cb040a30506be21206c31dbdabd3f087` and verifies
+the 37 exact artwork files against its byte-identical integrated commit
+`e8ecd0ab5bd29e348a84614b7243a655dc1a5e54`, which is in the candidate's history.
+This keeps first-launch reproduction available in a fresh clone without changing
+the source, terrain or reviewed package identity.
 `content-verification.json`, `compile-receipt.json` and `compiler-identity.json`
 record the accepted authoring candidate's logical evidence and actual compiler
 identity. The production adapter still performs its own support, route, water,

@@ -2,7 +2,8 @@
 
 Status: playable marine checkpoint; native acceptance pending and combined CI blocked by inherited lint failures.
 Base: user-selected expedition `13fdb5aca0948e6364aaa193a9bc7b846161460e`.
-Candidate: `wave/northern-archipelago`. Local work only; no dev/main or remote writes.
+Candidate: `wave/northern-archipelago`. The user authorized a combined draft progress
+PR to `dev` on September 13; implementation remains unmerged.
 Topology: one wave, because the new world, shared surface renderer and exploration controller have one meaningful combined runtime checkpoint. Root is the integration owner. Existing island-biomes PR212 is frozen V3; PR220 is the earlier V4 foundation already incorporated. Neither branch tip is imported. PR213/219 remain separate. Linear reconciliation unavailable; no tickets created.
 
 ## Locked decisions
@@ -326,3 +327,24 @@ look changes in both camera modes at all three UI sizes; both navigation tests
 pass. This small presentation change uses the lean user playtest path: toggle V
 and turn around, then switch C and repeat. Native motion remains unverified in
 this change; the current game was not restarted automatically.
+
+## Draft progress publication — September 13
+
+Publish this accumulated candidate as one draft against `dev` (`bb55696` at intake).
+The range includes earlier Grand/V4 foundations and the Forest expedition, in
+addition to Northern; it is not a Northern-only patch. Existing PRs 219 and 220
+remain independently open and must be coordinated before merging overlapping work.
+The complete PR selector chooses every concern; partial checkpoint results above
+do not establish a full candidate pass. The 517 V3/preview lint diagnostics predate
+the Northern wave, but those files are part of this cumulative diff against `dev`.
+Native acceptance, reported unexpected process exits, recording failure paths and
+the complete CI gate remain open. No merge or ready-for-review claim is made.
+
+Publication review found Forest's artwork provenance commit was absent from this
+candidate's ancestry. `art_verification_revision` now names the integrated,
+byte-identical 37-file artwork commit, while original export provenance and package
+fingerprint remain unchanged. Eight bootstrap tests pass, including verification
+that the pinned artwork is reachable from candidate history. Full package verification also passes: `8f56a9974aaac54b`, 914 objects,
+49 routes, 25 encounters and six fountains. Generated packages, native clips and full
+local capture packs are not added to source control; the committed authoring and
+review commands reproduce them. No Linear ticket state is inferred from GitHub.

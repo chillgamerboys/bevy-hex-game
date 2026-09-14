@@ -9,6 +9,21 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Combined expedition and Northern progress — draft candidate, 2026-09-13.**
+`wave/northern-archipelago` contains the later Forest–Massif expedition (127 enemies
+and one player), collected rewards and rank upgrades, momentum gliding, solid-world
+carving, readable menus/discoveries and local macOS recording. Northern adds an
+exploration-only V4 world with 11 islands in three clusters, streamed terrain,
+portable sailing, finite underwater oxygen, wind and shared ocean swells. M opens
+the exploration overview; V shows wind relative to player look. The runtime-loaded
+packages are reproduced from committed sources. This is accumulated unmerged work,
+including earlier Grand/V4 foundations, being published as one draft against `dev`.
+Recorded focused checks and static reviews pass at their named checkpoints; full
+selected CI and exact-head native acceptance do not. Unexpected native exits also
+remain a reported issue requiring diagnosis. See the current
+[Northern progress record](waves/northern-archipelago/manifest.md); the older
+Forest UX checkpoint below retains its historical scope.
+
 **Forest–Massif Battle UX — local candidate, 2026-09-12.** The unmerged
 `wave/forest-expedition` candidate now defaults Battle Mode and `cargo battle` to
 the V4 expedition with accepted Grand visuals, 115 actors and run-local progression.

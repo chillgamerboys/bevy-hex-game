@@ -169,8 +169,11 @@ def main():
     survey=json.loads((args.scratch/"terrain-survey.json").read_text())
     value,metadata,assets,outputs,placement,_=compose(survey)
     revision=generation["source_revision"]
+    # Keep exported provenance stable after an identical-artwork cherry-pick.
+    # Verification must use a commit carried by the published candidate history.
+    art_revision=generation.get("art_verification_revision", revision)
     for path,expected in outputs.items():
-        committed=subprocess.run(["git","show",f"{revision}:{path}"],cwd=ROOT,check=True,capture_output=True,text=True).stdout
+        committed=subprocess.run(["git","show",f"{art_revision}:{path}"],cwd=ROOT,check=True,capture_output=True,text=True).stdout
         if committed != expected or (ROOT/path).read_text() != expected:
             raise ValueError(f"current or committed exact artwork differs: {path}")
     source=final_source(value,placement,assets,revision)
