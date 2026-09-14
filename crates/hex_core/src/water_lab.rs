@@ -64,9 +64,9 @@ pub struct WaterLabSettings {
     pub wind: LabWind,
     /// Lab-only fraction of environmental wind used by gliding.
     pub glider_wind_scale: f32,
-    /// Phase subtracted from the shared wave and timed-wind clock.
+    /// Phase subtracted from the shared clock for wave-only reset.
     pub phase_origin: f32,
-    /// Frozen environmental phase; player movement remains live.
+    /// Frozen wave phase; wind and player movement remain live.
     pub frozen_phase: Option<f32>,
 }
 

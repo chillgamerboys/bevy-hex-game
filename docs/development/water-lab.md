@@ -19,8 +19,8 @@ Enter starts; Tab pauses and frees the mouse. The lab panel has clickable button
 | F3 | Depth colors / crests / patterns (depth offshore + nearshore crests + moving shimmer) |
 | F4 | Calm / steady 9 / steady 20 / gusts / turning / local shelter |
 | F5 | Glider wind influence: 100 / 65 / 45 percent |
-| F6 | Freeze/resume waves and timed wind changes; player movement stays live |
-| F7 | Reset wave and timed-wind phase |
+| F6 | Freeze/resume waves; wind and player movement stay live |
+| F7 | Reset wave phase |
 | F8 / F9 / F10 / F11 | Beach / swimming / boat / glider start |
 | B / G / F | Toggle boat / glider / exploration flight |
 | C | First-/third-person camera |
