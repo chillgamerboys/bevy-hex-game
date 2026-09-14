@@ -91,6 +91,16 @@ pub struct OceanSurfaceSample {
 
 /// World-owned, immutable surface implementation shared through an [`Arc`].
 pub trait OceanEnvironmentSampler: Debug + Send + Sync {
+    /// Optional exact bed publication for a finite, moving shoreline.
+    ///
+    /// World producers rebuild this snapshot with terrain revisions. It may include
+    /// beds above mean water; it never admits terrain or substitutes for unloaded
+    /// columns. A sampled surface at/below this bed is explicitly dry. Ordinary
+    /// oceans keep using their admitted stored liquid intervals.
+    fn inundation_column_at(&self, _xz: Vec2) -> Option<OceanWaterColumn> {
+        None
+    }
+
     /// Local wind; existing worlds retain their original time-only profile.
     fn wind_at(
         &self,
@@ -210,14 +220,15 @@ impl OceanEnvironmentView {
             ArenaAvailability::OutsideWorld => return OceanSurfaceState::OutsideWorld,
             ArenaAvailability::Ready => {}
         }
-        let Some(column) = column else {
+        let inundation = self.sampler.inundation_column_at(xz);
+        let Some(column) = inundation.or(column) else {
             return OceanSurfaceState::ReadyDry;
         };
         if !xz.is_finite()
             || !time.seconds.is_finite()
             || !column.mean_height.is_finite()
             || !column.bed_height.is_finite()
-            || column.bed_height >= column.mean_height
+            || (inundation.is_none() && column.bed_height >= column.mean_height)
         {
             return OceanSurfaceState::Unloaded;
         }
@@ -235,7 +246,11 @@ impl OceanEnvironmentView {
         {
             return OceanSurfaceState::Unloaded;
         }
-        OceanSurfaceState::ReadyWet(sample)
+        if inundation.is_some() && sample.height <= sample.bed_height + 0.001 {
+            OceanSurfaceState::ReadyDry
+        } else {
+            OceanSurfaceState::ReadyWet(sample)
+        }
     }
 }
 

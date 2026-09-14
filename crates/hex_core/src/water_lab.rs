@@ -10,6 +10,8 @@ pub const WATER_LAB_ID: u64 = 0x5741_5445_524c_4142;
 pub enum LabWave {
     /// No displacement.
     Flat,
+    /// Low ripples, usually only one voxel high.
+    Gentle,
     /// A regular train of short waves.
     #[default]
     Regular,
@@ -17,6 +19,8 @@ pub enum LabWave {
     Swell,
     /// Two wave trains intersecting at sixty degrees.
     Crossing,
+    /// Deliberately extreme storm waves for scale and contact testing.
+    Extreme,
 }
 
 /// Progressive water readability comparisons.
@@ -26,7 +30,7 @@ pub enum LabStyle {
     Depth,
     /// Depth and lighter crests.
     Crests,
-    /// Crests plus restrained variation and directional channel cues.
+    /// Depth offshore, nearshore crests, and moving shimmer throughout.
     #[default]
     Patterns,
 }
@@ -60,9 +64,9 @@ pub struct WaterLabSettings {
     pub wind: LabWind,
     /// Lab-only fraction of environmental wind used by gliding.
     pub glider_wind_scale: f32,
-    /// Phase subtracted from the shared clock, for wave-only reset.
+    /// Phase subtracted from the shared wave and timed-wind clock.
     pub phase_origin: f32,
-    /// Frozen wave phase; wind and player movement remain live.
+    /// Frozen environmental phase; player movement remains live.
     pub frozen_phase: Option<f32>,
 }
 
