@@ -18,6 +18,8 @@ portable sailing, finite underwater oxygen, wind and shared ocean swells. M open
 the exploration overview; V shows wind relative to player look. The runtime-loaded
 packages are reproduced from committed sources. This is accumulated unmerged work,
 including earlier Grand/V4 foundations, being published as one draft against `dev`.
+[PR #222](https://github.com/chillgamerboys/bevy-hex-game/pull/222) is that combined
+progress snapshot and remains a draft.
 Recorded focused checks and static reviews pass at their named checkpoints; full
 selected CI and exact-head native acceptance do not. Unexpected native exits also
 remain a reported issue requiring diagnosis. See the current

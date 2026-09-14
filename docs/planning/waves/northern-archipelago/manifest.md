@@ -4,6 +4,8 @@ Status: playable marine checkpoint; native acceptance pending and combined CI bl
 Base: user-selected expedition `13fdb5aca0948e6364aaa193a9bc7b846161460e`.
 Candidate: `wave/northern-archipelago`. The user authorized a combined draft progress
 PR to `dev` on September 13; implementation remains unmerged.
+Published draft: [PR #222](https://github.com/chillgamerboys/bevy-hex-game/pull/222),
+`wave/northern-archipelago` → `dev`. Earlier local-only notes are historical.
 Topology: one wave, because the new world, shared surface renderer and exploration controller have one meaningful combined runtime checkpoint. Root is the integration owner. Existing island-biomes PR212 is frozen V3; PR220 is the earlier V4 foundation already incorporated. Neither branch tip is imported. PR213/219 remain separate. Linear reconciliation unavailable; no tickets created.
 
 ## Locked decisions
