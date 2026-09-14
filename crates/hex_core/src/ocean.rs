@@ -89,6 +89,11 @@ pub struct OceanSurfaceSample {
 
 /// World-owned, immutable surface implementation shared through an [`Arc`].
 pub trait OceanEnvironmentSampler: Debug + Send + Sync {
+    /// Local wind; existing worlds retain their original time-only profile.
+    fn wind_at(&self, _position: Vec3, time: OceanSimulationTime, profile: OceanWindProfile) -> Vec2 {
+        profile.velocity_at(time)
+    }
+
     /// Sample a confirmed wet column using the same phase and formulas as rendering.
     ///
     /// The implementation may own immutable bathymetry/shelter data, but must not
@@ -174,6 +179,12 @@ pub struct OceanEnvironmentView {
 }
 
 impl OceanEnvironmentView {
+    /// Shared local wind for movement and its visible indicator.
+    #[must_use]
+    pub fn wind_at(&self, position: Vec3, time: OceanSimulationTime) -> Vec2 {
+        self.sampler.wind_at(position, time, self.wind)
+    }
+
     /// Combine a surface with current exact column facts, checking admission first.
     ///
     /// `availability` and `column` must come from the same current publication.

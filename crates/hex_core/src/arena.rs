@@ -44,6 +44,8 @@ pub enum ArenaMap {
     ForestMassif,
     /// Streamed northern islands with optional exploration flight and no encounters.
     NorthernArchipelago,
+    /// Compact, enemy-free water and wind experiment.
+    WaterLab,
 }
 
 /// Composition of the compact Fort encounter.
