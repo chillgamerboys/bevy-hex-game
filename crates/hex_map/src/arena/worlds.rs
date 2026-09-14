@@ -131,6 +131,7 @@ pub(super) fn build(
         return super::forest::build(selection, substances, art);
     }
     let (map, geometry, anchors, presentation) = match selection.map {
+        ArenaMap::WaterLab => crate::water_lab::build(materials, substances)?,
         ArenaMap::Duel => {
             let geometry = ArenaVoxelGeometry::default();
             let [human, enemy] = spawn_positions(geometry);
@@ -257,9 +258,10 @@ fn battle_deployment(
         // Both sides share the open west courtyard. The adventure starts lie
         // outside/inside the curtain wall and would require gate/keep routing.
         ArenaMap::Fort => ([(-4, 2), (-2, -2)], 15),
-        ArenaMap::SevenRegions | ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago => {
-            return Ok(None)
-        }
+        ArenaMap::SevenRegions
+        | ArenaMap::ForestMassif
+        | ArenaMap::NorthernArchipelago
+        | ArenaMap::WaterLab => return Ok(None),
     };
     let regions = centers.map(|(q, r)| {
         let preferred = TilePos::new(HexCoord::from_axial(q, r), level);
