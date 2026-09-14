@@ -32,6 +32,8 @@ pub(super) fn install(app: &mut App) {
     if let Ok(value) = std::env::var("HEX_WATER_LAB_WAVE") {
         settings.wave = match value.as_str() {
             "flat" => LabWave::Flat,
+            "gentle" => LabWave::Gentle,
+            "extreme" => LabWave::Extreme,
             "swell" => LabWave::Swell,
             "crossing" => LabWave::Crossing,
             _ => LabWave::Regular,
@@ -104,24 +106,37 @@ fn capture_motion(
     settings: Res<WaterLabSettings>,
     frame: Res<WaterLabFrame>,
     session: Res<ArenaSession>,
+    environment: Option<Res<OceanEnvironmentView>>,
     cameras: Query<&Transform, With<ArenaCamera>>,
 ) {
+    let stride = if state.capture_view.contains("cycle") || state.capture_view.contains("swim") {
+        48
+    } else {
+        4
+    };
     if !frame.enabled
         || !state.capture_view.starts_with("water-lab-motion")
-        || !(30..=122).contains(&state.frames)
-        || !(state.frames - 30).is_multiple_of(4)
+        || !(30..=30 + 23 * stride).contains(&state.frames)
+        || !(state.frames - 30).is_multiple_of(stride)
     {
         return;
     }
     let (Some(base), Some(target)) = (&state.capture, state.image.clone()) else {
         return;
     };
-    let index = (state.frames - 30) / 4;
+    let index = (state.frames - 30) / stride;
     let path = base.with_file_name(format!(
         "{}-{index:02}.png",
         base.file_stem().unwrap_or_default().to_string_lossy()
     ));
-    let receipt = serde_json::json!({"lab":snapshot(&settings,&frame),"frame":state.frames,"tick":session.tick,"camera":cameras.single().ok().map(|pose|pose.translation.to_array()),"player_feet":session.actors.first().map(|actor|actor.feet.to_array()),"evidence":"CONTINUOUS_WINDOWLESS_SEQUENCE; user control feel pending"});
+    let contact = session.actors.first().and_then(|actor| {
+        let env = environment.as_ref()?;
+        let at = Vec2::new(actor.feet.x, actor.feet.z);
+        let column = env.sampler.inundation_column_at(at)?;
+        let water = env.sampler.surface_at(at, frame.seconds, column)?;
+        Some(serde_json::json!({"feet":actor.feet.to_array(),"eye":actor.eye().to_array(),"surface_height":water.height,"bed_height":water.bed_height,"immersion":water.height-actor.feet.y,"swimming":actor.swimming().is_some_and(|swim|swim.active)}))
+    });
+    let receipt = serde_json::json!({"contact":contact,"capture_stride":stride,"lab":snapshot(&settings,&frame),"frame":state.frames,"tick":session.tick,"camera":cameras.single().ok().map(|pose|pose.translation.to_array()),"player_feet":session.actors.first().map(|actor|actor.feet.to_array()),"evidence":"CONTINUOUS_WINDOWLESS_SEQUENCE; user control feel pending"});
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             let result = (|| -> Result<(), String> {
@@ -159,8 +174,6 @@ fn capture_motion(
 
 fn water_tint(
     frame: Res<WaterLabFrame>,
-    view: Res<ArenaTerrainView>,
-    geometry: Res<ArenaVoxelGeometry>,
     environment: Option<Res<OceanEnvironmentView>>,
     mut sky: ResMut<hex_world::battle_sky::BattleSkyFrame>,
     mut cameras: Query<(&Transform, &mut DistanceFog), With<ArenaCamera>>,
@@ -174,24 +187,16 @@ fn water_tint(
     }
     let mut underwater = false;
     for (camera, mut fog) in &mut cameras {
-        let coord = hex_core::HexCoord::from_world(camera.translation);
-        if let Some(span) = view.liquids.iter().find(|span| span.bottom.coord == coord) {
-            let column = hex_core::ocean::OceanWaterColumn {
-                mean_height: geometry.top(hex_core::TilePos::new(coord, span.top_level)),
-                bed_height: geometry.top(span.bottom) - geometry.level_height,
-                water_id: span.substance,
-            };
-            if let Some(surface) = environment.as_ref().and_then(|env| {
-                env.sampler.surface_at(
-                    Vec2::new(camera.translation.x, camera.translation.z),
-                    frame.seconds,
-                    column,
-                )
-            }) {
-                underwater = camera.translation.y < surface.height
-                    && camera.translation.y > surface.bed_height;
-            }
-        }
+        let at = Vec2::new(camera.translation.x, camera.translation.z);
+        underwater = environment.as_ref().is_some_and(|env| {
+            env.sampler
+                .inundation_column_at(at)
+                .and_then(|column| env.sampler.surface_at(at, frame.seconds, column))
+                .is_some_and(|surface| {
+                    camera.translation.y < surface.height
+                        && camera.translation.y > surface.bed_height
+                })
+        });
         fog.color = if underwater {
             Color::srgb(0.04, 0.28, 0.35)
         } else {
@@ -260,10 +265,12 @@ fn controls(
     }
     if pressed(KeyCode::F2) {
         settings.wave = match settings.wave {
-            LabWave::Flat => LabWave::Regular,
+            LabWave::Flat => LabWave::Gentle,
+            LabWave::Gentle => LabWave::Regular,
             LabWave::Regular => LabWave::Swell,
             LabWave::Swell => LabWave::Crossing,
-            LabWave::Crossing => LabWave::Flat,
+            LabWave::Crossing => LabWave::Extreme,
+            LabWave::Extreme => LabWave::Flat,
         };
     }
     if pressed(KeyCode::F3) {
@@ -348,13 +355,14 @@ fn configure(
     settings: Res<WaterLabSettings>,
     geometry: Res<ArenaVoxelGeometry>,
     environment: Option<Res<OceanEnvironmentView>>,
-    mut previous: Local<Option<WaterLabSettings>>,
+    view: Res<ArenaTerrainView>,
+    mut previous: Local<Option<(WaterLabSettings, u64)>>,
 ) {
     if selection.map != ArenaMap::WaterLab {
         *previous = None;
         return;
     }
-    if *previous == Some(*settings)
+    if *previous == Some((*settings, view.revision))
         && environment
             .as_ref()
             .is_some_and(|env| env.package_fingerprint == WATER_LAB_ID)
@@ -363,13 +371,10 @@ fn configure(
     }
     commands.insert_resource(OceanEnvironmentView {
         package_fingerprint: WATER_LAB_ID,
-        sampler: Arc::new(LabSurface {
-            settings: *settings,
-            level_height: geometry.level_height,
-        }),
+        sampler: Arc::new(LabSurface::new(&view, *geometry, *settings)),
         wind: OceanWindProfile::default(),
     });
-    *previous = Some(*settings);
+    *previous = Some((*settings, view.revision));
 }
 
 fn stage_capture(
@@ -450,6 +455,7 @@ fn present(
         && !state.capture_view.ends_with("third")
     {
         let (position, target) = match state.capture_view.as_str() {
+            "water-lab-motion-cycle" => (Vec3::new(-24.0, 16.0, 14.0), Vec3::new(-8.0, 8.0, 3.0)),
             view if view.starts_with("water-lab-motion") => {
                 let angle = frame.seconds * if view.ends_with("reverse") { -0.6 } else { 0.6 };
                 (

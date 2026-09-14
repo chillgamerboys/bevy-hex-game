@@ -15,12 +15,12 @@ Enter starts; Tab pauses and frees the mouse. The lab panel has clickable button
 | Key | Action |
 | --- | --- |
 | F1 | Show/hide lab controls |
-| F2 | Flat / regular / swell / crossing waves |
-| F3 | Depth colors / crests / patterns |
+| F2 | Flat / gentle / regular / swell / crossing / extreme waves |
+| F3 | Depth colors / crests / patterns (depth offshore + nearshore crests + moving shimmer) |
 | F4 | Calm / steady 9 / steady 20 / gusts / turning / local shelter |
 | F5 | Glider wind influence: 100 / 65 / 45 percent |
-| F6 | Freeze/resume waves while retaining player movement |
-| F7 | Reset wave phase |
+| F6 | Freeze/resume waves and timed wind changes; player movement stays live |
+| F7 | Reset wave and timed-wind phase |
 | F8 / F9 / F10 / F11 | Beach / swimming / boat / glider start |
 | B / G / F | Toggle boat / glider / exploration flight |
 | C | First-/third-person camera |
@@ -32,9 +32,12 @@ Boat contact requires exact wet columns. Lab input returns a player leaving the
 finite footprint to the beach through the gameplay-owned reset API.
 
 `hex_map::water_lab::LabSurface` owns the wave and local wind functions. It consumes
-exact current wet-column bounds. The renderer and gameplay both use the same
+exact current exposed solid beds, including currently dry shore columns. The
+opt-in `inundation_column_at` contract permits wave run-up and retreat without
+changing solid occupancy. Current admission is still checked first; failed
+sampling remains blocked. Other oceans keep their existing stored-liquid policy. The renderer and gameplay both use the same
 quantized height and completed simulation phase. The opaque renderer uses one
-bounded disposable mesh batch, rebuilt from the small wet footprint; it never
+bounded disposable mesh batch, rebuilt from the currently inundated footprint; it never
 edits stored water voxels to animate a wave. This is a small-map prototype, not a
 scalable ocean renderer for the later large island map.
 
@@ -47,7 +50,7 @@ wind. HUD wind indicates the environment, not the glider's reduced effective win
 
 Review-only launch settings:
 
-- `HEX_WATER_LAB_WAVE`: `flat`, `regular`, `swell`, `crossing`.
+- `HEX_WATER_LAB_WAVE`: `flat`, `gentle`, `regular`, `swell`, `crossing`, `extreme`.
 - `HEX_WATER_LAB_STYLE`: `depth`, `crests`, `patterns`.
 - `HEX_WATER_LAB_WIND`: `calm`, `steady`, `strong`, `gusts`, `turning`, `shelter`.
 - `HEX_WATER_LAB_PHASE`: a finite phase to freeze; omit for live waves.
@@ -68,3 +71,30 @@ render submission and readback overhead and is not a GPU or native-vsync benchma
 For the first review, follow walk → swim → boat → swim → shore; then compare wave
 shape, colors, and glider wind influence one category at a time. Retain explicit
 pending verdicts for taste, comfort, and control feel until the user has played.
+
+## First playtest revision
+
+The native F2/F3/F4 feedback is preserved in the chat outputs with four original
+screenshots. The new fixture widens the channel to about ten world units and
+extends its sand bed underwater. Incoming +X waves gain shorter wavelengths and
+slower phase speed over shallows. Nearshore crests grow before dissipating; the
+channel loses height progressively, more at its banks, and fades at its far end.
+This is a stylized depth-dependent wave field, not a fluid or current solver.
+Spatial propagation is cached once per settings/terrain publication.
+
+Calm Patterns water uses continuously changing, oblique shimmer ribbons throughout
+the sea instead of binary static patches. Depth and Crests remain comparison
+styles; Patterns combines offshore depth colors with nearshore crest highlights.
+The headland is now roughly twenty units above the sea. F11 starts above its
+summit facing out to sea; its footprint is unchanged.
+
+Hands-free swimming and holding Space both target the same 0.8-unit immersion.
+A swimmer keeps following a descending wave instead of briefly switching to
+gravity. Ctrl still dives, releasing it returns to surface swimming; High Jump
+retains its launch. Boat toggles use the same changing shore surface.
+
+`water-lab-motion-cycle` records a fixed inlet view over more than 18 seconds.
+`water-lab-motion-swim-first` and `water-lab-motion-swim-third` record the same
+interval through gameplay cameras, with typed surface/feet/eye contact receipts.
+These 24 samples are 48 frames apart; dense orbit views remain four frames apart.
+The sparse cycle proves sampled presentation only, not smoothness or comfort.
