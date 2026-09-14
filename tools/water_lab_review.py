@@ -10,7 +10,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-VIEWS = ("overview", "shore", "reverse", "channel", "swim-first", "swim-third", "boat-first", "glider-third")
+VIEWS = ("overview", "shore", "reverse", "channel", "swim-first", "swim-third", "boat-first", "glider-third", "controls")
 
 
 def git(*args):

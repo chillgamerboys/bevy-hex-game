@@ -10,7 +10,7 @@ Launch from this checkout through Cargo:
 python3 tools/arena.py launch --map water-lab
 ```
 
-Enter starts; Tab pauses. The lab panel lists the comparison keys:
+Enter starts; Tab pauses and frees the mouse. The lab panel has clickable buttons and matching comparison keys:
 
 | Key | Action |
 | --- | --- |
@@ -51,10 +51,11 @@ Review-only launch settings:
 - `HEX_WATER_LAB_STYLE`: `depth`, `crests`, `patterns`.
 - `HEX_WATER_LAB_WIND`: `calm`, `steady`, `strong`, `gusts`, `turning`, `shelter`.
 - `HEX_WATER_LAB_PHASE`: a finite phase to freeze; omit for live waves.
+- `HEX_WATER_LAB_GLIDER_WIND`: a fraction in `[0, 1]`; the comparison candidates are 1, 0.65, and 0.45.
 - `HEX_ARENA_CAPTURE`: PNG destination; uses the existing windowless image target.
 - `HEX_ARENA_VIEW`: `water-lab-overview`, `water-lab-shore`, `water-lab-reverse`,
   `water-lab-channel`, `water-lab-swim-first`, `water-lab-swim-third`,
-  `water-lab-boat-first`, or `water-lab-glider-third`.
+  `water-lab-boat-first`, `water-lab-glider-third`, or `water-lab-controls`.
 - `water-lab-motion` and `water-lab-motion-reverse` produce 24 numbered PNG/JSON
   pairs from a continuously running windowless orbit, four frames apart. These
   diagnose visible motion defects; user control feel remains a native playtest.

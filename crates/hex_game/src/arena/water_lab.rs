@@ -13,7 +13,8 @@ struct LabUi {
 impl Default for LabUi {
     fn default() -> Self {
         Self {
-            visible: std::env::var_os("HEX_ARENA_CAPTURE").is_none(),
+            visible: std::env::var_os("HEX_ARENA_CAPTURE").is_none()
+                || std::env::var("HEX_ARENA_VIEW").is_ok_and(|view| view == "water-lab-controls"),
             capture_staged: false,
         }
     }
@@ -22,6 +23,8 @@ impl Default for LabUi {
 struct Panel;
 #[derive(Component)]
 struct Details;
+#[derive(Component)]
+struct LabButton(KeyCode);
 
 pub(super) fn install(app: &mut App) {
     hex_map::water_lab::install(app);
@@ -210,32 +213,20 @@ fn water_tint(
 }
 
 fn spawn(mut commands: Commands) {
-    commands
-        .spawn((
-            Panel,
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(18),
-                top: px(75),
-                width: px(325),
-                padding: UiRect::all(px(14)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.025, 0.055, 0.075, 0.92)),
-            GlobalZIndex(30),
-            Pickable::IGNORE,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Details,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(16.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.95, 0.96)),
-            ));
+    commands.spawn((Panel, Node {
+        position_type: PositionType::Absolute, right:px(18), top:px(75), width:px(325),
+        padding:UiRect::all(px(14)), flex_direction:FlexDirection::Column, row_gap:px(10), ..default()
+    }, BackgroundColor(Color::srgba(0.025,0.055,0.075,0.94)), GlobalZIndex(30)))
+    .with_children(|parent| {
+        parent.spawn((Details,Text::new(""),TextFont { font_size:FontSize::Px(16.0),..default() },TextColor(Color::srgb(0.85,0.95,0.96))));
+        parent.spawn(Node { flex_wrap:FlexWrap::Wrap,column_gap:px(5),row_gap:px(5),..default() }).with_children(|buttons| {
+            for (title,key) in [("Waves · F2",KeyCode::F2),("Color · F3",KeyCode::F3),("Wind · F4",KeyCode::F4),("Influence · F5",KeyCode::F5),("Freeze · F6",KeyCode::F6),("Phase reset · F7",KeyCode::F7),("Beach · F8",KeyCode::F8),("Swim · F9",KeyCode::F9),("Boat · F10",KeyCode::F10),("Glider · F11",KeyCode::F11)] {
+                buttons.spawn((Button,LabButton(key),Node { width:px(140),height:px(32),align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default() },BackgroundColor(Color::srgb(0.10,0.25,0.29))))
+                    .with_children(|button| { button.spawn((Text::new(title),TextFont {font_size:FontSize::Px(14.0),..default()},TextColor(Color::WHITE))); });
+            }
         });
+        parent.spawn((Text::new("Tab pauses and frees the mouse.\nWASD move · B boat · G glider\nF free flight · C camera · F1 hide"),TextFont {font_size:FontSize::Px(14.0),..default()},TextColor(Color::srgb(0.75,0.85,0.87))));
+    });
 }
 
 #[expect(
@@ -244,6 +235,7 @@ fn spawn(mut commands: Commands) {
 )]
 fn controls(
     keys: Res<ButtonInput<KeyCode>>,
+    buttons: Query<(&Interaction, &LabButton), Changed<Interaction>>,
     windows: Query<&Window>,
     selection: Res<ArenaSelection>,
     terrain: Res<ArenaTerrainView>,
@@ -254,13 +246,19 @@ fn controls(
     mut session: ResMut<ArenaSession>,
     mut input: ResMut<ArenaInput>,
 ) {
+    let pressed = |key| {
+        keys.just_pressed(key)
+            || buttons.iter().any(|(interaction, button)| {
+                *interaction == Interaction::Pressed && button.0 == key
+            })
+    };
     if selection.map != ArenaMap::WaterLab || windows.iter().any(|window| !window.focused) {
         return;
     }
-    if keys.just_pressed(KeyCode::F1) {
+    if pressed(KeyCode::F1) {
         ui.visible = !ui.visible;
     }
-    if keys.just_pressed(KeyCode::F2) {
+    if pressed(KeyCode::F2) {
         settings.wave = match settings.wave {
             LabWave::Flat => LabWave::Regular,
             LabWave::Regular => LabWave::Swell,
@@ -268,14 +266,14 @@ fn controls(
             LabWave::Crossing => LabWave::Flat,
         };
     }
-    if keys.just_pressed(KeyCode::F3) {
+    if pressed(KeyCode::F3) {
         settings.style = match settings.style {
             LabStyle::Depth => LabStyle::Crests,
             LabStyle::Crests => LabStyle::Patterns,
             LabStyle::Patterns => LabStyle::Depth,
         };
     }
-    if keys.just_pressed(KeyCode::F4) {
+    if pressed(KeyCode::F4) {
         settings.wind = match settings.wind {
             LabWind::Calm => LabWind::Steady,
             LabWind::Steady => LabWind::Strong,
@@ -285,7 +283,7 @@ fn controls(
             LabWind::Shelter => LabWind::Calm,
         };
     }
-    if keys.just_pressed(KeyCode::F5) {
+    if pressed(KeyCode::F5) {
         settings.glider_wind_scale = if settings.glider_wind_scale > 0.9 {
             0.65
         } else if settings.glider_wind_scale > 0.5 {
@@ -295,14 +293,14 @@ fn controls(
         };
     }
     let phase = session.ocean_time().phase_seconds();
-    if keys.just_pressed(KeyCode::F6) {
+    if pressed(KeyCode::F6) {
         if let Some(frozen) = settings.frozen_phase.take() {
             settings.phase_origin = (phase - frozen).rem_euclid(900.0);
         } else {
             settings.frozen_phase = Some(settings.phase(phase));
         }
     }
-    if keys.just_pressed(KeyCode::F7) {
+    if pressed(KeyCode::F7) {
         settings.phase_origin = phase;
         if settings.frozen_phase.is_some() {
             settings.frozen_phase = Some(0.0);
@@ -315,7 +313,7 @@ fn controls(
         (KeyCode::F11, LabStart::Glider),
     ]
     .into_iter()
-    .find(|(key, _)| keys.just_pressed(*key))
+    .find(|(key, _)| pressed(*key))
     .map(|(_, start)| start);
     let outside = session.actors.first().is_some_and(|actor| {
         !hex_map::water_lab::contains(hex_core::HexCoord::from_world(actor.feet))
@@ -444,7 +442,7 @@ fn present(
             .map_or(0.0, |flight| flight.velocity.length())
     });
     for mut label in &mut labels {
-        label.0 = format!("WATER LAB   ·   seven small biomes\n\nF2   Waves: {:?}\nF3   Color: {:?}\nF4   Wind: {:?} · {:.1} u/s\nF5   Glider wind: {:.0}%\nF6   Waves: {}\nF7   Restart wave phase\n\nF8   Beach start\nF9   Swimming start\nF10 Boat start\nF11 Glider start\n\nWASD move · B boat · G glider\nF free flight · C camera\nTab pause · F1 hide this panel\n\nGlider speed {:.1} u/s",settings.wave,settings.style,settings.wind,wind.length(),settings.glider_wind_scale * 100.0,if settings.frozen_phase.is_some() { "Frozen" } else { "Running" },speed);
+        label.0 = format!("WATER LAB\n\nWaves: {:?} · {}\nColor: {:?}\nWind: {:?} · {:.1} u/s\nBlowing toward {:.0}°\nGlider influence: {:.0}%\nGlider speed: {:.1} u/s",settings.wave,if settings.frozen_phase.is_some() { "frozen" } else { "running" },settings.style,settings.wind,wind.length(),wind.x.atan2(-wind.y).to_degrees().rem_euclid(360.0),settings.glider_wind_scale * 100.0,speed);
     }
     if state.capture.is_some()
         && state.capture_view.starts_with("water-lab-")
