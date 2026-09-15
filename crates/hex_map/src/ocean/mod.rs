@@ -88,13 +88,13 @@ impl Default for OceanSurfaceProfile {
 }
 
 impl OceanSurfaceProfile {
-    /// Regular opaque waves accepted in the Water Lab, applied to a world sea level.
-    /// Voxel mode uses the first wave with shallow-water steepening.
+    /// Opaque waves in the accepted Water Lab style, with irregular ocean wave groups.
+    /// Three sizes travel roughly eastward and steepen in shallow water.
     #[must_use]
     pub fn regular_voxels(mean_sea_level: f32, voxel_height: f32) -> Self {
         let primary = OceanWave {
             direction: Vec2::X,
-            amplitude: 0.9,
+            amplitude: 0.8,
             wavelength: 28.0,
             period: 9.0,
             phase_radians: 0.0,
@@ -105,12 +105,18 @@ impl OceanSurfaceProfile {
             waves: [
                 primary,
                 OceanWave {
-                    amplitude: 0.0,
-                    ..primary
+                    direction: Vec2::new(0.951_056_54, 0.309_017),
+                    amplitude: 0.38,
+                    wavelength: 43.0,
+                    period: 12.5,
+                    phase_radians: 1.3,
                 },
                 OceanWave {
-                    amplitude: 0.0,
-                    ..primary
+                    direction: Vec2::new(0.906_307_8, -0.422_618_27),
+                    amplitude: 0.18,
+                    wavelength: 13.0,
+                    period: 5.5,
+                    phase_radians: 2.4,
                 },
             ],
             ..Self::default()

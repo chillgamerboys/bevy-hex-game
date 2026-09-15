@@ -127,6 +127,37 @@ mod tests {
     }
 
     #[test]
+    fn ocean_wave_groups_vary_along_crests_and_between_primary_periods() {
+        let profile = OceanSurfaceProfile::regular_voxels(0.0, 0.4);
+        let bed = OceanBathymetry {
+            origin_xz: Vec2::splat(-128.0),
+            spacing: 256.0,
+            ..default()
+        };
+        let adapter = OceanSurfaceAdapter::new(profile, bed).unwrap();
+        let column = OceanWaterColumn {
+            mean_height: 0.0,
+            bed_height: -140.0,
+            water_id: hex_core::SubstanceId(3),
+        };
+        let height = |at, seconds| adapter.surface_at(at, seconds, column).unwrap().height;
+        let mut along_crest = false;
+        let mut across_periods = false;
+        for tick in 0..90 {
+            let t = tick as f32 * 0.1;
+            let center = height(Vec2::ZERO, t);
+            along_crest |= (center - height(Vec2::new(0.0, 24.0), t)).abs() > 0.39;
+            across_periods |= (center - height(Vec2::ZERO, t + 9.0)).abs() > 0.39;
+            assert!(center.abs() <= 1.6);
+        }
+        assert!(
+            along_crest,
+            "wave crests must not remain straight identical bands"
+        );
+        assert!(across_periods, "successive primary waves must differ");
+    }
+
+    #[test]
     fn adapter_keeps_exact_wet_bounds_without_decorative_or_residency_fallback() {
         let bed = OceanBathymetry {
             bed_heights: vec![2.0; 4],

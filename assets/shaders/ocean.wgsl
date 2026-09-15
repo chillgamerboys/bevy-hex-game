@@ -107,11 +107,18 @@ fn voxel_center(at: vec2<f32>) -> vec2<f32> {
     let cube = voxel_cube(at);
     return vec2<f32>(1.732050808*(cube.x+cube.z*0.5),1.5*cube.z);
 }
+fn voxel_component(at: vec2<f32>, shore_shift: f32, wave: vec4<f32>, rate: f32, phase: f32) -> f32 {
+    return wave.z*sin((dot(at,wave.xy)+shore_shift)*wave.w-ocean.water.y*rate+phase);
+}
 fn voxel_wave(at: vec2<f32>, quantized: bool) -> f32 {
     let depth = ocean.water.x-bed_sample(at).bed.x;
     let shallow = clamp(1.0-depth/6.0,0.0,1.0);
-    let travel = dot(at,ocean.wave0.xy)+1.4*clamp(6.0-depth,0.0,6.0);
-    let wave = ocean.wave0.z*(0.8+0.85*shallow)*sin(travel*ocean.wave0.w-ocean.water.y*ocean.periods.x+ocean.phase_offsets.x);
+    let shift = 1.4*clamp(6.0-depth,0.0,6.0);
+    let packet = 0.95+0.25*sin(at.x*0.031+at.y*0.019-ocean.water.y*0.11);
+    let components = voxel_component(at,shift,ocean.wave0,ocean.periods.x,ocean.phase_offsets.x)
+        + voxel_component(at,shift,ocean.wave1,ocean.periods.y,ocean.phase_offsets.y)
+        + voxel_component(at,shift,ocean.wave2,ocean.periods.z,ocean.phase_offsets.z);
+    let wave = components*(0.8+0.85*shallow)*packet;
     if quantized { return round(wave/ocean.voxel.x)*ocean.voxel.x; }
     return wave;
 }

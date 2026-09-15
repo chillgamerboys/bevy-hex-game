@@ -75,13 +75,21 @@ pub(super) fn sample(
         }
         let shallow = (1.0 - depth / 6.0).clamp(0.0, 1.0);
         let gain = 0.8 + 0.85 * shallow;
-        let [primary, ..] = profile.waves;
-        let travel = at.dot(primary.direction.normalize()) + 1.4 * (6.0 - depth).clamp(0.0, 6.0);
-        let wave = primary.amplitude
+        let shore_shift = 1.4 * (6.0 - depth).clamp(0.0, 6.0);
+        let packet = 0.95 + 0.25 * (at.x * 0.031 + at.y * 0.019 - seconds * 0.11).sin();
+        let wave = profile
+            .waves
+            .iter()
+            .map(|wave| {
+                let travel = at.dot(wave.direction.normalize()) + shore_shift;
+                wave.amplitude
+                    * (std::f32::consts::TAU * (travel / wave.wavelength - seconds / wave.period)
+                        + wave.phase_radians)
+                        .sin()
+            })
+            .sum::<f32>()
             * gain
-            * (std::f32::consts::TAU * (travel / primary.wavelength - seconds / primary.period)
-                + primary.phase_radians)
-                .sin();
+            * packet;
         return Some(OceanSurfaceSample {
             height: profile.mean_sea_level
                 + (wave / profile.voxel_height).round() * profile.voxel_height,
