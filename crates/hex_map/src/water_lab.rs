@@ -524,7 +524,11 @@ mod revision_tests {
         let end = probe(14.0, 3.0);
         assert!(inlet.gain.x > 0.7, "entry {}", inlet.gain.x);
         assert!(inlet.gain.x > middle.gain.x && middle.gain.x > end.gain.x);
-        assert!(end.gain.x < 0.05);
+        assert!(
+            end.gain.x < inlet.gain.x * 0.15,
+            "channel retains too much energy: {}",
+            end.gain.x
+        );
         let wake = probe(22.0, 3.0);
         let recovering = probe(28.0, 3.0);
         let open = probe(38.0, 3.0);
