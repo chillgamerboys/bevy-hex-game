@@ -496,6 +496,21 @@ fn telemetry(actor: &mut Actor, requested: Vec3, loading: bool) {
     }
 }
 
+// Game-tuned points of sail. Angle is from the wind SOURCE: 0=headwind, 180=tailwind.
+// Smooth transitions retain momentum through tacks instead of a beam-reach cutoff.
+fn sail_drive(alignment: f32) -> f32 {
+    let angle = (-alignment.clamp(-1.0, 1.0)).acos().to_degrees();
+    let smooth = |t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    if angle < 90.0 {
+        1.15 * smooth((angle - 40.0) / 50.0)
+    } else {
+        1.15 - 0.15 * smooth((angle - 90.0) / 90.0)
+    }
+}
+
 fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, Vec3) {
     let speed = boat.velocity.with_y(0.0).length();
     let turn = (70.0 - 35.0 * (speed / BOAT_SPEED)).to_radians() * STEP;
@@ -509,10 +524,8 @@ fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, V
         signed.clamp(-turn, turn) - intent.movement.x.clamp(-1.0, 1.0) * turn,
     ) * boat.heading;
     let alignment = heading.dot(boat.wind.normalize_or_zero());
-    let mut acceleration = 3.0 * alignment.max(0.0) * boat.wind.length() / 10.0
-        - 0.25
-        - 0.006 * speed * speed
-        - 2.0 * (-alignment).max(0.0);
+    let mut acceleration =
+        3.0 * sail_drive(alignment) * boat.wind.length() / 10.0 - 0.25 - 0.006 * speed * speed;
     if intent.movement.y > 0.0 && speed < 4.0 {
         acceleration = acceleration.max(1.5);
     }

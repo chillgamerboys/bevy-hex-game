@@ -600,7 +600,7 @@ fn portable_boat_toggle_preserves_speed_and_never_ratchets_altitude() {
 }
 
 #[test]
-fn sail_accelerates_with_wind_and_loses_momentum_across_or_against_it() {
+fn sail_accelerates_downwind_and_across_but_coasts_into_headwind() {
     let base = BoatSnapshot {
         active: true,
         heading: Vec3::X,
@@ -617,7 +617,7 @@ fn sail_accelerates_with_wind_and_loses_momentum_across_or_against_it() {
         .length()
     });
     let [aligned, across, against] = velocities;
-    assert!(aligned > 12.0 && across < 12.0 && against < across);
+    assert!(aligned > 12.0 && across > aligned && against < 12.0);
     let slow = BoatSnapshot {
         velocity: Vec3::ZERO,
         wind: Vec3::NEG_X * 10.0,
@@ -1120,4 +1120,32 @@ fn lab_wave_pushes_downhill_on_rise_and_fall_without_driving_the_sail() {
         push.length() < 0.0001,
         "missing water cannot become a downhill cliff"
     );
+}
+
+#[test]
+fn reaching_and_close_hauled_drive_are_symmetric_and_gradual() {
+    let speed_after = |angle: f32| {
+        let angle = angle.to_radians();
+        let heading = Vec3::new(-angle.cos(), 0.0, angle.sin());
+        let mut boat = BoatSnapshot {
+            active: true,
+            heading,
+            velocity: heading * 5.0,
+            wind: Vec3::X * 9.0,
+            ..Default::default()
+        };
+        for _ in 0..1200 {
+            let (heading, velocity) = boat_velocity(boat, ActorIntent::default(), heading);
+            boat.heading = heading;
+            boat.velocity = velocity;
+        }
+        boat.velocity.length()
+    };
+    let speeds = [30.0, 45.0, 55.0, 65.0, 90.0, 120.0, 180.0].map(speed_after);
+    let [head, edge, close, reach, beam, broad, run] = speeds;
+    assert!(head < 5.0 && edge > head && close > 5.0);
+    assert!(close < reach && reach < beam && broad > run && beam > broad);
+    assert!((speed_after(60.0) - speed_after(-60.0)).abs() < 0.0001);
+    assert!((speed_after(89.9) - speed_after(90.1)).abs() < 0.01);
+    assert!((speed_after(39.9) - speed_after(40.1)).abs() < 0.01);
 }
