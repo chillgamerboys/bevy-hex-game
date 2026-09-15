@@ -240,8 +240,11 @@ fn voxel_fragment(input: VertexOutput, front: bool) -> FragmentOutput {
     let t = ocean.water.y;
     let bend = sin(at.y*0.23+t*0.4)*1.7;
     let ribbons = sin(at.x*0.46+at.y*0.31+bend-t*1.25);
-    let shimmer = pow((ribbons+1.0)*0.5,3.0);
-    let drift = sin(at.x*0.13-at.y*0.27+t*0.75)*0.5+0.5;
+    // Fade subpixel ribbons at overview/horizon distances instead of aliasing into a grid.
+    let footprint = max(length(dpdx(input.world_position.xz)),length(dpdy(input.world_position.xz)));
+    let detail = 1.0-smoothstep(1.0,4.0,footprint);
+    let shimmer = mix(0.3125,pow((ribbons+1.0)*0.5,3.0),detail);
+    let drift = mix(0.5,sin(at.x*0.13-at.y*0.27+t*0.75)*0.5+0.5,detail);
     rgb = mix(rgb,mix(vec3<f32>(0.15,0.44,0.47),vec3<f32>(0.32,0.59,0.58),drift),0.12+shimmer*0.22);
     let peak = clamp(height/0.9-0.65,0.0,1.0);
     let wash = clamp(1.0-(depth+height)/0.9,0.0,1.0);
@@ -255,7 +258,7 @@ fn voxel_fragment(input: VertexOutput, front: bool) -> FragmentOutput {
     out.color = main_pass_post_lighting_processing(pbr,apply_pbr_lighting(pbr));
     if !local && input.world_normal.y > 0.5 && voxel_distance(at) <= ocean.voxel.y { discard; }
     if exact_water(at) < -0.5 { discard; }
-    if input.world_normal.y < 0.5 && !front { discard; }
+    // Only the taller cell has a nondegenerate riser; draw it from below too.
     return out;
 }
 
