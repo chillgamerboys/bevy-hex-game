@@ -35,6 +35,8 @@ pub struct OceanWave {
 /// World-owned visual ocean profile; ordinary liquids keep zero displacement.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct OceanSurfaceProfile {
+    /// Positive height enables the accepted opaque voxel-wave presentation; zero keeps legacy swells.
+    pub voxel_height: f32,
     /// Static physical sea surface, also the displacement's mean height.
     pub mean_sea_level: f32,
     /// The three slow swells; defaults have a combined maximum excursion of 3.5 units.
@@ -52,6 +54,7 @@ pub struct OceanSurfaceProfile {
 impl Default for OceanSurfaceProfile {
     fn default() -> Self {
         Self {
+            voxel_height: 0.0,
             mean_sea_level: 0.0,
             waves: [
                 OceanWave {
@@ -85,10 +88,41 @@ impl Default for OceanSurfaceProfile {
 }
 
 impl OceanSurfaceProfile {
+    /// Regular opaque waves accepted in the Water Lab, applied to a world sea level.
+    /// Voxel mode uses the first wave with shallow-water steepening.
+    #[must_use]
+    pub fn regular_voxels(mean_sea_level: f32, voxel_height: f32) -> Self {
+        let primary = OceanWave {
+            direction: Vec2::X,
+            amplitude: 0.9,
+            wavelength: 28.0,
+            period: 9.0,
+            phase_radians: 0.0,
+        };
+        Self {
+            mean_sea_level,
+            voxel_height,
+            waves: [
+                primary,
+                OceanWave {
+                    amplitude: 0.0,
+                    ..primary
+                },
+                OceanWave {
+                    amplitude: 0.0,
+                    ..primary
+                },
+            ],
+            ..Self::default()
+        }
+    }
+
     /// Rejects invalid uniforms before publishing a material or sampling a camera.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.mean_sea_level.is_finite()
+        self.voxel_height.is_finite()
+            && self.voxel_height >= 0.0
+            && self.mean_sea_level.is_finite()
             && self.shore_depth.is_finite()
             && self.shore_depth > 0.0
             && self.shore_reflection.is_finite()

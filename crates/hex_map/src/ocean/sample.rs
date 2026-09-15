@@ -65,6 +65,35 @@ pub(super) fn sample(
     if !profile.is_valid() || !at.is_finite() || !seconds.is_finite() {
         return None;
     }
+    if profile.voxel_height > 0.0 {
+        let center = hex_core::HexCoord::from_world(Vec3::new(at.x, 0.0, at.y)).to_world(0.0);
+        let at = Vec2::new(center.x, center.z);
+        let (bed_height, _) = bed.sample(at)?;
+        let depth = profile.mean_sea_level - bed_height;
+        if depth <= 0.0 && !exact_wet {
+            return None;
+        }
+        let shallow = (1.0 - depth / 6.0).clamp(0.0, 1.0);
+        let gain = 0.8 + 0.85 * shallow;
+        let [primary, ..] = profile.waves;
+        let travel = at.dot(primary.direction.normalize()) + 1.4 * (6.0 - depth).clamp(0.0, 6.0);
+        let wave = primary.amplitude
+            * gain
+            * (std::f32::consts::TAU * (travel / primary.wavelength - seconds / primary.period)
+                + primary.phase_radians)
+                .sin();
+        return Some(OceanSurfaceSample {
+            height: profile.mean_sea_level
+                + (wave / profile.voxel_height).round() * profile.voxel_height,
+            normal: Vec3::Y,
+            vertical_velocity: 0.0,
+            depth,
+            color: Vec4::new(0.045, 0.36, 0.38, 1.0).lerp(
+                Vec4::new(0.012, 0.095, 0.20, 1.0),
+                (depth / 6.0).clamp(0.0, 1.0),
+            ),
+        });
+    }
     let (height, gradient) = bed.sample(at)?;
     let depth = profile.mean_sea_level - height;
     if depth <= 0.0 && !exact_wet {

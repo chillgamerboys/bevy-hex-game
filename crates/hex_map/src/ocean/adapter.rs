@@ -22,6 +22,19 @@ impl OceanSurfaceAdapter {
     }
 }
 impl OceanEnvironmentSampler for OceanSurfaceAdapter {
+    fn wind_at(
+        &self,
+        _position: Vec3,
+        time: hex_core::ocean::OceanSimulationTime,
+        profile: hex_core::ocean::OceanWindProfile,
+    ) -> Vec2 {
+        if self.profile.voxel_height > 0.0 {
+            Vec2::X * 9.0
+        } else {
+            profile.velocity_at(time)
+        }
+    }
+
     fn surface_at(
         &self,
         at: Vec2,
@@ -77,6 +90,40 @@ mod tests {
             assert!(gameplay.normal.distance(camera.normal) < 0.00001);
             assert!((gameplay.vertical_velocity - camera.vertical_velocity).abs() < 0.00001);
         }
+    }
+
+    #[test]
+    fn voxel_profile_keeps_camera_float_and_steady_wind_in_agreement() {
+        let profile = OceanSurfaceProfile::regular_voxels(0.0, 0.4);
+        let bed = OceanBathymetry::default();
+        let adapter = OceanSurfaceAdapter::new(profile.clone(), bed.clone()).unwrap();
+        let column = OceanWaterColumn {
+            mean_height: 0.0,
+            bed_height: -140.0,
+            water_id: hex_core::SubstanceId(3),
+        };
+        let at = Vec2::splat(0.5);
+        for phase in [0.0, 1.0, 3.0, 7.0] {
+            let gameplay = adapter.surface_at(at, phase, column).unwrap();
+            let camera = super::super::sample_surface(&profile, &bed, at, phase).unwrap();
+            assert!((gameplay.height - camera.height).abs() < 0.00001);
+            assert!((gameplay.height / 0.4 - (gameplay.height / 0.4).round()).abs() < 0.00001);
+            assert_eq!(gameplay.normal, Vec3::Y);
+        }
+        assert_eq!(
+            adapter.wind_at(Vec3::ZERO, Default::default(), Default::default()),
+            Vec2::X * 9.0
+        );
+        assert!(adapter
+            .surface_at(
+                at,
+                0.0,
+                OceanWaterColumn {
+                    bed_height: 1.0,
+                    ..column
+                }
+            )
+            .is_none());
     }
 
     #[test]

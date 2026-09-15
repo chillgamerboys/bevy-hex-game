@@ -29,6 +29,7 @@ struct OceanParams {
     effects: vec4<f32>,
     shallow: vec4<f32>,
     deep: vec4<f32>,
+    voxel: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> ocean: OceanParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var beds: texture_2d<f32>;
@@ -90,6 +91,34 @@ fn exact_water(at: vec2<f32>) -> f32 {
     if any(cell < vec2<i32>(0)) || any(cell >= size) { return 0.0; }
     return textureLoad(near_water, cell, 0).r;
 }
+// Accepted Regular water shape, independent of the lab's authored channel.
+fn voxel_cube(at: vec2<f32>) -> vec3<f32> {
+    let q = 0.5773502692 * at.x - at.y / 3.0;
+    let r = 2.0 * at.y / 3.0;
+    let cube = vec3<f32>(q,-q-r,r);
+    var rounded = round(cube);
+    let error = abs(rounded-cube);
+    if error.x > error.y && error.x > error.z { rounded.x = -rounded.y-rounded.z; }
+    else if error.y > error.z { rounded.y = -rounded.x-rounded.z; }
+    else { rounded.z = -rounded.x-rounded.y; }
+    return rounded;
+}
+fn voxel_center(at: vec2<f32>) -> vec2<f32> {
+    let cube = voxel_cube(at);
+    return vec2<f32>(1.732050808*(cube.x+cube.z*0.5),1.5*cube.z);
+}
+fn voxel_wave(at: vec2<f32>, quantized: bool) -> f32 {
+    let depth = ocean.water.x-bed_sample(at).bed.x;
+    let shallow = clamp(1.0-depth/6.0,0.0,1.0);
+    let travel = dot(at,ocean.wave0.xy)+1.4*clamp(6.0-depth,0.0,6.0);
+    let wave = ocean.wave0.z*(0.8+0.85*shallow)*sin(travel*ocean.wave0.w-ocean.water.y*ocean.periods.x+ocean.phase_offsets.x);
+    if quantized { return round(wave/ocean.voxel.x)*ocean.voxel.x; }
+    return wave;
+}
+fn voxel_distance(at: vec2<f32>) -> f32 {
+    let delta = abs(voxel_cube(at)-voxel_cube(ocean.voxel.zw));
+    return max(delta.x,max(delta.y,delta.z));
+}
 struct Reflection { weight: f32, gradient: vec2<f32>, anchor: vec2<f32>, anchor_dx: vec2<f32>, anchor_dz: vec2<f32>, }
 fn shore_reflection(at: vec2<f32>, bed: OceanBed) -> Reflection {
     let distance = bed.shore_distance.x;
@@ -132,16 +161,31 @@ fn vertex(input: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let transform = mesh_functions::get_world_from_local(input.instance_index);
     var world = mesh_functions::mesh_position_local_to_world(transform, vec4<f32>(input.position, 1.0));
-    let bed = bed_sample(world.xz);
-    let swell = surface(world.xz, bed);
     let normal = mesh_functions::mesh_normal_local_to_world(input.normal, input.instance_index);
-    // Exact boundary upper vertices follow the same swell; bottoms stay fixed.
-    if abs(world.y - ocean.water.x) < 0.005 { world.y += swell.x; }
+    var center = vec2<f32>(100000.0);
+    if ocean.voxel.x > 0.0 {
+        if input.uv.x < 50000.0 {
+            center = input.uv+transform[3].xz;
+            var height = voxel_wave(center,true);
+            if input.position.y < -0.5 {
+                let neighbor = center+input.normal.xz*1.732050808;
+                height = min(height,voxel_wave(neighbor,true));
+                if voxel_distance(neighbor) > ocean.voxel.y { height = min(height,-2.0); }
+            }
+            world.y = ocean.water.x+height;
+        } else if abs(world.y-ocean.water.x) < 0.005 {
+            world.y += voxel_wave(select(world.xz,voxel_center(world.xz),normal.y < 0.5),normal.y < 0.5);
+        }
+    } else {
+        let bed = bed_sample(world.xz);
+        let swell = surface(world.xz,bed);
+        if abs(world.y-ocean.water.x) < 0.005 { world.y += swell.x; }
+    }
     out.world_position = world;
     out.position = position_world_to_clip(world.xyz);
     out.world_normal = normal;
 #ifdef VERTEX_UVS_A
-    out.uv = input.uv;
+    out.uv = select(input.uv,center,ocean.voxel.x > 0.0);
 #endif
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = input.instance_index;
@@ -185,8 +229,39 @@ fn optical_transmission(input: VertexOutput) -> f32 {
 #endif
 }
 
+fn voxel_fragment(input: VertexOutput, front: bool) -> FragmentOutput {
+    let local = input.uv.x < 50000.0;
+    let at = select(input.world_position.xz,input.uv,local);
+    let depth = ocean.water.x-bed_sample(at).bed.x;
+    var rgb = mix(vec3<f32>(0.045,0.36,0.38),vec3<f32>(0.012,0.095,0.20),clamp(depth/6.0,0.0,1.0));
+    let height = voxel_wave(at,local);
+    let crest = clamp(height/(0.9*1.4),0.0,1.0);
+    rgb = mix(rgb,vec3<f32>(0.46,0.72,0.73),crest*crest*(1.0-clamp(depth/6.0,0.0,1.0)));
+    let t = ocean.water.y;
+    let bend = sin(at.y*0.23+t*0.4)*1.7;
+    let ribbons = sin(at.x*0.46+at.y*0.31+bend-t*1.25);
+    let shimmer = pow((ribbons+1.0)*0.5,3.0);
+    let drift = sin(at.x*0.13-at.y*0.27+t*0.75)*0.5+0.5;
+    rgb = mix(rgb,mix(vec3<f32>(0.15,0.44,0.47),vec3<f32>(0.32,0.59,0.58),drift),0.12+shimmer*0.22);
+    let peak = clamp(height/0.9-0.65,0.0,1.0);
+    let wash = clamp(1.0-(depth+height)/0.9,0.0,1.0);
+    let foam = max(peak*1.7,wash)*(0.55+0.4*shimmer);
+    rgb = mix(rgb,vec3<f32>(0.93,0.97,0.94),clamp(foam,0.0,0.95));
+    if input.world_normal.y < 0.5 { rgb *= 0.72; }
+    var pbr = pbr_input_from_standard_material(input,front);
+    pbr.material.base_color = vec4<f32>(rgb,1.0);
+    pbr.material.perceptual_roughness = 0.85;
+    var out: FragmentOutput;
+    out.color = main_pass_post_lighting_processing(pbr,apply_pbr_lighting(pbr));
+    if !local && input.world_normal.y > 0.5 && voxel_distance(at) <= ocean.voxel.y { discard; }
+    if exact_water(at) < -0.5 { discard; }
+    if input.world_normal.y < 0.5 && !front { discard; }
+    return out;
+}
+
 @fragment
 fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
+    if ocean.voxel.x > 0.0 { return voxel_fragment(input,front); }
     let bed = bed_sample(input.world_position.xz);
     let depth = ocean.water.x - bed.bed.x;
     let footprint = max(length(dpdx(input.world_position.xz)), length(dpdy(input.world_position.xz)));
