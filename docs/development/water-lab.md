@@ -109,8 +109,9 @@ Channel delay is slightly reduced. Wave amplitude recovers smoothly over twenty
 world units after the exit instead of leaving a permanent calm wake. Patterns
 adds white foam to high crests and shallow shore contact.
 
-Lab swimming and boat buoyancy now approach the stepped water height with an
-exponential response (0.1-second time constant), capped at six vertical units/s.
+Lab swimming and boat buoyancy approach the stepped water height with a
+critically damped response (frequency parameter 16/s), capped at six vertical
+units/s. Velocity eases into each step rather than changing immediately.
 Physical collision remains authoritative. The two-thirds swim immersion is an
 equilibrium target; rising waves can briefly immerse the eye while the body
 catches up. Boat deck, player and camera share physical vertical displacement.
@@ -125,3 +126,24 @@ Next native route: inspect the channel exit and foam; compare Space released/hel
 and boat toggles in Regular/Extreme; repeat full heading turns with the glider
 at 65% in both camera modes. Control comfort and animation acceptance remain
 pending until that playtest.
+
+
+## Third playtest: accepted appearance and wave response
+
+The user accepts the current wave appearance and boat experience. Preserve the
+water renderer, sailing propulsion, steering and wind tuning.
+
+Lab swimmers and boats now receive a small downhill drift when the sampled water
+height changes. The slope uses admitted water samples two units to either side;
+dry/unloaded neighbours do not supply a slope. Smoothed surface rise/fall speed
+scales the push, capped at 0.8 units/s. A static slope does not itself drive an
+idle body. Mode changes reset the surface history so mounting/folding is not
+mistaken for a wave. The physical boat velocity includes drift, but that drift
+is removed before the next sailing calculation, preserving propulsion behavior.
+Ordinary oceans retain their previous marine behavior.
+
+All 19 focused marine tests pass, including ascent/descent push direction, flat
+and static-water neutrality, blocked sampling, sailing separation and vertical
+step/reversal easing. Native comfort remains pending. Try floating on Regular,
+repeat with Extreme, then sail across wave faces and toggle B near shore. The
+first 2D Grand V3 draft and its design notes remain separate planning work.

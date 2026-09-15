@@ -997,3 +997,125 @@ fn lab_boat_follows_steps_gradually_and_keeps_horizontal_sailing() {
         assert!((actor.feet.y - height - DECK).abs() < 0.002);
     }
 }
+
+#[test]
+fn lab_buoyancy_eases_speed_at_a_step_and_reversal() {
+    let mut height = 0.0;
+    let mut speed = 0.0;
+    for target in [0.4, -0.4] {
+        for tick in 0..120 {
+            let (rise, next_speed) = buoyancy_step(height, target, speed);
+            assert!(
+                (next_speed - speed).abs() < 1.6,
+                "no instant velocity replacement"
+            );
+            if tick == 0 {
+                assert!(rise.abs() < 0.01, "ease into a new voxel height");
+            }
+            height += rise;
+            speed = next_speed;
+        }
+        assert!((height - target).abs() < 0.002);
+        assert!(speed.abs() < 0.002);
+    }
+}
+
+#[test]
+fn lab_wave_pushes_downhill_on_rise_and_fall_without_driving_the_sail() {
+    #[derive(Debug)]
+    struct SlopingWave {
+        slope: Vec2,
+        rise: f32,
+        dry_positive_x: bool,
+    }
+    impl OceanEnvironmentSampler for SlopingWave {
+        fn surface_at(
+            &self,
+            at: Vec2,
+            time: f32,
+            column: OceanWaterColumn,
+        ) -> Option<OceanSurfaceSample> {
+            if self.dry_positive_x && at.x > 1.0 {
+                return None;
+            }
+            Some(OceanSurfaceSample {
+                height: column.mean_height + self.slope.dot(at) + self.rise * time,
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            })
+        }
+    }
+    for boat in [false, true] {
+        for rise in [-0.8, 0.0, 0.8] {
+            for slope in [Vec2::X * 0.4, -Vec2::Y * 0.4, Vec2::ZERO] {
+                let (mut actor, world, terrain, geometry, mut environment) = fixture();
+                actor.marine.as_mut().unwrap().lab = true;
+                environment.wind.speed = 0.0;
+                environment.sampler = Arc::new(SlopingWave {
+                    slope,
+                    rise,
+                    dry_positive_x: false,
+                });
+                let sea = context(&terrain, geometry, &environment);
+                if boat {
+                    assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+                } else {
+                    actor.feet.y = -0.8;
+                    tick_or_wait(&mut actor, ActorIntent::default(), &sea, &world);
+                }
+                let start = actor.feet;
+                for tick in 1..61 {
+                    let sea = MarineWorld {
+                        time: OceanSimulationTime::from_fixed_tick(1, tick, f64::from(STEP)),
+                        ..context(&terrain, geometry, &environment)
+                    };
+                    assert!(tick_or_wait(
+                        &mut actor,
+                        ActorIntent::default(),
+                        &sea,
+                        &world
+                    ));
+                    let state = actor.marine.as_ref().unwrap();
+                    assert!(state.wave_velocity.length() <= 0.80001);
+                    if boat {
+                        assert!(
+                            (state.boat.velocity.with_y(0.0) - state.wave_velocity).length()
+                                < 0.0001,
+                            "wave drift must not become sailing speed on the next tick"
+                        );
+                    }
+                }
+                let displacement = (actor.feet - start).with_y(0.0);
+                if rise.abs() > 0.01 && slope.length() > 0.01 {
+                    let downhill = -Vec3::new(slope.x, 0.0, slope.y);
+                    assert!(
+                        displacement.dot(downhill) > 0.005,
+                        "push follows the downhill gradient"
+                    );
+                } else {
+                    assert!(
+                        displacement.length() < 0.0001,
+                        "still/flat water gives no push"
+                    );
+                }
+            }
+        }
+    }
+    let (mut actor, _, terrain, geometry, mut environment) = fixture();
+    environment.sampler = Arc::new(SlopingWave {
+        slope: Vec2::X,
+        rise: 1.0,
+        dry_positive_x: true,
+    });
+    let state = actor.marine.as_mut().unwrap();
+    state.lab = true;
+    state.wave_height = Some(-0.4);
+    let (push, _) = context(&terrain, geometry, &environment).wave_motion(Vec3::ZERO, 0.0, state);
+    assert!(
+        push.length() < 0.0001,
+        "missing water cannot become a downhill cliff"
+    );
+}
