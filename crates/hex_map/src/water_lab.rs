@@ -267,9 +267,14 @@ fn propagation(
     if (at.y - 3.0).abs() < 5.2 && at.x > -18.0 {
         let progress = ((at.x + 16.0) / 32.0).clamp(0.0, 1.0);
         let bank = ((at.y - 3.0).abs() / 5.2).powi(2);
-        gain *= (1.0 - progress * progress).powi(2) * (-progress * bank * 2.0).exp();
-        travel += progress * progress * (3.0 + 8.0 * bank);
+        gain *= (1.0 - 0.88 * progress * progress).powi(2) * (-progress * bank * 1.6).exp();
+        travel += progress * progress * (2.0 + 5.0 * bank);
     }
+    // The island shelters the channel, not the entire sea behind it. Rebuild
+    // offshore wave energy over open water without a hard boundary at the exit.
+    let recovery = ((at.x - 16.0) / 20.0).clamp(0.0, 1.0);
+    let recovery = recovery * recovery * (3.0 - 2.0 * recovery);
+    gain += (0.8 + 0.85 * shallow - gain) * recovery;
     (travel, gain)
 }
 
@@ -520,6 +525,11 @@ mod revision_tests {
         assert!(inlet.gain.x > 0.7, "entry {}", inlet.gain.x);
         assert!(inlet.gain.x > middle.gain.x && middle.gain.x > end.gain.x);
         assert!(end.gain.x < 0.05);
+        let wake = probe(22.0, 3.0);
+        let recovering = probe(28.0, 3.0);
+        let open = probe(38.0, 3.0);
+        assert!(end.gain.x < wake.gain.x && wake.gain.x < recovering.gain.x);
+        assert!(recovering.gain.x < open.gain.x && open.gain.x >= 0.8);
         assert!(probe(-3.0, 6.0).gain.x < middle.gain.x);
         let offshore_spacing = probe(-28.0, 3.0).travel.x - probe(-32.0, 3.0).travel.x;
         let bank_spacing = probe(-1.0, 6.0).travel.x - probe(-5.0, 6.0).travel.x;

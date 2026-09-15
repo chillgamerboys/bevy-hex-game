@@ -59,6 +59,15 @@ fn color(
             Vec3::new(0.15, 0.44, 0.47).lerp(Vec3::new(0.32, 0.59, 0.58), drift),
             0.12 + shimmer * 0.22,
         );
+        let amplitude = wave_parameters(settings.wave).0;
+        let peak = if amplitude > 0.0 {
+            ((height - column.mean_height) / amplitude - 0.65).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let wash = (1.0 - (height - column.bed_height) / 0.9).clamp(0.0, 1.0);
+        let foam = (peak * 1.7).max(wash) * (0.55 + 0.4 * shimmer);
+        rgb = rgb.lerp(Vec3::new(0.93, 0.97, 0.94), foam.clamp(0.0, 0.95));
     }
     [rgb.x.max(0.0), rgb.y.max(0.0), rgb.z.max(0.0), 1.0]
 }
