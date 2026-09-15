@@ -27,6 +27,11 @@ use std::{
 mod render;
 #[cfg(test)]
 mod tests;
+
+// Extend nearby slopes without increasing the 256 presentation / 512 source
+// chunk caps. Water owns its separate, more expensive animated detail range.
+const TERRAIN_DETAIL_RADIUS: u32 = 144;
+
 pub(super) fn clear_render(world: &mut World) {
     render::clear(world);
 }
@@ -534,8 +539,8 @@ fn pump(world: &mut World) {
                 ResidencyRequest {
                     id: "terrain-detail".into(),
                     center,
-                    radius: 112,
-                    retention_radius: 144,
+                    radius: TERRAIN_DETAIL_RADIUS + 16,
+                    retention_radius: TERRAIN_DETAIL_RADIUS + 48,
                     priority: 100,
                 },
                 ResidencyRequest {

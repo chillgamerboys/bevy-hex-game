@@ -231,7 +231,10 @@ fn draw(world: &mut World) {
                 .filter(|c| {
                     let q = c.q * 16 + 8 - center.q;
                     let r = c.r * 16 + 8 - center.r;
-                    q.abs().max(r.abs()).max((q + r).abs()) <= 96
+                    q.unsigned_abs()
+                        .max(r.unsigned_abs())
+                        .max((q + r).unsigned_abs())
+                        <= super::TERRAIN_DETAIL_RADIUS
                 })
                 .collect();
             candidates.sort_by_key(|c| {
