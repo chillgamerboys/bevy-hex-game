@@ -1253,7 +1253,7 @@ fn release_uses_current_camera_aim_in_first_and_third_person() {
         let state = app.world().resource::<ViewState>();
         let actor = session.actors.first().expect("human");
         let direction = aim(state);
-        let camera = camera_origin(session, state, actor.eye(), direction);
+        let camera = camera_origin(session, state, actor, direction);
         let expected = session
             .aim_from_camera(actor.id, camera, direction)
             .with_y(0.0)

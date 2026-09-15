@@ -18,7 +18,7 @@ Enter starts; Tab pauses and frees the mouse. The lab panel has clickable button
 | F2 | Flat / gentle / regular / swell / crossing / extreme waves |
 | F3 | Depth colors / crests / patterns (depth offshore + nearshore crests + moving shimmer) |
 | F4 | Calm / steady 9 / steady 20 / gusts / turning / local shelter |
-| F5 | Glider wind influence: 100 / 65 / 45 percent |
+| F5 | Glider wind influence: 100 / 65 / 45 percent; starts at 65 |
 | F6 | Freeze/resume waves; wind and player movement stay live |
 | F7 | Reset wave phase |
 | F8 / F9 / F10 / F11 | Beach / swimming / boat / glider start |
@@ -98,3 +98,30 @@ retains its launch. Boat toggles use the same changing shore surface.
 interval through gameplay cameras, with typed surface/feet/eye contact receipts.
 These 24 samples are 48 frames apart; dense orbit views remain four frames apart.
 The sparse cycle proves sampled presentation only, not smoothness or comfort.
+
+## Second playtest revision
+
+The user prefers running Flat, Regular and Extreme, Patterns colors, and 65%
+glider wind influence. The lab now starts at 65%; the comparison controls remain.
+Boat propulsion is unchanged from the liked native baseline.
+
+Channel delay is slightly reduced. Wave amplitude recovers smoothly over twenty
+world units after the exit instead of leaving a permanent calm wake. Patterns
+adds white foam to high crests and shallow shore contact.
+
+Lab swimming and boat buoyancy now approach the stepped water height with an
+exponential response (0.1-second time constant), capped at six vertical units/s.
+Physical collision remains authoritative. The two-thirds swim immersion is an
+equilibrium target; rising waves can briefly immerse the eye while the body
+catches up. Boat deck, player and camera share physical vertical displacement.
+
+Third-person distance is 2.4 units for the body and 5 units while boating or
+gliding, with the existing collision sweep retracting the camera near obstacles.
+All aim consumers use that same camera pose. The canopy now uses the flight
+direction with world up, avoiding roll introduced by a shortest rotation arc.
+These camera and canopy presentation changes apply to the arena generally.
+
+Next native route: inspect the channel exit and foam; compare Space released/held
+and boat toggles in Regular/Extreme; repeat full heading turns with the glider
+at 65% in both camera modes. Control comfort and animation acceptance remain
+pending until that playtest.

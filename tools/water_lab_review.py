@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--style", choices=("depth", "crests", "patterns"), default="patterns")
     parser.add_argument("--wind", choices=("calm", "steady", "strong", "gusts", "turning", "shelter"), default="steady")
     parser.add_argument("--phase", type=float, default=1.5)
-    parser.add_argument("--glider-wind", type=float, choices=(1.0, 0.65, 0.45), default=1.0)
+    parser.add_argument("--glider-wind", type=float, choices=(1.0, 0.65, 0.45), default=0.65)
     parser.add_argument("--dirty-diagnostic", action="store_true")
     args = parser.parse_args()
     source = identity()

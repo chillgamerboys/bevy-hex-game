@@ -15,7 +15,7 @@ fn player_camera(session: &ArenaSession, state: &ViewState, actor: &hex_arena::A
     } else {
         actor.aim.normalize_or(Vec3::NEG_Z)
     };
-    let position = super::camera_origin(session, state, actor.eye(), direction);
+    let position = super::camera_origin(session, state, actor, direction);
     Transform::from_translation(position).looking_to(direction, Vec3::Y)
 }
 

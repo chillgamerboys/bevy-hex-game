@@ -28,7 +28,10 @@ struct LabButton(KeyCode);
 
 pub(super) fn install(app: &mut App) {
     hex_map::water_lab::install(app);
-    let mut settings = WaterLabSettings::default();
+    let mut settings = WaterLabSettings {
+        glider_wind_scale: 0.65,
+        ..default()
+    };
     if let Ok(value) = std::env::var("HEX_WATER_LAB_WAVE") {
         settings.wave = match value.as_str() {
             "flat" => LabWave::Flat,

@@ -545,7 +545,7 @@ fn observe(
         return;
     };
     let direction = super::aim(&state);
-    let origin = super::camera_origin(&session, &state, actor.eye(), direction);
+    let origin = super::camera_origin(&session, &state, actor, direction);
     let (aspect, height) = windows.single().map_or((16.0 / 9.0, 900.0), |w| {
         (
             w.width() / w.height().max(1.0),

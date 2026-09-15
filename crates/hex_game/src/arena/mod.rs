@@ -907,8 +907,7 @@ fn input(
     }
     let direction = aim(&state);
     let current_aim = session.actors.first().map_or(direction, |actor| {
-        let eye = actor.eye();
-        let camera = camera_origin(&session, &state, eye, direction);
+        let camera = camera_origin(&session, &state, actor, direction);
         session.aim_from_camera(actor.id, camera, direction)
     });
     let axis = |positive, negative| {
@@ -1506,11 +1505,19 @@ fn stage_partial_preview(world: &mut World) {
     }
 }
 
-fn camera_origin(session: &ArenaSession, state: &ViewState, eye: Vec3, direction: Vec3) -> Vec3 {
+fn camera_origin(
+    session: &ArenaSession,
+    state: &ViewState,
+    actor: &hex_arena::Actor,
+    direction: Vec3,
+) -> Vec3 {
+    let eye = actor.eye();
     let smoothed_eye = eye + Vec3::Y * state.step_offset;
+    let vehicle = actor.glider().is_some_and(|flight| flight.open)
+        || actor.boat().is_some_and(|boat| boat.active);
     let desired = if state.third_person {
-        smoothed_eye - direction * 1.25
-            + Vec3::Y * 0.38
+        smoothed_eye - direction * if vehicle { 5.0 } else { 2.4 }
+            + Vec3::Y * if vehicle { 1.2 } else { 0.55 }
             + direction.cross(Vec3::Y).normalize_or_zero() * 0.28
     } else {
         smoothed_eye
