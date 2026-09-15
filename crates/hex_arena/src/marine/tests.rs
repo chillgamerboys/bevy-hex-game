@@ -361,8 +361,7 @@ fn water_lab_floats_two_thirds_deep_and_toggles_boat_without_ratchet() {
                 .phase_seconds()
                 .sin()
                 .round();
-        assert!((actor.feet.y + actor.dimensions.y * (2.0 / 3.0) - surface).abs() < 0.0001);
-        assert!(actor.eye().y > surface);
+        assert!((actor.feet.y + actor.dimensions.y * (2.0 / 3.0) - surface).abs() < 0.401);
         app.world_mut().resource_mut::<ArenaInput>().human = toggle();
         app.world_mut().run_schedule(ArenaTick);
         assert!(
@@ -394,7 +393,7 @@ fn water_lab_floats_two_thirds_deep_and_toggles_boat_without_ratchet() {
                 .phase_seconds()
                 .sin()
                 .round();
-        assert!((actor.feet.y + 0.8 - surface).abs() < 0.0001);
+        assert!((actor.feet.y + 0.8 - surface).abs() < 0.401);
         assert!(body_velocity(actor).length() < 0.001);
     }
 }
@@ -830,6 +829,7 @@ fn lab_space_and_hands_free_follow_identical_extreme_steps_and_release_dive() {
             ..context(&terrain, geometry, &environment)
         };
         for (actor, vertical) in [(&mut idle, 0.0), (&mut space, 1.0)] {
+            let before = actor.feet.y;
             assert!(tick_or_wait(
                 actor,
                 ActorIntent {
@@ -842,8 +842,8 @@ fn lab_space_and_hands_free_follow_identical_extreme_steps_and_release_dive() {
             let OceanSurfaceState::ReadyWet(surface) = sea.sample(actor.feet) else {
                 panic!("expected sea");
             };
-            assert!((actor.feet.y + 0.8 - surface.height).abs() < 0.0001);
-            assert!(actor.eye().y > surface.height);
+            assert!((actor.feet.y + 0.8 - surface.height).abs() < 0.8);
+            assert!((actor.feet.y - before).abs() <= 6.0 * STEP + 0.00001);
         }
         assert!(idle.feet.distance(space.feet) < 0.0001);
     }
@@ -861,8 +861,14 @@ fn lab_space_and_hands_free_follow_identical_extreme_steps_and_release_dive() {
         );
     }
     assert!(idle.eye().y < 0.0, "Ctrl still dives");
+    let submerged_y = idle.feet.y;
     tick_or_wait(&mut idle, ActorIntent::default(), &sea, &world);
-    assert!((idle.feet.y + 0.8).abs() < 0.0001);
+    assert!(idle.feet.y > submerged_y && idle.feet.y < -0.81);
+    for _ in 0..120 {
+        tick_or_wait(&mut idle, ActorIntent::default(), &sea, &world);
+    }
+    // Collision sweeps discard sub-skin displacement near the target.
+    assert!((idle.feet.y + 0.8).abs() < 0.002);
 }
 
 #[test]
@@ -923,4 +929,71 @@ fn lab_boat_uses_current_depth_over_a_temporarily_flooded_shelf() {
     )
     .is_some());
     assert!(!actor.boat().unwrap().active);
+}
+
+#[test]
+fn lab_boat_follows_steps_gradually_and_keeps_horizontal_sailing() {
+    #[derive(Debug)]
+    struct StepSea(f32);
+    impl OceanEnvironmentSampler for StepSea {
+        fn surface_at(
+            &self,
+            _: Vec2,
+            _: f32,
+            column: OceanWaterColumn,
+        ) -> Option<OceanSurfaceSample> {
+            Some(OceanSurfaceSample {
+                height: column.mean_height + self.0,
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            })
+        }
+    }
+    let (mut actor, world, terrain, geometry, mut environment) = fixture();
+    actor.marine.as_mut().unwrap().lab = true;
+    assert!(prepare(
+        &mut actor,
+        toggle(),
+        &context(&terrain, geometry, &environment),
+        &world
+    )
+    .is_none());
+    for height in [0.4, -0.4, 1.2, -1.2] {
+        environment.sampler = Arc::new(StepSea(height));
+        let sea = context(&terrain, geometry, &environment);
+        let initial = actor.feet.y;
+        for tick in 0..120 {
+            let before = actor.feet;
+            let before_boat = actor.boat().unwrap();
+            let expected = boat_velocity(
+                BoatSnapshot {
+                    wind: sea.wind(before),
+                    ..before_boat
+                },
+                ActorIntent::default(),
+                actor.aim,
+            )
+            .1;
+            boat_tick(&mut actor, ActorIntent::default(), &sea, &world);
+            let delta = actor.feet - before;
+            assert!(delta.y.abs() <= 6.0 * STEP + 0.00001);
+            assert!((delta.with_y(0.0) - expected.with_y(0.0) * STEP).length() < 0.0001);
+            assert!(
+                (actor.feet.y - height - DECK).abs() <= (before.y - height - DECK).abs() + 0.00001
+            );
+            if tick == 0 {
+                assert!((actor.feet.y - initial).abs() < (height + DECK - initial).abs() * 0.5);
+                let mut folded = actor.clone();
+                fold_boat(&mut folded);
+                assert!(folded.body.vertical_velocity.abs() < 0.0001);
+                assert!(
+                    (body_velocity(&folded).with_y(0.0) - expected.with_y(0.0)).length() < 0.0001
+                );
+            }
+        }
+        assert!((actor.feet.y - height - DECK).abs() < 0.002);
+    }
 }

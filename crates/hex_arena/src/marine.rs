@@ -17,6 +17,12 @@ const BOAT_SPEED: f32 = 24.0;
 const HULL_RADIUS: f32 = 0.65;
 const HULL_HEIGHT: f32 = 0.65;
 
+// Follow a stepped surface over several ticks. The physical body, vehicle and
+// camera share this motion; water geometry remains quantized to whole voxels.
+fn buoyancy_step(current: f32, target: f32) -> f32 {
+    ((target - current) * (1.0 - (-10.0 * STEP).exp())).clamp(-6.0 * STEP, 6.0 * STEP)
+}
+
 /// Authoritative boat pose and motion; presentation adds no player displacement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoatSnapshot {
@@ -280,7 +286,14 @@ fn fold_boat(actor: &mut Actor) {
         .marine
         .as_ref()
         .filter(|state| state.boat.active)
-        .map(|state| state.boat.velocity);
+        .map(|state| {
+            // A rising lab wave is buoyancy, not a jump when folding the boat.
+            if state.lab {
+                state.boat.velocity.with_y(0.0)
+            } else {
+                state.boat.velocity
+            }
+        });
     if let Some(velocity) = velocity {
         let velocity =
             velocity + actor.body.impulse_velocity + Vec3::Y * actor.body.vertical_velocity;
@@ -486,7 +499,13 @@ fn boat_tick(
             return;
         }
     };
-    let desired = next.with_y(surface.height + DECK);
+    let target_y = surface.height + DECK;
+    let lab = state.lab;
+    let desired = next.with_y(if lab {
+        actor.feet.y + buoyancy_step(actor.feet.y, target_y)
+    } else {
+        target_y
+    });
     let delta = desired - actor.feet;
     let mut fraction = 1.0_f32;
     let mut loading = world.needs_terrain(
@@ -531,7 +550,11 @@ fn boat_tick(
         state.boat.velocity = if fraction < 1.0 {
             Vec3::ZERO
         } else {
-            velocity.with_y(surface.vertical_velocity)
+            velocity.with_y(if lab {
+                delta.y / STEP
+            } else {
+                surface.vertical_velocity
+            })
         };
         state.boat.surface_normal = surface.normal;
         state.boat.wind = boat.wind;
@@ -651,7 +674,8 @@ pub(crate) fn tick_or_wait(
         };
         // Space means surface, just like hands-free floating. It must not pump
         // the player out of the water and hand alternating ticks to gravity.
-        delta.y = target_height - immersion - actor.feet.y;
+        delta.y = buoyancy_step(actor.feet.y, target_height - immersion);
+        // This velocity is buoyancy, not a player jump impulse.
         velocity.y = 0.0;
     }
     let loading = world.needs_terrain(
