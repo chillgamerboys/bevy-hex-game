@@ -258,7 +258,9 @@ fn voxel_fragment(input: VertexOutput, front: bool) -> FragmentOutput {
     out.color = main_pass_post_lighting_processing(pbr,apply_pbr_lighting(pbr));
     if !local && input.world_normal.y > 0.5 && voxel_distance(at) <= ocean.voxel.y { discard; }
     if exact_water(at) < -0.5 { discard; }
-    // Only the taller cell has a nondegenerate riser; draw it from below too.
+    // Only the taller local cell has a nondegenerate riser; draw it from below too.
+    // Exact shoreline walls retain one-sided ownership against the solid bank.
+    if !local && input.world_normal.y < 0.5 && !front { discard; }
     return out;
 }
 
