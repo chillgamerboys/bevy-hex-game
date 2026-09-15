@@ -93,8 +93,10 @@ fn fixed_schedule_consumes_boat_edges_casts_aboard_and_publishes_one_clock() {
     assert!(session.ocean_time().seconds > 0.0);
     let player = session.actors.first().expect("player");
     let visible_surface = 0.2 * session.ocean_time().phase_seconds().sin();
-    assert!((player.feet.y - visible_surface - DECK).abs() < 0.0001);
-    assert!((player.eye().y - visible_surface - DECK - 1.02).abs() < 0.0001);
+    // Northern uses the accepted eased float: it follows a rising surface without snapping.
+    assert!(player.marine.as_ref().expect("marine").lab);
+    assert!(player.feet.y > DECK && player.feet.y < visible_surface + DECK);
+    assert!((player.eye().y - player.feet.y - 1.02).abs() < 0.0001);
 }
 
 #[test]
