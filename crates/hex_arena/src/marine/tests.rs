@@ -864,3 +864,63 @@ fn lab_space_and_hands_free_follow_identical_extreme_steps_and_release_dive() {
     tick_or_wait(&mut idle, ActorIntent::default(), &sea, &world);
     assert!((idle.feet.y + 0.8).abs() < 0.0001);
 }
+
+#[test]
+fn lab_boat_uses_current_depth_over_a_temporarily_flooded_shelf() {
+    #[derive(Debug)]
+    struct Shelf(f32);
+    impl OceanEnvironmentSampler for Shelf {
+        fn inundation_column_at(&self, _: Vec2) -> Option<OceanWaterColumn> {
+            Some(OceanWaterColumn {
+                mean_height: 0.0,
+                bed_height: 0.4,
+                water_id: SubstanceId(2),
+            })
+        }
+        fn surface_at(
+            &self,
+            _: Vec2,
+            _: f32,
+            column: OceanWaterColumn,
+        ) -> Option<OceanSurfaceSample> {
+            Some(OceanSurfaceSample {
+                height: self.0,
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            })
+        }
+    }
+    let (mut actor, mut world, mut terrain, geometry, mut env) = fixture();
+    terrain.liquids.clear();
+    let geometry = ArenaVoxelGeometry {
+        level_height: 0.4,
+        ..geometry
+    };
+    terrain.voxels = HexCoord::ORIGIN
+        .within_radius(3)
+        .into_iter()
+        .map(|coord| (TilePos::new(coord, 1), SubstanceId(1)))
+        .collect();
+    terrain.revision += 1;
+    world.refresh(&terrain, geometry);
+    actor.feet.y = 1.2;
+    actor.marine.as_mut().unwrap().lab = true;
+    env.sampler = Arc::new(Shelf(2.0));
+    let sea = context(&terrain, geometry, &env);
+    assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+    assert!(actor.boat().unwrap().active);
+    assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+    env.sampler = Arc::new(Shelf(0.5));
+    actor.feet.y = 0.4;
+    assert!(prepare(
+        &mut actor,
+        toggle(),
+        &context(&terrain, geometry, &env),
+        &world
+    )
+    .is_some());
+    assert!(!actor.boat().unwrap().active);
+}

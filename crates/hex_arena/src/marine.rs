@@ -3,7 +3,8 @@
 use bevy_math::{Quat, Vec2, Vec3};
 use hex_core::arena::{ArenaAvailability, ArenaTerrainView, ArenaVoxelGeometry};
 use hex_core::ocean::{
-    OceanEnvironmentView, OceanSimulationTime, OceanSurfaceState, OceanWaterColumn,
+    OceanEnvironmentView, OceanSimulationTime, OceanSurfaceSample, OceanSurfaceState,
+    OceanWaterColumn,
 };
 use hex_core::{HexCoord, TilePos};
 
@@ -291,6 +292,14 @@ fn fold_boat(actor: &mut Actor) {
     }
 }
 
+fn navigable_depth(actor: &Actor, surface: OceanSurfaceSample) -> f32 {
+    (if actor.marine.as_ref().is_some_and(|state| state.lab) {
+        surface.height
+    } else {
+        surface.mean_height
+    }) - surface.bed_height
+}
+
 fn hull_positions(feet: Vec3, heading: Vec3) -> [Vec3; 3] {
     [-0.8, 0.0, 0.8].map(|offset| feet + heading * offset - Vec3::Y * (DECK + 0.25))
 }
@@ -358,9 +367,7 @@ pub(crate) fn prepare(
         let OceanSurfaceState::ReadyWet(surface) = sea.sample(candidate) else {
             continue;
         };
-        if (actor.feet.y - surface.height).abs() > 1.5
-            || surface.mean_height - surface.bed_height < 0.7
-        {
+        if (actor.feet.y - surface.height).abs() > 1.5 || navigable_depth(actor, surface) < 0.7 {
             continue;
         }
         let feet = candidate.with_y(surface.height + DECK);
@@ -368,7 +375,7 @@ pub(crate) fn prepare(
         if world.needs_terrain(actor.feet, delta, actor.dimensions.y, actor.dimensions.x * 0.5)
             || world.sweep(actor.feet, delta, actor.dimensions.y, actor.dimensions.x * 0.5).is_some()
             || !boat_clear(world, feet, heading, actor)
-            || hull_positions(feet, heading).into_iter().any(|point| !matches!(sea.sample(point), OceanSurfaceState::ReadyWet(s) if s.mean_height - s.bed_height >= 0.7))
+            || hull_positions(feet, heading).into_iter().any(|point| !matches!(sea.sample(point), OceanSurfaceState::ReadyWet(s) if navigable_depth(actor, s) >= 0.7))
         { continue; }
         crate::glider::fold(actor);
         let velocity = incoming;
@@ -492,7 +499,7 @@ fn boat_tick(
         loading |= world.needs_terrain(point, delta, HULL_HEIGHT, HULL_RADIUS);
         match sea.sample(point + delta) {
             OceanSurfaceState::Unloaded => loading = true,
-            OceanSurfaceState::ReadyWet(s) if s.mean_height - s.bed_height >= 0.7 => {}
+            OceanSurfaceState::ReadyWet(s) if navigable_depth(actor, s) >= 0.7 => {}
             _ => fraction = 0.0,
         }
         if let Some(hit) = world.sweep(point, delta, HULL_HEIGHT, HULL_RADIUS) {
