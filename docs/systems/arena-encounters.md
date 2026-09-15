@@ -442,3 +442,16 @@ The same local branch adds gravity-aware Shadow aim against jumping humans, rais
 Golem movement to 3.2 units/second and tries the bounded deeper Worm escape above
 before stationary fallback. Existing attacks and player controls are unchanged.
 See the [focused validation report](../planning/waves/arena-bestiary/quick-combat-fixes.md).
+
+### Northern Archipelago water experiment
+
+The ocean now uses the Water Lab Regular/Patterns presentation: opaque hex columns,
+shallow crest foam and running shimmer, steady 9 u/s eastward wind, and 65% glider
+wind influence. The nearby patch stays on the world hex grid; the existing coarse
+horizon mesh bounds distant rendering cost. Camera contact and gameplay share the
+quantized world sampler. Swimming and boating use the accepted eased buoyancy and
+small downhill wave drift without feeding drift into sailing propulsion.
+
+The compiled island terrain and static wet footprint are unchanged. This is a
+port of the lab style to the ocean bathymetry, not its coordinate-specific channel
+fixture or a new water-volume simulation. Native ocean feel remains a playtest.

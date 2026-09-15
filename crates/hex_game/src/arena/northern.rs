@@ -232,11 +232,8 @@ fn configure(
                 return;
             }
         }
-        *profile = OceanSurfaceProfile {
-            mean_sea_level: map.sea_level,
-            ..default()
-        };
-        // Capture-only baseline retains identical water membership and depth absorption.
+        *profile = OceanSurfaceProfile::regular_voxels(map.sea_level, geometry.level_height);
+        // Capture-only baseline retains identical water membership and opaque color.
         if state.capture.is_some() && state.capture_view == "northern-bay-flat" {
             for wave in &mut profile.waves {
                 wave.amplitude = 0.0;
