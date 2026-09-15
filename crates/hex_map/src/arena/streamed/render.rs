@@ -234,7 +234,7 @@ fn draw(world: &mut World) {
                     q.unsigned_abs()
                         .max(r.unsigned_abs())
                         .max((q + r).unsigned_abs())
-                        <= super::TERRAIN_DETAIL_RADIUS
+                        <= u64::from(super::TERRAIN_DETAIL_RADIUS)
                 })
                 .collect();
             candidates.sort_by_key(|c| {
