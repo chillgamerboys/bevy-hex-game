@@ -445,8 +445,10 @@ See the [focused validation report](../planning/waves/arena-bestiary/quick-comba
 
 ### Northern Archipelago water experiment
 
-The ocean now uses the Water Lab Regular/Patterns presentation: opaque hex columns,
-shallow crest foam and running shimmer, steady 9 u/s eastward wind, and 65% glider
+The ocean uses the Water Lab opaque hex style with three wave sizes and periods
+traveling roughly eastward. Their directions spread from 25 degrees south of east
+to 18 degrees north; a slow envelope produces smaller/larger passing groups.
+Shallow crest foam and running shimmer remain, with steady 9 u/s eastward wind and 65% glider
 wind influence. The nearby patch stays on the world hex grid; the existing coarse
 horizon mesh bounds distant rendering cost. Camera contact and gameplay share the
 quantized world sampler. Swimming and boating use the accepted eased buoyancy and
@@ -455,3 +457,12 @@ small downhill wave drift without feeding drift into sailing propulsion.
 The compiled island terrain and static wet footprint are unchanged. This is a
 port of the lab style to the ocean bathymetry, not its coordinate-specific channel
 fixture or a new water-volume simulation. Native ocean feel remains a playtest.
+
+The sail now has a smooth points-of-sail curve rather than positive downwind dot
+product alone. Using angles from the wind source, drive fades from zero at 40°
+to full beam-reach power at 90°, then eases to the existing downwind power at 180°.
+Crosswind and close-reaching headings gain speed, so tacking makes upwind progress.
+Drag, steering, braking, the low-speed movement assist and the 24 u/s cap remain.
+This is a game-tuned automatic sail, informed by the
+[RYA points of sail](https://www.rya.org.uk/training/do-you-know-your-points-of-sail/),
+not a board-specific aerodynamic model or manual sail-trim simulation.
