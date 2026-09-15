@@ -17,6 +17,9 @@ pub use boundary::{OceanBoundaryColumn, OceanNearBoundary};
 pub use render::{install, OceanRenderStatus};
 pub use sample::{sample_local_surface, sample_surface, OceanSurfaceSample};
 
+/// Shared near-detail extent keeps stepped water beside detailed ocean shores.
+pub(crate) const VOXEL_DETAIL_RADIUS: u16 = 144;
+
 /// One analytic directional swell, with world-unit amplitude and wavelength.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OceanWave {

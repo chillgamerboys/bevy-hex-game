@@ -61,7 +61,7 @@ pub(super) fn voxel_surface_mesh() -> Mesh {
         Vec3::new(-0.866_025_4, 0.0, -0.5),
         Vec3::new(-0.866_025_4, 0.0, 0.5),
     ];
-    for coord in hex_core::HexCoord::ORIGIN.within_radius(64) {
+    for coord in hex_core::HexCoord::ORIGIN.within_radius(u32::from(super::VOXEL_DETAIL_RADIUS)) {
         let center = coord.to_world(0.0);
         let uv = Vec2::new(center.x, center.z);
         let start = data.len();
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn voxel_patch_is_bounded_and_every_vertex_has_cell_metadata() {
         let mesh = voxel_surface_mesh();
-        assert_eq!(mesh.count_vertices(), 98_305 + 12_481 * 31);
+        assert_eq!(mesh.count_vertices(), 98_305 + 62_641 * 31);
         assert_eq!(
             mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap().len(),
             mesh.count_vertices()

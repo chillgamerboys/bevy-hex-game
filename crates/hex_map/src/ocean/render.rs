@@ -150,7 +150,12 @@ fn parameters(
             },
             0.0,
         ),
-        voxel: Vec4::new(profile.voxel_height, 64.0, 0.0, 0.0),
+        voxel: Vec4::new(
+            profile.voxel_height,
+            f32::from(super::VOXEL_DETAIL_RADIUS),
+            0.0,
+            0.0,
+        ),
         shallow: profile.shallow_color,
         deep: profile.deep_color,
     }
