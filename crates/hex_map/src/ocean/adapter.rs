@@ -155,6 +155,10 @@ mod tests {
             "wave crests must not remain straight identical bands"
         );
         assert!(across_periods, "successive primary waves must differ");
+        // Both render and gameplay wrap the shared clock at 900 seconds.
+        for at in [Vec2::ZERO, Vec2::new(0.0, 24.0), Vec2::new(19.0, -31.0)] {
+            assert!((height(at, 900.0) - height(at, 0.0)).abs() < 0.0001);
+        }
     }
 
     #[test]

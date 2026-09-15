@@ -114,7 +114,7 @@ fn voxel_wave(at: vec2<f32>, quantized: bool) -> f32 {
     let depth = ocean.water.x-bed_sample(at).bed.x;
     let shallow = clamp(1.0-depth/6.0,0.0,1.0);
     let shift = 1.4*clamp(6.0-depth,0.0,6.0);
-    let packet = 0.95+0.25*sin(at.x*0.031+at.y*0.019-ocean.water.y*0.11);
+    let packet = 0.95+0.25*sin(at.x*0.031+at.y*0.019-ocean.water.y*(6.283185307/60.0));
     let components = voxel_component(at,shift,ocean.wave0,ocean.periods.x,ocean.phase_offsets.x)
         + voxel_component(at,shift,ocean.wave1,ocean.periods.y,ocean.phase_offsets.y)
         + voxel_component(at,shift,ocean.wave2,ocean.periods.z,ocean.phase_offsets.z);

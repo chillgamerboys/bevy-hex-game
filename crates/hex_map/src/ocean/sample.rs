@@ -76,7 +76,8 @@ pub(super) fn sample(
         let shallow = (1.0 - depth / 6.0).clamp(0.0, 1.0);
         let gain = 0.8 + 0.85 * shallow;
         let shore_shift = 1.4 * (6.0 - depth).clamp(0.0, 6.0);
-        let packet = 0.95 + 0.25 * (at.x * 0.031 + at.y * 0.019 - seconds * 0.11).sin();
+        let packet = 0.95
+            + 0.25 * (at.x * 0.031 + at.y * 0.019 - seconds * (std::f32::consts::TAU / 60.0)).sin();
         let wave = profile
             .waves
             .iter()

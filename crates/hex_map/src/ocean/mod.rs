@@ -115,7 +115,7 @@ impl OceanSurfaceProfile {
                     direction: Vec2::new(0.906_307_8, -0.422_618_27),
                     amplitude: 0.18,
                     wavelength: 13.0,
-                    period: 5.5,
+                    period: 6.0,
                     phase_radians: 2.4,
                 },
             ],
