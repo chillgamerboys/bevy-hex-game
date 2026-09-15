@@ -969,7 +969,11 @@ impl ArenaSession {
                 actor.free_flight = Some(exploration::FreeFlightState::default());
                 actor.marine = Some(marine::MarineState::default());
                 if let Some(marine) = &mut actor.marine {
-                    marine.lab = world.selection.map == hex_core::arena::ArenaMap::WaterLab;
+                    marine.lab = matches!(
+                        world.selection.map,
+                        hex_core::arena::ArenaMap::WaterLab
+                            | hex_core::arena::ArenaMap::NorthernArchipelago
+                    );
                 }
             }
         }
