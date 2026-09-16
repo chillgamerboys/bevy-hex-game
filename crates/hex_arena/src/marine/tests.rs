@@ -1149,3 +1149,41 @@ fn reaching_and_close_hauled_drive_are_symmetric_and_gradual() {
     assert!((speed_after(89.9) - speed_after(90.1)).abs() < 0.01);
     assert!((speed_after(39.9) - speed_after(40.1)).abs() < 0.01);
 }
+
+#[derive(Debug)]
+struct PositionWind;
+impl OceanEnvironmentSampler for PositionWind {
+    fn wind_at(
+        &self,
+        position: Vec3,
+        time: OceanSimulationTime,
+        profile: OceanWindProfile,
+    ) -> Vec2 {
+        profile.velocity_at(time) + Vec2::new(position.x, position.y) * 0.1
+    }
+    fn surface_at(
+        &self,
+        at: Vec2,
+        phase: f32,
+        column: OceanWaterColumn,
+    ) -> Option<OceanSurfaceSample> {
+        FlatSea.surface_at(at, phase, column)
+    }
+}
+
+#[test]
+fn spatial_wind_reaches_boat_and_glider_with_accepted_multiplier() {
+    for x in [0.0, 8.0] {
+        let (mut actor, world, terrain, geometry, mut environment) = fixture();
+        environment.sampler = Arc::new(PositionWind);
+        let sea = context(&terrain, geometry, &environment);
+        actor.marine.as_mut().expect("marine").lab = true;
+        actor.marine.as_mut().expect("marine").glider_wind_scale = 0.65;
+        actor.feet = Vec3::new(x, -0.8, 0.0);
+        let wind = sea.wind(actor.feet);
+        prepare(&mut actor, ActorIntent::default(), &sea, &world);
+        assert!((actor.glider.wind - wind * 0.65).length() < 0.00001);
+        assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
+        assert!((actor.boat().expect("boat").wind - sea.wind(actor.feet)).length() < 0.00001);
+    }
+}
