@@ -1205,11 +1205,7 @@ fn summit_glide_requires_admitted_clear_terrain_and_preserves_player() {
     terrain.revision += 1;
     assert!(!session.start_exploration_glide(feet, Vec3::X, &terrain, geometry));
     assert_eq!(session.actors.first().expect("player").feet, old);
-    terrain
-        .residency
-        .as_mut()
-        .expect("residency")
-        .ready = chunks;
+    terrain.residency.as_mut().expect("residency").ready = chunks;
     terrain.revision += 1;
     assert!(session.start_exploration_glide(feet, Vec3::X, &terrain, geometry));
     let actor = session.actors.first().expect("player");

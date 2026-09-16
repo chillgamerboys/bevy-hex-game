@@ -40,6 +40,26 @@ fn oscillation(seconds: f64, period: f64, phase: f32) -> f32 {
     (seconds.rem_euclid(period) * std::f64::consts::TAU / period + f64::from(phase)).sin() as f32
 }
 
+// Curl of a moving stream function: neighboring samples curve around the same
+// cells, with alternating clockwise/counterclockwise circulation. Different
+// spatial scales and periods keep the combined field from repeating in stripes.
+fn curl(at: Vec2, seconds: f64, scale: Vec2, periods: Vec2, phase: f32) -> Vec2 {
+    let a = at.x / scale.x + phase;
+    let b = at.y / scale.y - phase;
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let size = scale.min_element();
+    Vec2::new(
+        oscillation(seconds, f64::from(periods.x), a)
+            * oscillation(seconds, f64::from(periods.y), b + quarter)
+            * size
+            / scale.y,
+        -oscillation(seconds, f64::from(periods.x), a + quarter)
+            * oscillation(seconds, f64::from(periods.y), b)
+            * size
+            / scale.x,
+    )
+}
+
 impl WindField {
     pub(super) fn new(view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> Self {
         Self::for_region(view, geometry, SEA_LEVEL, None)
@@ -105,27 +125,35 @@ impl WindField {
         }
         let t = time.seconds;
         let altitude = smooth((p.y - self.sea_level) / 24.0);
-        let heading = profile.heading_radians + 15_f32.to_radians() * oscillation(t, 113.0, 0.0);
-        let direction = Vec2::new(heading.sin(), -heading.cos());
         let at = Vec2::new(p.x, p.z);
-        let phase = at.dot(direction) * 0.045 + at.perp_dot(direction) * 0.028;
+        // Keep gust coordinates in the fixed prevailing frame. Rotating the
+        // spatial basis over time would make distant Ocean gusts unnaturally fast.
+        let prevailing = Vec2::new(
+            profile.heading_radians.sin(),
+            -profile.heading_radians.cos(),
+        );
+        let phase = at.dot(prevailing) * 0.045 + at.perp_dot(prevailing) * 0.028;
+        let veer =
+            0.65 * oscillation(t, 23.0, phase * 0.8) + 0.35 * oscillation(t, 37.0, phase * -0.6);
+        let heading = profile.heading_radians
+            + 25_f32.to_radians() * oscillation(t, 97.0, 0.0)
+            + 20_f32.to_radians() * veer;
+        let direction = Vec2::new(heading.sin(), -heading.cos());
         let low = 0.7 * oscillation(t, 11.0, phase) + 0.3 * oscillation(t, 8.3, phase * 0.7);
         let high = 0.6 * oscillation(t, 3.7, phase) + 0.4 * oscillation(t, 5.3, phase * 0.7);
         let base = profile.speed.clamp(0.0, 25.0);
         let mean = base * (1.0 + 0.8 * altitude);
         let gust = low + (high - low) * altitude;
-        // Curl of a broad moving stream function. Its components are related,
-        // not independent random headings; the prevailing flow remains dominant.
-        let a = p.x / 16.0;
-        let b = p.z / 20.0;
-        let swirl = Vec2::new(
-            oscillation(t, 43.0, a) * oscillation(t, 37.0, b + std::f32::consts::FRAC_PI_2),
-            -oscillation(t, 43.0, a + std::f32::consts::FRAC_PI_2) * oscillation(t, 37.0, b),
-        )
-        .clamp_length_max(1.0)
-            * (base * 0.2);
-        ((direction * mean * (1.0 + 0.3 * gust) + swirl) * self.shelter(p, direction))
-            .clamp_length_max(25.0)
+        let band = oscillation(t, 41.0, at.x * 0.023 - at.y * 0.019);
+        let broad = curl(at, t, Vec2::new(26.0, 34.0), Vec2::new(53.0, 47.0), 0.0);
+        let eddy = curl(at, t, Vec2::new(11.0, 15.0), Vec2::new(27.0, 31.0), 1.4);
+        // Local eddies grow and subside smoothly, rather than permanently adding
+        // the same turbulence everywhere. Strong curls are occasional.
+        let pulse = smooth((oscillation(t, 29.0, at.x * 0.017 - at.y * 0.013) - 0.1) / 0.9);
+        let swirl = (broad * 0.18 + eddy * (0.75 * pulse)).clamp_length_max(0.85) * mean;
+        let flow = direction * mean * (1.0 + 0.45 * gust + 0.12 * band) + swirl;
+        // Larger local turns also turn the wind shadow, so cover stays upwind.
+        (flow * self.shelter(p, flow.normalize_or(direction))).clamp_length_max(25.0)
     }
 
     fn shelter(&self, p: Vec3, direction: Vec2) -> f32 {
@@ -208,6 +236,47 @@ mod tests {
             }
         }
         view
+    }
+
+    #[test]
+    fn exposed_field_has_spatial_contrast_and_smooth_ocean_gusts() {
+        let field = WindField::default();
+        let mut min_speed = f32::MAX;
+        let mut max_speed = 0.0_f32;
+        let mut min_heading = f32::MAX;
+        let mut max_heading = f32::MIN;
+        // A neighborhood at one instant should contain different wind, not just
+        // a single globally turning vector. All samples remain forward-biased.
+        for x in -6..=6_i16 {
+            for z in -6..=6_i16 {
+                let p = Vec3::new(f32::from(x) * 8.0, SEA_LEVEL, f32::from(z) * 8.0);
+                let v = field.velocity(p, time(12.0), east());
+                min_speed = min_speed.min(v.length());
+                max_speed = max_speed.max(v.length());
+                min_heading = min_heading.min(v.y.atan2(v.x));
+                max_heading = max_heading.max(v.y.atan2(v.x));
+            }
+        }
+        assert!(
+            max_speed - min_speed > 5.0,
+            "speed contrast: {}",
+            max_speed - min_speed
+        );
+        assert!(
+            max_heading - min_heading > 35_f32.to_radians(),
+            "direction contrast: {}",
+            (max_heading - min_heading).to_degrees()
+        );
+        for n in 0..1000 {
+            let t = 895.0 + f64::from(n) * 0.01;
+            let p = Vec3::new(-570.0, 448.0, -201.0);
+            let v = field.velocity(p, time(t), east());
+            assert!(
+                (v - field.velocity(p + Vec3::splat(0.001), time(t + 0.001), east())).length()
+                    < 0.05
+            );
+            assert!(v.is_finite() && v.length() <= 25.001);
+        }
     }
 
     #[test]

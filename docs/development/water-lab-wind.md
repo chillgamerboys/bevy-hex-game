@@ -5,8 +5,11 @@ Turning and the old synthetic Shelter comparison. Ocean now uses Field wind too.
 The fixture remains seven radius-12 biomes.
 
 Field starts from 9 u/s toward east. Its prevailing heading changes slowly within
-15 degrees. Related spatial gusts vary speed by up to 30%; broad moving curls add
-at most 20% of the base speed. Exposed mean speed grows smoothly to 1.8 times at
+25 degrees, with smooth local veering up to another 20 degrees. Related gusts
+vary speed by up to 45%, with slower spatial bands adding up to 12%. Two moving
+curl scales produce broad bends and smaller eddies. The smaller eddies grow and
+subside on a smooth 29-second envelope; combined swirl is capped at 85% of the
+altitude-adjusted mean speed. Exposed mean speed grows smoothly to 1.8 times at
 24 units above sea level. Low-altitude gust periods are 8.3 and 11 seconds;
 high-altitude periods are 3.7 and 5.3 seconds. Total speed is capped at 25 u/s.
 These are game tuning choices, not a fluid simulation.
@@ -16,8 +19,9 @@ including objects and shield-wall terrain edits. Three upwind probe paths extend
 48 units. Interpolated occupancy, soft vertical edges and distance decay produce
 shelter approaching 20% of exposed strength. Separate occupied intervals preserve
 openings. Terrain revision changes republish the sampler; removed walls therefore
-stop sheltering. Wind direction uses the prevailing heading for shelter, while
-local curls remain subordinate.
+stop sheltering. Shelter follows the unsheltered local flow direction, including local veering
+and curls. Gust coordinates stay in the fixed prevailing frame to prevent
+artificially fast changes far from the world origin.
 
 Boat, glider and displays all query `OceanEnvironmentView::wind_at` using the
 unwrapped completed simulation clock. The boat's propulsion and the glider's 65%
