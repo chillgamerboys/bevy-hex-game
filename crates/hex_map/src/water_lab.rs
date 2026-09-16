@@ -1,6 +1,7 @@
 //! Small built-in water fixture and its world-owned stepped surface.
 
 mod render;
+mod wind;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -138,6 +139,7 @@ pub struct LabSurface {
     /// Height of one whole voxel, obtained from world geometry.
     pub level_height: f32,
     columns: BTreeMap<HexCoord, WaveColumn>,
+    wind: wind::WindField,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -172,7 +174,9 @@ impl LabSurface {
                 }
             }
         }
-        Self::from_beds(beds, geometry.level_height, settings)
+        let mut surface = Self::from_beds(beds, geometry.level_height, settings);
+        surface.wind = wind::WindField::new(view, geometry);
+        surface
     }
 
     fn from_beds(
@@ -202,6 +206,7 @@ impl LabSurface {
             settings,
             level_height,
             columns,
+            wind: wind::WindField::default(),
         }
     }
 
@@ -312,8 +317,11 @@ impl OceanEnvironmentSampler for LabSurface {
         &self,
         position: Vec3,
         time: OceanSimulationTime,
-        _profile: OceanWindProfile,
+        profile: OceanWindProfile,
     ) -> Vec2 {
+        if self.settings.wind == LabWind::Field {
+            return self.wind.velocity(position, time, profile);
+        }
         #[expect(
             clippy::cast_possible_truncation,
             reason = "Bounded periodic wind is evaluated in world f32 units."
@@ -392,6 +400,7 @@ mod tests {
             settings: default(),
             level_height: 0.4,
             columns: BTreeMap::new(),
+            wind: wind::WindField::default(),
         };
         for time in [0.0, 0.1, 1.5, 5.9, 6.0, 899.99] {
             let a = sampler
@@ -419,6 +428,7 @@ mod tests {
             settings: default(),
             level_height: 0.4,
             columns: BTreeMap::new(),
+            wind: wind::WindField::default(),
         };
         let time = OceanSimulationTime::default();
         assert!((sampler.wind_at(Vec3::ZERO, time, default()).length() - 9.0).abs() < 0.00001);
