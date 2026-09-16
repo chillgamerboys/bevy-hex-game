@@ -486,6 +486,7 @@ fn present(
                     Vec3::new(6.0, 8.0, 0.0),
                 )
             }
+            "water-lab-wind-peak" => (Vec3::new(12.0, 44.0, 14.0), Vec3::new(-8.0, 20.0, -9.0)),
             "water-lab-overview" => (Vec3::new(0.0, 135.0, 55.0), Vec3::new(0.0, 4.0, 0.0)),
             "water-lab-reverse" => (Vec3::new(32.0, 18.0, -20.0), Vec3::new(8.0, 8.0, -5.0)),
             "water-lab-channel" => (Vec3::new(-22.0, 15.0, 12.0), Vec3::new(-3.0, 8.0, 3.0)),

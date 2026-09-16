@@ -210,7 +210,7 @@ pub(super) fn install(app: &mut App) {
             Update,
             (
                 present_map,
-                wind::present,
+                wind::present.after(super::water_lab::LabPresentation),
                 present_feedback,
                 present_menus,
                 reflow,

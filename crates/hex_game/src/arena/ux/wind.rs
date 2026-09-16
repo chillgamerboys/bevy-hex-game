@@ -61,6 +61,7 @@ pub(super) fn present(
     session: Res<ArenaSession>,
     ocean: Option<Res<OceanEnvironmentView>>,
     overview: Option<Res<ArenaOverview>>,
+    cameras: Query<&Transform, With<crate::arena::ArenaCamera>>,
     mut panels: Query<&mut Node, With<WindPanel>>,
     mut arrows: Query<&mut UiTransform, With<WindArrow>>,
     mut labels: Query<&mut Text, With<WindDetails>>,
@@ -109,7 +110,11 @@ pub(super) fn present(
     );
     // Camera yaw turns left-positive; UI rotation turns clockwise-positive.
     // Up means downwind lies ahead of the current look direction, in either camera mode.
-    let heading = velocity.x.atan2(-velocity.y) + state.yaw;
+    let view_heading = cameras.single().map_or(-state.yaw, |camera| {
+        let forward = camera.forward();
+        forward.x.atan2(-forward.z)
+    });
+    let heading = velocity.x.atan2(-velocity.y) - view_heading;
     for mut arrow in &mut arrows {
         arrow.set_if_neq(UiTransform::from_rotation(Rot2::radians(heading)));
     }
@@ -123,9 +128,7 @@ pub(super) fn present(
         velocity.length()
     );
     if lab {
-        label.push_str(
-            "\n\nField: 0–25 u/s\nCyan → yellow\nHeights: +2 / +14 / +30\nSea level reference",
-        );
+        label.push_str("\n\nField: 0–25 u/s\nCyan → yellow\nAbove sea (u):\n2 / 14 / 30");
     }
     for mut text in &mut labels {
         if text.0 != label {
