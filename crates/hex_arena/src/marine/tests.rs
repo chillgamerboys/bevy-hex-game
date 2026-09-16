@@ -1184,6 +1184,7 @@ fn spatial_wind_reaches_boat_and_glider_with_accepted_multiplier() {
         prepare(&mut actor, ActorIntent::default(), &sea, &world);
         assert!((actor.glider.wind - wind * 0.65).length() < 0.00001);
         assert!(prepare(&mut actor, toggle(), &sea, &world).is_none());
-        assert!((actor.boat().expect("boat").wind - sea.wind(actor.feet)).length() < 0.00001);
+        // Deployment samples at the pre-transition feet, before lifting onto the deck.
+        assert!((actor.boat().expect("boat").wind - wind).length() < 0.00001);
     }
 }
