@@ -345,7 +345,7 @@ pub(crate) fn setup(
                 });
                 p.spawn(text("Choose your map",26.0,INK));
                 p.spawn(scroll_content(row())).with_children(|r| {
-                    for map in [ArenaMap::ForestMassif,ArenaMap::NorthernArchipelago,ArenaMap::Duel,ArenaMap::Fort,ArenaMap::SevenRegions] { button(r,crate::arena::map_name(map),Action::Map(map)); }
+                    for map in [ArenaMap::ForestMassif,ArenaMap::NorthernArchipelago,ArenaMap::WaterLab,ArenaMap::Duel,ArenaMap::Fort,ArenaMap::SevenRegions] { button(r,crate::arena::map_name(map),Action::Map(map)); }
                 });
                 p.spawn((scroll_content(column()),ModeContent(ArenaControl::Player))).with_children(|p| {
                     p.spawn(text("Enemy party",26.0,INK));

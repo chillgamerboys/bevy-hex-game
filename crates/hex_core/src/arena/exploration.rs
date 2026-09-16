@@ -23,11 +23,12 @@ impl ArenaMap {
     pub const fn capabilities(self) -> ArenaMapCapabilities {
         let forest = matches!(self, Self::ForestMassif);
         let islands = matches!(self, Self::NorthernArchipelago);
+        let lab = matches!(self, Self::WaterLab);
         ArenaMapCapabilities {
-            expedition_player: forest || islands,
-            exploration: islands,
+            expedition_player: forest || islands || lab,
+            exploration: islands || lab,
             streamed: islands,
-            natural_environment: forest || islands,
+            natural_environment: forest || islands || lab,
         }
     }
 }

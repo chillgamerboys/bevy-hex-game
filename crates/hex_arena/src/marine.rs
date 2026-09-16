@@ -3,7 +3,8 @@
 use bevy_math::{Quat, Vec2, Vec3};
 use hex_core::arena::{ArenaAvailability, ArenaTerrainView, ArenaVoxelGeometry};
 use hex_core::ocean::{
-    OceanEnvironmentView, OceanSimulationTime, OceanSurfaceState, OceanWaterColumn,
+    OceanEnvironmentView, OceanSimulationTime, OceanSurfaceSample, OceanSurfaceState,
+    OceanWaterColumn,
 };
 use hex_core::{HexCoord, TilePos};
 
@@ -15,6 +16,20 @@ const DECK: f32 = 0.35;
 const BOAT_SPEED: f32 = 24.0;
 const HULL_RADIUS: f32 = 0.65;
 const HULL_HEIGHT: f32 = 0.65;
+
+// Follow a stepped surface over several ticks. The physical body, vehicle and
+// camera share this motion; water geometry remains quantized to whole voxels.
+fn buoyancy_step(current: f32, target: f32, speed: f32) -> (f32, f32) {
+    // Exact critically damped response: a voxel step changes acceleration,
+    // rather than immediately replacing the body's vertical velocity.
+    let error = current - target;
+    let decay = (-16.0 * STEP).exp();
+    let change = (speed + 16.0 * error) * STEP;
+    (
+        ((error + change) * decay - error).clamp(-6.0 * STEP, 6.0 * STEP),
+        ((speed - 16.0 * change) * decay).clamp(-6.0, 6.0),
+    )
+}
 
 /// Authoritative boat pose and motion; presentation adds no player displacement.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,14 +73,22 @@ pub struct SwimSnapshot {
 
 #[derive(Clone, Debug)]
 pub(crate) struct MarineState {
+    pub(crate) lab: bool,
+    pub(crate) glider_wind_scale: f32,
     boat: BoatSnapshot,
     swim: SwimSnapshot,
     velocity: Vec3,
+    buoyancy_speed: f32,
+    wave_velocity: Vec3,
+    wave_surface_speed: f32,
+    wave_height: Option<f32>,
 }
 
 impl Default for MarineState {
     fn default() -> Self {
         Self {
+            lab: false,
+            glider_wind_scale: 1.0,
             boat: BoatSnapshot::default(),
             swim: SwimSnapshot {
                 active: false,
@@ -74,15 +97,27 @@ impl Default for MarineState {
                 submerged: false,
             },
             velocity: Vec3::ZERO,
+            buoyancy_speed: 0.0,
+            wave_velocity: Vec3::ZERO,
+            wave_surface_speed: 0.0,
+            wave_height: None,
         }
     }
 }
 
 impl MarineState {
+    fn reset_wave_motion(&mut self) {
+        self.buoyancy_speed = 0.0;
+        self.wave_velocity = Vec3::ZERO;
+        self.wave_surface_speed = 0.0;
+        self.wave_height = None;
+    }
+
     pub(crate) fn stop_on_death(&mut self) {
         self.boat = BoatSnapshot::default();
         self.velocity = Vec3::ZERO;
         self.swim.active = false;
+        self.reset_wave_motion();
         // Preserve the last breathing facts for the terminal HUD. Only Restart
         // constructs a fresh reserve; pausing or repeated cleanup cannot refill it.
     }
@@ -103,6 +138,156 @@ impl Actor {
 }
 
 impl ArenaSession {
+    /// Stage an exploration glide only after destination terrain is admitted.
+    /// Existing progress is preserved; invalid or obstructed positions are rejected.
+    pub fn start_exploration_glide(
+        &mut self,
+        feet: Vec3,
+        heading: Vec3,
+        view: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> bool {
+        if !self.is_exploration()
+            || !feet.is_finite()
+            || !heading.is_finite()
+            || heading.with_y(0.0).length_squared() < 0.01
+        {
+            return false;
+        }
+        let Some(id) = self.human_actor_id() else {
+            return false;
+        };
+        self.collision.refresh(view, geometry);
+        let Some(actor) = self.actors.iter_mut().find(|actor| actor.id == id) else {
+            return false;
+        };
+        let radius = actor.dimensions.x * 0.5;
+        if self
+            .collision
+            .needs_terrain(feet, Vec3::ZERO, actor.dimensions.y, radius)
+            || !self.collision.clear(feet, actor.dimensions.y, radius)
+        {
+            return false;
+        }
+        let mut candidate = actor.clone();
+        fold_boat(&mut candidate);
+        candidate.clear_glider();
+        candidate.free_flight = Some(crate::exploration::FreeFlightState::default());
+        candidate.feet = feet;
+        candidate.previous_feet = feet;
+        candidate.grounded = false;
+        candidate.body.grounded = false;
+        let heading = heading.with_y(0.0).normalize();
+        candidate.aim = heading;
+        transfer_velocity(&mut candidate, heading * 12.0);
+        crate::glider::prepare(
+            &mut candidate,
+            ActorIntent {
+                glider_toggle: true,
+                glider_look: heading,
+                aim: heading,
+                ..Default::default()
+            },
+            &self.collision,
+            view,
+            geometry,
+        );
+        if !candidate.glider.open {
+            return false;
+        }
+        *actor = candidate;
+        true
+    }
+
+    /// Apply a named lab restart through gameplay, validating body clearance.
+    /// Returns false outside the lab or when the authored start is obstructed.
+    pub fn reset_water_lab_pose(
+        &mut self,
+        start: hex_core::water_lab::LabStart,
+        view: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> bool {
+        use hex_core::water_lab::LabStart;
+        if view.selection.map != hex_core::arena::ArenaMap::WaterLab || !self.is_exploration() {
+            return false;
+        }
+        let anchor = match start {
+            LabStart::Shore => "water_lab_shore",
+            LabStart::Swim | LabStart::Boat => "water_lab_swim",
+            LabStart::Glider => "water_lab_glider",
+        };
+        let Some(mut feet) = view.anchors.get(anchor).copied() else {
+            return false;
+        };
+        let environment = self.ocean_environment.clone();
+        let sea = MarineWorld {
+            terrain: view,
+            geometry,
+            environment: environment.as_ref(),
+            time: self.ocean_time(),
+        };
+        if matches!(start, LabStart::Swim | LabStart::Boat) {
+            let OceanSurfaceState::ReadyWet(surface) = sea.sample(feet) else {
+                return false;
+            };
+            feet.y = surface.height - 0.8;
+        }
+        let Some(actor) = self.actors.first_mut() else {
+            return false;
+        };
+        if !self.collision.clear(feet, 1.2, actor.dimensions.x * 0.5) {
+            return false;
+        }
+        let heading = if start == LabStart::Glider {
+            Vec3::NEG_Z
+        } else {
+            Vec3::X
+        };
+        let mut candidate = Actor::spawn(actor.id, feet, heading);
+        candidate.configure_expedition_player();
+        candidate.free_flight = Some(crate::exploration::FreeFlightState::default());
+        candidate.marine = Some(MarineState {
+            lab: true,
+            ..Default::default()
+        });
+        candidate.grounded = start == LabStart::Shore;
+        candidate.body.grounded = candidate.grounded;
+        if start == LabStart::Boat {
+            if prepare(
+                &mut candidate,
+                ActorIntent {
+                    boat_toggle: true,
+                    aim: Vec3::X,
+                    ..Default::default()
+                },
+                &sea,
+                &self.collision,
+            )
+            .is_some()
+            {
+                return false;
+            }
+        } else if start == LabStart::Glider {
+            transfer_velocity(&mut candidate, heading * 12.0);
+            crate::glider::prepare(
+                &mut candidate,
+                ActorIntent {
+                    glider_toggle: true,
+                    glider_look: heading,
+                    aim: heading,
+                    ..Default::default()
+                },
+                &self.collision,
+                view,
+                geometry,
+            );
+        }
+        candidate.previous_feet = candidate.feet;
+        *actor = candidate;
+        self.notice.clear();
+        true
+    }
+
     /// Completed fixed-step time shared by ocean physics and presentation.
     #[must_use]
     pub fn ocean_time(&self) -> OceanSimulationTime {
@@ -160,11 +345,39 @@ impl MarineWorld<'_> {
         environment.sample(Vec2::new(point.x, point.z), self.time, availability, column)
     }
 
-    fn wind(&self) -> Vec3 {
+    fn wind(&self, position: Vec3) -> Vec3 {
         self.environment.map_or(Vec3::ZERO, |environment| {
-            let velocity = environment.wind.velocity_at(self.time);
+            let velocity = environment.wind_at(position, self.time);
             Vec3::new(velocity.x, 0.0, velocity.y)
         })
+    }
+
+    fn wave_motion(&self, at: Vec3, height: f32, state: &MarineState) -> (Vec3, f32) {
+        if !state.lab {
+            return (Vec3::ZERO, 0.0);
+        }
+        let Some(previous) = state.wave_height else {
+            return (Vec3::ZERO, 0.0);
+        };
+        // Sample the admitted surface across several columns, not the vertical
+        // face of one voxel. A dry/unloaded neighbour cannot invent a slope.
+        let slope = |axis: Vec3| match (self.sample(at - axis * 2.0), self.sample(at + axis * 2.0))
+        {
+            (OceanSurfaceState::ReadyWet(a), OceanSurfaceState::ReadyWet(b))
+                if a.water_id == b.water_id =>
+            {
+                (b.height - a.height) / 4.0
+            }
+            _ => 0.0,
+        };
+        let downhill = -Vec3::new(slope(Vec3::X), 0.0, slope(Vec3::Z)).clamp_length_max(1.0);
+        let response = 1.0 - (-8.0 * STEP).exp();
+        let speed = (state.wave_surface_speed
+            + ((height - previous) / STEP - state.wave_surface_speed) * response)
+            .clamp(-6.0, 6.0);
+        // Only changing water creates a push. Mounting/folding does not count as
+        // a wave, and the separate drift never becomes sailing propulsion.
+        ((downhill * speed.abs() * 0.5).clamp_length_max(0.8), speed)
     }
 }
 
@@ -186,16 +399,32 @@ fn fold_boat(actor: &mut Actor) {
         .marine
         .as_ref()
         .filter(|state| state.boat.active)
-        .map(|state| state.boat.velocity);
+        .map(|state| {
+            // A rising lab wave is buoyancy, not a jump when folding the boat.
+            if state.lab {
+                state.boat.velocity.with_y(0.0)
+            } else {
+                state.boat.velocity
+            }
+        });
     if let Some(velocity) = velocity {
         let velocity =
             velocity + actor.body.impulse_velocity + Vec3::Y * actor.body.vertical_velocity;
         if let Some(state) = &mut actor.marine {
             state.boat.active = false;
             state.velocity = velocity;
+            state.reset_wave_motion();
         }
         transfer_velocity(actor, velocity);
     }
+}
+
+fn navigable_depth(actor: &Actor, surface: OceanSurfaceSample) -> f32 {
+    (if actor.marine.as_ref().is_some_and(|state| state.lab) {
+        surface.height
+    } else {
+        surface.mean_height
+    }) - surface.bed_height
 }
 
 fn hull_positions(feet: Vec3, heading: Vec3) -> [Vec3; 3] {
@@ -216,7 +445,11 @@ pub(crate) fn prepare(
     sea: &MarineWorld<'_>,
     world: &CollisionWorld,
 ) -> Option<&'static str> {
-    actor.glider.wind = sea.wind();
+    actor.glider.wind = sea.wind(actor.feet)
+        * actor
+            .marine
+            .as_ref()
+            .map_or(1.0, |state| state.glider_wind_scale);
     actor.marine.as_ref()?;
     if actor.hp <= 0.0 {
         return None;
@@ -261,9 +494,7 @@ pub(crate) fn prepare(
         let OceanSurfaceState::ReadyWet(surface) = sea.sample(candidate) else {
             continue;
         };
-        if (actor.feet.y - surface.height).abs() > 1.5
-            || surface.mean_height - surface.bed_height < 0.7
-        {
+        if (actor.feet.y - surface.height).abs() > 1.5 || navigable_depth(actor, surface) < 0.7 {
             continue;
         }
         let feet = candidate.with_y(surface.height + DECK);
@@ -271,7 +502,7 @@ pub(crate) fn prepare(
         if world.needs_terrain(actor.feet, delta, actor.dimensions.y, actor.dimensions.x * 0.5)
             || world.sweep(actor.feet, delta, actor.dimensions.y, actor.dimensions.x * 0.5).is_some()
             || !boat_clear(world, feet, heading, actor)
-            || hull_positions(feet, heading).into_iter().any(|point| !matches!(sea.sample(point), OceanSurfaceState::ReadyWet(s) if s.mean_height - s.bed_height >= 0.7))
+            || hull_positions(feet, heading).into_iter().any(|point| !matches!(sea.sample(point), OceanSurfaceState::ReadyWet(s) if navigable_depth(actor, s) >= 0.7))
         { continue; }
         crate::glider::fold(actor);
         let velocity = incoming;
@@ -281,10 +512,12 @@ pub(crate) fn prepare(
                 heading,
                 velocity,
                 surface_normal: surface.normal,
-                wind: sea.wind(),
+                wind: sea.wind(actor.feet),
             };
             state.swim.active = false;
             state.velocity = velocity;
+            state.reset_wave_motion();
+            state.wave_height = Some(surface.height);
         }
         actor.feet = feet;
         transfer_velocity(actor, Vec3::ZERO);
@@ -324,6 +557,21 @@ fn telemetry(actor: &mut Actor, requested: Vec3, loading: bool) {
     }
 }
 
+// Game-tuned points of sail. Angle is from the wind SOURCE: 0=headwind, 180=tailwind.
+// Smooth transitions retain momentum through tacks instead of a beam-reach cutoff.
+fn sail_drive(alignment: f32) -> f32 {
+    let angle = (-alignment.clamp(-1.0, 1.0)).acos().to_degrees();
+    let smooth = |t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    if angle < 90.0 {
+        1.15 * smooth((angle - 40.0) / 50.0)
+    } else {
+        1.15 - 0.15 * smooth((angle - 90.0) / 90.0)
+    }
+}
+
 fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, Vec3) {
     let speed = boat.velocity.with_y(0.0).length();
     let turn = (70.0 - 35.0 * (speed / BOAT_SPEED)).to_radians() * STEP;
@@ -337,10 +585,8 @@ fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, V
         signed.clamp(-turn, turn) - intent.movement.x.clamp(-1.0, 1.0) * turn,
     ) * boat.heading;
     let alignment = heading.dot(boat.wind.normalize_or_zero());
-    let mut acceleration = 3.0 * alignment.max(0.0) * boat.wind.length() / 10.0
-        - 0.25
-        - 0.006 * speed * speed
-        - 2.0 * (-alignment).max(0.0);
+    let mut acceleration =
+        3.0 * sail_drive(alignment) * boat.wind.length() / 10.0 - 0.25 - 0.006 * speed * speed;
     if intent.movement.y > 0.0 && speed < 4.0 {
         acceleration = acceleration.max(1.5);
     }
@@ -363,7 +609,8 @@ fn boat_tick(
         return;
     };
     let boat = BoatSnapshot {
-        wind: sea.wind(),
+        wind: sea.wind(actor.feet),
+        velocity: state.boat.velocity - state.wave_velocity,
         ..state.boat
     };
     let (heading, velocity) = boat_velocity(boat, intent, actor.aim);
@@ -377,12 +624,19 @@ fn boat_tick(
         OceanSurfaceState::ReadyDry | OceanSurfaceState::OutsideWorld => {
             if let Some(state) = &mut actor.marine {
                 state.boat.velocity = Vec3::ZERO;
+                state.reset_wave_motion();
             }
             telemetry(actor, velocity, false);
             return;
         }
     };
-    let desired = next.with_y(surface.height + DECK);
+    let target_y = surface.height + DECK;
+    let lab = state.lab;
+    let (rise, buoyancy_speed) = buoyancy_step(actor.feet.y, target_y, state.buoyancy_speed);
+    let (wave_velocity, wave_surface_speed) = sea.wave_motion(next, surface.height, state);
+    let velocity = velocity + wave_velocity;
+    let desired =
+        (next + wave_velocity * STEP).with_y(if lab { actor.feet.y + rise } else { target_y });
     let delta = desired - actor.feet;
     let mut fraction = 1.0_f32;
     let mut loading = world.needs_terrain(
@@ -395,7 +649,7 @@ fn boat_tick(
         loading |= world.needs_terrain(point, delta, HULL_HEIGHT, HULL_RADIUS);
         match sea.sample(point + delta) {
             OceanSurfaceState::Unloaded => loading = true,
-            OceanSurfaceState::ReadyWet(s) if s.mean_height - s.bed_height >= 0.7 => {}
+            OceanSurfaceState::ReadyWet(s) if navigable_depth(actor, s) >= 0.7 => {}
             _ => fraction = 0.0,
         }
         if let Some(hit) = world.sweep(point, delta, HULL_HEIGHT, HULL_RADIUS) {
@@ -417,6 +671,7 @@ fn boat_tick(
     if !boat_clear(world, actor.feet, heading, actor) {
         if let Some(state) = &mut actor.marine {
             state.boat.velocity = Vec3::ZERO;
+            state.reset_wave_motion();
         }
         return;
     }
@@ -427,11 +682,23 @@ fn boat_tick(
         state.boat.velocity = if fraction < 1.0 {
             Vec3::ZERO
         } else {
-            velocity.with_y(surface.vertical_velocity)
+            velocity.with_y(if lab {
+                delta.y / STEP
+            } else {
+                surface.vertical_velocity
+            })
         };
         state.boat.surface_normal = surface.normal;
         state.boat.wind = boat.wind;
         state.velocity = state.boat.velocity;
+        state.buoyancy_speed = if fraction < 1.0 { 0.0 } else { buoyancy_speed };
+        state.wave_velocity = if fraction < 1.0 {
+            Vec3::ZERO
+        } else {
+            wave_velocity
+        };
+        state.wave_surface_speed = wave_surface_speed;
+        state.wave_height = Some(surface.height);
     }
 }
 
@@ -457,6 +724,7 @@ pub(crate) fn tick_or_wait(
     if actor.free_flight.as_ref().is_some_and(|state| state.active) {
         if let Some(state) = &mut actor.marine {
             state.swim.active = false;
+            state.reset_wave_motion();
         }
         return false;
     }
@@ -464,9 +732,21 @@ pub(crate) fn tick_or_wait(
         boat_tick(actor, intent, sea, world);
         return true;
     }
+    let lab = actor.marine.as_ref().is_some_and(|state| state.lab);
+    let floating = lab
+        && intent.flight_vertical >= -0.01
+        && !intent.high_jump
+        && actor.body.vertical_velocity <= 2.5;
+    let following = floating && actor.marine.as_ref().is_some_and(|state| state.swim.active);
     let surface = match sample {
         OceanSurfaceState::ReadyWet(surface)
-            if actor.feet.y < surface.mean_height - 0.05
+            if (following
+                || actor.feet.y
+                    < (if lab {
+                        surface.height
+                    } else {
+                        surface.mean_height
+                    }) - 0.05)
                 && actor.feet.y + actor.dimensions.y > surface.bed_height =>
         {
             surface
@@ -479,6 +759,7 @@ pub(crate) fn tick_or_wait(
         _ => {
             if let Some(state) = &mut actor.marine {
                 state.swim.active = false;
+                state.reset_wave_motion();
             }
             return false;
         }
@@ -494,16 +775,28 @@ pub(crate) fn tick_or_wait(
         actor
             .marine
             .as_ref()
-            .map_or(Vec3::ZERO, |state| state.velocity)
+            .map_or(Vec3::ZERO, |state| state.velocity - state.wave_velocity)
     };
     let forward = actor.aim.with_y(0.0).normalize_or(Vec3::NEG_Z);
     let direction = (forward * intent.movement.y + forward.cross(Vec3::Y) * intent.movement.x)
         .clamp_length_max(1.0);
     let vertical = intent.flight_vertical.clamp(-1.0, 1.0);
     // A gentle control-only return to breathing depth; no water-volume solver.
-    let neutral = ((surface.height - 0.95 - actor.feet.y) * 2.0).clamp(-0.5, 1.2);
+    let immersion = if lab {
+        actor.dimensions.y * (2.0 / 3.0)
+    } else {
+        0.95
+    };
+    if lab && surface.height - surface.bed_height < immersion {
+        if let Some(state) = &mut actor.marine {
+            state.swim.active = false;
+            state.reset_wave_motion();
+        }
+        return false;
+    }
+    let neutral = ((surface.height - immersion - actor.feet.y) * 2.0).clamp(-0.5, 1.2);
     let mut velocity = prior.lerp(
-        direction * 3.5
+        direction * if lab { actor.walking_speed * 0.85 } else { 3.5 }
             + Vec3::Y
                 * if vertical.abs() > 0.01 {
                     vertical * 2.5
@@ -516,7 +809,34 @@ pub(crate) fn tick_or_wait(
         velocity.y = actor.body.vertical_velocity;
     }
     velocity += actor.body.impulse_velocity;
-    let delta = velocity * STEP;
+    let mut delta = velocity * STEP;
+    let mut buoyancy_speed = 0.0;
+    let mut wave_velocity = Vec3::ZERO;
+    let mut wave_surface_speed = 0.0;
+    let mut wave_height = None;
+    if floating {
+        let target_height = match sea.sample(actor.feet + delta) {
+            OceanSurfaceState::ReadyWet(next) => next.height,
+            _ => surface.height,
+        };
+        // Space means surface, just like hands-free floating. It must not pump
+        // the player out of the water and hand alternating ticks to gravity.
+        let previous_speed = actor
+            .marine
+            .as_ref()
+            .map_or(0.0, |state| state.buoyancy_speed);
+        (delta.y, buoyancy_speed) =
+            buoyancy_step(actor.feet.y, target_height - immersion, previous_speed);
+        if let Some(state) = &actor.marine {
+            (wave_velocity, wave_surface_speed) =
+                sea.wave_motion(actor.feet + delta, target_height, state);
+        }
+        wave_height = Some(target_height);
+        velocity += wave_velocity;
+        delta += wave_velocity * STEP;
+        // This velocity is buoyancy, not a player jump impulse.
+        velocity.y = 0.0;
+    }
     let loading = world.needs_terrain(
         actor.feet,
         delta,
@@ -537,6 +857,10 @@ pub(crate) fn tick_or_wait(
     actor.feet = feet;
     for normal in contacts {
         velocity -= normal * velocity.dot(normal).min(0.0);
+        wave_velocity -= normal * wave_velocity.dot(normal).min(0.0);
+        if normal.y.abs() > 0.5 {
+            buoyancy_speed = 0.0;
+        }
     }
     transfer_velocity(actor, velocity);
     actor.grounded = false;
@@ -544,6 +868,10 @@ pub(crate) fn tick_or_wait(
     if let Some(state) = &mut actor.marine {
         state.swim.active = true;
         state.velocity = velocity;
+        state.buoyancy_speed = buoyancy_speed;
+        state.wave_velocity = wave_velocity;
+        state.wave_surface_speed = wave_surface_speed;
+        state.wave_height = wave_height;
     }
     true
 }

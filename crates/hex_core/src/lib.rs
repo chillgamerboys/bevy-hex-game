@@ -37,6 +37,7 @@ pub mod traversal;
 pub mod unit_ids;
 pub mod view;
 pub mod voxel;
+pub mod water_lab;
 
 pub use app::{
     AppSystems, AuthoritativeSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode,

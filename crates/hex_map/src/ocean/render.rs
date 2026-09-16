@@ -23,6 +23,7 @@ struct OceanParams {
     effects: Vec4,
     shallow: Vec4,
     deep: Vec4,
+    voxel: Vec4,
 }
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
 struct OceanExtension {
@@ -39,6 +40,11 @@ struct OceanExtension {
     near_water: Handle<Image>,
 }
 impl MaterialExtension for OceanExtension {
+    fn enable_prepass() -> bool {
+        // The stock depth pass would write the undisplaced mesh through wave troughs.
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         "shaders/ocean.wgsl".into()
     }
@@ -142,6 +148,12 @@ fn parameters(
             } else {
                 1.0
             },
+            0.0,
+        ),
+        voxel: Vec4::new(
+            profile.voxel_height,
+            f32::from(super::VOXEL_DETAIL_RADIUS),
+            0.0,
             0.0,
         ),
         shallow: profile.shallow_color,
@@ -279,7 +291,11 @@ fn update(
             cache.material = Some(materials.add(OceanMaterial {
                 base: StandardMaterial {
                     base_color: Color::WHITE,
-                    alpha_mode: AlphaMode::Blend,
+                    alpha_mode: if profile.voxel_height > 0.0 {
+                        AlphaMode::Opaque
+                    } else {
+                        AlphaMode::Blend
+                    },
                     perceptual_roughness: 0.58,
                     reflectance: 0.18,
                     cull_mode: None,
@@ -314,13 +330,25 @@ fn update(
         value.extension.params.effects.w = if camera_underwater { 1.0 } else { 0.0 };
         status.phase_seconds = Some(value.extension.params.water.y);
     }
-    let position = Vec3::new(
-        frame.camera_position.x,
-        profile.mean_sea_level,
-        frame.camera_position.z,
-    );
+    let position = if profile.voxel_height > 0.0 {
+        hex_core::HexCoord::from_world(frame.camera_position).to_world(profile.mean_sea_level)
+    } else {
+        Vec3::new(
+            frame.camera_position.x,
+            profile.mean_sea_level,
+            frame.camera_position.z,
+        )
+    };
+    if let Some(mut value) = materials.get_mut(&material) {
+        value.extension.params.voxel.z = position.x;
+        value.extension.params.voxel.w = position.z;
+    }
     if cache.surface.is_none() {
-        let mesh = mesh::surface_mesh();
+        let mesh = if profile.voxel_height > 0.0 {
+            mesh::voxel_surface_mesh()
+        } else {
+            mesh::surface_mesh()
+        };
         status.surface_vertices = mesh.count_vertices();
         cache.surface = Some(
             commands

@@ -4,10 +4,12 @@ use hex_core::ocean::{OceanEnvironmentSampler, OceanSurfaceSample, OceanWaterCol
 
 /// Immutable world-owned wave sampler. Store behind the core environment Arc;
 /// every call receives current admitted occupancy rather than retaining residency.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OceanSurfaceAdapter {
     profile: OceanSurfaceProfile,
-    bath: OceanBathymetry,
+    bath: std::sync::Arc<OceanBathymetry>,
+    #[cfg(feature = "arena-prototype")]
+    wind: Option<std::sync::Arc<crate::water_lab::WindField>>,
 }
 impl OceanSurfaceAdapter {
     /// Takes a validated immutable snapshot once per package/profile publication.
@@ -18,10 +20,43 @@ impl OceanSurfaceAdapter {
         if !profile.is_valid() || !bath.is_valid() {
             return Err("Invalid ocean environment snapshot");
         }
-        Ok(Self { profile, bath })
+        Ok(Self {
+            profile,
+            bath: std::sync::Arc::new(bath),
+            #[cfg(feature = "arena-prototype")]
+            wind: None,
+        })
+    }
+}
+#[cfg(feature = "arena-prototype")]
+impl OceanSurfaceAdapter {
+    /// Attach a refreshed cover snapshot without copying the ocean bathymetry.
+    #[must_use]
+    pub fn with_wind_field(mut self, wind: crate::water_lab::WindField) -> Self {
+        self.wind = Some(std::sync::Arc::new(wind));
+        self
     }
 }
 impl OceanEnvironmentSampler for OceanSurfaceAdapter {
+    fn wind_at(
+        &self,
+        position: Vec3,
+        time: hex_core::ocean::OceanSimulationTime,
+        profile: hex_core::ocean::OceanWindProfile,
+    ) -> Vec2 {
+        #[cfg(feature = "arena-prototype")]
+        if let Some(field) = &self.wind {
+            return field.velocity(position, time, profile);
+        }
+        #[cfg(not(feature = "arena-prototype"))]
+        let _ = position;
+        if self.profile.voxel_height > 0.0 {
+            Vec2::X * 9.0
+        } else {
+            profile.velocity_at(time)
+        }
+    }
+
     fn surface_at(
         &self,
         at: Vec2,
@@ -52,6 +87,45 @@ impl OceanEnvironmentSampler for OceanSurfaceAdapter {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "arena-prototype")]
+    #[test]
+    fn attached_natural_field_is_shared_by_ocean_consumers() {
+        use hex_core::{
+            arena::{ArenaTerrainView, ArenaVoxelGeometry},
+            ocean::{OceanSimulationTime, OceanWindProfile},
+        };
+        let terrain = ArenaTerrainView::default();
+        let field = crate::water_lab::WindField::for_region(
+            &terrain,
+            ArenaVoxelGeometry::default(),
+            160.0,
+            None,
+        );
+        let adapter = OceanSurfaceAdapter::new(
+            OceanSurfaceProfile::regular_voxels(160.0, 0.4),
+            OceanBathymetry::default(),
+        )
+        .unwrap()
+        .with_wind_field(field.clone());
+        let wind = OceanWindProfile {
+            heading_radians: std::f32::consts::FRAC_PI_2,
+            speed: 9.0,
+        };
+        for height in [160.0, 174.0, 507.0] {
+            for seconds in [0.0, 5.0, 900.001] {
+                let p = Vec3::new(7.0, height, 3.0);
+                let time = OceanSimulationTime {
+                    generation: 1,
+                    seconds,
+                };
+                assert_eq!(
+                    adapter.wind_at(p, time, wind),
+                    field.velocity(p, time, wind)
+                );
+            }
+        }
+    }
+
     #[test]
     fn taller_swells_agree_for_camera_and_admitted_gameplay_sampling() {
         let profile = OceanSurfaceProfile::default();
@@ -76,6 +150,75 @@ mod tests {
             assert!((gameplay.height - camera.height).abs() < 0.00001);
             assert!(gameplay.normal.distance(camera.normal) < 0.00001);
             assert!((gameplay.vertical_velocity - camera.vertical_velocity).abs() < 0.00001);
+        }
+    }
+
+    #[test]
+    fn voxel_profile_keeps_camera_float_and_steady_wind_in_agreement() {
+        let profile = OceanSurfaceProfile::regular_voxels(0.0, 0.4);
+        let bed = OceanBathymetry::default();
+        let adapter = OceanSurfaceAdapter::new(profile.clone(), bed.clone()).unwrap();
+        let column = OceanWaterColumn {
+            mean_height: 0.0,
+            bed_height: -140.0,
+            water_id: hex_core::SubstanceId(3),
+        };
+        let at = Vec2::splat(0.5);
+        for phase in [0.0, 1.0, 3.0, 7.0] {
+            let gameplay = adapter.surface_at(at, phase, column).unwrap();
+            let camera = super::super::sample_surface(&profile, &bed, at, phase).unwrap();
+            assert!((gameplay.height - camera.height).abs() < 0.00001);
+            assert!((gameplay.height / 0.4 - (gameplay.height / 0.4).round()).abs() < 0.00001);
+            assert_eq!(gameplay.normal, Vec3::Y);
+        }
+        assert_eq!(
+            adapter.wind_at(Vec3::ZERO, Default::default(), Default::default()),
+            Vec2::X * 9.0
+        );
+        assert!(adapter
+            .surface_at(
+                at,
+                0.0,
+                OceanWaterColumn {
+                    bed_height: 1.0,
+                    ..column
+                }
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn ocean_wave_groups_vary_along_crests_and_between_primary_periods() {
+        let profile = OceanSurfaceProfile::regular_voxels(0.0, 0.4);
+        let bed = OceanBathymetry {
+            origin_xz: Vec2::splat(-128.0),
+            spacing: 256.0,
+            ..default()
+        };
+        let adapter = OceanSurfaceAdapter::new(profile, bed).unwrap();
+        let column = OceanWaterColumn {
+            mean_height: 0.0,
+            bed_height: -140.0,
+            water_id: hex_core::SubstanceId(3),
+        };
+        let height = |at, seconds| adapter.surface_at(at, seconds, column).unwrap().height;
+        let mut along_crest = false;
+        let mut across_periods = false;
+        for tick in 0..90 {
+            let t = tick as f32 * 0.1;
+            let center = height(Vec2::ZERO, t);
+            along_crest |= (center - height(Vec2::new(0.0, 24.0), t)).abs() > 0.39;
+            across_periods |= (center - height(Vec2::ZERO, t + 9.0)).abs() > 0.39;
+            assert!(center.abs() <= 1.6);
+        }
+        assert!(
+            along_crest,
+            "wave crests must not remain straight identical bands"
+        );
+        assert!(across_periods, "successive primary waves must differ");
+        // Both render and gameplay wrap the shared clock at 900 seconds.
+        for at in [Vec2::ZERO, Vec2::new(0.0, 24.0), Vec2::new(19.0, -31.0)] {
+            assert!((height(at, 900.0) - height(at, 0.0)).abs() < 0.0001);
         }
     }
 

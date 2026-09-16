@@ -17,6 +17,9 @@ pub use boundary::{OceanBoundaryColumn, OceanNearBoundary};
 pub use render::{install, OceanRenderStatus};
 pub use sample::{sample_local_surface, sample_surface, OceanSurfaceSample};
 
+/// Shared near-detail extent keeps stepped water beside detailed ocean shores.
+pub(crate) const VOXEL_DETAIL_RADIUS: u16 = 144;
+
 /// One analytic directional swell, with world-unit amplitude and wavelength.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OceanWave {
@@ -35,6 +38,8 @@ pub struct OceanWave {
 /// World-owned visual ocean profile; ordinary liquids keep zero displacement.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct OceanSurfaceProfile {
+    /// Positive height enables the accepted opaque voxel-wave presentation; zero keeps legacy swells.
+    pub voxel_height: f32,
     /// Static physical sea surface, also the displacement's mean height.
     pub mean_sea_level: f32,
     /// The three slow swells; defaults have a combined maximum excursion of 3.5 units.
@@ -52,6 +57,7 @@ pub struct OceanSurfaceProfile {
 impl Default for OceanSurfaceProfile {
     fn default() -> Self {
         Self {
+            voxel_height: 0.0,
             mean_sea_level: 0.0,
             waves: [
                 OceanWave {
@@ -85,10 +91,47 @@ impl Default for OceanSurfaceProfile {
 }
 
 impl OceanSurfaceProfile {
+    /// Opaque waves in the accepted Water Lab style, with irregular ocean wave groups.
+    /// Three sizes travel roughly eastward and steepen in shallow water.
+    #[must_use]
+    pub fn regular_voxels(mean_sea_level: f32, voxel_height: f32) -> Self {
+        let primary = OceanWave {
+            direction: Vec2::X,
+            amplitude: 0.8,
+            wavelength: 28.0,
+            period: 9.0,
+            phase_radians: 0.0,
+        };
+        Self {
+            mean_sea_level,
+            voxel_height,
+            waves: [
+                primary,
+                OceanWave {
+                    direction: Vec2::new(0.951_056_54, 0.309_017),
+                    amplitude: 0.38,
+                    wavelength: 43.0,
+                    period: 12.5,
+                    phase_radians: 1.3,
+                },
+                OceanWave {
+                    direction: Vec2::new(0.906_307_8, -0.422_618_27),
+                    amplitude: 0.18,
+                    wavelength: 13.0,
+                    period: 6.0,
+                    phase_radians: 2.4,
+                },
+            ],
+            ..Self::default()
+        }
+    }
+
     /// Rejects invalid uniforms before publishing a material or sampling a camera.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.mean_sea_level.is_finite()
+        self.voxel_height.is_finite()
+            && self.voxel_height >= 0.0
+            && self.mean_sea_level.is_finite()
             && self.shore_depth.is_finite()
             && self.shore_depth > 0.0
             && self.shore_reflection.is_finite()

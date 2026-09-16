@@ -9,6 +9,10 @@ pub(super) const HORIZON_RADIUS: f32 = 12_288.0;
 /// Four-unit radial spacing covers the first256 units, then grows toward the
 /// decorative horizon. Only the owning entity's X/Z translation changes.
 pub(super) fn surface_mesh() -> Mesh {
+    surface_data().into_mesh()
+}
+
+fn surface_data() -> MeshData {
     let radii = (1_u16..=64)
         .map(|n| f32::from(n) * 4.0)
         .chain((1_u16..=48).map(|n| 256.0 + f32::from(n) * 16.0))
@@ -43,6 +47,47 @@ pub(super) fn surface_mesh() -> Mesh {
         }
         previous = Some(start);
     }
+    data
+}
+
+/// Fixed local hex columns, backed by the existing coarser distant surface.
+pub(super) fn voxel_surface_mesh() -> Mesh {
+    let mut data = surface_data();
+    let corners = [
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.866_025_4, 0.0, 0.5),
+        Vec3::new(0.866_025_4, 0.0, -0.5),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(-0.866_025_4, 0.0, -0.5),
+        Vec3::new(-0.866_025_4, 0.0, 0.5),
+    ];
+    for coord in hex_core::HexCoord::ORIGIN.within_radius(u32::from(super::VOXEL_DETAIL_RADIUS)) {
+        let center = coord.to_world(0.0);
+        let uv = Vec2::new(center.x, center.z);
+        let start = data.len();
+        data.vertex_with_uv(center, Vec3::Y, uv);
+        for corner in corners {
+            data.vertex_with_uv(center + corner, Vec3::Y, uv);
+        }
+        for edge in 0..6_u32 {
+            data.indices
+                .extend([start, start + 1 + edge, start + 1 + (edge + 1) % 6]);
+        }
+        for (a, b) in corners.into_iter().zip(corners.into_iter().cycle().skip(1)) {
+            let start = data.len();
+            let normal = (a + b).normalize();
+            for point in [
+                center + a - Vec3::Y,
+                center + b - Vec3::Y,
+                center + b,
+                center + a,
+            ] {
+                data.vertex_with_uv(point, normal, uv);
+            }
+            data.indices
+                .extend([start, start + 1, start + 2, start, start + 2, start + 3]);
+        }
+    }
     data.into_mesh()
 }
 
@@ -50,6 +95,7 @@ pub(super) fn surface_mesh() -> Mesh {
 pub(super) struct MeshData {
     pub positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 impl MeshData {
@@ -57,18 +103,21 @@ impl MeshData {
         u32::try_from(self.positions.len()).unwrap_or(u32::MAX)
     }
     pub fn vertex(&mut self, position: Vec3, normal: Vec3) {
+        self.vertex_with_uv(position, normal, Vec2::splat(100_000.0));
+    }
+    fn vertex_with_uv(&mut self, position: Vec3, normal: Vec3, uv: Vec2) {
         self.positions.push(position.to_array());
         self.normals.push(normal.to_array());
+        self.uvs.push(uv.to_array());
     }
     pub fn into_mesh(self) -> Mesh {
-        let count = self.positions.len();
         Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; count])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
         .with_inserted_indices(Indices::U32(self.indices))
     }
 }
@@ -76,6 +125,20 @@ impl MeshData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn voxel_patch_is_bounded_and_every_vertex_has_cell_metadata() {
+        let mesh = voxel_surface_mesh();
+        assert_eq!(mesh.count_vertices(), 98_305 + 62_641 * 31);
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap().len(),
+            mesh.count_vertices()
+        );
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().len(),
+            mesh.count_vertices()
+        );
+    }
+
     #[test]
     fn horizon_geometry_has_fixed_bounded_cost_and_no_nonfinite_vertices() {
         let mesh = surface_mesh();

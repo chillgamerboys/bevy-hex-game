@@ -18,18 +18,29 @@ The latest movement tuning raises expedition starting walking speed to 5.90625 u
 
 **B** deploys or folds a portable sailboat beside clear water at least 0.7 units
 deep. W steers toward the view and provides slow paddling; A/D turn, S brakes.
-The sail adds propulsion along the wind and loses momentum across or against it.
+Sail drive varies smoothly with heading: it is strongest across the wind and
+remains useful while pointing partly upwind. Drive fades toward zero inside
+40 degrees of the wind source; the boat coasts through turns instead of stopping
+at a 90-degree cutoff.
 Speed is capped at 24 units/s. Opening equipment supplies no momentum; the hull
 and physical player sweep against solids and wait at unloaded boundaries. Spells
 remain available aboard. F and High Jump fold the boat.
 
-Swimming uses WASD, Space to rise and Ctrl to dive. The physical eye has a
+Swimming uses WASD at 85% of walking speed. Releasing Space or holding it targets
+two-thirds body immersion; Ctrl dives. Swimmers and boats ease over voxel steps
+and receive a small, smoothed downhill push as waves raise or lower them. Boat
+toggles work in the water and retain physical collision checks. The physical eye has a
 **90-second oxygen reserve**; breathing replenishes it over six seconds without
 healing. Empty oxygen costs 10 HP/s. The compact air indicator appears while
 submerged or recovering. The third-person camera never determines breathing.
 
-The prevailing wind is approximately 10 units/s with slow gusts. Glider lift,
-stall and airspeed use velocity relative to that wind; collision and streaming
+The natural wind field starts from 9 units/s toward east, with spatial gusts,
+local direction changes and intermittent swirls. Exposed mean speed rises toward
+1.8 times the sea-level baseline at 24 units above sea level; terrain and shield
+walls shelter their lee. Total speed is capped at 25 units/s. Glider influence
+starts at 65%; the boat samples full environmental wind. See the
+[wind model](../development/water-lab-wind.md) for tuning. Glider lift,
+stall and airspeed use velocity relative to its effective wind; collision and streaming
 use actual ground velocity. G can open the glider on land without adding lift or
 changing walking/jumping. Landing leaves the canopy open; water, blocking walls
 and casting fold it.
@@ -40,18 +51,28 @@ The arrow rotates as you look around in first or third person; its compass label
 still names the world direction and the readout shows current speed in units/s.
 It sits beside the north-up minimap when M is enabled, or in the upper-right
 corner otherwise. It uses the same wind
-and simulation clock as sailing and gliding, and is available on land too.
+and simulation clock as sailing and gliding, and is available on land too. V also
+shows up to 147 depth-tested field arrows; cyan-to-yellow color and length show
+0–25 units/s. The three sample layers follow altitude around the mountains.
+
+To start above the mountain summit with the glider open, use
+`python3 tools/arena.py launch --map northern-archipelago --start summit-glider`.
+Terrain admission completes before placement; Play/Enter releases the ready screen.
 
 ## Water and residency
 
-Three absolute-coordinate swells use amplitudes 2.1, 1.05 and 0.35 units, within a
-3.5-unit displacement envelope. Their periods remain 18, 25 and 12 seconds.
-Weak reflected waves near shores add interference; foam follows actual crests.
-Cached bed, shelter and shore-anchor samples supply matching CPU/GPU height,
-normal and vertical velocity. The boat, physical-eye breathing and rendering
-share one pause/reset-aware simulation clock. Rivers and fountains retain zero
-displacement. No currents, water-volume solver, gravity-driven liquid motion,
-draining or refilling have been added. Water cannot be carved.
+Ocean uses opaque stepped voxel waves with three different sizes, nearby travel
+directions and varying wave groups. Primary wavelengths are 28, 43 and 13 units;
+periods are 9, 12.5 and 6 seconds. Shallow water steepens waves, and crest/shore
+foam combines with moving color shimmer. Detailed nearby terrain and water ranges
+match, while distant islands retain coarse silhouettes.
+
+Cached beds, shelter and shore anchors supply matching CPU/GPU surfaces. Boats,
+swimmers and breathing use the same completed simulation clock. Natural wind is
+not yet coupled to wave generation. The lab's dynamic wet/dry shore experiment
+remains opt-in; Ocean retains its admitted stored-liquid membership. Rivers and
+fountains retain zero wave displacement. There is no water-volume solver,
+draining or refilling; water cannot be carved.
 
 The world retains at most 512 fine source chunks, two source workers and two admitted products per pump. Body and predicted travel dependencies take priority over optional detail. At most 256 detailed terrain chunks are presented; coarse terrain silhouettes and the decorative ocean horizon remain visible at distance. Neither proxy geometry nor unloaded chunks grant collision clearance. Sparse carved cells survive retirement and reload, but not Restart.
 

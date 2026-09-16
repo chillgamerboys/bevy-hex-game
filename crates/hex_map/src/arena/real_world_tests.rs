@@ -16,6 +16,44 @@ fn recipe(map: ArenaMap) -> worlds::WorldRecipe {
     .expect("accepted real world builds")
 }
 
+#[test]
+fn water_lab_publishes_exact_bounded_water_and_supported_dry_start() {
+    let first = recipe(ArenaMap::WaterLab);
+    let second = recipe(ArenaMap::WaterLab);
+    assert_eq!(first.map.len(), 3283);
+    assert_eq!(first.view.voxels, second.view.voxels);
+    assert_eq!(first.view.liquids, second.view.liquids);
+    assert!(first.view.liquids.len() > 2500);
+    assert!(first.view.static_spans.is_empty());
+    let [start, _] = first.view.spawns;
+    let support = first
+        .geometry
+        .voxel_at(start - Vec3::Y * 0.001)
+        .expect("finite start");
+    assert!(first.view.voxels.contains_key(&support));
+    assert!(!first
+        .view
+        .liquids
+        .iter()
+        .any(|span| span.bottom.coord == support.coord));
+    assert!(first
+        .map
+        .columns()
+        .all(|(coord, _)| crate::water_lab::contains(coord)));
+    for span in &first.view.liquids {
+        let bed = span.bottom.below();
+        assert!(first.view.voxels.contains_key(&bed));
+        assert!(
+            (first
+                .geometry
+                .top(TilePos::new(span.bottom.coord, span.top_level))
+                - crate::water_lab::SEA_LEVEL)
+                .abs()
+                < 0.00001
+        );
+    }
+}
+
 fn seven() -> &'static worlds::WorldRecipe {
     static RECIPE: OnceLock<worlds::WorldRecipe> = OnceLock::new();
     RECIPE.get_or_init(|| recipe(ArenaMap::SevenRegions))

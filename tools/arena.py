@@ -57,7 +57,7 @@ CHARGE_VIEWS = (
     "shield-partial-preview-first", "shield-partial-preview-third",
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
-MAPS = ("duel", "fort", "seven-regions", "forest-massif", "northern-archipelago")
+MAPS = ("duel", "fort", "seven-regions", "forest-massif", "northern-archipelago", "water-lab")
 ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12", "worm")
 PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 10,
                   "shaman-party": ["Shaman", *(["Goblin"] * 5)], "golem": ["Golem"],
@@ -989,6 +989,8 @@ def native_receipt_info(png: Path, view: str, pixels: list[int]) -> dict:
 
 
 def capture(args: argparse.Namespace) -> int:
+    if args.map == "water-lab":
+        raise RuntimeError("Use tools/water_lab_review.py for the finite Water Lab capture matrix.")
     views = BOT_VIEWS if args.bot_review else CHARGE_VIEWS if args.charge_review else MENU_VIEWS if args.menu_review else VIEWS
     matrix = "arena-bot-v1" if args.bot_review else "arena-charge-v1" if args.charge_review else "arena-menu-v3-terminal" if args.menu_review else MATRIX
     observer_matrix = args.spectator_review or args.spectator_performance
@@ -1180,6 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     launch = commands.add_parser("launch", help="Explicitly open the native playable arena through Cargo.")
+    launch.add_argument("--start", choices=("summit-glider",), help="Ocean only: start above the mountain summit with the glider open.")
     captures = commands.add_parser("capture", help="Capture all 23 views without a native window.")
     for command in (launch, captures):
         command.add_argument("--map", choices=MAPS, help="Map recipe (launch: forest-massif; legacy capture: duel).")
@@ -1236,6 +1239,8 @@ def main(argv: list[str] | None = None) -> int:
             if not 0 < args.timeout < float("inf"):
                 raise RuntimeError("--timeout must be a finite positive number.")
             return capture(args)
+        if args.start and args.map != "northern-archipelago":
+            raise RuntimeError("--start summit-glider requires --map northern-archipelago")
         battle_env = battle_environment(args, args.map or "forest-massif")
         env, _ = environment(args.target_dir)
         env.update(ux_environment(args))
@@ -1247,6 +1252,8 @@ def main(argv: list[str] | None = None) -> int:
         if (args.map or "forest-massif") == "forest-massif":
             prepare_forest_package(env)
         env.update(battle_env)
+        if args.start:
+            env["HEX_NORTHERN_START"] = args.start
         env.update(HEX_ARENA_MAP=args.map or "forest-massif", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)
         return run_cargo(env, None, None)

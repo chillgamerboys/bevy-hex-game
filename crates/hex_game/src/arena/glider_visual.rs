@@ -87,7 +87,38 @@ fn present(
         };
         *visibility = Visibility::Inherited;
         transform.translation = actor.feet + Vec3::Y * (actor.body_dimensions().y + 0.3);
-        transform.rotation =
-            Quat::from_rotation_arc(Vec3::NEG_Z, flight.direction.normalize_or(Vec3::NEG_Z));
+        transform.rotation = canopy_rotation(flight.direction);
+    }
+}
+
+fn canopy_rotation(direction: Vec3) -> Quat {
+    // Flight limits pitch to -60..30 degrees. A world-up frame therefore stays
+    // well defined through a full heading turn and never introduces a roll.
+    Transform::IDENTITY
+        .looking_to(direction.normalize_or(Vec3::NEG_Z), Vec3::Y)
+        .rotation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canopy_stays_upright_through_full_heading_turns() {
+        for pitch in [-60_f32, -15.0, 0.0, 30.0] {
+            let mut previous = None;
+            for degrees in 0..=720 {
+                let yaw = f32::from(u16::try_from(degrees).unwrap()).to_radians();
+                let direction = Quat::from_rotation_y(yaw)
+                    * (Quat::from_rotation_x(pitch.to_radians()) * Vec3::NEG_Z);
+                let rotation = canopy_rotation(direction);
+                assert!((rotation * Vec3::Y).y > 0.49);
+                assert!((rotation * Vec3::NEG_Z).dot(direction) > 0.9999);
+                if let Some(previous) = previous {
+                    assert!(rotation.angle_between(previous) < 0.025);
+                }
+                previous = Some(rotation);
+            }
+        }
     }
 }

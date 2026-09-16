@@ -71,6 +71,8 @@ mod terrain_damage;
 pub mod v4;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
+#[cfg(feature = "arena-prototype")]
+pub mod water_lab;
 mod world_snapshot;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};

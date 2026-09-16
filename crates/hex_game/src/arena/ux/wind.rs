@@ -1,4 +1,5 @@
 //! Optional view-relative wind instrument, consuming the same wind and clock as flight.
+pub(in crate::arena) mod field;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
 use hex_core::{arena::ArenaOverview, ocean::OceanEnvironmentView};
@@ -60,15 +61,16 @@ pub(super) fn present(
     session: Res<ArenaSession>,
     ocean: Option<Res<OceanEnvironmentView>>,
     overview: Option<Res<ArenaOverview>>,
+    cameras: Query<&Transform, With<crate::arena::ArenaCamera>>,
     mut panels: Query<&mut Node, With<WindPanel>>,
     mut arrows: Query<&mut UiTransform, With<WindArrow>>,
     mut labels: Query<&mut Text, With<WindDetails>>,
 ) {
-    let visible = ux.wind_visible
-        && state.started
-        && !state.paused
-        && session.human_actor_id().is_some()
-        && ocean.is_some();
+    let lab = ocean
+        .as_ref()
+        .is_some_and(|env| env.package_fingerprint == hex_core::water_lab::WATER_LAB_ID);
+    let visible =
+        ux.wind_visible && state.started && session.human_actor_id().is_some() && ocean.is_some();
     let beside_map = ux.map_visible
         && overview
             .as_ref()
@@ -82,7 +84,13 @@ pub(super) fn present(
                 Display::None
             },
         );
-        let right = px(if beside_map { 336 } else { 24 });
+        panel.left = if lab { px(24) } else { Val::Auto };
+        panel.width = px(230);
+        let right = if lab {
+            Val::Auto
+        } else {
+            px(if beside_map { 336 } else { 24 })
+        };
         if panel.right != right {
             panel.right = right;
         }
@@ -93,15 +101,25 @@ pub(super) fn present(
     let Some(ocean) = ocean else {
         return;
     };
-    let velocity = ocean.wind.velocity_at(session.ocean_time());
+    let velocity = ocean.wind_at(
+        session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+            .map_or(Vec3::ZERO, |actor| actor.feet),
+        session.ocean_time(),
+    );
     // Camera yaw turns left-positive; UI rotation turns clockwise-positive.
     // Up means downwind lies ahead of the current look direction, in either camera mode.
-    let heading = velocity.x.atan2(-velocity.y) + state.yaw;
+    let view_heading = cameras.single().map_or(-state.yaw, |camera| {
+        let forward = camera.forward();
+        forward.x.atan2(-forward.z)
+    });
+    let heading = velocity.x.atan2(-velocity.y) - view_heading;
     for mut arrow in &mut arrows {
         arrow.set_if_neq(UiTransform::from_rotation(Rot2::radians(heading)));
     }
     let compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    let label = format!(
+    let mut label = format!(
         "{} · {:.1} u/s",
         compass
             .get(super::direction_octant(velocity))
@@ -109,6 +127,12 @@ pub(super) fn present(
             .unwrap_or("N"),
         velocity.length()
     );
+    if lab {
+        label.push_str("\n\nField: 0–25 u/s\nCyan → yellow\nAbove sea (u):\n2 / 14 / 30");
+    }
+    if !lab {
+        label.push_str("\n\nField: 0–25 u/s\nCyan → yellow\nLayers follow altitude");
+    }
     for mut text in &mut labels {
         if text.0 != label {
             text.0.clone_from(&label);

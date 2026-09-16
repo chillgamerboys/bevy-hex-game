@@ -77,7 +77,9 @@ pub struct OceanSurfaceSample {
     pub height: f32,
     /// Unit upward surface normal, matching the rendered displacement derivative.
     pub normal: Vec3,
-    /// Analytic rate of change of surface height, in world units per second.
+    /// Continuous rate of change of surface height, in world units per second.
+    /// The stepped water lab reports zero: discrete jumps change contact position
+    /// and must not turn into unbounded launch impulses.
     pub vertical_velocity: f32,
     /// Exact undisplaced liquid upper face copied from the supplied column.
     pub mean_height: f32,
@@ -89,14 +91,35 @@ pub struct OceanSurfaceSample {
 
 /// World-owned, immutable surface implementation shared through an [`Arc`].
 pub trait OceanEnvironmentSampler: Debug + Send + Sync {
-    /// Sample a confirmed wet column using the same phase and formulas as rendering.
+    /// Optional exact bed publication for a finite, moving shoreline.
+    ///
+    /// World producers rebuild this snapshot with terrain revisions. It may include
+    /// beds above mean water; it never admits terrain or substitutes for unloaded
+    /// columns. A sampled surface at/below this bed is explicitly dry. Ordinary
+    /// oceans keep using their admitted stored liquid intervals.
+    fn inundation_column_at(&self, _xz: Vec2) -> Option<OceanWaterColumn> {
+        None
+    }
+
+    /// Local wind; existing worlds retain their original time-only profile.
+    fn wind_at(
+        &self,
+        _position: Vec3,
+        time: OceanSimulationTime,
+        profile: OceanWindProfile,
+    ) -> Vec2 {
+        profile.velocity_at(time)
+    }
+
+    /// Sample a published water column using the same phase and formulas as rendering.
     ///
     /// The implementation may own immutable bathymetry/shelter data, but must not
     /// retain streamed admission facts. It must preserve the supplied column's
-    /// exact bounds and identity, including wet shoreline columns that approximate
+    /// exact bed/mean bounds and identity, including wet shoreline columns that approximate
     /// bathymetry classifies as dry. Return `None` when the finite sampler does not
     /// cover the location or cannot produce a valid sample; decorative horizon
-    /// water must never provide a fallback.
+    /// water must never provide a fallback. For an explicit inundation bed, a
+    /// surface at/below that bed means dry; ordinary failed samples remain blocked.
     fn surface_at(
         &self,
         xz: Vec2,
@@ -110,7 +133,7 @@ pub trait OceanEnvironmentSampler: Debug + Send + Sync {
 pub enum OceanSurfaceState {
     /// Exact admitted liquid with a usable surface sample.
     ReadyWet(OceanSurfaceSample),
-    /// Exact admitted column has no ocean liquid interval.
+    /// Exact admitted column has no water, or its inundation surface is below its bed.
     ReadyDry,
     /// Exact terrain or the surface required for safe contact is unavailable.
     /// A failed sampler on a known wet column is never converted into dry air.
@@ -174,9 +197,17 @@ pub struct OceanEnvironmentView {
 }
 
 impl OceanEnvironmentView {
+    /// Shared local wind for movement and its visible indicator.
+    #[must_use]
+    pub fn wind_at(&self, position: Vec3, time: OceanSimulationTime) -> Vec2 {
+        self.sampler.wind_at(position, time, self.wind)
+    }
+
     /// Combine a surface with current exact column facts, checking admission first.
     ///
-    /// `availability` and `column` must come from the same current publication.
+    /// `availability`, `column`, and any inundation beds must come from the same
+    /// current publication. The opt-in inundation bed supersedes stored liquid
+    /// bounds so the shoreline can cover or reveal solid terrain.
     /// A ready wet column whose sampler fails remains blocked as `Unloaded`;
     /// callers must hold the last safe pose instead of proceeding through air.
     #[must_use]
@@ -192,14 +223,15 @@ impl OceanEnvironmentView {
             ArenaAvailability::OutsideWorld => return OceanSurfaceState::OutsideWorld,
             ArenaAvailability::Ready => {}
         }
-        let Some(column) = column else {
+        let inundation = self.sampler.inundation_column_at(xz);
+        let Some(column) = inundation.or(column) else {
             return OceanSurfaceState::ReadyDry;
         };
         if !xz.is_finite()
             || !time.seconds.is_finite()
             || !column.mean_height.is_finite()
             || !column.bed_height.is_finite()
-            || column.bed_height >= column.mean_height
+            || (inundation.is_none() && column.bed_height >= column.mean_height)
         {
             return OceanSurfaceState::Unloaded;
         }
@@ -217,7 +249,11 @@ impl OceanEnvironmentView {
         {
             return OceanSurfaceState::Unloaded;
         }
-        OceanSurfaceState::ReadyWet(sample)
+        if inundation.is_some() && sample.height <= sample.bed_height + 0.001 {
+            OceanSurfaceState::ReadyDry
+        } else {
+            OceanSurfaceState::ReadyWet(sample)
+        }
     }
 }
 
@@ -381,6 +417,72 @@ mod tests {
             })
             .length()
                 < f32::EPSILON
+        );
+    }
+}
+
+#[cfg(test)]
+mod inundation_tests {
+    use super::*;
+    #[derive(Debug)]
+    struct Shore;
+    impl OceanEnvironmentSampler for Shore {
+        fn inundation_column_at(&self, _: Vec2) -> Option<OceanWaterColumn> {
+            Some(OceanWaterColumn {
+                mean_height: 8.0,
+                bed_height: 8.4,
+                water_id: SubstanceId(3),
+            })
+        }
+        fn surface_at(
+            &self,
+            _: Vec2,
+            time: f32,
+            column: OceanWaterColumn,
+        ) -> Option<OceanSurfaceSample> {
+            Some(OceanSurfaceSample {
+                height: 8.0 + time.sin(),
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            })
+        }
+    }
+    #[test]
+    fn transient_shore_covers_and_reveals_exact_bed_but_never_admits_terrain() {
+        let env = OceanEnvironmentView {
+            package_fingerprint: 1,
+            sampler: Arc::new(Shore),
+            wind: OceanWindProfile::default(),
+        };
+        let time = OceanSimulationTime {
+            seconds: std::f64::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        for availability in [ArenaAvailability::Unloaded, ArenaAvailability::OutsideWorld] {
+            assert_eq!(
+                env.sample(Vec2::ZERO, time, availability, None),
+                if availability == ArenaAvailability::Unloaded {
+                    OceanSurfaceState::Unloaded
+                } else {
+                    OceanSurfaceState::OutsideWorld
+                }
+            );
+        }
+        assert!(matches!(
+            env.sample(Vec2::ZERO, time, ArenaAvailability::Ready, None),
+            OceanSurfaceState::ReadyWet(_)
+        ));
+        assert_eq!(
+            env.sample(
+                Vec2::ZERO,
+                OceanSimulationTime::default(),
+                ArenaAvailability::Ready,
+                None
+            ),
+            OceanSurfaceState::ReadyDry
         );
     }
 }

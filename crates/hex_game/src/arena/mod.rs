@@ -24,6 +24,7 @@ mod spectator;
 #[cfg(test)]
 mod tests;
 mod ux;
+mod water_lab;
 mod wisp;
 mod worm;
 mod worm_capture;
@@ -52,6 +53,7 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "seven-regions" => ArenaMap::SevenRegions,
         "forest-massif" => ArenaMap::ForestMassif,
         "northern-archipelago" => ArenaMap::NorthernArchipelago,
+        "water-lab" => ArenaMap::WaterLab,
         value => return Err(format!("Unknown arena map: {value}")),
     };
     if map == ArenaMap::ForestMassif && encounter.is_some_and(|value| value != "dragon") {
@@ -152,6 +154,7 @@ fn map_name(map: ArenaMap) -> &'static str {
         ArenaMap::SevenRegions => "Seven Regions",
         ArenaMap::ForestMassif => "Forest Massif",
         ArenaMap::NorthernArchipelago => "Northern Archipelago",
+        ArenaMap::WaterLab => "Water Lab",
     }
 }
 
@@ -446,6 +449,7 @@ pub fn run() -> AppExit {
     ux::install(&mut app);
     environment::install(&mut app);
     northern::install(&mut app);
+    water_lab::install(&mut app);
     glider_visual::install(&mut app);
     marine_visual::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
@@ -903,8 +907,7 @@ fn input(
     }
     let direction = aim(&state);
     let current_aim = session.actors.first().map_or(direction, |actor| {
-        let eye = actor.eye();
-        let camera = camera_origin(&session, &state, eye, direction);
+        let camera = camera_origin(&session, &state, actor, direction);
         session.aim_from_camera(actor.id, camera, direction)
     });
     let axis = |positive, negative| {
@@ -1502,11 +1505,19 @@ fn stage_partial_preview(world: &mut World) {
     }
 }
 
-fn camera_origin(session: &ArenaSession, state: &ViewState, eye: Vec3, direction: Vec3) -> Vec3 {
+fn camera_origin(
+    session: &ArenaSession,
+    state: &ViewState,
+    actor: &hex_arena::Actor,
+    direction: Vec3,
+) -> Vec3 {
+    let eye = actor.eye();
     let smoothed_eye = eye + Vec3::Y * state.step_offset;
+    let vehicle = actor.glider().is_some_and(|flight| flight.open)
+        || actor.boat().is_some_and(|boat| boat.active);
     let desired = if state.third_person {
-        smoothed_eye - direction * 1.25
-            + Vec3::Y * 0.38
+        smoothed_eye - direction * if vehicle { 5.0 } else { 2.4 }
+            + Vec3::Y * if vehicle { 1.2 } else { 0.55 }
             + direction.cross(Vec3::Y).normalize_or_zero() * 0.28
     } else {
         smoothed_eye
@@ -1541,6 +1552,9 @@ fn capture_frame(
         Option<Res<hex_map::arena::streamed::StreamedArena>>,
         Option<Res<hex_map::ocean::OceanRenderStatus>>,
         Res<northern::NorthernPresentation>,
+        Res<hex_core::water_lab::WaterLabSettings>,
+        Res<hex_map::water_lab::WaterLabFrame>,
+        Res<ux::wind::field::FieldDisplay>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1559,7 +1573,13 @@ fn capture_frame(
         northern_world,
         ocean_status,
         northern_presentation,
+        lab_settings,
+        lab_frame,
+        wind_field,
     ) = render_context;
+    if state.capture_view.starts_with("water-lab-motion") {
+        return;
+    }
     if !northern::capture_ready(
         &state.capture_view,
         &northern_presentation,
@@ -1874,6 +1894,7 @@ fn capture_frame(
             "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
             "idle_mouth": actor.eye().to_array(), "beam": beam, "flying": actor.flying, "grounded": actor.grounded,
             "flight_layer": actor.flight_layer(),
+            "glider": actor.glider().map(|glider| serde_json::json!({"open":glider.open,"velocity":glider.velocity.to_array(),"airspeed":glider.airspeed,"direction":glider.direction.to_array(),"stall_fraction":glider.stall_fraction})),
             "boat": actor.boat().map(|boat| serde_json::json!({"active":boat.active,"heading":boat.heading.to_array(),"velocity":boat.velocity.to_array(),"normal":boat.surface_normal.to_array(),"wind":boat.wind.to_array()})),
             "swimming": actor.swimming().map(|swim| serde_json::json!({"active":swim.active,"oxygen_seconds":swim.oxygen_seconds,"submerged":swim.submerged}))
         })
@@ -1940,6 +1961,7 @@ fn capture_frame(
         ("expedition", serde_json::json!(session.expedition_progress())),
         ("package_identity", serde_json::json!(view.package_identity)),
         ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref())),
+        ("water_lab", water_lab::snapshot(&lab_settings, &lab_frame, &wind_field)),
         ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
         ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),
         ("readability_state", readability_capture::receipt(readability.as_deref())),

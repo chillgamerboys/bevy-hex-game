@@ -208,7 +208,9 @@ fn refresh_presentations(
             return;
         }
     };
-    let mut roots = if let Some(mut materials) = liquid_materials {
+    let mut roots = if view.selection.map == hex_core::arena::ArenaMap::WaterLab {
+        Vec::new()
+    } else if let Some(mut materials) = liquid_materials {
         match crate::liquid_render::spawn_presentations(
             &mut commands,
             &mut meshes,
