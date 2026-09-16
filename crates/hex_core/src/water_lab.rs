@@ -49,6 +49,8 @@ pub enum LabWind {
     Gusts,
     /// Gusts plus gradual direction changes.
     Turning,
+    /// Spatial gusts, moving swirls, altitude and exact terrain shelter.
+    Field,
     /// Turning gusts with a sheltered cove.
     Shelter,
 }
