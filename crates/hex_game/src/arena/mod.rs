@@ -1554,6 +1554,7 @@ fn capture_frame(
         Res<northern::NorthernPresentation>,
         Res<hex_core::water_lab::WaterLabSettings>,
         Res<hex_map::water_lab::WaterLabFrame>,
+        Res<ux::wind::field::FieldDisplay>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1574,6 +1575,7 @@ fn capture_frame(
         northern_presentation,
         lab_settings,
         lab_frame,
+        wind_field,
     ) = render_context;
     if state.capture_view.starts_with("water-lab-motion") {
         return;
@@ -1959,7 +1961,7 @@ fn capture_frame(
         ("expedition", serde_json::json!(session.expedition_progress())),
         ("package_identity", serde_json::json!(view.package_identity)),
         ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref())),
-        ("water_lab", water_lab::snapshot(&lab_settings, &lab_frame)),
+        ("water_lab", water_lab::snapshot(&lab_settings, &lab_frame, &wind_field)),
         ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
         ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),
         ("readability_state", readability_capture::receipt(readability.as_deref())),

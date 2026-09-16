@@ -5,6 +5,9 @@ use hex_core::water_lab::{LabStart, LabStyle, LabWave, LabWind, WaterLabSettings
 use hex_map::water_lab::{LabSurface, WaterLabFrame};
 use std::sync::Arc;
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct LabPresentation;
+
 #[derive(Resource)]
 struct LabUi {
     visible: bool,
@@ -27,9 +30,11 @@ struct Details;
 struct LabButton(KeyCode);
 
 pub(super) fn install(app: &mut App) {
+    ux::wind::field::install(app);
     hex_map::water_lab::install(app);
     let mut settings = WaterLabSettings {
         glider_wind_scale: 0.65,
+        wind: LabWind::Field,
         ..default()
     };
     if let Ok(value) = std::env::var("HEX_WATER_LAB_WAVE") {
@@ -51,6 +56,7 @@ pub(super) fn install(app: &mut App) {
     }
     if let Ok(value) = std::env::var("HEX_WATER_LAB_WIND") {
         settings.wind = match value.as_str() {
+            "field" => LabWind::Field,
             "calm" => LabWind::Calm,
             "strong" => LabWind::Strong,
             "gusts" => LabWind::Gusts,
@@ -88,6 +94,7 @@ pub(super) fn install(app: &mut App) {
             Update,
             (stage_capture, present)
                 .chain()
+                .in_set(LabPresentation)
                 .in_set(ArenaFrame::Present)
                 .after(super::worm_capture::camera)
                 .after(super::environment::present),
@@ -99,15 +106,24 @@ pub(super) fn install(app: &mut App) {
 }
 
 /// Typed comparison facts persisted alongside ordinary arena capture state.
-pub(super) fn snapshot(settings: &WaterLabSettings, frame: &WaterLabFrame) -> serde_json::Value {
-    serde_json::json!({"enabled":frame.enabled,"wave":format!("{:?}",settings.wave),"style":format!("{:?}",settings.style),"wind":format!("{:?}",settings.wind),"glider_wind_scale":settings.glider_wind_scale,"wave_phase":settings.phase(frame.seconds),"frozen":settings.frozen_phase.is_some(),"whole_voxel_height":0.4,"maximum_columns":3283})
+pub(super) fn snapshot(
+    settings: &WaterLabSettings,
+    frame: &WaterLabFrame,
+    field: &ux::wind::field::FieldDisplay,
+) -> serde_json::Value {
+    serde_json::json!({"enabled":frame.enabled,"wave":format!("{:?}",settings.wave),"style":format!("{:?}",settings.style),"wind":format!("{:?}",settings.wind),"glider_wind_scale":settings.glider_wind_scale,"wave_phase":settings.phase(frame.seconds),"frozen":settings.frozen_phase.is_some(),"whole_voxel_height":0.4,"maximum_columns":3283,"wind_field":field.snapshot()})
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Capture records field, water, camera and actor facts from their authoritative owners."
+)]
 fn capture_motion(
     mut commands: Commands,
     state: Res<ViewState>,
     settings: Res<WaterLabSettings>,
     frame: Res<WaterLabFrame>,
+    field: Res<ux::wind::field::FieldDisplay>,
     session: Res<ArenaSession>,
     environment: Option<Res<OceanEnvironmentView>>,
     cameras: Query<&Transform, With<ArenaCamera>>,
@@ -139,7 +155,7 @@ fn capture_motion(
         let water = env.sampler.surface_at(at, frame.seconds, column)?;
         Some(serde_json::json!({"feet":actor.feet.to_array(),"eye":actor.eye().to_array(),"surface_height":water.height,"bed_height":water.bed_height,"immersion":water.height-actor.feet.y,"swimming":actor.swimming().is_some_and(|swim|swim.active)}))
     });
-    let receipt = serde_json::json!({"contact":contact,"capture_stride":stride,"lab":snapshot(&settings,&frame),"frame":state.frames,"tick":session.tick,"camera":cameras.single().ok().map(|pose|pose.translation.to_array()),"player_feet":session.actors.first().map(|actor|actor.feet.to_array()),"evidence":"CONTINUOUS_WINDOWLESS_SEQUENCE; user control feel pending"});
+    let receipt = serde_json::json!({"contact":contact,"capture_stride":stride,"lab":snapshot(&settings,&frame,&field),"frame":state.frames,"tick":session.tick,"camera":cameras.single().ok().map(|pose|pose.translation.to_array()),"player_feet":session.actors.first().map(|actor|actor.feet.to_array()),"evidence":"CONTINUOUS_WINDOWLESS_SEQUENCE; user control feel pending"});
     commands.spawn(Screenshot::image(target)).observe(
         move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
             let result = (|| -> Result<(), String> {
@@ -233,7 +249,7 @@ fn spawn(mut commands: Commands) {
                     .with_children(|button| { button.spawn((Text::new(title),TextFont {font_size:FontSize::Px(14.0),..default()},TextColor(Color::WHITE))); });
             }
         });
-        parent.spawn((Text::new("Tab pauses and frees the mouse.\nWASD move · B boat · G glider\nF free flight · C camera · F1 hide"),TextFont {font_size:FontSize::Px(14.0),..default()},TextColor(Color::srgb(0.75,0.85,0.87))));
+        parent.spawn((Text::new("Tab pauses and frees the mouse.\nWASD move · B boat · G glider\nF free flight · C camera · V wind field · F1 hide"),TextFont {font_size:FontSize::Px(14.0),..default()},TextColor(Color::srgb(0.75,0.85,0.87))));
     });
 }
 
@@ -290,7 +306,8 @@ fn controls(
             LabWind::Strong => LabWind::Gusts,
             LabWind::Gusts => LabWind::Turning,
             LabWind::Turning => LabWind::Shelter,
-            LabWind::Shelter => LabWind::Calm,
+            LabWind::Shelter => LabWind::Field,
+            LabWind::Field => LabWind::Calm,
         };
     }
     if pressed(KeyCode::F5) {
@@ -375,7 +392,10 @@ fn configure(
     commands.insert_resource(OceanEnvironmentView {
         package_fingerprint: WATER_LAB_ID,
         sampler: Arc::new(LabSurface::new(&view, *geometry, *settings)),
-        wind: OceanWindProfile::default(),
+        wind: OceanWindProfile {
+            heading_radians: std::f32::consts::FRAC_PI_2,
+            speed: 9.0,
+        },
     });
     *previous = Some((*settings, view.revision));
 }

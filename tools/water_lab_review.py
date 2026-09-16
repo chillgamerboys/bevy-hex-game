@@ -32,9 +32,11 @@ def main():
     parser.add_argument("--view", action="append", choices=(*VIEWS, "motion", "motion-reverse", "motion-cycle", "motion-swim-first", "motion-swim-third"))
     parser.add_argument("--wave", choices=("flat", "gentle", "regular", "swell", "crossing", "extreme"), default="regular")
     parser.add_argument("--style", choices=("depth", "crests", "patterns"), default="patterns")
-    parser.add_argument("--wind", choices=("calm", "steady", "strong", "gusts", "turning", "shelter"), default="steady")
+    parser.add_argument("--wind", choices=("calm", "steady", "strong", "gusts", "turning", "shelter", "field"), default="steady")
     parser.add_argument("--phase", type=float, default=1.5)
     parser.add_argument("--glider-wind", type=float, choices=(1.0, 0.65, 0.45), default=0.65)
+    parser.add_argument("--show-wind", action="store_true")
+    parser.add_argument("--settle-frames", type=int, choices=range(4,601), default=4, metavar="4..600")
     parser.add_argument("--dirty-diagnostic", action="store_true")
     args = parser.parse_args()
     source = identity()
@@ -51,7 +53,9 @@ def main():
     env.update(CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2", CARGO_TARGET_DIR=str(args.target_dir.resolve()),
                HEX_ARENA_MAP="water-lab", HEX_WATER_LAB_WAVE=args.wave,
                HEX_WATER_LAB_STYLE=args.style, HEX_WATER_LAB_WIND=args.wind,
-               HEX_WATER_LAB_GLIDER_WIND=str(args.glider_wind))
+               HEX_WATER_LAB_GLIDER_WIND=str(args.glider_wind),
+               HEX_ARENA_UI_WIND="1" if args.show_wind else "0",
+               HEX_ARENA_CAPTURE_SETTLE_FRAMES=str(args.settle_frames))
     manifest = {"source": source, "worktree": str(ROOT), "status": "INCOMPLETE", "views": [],
                 "review": "UNREVIEWED; native control feel and user taste pending"}
     manifest_path = output / "manifest.json"
@@ -86,10 +90,13 @@ def main():
                     or abs(lab.get("glider_wind_scale", -1.0) - args.glider_wind) > 1e-5
                     or lab.get("frozen") != (not view.startswith("motion"))):
                 raise RuntimeError(f"{view}: wrong actual map or preset")
+            field = lab.get("wind_field", {})
+            if field.get("enabled") != args.show_wind or len(field.get("samples", [])) > 147:
+                raise RuntimeError(f"{view}: incorrect wind overlay state")
             hashes.append({"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
         if len(paths) > 1 and len({row["sha256"] for row in hashes}) != len(paths):
             raise RuntimeError(f"{view}: unexpected identical motion frames")
-        intervals = receipt.get("app_frame_wall_intervals_ms", [])[10:]
+        intervals = receipt.get("app_frame_wall_intervals_ms", [])[receipt.get("render_ready_frame") or 10:]
         row = {"view": view, "command": command, "elapsed_seconds": time.monotonic() - started, "files": hashes,
                "actual": lab, "render_ready_ms": receipt.get("app_construction_to_render_ready_ms")}
         if intervals:

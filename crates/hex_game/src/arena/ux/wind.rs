@@ -1,4 +1,5 @@
 //! Optional view-relative wind instrument, consuming the same wind and clock as flight.
+pub(in crate::arena) mod field;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
 use hex_core::{arena::ArenaOverview, ocean::OceanEnvironmentView};
@@ -64,11 +65,11 @@ pub(super) fn present(
     mut arrows: Query<&mut UiTransform, With<WindArrow>>,
     mut labels: Query<&mut Text, With<WindDetails>>,
 ) {
-    let visible = ux.wind_visible
-        && state.started
-        && !state.paused
-        && session.human_actor_id().is_some()
-        && ocean.is_some();
+    let lab = ocean
+        .as_ref()
+        .is_some_and(|env| env.package_fingerprint == hex_core::water_lab::WATER_LAB_ID);
+    let visible =
+        ux.wind_visible && state.started && session.human_actor_id().is_some() && ocean.is_some();
     let beside_map = ux.map_visible
         && overview
             .as_ref()
@@ -82,7 +83,13 @@ pub(super) fn present(
                 Display::None
             },
         );
-        let right = px(if beside_map { 336 } else { 24 });
+        panel.left = if lab { px(24) } else { Val::Auto };
+        panel.width = px(if lab { 230 } else { 168 });
+        let right = if lab {
+            Val::Auto
+        } else {
+            px(if beside_map { 336 } else { 24 })
+        };
         if panel.right != right {
             panel.right = right;
         }
@@ -107,7 +114,7 @@ pub(super) fn present(
         arrow.set_if_neq(UiTransform::from_rotation(Rot2::radians(heading)));
     }
     let compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    let label = format!(
+    let mut label = format!(
         "{} · {:.1} u/s",
         compass
             .get(super::direction_octant(velocity))
@@ -115,6 +122,11 @@ pub(super) fn present(
             .unwrap_or("N"),
         velocity.length()
     );
+    if lab {
+        label.push_str(
+            "\n\nField: 0–25 u/s\nCyan → yellow\nHeights: +2 / +14 / +30\nSea level reference",
+        );
+    }
     for mut text in &mut labels {
         if text.0 != label {
             text.0.clone_from(&label);
