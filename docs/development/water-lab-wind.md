@@ -52,8 +52,10 @@ Native acceptance route: enable V, sail from exposed water into the hill's lee;
 place a shield wall upwind, compare behind/above it, then destroy it. Use F11 to
 start gliding from the hill, compare the three layers, and check controllability.
 F4 Steady provides the previous constant-wind reference. Pause/resume and F6/F7
-should confirm the clocks remain independent. Human control-feel acceptance is
-pending this playtest.
+should confirm the clocks remain independent. The user accepted the lab and Ocean
+wind iterations through gameplay head `83b409782ce3dd130231dad5f84eeae64a0fd45f`.
+This route remains available for regressions; full combined runtime sign-off stays
+with the parent delivery stack.
 
 ## Ocean adoption
 

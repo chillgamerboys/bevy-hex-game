@@ -9,6 +9,18 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+**Water and wind — follow-up candidate, 2026-09-15.** `feat/water-lab` adds the
+seven-region Wave Lab, opaque irregular voxel waves, eased swimming/boat response,
+broader sailing angles, corrected glider presentation, matching terrain/water
+detail range, and natural wind with terrain shelter and V field arrows. Accepted
+settings also apply to Ocean. The user approved the latest wind at gameplay head
+`83b409782ce3dd130231dad5f84eeae64a0fd45f`, following the water and movement
+playtests. This branch starts at PR #222's current head and is not live on `dev`.
+Focused checks and fresh static captures are recorded in the
+[water/wind checkpoint](../development/water-lab.md#water-and-wind-delivery-checkpoint).
+Full selected integration checks and parent-stack delivery remain pending; this
+does not implement the planned Grand V3 remake.
+
 **Combined expedition and Northern progress — draft candidate, 2026-09-13.**
 `wave/northern-archipelago` contains the later Forest–Massif expedition (127 enemies
 and one player), collected rewards and rank upgrades, momentum gliding, solid-world

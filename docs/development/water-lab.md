@@ -1,8 +1,11 @@
 # Water laboratory
 
 The `water-lab` arena map is an isolated experiment for opaque, whole-voxel water,
-surface swimming, wind variation, and glider wind tuning. Existing maps retain their
-water and controller defaults. This does not replace sailing propulsion.
+surface swimming, wind variation, and glider wind tuning. The accepted voxel-wave,
+marine-response and natural-wind settings are now also used by Northern Archipelago
+(Ocean). Its scalable ocean renderer remains separate from the small lab mesh.
+See [Ocean behavior](../systems/northern-archipelago.md) and
+[natural wind](water-lab-wind.md) for the current integrated defaults.
 
 Launch from this checkout through Cargo:
 
@@ -17,13 +20,14 @@ Enter starts; Tab pauses and frees the mouse. The lab panel has clickable button
 | F1 | Show/hide lab controls |
 | F2 | Flat / gentle / regular / swell / crossing / extreme waves |
 | F3 | Depth colors / crests / patterns (depth offshore + nearshore crests + moving shimmer) |
-| F4 | Calm / steady 9 / steady 20 / gusts / turning / local shelter |
+| F4 | Field (default) / calm / steady 9 / steady 20 / gusts / turning / local shelter |
 | F5 | Glider wind influence: 100 / 65 / 45 percent; starts at 65 |
 | F6 | Freeze/resume waves; wind and player movement stay live |
 | F7 | Reset wave phase |
 | F8 / F9 / F10 / F11 | Beach / swimming / boat / glider start |
 | B / G / F | Toggle boat / glider / exploration flight |
 | C | First-/third-person camera |
+| V | Local wind instrument and world-space field arrows |
 
 The map has exactly seven nonoverlapping radius-12 hex regions (3,283 columns),
 a walkable central island, a cove, a channel, a headland, and surrounding water.
@@ -44,15 +48,15 @@ scalable ocean renderer for the later large island map.
 Stepped tops have upward normals and zero continuous vertical velocity. Discrete
 height changes update surface contact, not launch impulses. In the lab, neutral
 swimming targets two-thirds of body height below the surface and moves at 85% of
-the actor's walking speed. The original swim tuning remains on other maps.
-Glider wind factors apply only to lab gliding; boat propulsion consumes full local
+the actor's walking speed. Ocean uses the same surface-swimming and eased
+wave response. Both maps start at 65% glider wind influence; boat propulsion consumes full local
 wind. HUD wind indicates the environment, not the glider's reduced effective wind.
 
 Review-only launch settings:
 
 - `HEX_WATER_LAB_WAVE`: `flat`, `gentle`, `regular`, `swell`, `crossing`, `extreme`.
 - `HEX_WATER_LAB_STYLE`: `depth`, `crests`, `patterns`.
-- `HEX_WATER_LAB_WIND`: `calm`, `steady`, `strong`, `gusts`, `turning`, `shelter`.
+- `HEX_WATER_LAB_WIND`: `field`, `calm`, `steady`, `strong`, `gusts`, `turning`, `shelter`.
 - `HEX_WATER_LAB_PHASE`: a finite phase to freeze; omit for live waves.
 - `HEX_WATER_LAB_GLIDER_WIND`: a fraction in `[0, 1]`; the comparison candidates are 1, 0.65, and 0.45.
 - `HEX_ARENA_CAPTURE`: PNG destination; uses the existing windowless image target.
@@ -71,6 +75,9 @@ render submission and readback overhead and is not a GPU or native-vsync benchma
 For the first review, follow walk → swim → boat → swim → shore; then compare wave
 shape, colors, and glider wind influence one category at a time. Retain explicit
 pending verdicts for taste, comfort, and control feel until the user has played.
+
+The following sections preserve the earlier lab iterations. References to Ocean
+retaining old behavior describe those checkpoints, before the later Ocean adoption.
 
 ## First playtest revision
 
@@ -147,3 +154,29 @@ and static-water neutrality, blocked sampling, sailing separation and vertical
 step/reversal easing. Native comfort remains pending. Try floating on Regular,
 repeat with Extreme, then sail across wave faces and toggle B near shore. The
 first 2D Grand V3 draft and its design notes remain separate planning work.
+
+
+## Water and wind delivery checkpoint
+
+`feat/water-lab` is a follow-up to the current Northern/Forest draft, PR #222,
+starting at `1133ac51cd37d37879a0f12d72a71127edf4b347`. It is unmerged; the large
+Grand V3 redesign remains separate planning work. The user accepted the wave
+appearance, boat feel, 65% glider influence and, after further iteration, the richer
+natural wind at gameplay head `83b409782ce3dd130231dad5f84eeae64a0fd45f`.
+
+The latest wind checkpoint passed six field tests and five Ocean sampler tests.
+Earlier focused marine checks cover floating, boat toggles, eased buoyancy, wave
+push, wind influence and sailing angles. Fresh whole-Ocean and summit-glider
+captures at that gameplay head were inspected individually; local PNG/JSON
+receipts and logs remain outside Git. Native Ocean launch confirmed the glider
+open above admitted summit terrain, with no missing assets or startup errors.
+These are scoped evidence and user playtest feedback, not a full integration PASS.
+
+The changed-path selector chooses the full integration gate because this work
+changes shared core vocabulary, map foundations and application composition.
+That full gate, independent visual review and the parent stack's final combined
+runtime sign-off remain pending under the user's usage budget. Previous broad
+map Clippy and fixture-artwork failures are recorded parent-stack debt; they are
+not represented as passes. Linear requires reauthentication; no issue state has
+been changed or inferred. Reconcile the parent stack and complete its selected
+checks before delivery to `dev`.
