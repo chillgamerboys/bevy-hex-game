@@ -28,6 +28,7 @@ pub(in crate::arena) struct FieldDisplay {
     sampled_at: Option<OceanSimulationTime>,
     terrain_revision: u64,
     center: Vec2,
+    height_origin: Option<f32>,
 }
 
 impl FieldDisplay {
@@ -37,7 +38,7 @@ impl FieldDisplay {
             "simulation_time": self.sampled_at.map(|t| t.seconds),
             "generation": self.sampled_at.map(|t| t.generation),
             "center": self.center.to_array(), "sample_hz": 10,
-            "speed_scale_u_s": [0,25], "height_above_sea": [2,14,30],
+            "speed_scale_u_s": [0,25], "height_origin": self.height_origin.unwrap_or(SEA_LEVEL), "layer_offsets": [2,14,30],
             "samples": self.samples.iter().map(|s| serde_json::json!({
                 "position":s.position.to_array(), "velocity":s.velocity.to_array()
             })).collect::<Vec<_>>()
@@ -90,7 +91,7 @@ impl FieldDisplay {
                 for z in -3..=3_i16 {
                     let position = Vec3::new(
                         center.x + f32::from(x) * 8.0,
-                        SEA_LEVEL + height,
+                        self.height_origin.unwrap_or(SEA_LEVEL) + height,
                         center.y + f32::from(z) * 8.0,
                     );
                     if inside(position, view, geometry) {
@@ -157,12 +158,15 @@ fn present(
     environment: Option<Res<OceanEnvironmentView>>,
     view: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
+    ocean_profile: Res<hex_map::ocean::OceanSurfaceProfile>,
     cameras: Query<&Transform, With<ArenaCamera>>,
     mut display: ResMut<FieldDisplay>,
     mut gizmos: Gizmos<WindGizmos>,
 ) {
-    let Some(environment) = environment.filter(|env| env.package_fingerprint == WATER_LAB_ID)
-    else {
+    let Some(environment) = environment.filter(|env| {
+        env.package_fingerprint == WATER_LAB_ID
+            || view.selection.map == hex_core::arena::ArenaMap::NorthernArchipelago
+    }) else {
         display.enabled = false;
         display.samples.clear();
         display.sampled_at = None;
@@ -173,6 +177,13 @@ fn present(
     } else {
         cameras.single().map_or(Vec3::ZERO, |pose| pose.translation)
     };
+    display.height_origin = Some(if environment.package_fingerprint == WATER_LAB_ID {
+        SEA_LEVEL
+    } else {
+        ocean_profile
+            .mean_sea_level
+            .max((center.y / 12.0).floor() * 12.0 - 14.0)
+    });
     let time = session.ocean_time();
     display.refresh(
         ux.wind_visible && state.started,

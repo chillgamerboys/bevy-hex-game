@@ -1182,6 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     launch = commands.add_parser("launch", help="Explicitly open the native playable arena through Cargo.")
+    launch.add_argument("--start", choices=("summit-glider",), help="Ocean only: start above the mountain summit with the glider open.")
     captures = commands.add_parser("capture", help="Capture all 23 views without a native window.")
     for command in (launch, captures):
         command.add_argument("--map", choices=MAPS, help="Map recipe (launch: forest-massif; legacy capture: duel).")
@@ -1238,6 +1239,8 @@ def main(argv: list[str] | None = None) -> int:
             if not 0 < args.timeout < float("inf"):
                 raise RuntimeError("--timeout must be a finite positive number.")
             return capture(args)
+        if args.start and args.map != "northern-archipelago":
+            raise RuntimeError("--start summit-glider requires --map northern-archipelago")
         battle_env = battle_environment(args, args.map or "forest-massif")
         env, _ = environment(args.target_dir)
         env.update(ux_environment(args))
@@ -1249,6 +1252,8 @@ def main(argv: list[str] | None = None) -> int:
         if (args.map or "forest-massif") == "forest-massif":
             prepare_forest_package(env)
         env.update(battle_env)
+        if args.start:
+            env["HEX_NORTHERN_START"] = args.start
         env.update(HEX_ARENA_MAP=args.map or "forest-massif", HEX_ARENA_ENCOUNTER=args.encounter or ("shadow" if args.map == "duel" else "dragon"))
         print(f"Opening native Spell Combat Arena: {shlex.join(('cargo', *CARGO_ARGS))}", flush=True)
         return run_cargo(env, None, None)

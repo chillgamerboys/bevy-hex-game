@@ -138,6 +138,67 @@ impl Actor {
 }
 
 impl ArenaSession {
+    /// Stage an exploration glide only after destination terrain is admitted.
+    /// Existing progress is preserved; invalid or obstructed positions are rejected.
+    pub fn start_exploration_glide(
+        &mut self,
+        feet: Vec3,
+        heading: Vec3,
+        view: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> bool {
+        if !self.is_exploration()
+            || !feet.is_finite()
+            || !heading.is_finite()
+            || heading.with_y(0.0).length_squared() < 0.01
+        {
+            return false;
+        }
+        let Some(id) = self.human_actor_id() else {
+            return false;
+        };
+        self.collision.refresh(view, geometry);
+        let Some(actor) = self.actors.iter_mut().find(|actor| actor.id == id) else {
+            return false;
+        };
+        let radius = actor.dimensions.x * 0.5;
+        if self
+            .collision
+            .needs_terrain(feet, Vec3::ZERO, actor.dimensions.y, radius)
+            || !self.collision.clear(feet, actor.dimensions.y, radius)
+        {
+            return false;
+        }
+        let mut candidate = actor.clone();
+        fold_boat(&mut candidate);
+        candidate.clear_glider();
+        candidate.free_flight = Some(crate::exploration::FreeFlightState::default());
+        candidate.feet = feet;
+        candidate.previous_feet = feet;
+        candidate.grounded = false;
+        candidate.body.grounded = false;
+        let heading = heading.with_y(0.0).normalize();
+        candidate.aim = heading;
+        transfer_velocity(&mut candidate, heading * 12.0);
+        crate::glider::prepare(
+            &mut candidate,
+            ActorIntent {
+                glider_toggle: true,
+                glider_look: heading,
+                aim: heading,
+                ..Default::default()
+            },
+            &self.collision,
+            view,
+            geometry,
+        );
+        if !candidate.glider.open {
+            return false;
+        }
+        *actor = candidate;
+        true
+    }
+
     /// Apply a named lab restart through gameplay, validating body clearance.
     /// Returns false outside the lab or when the authored start is obstructed.
     pub fn reset_water_lab_pose(

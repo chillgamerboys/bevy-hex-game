@@ -1,7 +1,7 @@
 # Natural wind field: Wave Lab candidate
 
 The Wave Lab opens with **Field** wind. F4 retains Calm, Steady, Strong, Gusts,
-Turning and the old synthetic Shelter comparison. Ocean keeps its existing wind.
+Turning and the old synthetic Shelter comparison. Ocean now uses Field wind too.
 The fixture remains seven radius-12 biomes.
 
 Field starts from 9 u/s toward east. Its prevailing heading changes slowly within
@@ -50,3 +50,20 @@ start gliding from the hill, compare the three layers, and check controllability
 F4 Steady provides the previous constant-wind reference. Pause/resume and F6/F7
 should confirm the clocks remain independent. Human control-feel acceptance is
 pending this playtest.
+
+## Ocean adoption
+
+Ocean now publishes the same natural field, with its own sea level as the altitude
+origin. Its immutable cover snapshot refreshes on terrain publications and movement
+between 16-unit cells; only spans within 112 units are retained. Bathymetry is shared
+across those refreshes. Waves, boat propulsion, and the 65% glider multiplier retain
+the accepted tuning. Other maps keep their previous behavior.
+
+V also shows the field in Ocean. Near sea level the layers use sea +2/+14/+30;
+farther up they follow camera altitude so the summit field remains visible.
+
+`python3 tools/arena.py launch --map northern-archipelago --start summit-glider`
+requests the summit neighborhood, refines the overview peak using admitted solid
+columns, and stages a body-clear glide five units above it at 12 u/s toward the
+shore. The ready screen keeps the player paused until Play/Enter. Progress is
+preserved; failed admission cannot move the player into unloaded terrain.

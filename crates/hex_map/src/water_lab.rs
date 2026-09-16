@@ -2,6 +2,7 @@
 
 mod render;
 mod wind;
+pub use wind::WindField;
 
 use std::collections::{BTreeMap, BTreeSet};
 

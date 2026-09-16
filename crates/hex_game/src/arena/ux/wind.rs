@@ -85,7 +85,7 @@ pub(super) fn present(
             },
         );
         panel.left = if lab { px(24) } else { Val::Auto };
-        panel.width = px(if lab { 230 } else { 168 });
+        panel.width = px(230);
         let right = if lab {
             Val::Auto
         } else {
@@ -129,6 +129,9 @@ pub(super) fn present(
     );
     if lab {
         label.push_str("\n\nField: 0–25 u/s\nCyan → yellow\nAbove sea (u):\n2 / 14 / 30");
+    }
+    if !lab {
+        label.push_str("\n\nField: 0–25 u/s\nCyan → yellow\nLayers follow altitude");
     }
     for mut text in &mut labels {
         if text.0 != label {

@@ -10,9 +10,20 @@ use hex_core::{
 
 use super::SEA_LEVEL;
 
-#[derive(Debug, Default, Clone)]
-pub(super) struct WindField {
+/// Immutable natural wind and published solid cover, shared by exploration maps.
+#[derive(Debug, Clone)]
+pub struct WindField {
+    sea_level: f32,
     spans: HashMap<HexCoord, Vec<Vec2>>,
+}
+
+impl Default for WindField {
+    fn default() -> Self {
+        Self {
+            sea_level: SEA_LEVEL,
+            spans: HashMap::new(),
+        }
+    }
 }
 
 fn smooth(value: f32) -> f32 {
@@ -31,8 +42,29 @@ fn oscillation(seconds: f64, period: f64, phase: f32) -> f32 {
 
 impl WindField {
     pub(super) fn new(view: &ArenaTerrainView, geometry: ArenaVoxelGeometry) -> Self {
-        let mut field = Self::default();
+        Self::for_region(view, geometry, SEA_LEVEL, None)
+    }
+
+    /// Snapshot cover within 112 units of an optional local center.
+    /// This bounds allocations on streamed worlds while covering the 48-unit
+    /// upwind probes for the actor and the nearby arrow grid.
+    #[must_use]
+    pub fn for_region(
+        view: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        sea_level: f32,
+        center: Option<Vec3>,
+    ) -> Self {
+        let mut field = Self {
+            sea_level,
+            ..Self::default()
+        };
         let mut insert = |bottom: TilePos, top: i32| {
+            if center.is_some_and(|p| {
+                bottom.coord.to_world(0.0).distance_squared(p.with_y(0.0)) > 112.0 * 112.0
+            }) {
+                return;
+            }
             field.spans.entry(bottom.coord).or_default().push(Vec2::new(
                 geometry.top(bottom) - geometry.level_height,
                 geometry.top(TilePos::new(bottom.coord, top)),
@@ -60,12 +92,9 @@ impl WindField {
         field
     }
 
-    pub(super) fn velocity(
-        &self,
-        p: Vec3,
-        time: OceanSimulationTime,
-        profile: OceanWindProfile,
-    ) -> Vec2 {
+    /// Sample actual environmental wind before any vehicle influence multiplier.
+    #[must_use]
+    pub fn velocity(&self, p: Vec3, time: OceanSimulationTime, profile: OceanWindProfile) -> Vec2 {
         if !p.is_finite()
             || p.abs().max_element() > 100_000.0
             || !time.seconds.is_finite()
@@ -75,7 +104,7 @@ impl WindField {
             return Vec2::ZERO;
         }
         let t = time.seconds;
-        let altitude = smooth((p.y - SEA_LEVEL) / 24.0);
+        let altitude = smooth((p.y - self.sea_level) / 24.0);
         let heading = profile.heading_radians + 15_f32.to_radians() * oscillation(t, 113.0, 0.0);
         let direction = Vec2::new(heading.sin(), -heading.cos());
         let at = Vec2::new(p.x, p.z);
@@ -179,6 +208,28 @@ mod tests {
             }
         }
         view
+    }
+
+    #[test]
+    fn ocean_sea_level_is_relative_and_region_contains_local_cover() {
+        let view = wall();
+        let geometry = ArenaVoxelGeometry::default();
+        let near = WindField::for_region(&view, geometry, SEA_LEVEL, Some(Vec3::ZERO));
+        let all = WindField::new(&view, geometry);
+        let p = Vec3::new(4.0, 10.0, 0.0);
+        assert_eq!(
+            near.velocity(p, time(3.0), east()),
+            all.velocity(p, time(3.0), east())
+        );
+        let empty = ArenaTerrainView::default();
+        let lab = WindField::for_region(&empty, geometry, 8.0, None);
+        let ocean = WindField::for_region(&empty, geometry, 160.0, None);
+        for height in [0.0, 12.0, 24.0] {
+            assert_eq!(
+                lab.velocity(p.with_y(8.0 + height), time(5.0), east()),
+                ocean.velocity(p.with_y(160.0 + height), time(5.0), east())
+            );
+        }
     }
 
     #[test]

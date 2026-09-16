@@ -4,10 +4,12 @@ use hex_core::ocean::{OceanEnvironmentSampler, OceanSurfaceSample, OceanWaterCol
 
 /// Immutable world-owned wave sampler. Store behind the core environment Arc;
 /// every call receives current admitted occupancy rather than retaining residency.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OceanSurfaceAdapter {
     profile: OceanSurfaceProfile,
-    bath: OceanBathymetry,
+    bath: std::sync::Arc<OceanBathymetry>,
+    #[cfg(feature = "arena-prototype")]
+    wind: Option<std::sync::Arc<crate::water_lab::WindField>>,
 }
 impl OceanSurfaceAdapter {
     /// Takes a validated immutable snapshot once per package/profile publication.
@@ -18,16 +20,36 @@ impl OceanSurfaceAdapter {
         if !profile.is_valid() || !bath.is_valid() {
             return Err("Invalid ocean environment snapshot");
         }
-        Ok(Self { profile, bath })
+        Ok(Self {
+            profile,
+            bath: std::sync::Arc::new(bath),
+            #[cfg(feature = "arena-prototype")]
+            wind: None,
+        })
+    }
+}
+#[cfg(feature = "arena-prototype")]
+impl OceanSurfaceAdapter {
+    /// Attach a refreshed cover snapshot without copying the ocean bathymetry.
+    #[must_use]
+    pub fn with_wind_field(mut self, wind: crate::water_lab::WindField) -> Self {
+        self.wind = Some(std::sync::Arc::new(wind));
+        self
     }
 }
 impl OceanEnvironmentSampler for OceanSurfaceAdapter {
     fn wind_at(
         &self,
-        _position: Vec3,
+        position: Vec3,
         time: hex_core::ocean::OceanSimulationTime,
         profile: hex_core::ocean::OceanWindProfile,
     ) -> Vec2 {
+        #[cfg(feature = "arena-prototype")]
+        if let Some(field) = &self.wind {
+            return field.velocity(position, time, profile);
+        }
+        #[cfg(not(feature = "arena-prototype"))]
+        let _ = position;
         if self.profile.voxel_height > 0.0 {
             Vec2::X * 9.0
         } else {
@@ -64,6 +86,45 @@ impl OceanEnvironmentSampler for OceanSurfaceAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "arena-prototype")]
+    #[test]
+    fn attached_natural_field_is_shared_by_ocean_consumers() {
+        use hex_core::{
+            arena::{ArenaTerrainView, ArenaVoxelGeometry},
+            ocean::{OceanSimulationTime, OceanWindProfile},
+        };
+        let terrain = ArenaTerrainView::default();
+        let field = crate::water_lab::WindField::for_region(
+            &terrain,
+            ArenaVoxelGeometry::default(),
+            160.0,
+            None,
+        );
+        let adapter = OceanSurfaceAdapter::new(
+            OceanSurfaceProfile::regular_voxels(160.0, 0.4),
+            OceanBathymetry::default(),
+        )
+        .unwrap()
+        .with_wind_field(field.clone());
+        let wind = OceanWindProfile {
+            heading_radians: std::f32::consts::FRAC_PI_2,
+            speed: 9.0,
+        };
+        for height in [160.0, 174.0, 507.0] {
+            for seconds in [0.0, 5.0, 900.001] {
+                let p = Vec3::new(7.0, height, 3.0);
+                let time = OceanSimulationTime {
+                    generation: 1,
+                    seconds,
+                };
+                assert_eq!(
+                    adapter.wind_at(p, time, wind),
+                    field.velocity(p, time, wind)
+                );
+            }
+        }
+    }
 
     #[test]
     fn taller_swells_agree_for_camera_and_admitted_gameplay_sampling() {

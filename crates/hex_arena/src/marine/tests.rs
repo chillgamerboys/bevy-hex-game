@@ -1188,3 +1188,34 @@ fn spatial_wind_reaches_boat_and_glider_with_accepted_multiplier() {
         assert!((actor.boat().expect("boat").wind - wind).length() < 0.00001);
     }
 }
+
+#[test]
+fn summit_glide_requires_admitted_clear_terrain_and_preserves_player() {
+    let mut app = session_app();
+    let mut terrain = app.world().resource::<ArenaTerrainView>().clone();
+    let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+    let mut session = app.world_mut().resource_mut::<ArenaSession>();
+    let actor = session.actors.first().expect("player");
+    let id = actor.id;
+    let hp = actor.hp;
+    let feet = actor.feet + Vec3::Y * 6.0;
+    let old = actor.feet;
+    let residency = terrain.residency.as_mut().expect("streamed fixture");
+    let chunks = std::mem::take(&mut residency.ready);
+    terrain.revision += 1;
+    assert!(!session.start_exploration_glide(feet, Vec3::X, &terrain, geometry));
+    assert_eq!(session.actors.first().expect("player").feet, old);
+    terrain
+        .residency
+        .as_mut()
+        .expect("residency")
+        .ready = chunks;
+    terrain.revision += 1;
+    assert!(session.start_exploration_glide(feet, Vec3::X, &terrain, geometry));
+    let actor = session.actors.first().expect("player");
+    assert_eq!(actor.id, id);
+    assert_eq!(actor.hp, hp);
+    assert_eq!(actor.feet, feet);
+    assert!(actor.glider.open);
+    assert_eq!(actor.glider.snapshot().velocity, Vec3::X * 12.0);
+}

@@ -35,6 +35,10 @@ pub(super) struct NorthernPresentation {
     capture_view: String,
     enabled: bool,
     boat_fixture_tick: Option<u64>,
+    adapter: Option<OceanSurfaceAdapter>,
+    wind_publication: Option<(u64, HexCoord)>,
+    summit_pending: Option<Vec3>,
+    summit_staged: bool,
 }
 
 #[derive(Component)]
@@ -46,7 +50,9 @@ pub(super) fn install(app: &mut App) {
         .add_systems(Startup, spawn_cue)
         .add_systems(
             Update,
-            (configure, ocean_depth).chain().before(ArenaFrame::Input),
+            (configure, stage_summit, ocean_depth)
+                .chain()
+                .before(ArenaFrame::Input),
         )
         .add_systems(
             Update,
@@ -114,6 +120,9 @@ pub(super) fn capture_ready(
     terrain: Option<&ArenaRenderStatus>,
     ocean: Option<&OceanRenderStatus>,
 ) -> bool {
+    if presentation.summit_pending.is_some() {
+        return false;
+    }
     if !fixture_view(view) {
         return true;
     }
@@ -207,6 +216,8 @@ fn configure(
             commands.remove_resource::<OceanEnvironmentView>();
         }
         cache.capture = None;
+        cache.summit_pending = None;
+        cache.summit_staged = false;
         return;
     }
     let Some(streamed) = streamed else {
@@ -239,32 +250,67 @@ fn configure(
                 wave.amplitude = 0.0;
             }
         }
-        cache.package = Some(map.package_fingerprint);
-        cache.boundary_center = None;
-        cache.capture = None;
-    }
-    if environment
-        .as_ref()
-        .is_none_or(|environment| environment.package_fingerprint != map.package_fingerprint)
-    {
         match OceanSurfaceAdapter::new(profile.clone(), bath.clone()) {
-            Ok(adapter) => {
-                commands.insert_resource(OceanEnvironmentView {
-                    package_fingerprint: map.package_fingerprint,
-                    sampler: Arc::new(adapter),
-                    wind: OceanWindProfile::default(),
-                });
-            }
+            Ok(adapter) => cache.adapter = Some(adapter),
             Err(error) => {
                 error!("Northern ocean environment: {error}");
                 exit.write(AppExit::error());
                 return;
             }
         }
+        cache.wind_publication = None;
+        cache.package = Some(map.package_fingerprint);
+        cache.boundary_center = None;
+        cache.capture = None;
+    }
+    let center = cache
+        .summit_pending
+        .or_else(|| session.stream_interest().map(|interest| interest.position))
+        .unwrap_or(Vec3::ZERO);
+    let center = HexCoord::from_world((center / 16.0).round() * 16.0);
+    let publication = (terrain.revision, center);
+    if cache.wind_publication != Some(publication)
+        || environment
+            .as_ref()
+            .is_none_or(|env| env.package_fingerprint != map.package_fingerprint)
+    {
+        if let Some(adapter) = &cache.adapter {
+            let field = hex_map::water_lab::WindField::for_region(
+                &terrain,
+                *geometry,
+                map.sea_level,
+                Some(center.to_world(0.0)),
+            );
+            commands.insert_resource(OceanEnvironmentView {
+                package_fingerprint: map.package_fingerprint,
+                sampler: Arc::new(adapter.clone().with_wind_field(field)),
+                wind: OceanWindProfile {
+                    heading_radians: std::f32::consts::FRAC_PI_2,
+                    speed: 9.0,
+                },
+            });
+            cache.wind_publication = Some(publication);
+        }
     }
     if cache.generation != Some(reset.generation) {
         cache.generation = Some(reset.generation);
+        cache.summit_staged = false;
         cache.boundary_center = None;
+    }
+    if !cache.summit_staged
+        && cache.summit_pending.is_none()
+        && std::env::var("HEX_NORTHERN_START").as_deref() == Ok("summit-glider")
+    {
+        cache.summit_pending = capture_pose(
+            "northern-summit",
+            &session,
+            &streamed,
+            &profile,
+            &bath,
+            &terrain,
+            *geometry,
+        )
+        .map(|pose| pose.interest);
     }
     if state.capture.is_some() && fixture_view(&state.capture_view) {
         if cache.capture.is_none() || cache.capture_view != state.capture_view {
@@ -284,6 +330,57 @@ fn configure(
     }
 }
 
+fn stage_summit(
+    mut cache: ResMut<NorthernPresentation>,
+    mut session: ResMut<ArenaSession>,
+    terrain: Res<ArenaTerrainView>,
+    geometry: Res<ArenaVoxelGeometry>,
+    mut state: ResMut<ViewState>,
+) {
+    let Some(site) = cache.summit_pending else {
+        return;
+    };
+    let coord = HexCoord::from_world(site);
+    // Wait for the entire summit neighborhood, then refine the coarse overview
+    // peak against published solid columns instead of spawning on a proxy mesh.
+    if coord.within_radius(8).into_iter().any(|coord| {
+        terrain
+            .residency
+            .as_ref()
+            .is_none_or(|residency| residency.at(coord, *geometry) != ArenaAvailability::Ready)
+    }) {
+        return;
+    }
+    let Some(peak) = coord
+        .within_radius(8)
+        .into_iter()
+        .filter_map(|coord| terrain.columns.get(&coord))
+        .flatten()
+        .map(|span| hex_core::TilePos::new(span.bottom.coord, span.top_level))
+        .max_by(|a, b| geometry.top(*a).total_cmp(&geometry.top(*b)))
+    else {
+        return;
+    };
+    let feet = peak.coord.to_world(geometry.top(peak) + 5.0);
+    let heading = terrain
+        .anchors
+        .get("party_start")
+        .copied()
+        .unwrap_or(Vec3::ZERO)
+        - feet;
+    if !session.start_exploration_glide(feet, heading, &terrain, *geometry) {
+        return;
+    }
+    let heading = heading.with_y(0.0).normalize_or(Vec3::X);
+    state.yaw = (-heading.x).atan2(-heading.z);
+    state.pitch = -0.15;
+    state.third_person = true;
+    state.initialized = true;
+    cache.summit_pending = None;
+    cache.summit_staged = true;
+    info!("Ocean summit glider staged: feet={feet:?}, heading={heading:?}, open=true, wind=natural-field");
+}
+
 fn interest(
     session: Res<ArenaSession>,
     cache: Res<NorthernPresentation>,
@@ -292,7 +389,12 @@ fn interest(
     if !cache.enabled {
         return;
     }
-    if let Some(capture) = cache.capture {
+    if let Some(position) = cache.summit_pending {
+        *target = ArenaStreamInterest {
+            position,
+            velocity: Vec3::ZERO,
+        };
+    } else if let Some(capture) = cache.capture {
         // An explicitly windowless composition camera requests fine terrain at
         // its subject, never fabricating movement or discoveries for the actor.
         *target = ArenaStreamInterest {
