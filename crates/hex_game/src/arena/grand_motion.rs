@@ -393,8 +393,11 @@ fn capture_inner(world: &mut World) -> Result<(), String> {
             session: Res<ArenaSession>, mut exit: MessageWriter<AppExit>
         | {
             let mut receipt = receipt.clone();
-            receipt["readback_completion"] = serde_json::json!({"frame": state.frames, "tick": session.tick});
             let result = (|| -> Result<(), String> {
+                receipt.as_object_mut().ok_or("Receipt is not an object")?.insert(
+                    "readback_completion".into(),
+                    serde_json::json!({"frame": state.frames, "tick": session.tick}),
+                );
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
