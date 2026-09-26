@@ -74,46 +74,412 @@ fn object(
         .map_err(|e| ContractError::new(&out.id, e.to_string()))?;
     Ok(out)
 }
-fn tree(
-    g: &GrandCompiler,
-    root: WorldHex,
-    index: usize,
-    giant: bool,
-) -> Result<ObjectInstance, ContractError> {
-    if giant {
-        return world_tree(g, root);
-    }
-    let mut cells = Cells::new();
-    let floor = g.surface(root).level + 1;
-    let [x, z] = world_xz(root);
-    let heart = gaussian(x, z, -50., 160., 250., 230.);
-    let height = (35. + heart * 85.) as i32 + (index % 25) as i32;
-    let crown = 3 + (heart * 4.) as i64;
-    add(&mut cells, root, floor, floor + height, "timber");
-    for dq in -crown..=crown {
-        for dr in -crown..=crown {
-            let d = (dq * dq + dq * dr + dr * dr) as f64;
-            if d > (crown * crown) as f64 {
-                continue;
+// These compact recipes retain the accepted expedition's actual curved boles,
+// flared roots, rising branches and differently shaded crown lobes. Grand's three
+// wider grove variants use that same sculptor; provenance lives beside the data.
+const FOREST_LIBRARY: &str =
+    include_str!("../../../../../assets/config/v4/grand-v4/forest/trees.ron");
+const MAX_FOREST_TREES: usize = 780;
+const MAX_FOREST_DETAILS: usize = 60;
+type Occupied = BTreeMap<WorldHex, Vec<(i32, i32)>>;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForestLibrary {
+    version: u32,
+    trees: Vec<ForestTemplate>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForestTemplate {
+    name: String,
+    height: i32,
+    radius: i64,
+    runs: Vec<(i64, i64, i32, i32, String)>,
+}
+impl ForestLibrary {
+    fn load() -> Result<Self, ContractError> {
+        let value: Self = ron::from_str(FOREST_LIBRARY)
+            .map_err(|e| ContractError::new("grand/forest", e.to_string()))?;
+        let mut names = std::collections::BTreeSet::new();
+        if value.version != 1 || value.trees.len() != 15 {
+            return Err(ContractError::new(
+                "grand/forest",
+                "wrong authored template catalogue",
+            ));
+        }
+        for tree in &value.trees {
+            if !names.insert(&tree.name)
+                || !(18..=114).contains(&tree.height)
+                || !(3..=16).contains(&tree.radius)
+                || tree.runs.is_empty()
+                || tree.runs.len() > 1_500
+                || tree.runs.iter().any(|(q, r, lo, hi, material)| {
+                    q.abs().max(r.abs()).max((q + r).abs()) > tree.radius
+                        || *lo < 0
+                        || lo >= hi
+                        || *hi > tree.height
+                        || forest_material(material).is_none()
+                })
+            {
+                return Err(ContractError::new(
+                    "grand/forest",
+                    "invalid authored tree bounds or material",
+                ));
             }
-            let p = WorldHex::new(root.q + dq, root.r + dr);
-            let depth = (1. - d / (crown * crown) as f64).sqrt();
-            add(
-                &mut cells,
-                p,
-                floor + height - (depth * 35.) as i32,
-                floor + height + (depth * 12.) as i32,
-                if floor > 1070 { "snow" } else { "foliage" },
-            );
+            if tree
+                .runs
+                .iter()
+                .map(|(_, _, lo, hi, _)| hi - lo)
+                .sum::<i32>()
+                > 65_536
+            {
+                return Err(ContractError::new(
+                    "grand/forest",
+                    "tree exceeds its occupied-cell budget",
+                ));
+            }
+        }
+        Ok(value)
+    }
+
+    fn select(&self, name: &str) -> Result<&ForestTemplate, ContractError> {
+        self.trees
+            .iter()
+            .find(|tree| tree.name == name)
+            .ok_or_else(|| ContractError::new("grand/forest", format!("missing tree {name}")))
+    }
+}
+fn forest_material(name: &str) -> Option<&'static str> {
+    match name {
+        "timber" => Some("timber"),
+        "foliage_dark" => Some("foliage_dark"),
+        "foliage" => Some("foliage"),
+        "foliage_light" => Some("foliage_light"),
+        _ => None,
+    }
+}
+fn turn(mut q: i64, mut r: i64, rotation: u64) -> (i64, i64) {
+    for _ in 0..rotation % 6 {
+        (q, r) = (-r, q + r);
+    }
+    (q, r)
+}
+fn forest_hash(seed: u64, p: WorldHex) -> u64 {
+    let mut value = seed
+        ^ u64::from_le_bytes(p.q.to_le_bytes()).wrapping_mul(0x9e3779b97f4a7c15)
+        ^ u64::from_le_bytes(p.r.to_le_bytes()).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    value ^ (value >> 31)
+}
+fn forest_density(x: f64, z: f64) -> f64 {
+    // A shared biome envelope with a feathered, irregular boundary, not a grid
+    // clipped to a hard ellipse. Large gaps form glades rather than missing rows.
+    let edge = biomes::forest_extent(
+        x + 31. * (z * 0.014).sin() + 12. * (x * 0.031).cos(),
+        z + 23. * (x * 0.013).sin() - 17. * (z * 0.025).cos(),
+    );
+    let boundary = 1. - smooth((edge - 0.72) / 0.32);
+    let groves = 0.82 + 0.12 * (x * 0.026 + z * 0.007).sin() + 0.06 * (z * 0.035 - x * 0.012).cos();
+    let glades = [
+        (-280., 90., 36., 25.),
+        (120., 355., 38., 32.),
+        (-160., 350., 24., 38.),
+    ]
+    .into_iter()
+    .map(|(cx, cz, rx, rz)| gaussian(x, z, cx, cz, rx, rz))
+    .fold(0_f64, f64::max);
+    boundary * groves * (1. - smooth((glades - 0.30) / 0.50))
+}
+fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
+    let [x, z] = world_xz(p);
+    sites::reserved_encounter(x, z)
+        || sites::PADS
+            .iter()
+            .any(|a| (x - a.x).hypot(z - a.z) < a.radius + 3.)
+        || CAMPS.iter().any(|(cx, cz)| (x - cx).hypot(z - cz) < 16.)
+        || ((x + 60.).abs() < 12. && (125. ..260.).contains(&z))
+        || g.anchors.iter().any(|a| {
+            let [ax, az] = world_xz(a.position.column);
+            (x - ax).hypot(z - az) < 8.
+        })
+}
+fn overlaps(occupied: &Occupied, columns: &[ColumnData]) -> bool {
+    columns.iter().any(|column| {
+        occupied.get(&column.position).is_some_and(|old| {
+            column
+                .runs
+                .iter()
+                .any(|run| old.iter().any(|(lo, hi)| *lo < run.top && run.bottom < *hi))
+        })
+    })
+}
+fn reserve(occupied: &mut Occupied, object: &ObjectInstance) {
+    for column in &object.occupancy {
+        occupied
+            .entry(column.position)
+            .or_default()
+            .extend(column.runs.iter().map(|run| (run.bottom, run.top)));
+    }
+}
+fn place_tree(
+    g: &GrandCompiler,
+    template: &ForestTemplate,
+    root: WorldHex,
+    rotation: u64,
+    occupied: &Occupied,
+    frozen: bool,
+) -> Result<Option<ObjectInstance>, ContractError> {
+    let mut contacts = BTreeMap::new();
+    for (q, r, lo, _, material) in &template.runs {
+        if *lo == 0 && material == "timber" {
+            let (q, r) = turn(*q, *r, rotation);
+            let p = WorldHex::new(root.q + q, root.r + r);
+            let surface = g.surface(p);
+            if !g.mainland(p) || surface.water.is_some() || reserved_growth(g, p) {
+                return Ok(None);
+            }
+            contacts.insert(p, surface.level + 1);
         }
     }
-    object(
+    let Some(floor) = contacts.values().copied().max() else {
+        return Err(ContractError::new(
+            "grand/forest",
+            "tree has no grounded wood",
+        ));
+    };
+    if contacts.values().any(|height| floor - height > 8) {
+        return Ok(None); // Preserve the hillside rather than flattening its terrain.
+    }
+    let mut columns: BTreeMap<WorldHex, Vec<VoxelRun>> = BTreeMap::new();
+    for (q, r, lo, hi, name) in &template.runs {
+        let (q, r) = turn(*q, *r, rotation);
+        let p = WorldHex::new(root.q + q, root.r + r);
+        let surface = g.surface(p);
+        let material = forest_material(name)
+            .ok_or_else(|| ContractError::new("grand/forest", "unknown tree material"))?;
+        let bottom = if *lo == 0 && material == "timber" {
+            surface.level + 1
+        } else {
+            floor + lo
+        };
+        if !g.mainland(p)
+            || bottom <= surface.level
+            || (material != "timber" && bottom < surface.level + 9)
+            || (bottom < surface.level + 17 && reserved_growth(g, p))
+        {
+            return Ok(None);
+        }
+        columns.entry(p).or_default().push(run(
+            bottom,
+            floor + hi,
+            if frozen && material == "foliage_light" {
+                "snow"
+            } else {
+                material
+            },
+        ));
+    }
+    let occupancy: Vec<_> = columns
+        .into_iter()
+        .map(|(position, runs)| ColumnData { position, runs })
+        .collect();
+    if overlaps(occupied, &occupancy) {
+        return Ok(None);
+    }
+    let object = ObjectInstance {
+        id: format!("grand/tree/{}_{}", root.q, root.r),
+        region_id: "grand".into(),
+        asset: format!("plant/grand-{}", template.name),
+        origin: VoxelPosition {
+            column: root,
+            level: g.surface(root).level + 1,
+        },
+        rotation: 0, // Occupancy has already been rotated into world coordinates.
+        grounding: Some(
+            contacts
+                .into_iter()
+                .map(|(column, level)| VoxelPosition {
+                    column,
+                    level: level - 1,
+                })
+                .collect(),
+        ),
+        occupancy,
+    };
+    object.validate()?;
+    Ok(Some(object))
+}
+fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<(), ContractError> {
+    let library = ForestLibrary::load()?;
+    let mut occupied = Occupied::new();
+    for object in out.iter() {
+        reserve(&mut occupied, object);
+    }
+    let mut candidates = vec![];
+    for q in (-480_i64..=480).step_by(4) {
+        for r in (-480_i64..=480).step_by(4) {
+            let key = forest_hash(g.source.seed, WorldHex::new(q, r));
+            let root = WorldHex::new(q + (key % 7) as i64 - 3, r + ((key >> 8) % 7) as i64 - 3);
+            let [x, z] = world_xz(root);
+            let surface = g.surface(root);
+            let edge = biomes::forest_extent(x, z);
+            if !g.mainland(root)
+                || surface.water.is_some()
+                || !(420..=850).contains(&surface.level)
+                || g.cavity(root).is_some()
+                || reserved_growth(g, root)
+                || (key % 10_000) as f64 / 10_000. > forest_density(x, z)
+            {
+                continue;
+            }
+            let variant = 1 + (key >> 24) % 3;
+            let family = if edge < 0.80 && key % 5 < 3 {
+                "grove"
+            } else if edge < 0.92 && key % 5 < 4 {
+                "ancient"
+            } else if edge < 0.90 && !key.is_multiple_of(4) {
+                "landmark"
+            } else if key.is_multiple_of(3) {
+                "understory-pine"
+            } else {
+                "understory-broadleaf"
+            };
+            let template = library.select(&format!("{family}-{variant}"))?;
+            let layer = if template.name.starts_with("grove-") {
+                0
+            } else if template.name.starts_with("ancient-") {
+                1
+            } else if template.height > 34 {
+                2
+            } else {
+                3
+            };
+            candidates.push((layer, key, root, template));
+            if template.height > 34 {
+                // A failed mature crown may still leave a valid sheltered site
+                // for a small tree. This fills layers without adding more roots.
+                let understory = if key.is_multiple_of(3) {
+                    "understory-pine"
+                } else {
+                    "understory-broadleaf"
+                };
+                let small = library.select(&format!("{understory}-{variant}"))?;
+                candidates.push((3, key.rotate_left(17), root, small));
+            }
+        }
+    }
+    // Mature groves reserve their branches first; smaller trees fill their gaps.
+    // Hash order avoids an axial scan edge when the explicit count budget is met.
+    candidates.sort_by_key(|(layer, key, root, template)| {
+        (*layer, std::cmp::Reverse(template.radius), *key, *root)
+    });
+    let mut planted = vec![];
+    let mut mature = 0;
+    for (_, key, root, template) in candidates {
+        if planted.len() >= MAX_FOREST_TREES - 12 {
+            break;
+        }
+        // Keep an understory allocation even if every mature candidate fits.
+        if template.height > 34 && mature >= MAX_FOREST_TREES - 12 - 180 {
+            continue;
+        }
+        if planted
+            .iter()
+            .any(|(_, old): &(u64, WorldHex)| old.checked_distance(root).is_ok_and(|d| d < 6))
+        {
+            continue;
+        }
+        if let Some(tree) = place_tree(g, template, root, key % 6, &occupied, false)? {
+            reserve(&mut occupied, &tree);
+            out.push(tree);
+            planted.push((key, root));
+            mature += usize::from(template.height > 34);
+        }
+    }
+    // Sparse snowy conifers retain the separately authored highland grove.
+    for i in 0..12 {
+        let root = nearest_hex(
+            -250. + f64::from(i % 4) * 28.,
+            -630. + f64::from(i / 4) * 20.,
+        );
+        let key = forest_hash(g.source.seed, root);
+        let template = library.select(&format!("understory-pine-{}", 1 + i % 3))?;
+        if let Some(tree) = place_tree(g, template, root, key % 6, &occupied, true)? {
+            reserve(&mut occupied, &tree);
+            out.push(tree);
+        }
+    }
+    let mut details = 0;
+    for (key, root) in planted {
+        if details >= MAX_FOREST_DETAILS {
+            break;
+        }
+        if !key.is_multiple_of(5) {
+            continue;
+        }
+        let (q, r) = turn(7, -2, key % 6);
+        let root = WorldHex::new(root.q + q, root.r + r);
+        if let Some(detail) = forest_detail(g, root, key, &occupied)? {
+            reserve(&mut occupied, &detail);
+            out.push(detail);
+            details += 1;
+        }
+    }
+    Ok(())
+}
+fn forest_detail(
+    g: &GrandCompiler,
+    root: WorldHex,
+    key: u64,
+    occupied: &Occupied,
+) -> Result<Option<ObjectInstance>, ContractError> {
+    let mut cells = Cells::new();
+    for q in -2_i64..=2 {
+        for r in -2_i64..=2 {
+            let distance = q.abs().max(r.abs()).max((q + r).abs());
+            if distance > 2 || (key % 3 == 2 && r != 0) {
+                continue;
+            }
+            let (q, r) = turn(q, r, key % 6);
+            let p = WorldHex::new(root.q + q, root.r + r);
+            let surface = g.surface(p);
+            if !g.mainland(p) || surface.water.is_some() || reserved_growth(g, p) {
+                return Ok(None);
+            }
+            let lo = surface.level + 1;
+            if key.is_multiple_of(3) {
+                let height = 2 + (2 - distance) as i32 * 2;
+                add(&mut cells, p, lo, lo + height, "stone");
+                add(&mut cells, p, lo + height - 1, lo + height, "moss");
+            } else if key % 3 == 1 {
+                if distance == 0 || (q - r).rem_euclid(3) == 0 {
+                    add(
+                        &mut cells,
+                        p,
+                        lo,
+                        lo + 1 + (2 - distance) as i32,
+                        if distance == 0 {
+                            "foliage_dark"
+                        } else {
+                            "foliage"
+                        },
+                    );
+                }
+            } else {
+                add(&mut cells, p, lo, lo + 2, "timber");
+            }
+        }
+    }
+    let object = object(
         g,
-        format!("grand/tree/{index:05}"),
-        "plant/grand-forest-tree",
+        format!("grand/forest-detail/{}_{}", root.q, root.r),
+        "decor/grand-forest-floor",
         root,
         cells,
-    )
+    )?;
+    Ok((!overlaps(occupied, &object.occupancy)).then_some(object))
 }
 
 // Independent, asymmetric lobes make a broad living canopy rather than a single
@@ -155,21 +521,28 @@ fn world_tree(g: &GrandCompiler, root: WorldHex) -> Result<ObjectInstance, Contr
     for (p, (lo, hi)) in canopy {
         add(&mut cells, p, lo, hi, "foliage");
     }
-    // Flared trunk narrows as the major boughs take over its load.
-    for q in -9_i64..=9 {
-        for r in -9_i64..=9 {
-            let distance = q.abs().max(r.abs()).max((q + r).abs());
-            if distance > 9 {
-                continue;
-            }
+    // A gently curved, continuously tapered bole uses fractional contours so
+    // individual columns end at different heights. Root fins and the fixed outer
+    // crown remain the same landmark; this avoids a straight extruded cylinder.
+    for q in -11_i64..=11 {
+        for r in -11_i64..=11 {
             let p = WorldHex::new(root.q + q, root.r + r);
-            let top = floor
-                + if distance <= 5 {
-                    265
-                } else {
-                    250 - (distance as i32 - 5) * 38
-                };
-            add(&mut cells, p, g.surface(p).level + 1, top, "timber");
+            let ground = g.surface(p).level + 1;
+            for level in ground..floor + 265 {
+                let t = (f64::from(level - floor) / 265.).clamp(0., 1.);
+                let drift = smooth(t);
+                let axis_q = 2.2 * drift + 0.6 * (std::f64::consts::PI * t).sin();
+                let axis_r = -1.5 * drift;
+                let x = q as f64 - axis_q + (r as f64 - axis_r) * 0.5;
+                let z = (r as f64 - axis_r) * 3_f64.sqrt() * 0.5;
+                let angle = z.atan2(x);
+                let width = 8.4 - 4.4 * t.powf(0.68);
+                let contour =
+                    1. + 0.10 * (3. * angle + t).sin() + 0.07 * (5. * angle - 1.3 * t).cos();
+                if x * x + z * z <= (width * contour).powi(2) {
+                    add(&mut cells, p, level, level + 1, "timber");
+                }
+            }
         }
     }
     // Each outer lobe has a visible rising branch from the trunk into its heart.
@@ -293,55 +666,14 @@ fn shrine(
 }
 /// Reserve a sparse global forest (bounded roots and exact compact occupancies).
 pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, ContractError> {
-    let mut out = vec![];
-    let mut index = 0;
-    // Thirteen-column spacing bounds roots at <6000 on the entire mainland.
-    for q in (-480..=480).step_by(13) {
-        for r in (-480..=480).step_by(13) {
-            let root = WorldHex::new(q + (r * 7_i64).rem_euclid(5), r);
-            let [x, z] = world_xz(root);
-            let s = g.surface(root);
-            let forest = biomes::forest_extent(x, z);
-            let frozen = ((x + 200.) / 80.).hypot((z + 610.) / 45.);
-            if !g.mainland(root)
-                || s.water.is_some()
-                || s.level < 420
-                || s.level > 1200
-                || forest > 1.
-                || (frozen < 1. && index % 5 != 0)
-            {
-                continue;
-            }
-            if sites::PADS
-                .iter()
-                .any(|a| (x - a.x).hypot(z - a.z) < a.radius + 22.)
-                || ((x + 60.) / 65.).hypot((z - 150.) / 105.) < 1.
-                || g.cavity(root).is_some()
-                || sites::reserved_encounter(x, z)
-                || CAMPS.iter().any(|(cx, cz)| (x - cx).hypot(z - cz) < 16.)
-            {
-                continue;
-            }
-            if forest > 0.8 && (q + r).rem_euclid(3) != 0 {
-                continue;
-            }
-            out.push(tree(g, root, index, false)?);
-            index += 1;
-        }
-    }
-    // Sparse frozen trees sit atop the ascent, independent of the lowland forest.
-    for i in 0..12 {
-        let x = -250. + (i % 4) as f64 * 28.;
-        let z = -630. + (i / 4) as f64 * 20.;
-        out.push(tree(g, nearest_hex(x, z), index, false)?);
-        index += 1;
-    }
-    out.push(tree(g, nearest_hex(-60., 125.), index, true)?);
-    out.push(temple_plant(g)?);
-    out.push(root_temple_ribs(g)?);
-    out.push(fire_marker(g)?);
-    out.push(air_marker(g)?);
-    out.push(earth_marker(g)?);
+    let mut out = vec![
+        world_tree(g, nearest_hex(-60., 125.))?,
+        temple_plant(g)?,
+        root_temple_ribs(g)?,
+        fire_marker(g)?,
+        air_marker(g)?,
+        earth_marker(g)?,
+    ];
     for (i, (x, z)) in CAMPS.into_iter().enumerate() {
         out.push(camp(g, i, nearest_hex(x, z))?);
     }
@@ -447,6 +779,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
             cells,
         )?);
     }
+    compose_forest(g, &mut out)?;
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
 }
@@ -705,4 +1038,225 @@ fn coastal_rock(
         root,
         cells,
     )
+}
+
+#[cfg(test)]
+mod forest_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[derive(Deserialize)]
+    struct Stock {
+        placements: Vec<StockCell>,
+    }
+    #[derive(Deserialize)]
+    struct StockCell {
+        position: StockPosition,
+        style: String,
+    }
+    #[derive(Deserialize)]
+    struct StockPosition {
+        q: i64,
+        r: i64,
+        level: i32,
+    }
+
+    fn expanded(template: &ForestTemplate, rotation: u64) -> BTreeSet<(i64, i64, i32, &str)> {
+        template
+            .runs
+            .iter()
+            .flat_map(|(q, r, bottom, top, material)| {
+                let (q, r) = turn(*q, *r, rotation);
+                (*bottom..*top).map(move |level| (q, r, level, material.as_str()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn forest_templates_preserve_accepted_art_and_exact_six_way_rotations() {
+        let library = ForestLibrary::load().expect("bounded catalogue");
+        for template in &library.trees {
+            let original = expanded(template, 0);
+            assert!(original.len() <= 65_536);
+            assert_eq!(original, expanded(template, 6));
+            for rotation in 0..6 {
+                let rotated = expanded(template, rotation);
+                let restored: BTreeSet<_> = rotated
+                    .into_iter()
+                    .map(|(q, r, level, material)| {
+                        let (q, r) = turn(q, r, 6 - rotation);
+                        (q, r, level, material)
+                    })
+                    .collect();
+                assert_eq!(
+                    restored, original,
+                    "exact local geometry: {}",
+                    template.name
+                );
+            }
+            if template.name.starts_with("grove-") {
+                continue;
+            }
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../assets/art/objects/plant/forest-expedition-{}.ron",
+                template.name
+            ));
+            let stock: Stock =
+                ron::from_str(&std::fs::read_to_string(path).expect("stock artwork"))
+                    .expect("stock schema");
+            let exact: BTreeSet<_> = stock
+                .placements
+                .iter()
+                .map(|cell| {
+                    let material = match cell.style.as_str() {
+                        "plant/trunk" => "timber",
+                        "plant/foliage-dark" => "foliage_dark",
+                        "plant/foliage-mid" => "foliage",
+                        "plant/foliage-light" => "foliage_light",
+                        _ => panic!("unexpected stock tree style"),
+                    };
+                    (
+                        cell.position.q,
+                        cell.position.r,
+                        cell.position.level,
+                        material,
+                    )
+                })
+                .collect();
+            assert_eq!(
+                original, exact,
+                "accepted forest artwork was changed: {}",
+                template.name
+            );
+        }
+    }
+
+    #[test]
+    fn forest_edge_is_feathered_and_named_glades_stay_open() {
+        assert!(forest_density(-280., 90.) < 0.01);
+        assert!(forest_density(120., 355.) < 0.01);
+        assert!(forest_density(-60., 110.) > 0.70);
+        assert!(forest_density(700., 600.) < 0.01);
+        let transition = (-400..600)
+            .map(|x| forest_density(f64::from(x), 330.))
+            .filter(|density| *density > 0.05 && *density < 0.65)
+            .count();
+        assert!(
+            transition > 100,
+            "a broad graded edge rather than a hard cutoff"
+        );
+    }
+
+    #[test]
+    fn authored_forest_is_bounded_grounded_layered_and_clear_of_gameplay_sites() {
+        let source: GrandSpec = ron::from_str(include_str!(
+            "../../../../../assets/config/v4/grand-v4/world.ron"
+        ))
+        .expect("Grand source");
+        let g = GrandCompiler::new(source).expect("complete authored composition");
+        let objects: Vec<_> = g.objects.values().flatten().collect();
+        let trees: Vec<_> = objects
+            .iter()
+            .copied()
+            .filter(|o| o.id.starts_with("grand/tree/"))
+            .collect();
+        assert!(trees.len() <= MAX_FOREST_TREES);
+        assert!(objects.len() < 900);
+        let mut occupied = Occupied::new();
+        for object in objects
+            .iter()
+            .copied()
+            .filter(|o| !o.id.starts_with("grand/tree/"))
+        {
+            reserve(&mut occupied, object);
+        }
+        let mut families = BTreeSet::new();
+        let mut canopy = BTreeSet::new();
+        for tree in &trees {
+            families.insert(tree.asset.as_str());
+            assert!(
+                !overlaps(&occupied, &tree.occupancy),
+                "exact solid overlap at {}",
+                tree.id
+            );
+            reserve(&mut occupied, tree);
+            let contacts = tree.grounding.as_ref().expect("root contacts");
+            assert!(!contacts.is_empty());
+            for contact in contacts {
+                let (terrain, _) = g.column(contact.column);
+                assert!(
+                    terrain.material_at(contact.level).is_some(),
+                    "unsupported root {}",
+                    tree.id
+                );
+                assert!(
+                    tree.occupancy.iter().any(|column| {
+                        column.position == contact.column
+                            && column.runs.iter().any(|run| {
+                                run.material == "timber" && run.bottom == contact.level + 1
+                            })
+                    }),
+                    "the declared root must actually meet that terrain"
+                );
+            }
+            for column in &tree.occupancy {
+                if column
+                    .runs
+                    .iter()
+                    .any(|run| run.material.starts_with("foliage"))
+                {
+                    canopy.insert(column.position);
+                }
+            }
+        }
+        let mut counts = BTreeMap::new();
+        for tree in &trees {
+            *counts.entry(tree.asset.as_str()).or_insert(0_usize) += 1;
+        }
+        println!("GRAND_FOREST_FAMILIES {counts:?}");
+        assert!(
+            families.len() >= 10,
+            "multiple mature and understory silhouettes"
+        );
+        let mut domain = 0_u32;
+        let mut covered = 0_u32;
+        let mut core = 0_u32;
+        let mut covered_core = 0_u32;
+        for &(r, a, b) in &g.source.mainland_rows {
+            for q in a..=b {
+                let p = WorldHex::new(q, r);
+                let [x, z] = world_xz(p);
+                let edge = biomes::forest_extent(x, z);
+                if edge > 1. || g.surface(p).water.is_some() {
+                    continue;
+                }
+                domain += 1;
+                covered += u32::from(canopy.contains(&p));
+                if edge < 0.70 {
+                    core += 1;
+                    covered_core += u32::from(canopy.contains(&p));
+                }
+            }
+        }
+        // Count exact union of real canopy columns, including clearings in the
+        // denominator. The giant landmark is deliberately excluded from coverage.
+        let fraction = f64::from(covered) / f64::from(domain);
+        let core_fraction = f64::from(covered_core) / f64::from(core);
+        println!("GRAND_FOREST trees={} families={} columns={covered}/{domain} coverage={fraction:.4} core={covered_core}/{core} core_coverage={core_fraction:.4}", trees.len(), families.len());
+        assert!(
+            fraction >= 0.40,
+            "forest must retain substantial foliage between its glades"
+        );
+        assert!(
+            core_fraction >= 0.50,
+            "inner groves need overlapping canopy coverage"
+        );
+        let sites = g.sites(1).expect("published sites");
+        for site in &sites.encounters {
+            assert!(g.clear_support(site.preferred, 16), "{}", site.id);
+        }
+        for node in &sites.route_nodes {
+            assert!(g.clear_support(node.position, 8), "{}", node.id);
+        }
+    }
 }
