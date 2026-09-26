@@ -8,7 +8,7 @@ use crate::STEP;
 
 #[derive(Debug)]
 pub(crate) struct ForecastMotion {
-    pub id: u8,
+    pub id: crate::ActorId,
     initial: Vec3,
     samples: Vec<(f32, Vec3)>,
     dimensions: Vec3,
@@ -16,7 +16,7 @@ pub(crate) struct ForecastMotion {
 
 impl ForecastMotion {
     pub fn human(
-        id: u8,
+        id: crate::ActorId,
         feet: Vec3,
         velocity: Vec3,
         prediction: f32,
@@ -37,7 +37,7 @@ impl ForecastMotion {
     }
 
     pub fn with_dimensions(
-        id: u8,
+        id: crate::ActorId,
         feet: Vec3,
         velocity: Vec3,
         prediction: f32,

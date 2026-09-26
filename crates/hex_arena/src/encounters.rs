@@ -254,7 +254,7 @@ impl ArenaSession {
             let wisp_count = roster.iter().filter(|s| **s == Species::Wisp).count();
             let mut wisp_slot = 0;
             for species in roster {
-                let Ok(id) = u8::try_from(self.actors.len()) else {
+                let Ok(id) = crate::ActorId::try_from(self.actors.len()) else {
                     break;
                 };
                 let player = self.actors.first().map_or(Vec3::ZERO, |a| a.feet);
@@ -811,7 +811,7 @@ impl ArenaSession {
                 actor.aim = intent.aim.normalize();
             }
             if let Some(spell) = intent.selected.filter(|spell| *spell != Spell::HighJump) {
-                if spell != actor.selected && actor.charge.is_some() {
+                if spell != actor.selected && (actor.charge.is_some() || actor.buffered_fireball) {
                     actor.cancel_charge();
                 }
                 actor.selected = spell;

@@ -413,7 +413,7 @@ impl ArenaTuning {
 #[derive(Debug, Clone)]
 pub struct Actor {
     /// Stable actor identity allocated once per run, never reused after death.
-    pub id: u8,
+    pub id: crate::ActorId,
     /// Physical/behavior profile; human and shadow preserve accepted Duel values.
     pub species: Species,
     /// Friendly bodies are skipped by projectiles except the caster itself.
@@ -442,6 +442,7 @@ pub struct Actor {
     worm: Option<crate::worm_body::WormBodyState>,
     charge: Option<ChargeState>,
     cast_needs_release: bool,
+    buffered_fireball: bool,
     body: Body,
     glider: glider::GliderState,
     free_flight: Option<exploration::FreeFlightState>,
@@ -466,7 +467,7 @@ impl Actor {
         self.dimensions.y = 1.2;
     }
 
-    fn spawn(id: u8, feet: Vec3, aim: Vec3) -> Self {
+    fn spawn(id: crate::ActorId, feet: Vec3, aim: Vec3) -> Self {
         Self {
             id,
             species: if id == 0 {
@@ -489,6 +490,7 @@ impl Actor {
             worm: None,
             charge: None,
             cast_needs_release: false,
+            buffered_fireball: false,
             body: Body::default(),
             glider: glider::GliderState::default(),
             free_flight: None,
@@ -609,7 +611,8 @@ impl Actor {
     }
 
     fn cancel_charge(&mut self) {
-        self.cast_needs_release |= self.charge.is_some();
+        self.cast_needs_release |= self.charge.is_some() || self.buffered_fireball;
+        self.buffered_fireball = false;
         self.charge = None;
     }
 
@@ -622,6 +625,7 @@ impl Actor {
         if !intent.cast_held && !intent.cast_pressed && !intent.cast_released {
             self.charge = None;
             self.cast_needs_release = false;
+            self.buffered_fireball = false;
             return None;
         }
         if intent.cast_pressed && !self.cast_needs_release && self.charge.is_none() {
@@ -635,9 +639,27 @@ impl Actor {
                     spell: self.selected,
                     elapsed: 0.0,
                 });
+            } else if self.species == Species::Human && self.selected == Spell::Fireball {
+                self.buffered_fireball = true;
+            }
+        }
+        if self.buffered_fireball && intent.cast_held && !intent.cast_released {
+            if self.selected != Spell::Fireball || self.hp <= 0.0 {
+                self.buffered_fireball = false;
+            } else if self
+                .cooldowns
+                .get(Spell::Fireball.index())
+                .is_some_and(|v| *v <= STEP * 0.01)
+            {
+                self.buffered_fireball = false;
+                self.charge = Some(ChargeState {
+                    spell: Spell::Fireball,
+                    elapsed: 0.0,
+                });
             }
         }
         if intent.cast_released {
+            self.buffered_fireball = false;
             self.cast_needs_release = false;
             let charge = self.charge.take()?;
             if self.hp > 0.0 && charge.spell == self.selected {
@@ -697,7 +719,7 @@ pub struct Projectile {
     /// Stable identifier within the current reset generation.
     pub id: u64,
     /// Casting actor identity.
-    pub owner: u8,
+    pub owner: crate::ActorId,
     /// Current physical center.
     pub position: Vec3,
     /// Physical center before the latest swept tick.
@@ -756,7 +778,7 @@ pub struct VisualEffect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArenaOutcome {
     /// Winning actor ID; zero also denotes all hostile encounter parties defeated.
-    Winner(u8),
+    Winner(crate::ActorId),
     /// No side survived the terminal simulation tick.
     Draw,
 }
@@ -855,7 +877,7 @@ impl Default for ArenaSession {
 }
 
 impl ArenaSession {
-    fn record_high_jump(&mut self, id: u8, origin: Vec3) {
+    fn record_high_jump(&mut self, id: crate::ActorId, origin: Vec3) {
         self.record_cast(id, Spell::HighJump);
         self.combat_cue(id, origin, CombatCueKind::Release);
         self.effects.push(VisualEffect {
@@ -932,7 +954,7 @@ impl ArenaSession {
     #[must_use]
     pub fn aim_from_camera(
         &self,
-        actor_id: u8,
+        actor_id: crate::ActorId,
         camera_origin: Vec3,
         camera_direction: Vec3,
     ) -> Vec3 {
@@ -1091,7 +1113,7 @@ impl ArenaSession {
                 actor.aim = intent.aim.normalize();
             }
             if let Some(spell) = intent.selected.filter(|spell| *spell != Spell::HighJump) {
-                if spell != actor.selected && actor.charge.is_some() {
+                if spell != actor.selected && (actor.charge.is_some() || actor.buffered_fireball) {
                     actor.cancel_charge();
                 }
                 actor.selected = spell;

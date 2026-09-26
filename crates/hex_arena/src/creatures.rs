@@ -4,7 +4,7 @@ use bevy_math::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Stable actor identities are allocated once per run and never reused after death.
-pub type ActorId = u8;
+pub type ActorId = u32;
 /// Combat allegiance; party membership is independent of friendly-fire policy.
 pub type TeamId = u8;
 /// Stable encounter group identity within the selected map.

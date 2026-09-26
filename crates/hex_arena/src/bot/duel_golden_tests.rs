@@ -89,7 +89,7 @@ impl Scenario {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct FrozenActor {
-    id: u8,
+    id: crate::ActorId,
     feet_milli: [i32; 3],
     previous_feet_milli: [i32; 3],
     aim_milli: [i32; 3],
@@ -106,7 +106,7 @@ struct FrozenActor {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct FrozenShot {
     id: u64,
-    owner: u8,
+    owner: crate::ActorId,
     spell: String,
     position_milli: [i32; 3],
     previous_position_milli: [i32; 3],
@@ -131,7 +131,7 @@ struct Snapshot {
     tick: u64,
     actors: Vec<FrozenActor>,
     shots: Vec<FrozenShot>,
-    winner: Option<u8>,
+    winner: Option<crate::ActorId>,
     complete: bool,
     stats: [FrozenStats; 2],
     bot_rng: u32,
@@ -271,7 +271,7 @@ fn snapshot(run: &FrozenRun, step: u64) -> &Snapshot {
         .expect("recorded step")
 }
 
-fn actor(state: &Snapshot, id: u8) -> &FrozenActor {
+fn actor(state: &Snapshot, id: crate::ActorId) -> &FrozenActor {
     state
         .actors
         .iter()

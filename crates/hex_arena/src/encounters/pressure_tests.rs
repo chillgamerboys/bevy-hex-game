@@ -67,6 +67,7 @@ fn scene(
 fn materials() -> ArenaMaterials {
     ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         grass: SubstanceId(2),
         dirt: SubstanceId(3),
         bedrock: SubstanceId(4),
@@ -372,7 +373,15 @@ fn goblin_slots_pursue_spotted_targets_beyond_shaman_support_range() {
     shaman.feet.x = -5.0;
     let mut allies = vec![target.clone(), shaman.clone()];
     for id in 8..18 {
-        let mut goblin = Actor::spawn(id, Vec3::new(-2.0, SKIN, f32::from(id - 8) * 0.4), Vec3::X);
+        let mut goblin = Actor::spawn(
+            id,
+            Vec3::new(
+                -2.0,
+                SKIN,
+                f32::from(u16::try_from(id - 8).unwrap_or_default()) * 0.4,
+            ),
+            Vec3::X,
+        );
         goblin.configure_species(Species::Goblin, &tuning.encounters);
         goblin.party = shaman.party;
         goblin.team = shaman.team;

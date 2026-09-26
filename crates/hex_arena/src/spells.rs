@@ -82,7 +82,7 @@ impl Projectile {
 struct Impact {
     point: Vec3,
     normal: Vec3,
-    actor: Option<u8>,
+    actor: Option<crate::ActorId>,
     barrier: Option<u64>,
 }
 
@@ -297,7 +297,7 @@ pub(crate) fn sweep_capsule_dimensions(
 
 pub(super) fn aim_from_camera(
     session: &ArenaSession,
-    actor_id: u8,
+    actor_id: crate::ActorId,
     origin: Vec3,
     direction: Vec3,
 ) -> Vec3 {
@@ -522,7 +522,7 @@ fn wall_volume(
 impl ArenaSession {
     pub(super) fn release(
         &mut self,
-        owner: u8,
+        owner: crate::ActorId,
         spell: Spell,
         tuning: &ArenaTuning,
         launch_speed: f32,
@@ -776,7 +776,7 @@ impl ArenaSession {
     pub(super) fn explode(
         &mut self,
         center: Vec3,
-        owner: u8,
+        owner: crate::ActorId,
         owner_team: crate::TeamId,
         spell: Spell,
         radius: f32,
@@ -939,7 +939,7 @@ pub(super) fn preview_actor(
 /// Deliberate observed body or memory hypothesis, never a reference to hidden state.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ForecastBody {
-    pub id: u8,
+    pub id: crate::ActorId,
     pub feet: Vec3,
     pub velocity: Vec3,
     pub predict_seconds: f32,
@@ -951,7 +951,7 @@ pub(crate) struct ForecastBody {
     pub prisms: Option<crate::BodyPrismSnapshot>,
 }
 impl ForecastBody {
-    pub fn human(id: u8, feet: Vec3, velocity: Vec3, predict_seconds: f32) -> Self {
+    pub fn human(id: crate::ActorId, feet: Vec3, velocity: Vec3, predict_seconds: f32) -> Self {
         Self {
             id,
             feet,
@@ -1001,7 +1001,7 @@ impl ForecastBody {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ForecastImpact {
     pub point: Vec3,
-    pub actor: Option<u8>,
+    pub actor: Option<crate::ActorId>,
     pub barrier: Option<u64>,
     pub time: f32,
 }
@@ -1331,6 +1331,7 @@ mod tests {
     fn shield_materials() -> ArenaMaterials {
         ArenaMaterials {
             stone: hex_core::SubstanceId(1),
+            reinforced_stone: None,
             bedrock: hex_core::SubstanceId(2),
             grass: hex_core::SubstanceId(3),
             dirt: hex_core::SubstanceId(4),
@@ -1663,6 +1664,7 @@ mod carved_object_tests {
         });
         let material = ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             grass: SubstanceId(2),
             dirt: SubstanceId(3),
             bedrock: SubstanceId(4),
@@ -1765,6 +1767,7 @@ mod carved_object_tests {
         );
         let material = ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             grass: SubstanceId(2),
             dirt: SubstanceId(3),
             bedrock: SubstanceId(4),

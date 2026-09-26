@@ -39,7 +39,7 @@ fn brute_force(actors: &mut [Actor], world: &CollisionWorld) -> usize {
     overlaps
 }
 
-fn actor(id: u8, feet: Vec3, species: Species) -> Actor {
+fn actor(id: crate::ActorId, feet: Vec3, species: Species) -> Actor {
     let mut actor = Actor::spawn(id, feet, Vec3::NEG_Z);
     actor.configure_species(species, &EncounterTuning::default());
     actor
@@ -91,13 +91,13 @@ fn dense_108() -> Vec<Actor> {
             let mut actor = actor(
                 id,
                 Vec3::new(
-                    f32::from(id % 12) * 0.17 - 1.0,
+                    f32::from(u16::try_from(id % 12).unwrap_or_default()) * 0.17 - 1.0,
                     0.0,
-                    f32::from(id / 12) * 0.17,
+                    f32::from(u16::try_from(id / 12).unwrap_or_default()) * 0.17,
                 ),
                 Species::Goblin,
             );
-            actor.dimensions *= 0.6 + f32::from(id % 7) * 0.23;
+            actor.dimensions *= 0.6 + f32::from(u16::try_from(id % 7).unwrap_or_default()) * 0.23;
             actor
         })
         .collect()
@@ -118,7 +118,7 @@ fn separation_matches_brute_force_for_dense_108_with_heterogeneous_radii() {
 #[test]
 fn separation_matches_ordered_solver_for_rotated_dragons_compounds_layers_and_dead_bodies() {
     for seed in 0_u8..8 {
-        let actors: Vec<_> = (0_u8..26)
+        let actors: Vec<_> = (0_u32..26)
             .map(|id| {
                 let species = match id % 8 {
                     0 => Species::Dragon,
@@ -136,12 +136,12 @@ fn separation_matches_ordered_solver_for_rotated_dragons_compounds_layers_and_de
                     255 - id,
                     Vec3::new(
                         f32::from(x) * 0.18 - 2.0,
-                        f32::from(id % 3),
+                        f32::from(u16::try_from(id % 3).unwrap_or_default()),
                         f32::from(z) * 0.18 - 2.0,
                     ),
                     species,
                 );
-                actor.body_yaw = f32::from(id + seed) * 0.37;
+                actor.body_yaw = f32::from(u16::try_from(id + seed).unwrap_or_default()) * 0.37;
                 if id % 9 == 0 {
                     actor.hp = 0.0;
                 }
@@ -165,11 +165,15 @@ fn separation_preserves_terrain_slide_and_valid_poses_beside_a_wall() {
     }
     let mut world = CollisionWorld::default();
     world.refresh(&view, geometry);
-    let mut actors: Vec<_> = (0_u8..20)
+    let mut actors: Vec<_> = (0_u32..20)
         .map(|id| {
             actor(
                 id,
-                Vec3::new(1.2 + f32::from(id % 4) * 0.1, SKIN, f32::from(id / 4) * 0.1),
+                Vec3::new(
+                    1.2 + f32::from(u16::try_from(id % 4).unwrap_or_default()) * 0.1,
+                    SKIN,
+                    f32::from(u16::try_from(id / 4).unwrap_or_default()) * 0.1,
+                ),
                 Species::Goblin,
             )
         })
@@ -190,9 +194,9 @@ fn scattered_108() -> Vec<Actor> {
             actor(
                 id,
                 Vec3::new(
-                    f32::from(id % 12) * 6.0 - 36.0,
+                    f32::from(u16::try_from(id % 12).unwrap_or_default()) * 6.0 - 36.0,
                     0.0,
-                    f32::from(id / 12) * 6.0 - 24.0,
+                    f32::from(u16::try_from(id / 12).unwrap_or_default()) * 6.0 - 24.0,
                 ),
                 Species::Goblin,
             )

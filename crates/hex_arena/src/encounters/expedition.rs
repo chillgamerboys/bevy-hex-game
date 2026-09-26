@@ -138,7 +138,7 @@ impl ArenaSession {
             let leader = roles.first().copied().ok_or("Empty expedition party.")?;
             let count = roles.len();
             for (slot, role) in roles.into_iter().enumerate() {
-                let id = u8::try_from(actors.len())
+                let id = crate::ActorId::try_from(actors.len())
                     .map_err(|error| format!("Expedition actor capacity exceeded: {error}."))?;
                 let mut actor = Actor::spawn(id, home, Vec3::NEG_Z);
                 actor.configure_expedition(role, &tuning.encounters);

@@ -6,7 +6,7 @@ use crate::{EncounterTuning, Species};
 const CASTER: u8 = 7;
 const TARGET: u8 = 8;
 
-fn profile(id: u8, team: u8, species: Species, feet: Vec3) -> Actor {
+fn profile(id: crate::ActorId, team: u8, species: Species, feet: Vec3) -> Actor {
     let tuning = EncounterTuning::default();
     let mut actor = Actor::spawn(id, feet, Vec3::NEG_X);
     actor.species = species;

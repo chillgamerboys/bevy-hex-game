@@ -59,21 +59,21 @@ pub(super) struct Brain {
 }
 
 impl Brain {
-    pub fn new(id: u8, home: Vec3) -> Self {
+    pub fn new(id: crate::ActorId, home: Vec3) -> Self {
         Self {
             active: None,
             rally_goal: None,
             cooldowns: [0.0; CREATURE_ABILITY_COUNT],
             shadow: Bot::default(),
             home,
-            seed: 0x9175_BAFF ^ (u32::from(id) * 1973),
+            seed: 0x9175_BAFF ^ (id.wrapping_mul(1973)),
             steering: steering::Steering::default(),
             shadow_travel: steering::ShadowTravel::new(home),
             retreat_goal: None,
             retreat_reconsider: 0,
             flight_recovery: None,
             patrol_goal: None,
-            patrol_step: usize::from(id % 6),
+            patrol_step: usize::try_from(id % 6).unwrap_or(0),
             shooting_angle: false,
             next_shot_probe: 0,
             decision: None,
@@ -327,9 +327,9 @@ impl Brain {
             PartyPhase::Dormant => {
                 self.home
                     + Vec3::new(
-                        (f32::from(actor.id) * 1.7).sin(),
+                        (f32::from(u16::try_from(actor.id).unwrap_or_default()) * 1.7).sin(),
                         0.0,
-                        (f32::from(actor.id) * 1.7).cos(),
+                        (f32::from(u16::try_from(actor.id).unwrap_or_default()) * 1.7).cos(),
                     ) * 1.5
             }
             _ => target.unwrap_or(party.battle_search.unwrap_or(self.home)),

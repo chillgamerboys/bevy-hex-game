@@ -169,6 +169,7 @@ fn worm_setup_is_typed_and_atomically_refused_until_runtime_admission_exists() {
     let geometry = ArenaVoxelGeometry::default();
     let materials = ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         grass: SubstanceId(2),
         dirt: SubstanceId(3),
         bedrock: SubstanceId(4),

@@ -47,7 +47,7 @@ pub(crate) struct BurrowContext<'a> {
     pub policy: &'a ArenaBurrowMaterials,
     pub dirt: SubstanceId,
     pub bodies: &'a [Actor],
-    pub owner: u8,
+    pub owner: crate::ActorId,
     pub geometry: ArenaVoxelGeometry,
 }
 

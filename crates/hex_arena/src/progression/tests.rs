@@ -65,6 +65,7 @@ fn fixture() -> Fixture {
     };
     let materials = ArenaMaterials {
         stone: material,
+        reinforced_stone: None,
         grass: material,
         dirt: material,
         bedrock: SubstanceId(2),

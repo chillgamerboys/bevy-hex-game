@@ -186,7 +186,10 @@ impl ArenaSession {
                     || control.gathering.is_empty()
                     || control
                         .gathering
-                        .get(usize::from(actor.id) % control.gathering.len())
+                        .get(
+                            usize::try_from(actor.id).unwrap_or(usize::MAX)
+                                % control.gathering.len(),
+                        )
                         .is_none_or(|goal| actor.feet.distance(*goal) > 0.8)
             })
             .count();
@@ -291,7 +294,7 @@ impl ArenaSession {
                 .then(|| {
                     control
                         .gathering
-                        .get(usize::from(id) % control.gathering.len())
+                        .get(usize::try_from(id).unwrap_or(usize::MAX) % control.gathering.len())
                         .copied()
                 })
                 .flatten();

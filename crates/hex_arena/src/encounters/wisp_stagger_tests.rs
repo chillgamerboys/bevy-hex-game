@@ -80,7 +80,7 @@ impl VolleyFixture {
         panic!("missing opening releases: {releases:?}");
     }
 
-    fn released(&self, id: u8) -> u32 {
+    fn released(&self, id: crate::ActorId) -> u32 {
         self.session
             .encounter
             .ability_counts

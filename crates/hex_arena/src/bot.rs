@@ -250,7 +250,7 @@ impl Bot {
 
     pub(crate) fn intent_battle(
         &mut self,
-        id: u8,
+        id: crate::ActorId,
         search: Vec3,
         actors: &[Actor],
         projectiles: &[Projectile],
@@ -356,7 +356,7 @@ impl Bot {
 
     pub(crate) fn intent_for(
         &mut self,
-        id: u8,
+        id: crate::ActorId,
         actors: &[Actor],
         projectiles: &[Projectile],
         collision: &CollisionWorld,

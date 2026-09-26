@@ -12,6 +12,7 @@ fn fixture() -> (
     let geometry = ArenaVoxelGeometry::default();
     let materials = ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         bedrock: SubstanceId(2),
         grass: SubstanceId(3),
         dirt: SubstanceId(4),

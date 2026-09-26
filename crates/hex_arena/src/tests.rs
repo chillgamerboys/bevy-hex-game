@@ -13,6 +13,7 @@ fn fixture() -> (
     let geometry = ArenaVoxelGeometry::default();
     let materials = ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         bedrock: SubstanceId(2),
         grass: SubstanceId(3),
         dirt: SubstanceId(4),
@@ -59,7 +60,7 @@ fn bot(session: &ArenaSession) -> &Actor {
         .expect("fixture bot")
 }
 
-fn set_actor(session: &mut ArenaSession, id: u8, feet: Vec3, aim: Vec3) {
+fn set_actor(session: &mut ArenaSession, id: crate::ActorId, feet: Vec3, aim: Vec3) {
     let actor = session
         .actors
         .iter_mut()

@@ -50,6 +50,7 @@ impl Fixture {
         let geometry = ArenaVoxelGeometry::default();
         let materials = ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             bedrock: SubstanceId(2),
             grass: SubstanceId(3),
             dirt: SubstanceId(4),
@@ -85,7 +86,7 @@ impl Fixture {
         }
     }
 
-    fn actor(&self, id: u8) -> &Actor {
+    fn actor(&self, id: crate::ActorId) -> &Actor {
         self.session
             .actors
             .iter()
@@ -93,7 +94,7 @@ impl Fixture {
             .expect("fixture actor")
     }
 
-    fn actor_mut(&mut self, id: u8) -> &mut Actor {
+    fn actor_mut(&mut self, id: crate::ActorId) -> &mut Actor {
         self.session
             .actors
             .iter_mut()

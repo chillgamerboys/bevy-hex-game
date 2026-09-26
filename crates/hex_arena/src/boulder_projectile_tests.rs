@@ -9,6 +9,7 @@ fn returning_source(source: Option<CreatureAbility>) -> (Actor, Actor, Actor) {
     let view = ArenaTerrainView::default();
     let materials = ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         grass: SubstanceId(2),
         dirt: SubstanceId(3),
         bedrock: SubstanceId(4),

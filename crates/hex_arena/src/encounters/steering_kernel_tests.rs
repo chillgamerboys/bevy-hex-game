@@ -41,12 +41,12 @@ fn cached_walk_probe_kernel_cpu_attribution() {
     let mut world = CollisionWorld::default();
     world.refresh(&view, geometry);
     let tuning = ArenaTuning::default();
-    let actors = (0_u8..100)
+    let actors = (0_u32..100)
         .map(|id| {
             let feet = Vec3::new(
-                -75.0 + f32::from(id % 10) * 3.0,
+                -75.0 + f32::from(u16::try_from(id % 10).unwrap_or_default()) * 3.0,
                 SKIN,
-                -15.0 + f32::from(id / 10) * 3.0,
+                -15.0 + f32::from(u16::try_from(id / 10).unwrap_or_default()) * 3.0,
             );
             let mut actor = Actor::spawn(id, feet, Vec3::X);
             actor.configure_expedition(crate::ExpeditionRole::Goblin, &tuning.encounters);

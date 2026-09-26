@@ -62,6 +62,7 @@ fn fixture(
     };
     let materials = ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         grass: SubstanceId(2),
         dirt: SubstanceId(3),
         bedrock: SubstanceId(4),
@@ -76,7 +77,7 @@ fn fixture(
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
     (session, view, geometry, materials, tuning)
 }
-fn pose(session: &mut ArenaSession, id: u8, feet: Vec3, aim: Vec3) {
+fn pose(session: &mut ArenaSession, id: crate::ActorId, feet: Vec3, aim: Vec3) {
     let a = session
         .actors
         .iter_mut()
@@ -93,7 +94,7 @@ fn pose(session: &mut ArenaSession, id: u8, feet: Vec3, aim: Vec3) {
 }
 fn start(
     session: &mut ArenaSession,
-    id: u8,
+    id: crate::ActorId,
     kind: CreatureAbility,
     aim: Vec3,
     tuning: &ArenaTuning,
@@ -578,7 +579,12 @@ fn search_expires_into_return_and_preserves_damage_when_home_is_reached() {
         .snapshot
         .home;
     for actor in session.actors.iter_mut().skip(1) {
-        actor.feet = home + Vec3::new(5.0, 0.0, f32::from(actor.id) * 0.7);
+        actor.feet = home
+            + Vec3::new(
+                5.0,
+                0.0,
+                f32::from(u16::try_from(actor.id).unwrap_or_default()) * 0.7,
+            );
         actor.previous_feet = actor.feet;
         actor.hp = 30.0;
     }

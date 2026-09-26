@@ -16,6 +16,7 @@ impl Fixture {
         let geometry = ArenaVoxelGeometry::default();
         let materials = ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             bedrock: SubstanceId(2),
             grass: SubstanceId(3),
             dirt: SubstanceId(4),
@@ -185,20 +186,39 @@ fn both_actor_identities_reach_full_charge_in_exactly_ninety_fixed_ticks() {
 }
 
 #[test]
-fn cooldown_press_does_not_arm_later_when_held_until_ready() {
+fn cooldown_held_fireball_charges_only_after_ready() {
     let mut f = Fixture::new();
     f.session.actors.first_mut().expect("human").cooldowns = [0.0, 0.2, 0.0];
-    f.hold(90, Spell::Fireball, Vec3::Y);
+    f.hold(12, Spell::Fireball, Vec3::Y);
+    assert!(f.actor().charge().is_none());
+    for _ in 0..18 {
+        f.tick(ActorIntent {
+            aim: Vec3::Y,
+            cast_held: true,
+            ..Default::default()
+        });
+    }
+    let charge = f.actor().charge().expect("hold arms once cooldown expires");
+    assert!(charge.elapsed > 0.0 && charge.elapsed < 0.08);
+    f.release(Vec3::Y);
+    assert_eq!(f.session.projectiles.len(), 1);
+}
+
+#[test]
+fn cancelled_cooldown_hold_cannot_rearm() {
+    let mut f = Fixture::new();
+    f.session.actors.first_mut().expect("human").cooldowns = [0.0, 0.2, 0.0];
+    f.hold(4, Spell::Fireball, Vec3::Y);
+    f.session.cancel_charges();
+    for _ in 0..90 {
+        f.tick(ActorIntent {
+            cast_held: true,
+            ..Default::default()
+        });
+    }
     assert!(f.actor().charge().is_none());
     f.release(Vec3::Y);
     assert!(f.session.projectiles.is_empty());
-    f.tick(ActorIntent {
-        aim: Vec3::Y,
-        cast_pressed: true,
-        cast_released: true,
-        ..Default::default()
-    });
-    assert_eq!(f.session.projectiles.len(), 1);
 }
 
 #[test]

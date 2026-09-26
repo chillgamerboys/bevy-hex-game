@@ -31,6 +31,7 @@ fn session_app() -> bevy_app::App {
         .insert_resource(geometry)
         .insert_resource(ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             grass: SubstanceId(3),
             dirt: SubstanceId(4),
             bedrock: SubstanceId(5),
@@ -551,6 +552,7 @@ fn transition_cooldown_rejected_high_jump_cannot_bypass_swimming_drag() {
         session.ocean_environment = Some(environment);
         let materials = hex_core::arena::ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             grass: SubstanceId(3),
             dirt: SubstanceId(4),
             bedrock: SubstanceId(5),
