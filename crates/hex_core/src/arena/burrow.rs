@@ -22,7 +22,7 @@ pub struct ArenaBurrowRequest {
     /// Session generation; old proposals cannot mutate a reset map.
     pub generation: u64,
     /// Stable source identity within that generation.
-    pub actor: u8,
+    pub actor: u32,
     /// Strictly increasing source sequence, including rejected proposals.
     pub sequence: u64,
     /// Exact canonical swept cells, including air; no duplicates or empty volume.
@@ -86,7 +86,7 @@ pub struct ArenaBurrowOutcome {
     /// Generation copied from the request.
     pub generation: u64,
     /// Actor copied from the request.
-    pub actor: u8,
+    pub actor: u32,
     /// Proposal sequence copied from the request.
     pub sequence: u64,
     /// Atomic world result.

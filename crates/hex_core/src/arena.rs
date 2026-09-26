@@ -385,6 +385,9 @@ pub struct ArenaFountainVisuals {
 pub struct ArenaMaterials {
     /// Conjurable stone used for cover and shield walls.
     pub stone: SubstanceId,
+    /// Optional stronger construction material admitted by this world's catalog.
+    /// Existing terrain and ordinary construction retain their original toughness.
+    pub reinforced_stone: Option<SubstanceId>,
     /// Arena's indestructible foundation.
     pub bedrock: SubstanceId,
     /// Upper terrain material.
