@@ -129,7 +129,7 @@ impl Tree {
         match self.geometry.refresh(edits) {
             Ok(Some(mesh)) => {
                 self.current_surface = mesh.count_vertices() > 0;
-                if let Some(existing) = world.resource_mut::<Assets<Mesh>>().get_mut(&self.mesh) {
+                if let Some(mut existing) = world.resource_mut::<Assets<Mesh>>().get_mut(&self.mesh) {
                     *existing = mesh;
                 } else {
                     self.current_surface = false;
