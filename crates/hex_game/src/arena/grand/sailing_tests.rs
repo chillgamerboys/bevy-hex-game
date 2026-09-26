@@ -415,7 +415,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let session = app.world().resource::<ArenaSession>();
     let elapsed = arrival_seconds - first_seconds;
     let remaining = arrival_feet.with_y(0.0).distance(target.with_y(0.0));
-    Ok(serde_json::json!({
+    let summary = serde_json::json!({
         "status":if failure.is_none(){"PASS"}else{"FAIL"},"error":failure,
         "identity":identity,"authored_start":start.to_array(),"authored_target":target.to_array(),
         "prepared_launch":prepared_launch.to_array(),"idle_readiness_ticks":idle_completed_ticks,"first_b_frame":first_b_frame,
@@ -428,6 +428,8 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         "wind_publisher":"production northern::configure, refreshed on terrain revision and quantized player center",
         "reference_seconds":45.0,"reference_delta_seconds":elapsed-45.0,
         "timing_acceptance":"Measurement only: no invented tolerance around the requested approximately 45 seconds.",
+    });
+    let diagnostics = serde_json::json!({
         "setup_wall_seconds":setup_wall_seconds,"crossing_wall_seconds":crossing_wall_seconds,"endpoint_liveness_probe":endpoint_probe,
         "frames":frames,"unchanged_tick_frames":unchanged_tick_frames,"unchanged_tick_wall_seconds":unchanged_tick_wall_seconds,
         "stationary_boat_ticks":stationary_boat_ticks,"departure":departure,"end_boat":arrival_boat,
@@ -435,7 +437,14 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         "minimum_heading_wind_alignment":alignment_min,"prevailing_wind":{"speed":app.world().resource::<OceanEnvironmentView>().wind.speed,"heading_radians":app.world().resource::<OceanEnvironmentView>().wind.heading_radians},
         "unupgraded":session.grand_progress().is_some_and(|p|p.shrines.is_empty() && !p.teleport_unlocked),
         "source_budget":512,"detail_budget":256,"worker_budget":2,"highwater":peaks,"samples":samples,
-    }))
+    });
+    let (serde_json::Value::Object(mut fields), serde_json::Value::Object(diagnostics)) =
+        (summary, diagnostics)
+    else {
+        return Err("sailing receipt sections must be JSON objects".into());
+    };
+    fields.extend(diagnostics);
+    Ok(serde_json::Value::Object(fields))
 }
 
 #[test]

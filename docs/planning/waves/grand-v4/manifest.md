@@ -170,9 +170,9 @@ reset until the approved Grand V4 project is complete. The live account returned
 0% used and a new weekly reset timestamp of 1791052758, replacing 1790450297.
 Their new 2% floor applied only before that reset; the prior overnight pause and
 10% stop are superseded. The explicitly named `Add late-game large spells` chat
-was told to resume once, as requested. An hourly thread heartbeat
-`finish-grand-v4-expedition` preserves continued execution and stays quiet when
-waiting conditions are unchanged. Deferred features remain backlog.
+was told to resume once, as requested. An hourly thread heartbeat was initially created for continuation. The user later
+asked to remove the hourly check; `finish-grand-v4-expedition` was deleted through
+the app on September 26. Development continues in the active chat. Deferred features remain backlog.
 
 The exact traversal/forest reference is the prior Forest expedition at `b314a9d`,
 including its authored lowland, one-level grades, shelves and preserved rendered
@@ -222,7 +222,9 @@ windowless river/forest sequences are being added separately; native control fee
 and the 30-minute session remain pending while the workstation is locked.
 
 Disk capacity is a separate validation constraint. Package-scoped development-cache
-cleanup has been proposed to the user after a Cargo dry run; source, packages,
-saves and captures are protected. Until authorized, no cleanup is performed.
+cleanup was explicitly approved by the user after a Cargo dry run and exact
+filesystem snapshot. Revalidation under the shared lock succeeded; Cargo removed
+only `hex_game` and `hex_map` development artifacts, recovering about 26 GiB.
+Source, packages, saves and captures were preserved. No other cache was cleaned.
 The large-spells chat received the requested post-reset resumption message; its
 prototype work remains separate from Grand’s retained advanced-spell backlog.
