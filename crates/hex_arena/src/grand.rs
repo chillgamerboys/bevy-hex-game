@@ -217,7 +217,7 @@ impl ArenaSession {
             self.encounter
                 .dormant
                 .values()
-                .filter(|p| p.near(player.feet))
+                .filter(|p| p.near_attack(player.feet, &self.projectiles))
                 .flat_map(|p| p.actors.iter().filter(|a| a.hp > 0.0).map(|a| a.feet)),
         );
         interests

@@ -31,6 +31,7 @@ pub(crate) enum StepRejection {
     Ineligible,
     Actor,
     Unrefreshed,
+    Unloaded,
 }
 
 #[derive(Debug)]
@@ -105,11 +106,12 @@ impl BurrowQuery {
         }
         swept_prism_cells(pose, pose, geometry).is_ok_and(|cells| {
             cells.into_iter().all(|pos| {
-                self.blocked_cell(pos, view).is_none()
+                view.residency.as_ref().is_none_or(|r| {
+                    r.at(pos.coord, geometry) == hex_core::arena::ArenaAvailability::Ready
+                }) && self.blocked_cell(pos, view).is_none()
                     && view
-                        .voxels
-                        .get(&pos)
-                        .is_none_or(|material| *material == SubstanceId::AIR)
+                        .solid_at(pos)
+                        .is_none_or(|material| material == SubstanceId::AIR)
             })
         })
     }
@@ -152,14 +154,19 @@ impl BurrowQuery {
         };
         let mut conversion = false;
         for pos in &cells {
+            if world.residency.as_ref().is_some_and(|r| {
+                r.at(pos.coord, geometry) != hex_core::arena::ArenaAvailability::Ready
+            }) {
+                return Admission::Blocked(StepRejection::Unloaded);
+            }
             if let Some(reason) = self.blocked_cell(*pos, world) {
                 return Admission::Blocked(reason);
             }
-            if let Some(material) = world.voxels.get(pos) {
-                if *material == dirt || *material == SubstanceId::AIR {
+            if let Some(material) = world.solid_at(*pos) {
+                if material == dirt || material == SubstanceId::AIR {
                     continue;
                 }
-                if !policy.eligible.contains(material) {
+                if !policy.eligible.contains(&material) {
                     return Admission::Blocked(StepRejection::Ineligible);
                 }
                 conversion = true;
@@ -423,9 +430,8 @@ pub(crate) fn head_clearance(
         if matching.next().is_some()
             || !(geometry.min_level..=geometry.max_level).contains(&support.level)
             || !view
-                .voxels
-                .get(&support)
-                .is_some_and(|substance| *substance != SubstanceId::AIR)
+                .solid_at(support)
+                .is_some_and(|substance| substance != SubstanceId::AIR)
         {
             return None;
         }
@@ -435,18 +441,13 @@ pub(crate) fn head_clearance(
         }
         // Reject a stale lower support when any higher solid now lies below or
         // inside the head. A distinct roof wholly above the head remains legal.
-        if support.level < geometry.max_level
-            && view
-                .voxels
-                .range(
-                    TilePos::new(coord, support.level + 1)
-                        ..=TilePos::new(coord, geometry.max_level),
-                )
-                .any(|(pos, substance)| {
-                    *substance != SubstanceId::AIR
-                        && geometry.top(*pos) - geometry.level_height < feet.y + head.height - SKIN
-                })
-        {
+        let head_top = geometry
+            .voxel_at(feet + Vec3::Y * (head.height - SKIN))?
+            .level;
+        if (support.level + 1..=head_top).any(|level| {
+            view.solid_at(TilePos::new(coord, level))
+                .is_some_and(|s| s != SubstanceId::AIR)
+        }) {
             return None;
         }
         clearance = clearance.min(feet.y - top);
@@ -454,9 +455,8 @@ pub(crate) fn head_clearance(
     // Head clearance is an ordinary physical-world rule: no dirt exception.
     let cells = swept_prism_cells(head_pose, head_pose, geometry).ok()?;
     if cells.iter().any(|pos| {
-        view.voxels
-            .get(pos)
-            .is_some_and(|substance| *substance != SubstanceId::AIR)
+        view.solid_at(*pos)
+            .is_some_and(|substance| substance != SubstanceId::AIR)
     }) {
         return None;
     }
@@ -484,4 +484,30 @@ pub(crate) fn head_clearance(
         return None;
     }
     clearance.is_finite().then_some(clearance)
+}
+
+/// Solid upper faces from either legacy cells or the streamed compact runs.
+pub(crate) fn column_tops(
+    view: &ArenaTerrainView,
+    coord: HexCoord,
+    geometry: ArenaVoxelGeometry,
+) -> Vec<TilePos> {
+    let mut tops: BTreeSet<_> = view
+        .voxels
+        .range(TilePos::new(coord, geometry.min_level)..=TilePos::new(coord, geometry.max_level))
+        .map(|(p, _)| *p)
+        .collect();
+    for columns in [&view.columns, &view.object_columns] {
+        if let Some(spans) = columns.get(&coord) {
+            tops.extend(spans.iter().map(|s| TilePos::new(coord, s.top_level)));
+        }
+    }
+    tops.into_iter()
+        .filter(|p| {
+            view.solid_at(*p).is_some_and(|s| s != SubstanceId::AIR)
+                && view
+                    .solid_at(p.above())
+                    .is_none_or(|s| s == SubstanceId::AIR)
+        })
+        .collect()
 }

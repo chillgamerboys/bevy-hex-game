@@ -43,10 +43,13 @@ fn decode(bytes: &[u8], expected: &GrandCheckpointIdentity) -> Result<ArenaSessi
 }
 
 fn validate(session: &ArenaSession) -> Result<(), String> {
+    session.validate_grand_records()?;
     session
         .serialize(super::finite::Finite)
         .map_err(|e| e.to_string())?;
     if session.tick > u64::MAX - 1_000_000
+        || session.next_projectile > u64::MAX - 1_000_000
+        || session.next_impact > u64::MAX - 1_000_000
         || !session
             .progression
             .as_ref()
@@ -63,6 +66,8 @@ fn validate(session: &ArenaSession) -> Result<(), String> {
         || !grand.respawn_position.is_finite()
         || !grand.teleport_cooldown.is_finite()
         || !(0.0..=6.0).contains(&grand.teleport_cooldown)
+        || session.outcome.is_some()
+        || session.exploration
         || session.progression.is_none()
         || session.actors.is_empty()
         || session.actors.len() > 128
@@ -109,6 +114,7 @@ fn validate(session: &ArenaSession) -> Result<(), String> {
     {
         return Err("Grand checkpoint player or actor identities are invalid".into());
     }
+    let mut projectile_ids = BTreeSet::new();
     for projectile in session.projectiles.iter().chain(
         session
             .encounter
@@ -116,7 +122,9 @@ fn validate(session: &ArenaSession) -> Result<(), String> {
             .values()
             .flat_map(|p| p.projectiles.iter()),
     ) {
-        if !projectile.position.is_finite()
+        if !projectile_ids.insert(projectile.id)
+            || projectile.id >= session.next_projectile
+            || !projectile.position.is_finite()
             || !projectile.velocity.is_finite()
             || !projectile.age.is_finite()
             || projectile.age < 0.0
@@ -124,6 +132,9 @@ fn validate(session: &ArenaSession) -> Result<(), String> {
         {
             return Err("Grand checkpoint contains an invalid projectile".into());
         }
+    }
+    if projectile_ids.len() > 4096 {
+        return Err("Grand checkpoint has too many projectiles".into());
     }
     Ok(())
 }
@@ -226,6 +237,76 @@ impl ArenaSession {
             )
         }) {
             return Err("Grand checkpoint destination terrain is not ready".into());
+        }
+        if let Some(actor) = self
+            .actors
+            .iter()
+            .filter(|a| a.hp > 0.0 && a.species != Species::Worm)
+            .find(|a| !crate::shapes::clear(&self.collision, a, a.feet, a.body_yaw))
+        {
+            return Err(format!(
+                "Grand checkpoint contains embedded actor {}",
+                actor.id
+            ));
+        }
+        Ok(())
+    }
+
+    /// Correlated terrain operations still requiring world acknowledgements.
+    #[must_use]
+    pub fn grand_pending_world_operations(&self) -> usize {
+        self.pending_impacts.len() + self.pending_burrows.len()
+    }
+
+    /// Check already-converted Worm volumes against authoritative world materials.
+    /// This never requests terrain conversion or advances a movement/AI tick.
+    pub fn validate_grand_burrow_poses(
+        &mut self,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        materials: hex_core::arena::ArenaMaterials,
+        policy: &hex_core::arena::ArenaBurrowMaterials,
+    ) -> Result<(), String> {
+        self.burrow_query.refresh(world);
+        for actor in self
+            .actors
+            .iter()
+            .filter(|a| a.hp > 0.0 && a.species == Species::Worm)
+        {
+            let parts = actor
+                .body_prism_snapshot()
+                .ok_or("Grand checkpoint Worm has no body components")?;
+            let pose = crate::worm_geometry::PrismPose {
+                feet: actor.feet,
+                parts,
+            };
+            for part in parts.iter() {
+                if self.collision.needs_terrain(
+                    actor.feet + part.offset,
+                    Vec3::ZERO,
+                    part.height,
+                    hex_core::config::HEX_SMALL_DIAMETER * 0.5,
+                ) {
+                    return Err("Grand checkpoint destination terrain is not ready".into());
+                }
+            }
+            let context = crate::worm_geometry::BurrowContext {
+                world,
+                geometry,
+                policy,
+                dirt: materials.dirt,
+                bodies: &self.actors,
+                owner: actor.id,
+            };
+            if !matches!(
+                self.burrow_query.admit(pose, pose, &context),
+                crate::worm_geometry::Admission::Clear
+            ) {
+                return Err(format!(
+                    "Grand checkpoint contains invalid buried Worm {}",
+                    actor.id
+                ));
+            }
         }
         Ok(())
     }

@@ -105,22 +105,8 @@ impl ArenaSession {
                 let Ok(id) = ActorId::try_from(ordinal * 32 + slot + 1) else {
                     break;
                 };
-                let species = if leader == Species::Shaman && slot >= 2 {
-                    Species::Goblin
-                } else {
-                    leader
-                };
+                let (species, role) = roster_profile(leader, slot);
                 let mut actor = Actor::spawn(id, home, Vec3::NEG_Z);
-                let role = match species {
-                    Species::Goblin if leader == Species::Shaman => Some(ExpeditionRole::Troll),
-                    Species::Goblin => Some(ExpeditionRole::Goblin),
-                    Species::Shaman => Some(ExpeditionRole::Shaman),
-                    Species::Dragon => Some(ExpeditionRole::Dragon),
-                    Species::Golem => Some(ExpeditionRole::PlainGolem),
-                    Species::Wisp => Some(ExpeditionRole::PlainWisp),
-                    Species::Shadow => Some(ExpeditionRole::MountainShadow),
-                    _ => None,
-                };
                 if let Some(role) = role {
                     actor.configure_expedition(role, &tuning.encounters);
                 } else {
@@ -260,6 +246,14 @@ impl DormantParty {
     pub(crate) fn near(&self, player: Vec3) -> bool {
         self.actors.iter().any(|a| a.feet.distance(player) < 100.0)
     }
+    pub(crate) fn near_attack(&self, player: Vec3, projectiles: &[Projectile]) -> bool {
+        self.near(player)
+            || projectiles.iter().filter(|p| p.owner == 0).any(|p| {
+                self.actors
+                    .iter()
+                    .any(|a| a.feet.distance(player) < 210.0 && a.feet.distance(p.position) < 32.0)
+            })
+    }
 }
 
 fn extract<T>(source: &mut Vec<T>, take: impl Fn(&T) -> bool) -> Vec<T> {
@@ -277,8 +271,9 @@ impl ArenaSession {
             let members: Vec<_> = self.actors.iter().filter(|a| a.party == Some(p.snapshot.id)).collect();
             !members.is_empty() && members.iter().all(|a| a.feet.distance(player) > 140.0)
                 && members.iter().all(|a| !self.pending_burrows.contains_key(&a.id))
+                && !self.projectiles.iter().any(|s| s.position.distance(player) < 100.0 && members.iter().any(|a| a.id == s.owner))
                 // A player projectile keeps its potential victims active until impact/expiry.
-                && !self.projectiles.iter().filter(|s| s.owner == 0).any(|s| members.iter().any(|a| a.feet.distance(s.position) < 24.0))
+                && !self.projectiles.iter().filter(|s| s.owner == 0).any(|s| members.iter().any(|a| a.feet.distance(s.position) < 32.0))
         }).map(|p| p.snapshot.id).collect();
         for party in parties {
             let Some(index) = self
@@ -325,7 +320,7 @@ impl ArenaSession {
             .dormant
             .iter()
             .filter(|(_, p)| {
-                p.near(player)
+                p.near_attack(player, &self.projectiles)
                     && p.actors.iter().filter(|a| a.hp > 0.0).all(|a| {
                         !self.collision.needs_terrain(
                             a.feet,
@@ -403,7 +398,13 @@ mod tests {
         session.actors.truncate(1);
         session.actors[0].feet = Vec3::ZERO;
         let mut enemy = Actor::spawn(417, Vec3::X * 160.0, Vec3::NEG_X);
-        enemy.configure_species(Species::Goblin, &EncounterTuning::default());
+        enemy.configure_expedition(ExpeditionRole::MountainShadow, &EncounterTuning::default());
+        session
+            .grand
+            .as_mut()
+            .unwrap()
+            .admitted
+            .insert("grand_shadow_tunnel".into());
         enemy.party = Some(13);
         enemy.cooldowns = [0.7; 3];
         enemy.last_damage_tick = Some(10);
@@ -412,6 +413,7 @@ mod tests {
             .brains
             .insert(417, brain::Brain::new(417, enemy.feet));
         session.actors.push(enemy);
+        session.register_forest_roster();
         session.tick = 100;
         session.encounter.runtime.push(PartyRuntime {
             snapshot: PartySnapshot {
@@ -478,4 +480,134 @@ mod tests {
         assert_eq!(session.encounter.runtime[0].knowledge.unwrap().tick, 910);
         assert!(session.encounter.brains.contains_key(&417));
     }
+}
+
+impl ArenaSession {
+    pub(crate) fn validate_grand_records(&self) -> Result<(), String> {
+        let grand = self.grand.as_ref().ok_or("Not a Grand checkpoint")?;
+        if grand
+            .admitted
+            .iter()
+            .any(|name| !SITES.iter().any(|site| site.0 == name))
+        {
+            return Err("Grand checkpoint contains an unknown encounter".into());
+        }
+        let mut expected = BTreeMap::new();
+        let mut expected_parties = std::collections::BTreeSet::new();
+        for (ordinal, &(name, leader, count)) in SITES
+            .iter()
+            .enumerate()
+            .filter(|(_, site)| grand.admitted.contains(site.0))
+        {
+            let party = u16::try_from(ordinal).map_err(|_| "Invalid Grand party identity")?;
+            expected_parties.insert(party);
+            for slot in 0..count {
+                let id = ActorId::try_from(ordinal * 32 + slot + 1)
+                    .map_err(|_| "Invalid Grand actor identity")?;
+                let (species, role) = roster_profile(leader, slot);
+                expected.insert(id, (party, species, role));
+            }
+        }
+        let mut actual = std::collections::BTreeSet::new();
+        for actor in self
+            .actors
+            .iter()
+            .chain(
+                self.encounter
+                    .dormant
+                    .values()
+                    .flat_map(|p| p.actors.iter()),
+            )
+            .filter(|a| a.id != 0)
+        {
+            let Some(&(party, species, role)) = expected.get(&actor.id) else {
+                return Err("Grand checkpoint contains an unauthored actor".into());
+            };
+            if actor.party != Some(party)
+                || actor.species != species
+                || actor.expedition_role != role
+                || !actual.insert(actor.id)
+            {
+                return Err("Grand checkpoint actor identity/profile is inconsistent".into());
+            }
+        }
+        if !self
+            .progression
+            .as_ref()
+            .is_some_and(|p| p.valid_grand_roster(&actual))
+        {
+            return Err("Grand checkpoint XP roster is inconsistent".into());
+        }
+        if actual != expected.keys().copied().collect() {
+            return Err("Grand checkpoint is missing encounter members".into());
+        }
+        let active_ids: std::collections::BTreeSet<_> = self
+            .actors
+            .iter()
+            .filter(|a| a.id != 0)
+            .map(|a| a.id)
+            .collect();
+        if active_ids != self.encounter.brains.keys().copied().collect() {
+            return Err("Grand checkpoint active AI ownership is inconsistent".into());
+        }
+        let mut parties = std::collections::BTreeSet::new();
+        for runtime in &self.encounter.runtime {
+            if !parties.insert(runtime.snapshot.id)
+                || !self
+                    .actors
+                    .iter()
+                    .any(|a| a.party == Some(runtime.snapshot.id))
+            {
+                return Err("Grand checkpoint active party ownership is inconsistent".into());
+            }
+        }
+        for (&id, party) in &self.encounter.dormant {
+            let ids: std::collections::BTreeSet<_> = party.actors.iter().map(|a| a.id).collect();
+            if !parties.insert(id)
+                || id != party.runtime.snapshot.id
+                || party.slept_at > self.tick
+                || ids.is_empty()
+                || ids != party.brains.keys().copied().collect()
+                || party.actors.iter().any(|a| a.party != Some(id))
+                || party.projectiles.iter().any(|p| !ids.contains(&p.owner))
+                || party.walls.iter().any(|p| !ids.contains(&p.owner))
+                || party.barriers.iter().any(|p| !ids.contains(&p.owner))
+                || party.auras.iter().any(|p| !ids.contains(&p.owner))
+            {
+                return Err("Grand checkpoint suspended party ownership is inconsistent".into());
+            }
+        }
+        if parties != expected_parties
+            || self
+                .projectiles
+                .iter()
+                .any(|p| p.owner != 0 && !active_ids.contains(&p.owner))
+            || self
+                .pending_walls
+                .iter()
+                .any(|p| p.owner != 0 && !active_ids.contains(&p.owner))
+        {
+            return Err("Grand checkpoint party/attack ownership is inconsistent".into());
+        }
+        Ok(())
+    }
+}
+
+fn roster_profile(leader: Species, slot: usize) -> (Species, Option<ExpeditionRole>) {
+    let species = if leader == Species::Shaman && slot >= 2 {
+        Species::Goblin
+    } else {
+        leader
+    };
+    let role = match species {
+        Species::Goblin if leader == Species::Shaman => Some(ExpeditionRole::Troll),
+        Species::Goblin => Some(ExpeditionRole::Goblin),
+        Species::Shaman => Some(ExpeditionRole::Shaman),
+        Species::Dragon => Some(ExpeditionRole::Dragon),
+        Species::Golem => Some(ExpeditionRole::PlainGolem),
+        Species::Wisp => Some(ExpeditionRole::PlainWisp),
+        Species::Shadow => Some(ExpeditionRole::MountainShadow),
+        _ => None,
+    };
+    (species, role)
 }

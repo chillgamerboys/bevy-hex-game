@@ -516,6 +516,13 @@ impl ArenaSession {
 }
 
 impl ProgressState {
+    pub(crate) fn valid_grand_roster(&self, ids: &BTreeSet<ActorId>) -> bool {
+        self.roster.keys().copied().collect::<BTreeSet<_>>() == *ids
+            && self.defeated.is_subset(ids)
+            && self.hits.keys().all(|id| ids.contains(id))
+            && self.rewards.is_empty()
+    }
+
     pub(crate) fn valid_checkpoint(&self) -> bool {
         (1..=100).contains(&self.snapshot.level)
             && self.snapshot.xp_to_next == level_threshold(self.snapshot.level)

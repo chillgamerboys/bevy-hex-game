@@ -478,8 +478,7 @@ fn surface_at(
         .filter(|level| *level >= geometry.min_level && *level <= geometry.max_level)
         .map(|level| TilePos::new(coord, level))
         .filter(|p| {
-            view.voxels.contains_key(p)
-                && !view.voxels.contains_key(&TilePos::new(coord, p.level + 1))
+            view.solid_at(*p).is_some() && view.solid_at(TilePos::new(coord, p.level + 1)).is_none()
         })
         .min_by(|a, b| {
             (geometry.top(*a) - reference)
@@ -503,19 +502,10 @@ fn head_supports(
             // the anchored tail prevents whole-body settling. Search only this
             // actual head column and the finite resident levels. Never select
             // an unrelated upper roof above both the old band and current head.
-            view.voxels
-                .range(
-                    TilePos::new(coord, geometry.min_level)
-                        ..=TilePos::new(coord, geometry.max_level),
-                )
+            worm_geometry::column_tops(view, coord, geometry)
+                .into_iter()
                 .rev()
-                .find_map(|(pos, _)| {
-                    (geometry.top(*pos) <= ceiling
-                        && !view
-                            .voxels
-                            .contains_key(&TilePos::new(coord, pos.level + 1)))
-                    .then_some(*pos)
-                })
+                .find(|pos| geometry.top(*pos) <= ceiling)
         })
         .collect()
 }
@@ -788,9 +778,8 @@ impl ArenaSession {
             worm_geometry::swept_prism_cells(before, after, geometry).is_ok_and(|cells| {
                 cells.iter().all(|cell| {
                     world
-                        .voxels
-                        .get(cell)
-                        .is_none_or(|material| *material == hex_core::SubstanceId::AIR)
+                        .solid_at(*cell)
+                        .is_none_or(|material| material == hex_core::SubstanceId::AIR)
                 }) && matches!(
                     self.burrow_query.admit(before, after, &context),
                     Admission::Clear
@@ -1351,7 +1340,7 @@ pub(super) fn deployment_pose(
         Vec3::new(width * 0.5, 0.0, -1.5),
     ];
     for surface in surfaces {
-        if !view.voxels.contains_key(&surface) {
+        if view.solid_at(surface).is_none() {
             continue;
         }
         for behind in directions {
@@ -1362,7 +1351,7 @@ pub(super) fn deployment_pose(
             let footprint = worm_geometry::footprint_columns(body)?;
             if !footprint.iter().all(|coord| {
                 let support = TilePos::new(*coord, surface.level);
-                region.surfaces.contains(&support) && view.voxels.contains_key(&support)
+                region.surfaces.contains(&support) && view.solid_at(support).is_some()
             }) || !worm_geometry::contained(body, geometry)
             {
                 continue;

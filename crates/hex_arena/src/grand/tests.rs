@@ -262,3 +262,46 @@ fn dead_checkpoint_requests_last_shrine_instead_of_outside_world_corpse() {
     );
     assert!(session.grand_actor_interests().contains(&respawn));
 }
+
+#[test]
+fn rebind_rejects_embedded_player_but_accepts_airborne_checkpoint() {
+    let (mut session, mut world, geometry) = fixture();
+    session.actors[0].feet = Vec3::Y * 12.0;
+    assert!(session.rebind_grand_terrain(&world, geometry, 1).is_ok());
+    let feet = session.actors[0].feet;
+    let cell = geometry.voxel_at(feet + Vec3::Y * 0.2).unwrap();
+    world.voxels.insert(cell, hex_core::SubstanceId(1));
+    world.revision += 1;
+    world.full_rebuild = true;
+    assert!(session
+        .rebind_grand_terrain(&world, geometry, 1)
+        .unwrap_err()
+        .contains("embedded actor"));
+}
+
+#[test]
+fn checkpoint_rejects_fabricated_actor_and_missing_party_member() {
+    let (mut session, _, _) = fixture();
+    let identity = GrandCheckpointIdentity {
+        world_id: "grand-test".into(),
+        content_revision: "accepted-content".into(),
+    };
+    session
+        .grand
+        .as_mut()
+        .unwrap()
+        .admitted
+        .insert("grand_shadow_tunnel".into());
+    assert!(session
+        .encode_grand_checkpoint(&identity)
+        .unwrap_err()
+        .contains("missing encounter"));
+    session.grand.as_mut().unwrap().admitted.clear();
+    session
+        .actors
+        .push(Actor::spawn(9999, Vec3::X * 3.0, Vec3::X));
+    assert!(session
+        .encode_grand_checkpoint(&identity)
+        .unwrap_err()
+        .contains("unauthored actor"));
+}
