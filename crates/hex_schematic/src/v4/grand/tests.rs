@@ -267,15 +267,36 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
         })
         .collect();
     let mut manifest = g.manifest();
+    // Manifest admission requires the complete finite coordinate catalogue,
+    // even when this focused test materializes only decorated chunks. Checksums
+    // of the unvisited chunks are synthetic and are never admitted as payloads.
+    for id in g.chunk_ids() {
+        let origin = id.origin().unwrap();
+        if (0..CHUNK_SIZE).any(|q| {
+            (0..CHUNK_SIZE).any(|r| {
+                WorldHex::new(origin.q + q, origin.r + r)
+                    .checked_distance(WorldHex::new(0, 0))
+                    .unwrap()
+                    <= RADIUS as u64
+            })
+        }) {
+            manifest.chunks.push(ChunkDescriptor {
+                coordinate: id,
+                fingerprint: 1,
+                path: format!("chunks/{}_{}.ron", id.q, id.r),
+            });
+        }
+    }
     let mut packages = vec![];
     for id in chunks {
         let package = g.chunk(id).unwrap().unwrap();
         manifest.features.extend(package.features.iter().cloned());
-        manifest.chunks.push(ChunkDescriptor {
-            coordinate: id,
-            fingerprint: package.fingerprint,
-            path: format!("chunks/{}_{}.ron", id.q, id.r),
-        });
+        manifest
+            .chunks
+            .iter_mut()
+            .find(|d| d.coordinate == id)
+            .unwrap()
+            .fingerprint = package.fingerprint;
         packages.push(package);
     }
     manifest.seal().unwrap();

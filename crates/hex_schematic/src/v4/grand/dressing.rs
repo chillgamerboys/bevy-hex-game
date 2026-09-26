@@ -249,7 +249,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
     for (i, (x, z)) in CAMPS.into_iter().enumerate() {
         out.push(camp(g, i, nearest_hex(x, z))?);
     }
-    for (i, (x, z)) in [(-390., 430.), (-555., 360.), (535., 580.), (600., 210.)]
+    for (i, (x, z)) in [(-390., 430.), (-555., 360.), (535., 580.), (700., 260.)]
         .into_iter()
         .enumerate()
     {
