@@ -20,7 +20,7 @@ use super::{ArenaFrame, ViewState};
 mod tests;
 
 // Bump when durable gameplay semantics change, even if the RON content is unchanged.
-const CONTENT_VERSION: u32 = 1;
+const CONTENT_VERSION: u32 = 2;
 const AUTOSAVE_TICKS: u64 = 30 * 120;
 const APP_FORMAT: &str = "grand-app-v1";
 const GAMEPLAY_FORMAT: &str = "grand-gameplay-v1";
