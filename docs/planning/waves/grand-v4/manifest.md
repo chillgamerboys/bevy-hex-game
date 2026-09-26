@@ -266,8 +266,35 @@ build, whose linked recovery markers and staged-respawn, ground-camera and motio
 fixture tests pass. The mixed-cache result is preserved as diagnostic evidence.
 Future cross-worktree builds must establish local dependency freshness explicitly.
 
-Package03's six static diagnostics found a library gap, a straight material seam
-and an obstructed forest review camera; source repairs still require fresh pixels.
+Five package04 diagnostic views at `ea4347837d5acb7381b5bdbff0f1e545a1898fb7`
+were inspected at full resolution and independently reviewed. They show closure
+of the library aperture, the irregular mountain material boundary, and useful
+forward/reverse forest framing. Library room contrast remains weak. A local warm
+stone floor/pier finish preserves every tested occupied interval, liquid and stone
+policy; all 32 Grand schematic tests and its map material-alias test pass. A fresh
+immutable package and recapture are required before approving the finish.
+
+Water inspection found a 0.261-cycle phase jump at an actual waterfall lip. The
+Grand-only shader now uses one continuous horizontal/height phase chart; geometry,
+hard hex normals, physics and ocean materials remain unchanged. Focused shader
+input tests and temporal presentation review remain pending at this checkpoint.
+
+The gameplay audit found that live death-recovery waits could advance combat.
+Recovery now holds simulation clocks, enemies, projectiles and effects while the
+safe destination loads. The new shrine/start waiting regression and all 40 Grand
+gameplay tests pass at `8092f7e`. Staged Continue retains its existing pause.
+
+The workspace/all-target/all-feature Clippy diagnostic passes at `8e2b121`.
+Cloud checks from the older `828c144` exposed a stale Sandbox row count, a stale
+legacy vegetation catalog fixture and a redundant rustdoc link; narrow repairs
+are integrated. Independent legacy V3 generation failures are being classified
+against the starting baseline, without reviving terrain-validator redesign.
+
+An authored ground-cover gap remains: current understory is small trees and a few
+floor props, with no grass tufts. The world lane is adding bounded nonblocking
+voxel tufts through the existing overview companion, rendered only over matching
+published detailed support, with no new streaming requests or collision facts.
+
 The full static/temporal matrix, exact combined CI gate, native movement and
 30-minute measured session remain open. This checkpoint is physical validation,
 not final terrain taste or presentation acceptance. Linear remains disconnected.
