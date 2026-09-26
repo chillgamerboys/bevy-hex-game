@@ -435,7 +435,12 @@ fn compact_columns_require_real_material_conversion_and_exact_residency() {
         Admission::NeedsConversion(_)
     ));
     assert!(!query.above_ground_clear(pose, &view, geometry));
-    view.columns.get_mut(&cell.coord).unwrap()[0].substance = dirt;
+    view.columns
+        .get_mut(&cell.coord)
+        .expect("authored column")
+        .first_mut()
+        .expect("authored solid span")
+        .substance = dirt;
     assert!(matches!(
         query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
         Admission::Clear

@@ -118,12 +118,16 @@ impl GrandCompiler {
             },
         }
     }
+    #[expect(
+        clippy::expect_used,
+        reason = "The canonical measured bay must contain a dry starting beach; compilation must fail if authoring breaks that required site."
+    )]
     fn beach_spawn(&self) -> VoxelPosition {
         let mut best = None;
         for r in 180..=380 {
             for q in -440..=-220 {
                 let p = WorldHex::new(q, r);
-                let depth = index(p).map_or(0, |i| self.coast[i]);
+                let depth = grid_value(&self.coast, p, 0);
                 if !(4..=6).contains(&depth) {
                     continue;
                 }
@@ -164,6 +168,7 @@ impl GrandCompiler {
             ("library_upper", -400., -530., true, true),
             ("shadow_entrance", -105., -151., true, true),
             ("shadow_tunnel", -105., -295., true, true),
+            ("shadow_exit", -105., -618., true, true),
             ("crystal_ascent", -201., -524., false, false),
             ("frozen_woods", -215., -604., false, false),
             ("world_tree", -60., 125., false, false),
@@ -240,7 +245,11 @@ impl GrandCompiler {
             .iter()
             .filter(|a| a.role == AnchorRole::Gameplay)
             .map(|a| Node {
-                id: a.id.rsplit('/').next().unwrap().into(),
+                id: a
+                    .id
+                    .rsplit_once('/')
+                    .map_or(a.id.as_str(), |(_, name)| name)
+                    .into(),
                 position: a.position,
             })
             .collect();

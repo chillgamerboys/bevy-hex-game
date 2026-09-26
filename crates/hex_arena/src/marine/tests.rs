@@ -1212,7 +1212,7 @@ fn summit_glide_requires_admitted_clear_terrain_and_preserves_player() {
     assert!(session.start_exploration_glide(feet, Vec3::X, &terrain, geometry));
     let actor = session.actors.first().expect("player");
     assert_eq!(actor.id, id);
-    assert_eq!(actor.hp, hp);
+    assert_eq!(actor.hp.to_bits(), hp.to_bits());
     assert_eq!(actor.feet, feet);
     assert!(actor.glider.open);
     assert_eq!(actor.glider.snapshot().velocity, Vec3::X * 12.0);
@@ -1250,23 +1250,54 @@ fn grand_stream_interest_tracks_walking_boat_and_glider_without_powered_flight()
     let mut session = ArenaSession::default();
     session.reset(1, &terrain, geometry);
     session.actors = vec![actor];
-    session.actors[0].body.control_velocity = Vec3::X * 5.0;
+    session
+        .actors
+        .first_mut()
+        .expect("Grand player")
+        .body
+        .control_velocity = Vec3::X * 5.0;
     let walking = session.stream_interest().unwrap();
-    assert_eq!(walking.position, session.actors[0].feet);
+    assert_eq!(
+        walking.position,
+        session.actors.first().expect("Grand player").feet
+    );
     assert_eq!(walking.velocity, Vec3::X * 5.0);
-    let state = session.actors[0].marine.as_mut().unwrap();
+    let state = session
+        .actors
+        .first_mut()
+        .expect("Grand player")
+        .marine
+        .as_mut()
+        .unwrap();
     state.boat.active = true;
     state.boat.velocity = Vec3::Z * 17.0;
     let sailing = session.stream_interest().unwrap();
-    assert_eq!(sailing.position, session.actors[0].feet);
+    assert_eq!(
+        sailing.position,
+        session.actors.first().expect("Grand player").feet
+    );
     assert_eq!(sailing.velocity, Vec3::Z * 17.0);
     assert!(session.start_exploration_glide(Vec3::Y * 12.0, Vec3::X, &terrain, geometry));
     let gliding = session.stream_interest().unwrap();
-    assert_eq!(gliding.position, session.actors[0].feet);
+    assert_eq!(
+        gliding.position,
+        session.actors.first().expect("Grand player").feet
+    );
     assert_eq!(
         gliding.velocity,
-        session.actors[0].glider().unwrap().velocity
+        session
+            .actors
+            .first()
+            .expect("Grand player")
+            .glider()
+            .unwrap()
+            .velocity
     );
     assert!(gliding.velocity.length() > 0.0);
-    assert!(session.actors[0].free_flight.is_none());
+    assert!(session
+        .actors
+        .first()
+        .expect("Grand player")
+        .free_flight
+        .is_none());
 }

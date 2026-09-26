@@ -110,6 +110,55 @@ fn complete_stair_route_has_walkable_risers_and_tunnels_remain_separate() {
 }
 
 #[test]
+fn shadow_route_walks_from_south_mouth_to_open_crystal_landing() {
+    let source = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .unwrap();
+    let g = GrandCompiler::new(source).unwrap();
+    let mut previous: Option<VoxelPosition> = None;
+    for r in (-414..=-101).rev() {
+        let p = nearest_hex(-105., r as f64 * 1.5);
+        let floor = shadow_cavity(p).map_or(651, |(floor, _)| floor);
+        let support = VoxelPosition {
+            column: p,
+            level: floor,
+        };
+        assert!(
+            g.clear_support(support, 12),
+            "blocked Shadow route: {support:?}"
+        );
+        if let Some(previous) = previous {
+            assert_eq!(previous.column.checked_distance(p).unwrap(), 1);
+            assert!(
+                (floor - previous.level).abs() <= 1,
+                "unwalkable Shadow riser: {support:?}"
+            );
+        }
+        if r >= -272 {
+            assert_eq!(floor, 520, "original Shadow bore stays uniform");
+        }
+        previous = Some(support);
+    }
+    let exit = g.support(-105., -618., true);
+    assert_eq!(exit.level, 651);
+    assert!(
+        g.crystal.contains(&exit.column),
+        "exit joins the authored Crystal footprint"
+    );
+    let (column, _) = g.column(exit.column);
+    assert!(
+        column.runs.iter().all(|run| run.top <= exit.level + 1),
+        "exit is open to the sky"
+    );
+    let crossing = nearest_hex(-105., -348.);
+    assert!(
+        g.column(crossing).0.material_at(620).is_some(),
+        "library separator remains intact"
+    );
+}
+
+#[test]
 fn watercourse_is_continuous_and_descends_from_garden_to_open_sea() {
     let mut source: GrandSpec = ron::from_str(include_str!(
         "../../../../../assets/config/v4/grand-v4/world.ron"

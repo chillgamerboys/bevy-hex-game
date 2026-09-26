@@ -21,7 +21,7 @@ VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-waterfall",
          "grand-frozen-woods", "grand-volcano", "grand-shrine-fire", "grand-bay",
          "grand-bay-baseline", "grand-bay-reverse", "grand-waterline", "grand-underwater",
          "grand-waterfall-cave", "grand-library", "grand-library-upper",
-         "grand-shadow-tunnel", "grand-shadow-reverse", "first", "third", "start")
+         "grand-shadow-tunnel", "grand-shadow-reverse", "grand-shadow-exit", "first", "third", "start")
 MOTION_ROUTE = (
     "Start at the beach; enter water, deploy/steer/fold the boat, sail to Fire; "
     "walk the river to the world tree and garden; follow water to the waterfall cave; "

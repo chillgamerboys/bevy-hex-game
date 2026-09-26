@@ -367,223 +367,6 @@ impl ArenaSession {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn all_grand_parties_admit_from_ready_compact_columns_without_legacy_voxels() {
-        use hex_core::arena::{
-            ArenaEncounterSite, ArenaExpeditionSites, ArenaResidency, ArenaSolidSpan,
-        };
-        let geometry = ArenaVoxelGeometry::default();
-        let surfaces = HexCoord::ORIGIN
-            .within_radius(10)
-            .into_iter()
-            .map(|coord| TilePos::new(coord, 0))
-            .collect();
-        let region = hex_core::arena::ArenaDeploymentRegion {
-            preferred: TilePos::new(HexCoord::ORIGIN, 0),
-            surfaces,
-        };
-        let chunks: std::collections::BTreeSet<_> = (-5..=5)
-            .flat_map(|q| (-5..=5).map(move |r| (q, r)))
-            .collect();
-        for &(name, _, count) in SITES {
-            let player = HexCoord::from_axial(-20, 0).to_world(SKIN);
-            let mut world = ArenaTerrainView {
-                revision: 1,
-                selection: hex_core::arena::ArenaSelection {
-                    map: ArenaMap::GrandV4,
-                    ..Default::default()
-                },
-                spawns: [player, player],
-                columns: HexCoord::ORIGIN
-                    .within_radius(40)
-                    .into_iter()
-                    .map(|coord| {
-                        (
-                            coord,
-                            vec![ArenaSolidSpan {
-                                bottom: TilePos::new(coord, 0),
-                                top_level: 0,
-                                substance: hex_core::SubstanceId(1),
-                            }],
-                        )
-                    })
-                    .collect(),
-                residency: Some(ArenaResidency {
-                    catalogue: chunks.clone(),
-                    ready: Default::default(),
-                }),
-                expedition: Some(ArenaExpeditionSites {
-                    encounters: [(
-                        name.into(),
-                        ArenaEncounterSite {
-                            deployment: region.clone(),
-                            rally_entry: None,
-                        },
-                    )]
-                    .into(),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            let mut session = ArenaSession::default();
-            session.reset(1, &world, geometry);
-            session.actors.truncate(1);
-            session.actors[0].configure_expedition_player();
-            session.admit_grand_parties(&world, geometry, &ArenaTuning::default());
-            assert_eq!(
-                session.actors.len(),
-                1,
-                "unloaded {name} must remain unadmitted"
-            );
-            world.residency.as_mut().unwrap().ready = chunks.clone();
-            world.revision += 1;
-            world.full_rebuild = true;
-            session.collision.refresh(&world, geometry);
-            assert!(world.voxels.is_empty());
-            session.admit_grand_parties(&world, geometry, &ArenaTuning::default());
-            assert_eq!(session.actors.len(), count + 1, "ready compact {name}");
-            assert!(session.grand.as_ref().unwrap().admitted.contains(name));
-            assert_eq!(session.encounter.brains.len(), count);
-        }
-    }
-
-    #[test]
-    fn grand_roster_keeps_existing_population_budget_and_unique_wide_ids() {
-        assert_eq!(SITES.iter().map(|s| s.2).sum::<usize>(), 127);
-        let ids: std::collections::BTreeSet<_> = SITES
-            .iter()
-            .enumerate()
-            .flat_map(|(i, s)| (0..s.2).map(move |j| i * 32 + j + 1))
-            .collect();
-        assert_eq!(ids.len(), 127);
-        assert!(ids.last().copied().unwrap() > usize::from(u8::MAX));
-    }
-
-    #[test]
-    fn grand_dormancy_preserves_projectiles_brains_and_remaining_clocks() {
-        let world = ArenaTerrainView {
-            selection: hex_core::arena::ArenaSelection {
-                map: ArenaMap::GrandV4,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let geometry = ArenaVoxelGeometry::default();
-        let mut session = ArenaSession::default();
-        session.reset(1, &world, geometry);
-        session.actors.truncate(1);
-        session.actors[0].feet = Vec3::ZERO;
-        let mut enemy = Actor::spawn(417, Vec3::X * 160.0, Vec3::NEG_X);
-        enemy.configure_expedition(ExpeditionRole::MountainShadow, &EncounterTuning::default());
-        session
-            .grand
-            .as_mut()
-            .unwrap()
-            .admitted
-            .insert("grand_shadow_tunnel".into());
-        enemy.party = Some(13);
-        enemy.cooldowns = [0.7; 3];
-        enemy.last_damage_tick = Some(10);
-        session
-            .encounter
-            .brains
-            .insert(417, brain::Brain::new(417, enemy.feet));
-        session.actors.push(enemy);
-        session.register_forest_roster();
-        session.tick = 100;
-        session.encounter.runtime.push(PartyRuntime {
-            snapshot: PartySnapshot {
-                id: 13,
-                phase: PartyPhase::Active,
-                home: Vec3::X * 160.0,
-                living: 1,
-            },
-            knowledge: Some(Knowledge {
-                point: Vec3::ZERO,
-                velocity: Vec3::X,
-                tick: 10,
-                direct: true,
-                cue_kind: None,
-                observed: None,
-            }),
-            last_sight: 10,
-            last_cue_id: None,
-            leash: 20.0,
-            search: 5.0,
-            battle_search: None,
-        });
-        let materials = ArenaMaterials {
-            stone: hex_core::SubstanceId(1),
-            reinforced_stone: None,
-            bedrock: hex_core::SubstanceId(2),
-            grass: hex_core::SubstanceId(3),
-            dirt: hex_core::SubstanceId(4),
-            fire: hex_core::ElementId(1),
-        };
-        session.release(
-            417,
-            Spell::Fireball,
-            &ArenaTuning::default(),
-            10.0,
-            &world,
-            geometry,
-            materials,
-            &mut CommandsOut::default(),
-        );
-        let position = session.projectiles[0].position;
-        session.suspend_grand_parties();
-        assert_eq!(session.actors.len(), 1);
-        assert!(session.projectiles.is_empty());
-        assert!(session
-            .grand_actor_interests()
-            .iter()
-            .all(|p| p.distance(Vec3::ZERO) < 100.0));
-        let identity = crate::GrandCheckpointIdentity {
-            world_id: "grand-test".into(),
-            content_revision: "content".into(),
-        };
-        let bytes = session.encode_grand_checkpoint(&identity).unwrap();
-        let mut long_shot =
-            ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 1).unwrap();
-        // An already sleeping party must wake for a player shot even when its
-        // owner is farther away than the old streaming-interest distance cap.
-        long_shot.actors[0].feet = Vec3::NEG_X * 100.0;
-        long_shot.release(
-            0,
-            Spell::Fireball,
-            &ArenaTuning::default(),
-            10.0,
-            &world,
-            geometry,
-            materials,
-            &mut CommandsOut::default(),
-        );
-        long_shot.projectiles[0].position = Vec3::X * 160.0;
-        assert!(long_shot
-            .grand_actor_interests()
-            .contains(&(Vec3::X * 160.0)));
-        long_shot.wake_grand_parties();
-        assert!(long_shot.encounter.dormant.is_empty());
-        assert!(long_shot.actors.iter().any(|a| a.id == 417));
-        session =
-            ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 1).unwrap();
-        session.tick = 1000;
-        session.actors[0].feet = Vec3::X * 160.0;
-        session.wake_grand_parties();
-        assert!(session.encounter.dormant.is_empty());
-        assert_eq!(session.actors[1].cooldowns, [0.7; 3]);
-        assert_eq!(session.actors[1].last_damage_tick, Some(910));
-        assert_eq!(session.projectiles[0].age, 0.0);
-        assert_eq!(session.projectiles[0].position, position);
-        assert_eq!(session.encounter.runtime[0].knowledge.unwrap().tick, 910);
-        assert!(session.encounter.brains.contains_key(&417));
-    }
-}
-
 impl ArenaSession {
     pub(crate) fn validate_grand_records(&self) -> Result<(), String> {
         let grand = self.grand.as_ref().ok_or("Not a Grand checkpoint")?;
@@ -601,11 +384,12 @@ impl ArenaSession {
             .enumerate()
             .filter(|(_, site)| grand.admitted.contains(site.0))
         {
-            let party = u16::try_from(ordinal).map_err(|_| "Invalid Grand party identity")?;
+            let party = u16::try_from(ordinal)
+                .map_err(|error| format!("Invalid Grand party identity: {error}"))?;
             expected_parties.insert(party);
             for slot in 0..count {
                 let id = ActorId::try_from(ordinal * 32 + slot + 1)
-                    .map_err(|_| "Invalid Grand actor identity")?;
+                    .map_err(|error| format!("Invalid Grand actor identity: {error}"))?;
                 let (species, role) = roster_profile(leader, slot);
                 expected.insert(id, (party, species, role));
             }
@@ -712,4 +496,269 @@ fn roster_profile(leader: Species, slot: usize) -> (Species, Option<ExpeditionRo
         _ => None,
     };
     (species, role)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_grand_parties_admit_from_ready_compact_columns_without_legacy_voxels() {
+        use hex_core::arena::{
+            ArenaEncounterSite, ArenaExpeditionSites, ArenaResidency, ArenaSolidSpan,
+        };
+        let geometry = ArenaVoxelGeometry::default();
+        let surfaces = HexCoord::ORIGIN
+            .within_radius(10)
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 0))
+            .collect();
+        let region = hex_core::arena::ArenaDeploymentRegion {
+            preferred: TilePos::new(HexCoord::ORIGIN, 0),
+            surfaces,
+        };
+        let chunks: std::collections::BTreeSet<_> = (-5..=5)
+            .flat_map(|q| (-5..=5).map(move |r| (q, r)))
+            .collect();
+        for &(name, _, count) in SITES {
+            let player = HexCoord::from_axial(-20, 0).to_world(SKIN);
+            let mut world = ArenaTerrainView {
+                revision: 1,
+                selection: hex_core::arena::ArenaSelection {
+                    map: ArenaMap::GrandV4,
+                    ..Default::default()
+                },
+                spawns: [player, player],
+                columns: HexCoord::ORIGIN
+                    .within_radius(40)
+                    .into_iter()
+                    .map(|coord| {
+                        (
+                            coord,
+                            vec![ArenaSolidSpan {
+                                bottom: TilePos::new(coord, 0),
+                                top_level: 0,
+                                substance: hex_core::SubstanceId(1),
+                            }],
+                        )
+                    })
+                    .collect(),
+                residency: Some(ArenaResidency {
+                    catalogue: chunks.clone(),
+                    ready: Default::default(),
+                }),
+                expedition: Some(ArenaExpeditionSites {
+                    encounters: [(
+                        name.into(),
+                        ArenaEncounterSite {
+                            deployment: region.clone(),
+                            rally_entry: None,
+                        },
+                    )]
+                    .into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut session = ArenaSession::default();
+            session.reset(1, &world, geometry);
+            session.actors.truncate(1);
+            session
+                .actors
+                .first_mut()
+                .expect("player")
+                .configure_expedition_player();
+            session.admit_grand_parties(&world, geometry, &ArenaTuning::default());
+            assert_eq!(
+                session.actors.len(),
+                1,
+                "unloaded {name} must remain unadmitted"
+            );
+            world.residency.as_mut().unwrap().ready = chunks.clone();
+            world.revision += 1;
+            world.full_rebuild = true;
+            session.collision.refresh(&world, geometry);
+            assert!(world.voxels.is_empty());
+            session.admit_grand_parties(&world, geometry, &ArenaTuning::default());
+            assert_eq!(session.actors.len(), count + 1, "ready compact {name}");
+            assert!(session.grand.as_ref().unwrap().admitted.contains(name));
+            assert_eq!(session.encounter.brains.len(), count);
+        }
+    }
+
+    #[test]
+    fn grand_roster_keeps_existing_population_budget_and_unique_wide_ids() {
+        assert_eq!(SITES.iter().map(|s| s.2).sum::<usize>(), 127);
+        let ids: std::collections::BTreeSet<_> = SITES
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| (0..s.2).map(move |j| i * 32 + j + 1))
+            .collect();
+        assert_eq!(ids.len(), 127);
+        assert!(ids.last().copied().unwrap() > usize::from(u8::MAX));
+    }
+
+    #[test]
+    fn grand_dormancy_preserves_projectiles_brains_and_remaining_clocks() {
+        let world = ArenaTerrainView {
+            selection: hex_core::arena::ArenaSelection {
+                map: ArenaMap::GrandV4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let geometry = ArenaVoxelGeometry::default();
+        let mut session = ArenaSession::default();
+        session.reset(1, &world, geometry);
+        session.actors.truncate(1);
+        session.actors.first_mut().expect("player").feet = Vec3::ZERO;
+        let mut enemy = Actor::spawn(417, Vec3::X * 160.0, Vec3::NEG_X);
+        enemy.configure_expedition(ExpeditionRole::MountainShadow, &EncounterTuning::default());
+        session
+            .grand
+            .as_mut()
+            .unwrap()
+            .admitted
+            .insert("grand_shadow_tunnel".into());
+        enemy.party = Some(13);
+        enemy.cooldowns = [0.7; 3];
+        enemy.last_damage_tick = Some(10);
+        session
+            .encounter
+            .brains
+            .insert(417, brain::Brain::new(417, enemy.feet));
+        session.actors.push(enemy);
+        session.register_forest_roster();
+        session.tick = 100;
+        session.encounter.runtime.push(PartyRuntime {
+            snapshot: PartySnapshot {
+                id: 13,
+                phase: PartyPhase::Active,
+                home: Vec3::X * 160.0,
+                living: 1,
+            },
+            knowledge: Some(Knowledge {
+                point: Vec3::ZERO,
+                velocity: Vec3::X,
+                tick: 10,
+                direct: true,
+                cue_kind: None,
+                observed: None,
+            }),
+            last_sight: 10,
+            last_cue_id: None,
+            leash: 20.0,
+            search: 5.0,
+            battle_search: None,
+        });
+        let materials = ArenaMaterials {
+            stone: hex_core::SubstanceId(1),
+            reinforced_stone: None,
+            bedrock: hex_core::SubstanceId(2),
+            grass: hex_core::SubstanceId(3),
+            dirt: hex_core::SubstanceId(4),
+            fire: hex_core::ElementId(1),
+        };
+        session.release(
+            417,
+            Spell::Fireball,
+            &ArenaTuning::default(),
+            10.0,
+            &world,
+            geometry,
+            materials,
+            &mut CommandsOut::default(),
+        );
+        let position = session
+            .projectiles
+            .first()
+            .expect("released projectile")
+            .position;
+        session.suspend_grand_parties();
+        assert_eq!(session.actors.len(), 1);
+        assert!(session.projectiles.is_empty());
+        assert!(session
+            .grand_actor_interests()
+            .iter()
+            .all(|p| p.distance(Vec3::ZERO) < 100.0));
+        let identity = crate::GrandCheckpointIdentity {
+            world_id: "grand-test".into(),
+            content_revision: "content".into(),
+        };
+        let bytes = session.encode_grand_checkpoint(&identity).unwrap();
+        let mut long_shot =
+            ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 1).unwrap();
+        // An already sleeping party must wake for a player shot even when its
+        // owner is farther away than the old streaming-interest distance cap.
+        long_shot.actors.first_mut().expect("player").feet = Vec3::NEG_X * 100.0;
+        long_shot.release(
+            0,
+            Spell::Fireball,
+            &ArenaTuning::default(),
+            10.0,
+            &world,
+            geometry,
+            materials,
+            &mut CommandsOut::default(),
+        );
+        long_shot
+            .projectiles
+            .first_mut()
+            .expect("released projectile")
+            .position = Vec3::X * 160.0;
+        assert!(long_shot
+            .grand_actor_interests()
+            .contains(&(Vec3::X * 160.0)));
+        long_shot.wake_grand_parties();
+        assert!(long_shot.encounter.dormant.is_empty());
+        assert!(long_shot.actors.iter().any(|a| a.id == 417));
+        session =
+            ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 1).unwrap();
+        session.tick = 1000;
+        session.actors.first_mut().expect("player").feet = Vec3::X * 160.0;
+        session.wake_grand_parties();
+        assert!(session.encounter.dormant.is_empty());
+        assert_eq!(
+            session
+                .actors
+                .get(1)
+                .expect("woken enemy")
+                .cooldowns
+                .map(f32::to_bits),
+            [0.7_f32; 3].map(f32::to_bits)
+        );
+        assert_eq!(
+            session.actors.get(1).expect("woken enemy").last_damage_tick,
+            Some(910)
+        );
+        assert_eq!(
+            session
+                .projectiles
+                .first()
+                .expect("released projectile")
+                .age
+                .to_bits(),
+            0.0_f32.to_bits()
+        );
+        assert_eq!(
+            session
+                .projectiles
+                .first()
+                .expect("released projectile")
+                .position,
+            position
+        );
+        assert_eq!(
+            session
+                .encounter
+                .runtime
+                .first()
+                .expect("woken party")
+                .knowledge
+                .unwrap()
+                .tick,
+            910
+        );
+        assert!(session.encounter.brains.contains_key(&417));
+    }
 }

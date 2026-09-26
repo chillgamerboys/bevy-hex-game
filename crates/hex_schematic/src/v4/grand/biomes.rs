@@ -17,8 +17,8 @@ pub struct GrandBiomeMap {
 }
 fn contains(rows: &[(i64, i64, i64)], p: WorldHex) -> bool {
     let first = rows.partition_point(|(r, _, _)| *r < p.r);
-    rows[first..]
-        .iter()
+    rows.iter()
+        .skip(first)
         .take_while(|(r, _, _)| *r == p.r)
         .any(|(_, a, b)| (*a..=*b).contains(&p.q))
 }
@@ -45,9 +45,10 @@ impl GrandBiomeMap {
                 });
             }
         }
-        if (x + 105.).abs() < 9. && (-408. ..=-150.).contains(&z) && (520. ..585.).contains(&level)
-        {
-            return Some("Shadow Tunnel");
+        if let Some((floor, ceiling)) = shadow_cavity(p) {
+            if (f64::from(floor)..f64::from(ceiling)).contains(&level) {
+                return Some("Shadow Tunnel");
+            }
         }
         if ((x + 1180.) / 86.).hypot((z - 450.) / 77.) <= 1. {
             return Some("Volcanic Island");
@@ -118,9 +119,10 @@ impl GrandCompiler {
         let mut rows = vec![];
         for (r, mut qs) in grouped {
             qs.sort();
-            let mut start = qs[0];
+            let mut qs = qs.into_iter();
+            let Some(mut start) = qs.next() else { continue };
             let mut last = start;
-            for q in qs.into_iter().skip(1) {
+            for q in qs {
                 if q != last + 1 {
                     rows.push((r, start, last));
                     start = q;

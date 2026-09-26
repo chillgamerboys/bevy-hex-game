@@ -812,12 +812,14 @@ fn capture_pose(
             "waterfall-cave" => ("library_entrance", Vec3::new(-4.0, 2.0, 0.0)),
             "shadow-tunnel" => ("shadow_entrance", Vec3::new(0.0, 2.0, 3.0)),
             "shadow-reverse" => ("shadow_tunnel", Vec3::new(0.0, 2.0, -80.0)),
+            "shadow-exit" => ("shadow_exit", Vec3::new(0.0, 4.0, -8.0)),
             _ => return None,
         };
         let site = anchor(site_name)?;
         let target = match name {
             "shadow-tunnel" => anchor("shadow_tunnel")? + Vec3::Y * 1.7,
             "shadow-reverse" => anchor("shadow_entrance")? + Vec3::Y * 1.7,
+            "shadow-exit" => site + Vec3::new(0.0, 1.7, 24.0),
             "world-tree" => site + Vec3::Y * 55.0,
             "roots-entrance" => site + Vec3::Y * 1.5,
             "shrine-plant" => site + Vec3::new(0.0, 1.8, -4.5),

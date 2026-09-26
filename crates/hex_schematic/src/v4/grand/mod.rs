@@ -2,7 +2,6 @@
 #![expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
     reason = "Finite authored geometry is bounded by radius900 and1600levels; rounding is the voxelization contract."
 )]
 mod biomes;
@@ -82,6 +81,22 @@ fn index(p: WorldHex) -> Option<usize> {
     let r = usize::try_from(p.r + OFFSET).ok()?;
     (q < GRID && r < GRID).then_some(r * GRID + q)
 }
+#[expect(
+    clippy::expect_used,
+    reason = "Both private distance grids are allocated at GRID squared before queries; index bounds use the same constant. An internal shape mismatch must fail."
+)]
+fn grid_value(grid: &[u16], p: WorldHex, outside: u16) -> u16 {
+    index(p).map_or(outside, |i| {
+        *grid
+            .get(i)
+            .expect("distance grid matches its bounded index")
+    })
+}
+fn grid_cell(grid: &mut [u16], p: WorldHex) -> Result<&mut u16, ContractError> {
+    index(p).and_then(|i| grid.get_mut(i)).ok_or_else(|| {
+        ContractError::new("grand", "distance-grid coordinate outside measured bounds")
+    })
+}
 fn smooth(t: f64) -> f64 {
     let t = t.clamp(0., 1.);
     t * t * (3. - 2. * t)
@@ -132,13 +147,11 @@ impl GrandCompiler {
                 return Err(ContractError::new("grand", "inverted footprint row"));
             }
             for q in a..=b {
-                let i = index(WorldHex::new(q, r)).ok_or_else(|| {
-                    ContractError::new("grand", "footprint outside measured bounds")
-                })?;
-                if coast[i] != 0 {
+                let cell = grid_cell(&mut coast, WorldHex::new(q, r))?;
+                if *cell != 0 {
                     return Err(ContractError::new("grand", "overlapping footprint rows"));
                 }
-                coast[i] = u16::MAX;
+                *cell = u16::MAX;
                 count += 1;
             }
         }
@@ -152,24 +165,24 @@ impl GrandCompiler {
         for r in -OFFSET..=OFFSET {
             for q in -OFFSET..=OFFSET {
                 let p = WorldHex::new(q, r);
-                let i = index(p).unwrap();
-                if coast[i] != 0
-                    && DIRS.iter().any(|(a, b)| {
-                        index(WorldHex::new(q + a, r + b)).is_none_or(|j| coast[j] == 0)
-                    })
+                if grid_value(&coast, p, 0) != 0
+                    && DIRS
+                        .iter()
+                        .any(|(a, b)| grid_value(&coast, WorldHex::new(q + a, r + b), 0) == 0)
                 {
-                    coast[i] = 1;
+                    *grid_cell(&mut coast, p)? = 1;
                     queue.push_back(p);
                 }
             }
         }
         while let Some(p) = queue.pop_front() {
-            let depth = coast[index(p).unwrap()];
+            let depth = grid_value(&coast, p, 0);
             for (a, b) in DIRS {
                 let n = WorldHex::new(p.q + a, p.r + b);
-                if let Some(i) = index(n) {
-                    if coast[i] == u16::MAX {
-                        coast[i] = depth + 1;
+                if index(n).is_some() {
+                    let cell = grid_cell(&mut coast, n)?;
+                    if *cell == u16::MAX {
+                        *cell = depth + 1;
                         queue.push_back(n);
                     }
                 }
@@ -180,25 +193,26 @@ impl GrandCompiler {
         for r in -OFFSET..=OFFSET {
             for q in -OFFSET..=OFFSET {
                 let p = WorldHex::new(q, r);
-                let i = index(p).unwrap();
-                if coast[i] > 0 {
-                    offshore_distance[i] = 0;
-                    if coast[i] == 1 {
+                let depth = grid_value(&coast, p, 0);
+                if depth > 0 {
+                    *grid_cell(&mut offshore_distance, p)? = 0;
+                    if depth == 1 {
                         offshore.push_back(p);
                     }
                 }
             }
         }
         while let Some(p) = offshore.pop_front() {
-            let d = offshore_distance[index(p).unwrap()];
+            let d = grid_value(&offshore_distance, p, 100);
             if d >= 100 {
                 continue;
             }
             for (a, b) in DIRS {
                 let n = WorldHex::new(p.q + a, p.r + b);
-                if let Some(i) = index(n) {
-                    if offshore_distance[i] == u16::MAX {
-                        offshore_distance[i] = d + 1;
+                if index(n).is_some() {
+                    let cell = grid_cell(&mut offshore_distance, n)?;
+                    if *cell == u16::MAX {
+                        *cell = d + 1;
                         offshore.push_back(n);
                     }
                 }
@@ -258,12 +272,12 @@ impl GrandCompiler {
     }
     /// Whether the column is inside the authored mainland footprint.
     pub fn mainland(&self, p: WorldHex) -> bool {
-        index(p).is_some_and(|i| self.coast[i] > 0)
+        grid_value(&self.coast, p, 0) > 0
     }
     /// Quantized solid surface before exact caves and above-ground structures.
     pub fn surface(&self, p: WorldHex) -> GrandSurface {
         let [x, z] = world_xz(p);
-        let depth = index(p).map_or(0, |i| self.coast[i]);
+        let depth = grid_value(&self.coast, p, 0);
         let mut h = if depth > 0 {
             let base = 480.
                 + 45. * gaussian(x, z, -60., 125., 220., 180.)
@@ -275,7 +289,7 @@ impl GrandCompiler {
             let eastern = 430. * gaussian(x, z, 320., -490., 240., 180.);
             401. + (base + mountains + saddle + eastern - 401.) * smooth(f64::from(depth) / 28.)
         } else {
-            let distance = index(p).map_or(100, |i| self.offshore_distance[i]).min(100);
+            let distance = grid_value(&self.offshore_distance, p, 100).min(100);
             400. - 3. * f64::from(distance)
                 + 10. * (x * 0.003 + z * 0.005).sin() * smooth(f64::from(distance) / 30.)
         };
@@ -455,13 +469,22 @@ impl GrandCompiler {
         // mainland footprint. Local aprons never alter coastline area.
         if depth == 0 && vr >= 1. {
             water = None;
-            let distance = index(p).map_or(100, |i| self.offshore_distance[i]).min(100);
+            let distance = grid_value(&self.offshore_distance, p, 100).min(100);
             h = 400. - 3. * f64::from(distance);
             material = "sand";
         }
         if depth > 0 {
             if let Some((floor, _)) = library_cavity(p) {
                 h = h.max(f64::from(floor + 1));
+            }
+            if let Some((floor, _)) = shadow_cavity(p) {
+                h = h.max(f64::from(floor + 1));
+            }
+            // A small open landing joins the north stair to the existing lower
+            // Crystal terrace. The broader ascent silhouette is unchanged.
+            if ((x + 105.) / 7.).hypot((z + 618.) / 4.5) < 1. {
+                h = 652.;
+                material = "slate";
             }
         }
         GrandSurface {
@@ -472,16 +495,16 @@ impl GrandCompiler {
     }
     /// Exact clear interval [floor+1, ceiling), inclusive support under actors.
     pub fn cavity(&self, p: WorldHex) -> Option<(i32, i32)> {
-        let [x, z] = world_xz(p);
         if let Some(interval) = library_cavity(p) {
             return Some(interval);
         }
-        if (x + 105.).abs() < 9. && (-408. ..=-150.).contains(&z) {
-            return Some((520, 585));
-        }
-        None
+        shadow_cavity(p)
     }
     /// Compile one exact column with carved interiors and optional liquid.
+    #[expect(
+        clippy::expect_used,
+        reason = "Authored finite columns are ordered, nonnegative compact intervals within MAX_LEVEL; sea filling cannot overflow those validated geometry bounds."
+    )]
     pub fn column(&self, p: WorldHex) -> (ColumnData, Option<LiquidColumn>) {
         let s = self.surface(p);
         let top = s.level + 1;
@@ -503,9 +526,8 @@ impl GrandCompiler {
         if let Some((floor, ceiling)) = library_cavity(p) {
             cut(&mut runs, floor + 1, ceiling);
         }
-        let [x, z] = world_xz(p);
-        if (x + 105.).abs() < 9. && (-408. ..=-150.).contains(&z) {
-            cut(&mut runs, 521, 585);
+        if let Some((floor, ceiling)) = shadow_cavity(p) {
+            cut(&mut runs, floor + 1, ceiling);
         }
         let liquid = super::fill_sea_column(
             p,
@@ -614,6 +636,10 @@ impl GrandCompiler {
         }
     }
     /// Sample actual quantized relief and named observation locations.
+    #[expect(
+        clippy::expect_used,
+        reason = "The fixed compiler palette contains every surface material and make_anchors always publishes party_start; missing either is an authoring invariant failure."
+    )]
     pub fn overview(&self) -> NorthernOverview {
         let origin_xz = [-1564., -1356.];
         let (width, height) = (783, 679);
@@ -637,7 +663,8 @@ impl GrandCompiler {
                                 s.material
                             }
                         })
-                        .unwrap() as u16,
+                        .expect("authored surface material is in the compiler palette")
+                        as u16,
                 );
             }
         }
@@ -647,7 +674,9 @@ impl GrandCompiler {
             .map(|a| {
                 let [x, z] = world_xz(a.position.column);
                 (
-                    a.id.rsplit('/').next().unwrap().into(),
+                    a.id.rsplit_once('/')
+                        .map_or(a.id.as_str(), |(_, name)| name)
+                        .into(),
                     [
                         x as f32,
                         (f64::from(a.position.level + 1) * LEVEL_HEIGHT) as f32,
@@ -674,7 +703,9 @@ impl GrandCompiler {
             bed_heights,
             surface_materials,
             materials: self.materials.clone(),
-            player_spawn: anchors["party_start"],
+            player_spawn: *anchors
+                .get("party_start")
+                .expect("authored starting anchor"),
             anchors,
             islands: vec![IslandSpec {
                 id: "fire-volcano".into(),
@@ -694,6 +725,19 @@ impl GrandCompiler {
                 .count(),
         }
     }
+}
+
+/// The Shadow's original uniform bore ends at r=-272. A straight northern
+/// stair then gains 131 levels over 140 adjacent rows and opens onto Crystal.
+/// Every riser is at most one level (0.35u), within the ordinary walk controller.
+fn shadow_cavity(p: WorldHex) -> Option<(i32, i32)> {
+    let [x, z] = world_xz(p);
+    if (x + 105.).abs() >= 9. || !(-618. ..=-150.).contains(&z) {
+        return None;
+    }
+    let steps = (-272 - p.r).max(0);
+    let floor = 520 + (steps * 131 / 140) as i32;
+    Some((floor, floor + 65))
 }
 fn palette() -> Vec<MaterialSpec> {
     let mut v: Vec<_> = [

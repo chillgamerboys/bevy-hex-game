@@ -1,10 +1,46 @@
 use super::*;
 
+#[expect(
+    clippy::expect_used,
+    reason = "Grand fixtures must retain their real player identity; a missing actor is a test failure."
+)]
+fn player(session: &ArenaSession) -> &Actor {
+    session
+        .actors
+        .iter()
+        .find(|actor| actor.id == 0)
+        .expect("Grand player")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "Fixture setup mutates the real player only; a missing player must fail the test."
+)]
+fn player_mut(session: &mut ArenaSession) -> &mut Actor {
+    session
+        .actors
+        .iter_mut()
+        .find(|actor| actor.id == 0)
+        .expect("Grand player")
+}
+
+#[track_caller]
+fn assert_exact_f32(actual: f32, expected: f32) {
+    // These equalities require bit-preserving saves or idempotent blessings.
+    assert_eq!(
+        actual.to_bits(),
+        expected.to_bits(),
+        "{actual} != {expected}"
+    );
+}
+
 #[test]
 fn shrine_tuning_rejects_nonfinite_or_unbounded_values() {
     assert!(GrandTuning::default().validate().is_ok());
-    let mut tuning = GrandTuning::default();
-    tuning.earth_run = f32::NAN;
+    let mut tuning = GrandTuning {
+        earth_run: f32::NAN,
+        ..Default::default()
+    };
     assert!(tuning.validate().is_err());
     tuning.earth_run = 20.0;
     assert!(tuning.validate().is_err());
@@ -30,7 +66,7 @@ fn fixture() -> (ArenaSession, ArenaTerrainView, ArenaVoxelGeometry) {
     let mut session = ArenaSession::default();
     session.reset(4, &world, geometry);
     session.actors.truncate(1);
-    session.actors[0].configure_expedition_player();
+    player_mut(&mut session).configure_expedition_player();
     (session, world, geometry)
 }
 
@@ -40,10 +76,10 @@ fn shrine_interaction_is_once_and_bonuses_stack_without_health() {
     for shrine in ShrineId::ALL {
         world
             .anchors
-            .insert(shrine.anchor().into(), session.actors[0].feet);
+            .insert(shrine.anchor().into(), player(&session).feet);
     }
     let base = session.player_tuning(&crate::ArenaTuning::default());
-    let hp = session.actors[0].max_hp;
+    let hp = player(&session).max_hp;
     session.advance_grand(ActorIntent::default(), &world, geometry);
     assert!(session.grand_progress().unwrap().shrines.is_empty());
     assert_eq!(
@@ -72,8 +108,8 @@ fn shrine_interaction_is_once_and_bonuses_stack_without_health() {
     assert!(first.fireball_damage > base.fireball_damage);
     assert!(first.projectile_speed > base.projectile_speed);
     assert!(first.high_jump_height > base.high_jump_height);
-    assert_eq!(first.fireball_damage, second.fireball_damage);
-    assert_eq!(session.actors[0].max_hp, hp);
+    assert_exact_f32(first.fireball_damage, second.fireball_damage);
+    assert_exact_f32(player(&session).max_hp, hp);
     assert_eq!(
         session.player_fireball_mode(),
         crate::FireballMode::Explosive
@@ -81,9 +117,9 @@ fn shrine_interaction_is_once_and_bonuses_stack_without_health() {
     assert!(session.earth_construction(0));
     assert!(!session.earth_construction(1));
     assert!(
-        session.actors[0].glider_scale > 1.0
-            && session.actors[0].swim_scale > 1.0
-            && session.actors[0].boat_scale > 1.0
+        player(&session).glider_scale > 1.0
+            && player(&session).swim_scale > 1.0
+            && player(&session).boat_scale > 1.0
     );
 }
 
@@ -96,11 +132,11 @@ fn checkpoint_round_trip_preserves_charged_input_projectile_and_clocks() {
         content_revision: "accepted-content".into(),
     };
     session.tick = 907;
-    session.actors[0].charge = Some(crate::ChargeState {
+    player_mut(&mut session).charge = Some(crate::ChargeState {
         spell: crate::Spell::Fireball,
         elapsed: 0.45,
     });
-    session.actors[0].cooldowns = [0.2, 0.3, 0.4];
+    player_mut(&mut session).cooldowns = [0.2, 0.3, 0.4];
     session
         .grand
         .as_mut()
@@ -128,7 +164,7 @@ fn checkpoint_round_trip_preserves_charged_input_projectile_and_clocks() {
     let restored =
         ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 4).unwrap();
     assert_eq!(restored.tick, 907);
-    assert_eq!(restored.actors[0].charge().unwrap().elapsed, 0.45);
+    assert_exact_f32(player(&restored).charge().unwrap().elapsed, 0.45);
     assert_eq!(restored.projectiles.len(), session.projectiles.len());
     assert!(!restored.projectiles.is_empty());
     assert_eq!(bytes, restored.encode_grand_checkpoint(&identity).unwrap());
@@ -149,31 +185,31 @@ fn checkpoint_round_trip_preserves_charged_input_projectile_and_clocks() {
 fn teleport_requires_visible_clear_ground_and_only_success_spends_cooldown() {
     let (mut session, world, geometry) = fixture();
     session.grand.as_mut().unwrap().teleport_unlocked = true;
-    session.actors[0].aim = Vec3::Y;
-    let before = session.actors[0].feet;
+    player_mut(&mut session).aim = Vec3::Y;
+    let before = player(&session).feet;
     session.advance_grand(
         ActorIntent {
             teleport: true,
-            aim: session.actors[0].aim,
+            aim: player(&session).aim,
             ..Default::default()
         },
         &world,
         geometry,
     );
-    assert_eq!(session.actors[0].feet, before);
-    assert_eq!(session.grand_progress().unwrap().teleport_cooldown, 0.0);
-    session.actors[0].aim = (Vec3::X * 6.0 - Vec3::Y * session.actors[0].eye().y).normalize();
+    assert_eq!(player(&session).feet, before);
+    assert_exact_f32(session.grand_progress().unwrap().teleport_cooldown, 0.0);
+    player_mut(&mut session).aim = (Vec3::X * 6.0 - Vec3::Y * player(&session).eye().y).normalize();
     session.advance_grand(
         ActorIntent {
             teleport: true,
-            aim: session.actors[0].aim,
+            aim: player(&session).aim,
             ..Default::default()
         },
         &world,
         geometry,
     );
-    assert!(session.actors[0].feet.x > 5.0);
-    assert_eq!(session.grand_progress().unwrap().teleport_cooldown, 6.0);
+    assert!(player(&session).feet.x > 5.0);
+    assert_exact_f32(session.grand_progress().unwrap().teleport_cooldown, 6.0);
 }
 
 #[test]
@@ -188,24 +224,26 @@ fn death_respawns_without_erasing_blessings_or_enemy_health() {
     let mut enemy = Actor::spawn(417, Vec3::new(8.0, SKIN, 0.0), Vec3::NEG_X);
     enemy.hp = 37.0;
     session.actors.push(enemy);
-    session.actors[0].hp = 0.0;
-    session.actors[0].feet = Vec3::new(5.0, SKIN, 0.0);
+    player_mut(&mut session).hp = 0.0;
+    player_mut(&mut session).feet = Vec3::new(5.0, SKIN, 0.0);
     session.advance_grand(ActorIntent::default(), &world, geometry);
-    assert!(session.actors[0].hp > 0.0);
-    assert_eq!(session.actors[1].hp, 37.0);
+    assert!(player(&session).hp > 0.0);
+    assert_exact_f32(session.actors.get(1).expect("retained enemy").hp, 37.0);
     assert_eq!(session.grand_progress().unwrap().deaths, 1);
-    assert!(session.actors[0].free_flight.is_none());
+    assert!(player(&session).free_flight.is_none());
     assert!(session.earth_construction(0));
 }
 
 #[test]
 fn configuration_before_reset_survives_new_run() {
     let (mut session, world, geometry) = fixture();
-    let mut tuning = GrandTuning::default();
-    tuning.earth_run = 1.4;
+    let tuning = GrandTuning {
+        earth_run: 1.4,
+        ..Default::default()
+    };
     session.configure_grand(tuning).unwrap();
     session.reset(5, &world, geometry);
-    assert_eq!(session.grand.as_ref().unwrap().tuning.earth_run, 1.4);
+    assert_exact_f32(session.grand.as_ref().unwrap().tuning.earth_run, 1.4);
     assert!(session.grand_progress().unwrap().shrines.is_empty());
 }
 
@@ -216,7 +254,7 @@ fn checkpoint_rejects_nonfinite_nested_movement_state() {
         world_id: "grand-test".into(),
         content_revision: "accepted-content".into(),
     };
-    session.actors[0].body.impulse_velocity = Vec3::splat(f32::NAN);
+    player_mut(&mut session).body.impulse_velocity = Vec3::splat(f32::NAN);
     assert!(session.encode_grand_checkpoint(&identity).is_err());
 }
 
@@ -256,8 +294,8 @@ fn dead_checkpoint_requests_last_shrine_instead_of_outside_world_corpse() {
     };
     let respawn = Vec3::new(14.0, 1.0, 5.0);
     session.grand.as_mut().unwrap().respawn_position = respawn;
-    session.actors[0].hp = 0.0;
-    session.actors[0].feet = Vec3::new(0.0, -1000.0, 0.0);
+    player_mut(&mut session).hp = 0.0;
+    player_mut(&mut session).feet = Vec3::new(0.0, -1000.0, 0.0);
     let bytes = session.encode_grand_checkpoint(&identity).unwrap();
     assert_eq!(
         ArenaSession::grand_checkpoint_position(&bytes, &identity).unwrap(),
@@ -269,9 +307,9 @@ fn dead_checkpoint_requests_last_shrine_instead_of_outside_world_corpse() {
 #[test]
 fn rebind_rejects_embedded_player_but_accepts_airborne_checkpoint() {
     let (mut session, mut world, geometry) = fixture();
-    session.actors[0].feet = Vec3::Y * 12.0;
+    player_mut(&mut session).feet = Vec3::Y * 12.0;
     assert!(session.rebind_grand_terrain(&world, geometry, 1).is_ok());
-    let feet = session.actors[0].feet;
+    let feet = player(&session).feet;
     let cell = geometry.voxel_at(feet + Vec3::Y * 0.2).unwrap();
     world.voxels.insert(cell, hex_core::SubstanceId(1));
     world.revision += 1;
@@ -325,13 +363,13 @@ fn all_120_shrine_orders_have_identical_cumulative_effects_at_every_prefix() {
         let base = session.player_tuning(&crate::ArenaTuning::default());
         let base_profile = base.player_profile.unwrap();
         let tuning = GrandTuning::default();
-        let hp = (session.actors[0].hp, session.actors[0].max_hp);
+        let hp = (player(&session).hp, player(&session).max_hp);
         let mut acquired = BTreeSet::new();
         for shrine in order.iter().copied() {
             world.anchors.clear();
             world
                 .anchors
-                .insert(shrine.anchor().into(), session.actors[0].feet);
+                .insert(shrine.anchor().into(), player(&session).feet);
             acquired.insert(shrine);
             // The second interaction must not stack the same reward again.
             for _ in 0..2 {
@@ -346,48 +384,48 @@ fn all_120_shrine_orders_have_identical_cumulative_effects_at_every_prefix() {
                 let actual = session.player_tuning(&crate::ArenaTuning::default());
                 let profile = actual.player_profile.unwrap();
                 let factor = |s, amount| if acquired.contains(&s) { amount } else { 1.0 };
-                assert_eq!(
+                assert_exact_f32(
                     actual.fireball_damage,
-                    base.fireball_damage * factor(ShrineId::Fire, tuning.fire_damage)
+                    base.fireball_damage * factor(ShrineId::Fire, tuning.fire_damage),
                 );
-                assert_eq!(
+                assert_exact_f32(
                     actual.projectile_speed,
-                    base.projectile_speed * factor(ShrineId::Air, tuning.air_projectiles)
+                    base.projectile_speed * factor(ShrineId::Air, tuning.air_projectiles),
                 );
-                assert_eq!(
+                assert_exact_f32(
                     profile.shield_projectile_speed,
                     base_profile.shield_projectile_speed
-                        * factor(ShrineId::Air, tuning.air_projectiles)
+                        * factor(ShrineId::Air, tuning.air_projectiles),
                 );
-                assert_eq!(
+                assert_exact_f32(
                     profile.fireball_radius,
                     base_profile.fireball_radius
                         * factor(ShrineId::Fire, tuning.fire_size)
-                        * factor(ShrineId::Plant, tuning.plant_size)
+                        * factor(ShrineId::Plant, tuning.plant_size),
                 );
-                assert_eq!(
+                assert_exact_f32(
                     actual.high_jump_height,
-                    base.high_jump_height * factor(ShrineId::Plant, tuning.plant_jump)
+                    base.high_jump_height * factor(ShrineId::Plant, tuning.plant_jump),
                 );
-                assert_eq!(
+                assert_exact_f32(
                     profile.walking_speed,
-                    base_profile.walking_speed * factor(ShrineId::Earth, tuning.earth_run)
+                    base_profile.walking_speed * factor(ShrineId::Earth, tuning.earth_run),
                 );
-                assert_eq!(
-                    session.actors[0].jump_scale,
-                    factor(ShrineId::Plant, tuning.plant_jump)
+                assert_exact_f32(
+                    player(&session).jump_scale,
+                    factor(ShrineId::Plant, tuning.plant_jump),
                 );
-                assert_eq!(
-                    session.actors[0].glider_scale,
-                    factor(ShrineId::Air, tuning.air_glider)
+                assert_exact_f32(
+                    player(&session).glider_scale,
+                    factor(ShrineId::Air, tuning.air_glider),
                 );
-                assert_eq!(
-                    session.actors[0].swim_scale,
-                    factor(ShrineId::Water, tuning.water_swim)
+                assert_exact_f32(
+                    player(&session).swim_scale,
+                    factor(ShrineId::Water, tuning.water_swim),
                 );
-                assert_eq!(
-                    session.actors[0].boat_scale,
-                    factor(ShrineId::Water, tuning.water_boat)
+                assert_exact_f32(
+                    player(&session).boat_scale,
+                    factor(ShrineId::Water, tuning.water_boat),
                 );
                 assert_eq!(
                     session.earth_construction(0),
@@ -398,7 +436,7 @@ fn all_120_shrine_orders_have_identical_cumulative_effects_at_every_prefix() {
                     session.player_fireball_mode() == crate::FireballMode::Explosive,
                     acquired.contains(&ShrineId::Fire)
                 );
-                assert_eq!((session.actors[0].hp, session.actors[0].max_hp), hp);
+                assert_eq!((player(&session).hp, player(&session).max_hp), hp);
                 assert_eq!(
                     session.grand_progress().unwrap().shrines.len(),
                     acquired.len()
@@ -433,8 +471,8 @@ fn teleport_uses_this_input_aim_crosses_gaps_and_obeys_cooldown() {
     world.revision += 1;
     world.full_rebuild = true;
     session.collision.refresh(&world, geometry);
-    session.actors[0].aim = Vec3::Y; // Deliberately stale, pointing away from ground.
-    let aim = (Vec3::X * 6.0 - session.actors[0].eye()).normalize();
+    player_mut(&mut session).aim = Vec3::Y; // Deliberately stale, pointing away from ground.
+    let aim = (Vec3::X * 6.0 - player(&session).eye()).normalize();
     session.advance_grand(
         ActorIntent {
             teleport: true,
@@ -444,22 +482,22 @@ fn teleport_uses_this_input_aim_crosses_gaps_and_obeys_cooldown() {
         &world,
         geometry,
     );
-    let target = session.actors[0].feet;
+    let target = player(&session).feet;
     assert!(
         target.x > 5.0,
         "visible support across the gap must be reachable"
     );
-    assert_eq!(session.grand_progress().unwrap().teleport_cooldown, 6.0);
+    assert_exact_f32(session.grand_progress().unwrap().teleport_cooldown, 6.0);
     session.advance_grand(
         ActorIntent {
             teleport: true,
-            aim: (Vec3::X * 9.0 - session.actors[0].eye()).normalize(),
+            aim: (Vec3::X * 9.0 - player(&session).eye()).normalize(),
             ..Default::default()
         },
         &world,
         geometry,
     );
-    assert_eq!(session.actors[0].feet, target);
+    assert_eq!(player(&session).feet, target);
     assert!((session.grand_progress().unwrap().teleport_cooldown - (6.0 - STEP)).abs() < 1e-6);
 }
 
@@ -470,12 +508,11 @@ fn teleport_refuses_wall_water_occupied_unloaded_and_out_of_range_ground() {
     for scenario in ["wall", "water", "occupied", "unloaded", "range", "locked"] {
         let (mut session, mut world, geometry) = fixture();
         session.grand.as_mut().unwrap().teleport_unlocked = scenario != "locked";
-        let aim = (Vec3::X * if scenario == "range" { 13.0 } else { 6.0 }
-            - session.actors[0].eye())
-        .normalize();
-        session.actors[0].aim = aim;
+        let aim = (Vec3::X * if scenario == "range" { 13.0 } else { 6.0 } - player(&session).eye())
+            .normalize();
+        player_mut(&mut session).aim = aim;
         let target = teleport_target(
-            &session.actors[0],
+            player(&session),
             &session.actors,
             &session.collision,
             &world,
@@ -510,7 +547,7 @@ fn teleport_refuses_wall_water_occupied_unloaded_and_out_of_range_ground() {
         world.revision += 1;
         world.full_rebuild = true;
         session.collision.refresh(&world, geometry);
-        let original = session.actors[0].feet;
+        let original = player(&session).feet;
         session.advance_grand(
             ActorIntent {
                 teleport: true,
@@ -520,10 +557,14 @@ fn teleport_refuses_wall_water_occupied_unloaded_and_out_of_range_ground() {
             &world,
             geometry,
         );
-        assert_eq!(session.actors[0].feet, original, "{scenario}");
+        assert_eq!(player(&session).feet, original, "{scenario}");
         assert_eq!(
-            session.grand_progress().unwrap().teleport_cooldown,
-            0.0,
+            session
+                .grand_progress()
+                .unwrap()
+                .teleport_cooldown
+                .to_bits(),
+            0.0_f32.to_bits(),
             "{scenario}"
         );
     }
@@ -533,7 +574,7 @@ fn teleport_refuses_wall_water_occupied_unloaded_and_out_of_range_ground() {
 fn grand_dragon_and_shadow_deaths_grant_xp_and_teleport_without_forest_rewards() {
     use crate::{EncounterTuning, ExpeditionRole, FireballMode};
     let (mut session, world, geometry) = fixture();
-    let hp = (session.actors[0].hp, session.actors[0].max_hp);
+    let hp = (player(&session).hp, player(&session).max_hp);
     for (id, role) in [
         (225, ExpeditionRole::Dragon),
         (226, ExpeditionRole::Dragon),
@@ -557,7 +598,7 @@ fn grand_dragon_and_shadow_deaths_grant_xp_and_teleport_without_forest_rewards()
     assert_eq!(session.progress().unwrap().dragons_defeated, 3);
     assert_eq!(session.player_fireball_mode(), FireballMode::ContactOnly);
     assert!(session.grand_progress().unwrap().teleport_unlocked);
-    assert_eq!((session.actors[0].hp, session.actors[0].max_hp), hp);
+    assert_eq!((player(&session).hp, player(&session).max_hp), hp);
     assert!(!session.is_forest_run());
     assert!(session
         .expedition_progress()
@@ -609,8 +650,8 @@ fn checkpoint_settlement_waits_for_matching_ack_and_replay_never_ticks() {
 fn grand_glide_start_does_not_enable_exploration_powered_flight() {
     let (mut session, world, geometry) = fixture();
     assert!(session.start_exploration_glide(Vec3::Y * 12.0, Vec3::X, &world, geometry));
-    assert!(session.actors[0].glider().unwrap().open);
-    assert!(session.actors[0].free_flight.is_none());
+    assert!(player(&session).glider().unwrap().open);
+    assert!(player(&session).free_flight.is_none());
 }
 
 #[test]
@@ -632,7 +673,7 @@ fn grand_initialization_never_grants_powered_exploration_flight() {
         &crate::ArenaTuning::default(),
     );
     assert!(session.encounter.initialized);
-    assert!(session.actors[0].free_flight.is_none());
+    assert!(player(&session).free_flight.is_none());
 }
 
 #[test]
@@ -673,8 +714,8 @@ fn teleport_rejects_implicit_ocean_above_visible_seabed() {
         sampler: std::sync::Arc::new(Ocean),
         wind: Default::default(),
     });
-    let before = session.actors[0].feet;
-    let aim = (Vec3::X * 6.0 - session.actors[0].eye()).normalize();
+    let before = player(&session).feet;
+    let aim = (Vec3::X * 6.0 - player(&session).eye()).normalize();
     assert!(world.liquids.is_empty());
     session.advance_grand(
         ActorIntent {
@@ -685,6 +726,6 @@ fn teleport_rejects_implicit_ocean_above_visible_seabed() {
         &world,
         geometry,
     );
-    assert_eq!(session.actors[0].feet, before);
-    assert_eq!(session.grand_progress().unwrap().teleport_cooldown, 0.0);
+    assert_eq!(player(&session).feet, before);
+    assert_exact_f32(session.grand_progress().unwrap().teleport_cooldown, 0.0);
 }

@@ -963,9 +963,11 @@ fn exploration_navigation_keys_use_published_overview_and_wind_without_progressi
             app.world().resource::<UxState>().wind_visible,
             "pause ignores V"
         );
+        assert!(app.world().resource::<ViewState>().paused);
         assert_eq!(
             app.world().get::<Node>(wind).expect("wind node").display,
-            Display::None
+            Display::Flex,
+            "the accepted wind field remains available for paused inspection"
         );
         app.world_mut().resource_mut::<ArenaReset>().generation += 1;
         settle(&mut app);

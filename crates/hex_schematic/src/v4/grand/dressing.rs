@@ -481,7 +481,9 @@ fn camp(g: &GrandCompiler, index: usize, root: WorldHex) -> Result<ObjectInstanc
                 add(&mut cells, p, lo, lo + 2, "stone");
             } else if r.abs() == 4 && q.abs() <= 3 {
                 add(&mut cells, p, lo, lo + 3, "timber");
-            } else if index % 2 == 0 && [(-5, 0), (-5, 1), (-4, -1), (5, -3)].contains(&(q, r)) {
+            } else if index.is_multiple_of(2)
+                && [(-5, 0), (-5, 1), (-4, -1), (5, -3)].contains(&(q, r))
+            {
                 let height = 7 + ((q - r + index as i64).rem_euclid(7)) as i32;
                 add(&mut cells, p, lo, lo + height, "stone");
             }
@@ -505,7 +507,7 @@ fn coastal_root(g: &GrandCompiler, x: f64, z: f64) -> Option<WorldHex> {
                 continue;
             }
             let p = WorldHex::new(hint.q + q, hint.r + r);
-            let depth = index(p).map_or(0, |i| g.coast[i]);
+            let depth = grid_value(&g.coast, p, 0);
             if !(2..=5).contains(&depth) {
                 continue;
             }

@@ -1712,9 +1712,11 @@ mod carved_object_tests {
         let actor = Actor::spawn(0, Vec3::new(-3.0, SKIN, 0.0), Vec3::X);
         let mut shot = projectile(&actor, Spell::Fireball, &tuning, 0, 45.0);
         shot.parameters.mode = crate::FireballMode::ContactOnly;
-        let mut session = ArenaSession::default();
-        session.actors = vec![actor];
-        session.projectiles = vec![shot];
+        let mut session = ArenaSession {
+            actors: vec![actor],
+            projectiles: vec![shot],
+            ..Default::default()
+        };
         session.collision.refresh(&view, geometry);
         let mut commands = CommandsOut::default();
         for _ in 0..60 {
