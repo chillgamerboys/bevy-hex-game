@@ -216,6 +216,23 @@ fn bay(
     b: Bay,
     encounter_columns: &std::collections::BTreeSet<WorldHex>,
 ) -> Result<ObjectInstance, ContractError> {
+    let mut object = bay_without_finish(g, index, b, encounter_columns)?;
+    for column in &mut object.occupancy {
+        for run in &mut column.runs {
+            if run.material == "stone" {
+                run.material = "limestone".into();
+            }
+        }
+    }
+    Ok(object)
+}
+
+fn bay_without_finish(
+    g: &GrandCompiler,
+    index: usize,
+    b: Bay,
+    encounter_columns: &std::collections::BTreeSet<WorldHex>,
+) -> Result<ObjectInstance, ContractError> {
     let mut cells = Cells::new();
     let base = b.floor + 1;
     // A wall bay has visible depth: shelves sit one hex behind the piers.
@@ -315,6 +332,35 @@ pub(super) fn compose(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_pier_finish_preserves_complete_arcade_occupancy_and_grounding() {
+        let mut source: GrandSpec = ron::from_str(include_str!(
+            "../../../../../../assets/config/v4/grand-v4/world.ron"
+        ))
+        .expect("Grand source");
+        source.full_dressing = false;
+        let compiler = GrandCompiler::new(source).expect("terrain");
+        let encounter_columns = std::collections::BTreeSet::new();
+        let mut recolored = 0;
+        for (index, spec) in BAYS.iter().copied().enumerate() {
+            let before = bay_without_finish(&compiler, index, spec, &encounter_columns)
+                .expect("original arcade");
+            let mut finished =
+                bay(&compiler, index, spec, &encounter_columns).expect("finished arcade");
+            for column in &mut finished.occupancy {
+                for run in &mut column.runs {
+                    if run.material == "limestone" {
+                        run.material = "stone".into();
+                        recolored += 1;
+                    }
+                }
+            }
+            assert_eq!(finished, before, "arcade {index} changed beyond pier color");
+        }
+        assert!(recolored > 0);
+    }
+
     #[test]
     fn complete_dressing_has_compatible_materials_in_every_shared_chunk() {
         let source: GrandSpec = ron::from_str(include_str!(

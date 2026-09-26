@@ -8,6 +8,7 @@ mod biomes;
 mod dressing;
 mod flow;
 mod forest_overview;
+mod library_finish;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
 mod sites;
@@ -304,11 +305,17 @@ impl GrandCompiler {
         shadow_cavity(p)
     }
     /// Compile one exact column with carved interiors and optional liquid.
+    pub fn column(&self, p: WorldHex) -> (ColumnData, Option<LiquidColumn>) {
+        let (mut column, liquid) = self.column_without_library_finish(p);
+        library_finish::floor(p, &mut column.runs);
+        (column, liquid)
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "Authored finite columns are ordered, nonnegative compact intervals within MAX_LEVEL; sea filling cannot overflow those validated geometry bounds."
     )]
-    pub fn column(&self, p: WorldHex) -> (ColumnData, Option<LiquidColumn>) {
+    fn column_without_library_finish(&self, p: WorldHex) -> (ColumnData, Option<LiquidColumn>) {
         let s = self.surface(p);
         let top = s.level + 1;
         let mut runs = vec![
@@ -569,6 +576,9 @@ fn palette() -> Vec<MaterialSpec> {
         ("reinforced_stone", [115, 124, 134, 255]),
         ("basalt", [62, 53, 57, 255]),
         ("slate", [83, 99, 123, 255]),
+        // Library paving and existing piers; the shared policy aliases this
+        // presentation material to ordinary stone, including durability.
+        ("limestone", [194, 179, 148, 255]),
         ("soil", [87, 75, 58, 255]),
         ("dirt", [87, 75, 58, 255]),
         ("moss", [66, 110, 70, 255]),

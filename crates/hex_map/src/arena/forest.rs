@@ -794,6 +794,19 @@ mod tests {
     use super::*;
     use hex_world_contracts::{QueryResult, WorldQuery};
 
+    #[test]
+    fn library_finishes_keep_the_exact_ordinary_stone_policy() {
+        let content = load_content().expect("accepted content");
+        let stone = material_id("stone", &content.substances).expect("ordinary stone");
+        for finish in ["limestone", "slate"] {
+            assert_eq!(
+                material_id(finish, &content.substances).expect("library finish"),
+                stone,
+                "{finish} must retain stone collision, durability, and edit semantics"
+            );
+        }
+    }
+
     fn prop_fixture(
         asset: &str,
         turn: u8,
