@@ -19,7 +19,7 @@ use hex_core::{
 };
 
 type Waypoint = (i32, i32, i32);
-type LocalRoute = (u8, Species, u16, i32, i32);
+type LocalRoute = (hex_arena::ActorId, Species, u16, i32, i32);
 
 // Accepted seeds: Fort 640367719 and Seven Regions 703700113. These explicit
 // cell centers were discovered once and replayed in both directions. The tests
