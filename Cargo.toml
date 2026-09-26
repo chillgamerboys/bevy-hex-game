@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["crates/*"]
 default-members = ["crates/hex_game"]
+exclude = ["vendor/aeronet_transport"]
 
 # Dependency versions live here so the crates can't drift apart. Each crate
 # opts in with `foo = { workspace = true }` and states its own features.
@@ -229,3 +230,8 @@ opt-level = 1
 inherits = "dev"
 debug = "line-tables-only"
 codegen-units = 4
+
+# Keep Bevy 0.19's transport API while using the fixed ringbuf release. Remove
+# this patch when a compatible Aeronet release carries the dependency update.
+[patch.crates-io]
+aeronet_transport = { path = "vendor/aeronet_transport" }
