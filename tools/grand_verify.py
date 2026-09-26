@@ -71,11 +71,11 @@ def require_same_source(before: dict[str, str], after: dict[str, str], phase: st
         )
 
 
-def build_test(target: Path, output: Path, environment: dict[str, str]) -> Path:
+def build_test(target: Path, output: Path, environment: dict[str, str], profile: str) -> Path:
     command = [
         "cargo", "test", "-p", "hex_game", "--lib",
         "--features", "arena-prototype,test-support", "--offline", "--no-run",
-        "--message-format=json", "--target-dir", str(target),
+        "--message-format=json", "--target-dir", str(target), "--profile", profile,
     ]
     with (output / "build.jsonl").open("w") as stdout, (output / "build.stderr.log").open("w") as stderr:
         result = subprocess.run(command, cwd=ROOT, env=environment, stdout=stdout, stderr=stderr, check=False)
@@ -215,6 +215,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", required=True, type=Path, help="Explicit actual Grand compiled package directory")
     parser.add_argument("--target-dir", required=True, type=Path, help="Existing shared Cargo target (coordinate the build slot)")
+    parser.add_argument("--cargo-profile", choices=("dev", "ci"), default="dev", help="Reuse the existing development or CI test profile")
     parser.add_argument("--output", type=Path, help="Fresh output directory; must not already exist")
     parser.add_argument("--case", action="append", choices=("land", "boat", "air"), dest="cases")
     parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
@@ -257,13 +258,14 @@ def main() -> None:
         "scope": "Production app/world/gameplay checkpoint composition; no window, pixels, or native motion.",
         "circuit_requested": arguments.circuit,
         "admissions_requested": arguments.admissions,
+        "cargo_profile": arguments.cargo_profile,
         "cases": [],
     }
     report_path = output / "report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     try:
         try:
-            binary = build_test(target, output, environment)
+            binary = build_test(target, output, environment, arguments.cargo_profile)
         finally:
             provenance["after_build"] = source_snapshot()
             provenance["build_changed_fields"] = changed_source(before_build, provenance["after_build"])
