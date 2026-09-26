@@ -4,6 +4,8 @@
 Build the current source once through Cargo, then launch its exact test artifact
 as independent writer/reader processes for land, moving boat, and gliding flight.
 Every case has explicit disposable HEX_GAME_DATA_DIR storage and a real package.
+With --circuit, the same current-source binary also performs three streaming loops
+with CPU terrain presentation, checking typed residency and sparse-edit retention.
 This checks persistence, not visual quality or native control feel.
 """
 from __future__ import annotations
@@ -12,6 +14,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -20,6 +23,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST = "arena::grand::tests::process_checkpoint_child"
+CIRCUIT_TEST = "arena::grand::tests::circuit_tests::actual_grand_streaming_circuit"
 
 
 def git(*arguments: str) -> str:
@@ -82,14 +86,60 @@ def execute_case(binary: Path, mode: str, output: Path, environment: dict[str, s
     return receipt
 
 
+def execute_circuit(binary: Path, output: Path, environment: dict[str, str], timeout: float) -> dict:
+    data = output / "circuit"
+    data.mkdir()
+    (data / "grand-verification-only").write_text("Disposable streaming-circuit acceptance.\n")
+    child = environment | {"HEX_GAME_DATA_DIR": str(data)}
+    for key in ("HEX_GRAND_VERIFY_MODE", "HEX_GRAND_VERIFY_PHASE"):
+        child.pop(key, None)
+    command = [str(binary), CIRCUIT_TEST, "--exact", "--ignored", "--nocapture", "--test-threads=1"]
+    log_path = data / "circuit.log"
+    with log_path.open("w") as log:
+        result = subprocess.run(command, cwd=ROOT, env=child, stdout=log, stderr=subprocess.STDOUT,
+                                timeout=timeout, check=False)
+    if result.returncode:
+        raise RuntimeError(f"Streaming circuit failed; see {log_path}")
+    log_text = log_path.read_text()
+    if "running 1 test" not in log_text or "GRAND_CIRCUIT_PASS " not in log_text:
+        raise RuntimeError("Exact streaming-circuit test did not execute to its completion marker")
+    receipt = json.loads((data / "circuit.json").read_text())
+    if receipt.get("kind") != "grand-streaming-circuit-v1" or receipt.get("status") != "PASS":
+        raise RuntimeError("Streaming-circuit receipt is missing its successful typed result")
+    circuits = receipt.get("circuits", 0)
+    if circuits < 3 or any(receipt.get(key, 0) < circuits for key in ("old_area_evictions", "ready_revisits")):
+        raise RuntimeError("Streaming-circuit receipt does not prove three eviction/revisit loops")
+    if receipt.get("edited_detail_published_before_eviction") is not True:
+        raise RuntimeError("Streaming-circuit receipt did not prove edited detail existed before eviction")
+    if receipt.get("completed_stops", 0) < 31 or len(receipt.get("samples", [])) != receipt["completed_stops"]:
+        raise RuntimeError("Streaming-circuit receipt is missing authored stops")
+    expected = {"source_chunks": 512, "finite_sources": 512, "detailed_chunks": 256, "source_jobs": 2}
+    if receipt.get("limits") != expected:
+        raise RuntimeError("Streaming-circuit receipt changed the accepted residency limits")
+    highwater = receipt["highwater"]
+    for observed, limit in (("resident_chunks", 512), ("finite_sources", 512),
+                            ("detailed_chunks", 256), ("in_flight_jobs", 2)):
+        if not 0 <= highwater[observed] <= limit:
+            raise RuntimeError(f"Streaming circuit exceeded its {observed} limit")
+    if highwater["detailed_chunks"] == 0 or highwater["observed_frames"] == 0:
+        raise RuntimeError("Streaming circuit did not exercise real terrain presentation")
+    if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
+        raise RuntimeError("Streaming-circuit receipt used a different immutable package")
+    return receipt
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", required=True, type=Path, help="Explicit actual Grand compiled package directory")
     parser.add_argument("--target-dir", required=True, type=Path, help="Existing shared Cargo target (coordinate the build slot)")
     parser.add_argument("--output", type=Path, help="Fresh output directory; must not already exist")
     parser.add_argument("--case", action="append", choices=("land", "boat", "air"), dest="cases")
+    parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
+    parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")
     arguments = parser.parse_args()
+    if any(not math.isfinite(value) or value <= 0 for value in (arguments.timeout, arguments.circuit_timeout)):
+        parser.error("timeouts must be positive finite seconds")
     package = arguments.package.resolve(strict=True)
     if not package.is_dir():
         parser.error("--package must be a compiled world directory")
@@ -116,6 +166,7 @@ def main() -> None:
         "head": git("rev-parse", "HEAD"), "source_status": git("status", "--short"),
         "started_utc": datetime.now(timezone.utc).isoformat(), "package": str(package),
         "scope": "Production app/world/gameplay checkpoint composition; no window, pixels, or native motion.",
+        "circuit_requested": arguments.circuit,
         "cases": [],
     }
     report_path = output / "report.json"
@@ -126,6 +177,8 @@ def main() -> None:
         for case in arguments.cases or ("land", "boat", "air"):
             report["cases"].append(execute_case(binary, case, output, environment, arguments.timeout))
             report_path.write_text(json.dumps(report, indent=2) + "\n")
+        if arguments.circuit:
+            report["circuit"] = execute_circuit(binary, output, environment, arguments.circuit_timeout)
         report["status"] = "PASS"
     except Exception as error:
         report["status"] = "FAIL"

@@ -16,6 +16,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "circuit_tests.rs"]
+mod circuit_tests;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Receipt {
     mode: String,
@@ -92,6 +95,10 @@ fn pump_until(app: &mut App, reason: &str, ready: impl Fn(&World) -> bool) {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "The actual-package fixture requires valid authored ocean geometry before any marine state can be verified."
+)]
 fn publish_ocean(world: &mut World) {
     let map = Arc::clone(&world.resource::<StreamedArena>().overview);
     let geometry = *world.resource::<ArenaVoxelGeometry>();
@@ -137,18 +144,23 @@ fn step(app: &mut App, intent: ActorIntent) {
     app.world_mut().run_schedule(ArenaTick);
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "The integration fixture must contain the production human actor before relocating its streaming interest."
+)]
 fn relocate(app: &mut App, position: Vec3) {
     app.world_mut().resource_mut::<ViewState>().pause();
-    let mut session = app.world_mut().resource_mut::<ArenaSession>();
-    let player = session
-        .actors
-        .iter_mut()
-        .find(|actor| actor.id == 0)
-        .expect("real human");
-    player.feet = position;
-    player.previous_feet = position;
-    player.grounded = false;
-    drop(session);
+    {
+        let mut session = app.world_mut().resource_mut::<ArenaSession>();
+        let player = session
+            .actors
+            .iter_mut()
+            .find(|actor| actor.id == 0)
+            .expect("real human");
+        player.feet = position;
+        player.previous_feet = position;
+        player.grounded = false;
+    }
     app.world_mut()
         .resource_mut::<ArenaStreamInterest>()
         .position = position;
@@ -157,10 +169,14 @@ fn relocate(app: &mut App, position: Vec3) {
     });
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "Missing authored actors, shrine sites or acknowledged terrain damage must fail this persistence fixture immediately."
+)]
 fn prepare_progress_and_damage(app: &mut App) -> (TilePos, TilePos, u8, u8) {
     // Admit a real authored party; never inject enemy IDs or incomplete rosters.
     let geometry = *app.world().resource::<ArenaVoxelGeometry>();
-    let site = app
+    let deployment = app
         .world()
         .resource::<ArenaTerrainView>()
         .expedition
@@ -170,18 +186,32 @@ fn prepare_progress_and_damage(app: &mut App) -> (TilePos, TilePos, u8, u8) {
         .get("grand_goblin_01")
         .expect("authored goblin party")
         .deployment
-        .preferred;
+        .clone();
+    let site = deployment.preferred;
     relocate(app, site.coord.to_world(geometry.top(site) + 0.02));
+    // relocate guarantees the player's immediate support only. Party admission
+    // requires the entire authored disk, which streams asynchronously.
+    pump_until(app, "complete authored goblin deployment", |world| {
+        let terrain = world.resource::<ArenaTerrainView>();
+        let residency = terrain.residency.as_ref().expect("finite residency");
+        deployment
+            .surfaces
+            .iter()
+            .all(|position| residency.at(position.coord, geometry) == ArenaAvailability::Ready)
+    });
     for _ in 0..12 {
         step(app, ActorIntent::default());
     }
+    let session = app.world().resource::<ArenaSession>();
+    let terrain = app.world().resource::<ArenaTerrainView>();
     assert!(
-        app.world()
-            .resource::<ArenaSession>()
-            .actors
-            .iter()
-            .any(|actor| actor.id != 0),
-        "real party admission"
+        session.actors.iter().any(|actor| actor.id != 0),
+        "real party admission after complete residency: notice={}, tick={}, preferred_solid={}, compact_columns={}, explicit_voxels={}",
+        session.notice,
+        session.tick,
+        terrain.solid_at(site).is_some(),
+        terrain.columns.len(),
+        terrain.voxels.len(),
     );
     if let Some(enemy) = app
         .world_mut()
@@ -232,10 +262,9 @@ fn prepare_progress_and_damage(app: &mut App) -> (TilePos, TilePos, u8, u8) {
         .map(|span| TilePos::new(span.bottom.coord, span.top_level - 1))
         .take(2)
         .collect();
-    let [carved, damaged] = candidates.as_slice() else {
-        panic!("package needs two destructible stone columns for the save fixture")
-    };
-    let (carved, damaged) = (*carved, *damaged);
+    let mut candidates = candidates.into_iter();
+    let carved = candidates.next().expect("first destructible terrain cell");
+    let damaged = candidates.next().expect("second destructible terrain cell");
     app.world_mut()
         .write_message(TerrainEdit::Clear { pos: carved });
     app.world_mut().write_message(TerrainImpact {
@@ -260,8 +289,19 @@ fn prepare_progress_and_damage(app: &mut App) -> (TilePos, TilePos, u8, u8) {
     (carved, damaged, health.remaining, health.maximum)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "The fixture requires a valid authored pose for its selected movement case and must reject unsupported externally selected modes."
+)]
 fn prepare_mode(app: &mut App, mode: &str) {
-    let start = app.world().resource::<ArenaTerrainView>().spawns[0];
+    let start = app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .spawns
+        .first()
+        .copied()
+        .expect("authored player spawn");
     match mode {
         "land" => {
             relocate(app, start);
@@ -274,18 +314,20 @@ fn prepare_mode(app: &mut App, mode: &str) {
         }
         "boat" => {
             let map = Arc::clone(&app.world().resource::<StreamedArena>().overview);
+            let width = usize::try_from(map.width).expect("validated overview width");
+            let [origin_x, origin_z] = map.origin_xz;
             let coarse = map
                 .bed_heights
                 .iter()
                 .enumerate()
                 .filter(|(_, height)| **height < map.sea_level - 5.0)
                 .map(|(index, _)| {
-                    let x = (index % map.width as usize) as f32;
-                    let z = (index / map.width as usize) as f32;
+                    let x = f32::from(u16::try_from(index % width).expect("bounded overview x"));
+                    let z = f32::from(u16::try_from(index / width).expect("bounded overview z"));
                     Vec3::new(
-                        map.origin_xz[0] + x * map.spacing,
+                        origin_x + x * map.spacing,
                         map.sea_level,
-                        map.origin_xz[1] + z * map.spacing,
+                        origin_z + z * map.spacing,
                     )
                 })
                 .min_by(|a, b| {
@@ -303,7 +345,8 @@ fn prepare_mode(app: &mut App, mode: &str) {
                     (geometry.top(TilePos::new(span.bottom.coord, span.top_level)) - map.sea_level)
                         .abs()
                         < 0.01
-                        && (span.top_level - span.bottom.level) as f32 * geometry.level_height > 3.0
+                        && u16::try_from(span.top_level - span.bottom.level)
+                            .is_ok_and(|depth| f32::from(depth) * geometry.level_height > 3.0)
                 })
                 .map(|span| span.bottom.coord.to_world(map.sea_level - 0.2))
                 .min_by(|a, b| {
@@ -346,6 +389,10 @@ fn prepare_mode(app: &mut App, mode: &str) {
     player.hp = player.max_hp - 7.0;
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "Movement acceptance requires the production human actor to exist."
+)]
 fn assert_mode(world: &World, mode: &str) {
     let player = world
         .resource::<ArenaSession>()
@@ -371,6 +418,10 @@ fn assert_mode(world: &World, mode: &str) {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "An owner export failure must fail the complete-state equality assertion rather than omit a partition."
+)]
 fn world_records(world: &World) -> BTreeMap<String, u64> {
     hex_map::arena::checkpoint::export_records(world)
         .expect("world export")
@@ -381,6 +432,10 @@ fn world_records(world: &World) -> BTreeMap<String, u64> {
         .collect()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "This acceptance phase must produce and reopen a complete real application save or fail with the precise missing boundary."
+)]
 fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
     assert!(
         !slot_path().exists(),
@@ -551,6 +606,10 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         .expect("all owner bodies durable");
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "This fresh-process acceptance phase must restore every required owner and write its verification receipt or fail immediately."
+)]
 fn read_phase(app: &mut App, mode: &str, root: &std::path::Path) {
     let receipt: Receipt =
         serde_json::from_slice(&std::fs::read(root.join("expected.json")).expect("writer receipt"))
