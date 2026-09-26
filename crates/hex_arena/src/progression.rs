@@ -283,8 +283,10 @@ impl ArenaSession {
                 }
                 if g.has(ShrineId::Plant) {
                     profile.fireball_radius *= g.tuning.plant_size;
-                    profile.shield_dimensions.0 += 1;
-                    profile.shield_dimensions.1 += 1;
+                    profile.shield_dimensions.0 =
+                        grand_dimension(profile.shield_dimensions.0, g.tuning.plant_size);
+                    profile.shield_dimensions.1 =
+                        grand_dimension(profile.shield_dimensions.1, g.tuning.plant_size);
                 }
             }
         }
@@ -315,11 +317,56 @@ impl ArenaSession {
         Some(UpgradePreview {
             rank,
             max_ranks: stat.max_ranks(),
-            before: state.upgrade_value(stat, rank),
+            before: self.grand_upgrade_value(stat, state.upgrade_value(stat, rank)),
             after: state
                 .can_upgrade(stat)
-                .then(|| state.upgrade_value(stat, rank + 1)),
+                .then(|| self.grand_upgrade_value(stat, state.upgrade_value(stat, rank + 1))),
         })
+    }
+
+    fn grand_upgrade_value(&self, stat: UpgradeStat, value: UpgradeValue) -> UpgradeValue {
+        let Some(g) = &self.grand else {
+            return value;
+        };
+        use crate::ShrineId;
+        match value {
+            UpgradeValue::Dimensions(w, h)
+                if stat == UpgradeStat::ShieldSize && g.has(ShrineId::Plant) =>
+            {
+                UpgradeValue::Dimensions(
+                    grand_dimension(w, g.tuning.plant_size),
+                    grand_dimension(h, g.tuning.plant_size),
+                )
+            }
+            UpgradeValue::Scalar(mut scalar) => {
+                if stat == UpgradeStat::WalkingSpeed && g.has(ShrineId::Earth) {
+                    scalar *= g.tuning.earth_run;
+                }
+                if stat == UpgradeStat::FireballDamage && g.has(ShrineId::Fire) {
+                    scalar *= g.tuning.fire_damage;
+                }
+                if matches!(
+                    stat,
+                    UpgradeStat::ProjectileSpeed | UpgradeStat::ShieldProjectileSpeed
+                ) && g.has(ShrineId::Air)
+                {
+                    scalar *= g.tuning.air_projectiles;
+                }
+                if stat == UpgradeStat::HighJumpHeight && g.has(ShrineId::Plant) {
+                    scalar *= g.tuning.plant_jump;
+                }
+                if stat == UpgradeStat::FireballSize {
+                    if g.has(ShrineId::Fire) {
+                        scalar *= g.tuning.fire_size;
+                    }
+                    if g.has(ShrineId::Plant) {
+                        scalar *= g.tuning.plant_size;
+                    }
+                }
+                UpgradeValue::Scalar(scalar)
+            }
+            _ => value,
+        }
     }
 
     /// Whether one available level reward can improve this field now.
@@ -435,20 +482,7 @@ impl ArenaSession {
                 .get(&actor.id)
                 .is_some_and(|tick| self.tick.saturating_sub(*tick) <= 1200)
             {
-                let xp = if self.grand.is_some() {
-                    match entry.species {
-                        Species::Goblin => 1,
-                        Species::Shaman => 5,
-                        Species::Dragon => 20,
-                        Species::Wisp => 3,
-                        Species::Golem => 25,
-                        Species::Worm => 10,
-                        Species::Shadow => 50,
-                        Species::Human => 0,
-                    }
-                } else {
-                    entry.xp()
-                };
+                let xp = entry.xp();
                 self.player_knowledge.credited_defeat(actor.id);
                 state.snapshot.xp += xp;
                 state.snapshot.total_xp += xp;
@@ -593,3 +627,11 @@ fn level_threshold(level: u32) -> u32 {
 
 #[cfg(test)]
 mod tests;
+
+// Validated authored multiplier and the existing small integer footprint ladder.
+fn grand_dimension(base: i32, scale: f32) -> i32 {
+    let target = f32::from(u16::try_from(base).unwrap_or(0)) * scale;
+    (base..=base.saturating_mul(2))
+        .find(|n| f32::from(u16::try_from(*n).unwrap_or(u16::MAX)) >= target)
+        .unwrap_or(base)
+}

@@ -773,3 +773,29 @@ fn reward_survives_complete_support_loss_near_the_living_player_without_healing(
     assert!((session.player_tuning(&tuning).fireball_damage - 40.0).abs() < 0.001);
     assert!((session.actors.first().expect("player").hp - 17.0).abs() < 0.001);
 }
+
+#[test]
+fn downhill_death_settles_on_actual_nearby_ground_outside_authored_shelves() {
+    let (mut session, mut view, geometry, materials, _) = start();
+    let ground = TilePos::new(HexCoord::from_axial(200, 0), 0);
+    for coord in ground.coord.within_radius(3) {
+        view.voxels.insert(TilePos::new(coord, 0), materials.stone);
+    }
+    view.revision += 1;
+    session.collision.refresh(&view, geometry);
+    let troll = session
+        .actors
+        .iter_mut()
+        .find(|a| a.expedition_role() == Some(ExpeditionRole::Troll))
+        .expect("Troll");
+    troll.feet = ground.coord.to_world(geometry.top(ground) + 1.0);
+    kill_role(&mut session, ExpeditionRole::Troll, false);
+    session.advance_milestones(&view, geometry);
+    let point = Vec3::from_array(
+        milestone(&session, ExpeditionReward::TrollDamage)
+            .available_position
+            .expect("nearby grounded orb"),
+    );
+    assert!(point.with_y(0.0).distance(ground.coord.to_world(0.0)) < 0.1);
+    assert!(point.y < geometry.top(ground) + 1.0);
+}

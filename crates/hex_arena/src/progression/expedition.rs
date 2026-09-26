@@ -282,6 +282,18 @@ impl ArenaSession {
                 drop.max(1.0),
             )
             .filter(|feet| self.reward_standing_pose(*feet, world, geometry))
+            .filter(|feet| {
+                // Prefer the real downhill floor, but do not strand a pickup on
+                // an isolated canopy above the nearest authored walking route.
+                candidates
+                    .iter()
+                    .min_by(|a, b| {
+                        (a.with_y(0.0) - feet.with_y(0.0))
+                            .length_squared()
+                            .total_cmp(&(b.with_y(0.0) - feet.with_y(0.0)).length_squared())
+                    })
+                    .is_none_or(|route| feet.y <= route.y + geometry.level_height)
+            })
         {
             return Some(ground + Vec3::Y * ORB_HEIGHT);
         }

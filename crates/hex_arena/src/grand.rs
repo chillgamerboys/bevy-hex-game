@@ -126,6 +126,7 @@ pub(crate) struct GrandState {
     pub(super) discovered: BTreeSet<ShrineId>,
     pub(super) last_shrine: Option<ShrineId>,
     pub(super) start: Vec3,
+    pub(crate) respawn_position: Vec3,
     pub(super) teleport_unlocked: bool,
     pub(super) teleport_cooldown: f32,
     pub(super) deaths: u32,
@@ -141,6 +142,7 @@ impl GrandState {
             discovered: BTreeSet::new(),
             last_shrine: None,
             start,
+            respawn_position: start,
             teleport_unlocked: false,
             teleport_cooldown: 0.0,
             deaths: 0,
@@ -202,6 +204,9 @@ impl ArenaSession {
         interests.extend(self.projectiles.iter().map(|p| p.position));
         interests.extend(self.pending_walls.iter().map(|w| w.center));
         interests.extend(g.respawn_interest);
+        if player.hp <= 0.0 {
+            interests.push(g.respawn_position);
+        }
         interests.extend(
             g.sites
                 .values()
@@ -311,6 +316,7 @@ impl ArenaSession {
                             self.notice = format!("{shrine:?} shrine: blessing acquired.");
                         }
                         grand.last_shrine = Some(shrine);
+                        grand.respawn_position = position;
                     } else if !grand.acquired.contains(&shrine) {
                         self.notice = format!("Press R to activate the {shrine:?} shrine.");
                     }
@@ -323,6 +329,7 @@ impl ArenaSession {
                     teleport_target(player, &self.actors, &self.collision, world, geometry)
                 {
                     if let Some(player) = self.actors.get_mut(player_index) {
+                        crate::marine::land_teleport(player);
                         player.feet = target;
                         player.previous_feet = target;
                         player.body = Default::default();

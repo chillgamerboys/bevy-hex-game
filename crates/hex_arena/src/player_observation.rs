@@ -612,8 +612,7 @@ impl PlayerObservation {
         let depth = (point - self.origin).dot(self.direction.normalize());
         self.origin.distance_squared(point) <= range * range
             && self.contains(point, diameter)
-            && diameter * self.viewport_height / (2.0 * depth * (self.vertical_fov * 0.5).tan())
-                >= pixels
+            && diameter * 1080.0 / (2.0 * depth * (self.vertical_fov * 0.5).tan()) >= pixels
     }
 
     fn valid(self) -> bool {

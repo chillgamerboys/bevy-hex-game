@@ -769,7 +769,7 @@ fn landmark_distance_is_euclidean_and_projected_size_is_resolution_independent()
         (LandmarkKind::Troll, 60.0),
         (LandmarkKind::Shadow, 60.0),
         (LandmarkKind::Golem, 60.0),
-        (LandmarkKind::Fountain, 35.0),
+        (LandmarkKind::Fountain, 100.0),
     ] {
         assert!(observation.landmark_contains(Vec3::X * range, 8.0, kind));
         assert!(!observation.landmark_contains(Vec3::X * (range + 0.01), 8.0, kind));

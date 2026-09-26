@@ -60,6 +60,7 @@ fn validate(session: &ArenaSession) -> Result<(), String> {
         .ok_or("Checkpoint is not a Grand run")?;
     grand.tuning.validate()?;
     if !grand.start.is_finite()
+        || !grand.respawn_position.is_finite()
         || !grand.teleport_cooldown.is_finite()
         || !(0.0..=6.0).contains(&grand.teleport_cooldown)
         || session.progression.is_none()
@@ -190,7 +191,16 @@ impl ArenaSession {
             .actors
             .iter()
             .find(|a| a.id == 0)
-            .map(|a| a.feet)
+            .map(|a| {
+                if a.hp > 0.0 {
+                    a.feet
+                } else {
+                    session
+                        .grand
+                        .as_ref()
+                        .map_or(a.feet, |g| g.respawn_position)
+                }
+            })
             .ok_or_else(|| "Grand checkpoint has no player".into())
     }
 

@@ -147,7 +147,7 @@ impl ArenaSession {
         view: &ArenaTerrainView,
         geometry: ArenaVoxelGeometry,
     ) -> bool {
-        if !self.is_exploration()
+        if !(self.is_exploration() || self.is_grand_run())
             || !feet.is_finite()
             || !heading.is_finite()
             || heading.with_y(0.0).length_squared() < 0.01
@@ -889,3 +889,18 @@ pub(crate) fn tick_or_wait(
 
 #[cfg(test)]
 mod tests;
+
+/// Teleport lands on admitted dry ground without retaining a deployed hull or water drift.
+pub(crate) fn land_teleport(actor: &mut Actor) {
+    if let Some(state) = &mut actor.marine {
+        state.boat.active = false;
+        state.boat.velocity = Vec3::ZERO;
+        state.swim.active = false;
+        state.swim.submerged = false;
+        state.velocity = Vec3::ZERO;
+        state.reset_wave_motion();
+    }
+    if let Some(flight) = &mut actor.free_flight {
+        *flight = Default::default();
+    }
+}

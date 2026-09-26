@@ -205,3 +205,60 @@ fn configuration_before_reset_survives_new_run() {
     assert_eq!(session.grand.as_ref().unwrap().tuning.earth_run, 1.4);
     assert!(session.grand_progress().unwrap().shrines.is_empty());
 }
+
+#[test]
+fn checkpoint_rejects_nonfinite_nested_movement_state() {
+    let (mut session, _, _) = fixture();
+    let identity = GrandCheckpointIdentity {
+        world_id: "grand-test".into(),
+        content_revision: "accepted-content".into(),
+    };
+    session.actors[0].body.impulse_velocity = Vec3::splat(f32::NAN);
+    assert!(session.encode_grand_checkpoint(&identity).is_err());
+}
+
+#[test]
+fn grand_upgrade_previews_include_cumulative_shrine_bonuses() {
+    let (mut session, _, _) = fixture();
+    session
+        .grand
+        .as_mut()
+        .unwrap()
+        .acquired
+        .extend(ShrineId::ALL);
+    let tuning = session.player_tuning(&crate::ArenaTuning::default());
+    let preview = session
+        .upgrade_preview(crate::UpgradeStat::FireballDamage)
+        .unwrap();
+    assert_eq!(
+        preview.before,
+        crate::UpgradeValue::Scalar(tuning.fireball_damage)
+    );
+    let preview = session
+        .upgrade_preview(crate::UpgradeStat::ShieldSize)
+        .unwrap();
+    let size = tuning.player_profile.unwrap().shield_dimensions;
+    assert_eq!(
+        preview.before,
+        crate::UpgradeValue::Dimensions(size.0, size.1)
+    );
+}
+
+#[test]
+fn dead_checkpoint_requests_last_shrine_instead_of_outside_world_corpse() {
+    let (mut session, _, _) = fixture();
+    let identity = GrandCheckpointIdentity {
+        world_id: "grand-test".into(),
+        content_revision: "accepted-content".into(),
+    };
+    let respawn = Vec3::new(14.0, 1.0, 5.0);
+    session.grand.as_mut().unwrap().respawn_position = respawn;
+    session.actors[0].hp = 0.0;
+    session.actors[0].feet = Vec3::new(0.0, -1000.0, 0.0);
+    let bytes = session.encode_grand_checkpoint(&identity).unwrap();
+    assert_eq!(
+        ArenaSession::grand_checkpoint_position(&bytes, &identity).unwrap(),
+        respawn
+    );
+    assert!(session.grand_actor_interests().contains(&respawn));
+}

@@ -1245,3 +1245,38 @@ fn breath_chips_intersected_hex_face_even_when_its_center_is_outside_the_cone() 
 
 #[path = "troll_tests.rs"]
 mod troll_tests;
+
+#[test]
+fn recovered_dragon_returning_from_high_refuge_keeps_flight_control() {
+    let (mut session, view, geometry, _, tuning) = fixture(ArenaEncounter::Dragon);
+    let mut actor = session
+        .actors
+        .iter()
+        .find(|a| a.id == 1)
+        .expect("dragon")
+        .clone();
+    actor.feet += Vec3::new(6.0, 8.0, 0.0);
+    actor.previous_feet = actor.feet;
+    actor.flying = true;
+    actor.hp = actor.max_hp;
+    let mut party = session.encounter.runtime.remove(0);
+    party.snapshot.phase = PartyPhase::Returning;
+    party.knowledge = None;
+    let mut brain = session.encounter.brains.remove(&1).expect("brain");
+    let (motion, _) = brain.intent(
+        &actor,
+        &party,
+        &session.actors,
+        &[],
+        &[],
+        &session.collision,
+        &view,
+        geometry,
+        &tuning,
+        100,
+    );
+    assert!(
+        motion.flight,
+        "healed dragon must fly out of its elevated refuge"
+    );
+}
