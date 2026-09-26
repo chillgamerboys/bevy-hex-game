@@ -7,6 +7,7 @@
 mod biomes;
 mod dressing;
 mod flow;
+mod forest_overview;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
 mod sites;
@@ -74,6 +75,7 @@ pub struct GrandCompiler {
     pub crystal_columns: usize,
     /// Number of globally reserved tree objects.
     pub tree_count: usize,
+    forest: Option<super::northern::forest::ForestOverview>,
     coast: Vec<u16>,
     offshore_distance: Vec<u16>,
     crystal: std::collections::BTreeSet<WorldHex>,
@@ -247,6 +249,7 @@ impl GrandCompiler {
             mainland_columns: count,
             crystal_columns: 22183,
             tree_count: 0,
+            forest: None,
             coast,
             offshore_distance,
             crystal,
@@ -260,6 +263,9 @@ impl GrandCompiler {
         } else {
             vec![]
         };
+        if result.source.full_dressing {
+            result.forest = Some(forest_overview::compile(&objects)?);
+        }
         result.tree_count = objects
             .iter()
             .filter(|o| o.asset.starts_with("plant/"))
@@ -526,6 +532,7 @@ impl GrandCompiler {
                 crater: true,
             }],
             tree_count: self.tree_count,
+            forest: self.forest.clone(),
             building_count: self
                 .objects
                 .values()

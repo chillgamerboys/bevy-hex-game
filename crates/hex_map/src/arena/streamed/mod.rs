@@ -27,6 +27,7 @@ use std::{
 };
 mod burrow;
 pub mod checkpoint;
+mod grand_forest;
 mod grand_landmarks;
 mod render;
 #[cfg(test)]
@@ -384,6 +385,14 @@ fn validate_overview(
             "Northern overview identity, palette or geometry differs from its package/profile"
                 .into(),
         );
+    }
+    if let Some(forest) = &overview.forest {
+        if !grand {
+            return Err("Forest companion is only supported for Grand".into());
+        }
+        forest
+            .validate_catalog(&manifest.features)
+            .map_err(|e| e.to_string())?;
     }
     let samples = overview
         .width

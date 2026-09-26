@@ -4,6 +4,7 @@
     clippy::cast_possible_truncation,
     reason = "The fixed radius700,1400-level package and bounded finite authored dimensions fit integer/f32 publications; quantization deliberately rounds voxel levels."
 )]
+pub mod forest;
 mod objects;
 #[cfg(test)]
 mod tests;
@@ -202,6 +203,9 @@ pub struct NorthernOverview {
     pub islands: Vec<IslandSpec>,
     /// Exact total tree records.
     pub tree_count: usize,
+    /// Optional shared authored tree shapes and placements for distant presentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forest: Option<forest::ForestOverview>,
     /// Exact building count, excluding field.
     pub building_count: usize,
 }
@@ -639,6 +643,7 @@ impl NorthernCompiler {
             anchors,
             islands: self.source.islands.clone(),
             tree_count: self.tree_count,
+            forest: None,
             building_count: 4,
         }
     }
