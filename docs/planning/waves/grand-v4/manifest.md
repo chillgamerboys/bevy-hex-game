@@ -1,6 +1,6 @@
 # Grand V4 integration wave
 
-Status: paused by user for the night; terrain/traversal review failed and requires redesign
+Status: resumed September 26; correcting failed terrain traversal and forest character
 Wave: `wave/grand-v4`
 Verified remote dev: `bb556963632de933b44fb75b1d306aca79258cef`
 Playable integration base: `873a2c37eeb8eda23c11d398ce7d68d7965a64db`
@@ -162,3 +162,39 @@ steady downstream shading from the saved ocean clock within existing mesh owners
 It is not part of the launchable final4 candidate until compiled and validated.
 The user explicitly requests stopping development at 10% weekly allowance remaining
 and opening the most recent valid map; this replaces all historical usage floors.
+
+## September 26 resumption and corrective source lanes
+
+The user explicitly resumed the work and authorized continuing after the weekly
+reset until the approved Grand V4 project is complete. The live account returned
+0% used and a new weekly reset timestamp of 1791052758, replacing 1790450297.
+Their new 2% floor applied only before that reset; the prior overnight pause and
+10% stop are superseded. The explicitly named `Add late-game large spells` chat
+was told to resume once, as requested. An hourly thread heartbeat
+`finish-grand-v4-expedition` preserves continued execution and stays quiet when
+waiting conditions are unchanged. Deferred features remain backlog.
+
+The exact traversal/forest reference is the prior Forest expedition at `b314a9d`,
+including its authored lowland, one-level grades, shelves and preserved rendered
+tree assets. The original Grand V3 remains the composition/footprint reference.
+This is an authorized terrain redesign with those references, not a new literal
+cell trace awaiting approval.
+
+Corrective ownership within this existing wave:
+
+- Terrain lane: Grand surface/cave/site composition and terrain tests in
+  `hex_schematic`, preserving exact footprint and meaningful vertical geography.
+- Forest lane: Grand `dressing.rs` and tree recipes/assets; palette additions are
+  coordinated through the terrain writer, runtime substance aliases through root.
+- River lane: exact directed-liquid graph and shading/material lifecycle in
+  `hex_schematic`/`hex_map`, preserving physical surfaces. Coordinate compiler
+  hooks and changed datums with the terrain writer.
+- Root: combined source, runtime adapters, captures, logical/native acceptance,
+  documentation and the single PR into `dev`.
+
+Reference recovery and source preparation start independently. A fresh immutable
+package and full visual review depend on all three composed source lanes; ordinary
+walking tests depend on the revised terrain, and river shader review depends on the
+new directed-liquid package. Shared heavy Cargo work uses the cooperative lock in
+the task work directory, also supplied to the large-spells chat. Each source file
+still has one writer. No candidate is accepted by a narrow route validator alone.

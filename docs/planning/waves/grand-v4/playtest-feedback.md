@@ -1,7 +1,9 @@
 # Grand V4 — terrain correction for the next session
 
-Development is paused for the night at the user's request. Resume only when the
-user returns; no automatic restart or further development is authorized tonight.
+Development was paused for the night at the user's request. On September 26 the
+user explicitly resumed it and authorized continuing after the weekly reset until
+the approved project is complete. The failed terrain review below remains the
+first corrective priority.
 
 ## User playtest result: terrain traversal fails
 

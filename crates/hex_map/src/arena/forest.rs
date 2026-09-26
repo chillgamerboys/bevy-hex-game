@@ -271,7 +271,7 @@ pub(super) fn material_id(name: &str, substances: &SubstanceTable) -> Result<Sub
     // keeps the original V4 names and colors, including distinct forest floors.
     let name = match name {
         "soil" | "pine-floor" => "dirt",
-        "moss" | "foliage" => "grass",
+        "moss" | "foliage" | "foliage_dark" | "foliage_light" => "grass",
         "timber" | "limestone" | "slate" | "crystal" => "stone",
         "spring-water" => "water",
         other => other,
