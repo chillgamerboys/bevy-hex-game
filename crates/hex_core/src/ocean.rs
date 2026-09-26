@@ -126,6 +126,18 @@ pub trait OceanEnvironmentSampler: Debug + Send + Sync {
         phase_seconds: f32,
         column: OceanWaterColumn,
     ) -> Option<OceanSurfaceSample>;
+
+    /// Sample with the unwrapped shared clock for environmental modes whose
+    /// periods do not divide the carrier waves' 900-second repeat interval.
+    /// Existing samplers retain their phase-only behavior by default.
+    fn surface_at_time(
+        &self,
+        xz: Vec2,
+        time: OceanSimulationTime,
+        column: OceanWaterColumn,
+    ) -> Option<OceanSurfaceSample> {
+        self.surface_at(xz, time.phase_seconds(), column)
+    }
 }
 
 /// Conservative result of combining current admission with ocean presentation.
@@ -235,7 +247,7 @@ impl OceanEnvironmentView {
         {
             return OceanSurfaceState::Unloaded;
         }
-        let Some(sample) = self.sampler.surface_at(xz, time.phase_seconds(), column) else {
+        let Some(sample) = self.sampler.surface_at_time(xz, time, column) else {
             return OceanSurfaceState::Unloaded;
         };
         if !sample.height.is_finite()
@@ -387,6 +399,59 @@ mod tests {
         if let OceanSurfaceState::ReadyWet(sample) = sampled {
             assert!((sample.height - (20.0 + paused.phase_seconds().sin())).abs() < 0.000_001);
         }
+    }
+
+    #[test]
+    fn environment_forwards_full_clock_to_opted_in_samplers() {
+        #[derive(Debug)]
+        struct Unwrapped;
+        impl OceanEnvironmentSampler for Unwrapped {
+            fn surface_at(
+                &self,
+                _: Vec2,
+                _: f32,
+                _: OceanWaterColumn,
+            ) -> Option<OceanSurfaceSample> {
+                None
+            }
+            fn surface_at_time(
+                &self,
+                _: Vec2,
+                time: OceanSimulationTime,
+                column: OceanWaterColumn,
+            ) -> Option<OceanSurfaceSample> {
+                assert_eq!(
+                    time,
+                    OceanSimulationTime {
+                        generation: 9,
+                        seconds: 1801.25
+                    }
+                );
+                Some(OceanSurfaceSample {
+                    height: column.mean_height,
+                    normal: Vec3::Y,
+                    vertical_velocity: 0.0,
+                    mean_height: column.mean_height,
+                    bed_height: column.bed_height,
+                    water_id: column.water_id,
+                })
+            }
+        }
+        let environment = OceanEnvironmentView {
+            package_fingerprint: 2,
+            sampler: Arc::new(Unwrapped),
+            wind: OceanWindProfile::default(),
+        };
+        let result = environment.sample(
+            Vec2::ZERO,
+            OceanSimulationTime {
+                generation: 9,
+                seconds: 1801.25,
+            },
+            ArenaAvailability::Ready,
+            Some(column()),
+        );
+        assert!(matches!(result, OceanSurfaceState::ReadyWet(_)));
     }
 
     #[test]

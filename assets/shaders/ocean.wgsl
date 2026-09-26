@@ -30,6 +30,8 @@ struct OceanParams {
     shallow: vec4<f32>,
     deep: vec4<f32>,
     voxel: vec4<f32>,
+    wind_energy: vec4<f32>,
+    wind_band: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> ocean: OceanParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var beds: texture_2d<f32>;
@@ -111,14 +113,24 @@ fn voxel_component(at: vec2<f32>, shore_shift: f32, wave: vec4<f32>, rate: f32, 
     return wave.z*sin((dot(at,wave.xy)+shore_shift)*wave.w-ocean.water.y*rate+phase);
 }
 fn voxel_wave(at: vec2<f32>, quantized: bool) -> f32 {
-    let depth = ocean.water.x-bed_sample(at).bed.x;
+    let bed = bed_sample(at);
+    let depth = ocean.water.x-bed.bed.x;
     let shallow = clamp(1.0-depth/6.0,0.0,1.0);
     let shift = 1.4*clamp(6.0-depth,0.0,6.0);
     let packet = 0.95+0.25*sin(at.x*0.031+at.y*0.019-ocean.water.y*(6.283185307/60.0));
-    let components = voxel_component(at,shift,ocean.wave0,ocean.periods.x,ocean.phase_offsets.x)
-        + voxel_component(at,shift,ocean.wave1,ocean.periods.y,ocean.phase_offsets.y)
-        + voxel_component(at,shift,ocean.wave2,ocean.periods.z,ocean.phase_offsets.z);
-    let wave = components*(0.8+0.85*shallow)*packet;
+    let components = ocean.wind_energy.x*voxel_component(at,shift,ocean.wave0,ocean.periods.x,ocean.phase_offsets.x)
+        + ocean.wind_energy.y*voxel_component(at,shift,ocean.wave1,ocean.periods.y,ocean.phase_offsets.y)
+        + ocean.wind_energy.z*voxel_component(at,shift,ocean.wave2,ocean.periods.z,ocean.phase_offsets.z);
+    var response = 1.0;
+    if ocean.wind_energy.w > 0.5 {
+        // One local broad-wind mode; slow global energy modes were reduced
+        // from unwrapped time on the CPU, never from the 900-second carrier.
+        let band = 1.0+ocean.wind_band.y*sin(at.x*0.023-at.y*0.019+ocean.wind_band.x);
+        let depth_t = clamp(depth/0.8,0.0,1.0);
+        let breaking = depth_t*depth_t*(3.0-2.0*depth_t);
+        response = band*breaking*(0.45+0.55*bed.shelter.x);
+    }
+    let wave = components*(0.8+0.85*shallow)*packet*response;
     if quantized { return round(wave/ocean.voxel.x)*ocean.voxel.x; }
     return wave;
 }

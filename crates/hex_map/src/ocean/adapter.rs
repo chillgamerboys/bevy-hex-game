@@ -63,15 +63,44 @@ impl OceanEnvironmentSampler for OceanSurfaceAdapter {
         seconds: f32,
         column: OceanWaterColumn,
     ) -> Option<OceanSurfaceSample> {
+        self.surface_at_time(
+            at,
+            hex_core::ocean::OceanSimulationTime {
+                generation: 0,
+                seconds: f64::from(seconds),
+            },
+            column,
+        )
+    }
+
+    fn surface_at_time(
+        &self,
+        at: Vec2,
+        time: hex_core::ocean::OceanSimulationTime,
+        column: OceanWaterColumn,
+    ) -> Option<OceanSurfaceSample> {
         if !self.bath.contains(at)
+            || !time.seconds.is_finite()
             || !column.mean_height.is_finite()
             || !column.bed_height.is_finite()
             || column.bed_height >= column.mean_height
-            || (column.mean_height - self.profile.mean_sea_level).abs() > 0.01
         {
             return None;
         }
-        let value = sample::sample(&self.profile, &self.bath, at, seconds, true)?;
+        // Admitted inland lakes and rivers use the ordinary flat liquid mesh.
+        // Their exact local surface must not be rejected or displaced by waves
+        // belonging to the ocean's different mean sea level.
+        if (column.mean_height - self.profile.mean_sea_level).abs() > 0.01 {
+            return Some(OceanSurfaceSample {
+                height: column.mean_height,
+                normal: Vec3::Y,
+                vertical_velocity: 0.0,
+                mean_height: column.mean_height,
+                bed_height: column.bed_height,
+                water_id: column.water_id,
+            });
+        }
+        let value = sample::sample_at_time(&self.profile, &self.bath, at, time, true)?;
         Some(OceanSurfaceSample {
             height: value.height + (column.mean_height - self.profile.mean_sea_level),
             normal: value.normal,
@@ -86,6 +115,90 @@ impl OceanEnvironmentSampler for OceanSurfaceAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inland_liquids_keep_their_exact_flat_local_height_and_identity() {
+        use hex_core::ocean::OceanSimulationTime;
+        let adapter = OceanSurfaceAdapter::new(
+            OceanSurfaceProfile::regular_voxels(160.0, 0.4),
+            OceanBathymetry::default(),
+        )
+        .unwrap();
+        let at = Vec2::splat(0.5);
+        for mean_height in [148.0, 173.6, 209.2] {
+            let column = OceanWaterColumn {
+                mean_height,
+                bed_height: mean_height - 4.0,
+                water_id: hex_core::SubstanceId(7),
+            };
+            for seconds in [0.0, 19.25, 900.001] {
+                let time = OceanSimulationTime {
+                    generation: 2,
+                    seconds,
+                };
+                let sample = adapter.surface_at_time(at, time, column).unwrap();
+                assert_eq!(sample.height.to_bits(), mean_height.to_bits());
+                assert_eq!(sample.mean_height.to_bits(), mean_height.to_bits());
+                assert_eq!(sample.bed_height.to_bits(), column.bed_height.to_bits());
+                assert_eq!(sample.normal, Vec3::Y);
+                assert!(sample.vertical_velocity.abs() < f32::EPSILON);
+                assert_eq!(sample.water_id, column.water_id);
+            }
+            assert!(adapter
+                .surface_at_time(Vec2::splat(2000.0), OceanSimulationTime::default(), column)
+                .is_none());
+            assert!(adapter
+                .surface_at_time(
+                    at,
+                    OceanSimulationTime::default(),
+                    OceanWaterColumn {
+                        bed_height: mean_height,
+                        ..column
+                    }
+                )
+                .is_none());
+            assert!(adapter
+                .surface_at_time(
+                    at,
+                    OceanSimulationTime {
+                        generation: 0,
+                        seconds: f64::NAN
+                    },
+                    column
+                )
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn unwrapped_wind_contact_agrees_with_camera_and_preserves_admitted_bounds() {
+        use hex_core::ocean::{OceanSimulationTime, OceanWindProfile};
+        let profile =
+            OceanSurfaceProfile::regular_voxels(0.0, 0.4).with_wind_response(OceanWindProfile {
+                heading_radians: 1.1,
+                speed: 12.0,
+            });
+        let bed = OceanBathymetry::default();
+        let adapter = OceanSurfaceAdapter::new(profile.clone(), bed.clone()).unwrap();
+        let column = OceanWaterColumn {
+            mean_height: 0.0,
+            bed_height: -23.0,
+            water_id: hex_core::SubstanceId(3),
+        };
+        for seconds in [899.999, 900.001, 1_800.01, 100_000.0] {
+            let time = OceanSimulationTime {
+                generation: 3,
+                seconds,
+            };
+            let at = Vec2::splat(0.5);
+            let contact = adapter.surface_at_time(at, time, column).unwrap();
+            let camera = super::super::sample_surface_at_time(&profile, &bed, at, time).unwrap();
+            assert!((contact.height - camera.height).abs() < 0.00001);
+            assert_eq!(contact.bed_height.to_bits(), column.bed_height.to_bits());
+            assert_eq!(contact.mean_height.to_bits(), column.mean_height.to_bits());
+            assert_eq!(contact.water_id, column.water_id);
+        }
+    }
 
     #[cfg(feature = "arena-prototype")]
     #[test]

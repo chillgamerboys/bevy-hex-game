@@ -9,13 +9,18 @@ mod reflection;
 mod render;
 mod sample;
 mod shelter;
+mod wind;
 
 use bevy::prelude::*;
+use hex_core::ocean::{OceanSimulationTime, OceanWindProfile};
 
 pub use adapter::OceanSurfaceAdapter;
 pub use boundary::{OceanBoundaryColumn, OceanNearBoundary};
 pub use render::{install, OceanRenderStatus};
-pub use sample::{sample_local_surface, sample_surface, OceanSurfaceSample};
+pub use sample::{
+    sample_local_surface, sample_local_surface_at_time, sample_surface, sample_surface_at_time,
+    OceanSurfaceSample,
+};
 
 /// Shared near-detail extent keeps stepped water beside detailed ocean shores.
 pub(crate) const VOXEL_DETAIL_RADIUS: u16 = 144;
@@ -52,6 +57,9 @@ pub struct OceanSurfaceProfile {
     pub shallow_color: Vec4,
     /// Deep-water linear RGBA, before lighting and fog.
     pub deep_color: Vec4,
+    /// Opt-in slow wind response for opaque voxel waves. Publish the same
+    /// prevailing profile used by the environment's natural wind field.
+    pub wind_response: Option<OceanWindProfile>,
 }
 
 impl Default for OceanSurfaceProfile {
@@ -86,11 +94,27 @@ impl Default for OceanSurfaceProfile {
             shore_reflection: 0.15,
             shallow_color: Vec4::new(0.025, 0.14, 0.23, 0.65),
             deep_color: Vec4::new(0.009, 0.045, 0.110, 0.985),
+            wind_response: None,
         }
     }
 }
 
 impl OceanSurfaceProfile {
+    /// Align the fixed wave train with prevailing wind and enable gradual sea
+    /// state changes and shoreline breaking. No local actor/camera cover is used.
+    #[must_use]
+    pub fn with_wind_response(mut self, wind: OceanWindProfile) -> Self {
+        let previous = self
+            .wind_response
+            .map_or(std::f32::consts::FRAC_PI_2, |value| value.heading_radians);
+        let rotation = Vec2::from_angle(wind.heading_radians - previous);
+        for wave in &mut self.waves {
+            wave.direction = rotation.rotate(wave.direction);
+        }
+        self.wind_response = Some(wind);
+        self
+    }
+
     /// Opaque waves in the accepted Water Lab style, with irregular ocean wave groups.
     /// Three sizes travel roughly eastward and steepen in shallow water.
     #[must_use]
@@ -138,6 +162,12 @@ impl OceanSurfaceProfile {
             && (0.0..=0.25).contains(&self.shore_reflection)
             && self.shallow_color.is_finite()
             && self.deep_color.is_finite()
+            && self.wind_response.is_none_or(|wind| {
+                self.voxel_height > 0.0
+                    && wind.heading_radians.is_finite()
+                    && wind.speed.is_finite()
+                    && (0.0..=25.0).contains(&wind.speed)
+            })
             && self.waves.iter().all(|wave| {
                 wave.direction.is_finite()
                     && wave.direction.length_squared() > 0.0
@@ -228,4 +258,18 @@ pub struct OceanFrame {
     /// Explicit seconds, frozen for review. The approved periods repeat at900s.
     /// Do not feed the legacy liquid clock's incompatible400-second wrap.
     pub phase_seconds: f32,
+    /// Preferred clock for wind-responsive water, including frozen captures.
+    /// `None` preserves callers that publish only the original bounded phase.
+    pub simulation_time: Option<OceanSimulationTime>,
+}
+
+impl OceanFrame {
+    /// Resolve one shared clock for uniforms and CPU camera contact.
+    #[must_use]
+    pub fn time(self) -> OceanSimulationTime {
+        self.simulation_time.unwrap_or(OceanSimulationTime {
+            generation: 0,
+            seconds: f64::from(self.phase_seconds),
+        })
+    }
 }

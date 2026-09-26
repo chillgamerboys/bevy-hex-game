@@ -9,6 +9,7 @@ use bevy::{
     render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat},
     shader::ShaderRef,
 };
+use hex_core::ocean::OceanSimulationTime;
 
 #[derive(Clone, Debug, ShaderType)]
 struct OceanParams {
@@ -24,6 +25,8 @@ struct OceanParams {
     shallow: Vec4,
     deep: Vec4,
     voxel: Vec4,
+    wind_energy: Vec4,
+    wind_band: Vec4,
 }
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
 struct OceanExtension {
@@ -106,7 +109,7 @@ pub fn install(app: &mut App) {
 fn parameters(
     profile: &OceanSurfaceProfile,
     bed: &OceanBathymetry,
-    phase: f32,
+    time: OceanSimulationTime,
     near: IVec2,
 ) -> OceanParams {
     let waves = profile.waves.map(|wave| {
@@ -120,10 +123,11 @@ fn parameters(
     });
     let [wave0, wave1, wave2] = waves;
     let [a, b, c] = profile.waves;
+    let wind = super::wind::WindResponse::new(profile, time);
     OceanParams {
         water: Vec4::new(
             profile.mean_sea_level,
-            phase,
+            time.phase_seconds(),
             profile.shore_depth,
             mesh::HORIZON_RADIUS,
         ),
@@ -158,6 +162,8 @@ fn parameters(
         ),
         shallow: profile.shallow_color,
         deep: profile.deep_color,
+        wind_energy: wind.energy,
+        wind_band: wind.band,
     }
 }
 
@@ -223,13 +229,14 @@ fn update(
         return;
     }
     if !frame.camera_position.is_finite()
-        || !frame.phase_seconds.is_finite()
+        || !frame.time().seconds.is_finite()
+        || (profile.wind_response.is_some() && frame.simulation_time.is_none())
         || !profile.is_valid()
         || (cache.bed_revision != Some(bed.revision) && !bed.is_valid())
     {
         status.ready = false;
         status.error = Some(
-            "Ocean requires finite profile, camera, phase and a complete bounded bathymetry grid."
+            "Ocean requires finite profile, camera, time and complete bathymetry; wind response requires unwrapped simulation_time."
                 .into(),
         );
         for entity in cache
@@ -304,7 +311,7 @@ fn update(
                     ..default()
                 },
                 extension: OceanExtension {
-                    params: parameters(&profile, &bed, frame.phase_seconds, cache.near_origin),
+                    params: parameters(&profile, &bed, frame.time(), cache.near_origin),
                     bathymetry: image,
                     near_water,
                 },
@@ -317,16 +324,16 @@ fn update(
     let Some(material) = cache.material.clone() else {
         return;
     };
-    let camera_underwater = super::sample_local_surface(
+    let camera_underwater = super::sample_local_surface_at_time(
         &profile,
         &bed,
         &boundary,
         frame.camera_position.xz(),
-        frame.phase_seconds,
+        frame.time(),
     )
     .is_some_and(|surface| frame.camera_position.y < surface.height);
     if let Some(mut value) = materials.get_mut(&material) {
-        value.extension.params = parameters(&profile, &bed, frame.phase_seconds, cache.near_origin);
+        value.extension.params = parameters(&profile, &bed, frame.time(), cache.near_origin);
         value.extension.params.effects.w = if camera_underwater { 1.0 } else { 0.0 };
         status.phase_seconds = Some(value.extension.params.water.y);
     }
@@ -429,7 +436,15 @@ mod tests {
                 assert!((*actual - expected).abs() < 0.00001);
             }
         }
-        let params = parameters(&OceanSurfaceProfile::default(), &bed, 7.0, IVec2::ZERO);
+        let params = parameters(
+            &OceanSurfaceProfile::default(),
+            &bed,
+            OceanSimulationTime {
+                generation: 0,
+                seconds: 7.0,
+            },
+            IVec2::ZERO,
+        );
         assert!((params.effects.x - 0.15).abs() < 0.00001);
         assert!((params.effects.y - 35.0).abs() < 0.00001);
         assert!((params.effects.z - 1.0).abs() < 0.00001);
@@ -440,7 +455,15 @@ mod tests {
         let mut profile = OceanSurfaceProfile::default();
         let bed = OceanBathymetry::default();
         for (at, seconds) in [(Vec2::ZERO, 0.0), (Vec2::new(17.0, -29.0), 7.0)] {
-            let uniforms = parameters(&profile, &bed, seconds, IVec2::ZERO);
+            let uniforms = parameters(
+                &profile,
+                &bed,
+                OceanSimulationTime {
+                    generation: 0,
+                    seconds: f64::from(seconds),
+                },
+                IVec2::ZERO,
+            );
             assert!((uniforms.phase_offsets - Vec4::new(0.0, 1.3, 2.4, 0.0)).length() < 0.00001);
             let specifications = [uniforms.wave0, uniforms.wave1, uniforms.wave2];
             let mut height = profile.mean_sea_level;
@@ -461,5 +484,87 @@ mod tests {
         profile.waves[1].phase_radians = f32::NAN;
         assert!(!profile.is_valid());
         assert!(super::super::sample_surface(&profile, &bed, Vec2::ZERO, 0.0).is_none());
+    }
+
+    #[test]
+    fn wind_uniforms_match_contact_at_shores_and_across_clock_wrap() {
+        use hex_core::ocean::OceanWindProfile;
+        for (depth, shelter) in [(40.0, 1.0), (3.0, 0.5), (0.2, 0.1)] {
+            let bed = OceanBathymetry {
+                origin_xz: Vec2::splat(-2000.0),
+                spacing: 4000.0,
+                bed_heights: vec![-depth; 4],
+                shore_shelter: vec![shelter; 4],
+                ..default()
+            };
+            for speed in [0.0, 9.0, 18.0] {
+                let profile = OceanSurfaceProfile::regular_voxels(0.0, 0.4).with_wind_response(
+                    OceanWindProfile {
+                        heading_radians: 1.1,
+                        speed,
+                    },
+                );
+                for seconds in [0.0, 899.999, 900.001, 100_000_000.25] {
+                    let time = OceanSimulationTime {
+                        generation: 4,
+                        seconds,
+                    };
+                    let params = parameters(&profile, &bed, time, IVec2::ZERO);
+                    for coordinate in [
+                        hex_core::HexCoord::from_axial(0, 0),
+                        hex_core::HexCoord::from_axial(331, -140),
+                    ] {
+                        let at = coordinate.to_world(0.0).xz();
+                        // Evaluate the WGSL's packed inputs in shader order,
+                        // independently from CPU contact and wind helpers.
+                        let shift = 1.4 * (6.0 - depth).clamp(0.0, 6.0);
+                        let mut components = 0.0;
+                        for (index, specification) in [params.wave0, params.wave1, params.wave2]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            components += params.wind_energy[index]
+                                * specification.z
+                                * ((at.dot(specification.truncate().truncate()) + shift)
+                                    * specification.w
+                                    - params.water.y * params.periods[index]
+                                    + params.phase_offsets[index])
+                                    .sin();
+                        }
+                        let packet = 0.95
+                            + 0.25
+                                * (at.x * 0.031 + at.y * 0.019
+                                    - params.water.y * (std::f32::consts::TAU / 60.0))
+                                    .sin();
+                        let band = 1.0
+                            + params.wind_band.y
+                                * (at.x * 0.023 - at.y * 0.019 + params.wind_band.x).sin();
+                        let depth_t = (depth / 0.8).clamp(0.0, 1.0);
+                        let response = band
+                            * depth_t
+                            * depth_t
+                            * (3.0 - 2.0 * depth_t)
+                            * (0.45 + 0.55 * shelter);
+                        let wave = components
+                            * (0.8 + 0.85 * (1.0 - depth / 6.0).clamp(0.0, 1.0))
+                            * packet
+                            * response;
+                        let gpu_height = (wave / params.voxel.x).round() * params.voxel.x;
+                        let cpu =
+                            super::super::sample_surface_at_time(&profile, &bed, at, time).unwrap();
+                        assert!(
+                            (cpu.height - gpu_height).abs() < 0.00001,
+                            "depth={depth} speed={speed} time={seconds} at={at:?}"
+                        );
+                        // Changing the camera-centered geometry footprint must
+                        // not change wave energy or the shared clock.
+                        let other = parameters(&profile, &bed, time, IVec2::new(900, -450));
+                        assert_eq!(params.wind_energy, other.wind_energy);
+                        assert_eq!(params.wind_band, other.wind_band);
+                        assert_eq!(params.water, other.water);
+                    }
+                }
+            }
+        }
     }
 }

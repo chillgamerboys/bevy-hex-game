@@ -1,5 +1,6 @@
 use super::{OceanBathymetry, OceanNearBoundary, OceanSurfaceProfile};
 use bevy::prelude::*;
+use hex_core::ocean::OceanSimulationTime;
 
 /// Surface height, normal and color; exact liquid occupancy remains world authority.
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +30,18 @@ pub fn sample_surface(
     sample(profile, bed, at, seconds, false)
 }
 
+/// Sample wind-responsive water using the unwrapped simulation clock. Use this
+/// for gameplay, camera immersion and frozen reviews of an opt-in wind profile.
+#[must_use]
+pub fn sample_surface_at_time(
+    profile: &OceanSurfaceProfile,
+    bed: &OceanBathymetry,
+    at: Vec2,
+    time: OceanSimulationTime,
+) -> Option<OceanSurfaceSample> {
+    sample_at_time(profile, bed, at, time, false)
+}
+
 /// Uses known exact water occupancy at a local shore, including dry carved land.
 /// The continuous wave equation remains identical to GPU displacement; an exact
 /// wet hex that the coarse grid misclassifies still has its mean-height surface.
@@ -40,6 +53,27 @@ pub fn sample_local_surface(
     at: Vec2,
     seconds: f32,
 ) -> Option<OceanSurfaceSample> {
+    sample_local_surface_at_time(
+        profile,
+        bed,
+        near,
+        at,
+        OceanSimulationTime {
+            generation: 0,
+            seconds: f64::from(seconds),
+        },
+    )
+}
+
+/// Exact local coverage variant of [`sample_surface_at_time`].
+#[must_use]
+pub fn sample_local_surface_at_time(
+    profile: &OceanSurfaceProfile,
+    bed: &OceanBathymetry,
+    near: &OceanNearBoundary,
+    at: Vec2,
+    time: OceanSimulationTime,
+) -> Option<OceanSurfaceSample> {
     if !at.is_finite() {
         return None;
     }
@@ -50,9 +84,9 @@ pub fn sample_local_surface(
         }) {
             return None;
         }
-        return sample(profile, bed, at, seconds, true);
+        return sample_at_time(profile, bed, at, time, true);
     }
-    sample_surface(profile, bed, at, seconds)
+    sample_surface_at_time(profile, bed, at, time)
 }
 
 pub(super) fn sample(
@@ -62,9 +96,29 @@ pub(super) fn sample(
     seconds: f32,
     exact_wet: bool,
 ) -> Option<OceanSurfaceSample> {
-    if !profile.is_valid() || !at.is_finite() || !seconds.is_finite() {
+    sample_at_time(
+        profile,
+        bed,
+        at,
+        OceanSimulationTime {
+            generation: 0,
+            seconds: f64::from(seconds),
+        },
+        exact_wet,
+    )
+}
+
+pub(super) fn sample_at_time(
+    profile: &OceanSurfaceProfile,
+    bed: &OceanBathymetry,
+    at: Vec2,
+    time: OceanSimulationTime,
+    exact_wet: bool,
+) -> Option<OceanSurfaceSample> {
+    if !profile.is_valid() || !at.is_finite() || !time.seconds.is_finite() {
         return None;
     }
+    let seconds = time.phase_seconds();
     if profile.voxel_height > 0.0 {
         let center = hex_core::HexCoord::from_world(Vec3::new(at.x, 0.0, at.y)).to_world(0.0);
         let at = Vec2::new(center.x, center.z);
@@ -78,19 +132,29 @@ pub(super) fn sample(
         let shore_shift = 1.4 * (6.0 - depth).clamp(0.0, 6.0);
         let packet = 0.95
             + 0.25 * (at.x * 0.031 + at.y * 0.019 - seconds * (std::f32::consts::TAU / 60.0)).sin();
+        let response = super::wind::WindResponse::new(profile, time);
+        let shelter = if profile.wind_response.is_some() {
+            bed.sample_shelter(at)?.0
+        } else {
+            1.0
+        };
         let wave = profile
             .waves
             .iter()
-            .map(|wave| {
+            .zip(response.energy.truncate().to_array())
+            .map(|(wave, energy)| {
                 let travel = at.dot(wave.direction.normalize()) + shore_shift;
-                wave.amplitude
-                    * (std::f32::consts::TAU * (travel / wave.wavelength - seconds / wave.period)
-                        + wave.phase_radians)
-                        .sin()
+                energy
+                    * (wave.amplitude
+                        * (travel * (std::f32::consts::TAU / wave.wavelength)
+                            - seconds * (std::f32::consts::TAU / wave.period)
+                            + wave.phase_radians)
+                            .sin())
             })
             .sum::<f32>()
             * gain
-            * packet;
+            * packet
+            * response.local_gain(at, depth, shelter);
         return Some(OceanSurfaceSample {
             height: profile.mean_sea_level
                 + (wave / profile.voxel_height).round() * profile.voxel_height,

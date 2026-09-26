@@ -110,7 +110,7 @@ struct Measurements {
 }
 impl Measurements {
     fn pump(&mut self, world: &mut World, carved: TilePos) {
-        let previous_interest = world.resource::<StreamedArena>().interest_key;
+        let previous_interest = world.resource::<StreamedArena>().interest_key.clone();
         let previous_revision = world.resource::<ArenaTerrainView>().revision;
         super::pump(world);
         let state = world.resource::<StreamedArena>();
