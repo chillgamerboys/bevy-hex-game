@@ -1198,7 +1198,7 @@ mod structural_tests {
             );
             assert_eq!(
                 view.maps.last().map(|map| map.id.as_str()),
-                Some("mountain-range")
+                Some("grand-v3-baseline")
             );
 
             let snapshot = sandbox_view_snapshot(view, size, mode);
@@ -1218,7 +1218,7 @@ mod structural_tests {
             let final_row = snapshot
                 .nodes
                 .iter()
-                .find(|node| node.name == "Inspect Mountain Range")
+                .find(|node| node.name == "Inspect Grand V3 Baseline")
                 .expect("the final shipped map row should render");
             assert_eq!(
                 final_row.visibility_requirement,
