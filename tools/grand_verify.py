@@ -6,6 +6,7 @@ as independent writer/reader processes for land, moving boat, and gliding flight
 Every case has explicit disposable HEX_GAME_DATA_DIR storage and a real package.
 With --circuit, the same current-source binary also performs three streaming loops
 with CPU terrain presentation, checking typed residency and sparse-edit retention.
+With --admissions, it verifies all fourteen authored enemy parties and their codec.
 This checks persistence, not visual quality or native control feel.
 """
 from __future__ import annotations
@@ -24,10 +25,50 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 TEST = "arena::grand::tests::process_checkpoint_child"
 CIRCUIT_TEST = "arena::grand::tests::circuit_tests::actual_grand_streaming_circuit"
+ADMISSION_TEST = "arena::grand::tests::admission_tests::actual_grand_all_authored_parties_admit_and_checkpoint"
 
 
 def git(*arguments: str) -> str:
     return subprocess.check_output(["git", *arguments], cwd=ROOT, text=True).strip()
+
+
+def source_snapshot() -> dict[str, str]:
+    """Catch content edits even when HEAD and an existing 'M' status stay the same."""
+    digest = hashlib.sha256()
+    digest.update(subprocess.check_output(["git", "diff", "--binary", "HEAD", "--"], cwd=ROOT))
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=ROOT,
+    )
+    for relative in sorted(name for name in untracked.split(b"\0") if name):
+        digest.update(relative + b"\0")
+        path = ROOT / os.fsdecode(relative)
+        if path.is_symlink():
+            digest.update(b"symlink\0" + os.fsencode(os.readlink(path)))
+        else:
+            digest.update(b"file\0")
+            with path.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+        digest.update(b"\0")
+    return {
+        "head": git("rev-parse", "HEAD"),
+        "source_status": git("status", "--short"),
+        "working_tree_sha256": digest.hexdigest(),
+    }
+
+
+def changed_source(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    return [name for name in before if before[name] != after[name]]
+
+
+def require_same_source(before: dict[str, str], after: dict[str, str], phase: str) -> None:
+    changed = changed_source(before, after)
+    if changed:
+        raise RuntimeError(
+            f"Source changed during {phase} ({', '.join(changed)}). "
+            "This run cannot report PASS; stop source edits and run fresh acceptance. "
+            "See source_provenance in report.json."
+        )
 
 
 def build_test(target: Path, output: Path, environment: dict[str, str]) -> Path:
@@ -128,6 +169,48 @@ def execute_circuit(binary: Path, output: Path, environment: dict[str, str], tim
     return receipt
 
 
+def execute_admissions(binary: Path, output: Path, environment: dict[str, str], timeout: float) -> dict:
+    data = output / "admissions"
+    data.mkdir()
+    (data / "grand-verification-only").write_text("Disposable authored-party admission acceptance.\n")
+    child = environment | {"HEX_GAME_DATA_DIR": str(data)}
+    for key in ("HEX_GRAND_VERIFY_MODE", "HEX_GRAND_VERIFY_PHASE"):
+        child.pop(key, None)
+    command = [str(binary), ADMISSION_TEST, "--exact", "--ignored", "--nocapture", "--test-threads=1"]
+    log_path = data / "admission.log"
+    with log_path.open("w") as log:
+        result = subprocess.run(command, cwd=ROOT, env=child, stdout=log, stderr=subprocess.STDOUT,
+                                timeout=timeout, check=False)
+    if result.returncode:
+        raise RuntimeError(f"Authored-party admission failed; see {log_path}")
+    log_text = log_path.read_text()
+    if "running 1 test" not in log_text or "GRAND_ADMISSION_PASS " not in log_text:
+        raise RuntimeError("Exact authored-party admission test did not complete")
+    receipt = json.loads((data / "admission.json").read_text())
+    if receipt.get("kind") != "grand-authored-admission-v1" or receipt.get("status") != "PASS":
+        raise RuntimeError("Authored-party receipt is missing its successful typed result")
+    expected = [(f"grand_goblin_{index:02}", count) for index, count in enumerate((8, 12, 18, 20, 22, 24), 1)]
+    expected += [("grand_shaman_01", 3), ("grand_dragon_01", 3), ("grand_golem_01", 3),
+                 ("grand_wisp_01", 10), ("grand_worm_01", 1), ("grand_worm_02", 1),
+                 ("grand_worm_03", 1), ("grand_shadow_tunnel", 1)]
+    parties = receipt.get("parties", [])
+    if len(parties) != len(expected):
+        raise RuntimeError("Authored-party receipt does not contain all fourteen parties")
+    for ordinal, (party, (site, count)) in enumerate(zip(parties, expected)):
+        if (party.get("site") != site or party.get("party") != ordinal or party.get("members") != count
+                or party.get("actor_ids") != list(range(ordinal * 32 + 1, ordinal * 32 + count + 1))):
+            raise RuntimeError(f"Authored-party receipt has an incomplete or wrong roster for {site}")
+        if not 0 <= party.get("simulation_ticks", -1) <= 12:
+            raise RuntimeError(f"Authored-party admission exceeded its simulation budget at {site}")
+    if (receipt.get("unique_enemies") != 127 or parties[-1].get("registered_enemies") != 127
+            or receipt.get("checkpoint_bytes", 0) <= 0
+            or not 0 < receipt.get("active_actors_at_checkpoint", 128) < 128):
+        raise RuntimeError("Authored-party receipt does not prove the complete roster, dormancy and checkpoint")
+    if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
+        raise RuntimeError("Authored-party receipt used a different immutable package")
+    return receipt
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", required=True, type=Path, help="Explicit actual Grand compiled package directory")
@@ -135,10 +218,13 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Fresh output directory; must not already exist")
     parser.add_argument("--case", action="append", choices=("land", "boat", "air"), dest="cases")
     parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
+    parser.add_argument("--admissions", action="store_true", help="Also verify all fourteen actual-package enemy parties using the same test build")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
     parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")
+    parser.add_argument("--admission-timeout", type=float, default=420.0, help="Maximum seconds for the optional all-party admission oracle")
     arguments = parser.parse_args()
-    if any(not math.isfinite(value) or value <= 0 for value in (arguments.timeout, arguments.circuit_timeout)):
+    if any(not math.isfinite(value) or value <= 0 for value in
+           (arguments.timeout, arguments.circuit_timeout, arguments.admission_timeout)):
         parser.error("timeouts must be positive finite seconds")
     package = arguments.package.resolve(strict=True)
     if not package.is_dir():
@@ -161,24 +247,40 @@ def main() -> None:
     # An inherited capture or alternate scenario must never change this test mode.
     for key in ("HEX_REVIEW_CAPTURE", "HEX_WALK_SCRIPT", "HEX_WALK_OUT", "HEX_ARENA_CAPTURE", "HEX_NORTHERN_START"):
         environment.pop(key, None)
+    before_build = source_snapshot()
+    provenance = {"before_build": before_build}
     report = {
         "kind": "grand-process-restart-v1", "status": "INCOMPLETE",
-        "head": git("rev-parse", "HEAD"), "source_status": git("status", "--short"),
+        "head": before_build["head"], "source_status": before_build["source_status"],
+        "source_provenance": provenance,
         "started_utc": datetime.now(timezone.utc).isoformat(), "package": str(package),
         "scope": "Production app/world/gameplay checkpoint composition; no window, pixels, or native motion.",
         "circuit_requested": arguments.circuit,
+        "admissions_requested": arguments.admissions,
         "cases": [],
     }
     report_path = output / "report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     try:
-        binary = build_test(target, output, environment)
+        try:
+            binary = build_test(target, output, environment)
+        finally:
+            provenance["after_build"] = source_snapshot()
+            provenance["build_changed_fields"] = changed_source(before_build, provenance["after_build"])
+        require_same_source(before_build, provenance["after_build"], "the test build")
         report["test_executable"] = str(binary)
-        for case in arguments.cases or ("land", "boat", "air"):
-            report["cases"].append(execute_case(binary, case, output, environment, arguments.timeout))
-            report_path.write_text(json.dumps(report, indent=2) + "\n")
-        if arguments.circuit:
-            report["circuit"] = execute_circuit(binary, output, environment, arguments.circuit_timeout)
+        try:
+            for case in arguments.cases or ("land", "boat", "air"):
+                report["cases"].append(execute_case(binary, case, output, environment, arguments.timeout))
+                report_path.write_text(json.dumps(report, indent=2) + "\n")
+            if arguments.circuit:
+                report["circuit"] = execute_circuit(binary, output, environment, arguments.circuit_timeout)
+            if arguments.admissions:
+                report["admissions"] = execute_admissions(binary, output, environment, arguments.admission_timeout)
+        finally:
+            provenance["after_execution"] = source_snapshot()
+            provenance["execution_changed_fields"] = changed_source(before_build, provenance["after_execution"])
+        require_same_source(before_build, provenance["after_execution"], "test execution")
         report["status"] = "PASS"
     except Exception as error:
         report["status"] = "FAIL"

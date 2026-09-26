@@ -16,6 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "admission_tests.rs"]
+mod admission_tests;
 #[path = "circuit_tests.rs"]
 mod circuit_tests;
 
@@ -24,7 +26,7 @@ struct Receipt {
     mode: String,
     write_pid: u32,
     tick: u64,
-    environment_seconds: f64,
+    environment_seconds_bits: u64,
     player_position: [f32; 3],
     projectiles: usize,
     carved: TilePos,
@@ -530,7 +532,9 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
                 .is_some(),
         "held charge at land/boat save"
     );
-    app.world_mut().resource_mut::<ArenaSession>().tick = 108_321;
+    // More than sixty hours exposes drift if the app validates against an exact
+    // f64 1/120 instead of the gameplay clock's actual f32 fixed step.
+    app.world_mut().resource_mut::<ArenaSession>().tick = 25_920_001;
     let clock = app.world().resource::<ArenaSession>().ocean_time();
     app.world_mut().insert_resource(clock);
     {
@@ -580,7 +584,7 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         mode: mode.into(),
         write_pid: std::process::id(),
         tick: session.tick,
-        environment_seconds: clock.seconds,
+        environment_seconds_bits: clock.seconds.to_bits(),
         player_position: player.feet.to_array(),
         projectiles: session.projectiles.len(),
         carved,
@@ -670,7 +674,7 @@ fn read_phase(app: &mut App, mode: &str, root: &std::path::Path) {
             .resource::<OceanSimulationTime>()
             .seconds
             .to_bits(),
-        receipt.environment_seconds.to_bits()
+        receipt.environment_seconds_bits
     );
     assert_eq!(
         world_records(app.world()),
@@ -774,7 +778,8 @@ fn read_phase(app: &mut App, mode: &str, root: &std::path::Path) {
     let result = serde_json::json!({ "mode": mode, "write_pid": receipt.write_pid, "read_pid": std::process::id(),
         "tick": receipt.tick, "projectiles": receipt.projectiles, "world_records": receipt.world_records.len(),
         "full_owner_state_equal": true, "partial_health_retained": true, "carve_revisited": true,
-        "environment_seconds": receipt.environment_seconds });
+        "environment_seconds_bits": receipt.environment_seconds_bits,
+        "environment_seconds": f64::from_bits(receipt.environment_seconds_bits) });
     std::fs::write(
         root.join("verified.json"),
         serde_json::to_vec_pretty(&result).expect("result"),

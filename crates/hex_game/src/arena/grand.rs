@@ -275,7 +275,7 @@ fn read_app(
         || app.environment_seconds < 0.0
         || app.tick > 9_007_199_254_740_992
         || (app.environment_seconds
-            - OceanSimulationTime::from_fixed_tick(0, app.tick, super::FIXED_SECONDS).seconds)
+            - OceanSimulationTime::from_fixed_tick(0, app.tick, f64::from(hex_arena::STEP)).seconds)
             .abs()
             > 0.01
     {

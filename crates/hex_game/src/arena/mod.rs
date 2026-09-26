@@ -1231,8 +1231,11 @@ fn drive_simulation(world: &mut World) {
             world.resource_mut::<ArenaInput>().human = sample;
         }
         let started = std::time::Instant::now();
+        let tick_before_step = world.resource::<ArenaSession>().tick;
         world.run_schedule(ArenaTick);
-        if managed {
+        // A streamed-terrain wait publishes world data without consuming a
+        // gameplay gesture. Keep its edge queued until a real simulation tick.
+        if managed && world.resource::<ArenaSession>().tick > tick_before_step {
             world.resource_mut::<ViewState>().casts.consume();
         }
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;

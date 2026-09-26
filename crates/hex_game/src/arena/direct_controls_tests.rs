@@ -310,3 +310,173 @@ fn native_shift_does_not_change_the_four_point_five_unit_movement_speed() {
         assert!(!app.world().resource::<ArenaInput>().human.run);
     }
 }
+
+fn grand_streaming_controls() -> App {
+    use hex_core::arena::{ArenaExpeditionSites, ArenaMaterials, ArenaResidency, ArenaSolidSpan};
+    use hex_core::{ElementId, HexCoord, SubstanceId, TilePos};
+
+    let geometry = ArenaVoxelGeometry {
+        radius: 32,
+        ..default()
+    };
+    let chunks = (-2..=2)
+        .flat_map(|q| (-2..=2).map(move |r| (q, r)))
+        .collect::<std::collections::BTreeSet<_>>();
+    let terrain = ArenaTerrainView {
+        revision: 1,
+        selection: ArenaSelection {
+            map: ArenaMap::GrandV4,
+            ..default()
+        },
+        spawns: [Vec3::Y * 0.0001, Vec3::X * 8.0],
+        columns: HexCoord::ORIGIN
+            .within_radius(32)
+            .into_iter()
+            .map(|coord| {
+                (
+                    coord,
+                    vec![ArenaSolidSpan {
+                        bottom: TilePos::new(coord, 0),
+                        top_level: 0,
+                        substance: SubstanceId(1),
+                    }],
+                )
+            })
+            .collect(),
+        residency: Some(ArenaResidency {
+            catalogue: chunks.clone(),
+            ready: chunks,
+        }),
+        expedition: Some(ArenaExpeditionSites::default()),
+        ..default()
+    };
+    let mut builder = HeadlessAppBuilder::new()
+        .with_minimal_plugins()
+        .with_fixed_step(std::time::Duration::from_secs_f64(1.0 / 60.0));
+    builder
+        .app_mut()
+        .insert_resource(terrain)
+        .insert_resource(geometry)
+        .insert_resource(ArenaMaterials {
+            stone: SubstanceId(1),
+            reinforced_stone: None,
+            bedrock: SubstanceId(2),
+            grass: SubstanceId(3),
+            dirt: SubstanceId(4),
+            fire: ElementId(1),
+        })
+        .init_resource::<ArenaReset>()
+        .insert_resource(ViewState {
+            started: true,
+            paused: false,
+            capture: None,
+            ..default()
+        })
+        .add_plugins(hex_arena::plugin)
+        .add_systems(Update, drive_simulation);
+    let mut app = builder.build();
+    app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    app.update();
+    app.update();
+    let session = app.world().resource::<ArenaSession>();
+    assert!(
+        session.is_grand_run() && session.tick > 0,
+        "{}",
+        session.notice
+    );
+    app
+}
+
+fn set_grand_controls_ready(app: &mut App, ready: bool) {
+    let mut terrain = app.world_mut().resource_mut::<ArenaTerrainView>();
+    let residency = terrain.residency.as_mut().expect("finite fixture");
+    residency.ready = if ready {
+        residency.catalogue.clone()
+    } else {
+        default()
+    };
+    terrain.revision += 1;
+    terrain.full_rebuild = true;
+}
+
+#[test]
+fn grand_streaming_wait_preserves_restored_release_and_fresh_press_until_consumed() {
+    for restored_release in [false, true] {
+        let mut app = grand_streaming_controls();
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        if restored_release {
+            app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+                aim: Vec3::X,
+                selected: Some(Spell::Fireball),
+                cast_pressed: true,
+                cast_held: true,
+                ..default()
+            };
+            tick(&mut app);
+            assert_eq!(charge(&app), Some(Spell::Fireball));
+            let identity = hex_arena::GrandCheckpointIdentity {
+                world_id: "controls-fixture".into(),
+                content_revision: "streaming-input".into(),
+            };
+            let bytes = app
+                .world()
+                .resource::<ArenaSession>()
+                .encode_grand_checkpoint(&identity)
+                .expect("armed checkpoint");
+            let restored = ArenaSession::decode_grand_checkpoint(
+                &bytes,
+                &identity,
+                app.world().resource::<ArenaTerrainView>(),
+                *app.world().resource::<ArenaVoxelGeometry>(),
+                app.world().resource::<ArenaReset>().generation,
+            )
+            .expect("restored armed checkpoint");
+            app.world_mut().insert_resource(restored);
+            app.world_mut()
+                .resource_mut::<ViewState>()
+                .casts
+                .resume_existing(Spell::Fireball, false, Vec3::X);
+        } else {
+            mouse.press(MouseButton::Left);
+            app.world_mut()
+                .resource_mut::<ViewState>()
+                .casts
+                .observe(&mouse, &[], Vec3::X);
+            mouse.clear();
+        }
+        set_grand_controls_ready(&mut app, false);
+        let waiting_tick = app.world().resource::<ArenaSession>().tick;
+        for _ in 0..3 {
+            app.update();
+            assert_eq!(app.world().resource::<ArenaSession>().tick, waiting_tick);
+            assert_eq!(casts(&app, Spell::Fireball), 0);
+            let mut queued = ActorIntent::default();
+            app.world().resource::<ViewState>().casts.write(&mut queued);
+            assert_eq!(queued.cast_pressed, !restored_release);
+            assert_eq!(queued.cast_released, restored_release);
+        }
+        set_grand_controls_ready(&mut app, true);
+        app.update();
+        assert!(app.world().resource::<ArenaSession>().tick > waiting_tick);
+        let mut consumed = ActorIntent::default();
+        app.world()
+            .resource::<ViewState>()
+            .casts
+            .write(&mut consumed);
+        assert!(!consumed.cast_pressed && !consumed.cast_released);
+        if !restored_release {
+            assert_eq!(charge(&app), Some(Spell::Fireball));
+            assert_eq!(casts(&app, Spell::Fireball), 0);
+            mouse.release(MouseButton::Left);
+            app.world_mut()
+                .resource_mut::<ViewState>()
+                .casts
+                .observe(&mouse, &[], Vec3::X);
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(casts(&app, Spell::Fireball), 1);
+        assert!(charge(&app).is_none());
+    }
+}

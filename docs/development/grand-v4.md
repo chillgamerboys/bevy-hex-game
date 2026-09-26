@@ -72,7 +72,7 @@ Cargo jobs against the shared target. The process harness builds current source 
 launches separate writer/reader processes for land, boat and glider cases:
 
 ```sh
-python3 tools/grand_verify.py --circuit --package /absolute/grand-package \
+python3 tools/grand_verify.py --circuit --admissions --package /absolute/grand-package \
   --target-dir /absolute/cargo-target --output /absolute/fresh-restart-evidence
 python3 tools/grand_capture.py --package /absolute/grand-package \
   --target-dir /absolute/cargo-target --label fresh-candidate
@@ -82,6 +82,9 @@ python3 tools/grand_capture.py --package /absolute/grand-package \
 and CPU-prepared terrain roots. It checks chunk budgets and edit persistence through
 eviction/revisit. These paused interest relocations make no travel-speed, pixel,
 process-memory or frame-rate claim.
+`--admissions` visits all fourteen actual encounter sites, checks their exact
+127 stable enemy identities and species, and verifies active/dormant checkpoint
+integrity. The restart clock fixture also covers a run longer than sixty hours.
 
 The capture matrix is windowless and requires a clean committed candidate. It
 records source and package hashes, renders, native state receipts and an initially
