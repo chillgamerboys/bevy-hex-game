@@ -1,6 +1,6 @@
 //! Export the finalized authored instances, never another seeded forest placement.
 use super::*;
-use crate::v4::northern::forest::{ForestInstance, ForestOverview, ForestShape, forest_rotate};
+use crate::v4::northern::forest::{forest_rotate, ForestInstance, ForestOverview, ForestShape};
 
 pub(super) fn compile(objects: &[ObjectInstance]) -> Result<ForestOverview, ContractError> {
     let mut shapes: BTreeMap<String, ForestShape> = BTreeMap::new();
@@ -159,8 +159,8 @@ fn local_source(
 mod tests {
     use super::*;
     use crate::v4::northern::forest::{
-        MAX_FOREST_INSTANCES, MAX_FOREST_SHAPES, MAX_FOREST_SOURCE_RUNS, MAX_FOREST_VERTICES,
-        forest_mesh,
+        forest_mesh, MAX_FOREST_INSTANCES, MAX_FOREST_SHAPES, MAX_FOREST_SOURCE_RUNS,
+        MAX_FOREST_VERTICES,
     };
     use std::collections::BTreeSet;
     fn compiler() -> Result<GrandCompiler, Box<dyn std::error::Error>> {
@@ -203,11 +203,9 @@ mod tests {
                 .find(|o| o.id == instance.id)
                 .expect("authored tree");
             let shape = forest.shapes.get(instance.shape).expect("shape");
-            assert!(
-                instance
-                    .matches_object(shape, source)
-                    .expect("exact transform")
-            );
+            assert!(instance
+                .matches_object(shape, source)
+                .expect("exact transform"));
             let source_footprint: BTreeSet<_> = source
                 .occupancy
                 .iter()

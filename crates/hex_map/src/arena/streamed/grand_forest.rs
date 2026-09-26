@@ -8,7 +8,7 @@ use bevy::{
     prelude::*,
 };
 use hex_schematic::v4::northern::forest::{
-    ForestInstance, ForestMesh, ForestOverview, ForestShape, MAX_FOREST_VERTICES, forest_mesh,
+    forest_mesh, ForestInstance, ForestMesh, ForestOverview, ForestShape, MAX_FOREST_VERTICES,
 };
 use hex_world_contracts::{ChunkId, MaterialSpec, VoxelPosition};
 use hex_world_runtime::FiniteWorldSession;
