@@ -375,8 +375,8 @@ fn update(
     for mut transform in &mut surfaces {
         transform.translation = position;
     }
-    if cache.boundary_revision != Some(boundary.revision) {
-        if let Some(mesh) = boundary.build() {
+    if changed || cache.boundary_revision != Some(boundary.revision) {
+        if let Some(mesh) = boundary.build(profile.mean_sea_level) {
             if let Some((entity, old)) = cache.boundary.take() {
                 commands.entity(entity).despawn();
                 meshes.remove(old.id());

@@ -27,6 +27,12 @@ pub struct OceanNearBoundary {
     pub known_columns: BTreeSet<HexCoord>,
 }
 
+// Match the exact wet mask's sea-plane tolerance. Raised water retains its own
+// flat renderer, while its intervals still occlude the ocean's neighboring faces.
+fn at_sea_level(top: f32, sea: f32) -> bool {
+    (top - sea).abs() < 0.01
+}
+
 impl OceanNearBoundary {
     /// A bounded axial wet/dry mask. Unknown columns retain decorative distant
     /// water; known dry columns never gain water after solid terrain is carved.
@@ -62,7 +68,7 @@ impl OceanNearBoundary {
             *values.get_mut(index(*coord)?)? = -1.0;
         }
         for column in &self.columns {
-            if self.known_columns.contains(&column.coordinate) && (column.top - sea).abs() < 0.01 {
+            if self.known_columns.contains(&column.coordinate) && at_sea_level(column.top, sea) {
                 *values.get_mut(index(column.coordinate)?)? = 1.0;
             }
         }
@@ -73,8 +79,8 @@ impl OceanNearBoundary {
         ))
     }
 
-    pub(super) fn build(&self) -> Option<Mesh> {
-        if self.columns.len() > 32_768 {
+    pub(super) fn build(&self, sea: f32) -> Option<Mesh> {
+        if self.columns.len() > 32_768 || !sea.is_finite() {
             return None;
         }
         let mut lookup: BTreeMap<HexCoord, Vec<(f32, f32)>> = BTreeMap::new();
@@ -89,7 +95,14 @@ impl OceanNearBoundary {
                 .push((column.bottom, column.top));
         }
         let mut mesh = MeshData::default();
-        for column in &self.columns {
+        // All liquid intervals above participate in occlusion, including raised
+        // rivers at a sea junction. Emit only sea boundaries: the ordinary
+        // liquid mesh owns raised-water bottoms and sides as well as their tops.
+        for column in self
+            .columns
+            .iter()
+            .filter(|column| at_sea_level(column.top, sea))
+        {
             append_bottom(&mut mesh, *column);
             for neighbor in column
                 .coordinate
@@ -195,9 +208,9 @@ mod tests {
             columns: vec![column],
             ..default()
         };
-        assert_eq!(boundary.build().unwrap().count_vertices(), 7);
+        assert_eq!(boundary.build(0.0).unwrap().count_vertices(), 7);
         boundary.known_columns = HexCoord::ORIGIN.within_radius(1).into_iter().collect();
-        assert_eq!(boundary.build().unwrap().count_vertices(), 31);
+        assert_eq!(boundary.build(0.0).unwrap().count_vertices(), 31);
         boundary.columns.push(OceanBoundaryColumn {
             coordinate: HexCoord::from_axial(1, 0),
             ..column
@@ -205,10 +218,59 @@ mod tests {
         boundary
             .known_columns
             .extend(HexCoord::from_axial(1, 0).within_radius(1));
-        let indices = boundary.build().unwrap().indices().unwrap().len();
+        let indices = boundary.build(0.0).unwrap().indices().unwrap().len();
         assert_eq!(
             indices, 96,
             "two bottoms and ten exterior sides; no shared water face"
         );
+    }
+
+    #[test]
+    fn raised_water_occludes_sea_faces_without_emitting_duplicate_boundaries(
+    ) -> Result<(), &'static str> {
+        let sea = OceanBoundaryColumn {
+            coordinate: HexCoord::ORIGIN,
+            bottom: 138.6,
+            top: 140.0,
+        };
+        let raised = OceanBoundaryColumn {
+            coordinate: HexCoord::from_axial(1, 0),
+            // The first raised Grand level, 401 * 0.35, belongs to the flat mesh.
+            top: 140.35,
+            ..sea
+        };
+        let boundary = OceanNearBoundary {
+            columns: vec![sea, raised],
+            known_columns: HexCoord::ORIGIN.within_radius(1).into_iter().collect(),
+            ..default()
+        };
+        let mesh = boundary.build(140.0).ok_or("valid mixed water boundary")?;
+        assert_eq!(mesh.count_vertices(), 27, "one bottom and five sea sides");
+        assert_eq!(mesh.indices().ok_or("boundary indices")?.len(), 48);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            return Err("boundary positions");
+        };
+        assert!(positions
+            .iter()
+            .all(|&[x, y, z]| { x.hypot(z) <= 1.000_001 && (sea.bottom..=sea.top).contains(&y) }));
+        let (_, _, mask) = boundary.mask(140.0).ok_or("valid mixed water mask")?;
+        assert_eq!(mask.iter().filter(|value| **value > 0.5).count(), 1);
+
+        let inland_only = OceanNearBoundary {
+            columns: vec![raised],
+            ..boundary
+        };
+        assert_eq!(
+            inland_only
+                .build(140.0)
+                .ok_or("valid inland coverage")?
+                .count_vertices(),
+            0,
+            "inland geometry has exactly one renderer"
+        );
+        assert!(inland_only.build(f32::NAN).is_none());
+        Ok(())
     }
 }
