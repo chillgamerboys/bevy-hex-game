@@ -246,6 +246,8 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
     }
     out.push(tree(g, nearest_hex(-60., 125.), index, true)?);
     out.push(temple_plant(g)?);
+    out.push(fire_marker(g)?);
+    out.push(air_marker(g)?);
     for (i, (x, z)) in CAMPS.into_iter().enumerate() {
         out.push(camp(g, i, nearest_hex(x, z))?);
     }
@@ -376,6 +378,89 @@ fn temple_plant(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
         g,
         "grand/root-temple-plant".into(),
         "decor/grand-temple-plant",
+        root,
+        cells,
+    )
+}
+
+fn marker_base(g: &GrandCompiler, root: WorldHex) -> (Cells, i32) {
+    let floor = g.surface(root).level + 1;
+    let mut cells = Cells::new();
+    for q in -2_i64..=2 {
+        for r in -2_i64..=2 {
+            if q.abs().max(r.abs()).max((q + r).abs()) <= 2 {
+                let p = WorldHex::new(root.q + q, root.r + r);
+                add(&mut cells, p, g.surface(p).level + 1, floor + 2, "stone");
+            }
+        }
+    }
+    (cells, floor)
+}
+
+fn fire_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
+    // A static flame-shaped sculpture behind the claim point. Its opaque warm
+    // masonry has ordinary solid behavior; it is not an active fire or hazard.
+    let root = nearest_hex(-1170., 449.);
+    let (mut cells, floor) = marker_base(g, root);
+    for q in -1_i64..=1 {
+        for r in -1_i64..=1 {
+            if q.abs().max(r.abs()).max((q + r).abs()) <= 1 {
+                let p = WorldHex::new(root.q + q, root.r + r);
+                let height = if q == 0 && r == 0 {
+                    13
+                } else {
+                    7 + (q - r) as i32
+                };
+                add(&mut cells, p, floor + 2, floor + height, "worked_stone");
+            }
+        }
+    }
+    // The bent central tongue and uneven side tips give the small silhouette
+    // direction without extending over the interaction point or temple roof.
+    add(&mut cells, root, floor + 13, floor + 15, "worked_stone");
+    add(
+        &mut cells,
+        WorldHex::new(root.q + 1, root.r),
+        floor + 11,
+        floor + 16,
+        "worked_stone",
+    );
+    add(
+        &mut cells,
+        WorldHex::new(root.q - 1, root.r + 1),
+        floor + 5,
+        floor + 11,
+        "worked_stone",
+    );
+    object(
+        g,
+        "grand/fire-flame-marker".into(),
+        "decor/grand-static-flame",
+        root,
+        cells,
+    )
+}
+
+fn air_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
+    // A grounded, pale spiral around a blue center, behind the claim point.
+    // This is bounded static art rather than a wind simulation or new ability.
+    let root = nearest_hex(-400., -571.);
+    let (mut cells, floor) = marker_base(g, root);
+    add(&mut cells, root, floor + 2, floor + 16, "crystal");
+    for (step, &(q, r)) in DIRS.iter().cycle().take(12).enumerate() {
+        let bottom = floor + 2 + step as i32;
+        add(
+            &mut cells,
+            WorldHex::new(root.q + q, root.r + r),
+            bottom,
+            bottom + 3,
+            "snow",
+        );
+    }
+    object(
+        g,
+        "grand/air-spiral-marker".into(),
+        "decor/grand-static-spiral",
         root,
         cells,
     )

@@ -212,6 +212,25 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
         4
     );
     assert!(objects.iter().any(|o| o.id == "grand/root-temple-plant"));
+    for id in ["grand/fire-flame-marker", "grand/air-spiral-marker"] {
+        let marker = objects.iter().find(|object| object.id == id).unwrap();
+        assert!(marker.occupancy.len() <= 19, "small temple marker: {id}");
+        assert!(
+            marker.occupancy.iter().all(|column| column
+                .runs
+                .iter()
+                .all(|run| run.top <= marker.origin.level + 16)),
+            "marker stays below the temple cap: {id}"
+        );
+    }
+    assert_eq!(
+        g.overview().building_count,
+        objects
+            .iter()
+            .filter(|o| !o.asset.starts_with("plant/"))
+            .count(),
+        "overview reports actual authored non-tree objects"
+    );
     let tree = objects.iter().find(|o| o.id == "grand/world-tree").unwrap();
     let tree_chunks: std::collections::BTreeSet<_> =
         tree.occupancy.iter().map(|c| c.position.chunk()).collect();
@@ -256,6 +275,8 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
         .filter(|o| {
             o.id == "grand/world-tree"
                 || o.id == "grand/root-temple-plant"
+                || o.id == "grand/fire-flame-marker"
+                || o.id == "grand/air-spiral-marker"
                 || o.id.starts_with("grand/forest-camp/")
                 || o.id.starts_with("grand/coastal-rock/")
         })

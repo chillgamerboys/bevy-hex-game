@@ -34,11 +34,15 @@ Ocean volume is independent of the mainland-area measurement.
 
 The source defines the beach start, five shrines, 14 encounter sites, the forest
 and World Tree with grounded spreading roots, a planted temple below its roots,
+small static flame and spiral sculptures behind the Fire and Air claim points,
 six small camp/ruin accents, four coastal rock clusters, a fort, the mountain garden and fountain,
 a continuous descending watercourse through falls and valley lake into the bay,
 Crystal terraces and frozen woods, the library stair route inside the mountain,
 a separate uniform Shadow tunnel, and the offshore volcanic island. Site facts
 carry exact supporting voxels and package identity in `arena-sites.ron`.
+The Fire and Air markers use ordinary opaque voxel materials; they add no hazard,
+animation or ability. Overview structure counts derive from authored non-tree
+objects, matching the compiler receipt rather than a fixed landmark estimate.
 
 The offshore observation anchors define a clear 796.08-world-unit sea segment.
 The independent unupgraded controller reference travels 793.9485 units in 45 seconds

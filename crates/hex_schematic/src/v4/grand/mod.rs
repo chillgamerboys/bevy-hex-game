@@ -686,7 +686,12 @@ impl GrandCompiler {
                 crater: true,
             }],
             tree_count: self.tree_count,
-            building_count: if self.source.full_dressing { 8 } else { 0 },
+            building_count: self
+                .objects
+                .values()
+                .flatten()
+                .filter(|object| !object.asset.starts_with("plant/"))
+                .count(),
         }
     }
 }
@@ -694,6 +699,8 @@ fn palette() -> Vec<MaterialSpec> {
     let mut v: Vec<_> = [
         ("bedrock", [54, 64, 76, 255]),
         ("stone", [115, 124, 134, 255]),
+        // An opaque carved flame marker, using the existing fitted-masonry policy.
+        ("worked_stone", [248, 132, 48, 255]),
         ("reinforced_stone", [115, 124, 134, 255]),
         ("basalt", [62, 53, 57, 255]),
         ("slate", [83, 99, 123, 255]),
