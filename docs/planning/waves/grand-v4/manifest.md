@@ -1,6 +1,6 @@
 # Grand V4 integration wave
 
-Status: combined implementation; acceptance in progress
+Status: paused by user for the night; terrain/traversal review failed and requires redesign
 Wave: `wave/grand-v4`
 Verified remote dev: `bb556963632de933b44fb75b1d306aca79258cef`
 Playable integration base: `873a2c37eeb8eda23c11d398ce7d68d7965a64db`
@@ -12,6 +12,12 @@ Exclusions: new species/boss variants, advanced elemental control, tactical/netw
 World, gameplay and shared app must be reviewed together; existing #222/#223 form the playable base. No individual leaf proves the expedition or save composition.
 
 ## Locked decisions
+Latest user direction: [terrain playtest feedback](playtest-feedback.md) is the
+first correction for the next session. Current landforms are too steep and rounded;
+valleys and hills need broadly traversable surfaces, mountains need usable routes,
+and forest character should follow the prior Dragon/Goblin V4 map while preserving
+Grand V3's authored composition at larger scale.
+
 1. Grand V4 is a new selectable streamed expedition based on playable 873a2c37; preserve all existing maps.
 2. Mainland coastline-enclosed area including inland lakes is seven times canonical Grand V3 mainland, excluding ocean/offshore islands. Crystal Ascent is independently seven times original footprint, never scaled twice.
 3. Preserve approved relative layout, intimate garden/lake, connected waterfall/library, separate straight Shadow tunnel, broad forest/world tree and offshore volcano calibrated to 45 seconds favorable unupgraded sailing.
