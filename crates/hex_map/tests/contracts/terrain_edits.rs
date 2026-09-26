@@ -9,6 +9,10 @@ enum MalformedChunkTopology {
     Unexpected,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the malformed-topology fixture requires an edit target and valid initial chunk ownership"
+)]
 fn assert_chunk_topology_fails_closed(kind: MalformedChunkTopology) {
     let mut app = test_app();
     enter_gameplay(&mut app);

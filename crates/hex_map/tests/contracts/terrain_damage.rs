@@ -219,7 +219,10 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
     let grid_before = current_grid(&mut app);
     let affected_chunk = terrain_chunk_key(target.coord);
     let chunks_before = terrain_chunk_roots(&mut app);
-    let affected_root_before = chunks_before[&affected_chunk];
+    let affected_root_before = chunks_before
+        .get(&affected_chunk)
+        .copied()
+        .expect("the target voxel must have an existing terrain chunk root");
     let mut cursor = app
         .world()
         .resource::<Messages<TerrainImpactOutcome>>()
@@ -278,13 +281,21 @@ fn partial_then_exact_damage_preserves_then_destroys_the_voxel() {
         "chunk-native destruction must retain the stable whole-grid owner"
     );
     let chunks_after = terrain_chunk_roots(&mut app);
+    let affected_root_after = chunks_after
+        .get(&affected_chunk)
+        .copied()
+        .expect("destruction must retain a published root for the affected chunk");
     assert_ne!(
-        chunks_after[&affected_chunk], affected_root_before,
+        affected_root_after, affected_root_before,
         "destruction must atomically replace its affected chunk root"
     );
     for (chunk, root) in chunks_before {
         if chunk != affected_chunk {
-            assert_eq!(chunks_after[&chunk], root, "unaffected chunk {chunk:?}");
+            assert_eq!(
+                chunks_after.get(&chunk),
+                Some(&root),
+                "unaffected chunk {chunk:?}"
+            );
         }
     }
     assert_current_snapshot_matches_live_export(&app, "destructive terrain damage");

@@ -712,6 +712,10 @@ fn terrain_chunk_key(coord: HexCoord) -> (i32, i32) {
     (coord.x().div_euclid(16), coord.y().div_euclid(16))
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "this contract fixture must fail if the active grid or a chunk parent is missing"
+)]
 fn terrain_chunk_roots(app: &mut App) -> BTreeMap<(i32, i32), Entity> {
     let world = app.world_mut();
     let expected = world
