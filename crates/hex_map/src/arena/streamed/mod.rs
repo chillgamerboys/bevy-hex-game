@@ -633,24 +633,30 @@ fn publish(state: &mut StreamedArena, view: &mut ArenaTerrainView, geometry: &Ar
     view.revision = view.revision.wrapping_add(1);
 }
 
+// Rounding any cell in a 16×16 axial chunk to its centre can move the interest
+// by sixteen hexes at the q/r corner. Preserve the intended sixteen-hex local
+// actor envelope after quantization, including the diagonally previous chunk.
+const ACTOR_INTEREST_RADIUS: u32 = 16 + 16;
+
+fn interest_center(position: Vec3) -> WorldHex {
+    let chunk = world_hex(HexCoord::from_world(position)).chunk();
+    WorldHex::new(chunk.q * 16 + 8, chunk.r * 16 + 8)
+}
+
 fn pump(world: &mut World) {
     let started = Instant::now();
     let interest = *world.resource::<ArenaStreamInterest>();
     let geometry = *world.resource::<ArenaVoxelGeometry>();
     world.resource_scope(|world, mut state: Mut<StreamedArena>| {
-        let quantize = |position| {
-            let c = world_hex(HexCoord::from_world(position)).chunk();
-            WorldHex::new(c.q * 16 + 8, c.r * 16 + 8)
-        };
-        let center = quantize(interest.position);
-        let ahead = quantize(interest.position + interest.velocity);
-        let far = quantize(interest.position + interest.velocity * 2.0);
+        let center = interest_center(interest.position);
+        let ahead = interest_center(interest.position + interest.velocity);
+        let far = interest_center(interest.position + interest.velocity * 2.0);
         let mut actors: Vec<_> = world
             .resource::<ArenaActorStreamInterests>()
             .positions
             .iter()
             .filter(|p| p.is_finite())
-            .map(|p| quantize(*p))
+            .map(|p| interest_center(*p))
             .collect();
         actors.sort();
         actors.dedup();
@@ -697,8 +703,8 @@ fn pump(world: &mut World) {
                     .map(|(i, center)| ResidencyRequest {
                         id: format!("actor-{i}"),
                         center: *center,
-                        radius: 16,
-                        retention_radius: 16,
+                        radius: ACTOR_INTEREST_RADIUS,
+                        retention_radius: ACTOR_INTEREST_RADIUS,
                         priority: 252,
                     }),
             );

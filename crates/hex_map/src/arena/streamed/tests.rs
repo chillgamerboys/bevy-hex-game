@@ -4,6 +4,31 @@ use hex_core::arena::ArenaMap;
 use serde::Serialize;
 use std::io::Write;
 
+#[test]
+fn actor_interest_retains_local_envelope_at_every_chunk_cell() {
+    // The reported garden wait happened at this minimum/minimum chunk corner.
+    let corner = HexCoord::from_axial(416, -352);
+    let center = interest_center(corner.to_world(0.0));
+    let previous = WorldHex::new(415, -353);
+    assert_eq!(center.checked_distance(previous).unwrap(), 18);
+    assert!(center.checked_distance(previous).unwrap() <= u64::from(ACTOR_INTEREST_RADIUS));
+    for origin in [HexCoord::ORIGIN, corner, HexCoord::from_axial(-32, -48)] {
+        for q in 0..16 {
+            for r in 0..16 {
+                let actor = HexCoord::from_axial(origin.x() + q, origin.y() + r);
+                let center = interest_center(actor.to_world(0.0));
+                for local in actor.within_radius(16) {
+                    assert!(
+                        center.checked_distance(world_hex(local)).unwrap()
+                            <= u64::from(ACTOR_INTEREST_RADIUS),
+                        "quantized interest lost {local:?} around {actor:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default, Serialize)]
 struct Peaks {
     residents: usize,
