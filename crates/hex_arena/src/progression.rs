@@ -8,7 +8,7 @@ pub use expedition::{ExpeditionReward, ExpeditionSnapshot, FountainSnapshot, Mil
 use crate::{ActorId, ArenaSession, ArenaTuning, ExpeditionRole, Species};
 
 /// Impact behavior frozen when an ordinary Fireball is released.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FireballMode {
     /// Damage only the exact struck body, barrier, or terrain voxel.
     ContactOnly,
@@ -18,7 +18,9 @@ pub enum FireballMode {
 }
 
 /// Beneficial player upgrades available in the Forest–Massif pause menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum UpgradeStat {
     /// Advance one exact Shield footprint rank.
     ShieldSize,
@@ -93,7 +95,7 @@ pub struct UpgradePreview {
 }
 
 /// Effective expedition-only spell geometry and movement, separate from legacy presets.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlayerSpellProfile {
     /// Shield seed reference speed, independent of Fireball speed.
     pub shield_projectile_speed: f32,
@@ -106,7 +108,7 @@ pub struct PlayerSpellProfile {
 }
 
 /// Read-only player progress, with no hidden enemy positions or party activity.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProgressSnapshot {
     /// Current player level, starting at one.
     pub level: u32,
@@ -134,7 +136,7 @@ pub struct ProgressSnapshot {
     pub completed: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct RosterEntry {
     species: Species,
     role: Option<ExpeditionRole>,
@@ -176,7 +178,7 @@ impl RosterEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ProgressState {
     snapshot: ProgressSnapshot,
     ranks: BTreeMap<UpgradeStat, u8>,
@@ -184,7 +186,7 @@ pub(crate) struct ProgressState {
     shield_speed_bonus: f32,
     shield_dimension_bonus: i32,
     roster: BTreeMap<ActorId, RosterEntry>,
-    expedition: bool,
+    pub(crate) expedition: bool,
     fountains: BTreeMap<String, expedition::FountainState>,
     rewards: BTreeMap<ExpeditionReward, expedition::RewardState>,
     settlement_supports: BTreeSet<hex_core::TilePos>,
@@ -232,7 +234,7 @@ impl ArenaSession {
     /// Whether the reset-accepted session is the authored Forest–Massif player run.
     #[must_use]
     pub fn is_forest_run(&self) -> bool {
-        self.progression.is_some()
+        self.progression.is_some() && self.grand.is_none()
     }
 
     /// Run progress; other maps and spectators have no progression.
@@ -257,17 +259,52 @@ impl ArenaSession {
                 base.clone()
             };
         };
-        state.tuning(base)
+        let mut tuning = state.tuning(base);
+        if let Some(g) = &self.grand {
+            use crate::ShrineId;
+            if g.has(ShrineId::Fire) {
+                tuning.fireball_damage *= g.tuning.fire_damage;
+            }
+            if g.has(ShrineId::Air) {
+                tuning.projectile_speed *= g.tuning.air_projectiles;
+            }
+            if g.has(ShrineId::Plant) {
+                tuning.high_jump_height *= g.tuning.plant_jump;
+            }
+            if let Some(profile) = &mut tuning.player_profile {
+                if g.has(ShrineId::Fire) {
+                    profile.fireball_radius *= g.tuning.fire_size;
+                }
+                if g.has(ShrineId::Air) {
+                    profile.shield_projectile_speed *= g.tuning.air_projectiles;
+                }
+                if g.has(ShrineId::Earth) {
+                    profile.walking_speed *= g.tuning.earth_run;
+                }
+                if g.has(ShrineId::Plant) {
+                    profile.fireball_radius *= g.tuning.plant_size;
+                    profile.shield_dimensions.0 += 1;
+                    profile.shield_dimensions.1 += 1;
+                }
+            }
+        }
+        tuning
     }
 
     /// Current ordinary expedition walking speed; legacy movement remains separately tuned.
     #[must_use]
     pub fn player_walking_speed(&self) -> f32 {
-        self.progression
+        let base = self
+            .progression
             .as_ref()
             .map_or(if self.exploration { 5.90625 } else { 4.5 }, |state| {
                 state.walking_speed()
-            })
+            });
+        base * self
+            .grand
+            .as_ref()
+            .filter(|g| g.has(crate::ShrineId::Earth))
+            .map_or(1.0, |g| g.tuning.earth_run)
     }
 
     /// Effective before/after values for one rank, independent of the current point balance.
@@ -307,6 +344,13 @@ impl ArenaSession {
     }
 
     pub(crate) fn player_fireball_mode(&self) -> FireballMode {
+        if let Some(g) = &self.grand {
+            return if g.has(crate::ShrineId::Fire) {
+                FireballMode::Explosive
+            } else {
+                FireballMode::ContactOnly
+            };
+        }
         if self.exploration || self.progress().is_some_and(|p| !p.explosions_unlocked) {
             FireballMode::ContactOnly
         } else {
@@ -316,7 +360,7 @@ impl ArenaSession {
 
     pub(crate) fn register_forest_roster(&mut self) {
         if let Some(state) = &mut self.progression {
-            state.roster = self
+            let roster = self
                 .actors
                 .iter()
                 .filter(|a| a.id != 0)
@@ -329,8 +373,14 @@ impl ArenaSession {
                         },
                     )
                 })
-                .collect();
-            state.expedition = state.roster.values().any(|entry| entry.role.is_some());
+                .collect::<BTreeMap<_, _>>();
+            if self.grand.is_some() {
+                state.roster.extend(roster);
+            } else {
+                state.roster = roster;
+            }
+            state.expedition =
+                self.grand.is_some() || state.roster.values().any(|entry| entry.role.is_some());
         }
     }
 
@@ -347,6 +397,16 @@ impl ArenaSession {
         if hostile {
             if let Some(state) = &mut self.progression {
                 state.hits.insert(victim, self.tick);
+            }
+        }
+    }
+
+    pub(crate) fn shift_grand_credit(&mut self, ids: &BTreeSet<ActorId>, delta: u64) {
+        if let Some(state) = &mut self.progression {
+            for (id, tick) in &mut state.hits {
+                if ids.contains(id) {
+                    *tick = tick.saturating_add(delta);
+                }
             }
         }
     }
@@ -375,7 +435,20 @@ impl ArenaSession {
                 .get(&actor.id)
                 .is_some_and(|tick| self.tick.saturating_sub(*tick) <= 1200)
             {
-                let xp = entry.xp();
+                let xp = if self.grand.is_some() {
+                    match entry.species {
+                        Species::Goblin => 1,
+                        Species::Shaman => 5,
+                        Species::Dragon => 20,
+                        Species::Wisp => 3,
+                        Species::Golem => 25,
+                        Species::Worm => 10,
+                        Species::Shadow => 50,
+                        Species::Human => 0,
+                    }
+                } else {
+                    entry.xp()
+                };
                 self.player_knowledge.credited_defeat(actor.id);
                 state.snapshot.xp += xp;
                 state.snapshot.total_xp += xp;
@@ -389,7 +462,7 @@ impl ArenaSession {
         }
         let minions = state.minion_total();
         state.snapshot.forest_cleared = minions > 0 && state.snapshot.forest_defeated == minions;
-        if !state.expedition {
+        if !state.expedition && self.grand.is_none() {
             // Legacy packages retain automatic clear rewards. Expedition pickup
             // authority will mutate these fields separately; deaths never do.
             state.snapshot.explosions_unlocked = state.snapshot.dragons_defeated == 3;
@@ -399,12 +472,27 @@ impl ArenaSession {
                 0.0
             };
         }
-        state.snapshot.completed =
-            !state.roster.is_empty() && state.defeated.len() == state.roster.len();
+        if let Some(g) = &self.grand {
+            state.snapshot.explosions_unlocked = g.has(crate::ShrineId::Fire);
+        }
+        state.snapshot.completed = self.grand.is_none()
+            && !state.roster.is_empty()
+            && state.defeated.len() == state.roster.len();
     }
 }
 
 impl ProgressState {
+    pub(crate) fn valid_checkpoint(&self) -> bool {
+        (1..=100).contains(&self.snapshot.level)
+            && self.snapshot.xp_to_next == level_threshold(self.snapshot.level)
+            && self.snapshot.xp < self.snapshot.xp_to_next
+            && self.snapshot.available_upgrades < self.snapshot.level
+            && self
+                .ranks
+                .iter()
+                .all(|(stat, rank)| *rank <= stat.max_ranks())
+    }
+
     fn minion_total(&self) -> usize {
         self.roster
             .values()

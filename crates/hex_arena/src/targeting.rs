@@ -6,7 +6,7 @@ use crate::collision::CollisionWorld;
 use crate::spells::ForecastBody;
 use crate::{shapes, Actor, STEP};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ObservedTarget {
     pub body: ForecastBody,
     pub tick: u64,

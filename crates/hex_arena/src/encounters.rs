@@ -10,6 +10,7 @@ mod abilities;
 mod battle_runtime;
 mod brain;
 mod expedition;
+mod grand;
 #[cfg(any(test, feature = "test-support"))]
 mod route_probe;
 #[cfg(any(test, feature = "test-support"))]
@@ -23,7 +24,7 @@ mod tests;
 mod wisp;
 mod worm;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Knowledge {
     point: Vec3,
     velocity: Vec3,
@@ -33,7 +34,7 @@ struct Knowledge {
     observed: Option<targeting::ObservedTarget>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PartyRuntime {
     snapshot: PartySnapshot,
     knowledge: Option<Knowledge>,
@@ -44,15 +45,17 @@ struct PartyRuntime {
     battle_search: Option<Vec3>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct EncounterState {
     pub initialized: bool,
+    #[serde(skip)]
     expedition: Option<expedition::Control>,
     separation_stats: ActorSeparationStats,
     worms: BTreeMap<ActorId, worm::Controller>,
     pub(crate) spawn_failed: bool,
     pub parties: Vec<PartySnapshot>,
     runtime: Vec<PartyRuntime>,
+    pub(crate) dormant: BTreeMap<PartyId, grand::DormantParty>,
     brains: BTreeMap<ActorId, brain::Brain>,
     pub barriers: Vec<BarrierSnapshot>,
     pub auras: Vec<AuraSnapshot>,
@@ -128,6 +131,10 @@ impl ArenaSession {
         geometry: ArenaVoxelGeometry,
         tuning: &ArenaTuning,
     ) {
+        if world.selection.map == ArenaMap::GrandV4 {
+            self.initialize_grand(world, geometry);
+            return;
+        }
         if world.selection.map.capabilities().exploration {
             self.initialize_exploration(world, geometry);
             return;
@@ -491,7 +498,13 @@ impl ArenaSession {
                 p.knowledge = None;
             }
         }
-        self.encounter.parties = self.encounter.runtime.iter().map(|p| p.snapshot).collect();
+        self.encounter.parties = self
+            .encounter
+            .runtime
+            .iter()
+            .map(|p| p.snapshot)
+            .chain(self.encounter.dormant.values().map(|p| p.runtime.snapshot))
+            .collect();
     }
 
     pub(super) fn wake_encounter_damage(&mut self, owner: ActorId, victim: ActorId, amount: f32) {
@@ -688,6 +701,16 @@ impl ArenaSession {
         }
         if self.encounter.spawn_failed || !self.encounter.initialized {
             return CommandsOut::default();
+        }
+        if self.is_grand_run() {
+            self.suspend_grand_parties();
+            self.wake_grand_parties();
+            self.admit_grand_parties(world, geometry, tuning);
+            if self.grand_waiting_for_actors() {
+                self.notice = "Loading nearby encounter terrain…".into();
+                return CommandsOut::default();
+            }
+            self.advance_grand(human, world, geometry);
         }
         self.begin_simulation_tick();
         let mut out = CommandsOut::default();
@@ -947,12 +970,20 @@ impl ArenaSession {
         if self.accepted_battle.control == ArenaControl::Spectator {
             self.finish_battle_tick();
         } else {
-            self.outcome = match (human_alive, enemy) {
-                (true, None) if self.exploration || self.completed_run() => None,
-                (true, None) => Some(ArenaOutcome::Winner(0)),
-                (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
-                (false, None) => Some(ArenaOutcome::Draw),
-                _ => None,
+            self.outcome = if self.is_grand_run() {
+                None
+            } else {
+                match (human_alive, enemy) {
+                    (true, None)
+                        if self.exploration || self.is_grand_run() || self.completed_run() =>
+                    {
+                        None
+                    }
+                    (true, None) => Some(ArenaOutcome::Winner(0)),
+                    (false, Some(id)) => Some(ArenaOutcome::Winner(id)),
+                    (false, None) => Some(ArenaOutcome::Draw),
+                    _ => None,
+                }
             };
         }
         if self.is_finished() {
@@ -1039,7 +1070,7 @@ fn liquid_candidates<'a>(
         })
 }
 
-fn safe_spawn(
+pub(crate) fn safe_spawn(
     actor: &Actor,
     desired: Vec3,
     others: &[Actor],
@@ -1086,7 +1117,7 @@ fn safe_spawn(
     })
 }
 
-fn body_overlap(a: &Actor, b: &Actor) -> Option<Vec3> {
+pub(crate) fn body_overlap(a: &Actor, b: &Actor) -> Option<Vec3> {
     if matches!(a.species, Species::Golem | Species::Wisp | Species::Worm)
         || matches!(b.species, Species::Golem | Species::Wisp | Species::Worm)
     {
@@ -1321,7 +1352,7 @@ pub struct PartyKnowledgeSnapshot {
 }
 
 /// Read-only creature plans based exclusively on admitted observations and geometry.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CreatureDecisionSnapshot {
     /// Stable controlled actor.
     pub id: ActorId,
@@ -1383,3 +1414,12 @@ impl ArenaSession {
 }
 
 pub use expedition::ExpeditionRallySnapshot;
+
+impl Knowledge {
+    fn shift_clock(&mut self, delta: u64) {
+        self.tick = self.tick.saturating_add(delta);
+        if let Some(o) = &mut self.observed {
+            o.tick = o.tick.saturating_add(delta);
+        }
+    }
+}

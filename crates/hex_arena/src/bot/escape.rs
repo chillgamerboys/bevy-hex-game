@@ -65,7 +65,7 @@ const DIRECTIONS: [Vec3; 6] = [
     Vec3::new(0.5, 0.0, -0.866_025_4),
 ];
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Travel {
     target: Vec3,
     jump: bool,
@@ -75,7 +75,7 @@ struct Travel {
     revision: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Search {
     body: Actor,
     revision: u64,
@@ -83,7 +83,7 @@ struct Search {
     rims: [Option<Vec3>; 6],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct EscapeRecovery {
     suspected: Option<(u64, Vec3)>,
     started: Option<u64>,
@@ -94,6 +94,7 @@ pub(super) struct EscapeRecovery {
     suppressed: Option<(Vec3, u64)>,
     suppression_revision: Option<u64>,
     suppression_capability: Option<(bool, u32)>,
+    #[serde(skip)]
     reason: &'static str,
     pub rollout_ticks: u64,
     pub attempts: u32,
@@ -497,3 +498,26 @@ fn local_signature(
 
 #[cfg(test)]
 mod tests;
+
+impl EscapeRecovery {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        for t in [&mut self.next_probe, &mut self.next_plan] {
+            *t = t.saturating_add(delta);
+        }
+        if let Some((t, _)) = &mut self.suspected {
+            *t = t.saturating_add(delta);
+        }
+        if let Some(t) = &mut self.started {
+            *t = t.saturating_add(delta);
+        }
+        if let Some((_, t)) = &mut self.suppressed {
+            *t = t.saturating_add(delta);
+        }
+        if let Some(s) = &mut self.search {
+            s.body.shift_clock(delta);
+        }
+        if let Some(r) = &mut self.route {
+            r.expected.shift_clock(delta);
+        }
+    }
+}

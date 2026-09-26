@@ -16,14 +16,14 @@ use hex_core::arena::{
 use hex_core::TerrainDamageKind;
 
 /// Species-specific earth sensing supplies a position, never a shot forecast.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct BurrowTarget {
     id: ActorId,
     point: Vec3,
     tick: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Escape {
     origin: Vec3,
     depth: u8,
@@ -31,7 +31,7 @@ struct Escape {
     rise_admitted: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Controller {
     heading: f32,
     lift: f32,
@@ -66,7 +66,7 @@ impl Controller {
             seen: Vec::new(),
             target: None,
             goal: actor.feet,
-            search_step: actor.id % 4,
+            search_step: u8::try_from(actor.id % 4).unwrap_or_default(),
             committed_direction: None,
             committed_goal: actor.feet,
             burrow_target: None,
@@ -1387,4 +1387,19 @@ pub(super) fn deployment_pose(
         }
     }
     None
+}
+
+impl Controller {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        self.next_sense = self.next_sense.saturating_add(delta);
+        for seen in &mut self.seen {
+            seen.tick = seen.tick.saturating_add(delta);
+        }
+        if let Some(target) = &mut self.target {
+            target.shift_clock(delta);
+        }
+        if let Some(target) = &mut self.burrow_target {
+            target.tick = target.tick.saturating_add(delta);
+        }
+    }
 }

@@ -32,7 +32,7 @@ fn buoyancy_step(current: f32, target: f32, speed: f32) -> (f32, f32) {
 }
 
 /// Authoritative boat pose and motion; presentation adds no player displacement.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BoatSnapshot {
     /// Whether the portable boat is deployed.
     pub active: bool,
@@ -59,7 +59,7 @@ impl Default for BoatSnapshot {
 }
 
 /// Physical swimming and breathing facts, independent of camera mode.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SwimSnapshot {
     /// Whether swimming currently controls the body.
     pub active: bool,
@@ -71,7 +71,7 @@ pub struct SwimSnapshot {
     pub submerged: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MarineState {
     pub(crate) lab: bool,
     pub(crate) glider_wind_scale: f32,
@@ -572,7 +572,17 @@ fn sail_drive(alignment: f32) -> f32 {
     }
 }
 
+#[cfg(test)]
 fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, Vec3) {
+    boat_velocity_scaled(boat, intent, aim, 1.0)
+}
+
+fn boat_velocity_scaled(
+    boat: BoatSnapshot,
+    intent: ActorIntent,
+    aim: Vec3,
+    scale: f32,
+) -> (Vec3, Vec3) {
     let speed = boat.velocity.with_y(0.0).length();
     let turn = (70.0 - 35.0 * (speed / BOAT_SPEED)).to_radians() * STEP;
     let target = if intent.movement.y > 0.0 {
@@ -585,8 +595,9 @@ fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, V
         signed.clamp(-turn, turn) - intent.movement.x.clamp(-1.0, 1.0) * turn,
     ) * boat.heading;
     let alignment = heading.dot(boat.wind.normalize_or_zero());
-    let mut acceleration =
-        3.0 * sail_drive(alignment) * boat.wind.length() / 10.0 - 0.25 - 0.006 * speed * speed;
+    let mut acceleration = 3.0 * scale * sail_drive(alignment) * boat.wind.length() / 10.0
+        - 0.25
+        - 0.006 * speed * speed;
     if intent.movement.y > 0.0 && speed < 4.0 {
         acceleration = acceleration.max(1.5);
     }
@@ -595,7 +606,7 @@ fn boat_velocity(boat: BoatSnapshot, intent: ActorIntent, aim: Vec3) -> (Vec3, V
     }
     (
         heading,
-        heading * (speed + acceleration * STEP).clamp(0.0, BOAT_SPEED),
+        heading * (speed + acceleration * STEP).clamp(0.0, BOAT_SPEED * scale),
     )
 }
 
@@ -613,7 +624,7 @@ fn boat_tick(
         velocity: state.boat.velocity - state.wave_velocity,
         ..state.boat
     };
-    let (heading, velocity) = boat_velocity(boat, intent, actor.aim);
+    let (heading, velocity) = boat_velocity_scaled(boat, intent, actor.aim, actor.boat_scale);
     let next = actor.feet + velocity * STEP;
     let surface = match sea.sample(next) {
         OceanSurfaceState::ReadyWet(surface) => surface,
@@ -796,7 +807,7 @@ pub(crate) fn tick_or_wait(
     }
     let neutral = ((surface.height - immersion - actor.feet.y) * 2.0).clamp(-0.5, 1.2);
     let mut velocity = prior.lerp(
-        direction * if lab { actor.walking_speed * 0.85 } else { 3.5 }
+        direction * actor.swim_scale * if lab { actor.walking_speed * 0.85 } else { 3.5 }
             + Vec3::Y
                 * if vertical.abs() > 0.01 {
                     vertical * 2.5

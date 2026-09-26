@@ -23,7 +23,7 @@ pub(super) struct MotionIntent {
     pub flight: bool,
     pub lunge: bool,
 }
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Brain {
     pub active: Option<super::abilities::Cast>,
     pub(super) rally_goal: Option<Vec3>,
@@ -339,6 +339,8 @@ impl Brain {
         }
         if actor.species == Species::Dragon {
             flight = party.snapshot.phase == PartyPhase::Dormant
+                || (party.snapshot.phase == PartyPhase::Returning
+                    && (actor.flying || actor.feet.y > self.home.y + actor.dimensions.y))
                 || (party.snapshot.phase == PartyPhase::Active
                     && (sight.is_none()
                         || actor.flying
@@ -1198,4 +1200,59 @@ fn goblin_separation(actor: &Actor, actors: &[Actor], desired: Vec3, spacing: f3
         }
     }
     direction.clamp_length_max(1.0)
+}
+
+impl Brain {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        for t in [
+            &mut self.retreat_reconsider,
+            &mut self.next_shot_probe,
+            &mut self.reaction_since,
+        ] {
+            *t = t.saturating_add(delta);
+        }
+        for t in [
+            &mut self.flight_recovery,
+            &mut self.patrol_goal,
+            &mut self.lunge,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            t.1 = t.1.saturating_add(delta);
+        }
+        for t in [
+            &mut self.battle_sense_tick,
+            &mut self.lunge_since,
+            &mut self.ember_opening_at,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *t = t.saturating_add(delta);
+        }
+        for o in &mut self.battle_seen {
+            o.tick = o.tick.saturating_add(delta);
+        }
+        if let Some(o) = &mut self.golem_observation {
+            o.tick = o.tick.saturating_add(delta);
+        }
+        if let Some(k) = &mut self.ember_seen {
+            k.shift_clock(delta);
+        }
+        if let Some(wisp::EmberTarget::Visible(k) | wisp::EmberTarget::Cover(k)) =
+            &mut self.ember_target
+        {
+            k.shift_clock(delta);
+        }
+        if let Some(c) = &mut self.active {
+            c.shift_clock(delta);
+        }
+        if let Some(d) = &mut self.decision {
+            d.observation_tick = d.observation_tick.map(|t| t.saturating_add(delta));
+        }
+        self.shadow.shift_clock(delta);
+        self.steering.shift_clock(delta);
+        self.shadow_travel.shift_clock(delta);
+    }
 }

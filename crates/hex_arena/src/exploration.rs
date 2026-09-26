@@ -21,7 +21,7 @@ pub struct FreeFlightSnapshot {
     pub loading: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FreeFlightState {
     pub(crate) active: bool,
     velocity: Vec3,

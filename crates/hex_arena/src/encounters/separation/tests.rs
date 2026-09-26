@@ -86,7 +86,7 @@ fn separation_requeries_pairs_introduced_by_an_earlier_push_in_the_same_pass() {
 }
 
 fn dense_108() -> Vec<Actor> {
-    (0_u8..108)
+    (0_u32..108)
         .map(|id| {
             let mut actor = actor(
                 id,
@@ -130,8 +130,8 @@ fn separation_matches_ordered_solver_for_rotated_dragons_compounds_layers_and_de
                     6 => Species::Shadow,
                     _ => Species::Goblin,
                 };
-                let x = (u16::from(id) * 17 + u16::from(seed) * 7) % 31;
-                let z = (u16::from(id) * 11 + u16::from(seed) * 13) % 29;
+                let x = (u16::try_from(id).unwrap_or_default() * 17 + u16::from(seed) * 7) % 31;
+                let z = (u16::try_from(id).unwrap_or_default() * 11 + u16::from(seed) * 13) % 29;
                 let mut actor = actor(
                     255 - id,
                     Vec3::new(
@@ -141,7 +141,8 @@ fn separation_matches_ordered_solver_for_rotated_dragons_compounds_layers_and_de
                     ),
                     species,
                 );
-                actor.body_yaw = f32::from(u16::try_from(id + seed).unwrap_or_default()) * 0.37;
+                actor.body_yaw =
+                    f32::from(u16::try_from(id + u32::from(seed)).unwrap_or_default()) * 0.37;
                 if id % 9 == 0 {
                     actor.hp = 0.0;
                 }
@@ -189,7 +190,7 @@ fn separation_preserves_terrain_slide_and_valid_poses_beside_a_wall() {
 }
 
 fn scattered_108() -> Vec<Actor> {
-    (0_u8..108)
+    (0_u32..108)
         .map(|id| {
             actor(
                 id,

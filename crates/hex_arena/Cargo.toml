@@ -13,7 +13,7 @@ test-support = []
 [dependencies]
 bevy_app.workspace = true
 bevy_ecs.workspace = true
-bevy_math.workspace = true
+bevy_math = { workspace = true, features = ["serialize"] }
 hex_core.workspace = true
 serde.workspace = true
 ron.workspace = true

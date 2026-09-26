@@ -38,7 +38,9 @@ pub use encounters::ExpeditionRallySnapshot;
 pub use expedition::{DragonTier, ExpeditionRole};
 mod exploration;
 mod glider;
+mod grand;
 pub use exploration::FreeFlightSnapshot;
+pub use grand::{GrandCheckpointIdentity, GrandProgressSnapshot, GrandTuning, ShrineId};
 mod hex_prisms;
 pub use glider::GliderSnapshot;
 mod marine;
@@ -132,7 +134,7 @@ impl Spell {
 }
 
 /// A complete input sample. Bot and human commands share this exact path.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct ActorIntent {
     /// Horizontal axes: x is right and y is forward relative to aim yaw.
     pub movement: Vec2,
@@ -144,6 +146,10 @@ pub struct ActorIntent {
     pub jump: bool,
     /// Independent High Jump press edge; never changes the selected projectile.
     pub high_jump: bool,
+    /// One X edge requests the unlocked Grand short teleport.
+    pub teleport: bool,
+    /// One R edge activates a nearby Grand shrine.
+    pub interact: bool,
     /// Single G press edge to open or fold the expedition glider.
     pub glider_toggle: bool,
     /// Raw camera look direction for flight steering, before aim correction.
@@ -174,6 +180,8 @@ impl Default for ActorIntent {
             run: false,
             jump: false,
             high_jump: false,
+            teleport: false,
+            interact: false,
             glider_toggle: false,
             glider_look: Vec3::NEG_Z,
             flight_toggle: false,
@@ -196,7 +204,7 @@ pub struct ArenaInput {
 }
 
 /// Read-only projection of an actor's currently armed spell.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChargeState {
     /// Spell captured on the accepted press.
     pub spell: Spell,
@@ -410,7 +418,7 @@ impl ArenaTuning {
 }
 
 /// One authoritative continuous actor. Presentation reads these fields only.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Actor {
     /// Stable actor identity allocated once per run, never reused after death.
     pub id: crate::ActorId,
@@ -448,6 +456,10 @@ pub struct Actor {
     free_flight: Option<exploration::FreeFlightState>,
     marine: Option<marine::MarineState>,
     walking_speed: f32,
+    jump_scale: f32,
+    glider_scale: f32,
+    swim_scale: f32,
+    boat_scale: f32,
     dimensions: Vec3,
     expedition_role: Option<ExpeditionRole>,
     dragon_tier: DragonTier,
@@ -496,6 +508,10 @@ impl Actor {
             free_flight: None,
             marine: None,
             walking_speed: 5.90625,
+            jump_scale: 1.0,
+            glider_scale: 1.0,
+            swim_scale: 1.0,
+            boat_scale: 1.0,
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
             expedition_role: None,
             dragon_tier: DragonTier::Standard,
@@ -610,6 +626,14 @@ impl Actor {
         self.charge
     }
 
+    /// Cast state that must be reconciled with the physical mouse button after resume.
+    #[must_use]
+    pub fn resume_cast_spell(&self) -> Option<Spell> {
+        self.charge
+            .map(|c| c.spell)
+            .or(self.buffered_fireball.then_some(Spell::Fireball))
+    }
+
     fn cancel_charge(&mut self) {
         self.cast_needs_release |= self.charge.is_some() || self.buffered_fireball;
         self.buffered_fireball = false;
@@ -714,7 +738,7 @@ impl Actor {
 }
 
 /// A released projectile. Its launch parameters are frozen through impact.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Projectile {
     /// Stable identifier within the current reset generation.
     pub id: u64,
@@ -735,7 +759,7 @@ pub struct Projectile {
 }
 
 /// Presentation identity, independent of the three gameplay ability slots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum VisualEffectKind {
     /// Stone cover emergence.
     Shield,
@@ -760,7 +784,7 @@ impl From<Spell> for VisualEffectKind {
 }
 
 /// Short-lived cosmetic event; neither rendering nor expiry mutates terrain or HP.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VisualEffect {
     /// World-space effect center.
     pub center: Vec3,
@@ -775,7 +799,7 @@ pub struct VisualEffect {
 }
 
 /// Terminal result. The entire session waits for a full reset after KO.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ArenaOutcome {
     /// Winning actor ID; zero also denotes all hostile encounter parties defeated.
     Winner(crate::ActorId),
@@ -784,7 +808,7 @@ pub enum ArenaOutcome {
 }
 
 /// Readable immutable simulation projection plus privately owned control state.
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ArenaSession {
     /// Stable continuous actors for the selected duel or encounter roster.
     pub actors: Vec<Actor>,
@@ -805,17 +829,25 @@ pub struct ArenaSession {
     /// Number of shield impacts that added at least one safe cell since reset.
     pub shields_raised: u64,
     progression: Option<progression::ProgressState>,
+    grand: Option<grand::GrandState>,
+    configured_grand_tuning: GrandTuning,
     exploration: bool,
+    #[serde(skip)]
     ocean_environment: Option<OceanEnvironmentView>,
     player_knowledge: player_observation::PlayerKnowledge,
+    #[serde(skip)]
     collision: CollisionWorld,
     generation: Option<u64>,
     bot: Bot,
     next_projectile: u64,
     next_impact: u64,
+    #[serde(skip)]
     pending_impacts: BTreeMap<TerrainBatchId, TerrainImpact>,
+    #[serde(skip)]
     burrow_policy: ArenaBurrowMaterials,
+    #[serde(skip)]
     burrow_query: worm_geometry::BurrowQuery,
+    #[serde(skip)]
     pending_burrows: BTreeMap<ActorId, ArenaBurrowRequest>,
     next_burrow: BTreeMap<ActorId, u64>,
     pending_walls: Vec<PendingWall>,
@@ -824,12 +856,17 @@ pub struct ArenaSession {
     next_cue: u64,
     combat_stats: [ActorCombatStats; 2],
     encounter: encounters::EncounterState,
+    #[serde(skip)]
     accepted_battle: ArenaBattleSetup,
+    #[serde(skip)]
     battle_result: Option<BattleResult>,
+    #[serde(skip)]
     battle_initial: Vec<BattleTeamSummary>,
     #[cfg(any(test, feature = "test-support"))]
+    #[serde(skip)]
     baseline_bot: Option<bot_baseline::Bot>,
     #[cfg(any(test, feature = "test-support"))]
+    #[serde(skip)]
     cpu: cpu_diagnostics::CpuDiagnostics,
 }
 
@@ -846,6 +883,8 @@ impl Default for ArenaSession {
             terrain_outcomes: 0,
             shields_raised: 0,
             progression: None,
+            grand: None,
+            configured_grand_tuning: GrandTuning::default(),
             exploration: false,
             ocean_environment: None,
             player_knowledge: player_observation::PlayerKnowledge::default(),
@@ -966,6 +1005,7 @@ impl ArenaSession {
         let look_at = world.anchors.get("player_look_at").copied().unwrap_or(bot);
         let aim = (look_at - human).normalize_or_zero();
         let bot_enabled = self.bot_enabled;
+        let configured_grand_tuning = self.configured_grand_tuning.clone();
         #[cfg(any(test, feature = "test-support"))]
         let baseline = self.baseline_bot.is_some();
         #[cfg(any(test, feature = "test-support"))]
@@ -974,8 +1014,17 @@ impl ArenaSession {
             actors: vec![Actor::spawn(0, human, aim), Actor::spawn(1, bot, -aim)],
             generation: Some(generation),
             exploration: world.selection.map.capabilities().exploration,
-            progression: (world.selection.map == hex_core::arena::ArenaMap::ForestMassif)
-                .then(progression::ProgressState::default),
+            progression: matches!(
+                world.selection.map,
+                hex_core::arena::ArenaMap::ForestMassif | hex_core::arena::ArenaMap::GrandV4
+            )
+            .then(progression::ProgressState::default),
+            grand: (world.selection.map == hex_core::arena::ArenaMap::GrandV4).then(|| {
+                let mut state = grand::GrandState::new(human);
+                state.tuning = configured_grand_tuning.clone();
+                state
+            }),
+            configured_grand_tuning,
             bot_enabled,
             bot: Bot::default(),
             #[cfg(any(test, feature = "test-support"))]
@@ -1322,6 +1371,8 @@ fn simulate(
         input.human.cast_held = false;
         input.human.jump = false;
         input.human.high_jump = false;
+        input.human.teleport = false;
+        input.human.interact = false;
         input.human.glider_toggle = false;
         input.human.glider_look = input.human.aim;
         input.human.flight_toggle = false;
@@ -1335,7 +1386,7 @@ fn simulate(
             if marine.lab {
                 marine.glider_wind_scale = lab_settings
                     .as_ref()
-                    .map_or(1.0, |settings| settings.glider_wind_scale);
+                    .map_or(0.65, |settings| settings.glider_wind_scale);
             }
         }
     }
@@ -1343,7 +1394,7 @@ fn simulate(
     session.ocean_environment = ocean
         .as_deref()
         .filter(|environment| {
-            session.is_exploration()
+            (session.is_exploration() || session.is_grand_run())
                 && (view.package_identity.as_ref().is_some_and(|package| {
                     package.manifest_fingerprint == environment.package_fingerprint
                 }) || (view.selection.map == hex_core::arena::ArenaMap::WaterLab
@@ -1361,6 +1412,8 @@ fn simulate(
     input.human.cast_released = false;
     input.human.jump = false;
     input.human.high_jump = false;
+    input.human.teleport = false;
+    input.human.interact = false;
     input.human.glider_toggle = false;
     input.human.flight_toggle = false;
     input.human.boat_toggle = false;
@@ -1398,3 +1451,10 @@ mod shape_contract_tests;
 
 #[cfg(test)]
 mod worm_foundation_tests;
+
+impl Actor {
+    fn shift_clock(&mut self, delta: u64) {
+        self.last_damage_tick = self.last_damage_tick.map(|t| t.saturating_add(delta));
+        self.last_activity_tick = self.last_activity_tick.saturating_add(delta);
+    }
+}

@@ -66,14 +66,14 @@ pub struct BotDebugSnapshot {
     pub escape_rollout_ticks: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Memory {
     feet: Vec3,
     velocity: Vec3,
     tick: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct CueMemory {
     position: Vec3,
     tick: u64,
@@ -118,14 +118,14 @@ impl Belief {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct BattlePerception {
     search: Vec3,
     seen: Vec<crate::targeting::ObservedTarget>,
     target: Option<crate::targeting::ObservedTarget>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Threat {
     position: Vec3,
     velocity: Vec3,
@@ -133,13 +133,13 @@ struct Threat {
 }
 
 /// Only the sensing facade may construct an observation from live opponent state.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Observation {
     target: Option<Memory>,
     threat: Option<Threat>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Bot {
     seed: u32,
     think_ticks: u16,
@@ -166,7 +166,9 @@ pub(super) struct Bot {
     pending_tap: Option<(Spell, Vec3, bool)>,
     run: bool,
     error: Vec3,
+    #[serde(skip)]
     mode: &'static str,
+    #[serde(skip)]
     last_release_reason: &'static str,
     planned_charge: f32,
     uncertainty: f32,
@@ -1344,3 +1346,48 @@ pub(crate) fn ballistic_aim_with_gravity(
 
 #[cfg(test)]
 mod tests;
+
+impl Bot {
+    pub(crate) fn shift_clock(&mut self, delta: u64) {
+        for t in [
+            &mut self.tick,
+            &mut self.ambush_until,
+            &mut self.dodge_until,
+            &mut self.safe_at,
+        ] {
+            *t = t.saturating_add(delta);
+        }
+        for t in [
+            &mut self.loss_tick,
+            &mut self.ambush_episode,
+            &mut self.acquired_at,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *t = t.saturating_add(delta);
+        }
+        if let Some(m) = &mut self.memory {
+            m.tick = m.tick.saturating_add(delta);
+        }
+        if let Some(c) = &mut self.cue {
+            c.tick = c.tick.saturating_add(delta);
+        }
+        if let Some(m) = &mut self.observation.target {
+            m.tick = m.tick.saturating_add(delta);
+        }
+        if let Some(b) = &mut self.battle {
+            for o in &mut b.seen {
+                o.tick = o.tick.saturating_add(delta);
+            }
+            if let Some(o) = &mut b.target {
+                o.tick = o.tick.saturating_add(delta);
+            }
+        }
+        if let Some(o) = &mut self.player_profile {
+            o.tick = o.tick.saturating_add(delta);
+        }
+        self.route.shift_clock(delta);
+        self.escape.shift_clock(delta);
+    }
+}

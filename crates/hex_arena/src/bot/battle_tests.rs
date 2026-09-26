@@ -3,8 +3,8 @@
 use super::*;
 use crate::{EncounterTuning, Species};
 
-const CASTER: u8 = 7;
-const TARGET: u8 = 8;
+const CASTER: crate::ActorId = 7;
+const TARGET: crate::ActorId = 8;
 
 fn profile(id: crate::ActorId, team: u8, species: Species, feet: Vec3) -> Actor {
     let tuning = EncounterTuning::default();

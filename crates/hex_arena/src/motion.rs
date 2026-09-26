@@ -69,7 +69,7 @@ pub(crate) fn tick_with_lunge(
             profile.walk = actor.walking_speed;
             profile.run = actor.walking_speed;
             // Clear three expedition voxels (1.05), remaining below four (1.40).
-            profile.jump_height = 1.38;
+            profile.jump_height = 1.38 * actor.jump_scale;
             if actor.glider.open && !actor.grounded {
                 crate::glider::tick(actor, world, profile);
                 return;

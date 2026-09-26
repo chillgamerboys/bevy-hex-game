@@ -11,7 +11,7 @@ mod kernel_tests;
 
 /// Frozen pre-recovery movement for the accepted Shadow's patrol/home phases.
 /// Active Shadow combat already returns through its unchanged Bot controller.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct ShadowTravel {
     direction: Vec3,
     decided: u64,
@@ -92,7 +92,7 @@ impl ShadowTravel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct JumpRoute {
     direction: Vec3,
     expected: Actor,
@@ -101,7 +101,7 @@ struct JumpRoute {
     airborne: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Steering {
     direction: Vec3,
     next_decision: u64,
@@ -261,7 +261,9 @@ impl Steering {
 
     fn schedule_jump(&mut self, id: ActorId, tuning: &EncounterTuning, tick: u64) {
         self.jump_since = tick;
-        let phase = (u16::from(id) * 37).wrapping_add(self.jump_sequence.wrapping_mul(53)) % 101;
+        let phase = (u16::try_from(id).unwrap_or_default() * 37)
+            .wrapping_add(self.jump_sequence.wrapping_mul(53))
+            % 101;
         self.jump_interval = tuning.goblin_jump_interval_min
             + f32::from(phase) / 100.0
                 * (tuning.goblin_jump_interval_max - tuning.goblin_jump_interval_min);
@@ -619,4 +621,25 @@ fn detour(
         }
     }
     best.1
+}
+
+impl ShadowTravel {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        self.decided = self.decided.saturating_add(delta);
+    }
+}
+impl Steering {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        for t in [
+            &mut self.next_decision,
+            &mut self.next_recovery,
+            &mut self.progress_tick,
+            &mut self.jump_since,
+        ] {
+            *t = t.saturating_add(delta);
+        }
+        if let Some(jump) = &mut self.jump {
+            jump.expected.shift_clock(delta);
+        }
+    }
 }

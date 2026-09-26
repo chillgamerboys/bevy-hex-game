@@ -5,13 +5,13 @@ use serde::Serialize;
 
 use crate::{ArenaOutcome, ArenaSession, BotDebugSnapshot, Spell, CREATURE_ABILITY_COUNT, STEP};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum CombatCueKind {
     Release,
     Impact,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CombatCue {
     pub id: u64,
     pub tick: u64,
@@ -22,7 +22,7 @@ pub(crate) struct CombatCue {
 }
 
 /// Actual spell releases and HP losses, independent of presentation or bot estimates.
-#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, serde::Deserialize)]
 pub struct ActorCombatStats {
     /// Shield, Fireball, and High Jump activations, including unsuccessful casts.
     pub casts: [u32; 3],

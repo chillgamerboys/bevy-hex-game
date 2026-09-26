@@ -15,7 +15,7 @@ pub const CREATURE_ABILITY_COUNT: usize = 12;
 
 /// One world-oriented native hex prism in a compound creature body.
 /// Its pointy horizontal hex has circumradius one world unit, matching terrain.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BodyHexPrism {
     /// Prism base offset from the actor's feet, expressed in world axes.
     pub offset: Vec3,
@@ -25,7 +25,7 @@ pub struct BodyHexPrism {
 
 /// Authoritative finite projection of a charged or active direct beam.
 /// Presentation does not extend this segment or query hidden targets.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BeamSnapshot {
     /// Physical mouth at the current actor pose.
     pub origin: Vec3,
@@ -62,7 +62,7 @@ pub enum Species {
 }
 
 /// Creature attack or support action; player hotbar slots remain separate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum CreatureAbility {
     /// Ordinary charged explosive projectile.
     Fireball,
@@ -112,7 +112,7 @@ impl CreatureAbility {
 }
 
 /// Frozen projectile appearance, independent of a human hotbar slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum ProjectileAppearance {
     /// Accepted ordinary wall seed.
     ShieldSeed,
@@ -125,7 +125,7 @@ pub enum ProjectileAppearance {
 }
 
 /// Current authoritative phase of a creature action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum AttackPhase {
     /// Preparing an attack, before any impact.
     Windup,
@@ -136,7 +136,7 @@ pub enum AttackPhase {
 }
 
 /// Read-only attack geometry and phase, never a hidden target or AI plan.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct AttackSnapshot {
     /// Action currently presented.
     pub kind: CreatureAbility,
@@ -155,7 +155,7 @@ pub struct AttackSnapshot {
 }
 
 /// A gameplay-owned transparent barrier, independent of terrain material/HP.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BarrierSnapshot {
     /// Stable object identity within this run.
     pub id: u64,
@@ -180,7 +180,7 @@ pub struct BarrierSnapshot {
 }
 
 /// Active timed shaman support field.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct AuraSnapshot {
     /// Living owner of the aura.
     pub owner: ActorId,
@@ -195,7 +195,7 @@ pub struct AuraSnapshot {
 }
 
 /// Local encounter engagement state.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum PartyPhase {
     /// Patrol without knowledge of the player.
     #[default]
@@ -209,7 +209,7 @@ pub enum PartyPhase {
 }
 
 /// Stable public party state for typed encounter evidence.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PartySnapshot {
     /// Stable group identity.
     pub id: PartyId,

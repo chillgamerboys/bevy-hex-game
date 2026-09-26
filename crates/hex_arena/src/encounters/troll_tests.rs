@@ -20,7 +20,7 @@ fn troll_support_crosses_forest_parties_but_shaman_support_remains_local() {
             .find(|a| a.id == id)
             .expect("actor");
         actor.configure_expedition(role, &tuning.encounters);
-        actor.party = Some(u16::from(id));
+        actor.party = Some(u16::try_from(id).unwrap_or_default());
         actor.feet = Vec3::new(f32::from(u16::try_from(id).unwrap_or_default()), SKIN, 0.0);
         actor.previous_feet = actor.feet;
         actor.hp = 20.0;

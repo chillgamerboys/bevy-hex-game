@@ -194,7 +194,7 @@ fn goblin_swipe_has_real_windup_single_hit_and_physical_terrain_contact() {
     pose(&mut session, 1, Vec3::ZERO, Vec3::X);
     pose(&mut session, 0, Vec3::X * 1.3, Vec3::NEG_X);
     for a in session.actors.iter_mut().skip(2) {
-        a.feet = Vec3::X * 12.0 + Vec3::Z * f32::from(a.id);
+        a.feet = Vec3::X * 12.0 + Vec3::Z * f32::from(u16::try_from(a.id).unwrap_or_default());
         a.previous_feet = a.feet;
     }
     start(&mut session, 1, CreatureAbility::Swipe, Vec3::X, &tuning);
@@ -623,7 +623,11 @@ fn shaman_waits_for_reaction_charges_then_cancels_if_cover_closes_before_release
     pose(&mut session, 1, Vec3::new(-5.0, 0.0, 0.0), Vec3::X);
     pose(&mut session, 0, Vec3::new(5.0, 0.0, 0.0), Vec3::NEG_X);
     for a in session.actors.iter_mut().skip(2) {
-        a.feet = Vec3::new(15.0, 0.0, f32::from(a.id) * 2.0);
+        a.feet = Vec3::new(
+            15.0,
+            0.0,
+            f32::from(u16::try_from(a.id).unwrap_or_default()) * 2.0,
+        );
         a.previous_feet = a.feet;
     }
     let mut brain = session.encounter.brains.remove(&1).expect("brain");

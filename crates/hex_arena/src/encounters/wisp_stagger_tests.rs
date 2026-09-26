@@ -62,7 +62,7 @@ impl VolleyFixture {
         assert!(!self.session.is_finished(), "timing target remains alive");
     }
 
-    fn opening_releases(&mut self, count: usize) -> BTreeMap<u8, u64> {
+    fn opening_releases(&mut self, count: usize) -> BTreeMap<crate::ActorId, u64> {
         let mut releases = BTreeMap::new();
         for _ in 0..150 {
             self.step();

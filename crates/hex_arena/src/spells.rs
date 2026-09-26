@@ -21,7 +21,7 @@ const PROJECTILE_RADIUS: f32 = 0.06;
 pub(super) const MAX_FLIGHT_SECONDS: f32 = 8.0;
 pub(super) const EMERGENCE_SECONDS: f32 = 0.18;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ShotParameters {
     mode: crate::FireballMode,
     gravity: f32,
@@ -34,18 +34,21 @@ pub(crate) struct ShotParameters {
     terrain_power: u8,
     terrain_kind: Option<hex_core::TerrainDamageKind>,
     wall_dimensions: (i32, i32),
+    reinforced: bool,
     shield_push: f32,
     direction: Vec3,
     team: crate::TeamId,
     min_y: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PendingWall {
+    pub(crate) owner: crate::ActorId,
     pub(super) voxels: Vec<TilePos>,
     pub(super) age: f32,
     candidates: Vec<TilePos>,
-    center: Vec3,
+    pub(crate) center: Vec3,
+    reinforced: bool,
 }
 
 impl Projectile {
@@ -144,6 +147,7 @@ fn projectile(
             terrain_power: tuning.terrain_power,
             terrain_kind: None,
             wall_dimensions: tuning.shield_dimensions(),
+            reinforced: false,
             shield_push: tuning.shield_push,
             direction: actor.aim,
             team: actor.team,
@@ -195,6 +199,7 @@ fn creature_projectile(
             terrain_power: spec.terrain_power,
             terrain_kind: Some(spec.terrain_kind),
             wall_dimensions: (0, 0),
+            reinforced: false,
             shield_push: 0.0,
             direction,
             team: actor.team,
@@ -553,6 +558,7 @@ impl ArenaSession {
         if Some(owner) == self.human_actor_id() {
             shot.parameters.mode = self.player_fireball_mode();
         }
+        shot.parameters.reinforced = self.earth_construction(owner);
         shot.parameters.min_y = self.collision.min_y.min(-10.0);
         self.next_projectile += 1;
         self.projectiles.push(shot);
@@ -628,9 +634,11 @@ impl ArenaSession {
                             &BTreeSet::new(),
                         );
                         self.pending_walls.push(PendingWall {
+                            owner: shot.owner,
                             voxels,
                             age: 0.0,
                             candidates,
+                            reinforced: shot.parameters.reinforced,
                             center: impact.point - impact.normal * PROJECTILE_RADIUS,
                         });
                         self.effects.push(VisualEffect {
@@ -697,7 +705,11 @@ impl ArenaSession {
                 for pos in wall.voxels {
                     out.edits.push(TerrainEdit::Set {
                         pos,
-                        substance: materials.stone,
+                        substance: if wall.reinforced {
+                            materials.reinforced_stone.unwrap_or(materials.stone)
+                        } else {
+                            materials.stone
+                        },
                     });
                 }
                 self.shields_raised += 1;
@@ -937,7 +949,7 @@ pub(super) fn preview_actor(
 }
 
 /// Deliberate observed body or memory hypothesis, never a reference to hidden state.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ForecastBody {
     pub id: crate::ActorId,
     pub feet: Vec3,
@@ -1341,6 +1353,8 @@ mod tests {
 
     fn staged_wall(candidates: Vec<TilePos>) -> PendingWall {
         PendingWall {
+            owner: 0,
+            reinforced: false,
             voxels: candidates.clone(),
             candidates,
             age: EMERGENCE_SECONDS - STEP,

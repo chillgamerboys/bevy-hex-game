@@ -26,7 +26,7 @@ pub struct GliderSnapshot {
     pub direction: Vec3,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GliderState {
     pub(crate) open: bool,
     velocity: Vec3,
@@ -89,12 +89,17 @@ fn acceleration(speed: f32, direction: Vec3) -> f32 {
     -GRAVITY * direction.y - 10.0 * direction.y.max(0.0) - 0.22 - 0.0009 * speed * speed
 }
 
+#[cfg(test)]
 fn velocity_step(state: &mut GliderState) {
+    velocity_step_scaled(state, 1.0);
+}
+
+fn velocity_step_scaled(state: &mut GliderState, scale: f32) {
     // Keep persistent ground velocity, applying flight forces in the moving air.
     // Changing wind or toggling the canopy supplies no instantaneous velocity.
     state.velocity -= state.wind;
     let speed = state.velocity.length();
-    let turn_degrees = 100.0 - 45.0 * (speed / MAX_SPEED).clamp(0.0, 1.0);
+    let turn_degrees = 100.0 * scale - 45.0 * (speed / (MAX_SPEED * scale)).clamp(0.0, 1.0);
     // Heading stays bounded even when opening during a vertical fall or boost.
     state.heading = turn_towards(state.heading, state.look, turn_degrees.to_radians() * STEP);
     state.heading = clamped_look(state.heading);
@@ -111,7 +116,7 @@ fn velocity_step(state: &mut GliderState) {
     // Lost lift means real downward acceleration, not an artificial fold or
     // a forward launch kick. Diving recovers speed and then steering authority.
     state.velocity.y -= GRAVITY * (1.0 - lift(speed)) * STEP;
-    state.velocity = state.velocity.clamp_length_max(MAX_SPEED);
+    state.velocity = state.velocity.clamp_length_max(MAX_SPEED * scale);
     state.velocity += state.wind;
 }
 
@@ -205,7 +210,7 @@ pub(crate) fn tick(actor: &mut Actor, world: &CollisionWorld, profile: GroundPro
     actor.glider.velocity += actor.body.impulse_velocity + Vec3::Y * actor.body.vertical_velocity;
     actor.body.impulse_velocity = Vec3::ZERO;
     actor.body.vertical_velocity = 0.0;
-    velocity_step(&mut actor.glider);
+    velocity_step_scaled(&mut actor.glider, actor.glider_scale);
     let (feet, contacts) = slide_with_contacts(
         world,
         actor.feet,

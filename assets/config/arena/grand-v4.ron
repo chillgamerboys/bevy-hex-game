@@ -1,0 +1,11 @@
+(
+    fire_damage: 1.25,
+    fire_size: 1.15,
+    air_projectiles: 1.15,
+    air_glider: 1.10,
+    water_swim: 1.25,
+    water_boat: 1.15,
+    earth_run: 1.15,
+    plant_size: 1.15,
+    plant_jump: 1.25,
+)

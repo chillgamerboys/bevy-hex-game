@@ -1217,3 +1217,27 @@ fn summit_glide_requires_admitted_clear_terrain_and_preserves_player() {
     assert!(actor.glider.open);
     assert_eq!(actor.glider.snapshot().velocity, Vec3::X * 12.0);
 }
+
+#[test]
+fn grand_favorable_wind_45_second_unupgraded_sailing_distance() {
+    let mut boat = BoatSnapshot {
+        active: true,
+        heading: Vec3::X,
+        wind: Vec3::X * 9.0,
+        ..Default::default()
+    };
+    let intent = ActorIntent {
+        movement: Vec2::Y,
+        aim: Vec3::X,
+        ..Default::default()
+    };
+    let mut distance = 0.0;
+    for _ in 0..5400 {
+        let (heading, velocity) = boat_velocity(boat, intent, Vec3::X);
+        boat.heading = heading;
+        boat.velocity = velocity;
+        distance += velocity.x * STEP;
+    }
+    println!("Grand sail reference: from rest, 9u/s tailwind, forward held, 45sec -> {distance:.4}u, final speed {:.4}u/s", boat.velocity.length());
+    assert!(distance > 600.0 && distance < 900.0);
+}

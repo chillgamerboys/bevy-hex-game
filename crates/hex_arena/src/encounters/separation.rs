@@ -10,7 +10,7 @@ mod tests;
 /// Work performed by ordinary actor separation on the latest simulated tick.
 /// Worms retain their separate movement/separation solver. Counts are deterministic;
 /// CPU timing belongs to an external profiler, not simulation state.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ActorSeparationStats {
     /// Complete ordered passes, including the final unchanged pass.
     pub passes: usize,

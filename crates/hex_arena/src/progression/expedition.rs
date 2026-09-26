@@ -8,7 +8,9 @@ use hex_core::arena::{ArenaExpeditionSites, ArenaTerrainView, ArenaVoxelGeometry
 use hex_core::TilePos;
 
 /// One authored milestone's player reward, separate from immediate kill XP.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum ExpeditionReward {
     /// Troll's separate +25 Fireball damage bonus.
     TrollDamage,
@@ -45,7 +47,7 @@ impl ExpeditionReward {
 const ORB_HEIGHT: f32 = 0.6;
 const PICKUP_DISTANCE: f32 = 1.6;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct RewardState {
     position: Option<Vec3>,
     collected: bool,
@@ -124,7 +126,7 @@ pub struct ExpeditionSnapshot {
     pub fountains: Vec<FountainSnapshot>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct FountainState {
     cells: BTreeSet<TilePos>,
     consumed: bool,
@@ -267,12 +269,10 @@ impl ArenaSession {
             .iter()
             .map(|support| support.coord.to_world(geometry.top(*support) + SKIN))
             .collect();
-        // Preserve exact placement when the death lies above a reachable authored
-        // surface. A tree crown or other isolated new platform must not trap the
-        // reward; those deaths settle on the nearest valid authored route or shelf.
-        let drop = geometry.top(TilePos::new(hex_core::HexCoord::ORIGIN, geometry.max_level))
-            - geometry.top(TilePos::new(hex_core::HexCoord::ORIGIN, geometry.min_level))
-            + geometry.level_height;
+        // Settle first onto real ground below the death, including downhill
+        // ground outside authored shelves. The catalogue remains only a fallback.
+        let drop = (geometry.max_level - geometry.min_level).unsigned_abs();
+        let drop = f32::from(u16::try_from(drop).unwrap_or(u16::MAX)) * geometry.level_height;
         if let Some(ground) = self
             .collision
             .ground(
@@ -281,12 +281,9 @@ impl ArenaSession {
                 player.dimensions.x * 0.5,
                 drop.max(1.0),
             )
-            .filter(|ground| {
-                let support = geometry.voxel_at(*ground - Vec3::Y * SKIN * 2.0);
-                support.is_some_and(|support| state.settlement_supports.contains(&support))
-            })
+            .filter(|feet| self.reward_standing_pose(*feet, world, geometry))
         {
-            candidates.push(ground);
+            return Some(ground + Vec3::Y * ORB_HEIGHT);
         }
         candidates.sort_by(|a, b| {
             a.distance_squared(origin)
@@ -394,10 +391,12 @@ impl ArenaSession {
                     .flat_map(|route| route.ribbon.iter().copied()),
             )
             .collect();
-        state.rewards = ExpeditionReward::ALL
-            .into_iter()
-            .map(|reward| (reward, RewardState::default()))
-            .collect();
+        if self.grand.is_none() {
+            state.rewards = ExpeditionReward::ALL
+                .into_iter()
+                .map(|reward| (reward, RewardState::default()))
+                .collect();
+        }
         state.fountains = sites
             .fountains
             .iter()

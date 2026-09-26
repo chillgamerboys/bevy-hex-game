@@ -25,7 +25,7 @@ pub struct PlayerObservation {
 }
 
 /// Only these authored encounters and pools produce persistent map markers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LandmarkKind {
     /// One of the three independent Dragon encounters.
     Dragon,
@@ -40,7 +40,7 @@ pub enum LandmarkKind {
 }
 
 /// Remembered facts, never a live reference to an undisclosed enemy or pool.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredLandmark {
     /// Authored encounter or fountain name.
     pub id: String,
@@ -55,7 +55,7 @@ pub struct DiscoveredLandmark {
 }
 
 /// Coarse health for one currently visible hostile; no exact HP is exported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TargetHealthSnapshot {
     /// Stable actor identity within this run.
     pub actor_id: ActorId,
@@ -68,7 +68,7 @@ pub struct TargetHealthSnapshot {
 }
 
 /// One briefly announced, currently visible coarse enemy-health event.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EnemyHealthCueSnapshot {
     /// Stable identity used to place the cue, without exporting hidden actors.
     pub actor_id: ActorId,
@@ -78,7 +78,7 @@ pub struct EnemyHealthCueSnapshot {
     pub health_pips: u8,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct HealthAnnouncement {
     shown_band: Option<u8>,
     remaining: f32,
@@ -133,7 +133,7 @@ pub struct CombatFeedbackSnapshot {
     pub spells: [SpellAvailability; 3],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PlayerKnowledge {
     active: bool,
     sample_elapsed: f32,
@@ -156,6 +156,12 @@ impl PlayerKnowledge {
             Some(ExpeditionRole::Troll) => LandmarkKind::Troll,
             Some(ExpeditionRole::MountainShadow) => LandmarkKind::Shadow,
             Some(ExpeditionRole::PlainGolem) => LandmarkKind::Golem,
+            None => match actor.species {
+                crate::Species::Dragon => LandmarkKind::Dragon,
+                crate::Species::Shadow => LandmarkKind::Shadow,
+                crate::Species::Golem => LandmarkKind::Golem,
+                _ => return,
+            },
             _ => return,
         };
         self.actors.insert(actor.id, (name.into(), kind));
@@ -457,10 +463,22 @@ impl ArenaSession {
                     })
                     .copied()
                     .unwrap_or(first);
-                // A central cell-sized patch must itself be visible: the extent of
-                // the whole pool cannot make a distant sliver count as observation.
-                let sighted = observation.landmark_contains(point, 1.0, LandmarkKind::Fountain)
-                    && self.collision.sight_clear(observation.origin, point);
+                // A recognizable central surface plus several visible patches admits a
+                // flyover. A single exposed edge behind cover never reveals the pool.
+                let diameter = (max - min).with_y(0.0).length().clamp(1.0, 8.0);
+                let required = points.len().min(3);
+                let visible = points
+                    .iter()
+                    .filter(|p| {
+                        observation.contains(**p, diameter)
+                            && self.collision.sight_clear(observation.origin, **p)
+                    })
+                    .take(required)
+                    .count();
+                let sighted =
+                    observation.landmark_contains(point, diameter, LandmarkKind::Fountain)
+                        && self.collision.sight_clear(observation.origin, point)
+                        && visible == required;
                 if sighted {
                     seen.insert(id.clone());
                     self.player_knowledge.admit(DiscoveredLandmark {
@@ -589,12 +607,13 @@ impl PlayerObservation {
         let (range, pixels) = match kind {
             LandmarkKind::Dragon => (120.0, 16.0),
             LandmarkKind::Shadow | LandmarkKind::Troll | LandmarkKind::Golem => (60.0, 16.0),
-            LandmarkKind::Fountain => (35.0, 12.0),
+            LandmarkKind::Fountain => (100.0, 12.0),
         };
         let depth = (point - self.origin).dot(self.direction.normalize());
         self.origin.distance_squared(point) <= range * range
             && self.contains(point, diameter)
-            && diameter * 1080.0 / (2.0 * depth * (self.vertical_fov * 0.5).tan()) >= pixels
+            && diameter * self.viewport_height / (2.0 * depth * (self.vertical_fov * 0.5).tan())
+                >= pixels
     }
 
     fn valid(self) -> bool {

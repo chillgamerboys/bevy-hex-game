@@ -13,7 +13,7 @@ const RUN: f32 = 4.5;
 const STEP_HEIGHT: f32 = 0.4;
 const JUMP_HEIGHT: f32 = 3.25 * 0.4;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Body {
     pub vertical_velocity: f32,
     pub impulse_velocity: Vec3,

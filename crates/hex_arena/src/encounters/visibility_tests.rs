@@ -2,8 +2,8 @@
 
 use super::*;
 
-const OBSERVER: u8 = 7;
-const NEAR: u8 = 8;
+const OBSERVER: crate::ActorId = 7;
+const NEAR: crate::ActorId = 8;
 
 struct SightFixture {
     actors: Vec<Actor>,

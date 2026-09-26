@@ -5,7 +5,7 @@ use bevy_math::Vec3;
 use std::borrow::Cow;
 
 /// Stable authored identity independent of the shared creature shape/AI family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExpeditionRole {
     /// Slower, weaker Goblin in one of the five outskirts groups.
     BabyGoblin,
@@ -43,7 +43,7 @@ impl ExpeditionRole {
 }
 
 /// Actor-owned Dragon strength and visual identity.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DragonTier {
     /// Ordinary Dragon, retaining configurable encounter tuning.
     #[default]

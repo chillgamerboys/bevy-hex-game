@@ -13,7 +13,7 @@ pub(super) fn index(kind: CreatureAbility) -> usize {
     kind.index()
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Cast {
     kind: CreatureAbility,
     age: f32,
@@ -29,7 +29,7 @@ pub(super) struct Cast {
     laser: Option<LaserTrack>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct LaserTrack {
     target: ActorId,
     point: Vec3,
@@ -724,3 +724,11 @@ fn closest_voxel_point(point: Vec3, pos: TilePos, geometry: ArenaVoxelGeometry) 
 #[cfg(test)]
 #[path = "cone_tests.rs"]
 mod cone_tests;
+
+impl Cast {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        if let Some(laser) = &mut self.laser {
+            laser.tick = laser.tick.saturating_add(delta);
+        }
+    }
+}
