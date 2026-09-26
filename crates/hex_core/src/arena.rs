@@ -46,6 +46,8 @@ pub enum ArenaMap {
     NorthernArchipelago,
     /// Compact, enemy-free water and wind experiment.
     WaterLab,
+    /// Streamed Grand remake with independent shrine progression and durable runs.
+    GrandV4,
 }
 
 /// Composition of the compact Fort encounter.

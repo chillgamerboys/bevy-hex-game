@@ -24,11 +24,12 @@ impl ArenaMap {
         let forest = matches!(self, Self::ForestMassif);
         let islands = matches!(self, Self::NorthernArchipelago);
         let lab = matches!(self, Self::WaterLab);
+        let grand = matches!(self, Self::GrandV4);
         ArenaMapCapabilities {
-            expedition_player: forest || islands || lab,
+            expedition_player: forest || islands || lab || grand,
             exploration: islands || lab,
-            streamed: islands,
-            natural_environment: forest || islands || lab,
+            streamed: islands || grand,
+            natural_environment: forest || islands || lab || grand,
         }
     }
 }
