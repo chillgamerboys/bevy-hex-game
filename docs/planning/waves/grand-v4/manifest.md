@@ -137,10 +137,10 @@ residency results; they make no native movement, appearance or frame-rate claim.
 The full gate still encounters inherited V3/map lint failures. Fresh windowless
 review and native acceptance remain required before completion or merge.
 
-## Review checkpoint before user play
+## Historical September 25 review checkpoint before user play
 
 Combined draft PR: https://github.com/chillgamerboys/bevy-hex-game/pull/224.
-The latest launchable source is `53a66990411ddf01ae0840830c62d2d7e306bb03`
+The source offered at that checkpoint was `53a66990411ddf01ae0840830c62d2d7e306bb03`
 with immutable final4 package fingerprint `13408690208396973052`.
 A fresh twelve-view windowless correction pack completed mechanically at that head.
 Static inspection confirms restored inland water, a broader dominant tree, a visible
@@ -198,3 +198,31 @@ walking tests depend on the revised terrain, and river shader review depends on 
 new directed-liquid package. Shared heavy Cargo work uses the cooperative lock in
 the task work directory, also supplied to the large-spells chat. Each source file
 still has one writer. No candidate is accepted by a narrow route validator alone.
+
+
+## September 26 integration status
+
+The terrain, source-lake/headwater containment, forest recipes and distant forest
+publication are composed with the garden/library architecture. Exact scale and
+water datums remain unchanged. Two material conflicts in the combined garden were
+reproduced and repaired before issuing a replacement package. The fresh package
+build and all current walking/sailing results must be recorded before declaring
+this candidate traversable. The original failed receipts remain preserved.
+
+The inherited V3/map Clippy block has been repaired in identifiable maintenance
+commits. Scoped combined map checks passed 58/59 tests; the remaining fountain
+fixture assumed opaque topology while requesting translucent water. Its corrected
+dual-style lifecycle and closed-water tests pass, as do the affected terrain
+contracts. These scoped checks do not replace the final selector-chosen gate.
+
+The static matrix now contains 36 views, including admitted ground-level forest
+and fountain cameras and a reverse library view. Capture admission rejects stale
+authoring signatures and labels subsets as partial diagnostics. Continuous
+windowless river/forest sequences are being added separately; native control feel
+and the 30-minute session remain pending while the workstation is locked.
+
+Disk capacity is a separate validation constraint. Package-scoped development-cache
+cleanup has been proposed to the user after a Cargo dry run; source, packages,
+saves and captures are protected. Until authorized, no cleanup is performed.
+The large-spells chat received the requested post-reset resumption message; its
+prototype work remains separate from Grand’s retained advanced-spell backlog.

@@ -69,6 +69,17 @@ it is bounded to 20,000 columns, 25,000 runs and 600,000 indexed vertices. The c
 not collision or seabed authority. Local shrine and library lights make the opaque
 caves readable without changing global daylight or gameplay visibility.
 
+Ordinary forest trees also publish authored distant silhouettes, independent of
+source-chunk residency. Shared crown/trunk meshes yield atomically to detailed
+objects, retain persistent cuts and never pin source chunks. The bounded overview
+contains 774 trees from 13 recipe families; its full intact geometry is about
+1.41 million vertices against a 1.6-million limit. Ground edits do not erase trees.
+The recipes reuse the earlier Dragon/Goblin expedition’s curved timber and layered
+foliage, with irregular grove edges and understory. The garden now has an open
+courtyard, planted beds and a shallow fountain rim; the library has arched wall
+bays with colored books. Fresh composed-package review remains the acceptance
+authority for their appearance.
+
 The detailed terrain renderer owns water above mean sea level. The animated ocean
 owns sea-level water; raised neighbors still occlude its boundary faces. This keeps
 the garden, fountain, falls, valley lake and river visible without duplicate ocean
@@ -81,8 +92,9 @@ Cargo jobs against the shared target. The process harness builds current source 
 launches separate writer/reader processes for land, boat and glider cases:
 
 ```sh
-python3 tools/grand_verify.py --circuit --admissions --package /absolute/grand-package \
-  --target-dir /absolute/cargo-target --output /absolute/fresh-restart-evidence
+python3 tools/grand_verify.py --cargo-profile ci --circuit --admissions --walking --sailing \
+  --package /absolute/grand-package --target-dir /absolute/cargo-target \
+  --output /absolute/fresh-restart-evidence
 python3 tools/grand_capture.py --package /absolute/grand-package \
   --target-dir /absolute/cargo-target --label fresh-candidate
 ```
@@ -94,8 +106,16 @@ process-memory or frame-rate claim.
 `--admissions` visits all fourteen actual encounter sites, checks their exact
 127 stable enemy identities and species, and verifies active/dormant checkpoint
 integrity. The restart clock fixture also covers a run longer than sixty hours.
+`--walking` exercises eleven ordinary walking routes through the real controller,
+including both riverbank escapes, cross-country hills, island landing and summit
+approaches. It requires completed simulation ticks and clear supported endpoints.
+`--sailing` measures the authored crossing with one ordinary B input, live wind and
+unupgraded boat physics; its reported time is a measurement against the approximate
+45-second design reference, not an assumed success.
 
-The capture matrix is windowless and requires a clean committed candidate. It
+The 36-view capture matrix is windowless and requires a clean committed candidate
+and a package whose authoring signature matches current source. A `--view` subset
+is explicitly a partial diagnostic, never a completed full matrix. It
 records source and package hashes, renders, native state receipts and an initially
 unreviewed index. Inspect every full-resolution frame and the contact sheet.
 `--dirty-diagnostic` provides scratch evidence only. The matrix includes the whole
@@ -115,8 +135,9 @@ waterfall/library branches → Shadow → Crystal/summit → glider descent. Exe
 shrines, valid/refused teleport, death, and process restart on land/boat/air. Run
 repeated circuits and a 30-minute session, report frame-time percentiles and loading,
 and inspect vehicle orientation, colored strips and ocean seams in both directions.
-An explicitly approved visible native review is required by the rendering skill;
-stills and headless timing do not establish control feel or 60 FPS.
+Continuous windowless sequences can review temporal presentation. The named native
+route still needs an explicitly approved live or user playtest for control feel and
+taste; stills and headless timing do not establish those qualities or 60 FPS.
 
 ## Retained backlog
 

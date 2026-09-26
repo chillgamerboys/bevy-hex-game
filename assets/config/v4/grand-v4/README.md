@@ -59,7 +59,7 @@ Grand publishes exact loaded collision, bounded actor interests, and a compact
 package-bound biome companion. The World Tree's approximately 265-by-223-unit crown
 uses one stable `grand/world-tree` object, bounded to 20,000 columns and 128 chunks;
 its branches and roots preserve shrine, encounter and southern temple clearance.
-The current authored tree measures 15,883 columns, 19,963 compact runs and 85 chunks.
+The current authored tree measures 15,883 columns, 20,000 compact runs and 85 chunks.
 Distant presentation is separate from seabed authority.
 
 Map checkpoint records preserve sparse edits, partial voxel health, transaction

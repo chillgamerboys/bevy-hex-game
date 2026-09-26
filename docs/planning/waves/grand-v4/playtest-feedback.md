@@ -48,8 +48,34 @@ circuits do not establish terrain usability. Keep their evidence, but the curren
 candidate has **failed the user's terrain/traversal review** and must not be called
 an accepted integrated expedition.
 
-The steady downhill river-wave request remains queued. Its separate source
+At the overnight final4 checkpoint, the steady downhill river-wave request remained queued. Its separate source
 checkpoint is `bf6f4f63997d9e4246711714a5decc4386649ac6` on
 `feat/grand-river-flow`; one authored-link test passed, but renderer compilation,
 package/graph validation and motion review remain pending. It is not integrated
 into the current final4 playtest candidate.
+
+
+## September 26 corrections under validation
+
+The revised source uses the recovered `b314a9d` Forest expedition as its traversal
+and tree reference. Broad lowland envelopes replace the inflated rounded slopes,
+with continuous coast/river shoulders and meaningful mountain approaches. The
+first real-controller walking run passed five routes and failed six: it exposed
+two terrain joins at the island and Shadow outlet, encounter-interest loading
+stalls, and local tree-avoidance limitations in the test driver. Those failures
+are preserved; source repairs require a new complete walking run, not a changed
+claim on the old receipt.
+
+The downhill river shader and exact flow graph are integrated. A focused fresh
+windowless frame renders its bands but exposed unsupported regular reaches. Exact
+columns showed a later valley cap cutting away already-composed beds and banks;
+that ordering is now repaired, retaining shallow reaches, broad bank shoulders
+and localized waterfall drops. The moving-wave appearance remains under review.
+
+Forest recipes, persistent distant forest publication, garden courtyard and
+library architecture are integrated. Full-package admission caught two overlapping
+fountain-rim/shrine voxels missed by the earlier local dressing tests. The rim now
+respects authored occupancy; a full-composition overlap regression and both affected
+chunks pass. A fresh immutable package, all eleven walking routes, measured sailing,
+36-view static matrix, temporal sequences, combined CI and native play remain
+required. This entry records corrective work, not acceptance of the expedition.
