@@ -172,6 +172,8 @@ impl GrandCompiler {
             ("crystal_ascent", -201., -524., false, false),
             ("frozen_woods", -215., -604., false, false),
             ("world_tree", -60., 125., false, false),
+            ("root_temple_entrance", -60., 187.5, true, false),
+            ("root_temple_approach", -60., 225., true, false),
             ("goblin_fort", -60., 225., false, false),
             ("forest", -100., 230., false, false),
             ("valley_lake", 405., -115., false, false),

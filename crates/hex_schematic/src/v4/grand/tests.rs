@@ -261,7 +261,11 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
         4
     );
     assert!(objects.iter().any(|o| o.id == "grand/root-temple-plant"));
-    for id in ["grand/fire-flame-marker", "grand/air-spiral-marker"] {
+    for id in [
+        "grand/fire-flame-marker",
+        "grand/air-spiral-marker",
+        "grand/earth-heart-marker",
+    ] {
         let marker = objects.iter().find(|object| object.id == id).unwrap();
         assert!(marker.occupancy.len() <= 19, "small temple marker: {id}");
         assert!(
@@ -284,23 +288,78 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
     let tree_chunks: std::collections::BTreeSet<_> =
         tree.occupancy.iter().map(|c| c.position.chunk()).collect();
     assert!(
-        tree_chunks.len() <= 32,
+        tree_chunks.len() <= 128,
         "complete landmark fits comfortably inside 256 detailed chunks"
+    );
+    assert!(tree.occupancy.len() <= 20_000, "bounded full tree source");
+    let mut bounds = [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for column in &tree.occupancy {
+        let [x, z] = world_xz(column.position);
+        bounds[0] = bounds[0].min(x);
+        bounds[1] = bounds[1].max(x);
+        bounds[2] = bounds[2].min(z);
+        bounds[3] = bounds[3].max(z);
+    }
+    println!(
+        "Grand World Tree: columns={}, runs={}, chunks={}, width={:.2}, depth={:.2}",
+        tree.occupancy.len(),
+        tree.occupancy
+            .iter()
+            .map(|column| column.runs.len())
+            .sum::<usize>(),
+        tree_chunks.len(),
+        bounds[1] - bounds[0],
+        bounds[3] - bounds[2]
+    );
+    assert!(
+        (250. ..=300.).contains(&(bounds[1] - bounds[0])),
+        "biome-scale crown width"
+    );
+    assert!(bounds[3] - bounds[2] >= 200., "broad canopy depth");
+    assert!(
+        tree.occupancy.iter().any(|column| {
+            column
+                .position
+                .checked_distance(tree.origin.column)
+                .unwrap()
+                > 20
+                && column
+                    .runs
+                    .iter()
+                    .any(|run| run.material == "timber" && run.bottom > tree.origin.level + 100)
+        }),
+        "major branches visibly support the outer canopy"
     );
     assert!(
         tree.occupancy.iter().any(|c| {
-            c.position.checked_distance(tree.origin.column).unwrap() > 12
+            c.position.checked_distance(tree.origin.column).unwrap() > 40
                 && c.runs
                     .iter()
                     .any(|r| r.material == "timber" && r.bottom == g.surface(c.position).level + 1)
         }),
         "tree has grounded spreading roots beyond its trunk"
     );
-    for z in 148..=194 {
+    let mut previous: Option<VoxelPosition> = None;
+    for r in 83..=150 {
+        let z = f64::from(r) * 1.5;
+        let support = g.support(-60., z, true);
         assert!(
-            g.clear_support(g.support(-60., f64::from(z), true), 8),
+            g.clear_support(support, 12),
             "root-temple approach blocked at {z}"
         );
+        if let Some(previous) = previous {
+            assert_eq!(previous.column.checked_distance(support.column).unwrap(), 1);
+            assert!(
+                (previous.level - support.level).abs() <= 1,
+                "unwalkable fort/temple step at {z}"
+            );
+        }
+        previous = Some(support);
     }
     let sites = g.sites(1).unwrap();
     for site in &sites.encounters {
@@ -326,6 +385,9 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
                 || o.id == "grand/root-temple-plant"
                 || o.id == "grand/fire-flame-marker"
                 || o.id == "grand/air-spiral-marker"
+                || o.id == "grand/earth-heart-marker"
+                || o.id == "grand/root-temple-ribs"
+                || o.id == "grand/goblin-fort"
                 || o.id.starts_with("grand/forest-camp/")
                 || o.id.starts_with("grand/coastal-rock/")
         })
@@ -374,4 +436,19 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
     for package in packages {
         package.validate_with_index(&index).unwrap();
     }
+}
+
+#[test]
+fn volcanic_caldera_stays_below_its_rim_and_preserves_exact_sites() {
+    let source = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .unwrap();
+    let g = GrandCompiler::new(source).unwrap();
+    let bottom = g.surface(nearest_hex(-1195., 472.)).level;
+    let rim = g.surface(nearest_hex(-1217., 472.)).level;
+    assert!(rim - bottom >= 80, "visible caldera depth");
+    assert_eq!(g.support(-1170., 455., false).level, 579);
+    assert_eq!(g.support(-1205., 430., false).level, 575);
+    assert!(g.clear_support(g.support(-1170., 455., false), 12));
 }

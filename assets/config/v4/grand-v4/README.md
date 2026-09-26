@@ -33,14 +33,16 @@ The finite ocean envelope has radius 900 and 2,432,701 total columns in 9,804 ch
 Ocean volume is independent of the mainland-area measurement.
 
 The source defines the beach start, five shrines, 14 encounter sites, the forest
-and World Tree with grounded spreading roots, a planted temple below its roots,
-small static flame and spiral sculptures behind the Fire and Air claim points,
+and World Tree with a broad layered canopy, supporting branches and spreading roots,
+a planted temple connected to the fort by a continuous stair and aligned gates,
+small static flame, spiral and crystal sculptures behind the Fire, Air and Earth claim points,
 six small camp/ruin accents, four coastal rock clusters, a fort, the mountain garden and fountain,
 a continuous descending watercourse through falls and valley lake into the bay,
 Crystal terraces and frozen woods, the library stair route inside the mountain,
-a separate uniform Shadow tunnel, and the offshore volcanic island. Site facts
+a separate uniform Shadow tunnel with a walkable northern outlet to Crystal,
+and the offshore volcanic island with a recessed caldera. Site facts
 carry exact supporting voxels and package identity in `arena-sites.ron`.
-The Fire and Air markers use ordinary opaque voxel materials; they add no hazard,
+The shrine markers use ordinary opaque voxel materials; they add no hazard,
 animation or ability. Overview structure counts derive from authored non-tree
 objects, matching the compiler receipt rather than a fixed landmark estimate.
 
@@ -54,8 +56,10 @@ actual travel with spatial wind and waves is a separate native measurement.
 Terrain and object source use compact runs, compiled and admitted one chunk at a
 time. The runtime retains at most 512 source chunks and 256 detailed render chunks.
 Grand publishes exact loaded collision, bounded actor interests, and a compact
-package-bound biome companion. The World Tree spans 21 chunks and has a stable
-`grand/world-tree` identity; its bounded roots preserve the south temple approach.
+package-bound biome companion. The World Tree's approximately 265-by-223-unit crown
+uses one stable `grand/world-tree` object, bounded to 20,000 columns and 128 chunks;
+its branches and roots preserve shrine, encounter and southern temple clearance.
+The current authored tree measures 15,883 columns, 19,963 compact runs and 85 chunks.
 Distant presentation is separate from seabed authority.
 
 Map checkpoint records preserve sparse edits, partial voxel health, transaction

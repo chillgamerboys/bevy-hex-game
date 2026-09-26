@@ -450,6 +450,24 @@ impl GrandCompiler {
                 water = None;
             }
         }
+        // The shrine aprons erased the old central crater. This irregular
+        // caldera occupies the southwest summit shoulder outside both exact pads.
+        let angle = (z - 472.).atan2(x + 1195.);
+        let crater = ((x + 1195.) / 20.).hypot((z - 472.) / 16.) / (1. + 0.08 * (angle * 3.).sin());
+        let clear_pad = sites::PADS
+            .iter()
+            .filter(|site| site.x < -1000.)
+            .all(|site| (x - site.x).hypot(z - site.z) > site.radius + 4.);
+        if crater < 1.5 && clear_pad {
+            let target = if crater < 1. {
+                511. + 77. * crater.powi(6)
+            } else {
+                620. + 8. * (angle * 5.).sin()
+            };
+            h += (target - h) * (1. - smooth((crater - 1.) / 0.5));
+            material = "basalt";
+            water = None;
+        }
         // The garden pool drains by a narrow, gently curved rill into the lake.
         if (276. ..=306.).contains(&x) {
             let center = -474. + 4. * ((x - 276.) / 30.) + 1.5 * ((x - 276.) / 9.).sin();
@@ -485,6 +503,12 @@ impl GrandCompiler {
             if ((x + 105.) / 7.).hypot((z + 618.) / 4.5) < 1. {
                 h = 652.;
                 material = "slate";
+            }
+            // The fort pad must not overwrite the walkable temple approach.
+            // One level per row joins the temple floor to both fort gates.
+            if (x + 60.).abs() < 7. && (180. ..=225.).contains(&z) {
+                h = f64::from(471 + (p.r - 120).clamp(0, 30) as i32);
+                material = "sand";
             }
         }
         GrandSurface {
@@ -525,6 +549,22 @@ impl GrandCompiler {
         runs.retain(|r| r.bottom < r.top);
         if let Some((floor, ceiling)) = library_cavity(p) {
             cut(&mut runs, floor + 1, ceiling);
+            let [x, z] = world_xz(p);
+            if z > 0. {
+                // Warm floor and a narrow contrasting center guide remain actual
+                // supporting terrain, with no raised decorative obstacle.
+                cut(&mut runs, floor - 1, floor + 1);
+                runs.push(run(
+                    floor - 1,
+                    floor + 1,
+                    if (x + 60.).abs() < 1.8 {
+                        "slate"
+                    } else {
+                        "sand"
+                    },
+                ));
+                runs.sort_by_key(|run| run.bottom);
+            }
         }
         if let Some((floor, ceiling)) = shadow_cavity(p) {
             cut(&mut runs, floor + 1, ceiling);
@@ -832,10 +872,12 @@ fn library_cavity(p: WorldHex) -> Option<(i32, i32)> {
         return Some((1100, 1190));
     }
     // Temple below the roots, with a southern passage under the trunk.
-    if ((x + 60.) / 26.).hypot((z - 125.) / 22.) < 1.
-        || (x + 60.).abs() < 7. && (130. ..=196.).contains(&z)
-    {
+    if ((x + 60.) / 26.).hypot((z - 125.) / 22.) < 1. {
         return Some((470, 503));
+    }
+    if (x + 60.).abs() < 7. && (130. ..=225.).contains(&z) {
+        let floor = 470 + (p.r - 120).clamp(0, 30) as i32;
+        return Some((floor, floor + 33));
     }
     None
 }

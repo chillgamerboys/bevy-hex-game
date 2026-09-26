@@ -80,31 +80,16 @@ fn tree(
     index: usize,
     giant: bool,
 ) -> Result<ObjectInstance, ContractError> {
+    if giant {
+        return world_tree(g, root);
+    }
     let mut cells = Cells::new();
     let floor = g.surface(root).level + 1;
     let [x, z] = world_xz(root);
     let heart = gaussian(x, z, -50., 160., 250., 230.);
-    let height = if giant {
-        320
-    } else {
-        (35. + heart * 85.) as i32 + (index % 25) as i32
-    };
-    let crown = if giant { 29 } else { 3 + (heart * 4.) as i64 };
-    let trunk: i64 = if giant { 6 } else { 0 };
-    for dq in -trunk..=trunk {
-        for dr in -trunk..=trunk {
-            if dq.abs().max(dr.abs()).max((dq + dr).abs()) <= trunk {
-                let p = WorldHex::new(root.q + dq, root.r + dr);
-                add(
-                    &mut cells,
-                    p,
-                    g.surface(p).level + 1,
-                    floor + height,
-                    "timber",
-                );
-            }
-        }
-    }
+    let height = (35. + heart * 85.) as i32 + (index % 25) as i32;
+    let crown = 3 + (heart * 4.) as i64;
+    add(&mut cells, root, floor, floor + height, "timber");
     for dq in -crown..=crown {
         for dr in -crown..=crown {
             let d = (dq * dq + dq * dr + dr * dr) as f64;
@@ -113,58 +98,151 @@ fn tree(
             }
             let p = WorldHex::new(root.q + dq, root.r + dr);
             let depth = (1. - d / (crown * crown) as f64).sqrt();
-            let lo = floor + height - (depth * if giant { 100. } else { 35. }) as i32;
-            let hi = floor + height + (depth * if giant { 35. } else { 12. }) as i32;
             add(
                 &mut cells,
                 p,
-                lo,
-                hi,
+                floor + height - (depth * 35.) as i32,
+                floor + height + (depth * 12.) as i32,
                 if floor > 1070 { "snow" } else { "foliage" },
             );
         }
     }
-    if giant {
-        // Low, spreading buttress roots follow the actual terrain. The south
-        // approach remains clear above the authored passage into the temple.
-        for (arm, (dq, dr)) in DIRS.into_iter().enumerate() {
-            for distance in 5_i64..=24 {
-                let bend = ((distance / 5 + arm as i64) % 3) - 1;
-                let center = WorldHex::new(
-                    root.q + dq * distance - dr * bend,
-                    root.r + dr * distance + dq * bend,
-                );
-                let width: i64 = if distance < 13 { 2 } else { 1 };
-                for aq in -width..=width {
-                    for ar in -width..=width {
-                        if aq.abs().max(ar.abs()).max((aq + ar).abs()) > width {
-                            continue;
-                        }
-                        let p = WorldHex::new(center.q + aq, center.r + ar);
-                        let [x, z] = world_xz(p);
-                        if (x + 60.).abs() < 10. && (135. ..200.).contains(&z) {
-                            continue;
-                        }
-                        let lo = g.surface(p).level + 1;
-                        let rise = (29 - distance) as i32 / 3 + 1;
-                        add(&mut cells, p, lo, lo + rise, "timber");
+    object(
+        g,
+        format!("grand/tree/{index:05}"),
+        "plant/grand-forest-tree",
+        root,
+        cells,
+    )
+}
+
+// Independent, asymmetric lobes make a broad living canopy rather than a single
+// sphere on a pole. Compact per-column intervals keep the full landmark bounded.
+const WORLD_TREE_LOBES: [(i64, i64, i64, i32); 7] = [
+    (0, 0, 44, 300),
+    (-35, 8, 35, 278),
+    (38, -14, 34, 294),
+    (8, -38, 36, 269),
+    (-12, 41, 34, 288),
+    (-36, -24, 30, 259),
+    (30, 28, 31, 280),
+];
+fn world_tree(g: &GrandCompiler, root: WorldHex) -> Result<ObjectInstance, ContractError> {
+    let floor = g.surface(root).level + 1;
+    let mut cells = Cells::new();
+    let mut canopy: BTreeMap<WorldHex, (i32, i32)> = BTreeMap::new();
+    for (cq, cr, radius, height) in WORLD_TREE_LOBES {
+        for q in -radius..=radius {
+            for r in -radius..=radius {
+                let metric = q * q + q * r + r * r;
+                if metric > radius * radius {
+                    continue;
+                }
+                let depth = (1. - metric as f64 / (radius * radius) as f64).sqrt();
+                let low = floor + height - (depth * 90.) as i32;
+                let high = floor + height + (depth * 55.) as i32 + 1;
+                let p = WorldHex::new(root.q + cq + q, root.r + cr + r);
+                canopy
+                    .entry(p)
+                    .and_modify(|(lo, hi)| {
+                        *lo = (*lo).min(low);
+                        *hi = (*hi).max(high);
+                    })
+                    .or_insert((low, high));
+            }
+        }
+    }
+    for (p, (lo, hi)) in canopy {
+        add(&mut cells, p, lo, hi, "foliage");
+    }
+    // Flared trunk narrows as the major boughs take over its load.
+    for q in -9_i64..=9 {
+        for r in -9_i64..=9 {
+            let distance = q.abs().max(r.abs()).max((q + r).abs());
+            if distance > 9 {
+                continue;
+            }
+            let p = WorldHex::new(root.q + q, root.r + r);
+            let top = floor
+                + if distance <= 5 {
+                    265
+                } else {
+                    250 - (distance as i32 - 5) * 38
+                };
+            add(&mut cells, p, g.surface(p).level + 1, top, "timber");
+        }
+    }
+    // Each outer lobe has a visible rising branch from the trunk into its heart.
+    for (cq, cr, _, height) in WORLD_TREE_LOBES.into_iter().skip(1) {
+        let steps = cq.abs().max(cr.abs()).max((cq + cr).abs());
+        for step in 0..=steps {
+            let t = step as f64 / steps as f64;
+            let q = (cq as f64 * t).round() as i64;
+            let r = (cr as f64 * t).round() as i64;
+            let center = floor + 110 + ((height - 130) as f64 * t.sqrt()) as i32;
+            let width = if t < 0.30 {
+                4_i64
+            } else if t < 0.70 {
+                3
+            } else {
+                2
+            };
+            for aq in -width..=width {
+                for ar in -width..=width {
+                    if aq.abs().max(ar.abs()).max((aq + ar).abs()) > width {
+                        continue;
                     }
+                    add(
+                        &mut cells,
+                        WorldHex::new(root.q + q + aq, root.r + r + ar),
+                        center - 6,
+                        center + 7,
+                        "timber",
+                    );
+                }
+            }
+        }
+    }
+    // Broad buttresses and branching surface roots follow terrain, retaining the
+    // main south passage and every encounter/camp's usable deployment ground.
+    for (arm, (dq, dr)) in DIRS.into_iter().enumerate() {
+        for distance in 5_i64..=68 {
+            let bend = ((distance as f64 / 13. + arm as f64).sin() * 4.).round() as i64;
+            let center = WorldHex::new(
+                root.q + dq * distance - dr * bend,
+                root.r + dr * distance + dq * bend,
+            );
+            let width: i64 = if distance < 18 {
+                4
+            } else if distance < 40 {
+                2
+            } else {
+                1
+            };
+            for aq in -width..=width {
+                for ar in -width..=width {
+                    if aq.abs().max(ar.abs()).max((aq + ar).abs()) > width {
+                        continue;
+                    }
+                    let p = WorldHex::new(center.q + aq, center.r + ar);
+                    let [x, z] = world_xz(p);
+                    if (x + 60.).abs() < 12. && (130. ..260.).contains(&z)
+                        || sites::reserved_encounter(x, z)
+                        || CAMPS.iter().any(|(cx, cz)| (x - cx).hypot(z - cz) < 12.)
+                    {
+                        continue;
+                    }
+                    let lo = g.surface(p).level + 1;
+                    let rise = 2 + (68 - distance) as i32 / 4;
+                    add(&mut cells, p, lo, lo + rise, "timber");
                 }
             }
         }
     }
     object(
         g,
-        if giant {
-            "grand/world-tree".into()
-        } else {
-            format!("grand/tree/{index:05}")
-        },
-        if giant {
-            "plant/grand-world-tree"
-        } else {
-            "plant/grand-forest-tree"
-        },
+        "grand/world-tree".into(),
+        "plant/grand-world-tree",
         root,
         cells,
     )
@@ -183,11 +261,25 @@ fn shrine(
         for r in -8_i64..=8 {
             let d = q.abs().max(r.abs()).max((q + r).abs());
             let p = WorldHex::new(root.q + q, root.r + r);
-            if d == 7 && (q + r) % 3 == 0 {
-                add(&mut cells, p, floor, floor + 18, "stone");
+            let [px, pz] = world_xz(p);
+            let plant_door = id == "plant" && (px + 60.).abs() < 4. && pz > 125.;
+            if d == 7 && (q + r) % 3 == 0 && !plant_door {
+                add(
+                    &mut cells,
+                    p,
+                    floor,
+                    floor + 18,
+                    if id == "plant" { "timber" } else { "stone" },
+                );
             }
             if d == 8 {
-                add(&mut cells, p, floor + 18, floor + 20, "stone");
+                add(
+                    &mut cells,
+                    p,
+                    floor + 18,
+                    floor + 20,
+                    if id == "plant" { "moss" } else { "stone" },
+                );
             }
         }
     }
@@ -246,8 +338,10 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
     }
     out.push(tree(g, nearest_hex(-60., 125.), index, true)?);
     out.push(temple_plant(g)?);
+    out.push(root_temple_ribs(g)?);
     out.push(fire_marker(g)?);
     out.push(air_marker(g)?);
+    out.push(earth_marker(g)?);
     for (i, (x, z)) in CAMPS.into_iter().enumerate() {
         out.push(camp(g, i, nearest_hex(x, z))?);
     }
@@ -294,7 +388,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
         root,
         cells,
     )?);
-    // Fort palisade: wide south gate and corner towers; center remains deployment clear.
+    // Gates align with the world-space temple approach across both skewed axial walls.
     let root = nearest_hex(-60., 225.);
     let floor = g.surface(root).level + 1;
     let mut cells = Cells::new();
@@ -303,10 +397,10 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
             if q.abs() != 17 && r.abs() != 17 {
                 continue;
             }
-            if r == 17 && q.abs() < 5 {
+            let p = WorldHex::new(root.q + q, root.r + r);
+            if r.abs() == 17 && (world_xz(p)[0] + 60.).abs() < 8. {
                 continue;
             }
-            let p = WorldHex::new(root.q + q, root.r + r);
             let lo = g.surface(p).level + 1;
             add(
                 &mut cells,
@@ -378,6 +472,30 @@ fn temple_plant(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
         g,
         "grand/root-temple-plant".into(),
         "decor/grand-temple-plant",
+        root,
+        cells,
+    )
+}
+
+fn root_temple_ribs(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
+    let root = nearest_hex(-60., 161.);
+    let mut cells = Cells::new();
+    for z in [147., 161., 175.] {
+        for x in [-65., -55.] {
+            let p = nearest_hex(x, z);
+            let floor = g.support(x, z, true).level + 1;
+            add(&mut cells, p, floor, floor + 26, "timber");
+        }
+        for x in -65..=-55 {
+            let p = nearest_hex(f64::from(x), z);
+            let floor = g.support(f64::from(x), z, true).level + 1;
+            add(&mut cells, p, floor + 26, floor + 29, "timber");
+        }
+    }
+    object(
+        g,
+        "grand/root-temple-ribs".into(),
+        "structure/grand-root-arches",
         root,
         cells,
     )
@@ -461,6 +579,32 @@ fn air_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
         g,
         "grand/air-spiral-marker".into(),
         "decor/grand-static-spiral",
+        root,
+        cells,
+    )
+}
+
+fn earth_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
+    let root = nearest_hex(-179., -524.);
+    let (mut cells, floor) = marker_base(g, root);
+    for q in -2_i64..=2 {
+        for r in -2_i64..=2 {
+            let distance = q.abs().max(r.abs()).max((q + r).abs());
+            if distance <= 2 {
+                add(
+                    &mut cells,
+                    WorldHex::new(root.q + q, root.r + r),
+                    floor + 2,
+                    floor + 15 - distance as i32 * 4,
+                    "crystal",
+                );
+            }
+        }
+    }
+    object(
+        g,
+        "grand/earth-heart-marker".into(),
+        "decor/grand-earth-heart",
         root,
         cells,
     )
