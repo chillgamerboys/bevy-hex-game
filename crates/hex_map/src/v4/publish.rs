@@ -440,6 +440,16 @@ impl TerrainPresenter {
                                 ))
                         })
                         .clone();
+                    if let Some(mut material) = world
+                        .resource_mut::<Assets<super::river::RiverMaterial>>()
+                        .get_mut(&river)
+                    {
+                        super::river::set_origin(
+                            &mut material,
+                            self.context.origin,
+                            self.context.level_height,
+                        );
+                    }
                     world.entity_mut(batch_entity).insert(MeshMaterial3d(river));
                 } else {
                     world

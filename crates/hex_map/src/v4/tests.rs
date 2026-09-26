@@ -1050,6 +1050,94 @@ fn halo_fixture(neighbor_bottom: i32, neighbor_top: i32) -> (WorldPackage, World
     (package, owner, neighbor)
 }
 
+#[test]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "Assertions are test oracles; Result propagates only fixture and presentation errors."
+)]
+fn authored_river_material_preserves_exact_prisms_and_atomic_retirement(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (mut package, owner, neighbor) = halo_fixture(-4, 2);
+    package.manifest.world_id = "grand-v4".into();
+    for chunk in package.chunks.values_mut() {
+        chunk.world_id = "grand-v4".into();
+        for column in &chunk.columns {
+            for run in &column.runs {
+                chunk.semantics.liquids.push(LiquidColumn {
+                    column: column.position,
+                    bottom: run.bottom,
+                    top: run.top,
+                    body_id: "grand/river".into(),
+                    kind: if column.position == owner {
+                        LiquidKind::Directed
+                    } else {
+                        LiquidKind::Standing
+                    },
+                    downstream: if column.position == owner {
+                        vec![VoxelPosition {
+                            column: neighbor,
+                            level: 1,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                });
+            }
+        }
+    }
+    package.seal()?;
+    let mut presenter = TerrainPresenter::new(
+        &package.manifest,
+        RenderOrigin {
+            column: owner,
+            level: 0,
+        },
+        1.0,
+    )?;
+    let chunk = package.chunks.get(&owner.chunk()).ok_or("owner chunk")?;
+    let mut world = World::new();
+    world.init_resource::<river::Enabled>();
+    let initial = presenter.prepare(chunk, 1)?;
+    let before = presenter.publish(&mut world, initial)?;
+    assert_eq!(before.logical_runs, 1);
+    assert_eq!(
+        world
+            .query::<&MeshMaterial3d<river::RiverMaterial>>()
+            .iter(&world)
+            .count(),
+        1
+    );
+    let exact = world
+        .query::<&ResidentRun>()
+        .iter(&world)
+        .next()
+        .ok_or("exact prism")?;
+    assert_eq!(
+        (exact.bottom, exact.top, exact.position.column),
+        (-4, 4, owner)
+    );
+    assert!(presenter
+        .publish(&mut world, presenter.prepare(chunk, 0)?)
+        .is_err());
+    assert!(world.get_entity(before.root).is_ok());
+    let replacement = presenter.prepare(chunk, 2)?;
+    let after = presenter.publish(&mut world, replacement)?;
+    assert!(world.get_entity(before.root).is_err());
+    assert_eq!(
+        world
+            .query::<&MeshMaterial3d<river::RiverMaterial>>()
+            .iter(&world)
+            .count(),
+        1
+    );
+    assert_eq!(world.resource::<Assets<river::RiverMaterial>>().len(), 1);
+    presenter.clear(&mut world);
+    assert!(world.get_entity(after.root).is_err());
+    assert!(world.resource::<Assets<river::RiverMaterial>>().is_empty());
+    assert!(world.resource::<Assets<Mesh>>().is_empty());
+    Ok(())
+}
+
 fn halo_neighbor(package: &WorldPackage, column: WorldHex) -> RenderNeighbor {
     RenderNeighbor {
         package: std::sync::Arc::new(

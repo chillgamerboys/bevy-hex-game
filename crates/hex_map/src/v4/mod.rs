@@ -3,8 +3,9 @@
 //! This adapter never installs the legacy grid plugin or a complete `VoxelMap`.
 //! [`crate::v4::ResidentRun`] retains exact global identity; the legacy `HexCoord`, `TilePos`
 //! and `SubstanceId` components are local picking mirrors, not world authority.
-//! Liquid intervals and static-object occupancy currently use exact prism geometry.
-//! Authored object assets, liquid effects and interior cutaways are not rendered.
+//! Liquid intervals and static-object occupancy use exact prism geometry. Grand's
+//! directed liquids can add saved-clock flow shading without displacing the prisms.
+//! Authored object assets and interior cutaways are not rendered by this adapter.
 //! The original semantic descriptors remain available through [`crate::v4::TerrainPresenter::package`].
 
 mod halo;

@@ -11,7 +11,7 @@
 struct RiverParameters {
     // Shared saved-clock phase, foam strength, fall flag, wavelength.
     phase_foam_fall: vec4<f32>,
-    // Authored absolute chart: every exact downstream link increases it.
+    // Authored chart direction, plus horizontal/fall phase at the render origin.
     direction: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> river: RiverParameters;
@@ -21,7 +21,8 @@ fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> Fragment
     var pbr = pbr_input_from_standard_material(input, front);
     let falling = river.phase_foam_fall.z > 0.5 && abs(input.world_normal.y) < 0.5;
     let chart = select(dot(input.world_position.xz, river.direction.xy), -input.world_position.y, falling);
-    let phase = chart / river.phase_foam_fall.w - river.phase_foam_fall.x;
+    let origin_phase = select(river.direction.z, river.direction.w, falling);
+    let phase = chart / river.phase_foam_fall.w + origin_phase - river.phase_foam_fall.x;
     let wave = 0.5 + 0.5 * sin(6.283185307 * phase);
     let width = max(fwidth(wave), 0.002);
     let crest = smoothstep(0.68 - width, 0.92 + width, wave);
