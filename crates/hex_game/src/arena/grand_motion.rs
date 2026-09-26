@@ -446,10 +446,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "Named route fixtures and bounded stride must remain present."
-    )]
     fn paired_routes_cross_chunk_boundaries_and_use_only_ordinary_input() {
         for (forward, reverse) in [
             ("grand-motion-forest-forward", "grand-motion-forest-reverse"),

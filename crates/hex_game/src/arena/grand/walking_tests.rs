@@ -2,7 +2,6 @@
 //! Only independent starts may relocate; every route uses ordinary held walking.
 #![expect(
     clippy::expect_used,
-    clippy::print_stdout,
     reason = "The explicit integration runner requires complete fixtures and durable diagnostic receipts, including failures."
 )]
 use super::*;
@@ -405,7 +404,9 @@ fn object_follower_remembers_side_and_rechecks_a_blocked_heading() {
 fn block_reason(world: &World) -> Option<&'static str> {
     let player = human(world);
     let session = world.resource::<ArenaSession>();
-    let progress = session.grand_progress().expect("Grand progress");
+    let Some(progress) = session.grand_progress() else {
+        return Some("Grand progression missing");
+    };
     if player.hp <= 0.0 || progress.deaths > 0 {
         return Some("player died or respawned");
     }
