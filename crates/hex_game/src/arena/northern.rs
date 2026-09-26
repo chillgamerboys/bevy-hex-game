@@ -794,8 +794,8 @@ fn capture_pose(
             "garden" => ("garden", Vec3::new(38.0, 26.0, 45.0)),
             "waterfall" => ("waterfall", Vec3::new(-35.0, 22.0, 48.0)),
             "valley-lake" => ("valley_lake", Vec3::new(60.0, 40.0, 70.0)),
-            "world-tree" => ("world_tree", Vec3::new(-100.0, 70.0, 140.0)),
-            "roots-entrance" => ("shrine_plant", Vec3::new(0.0, 2.0, 65.0)),
+            "world-tree" => ("world_tree", Vec3::new(-205.0, 95.0, 270.0)),
+            "roots-entrance" => ("root_temple_approach", Vec3::new(-12.0, 5.0, -10.0)),
             "shrine-plant" => ("shrine_plant", Vec3::new(5.0, 2.0, 7.0)),
             "shrine-earth" => ("shrine_earth", Vec3::new(8.0, 3.0, 10.0)),
             "shrine-fire" => ("shrine_fire", Vec3::new(8.0, 3.0, 10.0)),
@@ -803,7 +803,7 @@ fn capture_pose(
             "forest" => ("forest", Vec3::new(45.0, 30.0, 60.0)),
             "summit" => ("shrine_air", Vec3::new(72.0, 50.0, 92.0)),
             "crystal" => ("crystal_ascent", Vec3::new(-85.0, 65.0, 100.0)),
-            "frozen-woods" => ("frozen_woods", Vec3::new(45.0, 35.0, 55.0)),
+            "frozen-woods" => ("frozen_woods", Vec3::new(45.0, 130.0, 55.0)),
             "volcano" => ("volcano", Vec3::new(125.0, 95.0, 155.0)),
             "bay" | "bay-baseline" => ("bay", Vec3::new(-18.0, 8.0, 24.0)),
             "bay-reverse" => ("bay", Vec3::new(24.0, 8.0, -18.0)),
@@ -821,7 +821,7 @@ fn capture_pose(
             "shadow-reverse" => anchor("shadow_entrance")? + Vec3::Y * 1.7,
             "shadow-exit" => site + Vec3::new(0.0, 1.7, 24.0),
             "world-tree" => site + Vec3::Y * 55.0,
-            "roots-entrance" => site + Vec3::Y * 1.5,
+            "roots-entrance" => anchor("root_temple_entrance")? + Vec3::Y * 2.0,
             "shrine-plant" => site + Vec3::new(0.0, 1.8, -4.5),
             "shrine-earth" | "shrine-fire" | "shrine-air" => site + Vec3::new(0.0, 2.0, -3.0),
             "library-upper" => site + Vec3::new(9.0, 4.0, -9.0),
@@ -830,7 +830,9 @@ fn capture_pose(
         };
         return Some(CapturePose {
             camera: Transform::from_translation(site + offset).looking_at(target, Vec3::Y),
-            interest: if name == "shadow-reverse" {
+            interest: if name == "roots-entrance" {
+                anchor("root_temple_entrance")?
+            } else if name == "shadow-reverse" {
                 site + offset
             } else {
                 site

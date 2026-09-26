@@ -16,6 +16,7 @@ mod marine_visual;
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
 mod grand;
+mod grand_lighting;
 mod hud;
 mod northern;
 mod presentation;
@@ -463,6 +464,7 @@ pub fn run() -> AppExit {
     glider_visual::install(&mut app);
     marine_visual::install(&mut app);
     grand::install(&mut app);
+    grand_lighting::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
         .insert_resource(selection)

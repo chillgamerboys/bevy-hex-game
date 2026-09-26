@@ -106,6 +106,15 @@ Resolve source conflicts, invalid shared facts, actual budget failures and faili
 
 ## Injection log
 - Sep25: user approved implementation; three isolated source lanes and root integration started.
+- Sep25 visual review: the first full-size captures exposed omitted detailed inland water,
+  unreadable cave lighting, a blocked Plant approach, insufficient World Tree canopy scale,
+  a missing Earth focal object, and a buried Frozen Woods review camera. These are repairs
+  within this integration wave. The completed gameplay worker takes a separate world-only
+  repair assignment in `hex_map/src/arena/streamed/render.rs` and its liquid tests; the world
+  worker retains Grand schematic content and route tests. Root owns `hex_game` lighting and
+  review cameras. The water worker investigates the reproduced shoreline stippling. Each
+  shared file still has one writer. Failed exact-head frames remain preserved; corrections
+  require a new immutable package where authoring changes and fresh captures.
 
 ## Close-out
 Source lanes are integrated. The [candidate guide](../../../development/grand-v4.md) records launch, owner contracts, focused acceptance commands, and the deferred backlog. Combined process restart, rendering, residency, and native acceptance remain distinct from the focused gameplay and compiler tests. The exact final gate and evidence receipts must be recorded before any completion or merge claim.
