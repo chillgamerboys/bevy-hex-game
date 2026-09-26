@@ -17,6 +17,7 @@ pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRES
 mod golem;
 mod grand;
 mod grand_lighting;
+mod grand_motion;
 mod hud;
 mod northern;
 mod presentation;
@@ -356,6 +357,7 @@ impl ViewState {
 
     fn external_camera(&self) -> bool {
         self.capture.is_some()
+            && !grand_motion::is_view(&self.capture_view)
             && !matches!(
                 self.capture_view.as_str(),
                 "first" | "third" | "tuning" | "start" | "terminal-win" | "terminal-defeat"
@@ -432,6 +434,10 @@ pub fn run() -> AppExit {
         return AppExit::error();
     }
     let mut app = App::new();
+    if let Err(error) = grand_motion::install(&mut app, &state, selection.map) {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
     let plugins = DefaultPlugins.set(WindowPlugin {
         close_when_requested: false,
         primary_window: Some(Window {
@@ -1126,7 +1132,16 @@ fn drive_simulation(world: &mut World) {
             .actors
             .first()
             .map_or(Vec3::X, |actor| actor.aim);
-        let sample = if observer || encounter::stress_view(&view) {
+        let sample = if grand_motion::is_view(&view) {
+            match grand_motion::input(world) {
+                Ok(intent) => intent,
+                Err(error) => {
+                    error!("Grand motion failed: {error}");
+                    world.write_message(AppExit::error());
+                    return;
+                }
+            }
+        } else if observer || encounter::stress_view(&view) {
             ActorIntent::default()
         } else if view.starts_with("encounter-") && view != "encounter-landmark" {
             let mut route_step = world.resource::<ViewState>().capture_route_step;
@@ -1659,7 +1674,9 @@ fn capture_frame(
         ocean_frame,
         ocean_profile,
     ) = render_context;
-    if state.capture_view.starts_with("water-lab-motion") {
+    if state.capture_view.starts_with("water-lab-motion")
+        || grand_motion::is_view(&state.capture_view)
+    {
         return;
     }
     if !northern::capture_ready(

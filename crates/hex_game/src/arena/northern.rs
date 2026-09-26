@@ -126,7 +126,7 @@ pub(super) fn prevailing_wind(streamed: &StreamedArena, selection: ArenaMap) -> 
 }
 
 pub(super) fn fixture_view(view: &str) -> bool {
-    view.starts_with("grand-")
+    (view.starts_with("grand-") && !super::grand_motion::is_view(view))
         || matches!(
             view,
             "northern-overview"
@@ -427,12 +427,18 @@ pub(super) fn interest(
     session: Res<ArenaSession>,
     selection: Res<ArenaSelection>,
     cache: Option<Res<NorthernPresentation>>,
+    motion: Option<Res<super::grand_motion::Run>>,
     mut target: ResMut<ArenaStreamInterest>,
 ) {
     if !selection.map.capabilities().streamed {
         return;
     }
-    if let Some(position) = cache.as_ref().and_then(|cache| cache.summit_pending) {
+    if let Some(position) = motion.as_ref().and_then(|motion| motion.loading_interest()) {
+        *target = ArenaStreamInterest {
+            position,
+            velocity: Vec3::ZERO,
+        };
+    } else if let Some(position) = cache.as_ref().and_then(|cache| cache.summit_pending) {
         *target = ArenaStreamInterest {
             position,
             velocity: Vec3::ZERO,
@@ -503,21 +509,18 @@ fn present(
         return;
     }
     // Explicit frozen phase zero matches the existing arena capture contract.
-    frame.phase_seconds = if state.capture.is_some() && state.capture_view != "northern-boat" {
-        0.0
+    let freeze = state.capture.is_some()
+        && state.capture_view != "northern-boat"
+        && !super::grand_motion::is_view(&state.capture_view);
+    frame.phase_seconds = if freeze { 0.0 } else { time.phase_seconds() };
+    frame.simulation_time = Some(if freeze {
+        OceanSimulationTime {
+            generation: time.generation,
+            seconds: 0.0,
+        }
     } else {
-        time.phase_seconds()
-    };
-    frame.simulation_time = Some(
-        if state.capture.is_some() && state.capture_view != "northern-boat" {
-            OceanSimulationTime {
-                generation: time.generation,
-                seconds: 0.0,
-            }
-        } else {
-            *time
-        },
-    );
+        *time
+    });
     sky.enabled = true;
     sky.sun_direction = sun_direction();
     #[expect(
