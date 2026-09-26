@@ -2,7 +2,8 @@
 //!
 //! This is independent of the ocean bed/terrain overview. Compact column runs
 //! preserve the actual grounded trunk and crown without expanding voxel levels.
-//! The full semantic chunk is released after building this disposable mesh.
+//! Only the bounded authored tree columns are retained after releasing the root
+//! chunk. Persistent object removals mask those columns even after source eviction.
 use super::{package_path_for, StreamedArena};
 use bevy::{
     asset::RenderAssetUsages,
@@ -10,8 +11,8 @@ use bevy::{
     prelude::*,
 };
 use hex_core::{arena::ArenaMap, HexCoord};
-use hex_world_contracts::{ChunkId, ObjectInstance, VoxelRun, WorldHex};
-use hex_world_runtime::{FileChunkSource, IoLimits};
+use hex_world_contracts::{ChunkId, ColumnData, ObjectInstance, VoxelRun, WorldHex};
+use hex_world_runtime::{FileChunkSource, FiniteWorldSession, IoLimits};
 use std::collections::{BTreeMap, BTreeSet};
 
 const TREE_ASSET: &str = "plant/grand-world-tree";
@@ -37,7 +38,8 @@ struct Cache {
 
 struct Tree {
     id: String,
-    footprint: BTreeSet<ChunkId>,
+    geometry: TreeGeometry,
+    current_surface: bool,
     entity: Entity,
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
@@ -69,7 +71,7 @@ pub(super) fn sync(
     }
     if !world.contains_resource::<Cache>() {
         let tree = match load(state) {
-            Ok(Some((id, footprint, mesh))) => {
+            Ok(Some((id, geometry, mesh))) => {
                 let vertices = mesh.count_vertices();
                 let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
                 let material =
@@ -92,12 +94,13 @@ pub(super) fn sync(
                     .id();
                 info!(
                     vertices,
-                    chunks = footprint.len(),
+                    chunks = geometry.observed_revisions.len(),
                     "Grand World Tree proxy prepared"
                 );
                 Some(Tree {
                     id,
-                    footprint,
+                    geometry,
+                    current_surface: vertices > 0,
                     entity,
                     mesh,
                     material,
@@ -117,28 +120,45 @@ pub(super) fn sync(
         let Some(tree) = cache.tree.as_mut() else {
             return;
         };
-        let edited = tree.footprint.iter().any(|chunk| {
-            state
-                .edits
-                .revision(*chunk)
-                .is_some_and(|revision| revision > 0)
-        });
-        let visible = should_show(detailed_objects.contains_key(&tree.id), edited);
-        if visible != tree.visible {
-            if let Some(mut visibility) = world.get_mut::<Visibility>(tree.entity) {
+        tree.sync(world, &state.edits, detailed_objects.contains_key(&tree.id));
+    });
+}
+
+impl Tree {
+    fn sync(&mut self, world: &mut World, edits: &FiniteWorldSession, complete_detailed: bool) {
+        match self.geometry.refresh(edits) {
+            Ok(Some(mesh)) => {
+                self.current_surface = mesh.count_vertices() > 0;
+                if let Some(existing) = world.resource_mut::<Assets<Mesh>>().get_mut(&self.mesh) {
+                    *existing = mesh;
+                } else {
+                    self.current_surface = false;
+                }
+            }
+            Ok(None) => {} // Ground edits and residency changes keep the same mesh.
+            Err(error) => {
+                // Never display stale intact geometry if its current mask cannot
+                // fit the bounded proxy; detailed publication remains authoritative.
+                self.current_surface = false;
+                warn!("Grand World Tree masked proxy unavailable: {error}");
+            }
+        }
+        let visible = should_show(complete_detailed, self.current_surface);
+        if visible != self.visible {
+            if let Some(mut visibility) = world.get_mut::<Visibility>(self.entity) {
                 *visibility = if visible {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 };
             }
-            tree.visible = visible;
+            self.visible = visible;
         }
-    });
+    }
 }
 
-fn should_show(complete_detailed: bool, edited_footprint: bool) -> bool {
-    !complete_detailed && !edited_footprint
+fn should_show(complete_detailed: bool, current_surface: bool) -> bool {
+    !complete_detailed && current_surface
 }
 
 /// Clear alongside the streamed renderer on map exit or package replacement.
@@ -157,7 +177,7 @@ pub(super) fn clear(world: &mut World) {
     }
 }
 
-type Loaded = (String, BTreeSet<ChunkId>, Mesh);
+type Loaded = (String, TreeGeometry, Mesh);
 
 fn load(state: &StreamedArena) -> Result<Option<Loaded>, String> {
     let point = state
@@ -198,21 +218,140 @@ fn load(state: &StreamedArena) -> Result<Option<Loaded>, String> {
             )
         })
         .collect();
-    let mesh = surface(object, state.overview.level_height, &palette)?;
-    let footprint = object
-        .occupancy
-        .iter()
-        .map(|column| column.position.chunk())
-        .chain(
-            object
-                .grounding
-                .iter()
-                .flatten()
-                .map(|position| position.column.chunk()),
-        )
-        .chain(std::iter::once(root.chunk()))
-        .collect();
-    Ok(Some((object.id.clone(), footprint, mesh)))
+    let (geometry, mesh) =
+        TreeGeometry::new(object, state.overview.level_height, palette, &state.edits)?;
+    Ok(Some((object.id.clone(), geometry, mesh)))
+}
+
+/// Compact authored occupancy is independent of both terrain residency and edits.
+/// The keys retain the original full footprint, including removed columns/supports.
+struct TreeGeometry {
+    authored: Vec<ColumnData>,
+    masked: Vec<ColumnData>,
+    observed_revisions: BTreeMap<ChunkId, u64>,
+    level_height: f32,
+    palette: BTreeMap<String, [f32; 4]>,
+}
+
+impl TreeGeometry {
+    fn new(
+        object: &ObjectInstance,
+        level_height: f32,
+        palette: BTreeMap<String, [f32; 4]>,
+        edits: &FiniteWorldSession,
+    ) -> Result<(Self, Mesh), String> {
+        check_occupancy_budget(&object.occupancy)?;
+        let observed_revisions = object
+            .occupancy
+            .iter()
+            .map(|column| column.position.chunk())
+            .chain(
+                object
+                    .grounding
+                    .iter()
+                    .flatten()
+                    .map(|position| position.column.chunk()),
+            )
+            .chain(std::iter::once(object.origin.column.chunk()))
+            .map(|chunk| (chunk, edits.revision(chunk).unwrap_or(0)))
+            .collect();
+        // Apply restored removals before the first mesh can become visible.
+        let masked = masked_columns(&object.occupancy, edits)?;
+        let mesh = surface(&masked, level_height, &palette)?;
+        Ok((
+            Self {
+                authored: object.occupancy.clone(),
+                masked,
+                observed_revisions,
+                level_height,
+                palette,
+            },
+            mesh,
+        ))
+    }
+
+    fn refresh(&mut self, edits: &FiniteWorldSession) -> Result<Option<Mesh>, String> {
+        let mut changed = false;
+        for (chunk, observed) in &mut self.observed_revisions {
+            let current = edits.revision(*chunk).unwrap_or(0);
+            changed |= current != *observed;
+            *observed = current;
+        }
+        if !changed {
+            return Ok(None);
+        }
+        // Revision changes are only a cheap dirty hint. Terrain damage, refills,
+        // or edits to another object in these chunks cannot reshape this tree.
+        let masked = masked_columns(&self.authored, edits)?;
+        if masked == self.masked {
+            return Ok(None);
+        }
+        self.masked = masked;
+        surface(&self.masked, self.level_height, &self.palette).map(Some)
+    }
+}
+
+fn check_occupancy_budget(occupancy: &[ColumnData]) -> Result<(), String> {
+    if occupancy.len() > MAX_COLUMNS
+        || occupancy
+            .iter()
+            .map(|column| column.runs.len())
+            .sum::<usize>()
+            > MAX_RUNS
+    {
+        return Err("World Tree occupancy exceeds its presentation budget".into());
+    }
+    Ok(())
+}
+
+/// Subtract sparse persistent removals from the authored intervals. No generated
+/// chunk is loaded, and neither intact voxels nor a per-voxel mask is expanded.
+fn masked_columns(
+    authored: &[ColumnData],
+    edits: &FiniteWorldSession,
+) -> Result<Vec<ColumnData>, String> {
+    let mut columns = Vec::with_capacity(authored.len());
+    let mut run_count = 0;
+    for column in authored {
+        let mut runs = Vec::new();
+        for run in &column.runs {
+            let mut bottom = run.bottom;
+            for removed in edits
+                .removed_in_column(column.position)
+                .filter(|removed| removed.level >= run.bottom && removed.level < run.top)
+            {
+                append_fragment(&mut runs, &mut run_count, run, bottom, removed.level)?;
+                bottom = removed.level + 1; // Strictly below the exclusive i32 run top.
+            }
+            append_fragment(&mut runs, &mut run_count, run, bottom, run.top)?;
+        }
+        columns.push(ColumnData {
+            position: column.position,
+            runs,
+        });
+    }
+    Ok(columns)
+}
+
+fn append_fragment(
+    runs: &mut Vec<VoxelRun>,
+    total: &mut usize,
+    source: &VoxelRun,
+    bottom: i32,
+    top: i32,
+) -> Result<(), String> {
+    if bottom < top {
+        if *total >= MAX_RUNS {
+            return Err("World Tree removal mask exceeds its run budget".into());
+        }
+        runs.push(VoxelRun {
+            bottom,
+            top,
+            material: source.material.clone(),
+        });
+        *total += 1;
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -299,29 +438,20 @@ fn exposed(bottom: i32, top: i32, neighbors: &[VoxelRun]) -> Vec<(i32, i32)> {
     reason = "Validated finite Grand columns are within radius900 and1600levels."
 )]
 fn surface(
-    object: &ObjectInstance,
+    occupancy: &[ColumnData],
     level_height: f32,
     palette: &BTreeMap<String, [f32; 4]>,
 ) -> Result<Mesh, String> {
-    if object.occupancy.len() > MAX_COLUMNS
-        || object
-            .occupancy
-            .iter()
-            .map(|column| column.runs.len())
-            .sum::<usize>()
-            > MAX_RUNS
-        || !level_height.is_finite()
-        || level_height <= 0.0
-    {
-        return Err("World Tree occupancy exceeds its presentation budget".into());
+    check_occupancy_budget(occupancy)?;
+    if !level_height.is_finite() || level_height <= 0.0 {
+        return Err("World Tree level height must be finite and positive".into());
     }
-    let columns: BTreeMap<_, _> = object
-        .occupancy
+    let columns: BTreeMap<_, _> = occupancy
         .iter()
         .map(|column| (column.position, column.runs.as_slice()))
         .collect();
     let mut out = Surface::default();
-    for column in &object.occupancy {
+    for column in occupancy {
         let coord = super::local(column.position).ok_or("World Tree column outside local range")?;
         for run in &column.runs {
             let color = *palette
@@ -369,12 +499,429 @@ fn surface(
 mod tests {
     use super::*;
 
+    use hex_world_contracts::{
+        ChunkDescriptor, ChunkPackage, ChunkSemantics, MaterialSpec, RegionDescriptor,
+        ResidencyRequest, VoxelEdit, VoxelPosition, WorldEditTransaction, WorldManifest,
+        WorldPackage, SCHEMA_VERSION,
+    };
+    use hex_world_runtime::{
+        CancellationToken, FiniteChunkCheckpoint, FiniteSessionHeader, MemoryChunkSource,
+        RuntimeConfig, RuntimeResult, WorldRuntime,
+    };
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
+    struct Fixture {
+        runtime: WorldRuntime,
+        edits: FiniteWorldSession,
+        object: ObjectInstance,
+        palette: BTreeMap<String, [f32; 4]>,
+    }
+
+    fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
+        let root = WorldHex::new(15, 0);
+        let crown = WorldHex::new(16, 0); // A second source chunk.
+        let object = ObjectInstance {
+            id: "grand/world-tree".into(),
+            region_id: "tree".into(),
+            asset: TREE_ASSET.into(),
+            origin: VoxelPosition {
+                column: root,
+                level: 10,
+            },
+            rotation: 0,
+            grounding: None,
+            occupancy: vec![
+                ColumnData {
+                    position: root,
+                    runs: vec![
+                        VoxelRun {
+                            bottom: 10,
+                            top: 22,
+                            material: "timber".into(),
+                        },
+                        VoxelRun {
+                            bottom: 22,
+                            top: 28,
+                            material: "foliage".into(),
+                        },
+                    ],
+                },
+                ColumnData {
+                    position: crown,
+                    runs: vec![VoxelRun {
+                        bottom: 22,
+                        top: 28,
+                        material: "foliage".into(),
+                    }],
+                },
+            ],
+        };
+        let chunks: BTreeMap<_, _> = [root, crown]
+            .into_iter()
+            .map(|position| {
+                (
+                    position.chunk(),
+                    ChunkPackage {
+                        schema_version: SCHEMA_VERSION,
+                        world_id: "grand-v4".into(),
+                        coordinate: position.chunk(),
+                        source_fingerprint: 7,
+                        columns: vec![ColumnData {
+                            position,
+                            runs: vec![VoxelRun {
+                                bottom: 0,
+                                top: 10,
+                                material: "stone".into(),
+                            }],
+                        }],
+                        features: vec![],
+                        semantics: ChunkSemantics {
+                            objects: if position == root {
+                                vec![object.clone()]
+                            } else {
+                                vec![]
+                            },
+                            ..default()
+                        },
+                        fingerprint: 0,
+                    },
+                )
+            })
+            .collect();
+        let mut package = WorldPackage {
+            manifest: WorldManifest {
+                schema_version: SCHEMA_VERSION,
+                world_id: "grand-v4".into(),
+                compiler_version: "test-1".into(),
+                source_fingerprint: 7,
+                materials: ["stone", "timber", "foliage"]
+                    .into_iter()
+                    .map(|id| MaterialSpec {
+                        id: id.into(),
+                        solid: true,
+                        diggable: true,
+                        color: [80, 100, 60, 255],
+                    })
+                    .collect(),
+                regions: [("tree", root), ("crown", crown)]
+                    .into_iter()
+                    .map(|(id, origin)| RegionDescriptor {
+                        id: id.into(),
+                        origin,
+                        radius: 0,
+                        source_fingerprint: 7,
+                    })
+                    .collect(),
+                chunks: chunks
+                    .keys()
+                    .map(|coordinate| ChunkDescriptor {
+                        coordinate: *coordinate,
+                        fingerprint: 0,
+                        path: format!("chunks/{}_{}.ron", coordinate.q, coordinate.r),
+                    })
+                    .collect(),
+                boundaries: vec![],
+                summary: vec![],
+                features: vec![],
+                fingerprint: 0,
+            },
+            chunks,
+        };
+        package.seal()?;
+        let source = Arc::new(MemoryChunkSource::new(package)?);
+        let mut runtime = WorldRuntime::new(source, RuntimeConfig::default())?;
+        runtime.set_interests(vec![ResidencyRequest {
+            id: "fixture".into(),
+            center: root,
+            radius: 1,
+            retention_radius: 1,
+            priority: 1,
+        }])?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runtime.resident_chunks().count() != 2 {
+            let update = runtime.pump();
+            assert!(
+                update.failures.is_empty(),
+                "fixture source failures: {:?}",
+                update.failures
+            );
+            assert!(Instant::now() < deadline, "bounded fixture admission");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let edits = FiniteWorldSession::streamed(&runtime, 0, 50)?;
+        Ok(Fixture {
+            runtime,
+            edits,
+            object,
+            palette: BTreeMap::from([
+                ("timber".into(), [0.2, 0.1, 0.0, 1.0]),
+                ("foliage".into(), [0.1, 0.3, 0.0, 1.0]),
+            ]),
+        })
+    }
+
+    fn remove_cells(
+        edits: &mut FiniteWorldSession,
+        id: &str,
+        cells: &[VoxelPosition],
+    ) -> RuntimeResult<()> {
+        edits.apply_transaction(&WorldEditTransaction {
+            id: id.into(),
+            expected_revisions: cells
+                .iter()
+                .map(|position| {
+                    let chunk = position.column.chunk();
+                    (chunk, edits.revision(chunk).unwrap_or(0))
+                })
+                .collect(),
+            edits: cells
+                .iter()
+                .map(|position| VoxelEdit {
+                    position: *position,
+                    material: None,
+                })
+                .collect(),
+        })?;
+        Ok(())
+    }
+
+    fn tree_in_world(geometry: TreeGeometry, mesh: Mesh) -> (World, Tree) {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        let current_surface = mesh.count_vertices() > 0;
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
+        let entity = world.spawn((Mesh3d(mesh.clone()), Visibility::Hidden)).id();
+        (
+            world,
+            Tree {
+                id: "grand/world-tree".into(),
+                geometry,
+                current_surface,
+                entity,
+                mesh,
+                material: Handle::default(),
+                visible: false,
+            },
+        )
+    }
+
+    fn mesh_bits(mesh: &Mesh) -> Option<(Vec<[u32; 3]>, Vec<[u32; 3]>, Vec<[u32; 4]>, Vec<usize>)> {
+        use bevy::mesh::VertexAttributeValues::{Float32x3, Float32x4};
+        let Some(Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            return None;
+        };
+        let Some(Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            return None;
+        };
+        let Some(Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            return None;
+        };
+        Some((
+            positions.iter().map(|p| p.map(f32::to_bits)).collect(),
+            normals.iter().map(|p| p.map(f32::to_bits)).collect(),
+            colors.iter().map(|p| p.map(f32::to_bits)).collect(),
+            mesh.indices()?.iter().collect(),
+        ))
+    }
+
     #[test]
-    fn detailed_publication_or_any_footprint_edit_suppresses_proxy() {
-        assert!(should_show(false, false));
-        assert!(!should_show(true, false));
-        assert!(!should_show(false, true));
+    fn terrain_only_edits_keep_the_same_visible_tree_mesh() {
+        let mut f = fixture().expect("validated two-chunk tree");
+        let (geometry, mesh) =
+            TreeGeometry::new(&f.object, 0.35, f.palette, &f.edits).expect("proxy");
+        let original = mesh_bits(&mesh).expect("indexed opaque surface");
+        let (mut world, mut tree) = tree_in_world(geometry, mesh);
+        tree.sync(&mut world, &f.edits, false);
+        assert!(tree.visible);
+        let handle = tree.mesh.clone();
+        remove_cells(
+            &mut f.edits,
+            "ground-damage",
+            &[VoxelPosition {
+                column: f.object.origin.column,
+                level: 9,
+            }],
+        )
+        .expect("finite terrain removal");
+        assert_eq!(f.edits.revision(f.object.origin.column.chunk()), Some(1));
+        assert!(
+            tree.geometry
+                .refresh(&f.edits)
+                .expect("ground refresh")
+                .is_none(),
+            "an actual terrain revision must not request a tree mesh replacement"
+        );
+        tree.sync(&mut world, &f.edits, false);
+        assert!(tree.visible);
+        assert_eq!(tree.mesh, handle);
+        assert_eq!(
+            *world.get::<Visibility>(tree.entity).expect("visibility"),
+            Visibility::Inherited
+        );
+        let current = world
+            .resource::<Assets<Mesh>>()
+            .get(&tree.mesh)
+            .expect("tree mesh");
+        assert_eq!(mesh_bits(current).expect("surface"), original);
+    }
+
+    #[test]
+    fn trunk_and_crown_removals_survive_eviction_resume_and_full_detail_handoff() {
+        let mut f = fixture().expect("validated two-chunk tree");
+        let (geometry, mesh) =
+            TreeGeometry::new(&f.object, 0.35, f.palette.clone(), &f.edits).expect("proxy");
+        let before = mesh_bits(&mesh).expect("surface");
+        let (mut world, mut tree) = tree_in_world(geometry, mesh);
+        let cuts = [
+            VoxelPosition {
+                column: WorldHex::new(15, 0),
+                level: 12,
+            },
+            VoxelPosition {
+                column: WorldHex::new(16, 0),
+                level: 25,
+            },
+        ];
+        remove_cells(&mut f.edits, "trunk-and-crown", &cuts).expect("object removal");
+        tree.sync(&mut world, &f.edits, false);
+        assert!(
+            tree.visible,
+            "partial detailed admission retains the whole masked proxy"
+        );
+        let after = mesh_bits(
+            world
+                .resource::<Assets<Mesh>>()
+                .get(&tree.mesh)
+                .expect("masked mesh"),
+        )
+        .expect("surface");
+        assert_ne!(after, before, "actual tree removals reshape its surface");
+        let remaining = tree.geometry.masked.clone();
+        for cut in cuts {
+            assert!(f.edits.object_removed(cut));
+            assert!(remaining
+                .iter()
+                .find(|c| c.position == cut.column)
+                .expect("column")
+                .material_at(cut.level)
+                .is_none());
+            assert_eq!(
+                remaining
+                    .iter()
+                    .find(|c| c.position == cut.column)
+                    .expect("column")
+                    .material_at(cut.level + 1),
+                f.object
+                    .occupancy
+                    .iter()
+                    .find(|c| c.position == cut.column)
+                    .expect("original column")
+                    .material_at(cut.level + 1),
+                "an adjacent surviving cell retains its authored material"
+            );
+        }
+        assert_eq!(
+            tree.geometry.observed_revisions.len(),
+            2,
+            "original whole footprint retained"
+        );
+        tree.sync(&mut world, &f.edits, true);
+        assert!(
+            !tree.visible,
+            "only complete detailed publication hides the proxy"
+        );
+        tree.sync(&mut world, &f.edits, false);
+        assert!(
+            tree.visible,
+            "retreat to partial detail restores the already-masked proxy"
+        );
+        assert_eq!(
+            mesh_bits(
+                world
+                    .resource::<Assets<Mesh>>()
+                    .get(&tree.mesh)
+                    .expect("same mesh")
+            )
+            .expect("surface"),
+            after
+        );
+
+        f.runtime.set_interests(vec![]).expect("evict all");
+        f.runtime.pump();
+        f.edits.sync_residency(&f.runtime);
+        assert_eq!(f.edits.resident_source_count(), 0);
+        assert_eq!(f.runtime.resident_chunks().count(), 0);
+        assert!(tree
+            .geometry
+            .refresh(&f.edits)
+            .expect("unloaded refresh")
+            .is_none());
+        assert_eq!(
+            masked_columns(&f.object.occupancy, &f.edits).expect("unloaded mask"),
+            remaining
+        );
+        let header = f.edits.checkpoint_header();
+        let partitions = f
+            .edits
+            .checkpoint_partitions()
+            .collect::<RuntimeResult<Vec<_>>>()
+            .expect("save unloaded edits");
+        let encoded = ron::to_string(&(header, partitions)).expect("persistent codec");
+        let (header, partitions): (FiniteSessionHeader, Vec<FiniteChunkCheckpoint>) =
+            ron::from_str(&encoded).expect("resumed codec");
+        let resumed = FiniteWorldSession::restore_checkpoint(
+            &f.runtime,
+            0,
+            50,
+            &header,
+            partitions.into_iter().map(Ok),
+            &CancellationToken::default(),
+        )
+        .expect("restore");
+        assert_eq!(
+            resumed.resident_source_count(),
+            0,
+            "proxy mask does not pin source chunks"
+        );
+        let (restored, mesh) =
+            TreeGeometry::new(&f.object, 0.35, f.palette, &resumed).expect("first resumed proxy");
+        assert_eq!(restored.masked, remaining);
+        assert_eq!(
+            restored.observed_revisions,
+            tree.geometry.observed_revisions
+        );
+        assert_eq!(
+            mesh_bits(&mesh).expect("resumed surface"),
+            after,
+            "the first mesh after resume already contains all trunk and crown cuts"
+        );
+    }
+
+    #[test]
+    fn removal_fragment_budget_fails_before_adding_an_unbounded_run() {
+        let source = VoxelRun {
+            bottom: 0,
+            top: 100,
+            material: "timber".into(),
+        };
+        let mut runs = vec![];
+        let mut count = MAX_RUNS;
+        assert!(append_fragment(&mut runs, &mut count, &source, 1, 2).is_err());
+        assert!(runs.is_empty());
+        assert_eq!(count, MAX_RUNS);
+        append_fragment(&mut runs, &mut count, &source, 2, 2)
+            .expect("empty interval costs nothing");
+    }
+
+    #[test]
+    fn only_complete_detail_or_invalid_current_surface_suppresses_proxy() {
+        assert!(should_show(false, true));
         assert!(!should_show(true, true));
+        assert!(!should_show(false, false));
+        assert!(!should_show(true, false));
     }
 
     #[test]
@@ -414,7 +961,7 @@ mod tests {
             grounding: None,
         };
         let palette = BTreeMap::from([("timber".into(), [0.2, 0.1, 0.0, 1.0])]);
-        let mesh = surface(&object, 0.35, &palette).expect("bounded tree");
+        let mesh = surface(&object.occupancy, 0.35, &palette).expect("bounded tree");
         // 320 levels still cost two caps and five exposed sides per column.
         assert_eq!(mesh.count_vertices(), 64);
         assert_eq!(mesh.indices().expect("indexed faces").len(), 108);
@@ -549,8 +1096,8 @@ mod tests {
                 )
             })
             .collect();
-        let mesh =
-            surface(tree, overview.level_height, &palette).expect("bounded actual tree mesh");
+        let mesh = surface(&tree.occupancy, overview.level_height, &palette)
+            .expect("bounded actual tree mesh");
         let vertices = mesh.count_vertices();
         let indices = mesh.indices().expect("indexed tree").len();
         assert!(vertices > 0 && vertices <= MAX_VERTICES);
