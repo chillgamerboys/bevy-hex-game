@@ -1,9 +1,5 @@
 use super::*;
 
-#[expect(
-    clippy::expect_used,
-    reason = "Grand fixtures must retain their real player identity; a missing actor is a test failure."
-)]
 fn player(session: &ArenaSession) -> &Actor {
     session
         .actors
@@ -12,10 +8,6 @@ fn player(session: &ArenaSession) -> &Actor {
         .expect("Grand player")
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "Fixture setup mutates the real player only; a missing player must fail the test."
-)]
 fn player_mut(session: &mut ArenaSession) -> &mut Actor {
     session
         .actors

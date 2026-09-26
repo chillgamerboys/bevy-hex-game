@@ -1274,6 +1274,9 @@ struct CommandsOut {
     edits: Vec<TerrainEdit>,
     impacts: Vec<TerrainImpact>,
     burrows: Vec<ArenaBurrowRequest>,
+    // Only the Grand pre-tick terrain gate may defer travel edges. Refused
+    // actions, terminal sessions and invalid setup must still consume them.
+    defer_travel_input: bool,
 }
 
 fn separate_actors(actors: &mut [Actor], world: &CollisionWorld) {
@@ -1423,6 +1426,18 @@ fn simulate(
         return;
     }
     let emitted = session.advance(human, &view, *geometry, *materials, &tuning);
+    if emitted.defer_travel_input {
+        // These booleans already latch between rendered frames without a fixed
+        // step. Keep that same contract when a Grand step only loads terrain.
+        // The shared input is the entire latch: pause/reset can discard it.
+        input.human.jump = human.jump;
+        input.human.high_jump = human.high_jump;
+        input.human.glider_toggle = human.glider_toggle;
+        input.human.flight_toggle = human.flight_toggle;
+        input.human.boat_toggle = human.boat_toggle;
+        // X/R are contextual one-shots, not deferred travel. Cast gestures keep
+        // their existing application-owned queue and completed-tick contract.
+    }
     *ocean_time = session.ocean_time();
     for request in emitted.burrows {
         burrows.write(request);

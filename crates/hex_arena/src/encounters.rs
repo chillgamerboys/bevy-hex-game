@@ -708,7 +708,10 @@ impl ArenaSession {
             self.admit_grand_parties(world, geometry, tuning);
             if self.grand_waiting_for_actors() {
                 self.notice = "Loading nearby encounter terrain…".into();
-                return CommandsOut::default();
+                return CommandsOut {
+                    defer_travel_input: true,
+                    ..Default::default()
+                };
             }
             self.advance_grand(human, world, geometry);
         }

@@ -9,6 +9,8 @@ mod checkpoint;
 mod finite;
 pub use checkpoint::GrandCheckpointIdentity;
 #[cfg(test)]
+mod input_tests;
+#[cfg(test)]
 mod tests;
 
 /// Stable elemental reward identities, independent of acquisition order.
