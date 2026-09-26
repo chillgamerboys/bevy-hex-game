@@ -1,7 +1,7 @@
 //! Small, supported architectural groups around Grand's existing playable voids.
 use super::*;
 
-fn garden(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, ContractError> {
+fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>, ContractError> {
     let mut frame = Cells::new();
     // Short north/west arcades frame the court without enclosing its south and
     // east approaches. Their overhead beams are well above ordinary headroom.
@@ -85,6 +85,15 @@ fn garden(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, ContractError> {
                 continue;
             }
             let floor = g.surface(p).level + 1;
+            // The established Water Shrine posts retain these exact cells.
+            // The low rim may meet a post, but cannot author another material
+            // inside it; water and the open southern approach remain untouched.
+            if occupied
+                .get(&p)
+                .is_some_and(|runs| runs.iter().any(|(lo, hi)| *lo <= floor && floor < *hi))
+            {
+                continue;
+            }
             add(&mut basin, p, floor, floor + 1, "sand");
         }
     }
@@ -277,7 +286,10 @@ fn bay(
     )
 }
 
-pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, ContractError> {
+pub(super) fn compose(
+    g: &GrandCompiler,
+    existing: &[ObjectInstance],
+) -> Result<Vec<ObjectInstance>, ContractError> {
     // Exact manifest-bound deployment columns plus one neighbouring hex retain
     // body clearance without treating an entire interior hall as a forest glade.
     let mut encounter_columns = std::collections::BTreeSet::new();
@@ -289,7 +301,11 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
             }
         }
     }
-    let mut out = garden(g)?;
+    let mut occupied = Occupied::new();
+    for object in existing {
+        reserve(&mut occupied, object);
+    }
+    let mut out = garden(g, &occupied)?;
     for (index, b) in BAYS.iter().copied().enumerate() {
         out.push(bay(g, index, b, &encounter_columns)?);
     }
@@ -300,6 +316,82 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
 mod tests {
     use super::*;
     #[test]
+    fn complete_dressing_has_compatible_materials_in_every_shared_chunk() {
+        let source: GrandSpec = ron::from_str(include_str!(
+            "../../../../../../assets/config/v4/grand-v4/world.ron"
+        ))
+        .expect("Grand source");
+        assert!(
+            source.full_dressing,
+            "validate the actual complete composition"
+        );
+        let compiler = GrandCompiler::new(source).expect("complete composition");
+        let mut conflicts = Vec::new();
+        for (chunk, influences) in &compiler.influences {
+            let mut occupied: BTreeMap<WorldHex, Vec<(&str, &VoxelRun)>> = BTreeMap::new();
+            for influence in influences {
+                for column in &influence.occupancy {
+                    let previous = occupied.entry(column.position).or_default();
+                    for run in &column.runs {
+                        for (id, old) in previous.iter() {
+                            if old.bottom < run.top
+                                && run.bottom < old.top
+                                && old.material != run.material
+                            {
+                                conflicts.push(format!(
+                                    "chunk {chunk:?}, column {:?}, levels {}..{}: {id} ({}) vs {} ({})",
+                                    column.position,
+                                    old.bottom.max(run.bottom),
+                                    old.top.min(run.top),
+                                    old.material,
+                                    influence.id,
+                                    run.material,
+                                ));
+                            }
+                        }
+                        previous.push((&influence.id, run));
+                    }
+                }
+            }
+        }
+        assert!(conflicts.is_empty(), "{}", conflicts.join("\n"));
+        for q in [19, 20] {
+            let garden = compiler
+                .chunk(ChunkId { q, r: -20 })
+                .expect("Garden composition must pass strict chunk sealing")
+                .expect("Garden chunk exists");
+            assert!(!garden.semantics.object_influences.is_empty());
+        }
+        let rim = compiler
+            .objects
+            .values()
+            .flatten()
+            .find(|object| object.id == "grand/fountain-rim")
+            .expect("the low fountain rim remains authored");
+        assert!(!rim.occupancy.is_empty());
+        for q in [318, 321] {
+            let p = WorldHex::new(q, -320);
+            assert!(
+                rim.occupancy.iter().all(|column| column.position != p),
+                "the existing Water Shrine owns the rim/post intersection at {p:?}"
+            );
+            let shrine = compiler
+                .influences
+                .get(&p.chunk())
+                .expect("shrine chunk")
+                .iter()
+                .find(|object| object.id == "grand/shrine/water")
+                .expect("the existing Water Shrine remains authored");
+            let post = shrine
+                .occupancy
+                .iter()
+                .find(|column| column.position == p)
+                .expect("the established shrine post is preserved");
+            assert!(post.runs.iter().any(|run| run.material == "stone"));
+        }
+    }
+
+    #[test]
     fn courtyard_and_library_are_supported_and_preserve_exact_water_and_passages() {
         let mut source: GrandSpec = ron::from_str(include_str!(
             "../../../../../../assets/config/v4/grand-v4/world.ron"
@@ -307,7 +399,9 @@ mod tests {
         .expect("Grand source");
         source.full_dressing = false;
         let plain = GrandCompiler::new(source.clone()).expect("terrain");
-        let additions = compose(&plain).expect("bounded architecture");
+        let water_shrine =
+            shrine(&plain, "water", 275., -490., false).expect("existing Water Shrine fixture");
+        let additions = compose(&plain, &[water_shrine]).expect("bounded architecture");
         assert_eq!(additions.len(), 16);
         let mut occupied = Occupied::new();
         for object in &additions {

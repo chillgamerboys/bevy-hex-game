@@ -751,7 +751,8 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
         root,
         cells,
     )?);
-    out.extend(landmarks::compose(g)?);
+    let landmarks = landmarks::compose(g, &out)?;
+    out.extend(landmarks);
     compose_forest(g, &mut out)?;
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
