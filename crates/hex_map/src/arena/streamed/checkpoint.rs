@@ -123,9 +123,15 @@ fn stage(world: &World, snapshot: &SessionCheckpoint) -> RuntimeResult<StagedMap
         || snapshot.identity().manifest_fingerprint != state.runtime.manifest().fingerprint
         || snapshot.identity().world_id != state.runtime.manifest().world_id
         || header.next_transaction == u64::MAX
-        || header.damage_chunks.windows(2).any(|p| p[0] >= p[1])
+        || header
+            .damage_chunks
+            .windows(2)
+            .any(|p| p.first() >= p.get(1))
         || header.consumed_batches.len() > 1_048_576
-        || header.consumed_batches.windows(2).any(|p| p[0] >= p[1])
+        || header
+            .consumed_batches
+            .windows(2)
+            .any(|p| p.first() >= p.get(1))
     {
         return Err(error("map checkpoint identity or metadata is invalid"));
     }
@@ -160,7 +166,7 @@ fn stage(world: &World, snapshot: &SessionCheckpoint) -> RuntimeResult<StagedMap
         &CancellationToken::default(),
     )?;
     let source = FileChunkSource::open_workspace(
-        &package_path_for(world.resource::<ArenaSelection>().map),
+        package_path_for(world.resource::<ArenaSelection>().map),
         IoLimits::default(),
     )?;
     if source.manifest().fingerprint != state.runtime.manifest().fingerprint {
@@ -172,7 +178,9 @@ fn stage(world: &World, snapshot: &SessionCheckpoint) -> RuntimeResult<StagedMap
         let cells: Vec<DamageCell> = read(snapshot, &damage_key(id))?;
         if cells.is_empty()
             || cells.len() > 1_048_576
-            || cells.windows(2).any(|p| p[0].position >= p[1].position)
+            || cells
+                .windows(2)
+                .any(|p| p.first().map(|c| c.position) >= p.get(1).map(|c| c.position))
         {
             return Err(error("noncanonical damage partition"));
         }
@@ -199,7 +207,8 @@ fn stage(world: &World, snapshot: &SessionCheckpoint) -> RuntimeResult<StagedMap
                     part.terrain_edits
                         .binary_search_by_key(&p, |e| e.position)
                         .ok()
-                        .map(|i| part.terrain_edits[i].material.as_deref())
+                        .and_then(|i| part.terrain_edits.get(i))
+                        .map(|edit| edit.material.as_deref())
                 })
                 .unwrap_or_else(|| {
                     chunk

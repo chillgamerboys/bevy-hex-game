@@ -32,6 +32,23 @@ impl TerrainDamageState {
         self.consumed_batches = values.into_iter().map(TerrainBatchId).collect();
     }
 
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn apply_burrow_health(
+        &mut self,
+        changes: &[hex_core::arena::ArenaBurrowChange],
+        damaged: &mut DamagedVoxels,
+    ) {
+        for change in changes {
+            if change.health_after.is_damaged() {
+                self.remaining
+                    .insert(change.position, change.health_after.remaining);
+                damaged.publish(change.position, change.health_after);
+            } else {
+                self.forget_voxel(change.position, damaged);
+            }
+        }
+    }
+
     /// Claims the first processed use of a batch id, including rejected batches.
     pub(crate) fn consume_batch(&mut self, batch: TerrainBatchId) -> bool {
         self.consumed_batches.insert(batch)

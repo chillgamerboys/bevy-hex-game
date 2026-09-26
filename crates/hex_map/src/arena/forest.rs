@@ -272,7 +272,7 @@ pub(super) fn material_id(name: &str, substances: &SubstanceTable) -> Result<Sub
     let name = match name {
         "soil" | "pine-floor" => "dirt",
         "moss" | "foliage" => "grass",
-        "timber" | "limestone" => "stone",
+        "timber" | "limestone" | "slate" | "crystal" => "stone",
         "spring-water" => "water",
         other => other,
     };

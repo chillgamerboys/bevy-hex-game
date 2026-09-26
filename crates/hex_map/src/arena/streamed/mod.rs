@@ -11,6 +11,7 @@ use hex_core::{
     DamagedVoxels, HexCoord, SubstanceId, TerrainEdit, TerrainImpactOutcome,
     TerrainImpactRejection, TerrainImpactResult, TilePos,
 };
+use hex_schematic::v4::grand::GrandBiomeMap;
 use hex_schematic::v4::northern::NorthernOverview;
 use hex_world_contracts::{
     ChunkId, ResidencyRequest, VoxelEdit, VoxelPosition, WorldEditTransaction, WorldHex,
@@ -24,6 +25,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod burrow;
 pub mod checkpoint;
 mod render;
 #[cfg(test)]
@@ -42,6 +44,7 @@ pub struct StreamedArena {
     pub edits: FiniteWorldSession,
     /// Cached immutable map geography for ocean and overview presentation.
     pub overview: Arc<NorthernOverview>,
+    biomes: Option<GrandBiomeMap>,
     generation: u64,
     projected: BTreeMap<ChunkId, u64>,
     interest_key: Option<Vec<WorldHex>>,
@@ -55,6 +58,23 @@ pub struct StreamedArena {
     pub peak_resident: usize,
 }
 
+impl StreamedArena {
+    /// Compiler-authored entered biome; never depends on distant mesh residency.
+    #[must_use]
+    pub fn biome_at(&self, position: Vec3) -> Option<&'static str> {
+        if !position.is_finite() {
+            return None;
+        }
+        let p = world_hex(HexCoord::from_world(position));
+        if p.checked_distance(WorldHex::new(0, 0)).ok()? > u64::from(self.overview.radius) {
+            return None;
+        }
+        self.biomes
+            .as_ref()?
+            .label_at(position.to_array().map(f64::from))
+    }
+}
+
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<ArenaStreamInterest>()
         .init_resource::<ArenaActorStreamInterests>()
@@ -65,6 +85,13 @@ pub(super) fn plugin(app: &mut App) {
                 .in_set(ArenaSystems::ApplyTerrain)
                 .run_if(resource_exists::<StreamedArena>),
         );
+    app.add_systems(
+        ArenaTick,
+        burrow::apply
+            .after(apply)
+            .in_set(ArenaSystems::ApplyTerrain)
+            .run_if(resource_exists::<StreamedArena>),
+    );
     render::plugin(app);
 }
 
@@ -112,10 +139,47 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
             .map_err(|e| e.to_string())?,
     );
     validate_overview(&overview, source.manifest())?;
+    let biomes = if grand {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(directory.join("grand-biomes.ron"))
+            .map_err(|e| e.to_string())?
+            .take(1_048_577)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 1_048_576 {
+            return Err("Grand biome companion exceeds1MiB".into());
+        }
+        let map: GrandBiomeMap = ron::de::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        if map.version != 1
+            || map.package_fingerprint != source.manifest().fingerprint
+            || map.source_fingerprint != source.manifest().source_fingerprint
+            || map.mainland_rows.len() > 10000
+            || map.crystal_rows.len() > 1000
+        {
+            return Err("Grand biome companion identity/bounds mismatch".into());
+        }
+        for rows in [&map.mainland_rows, &map.crystal_rows] {
+            if rows.windows(2).any(|pair| pair.first() >= pair.get(1))
+                || rows.iter().any(|(r, a, b)| {
+                    a > b
+                        || r.unsigned_abs() > 900
+                        || a.unsigned_abs() > 900
+                        || b.unsigned_abs() > 900
+                })
+            {
+                return Err("Grand biome rows are invalid".into());
+            }
+        }
+        Some(map)
+    } else {
+        None
+    };
     let mut runtime = WorldRuntime::new(
         source.clone(),
         RuntimeConfig {
             max_resident_chunks: 512,
+            max_interests: if grand { 132 } else { 64 },
             max_in_flight_jobs: 2,
             max_publications_per_pump: 2,
             ..default()
@@ -248,6 +312,7 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
         runtime,
         edits,
         overview: overview.clone(),
+        biomes,
         generation,
         projected: BTreeMap::new(),
         interest_key: None,
@@ -267,6 +332,7 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
         position: spawn,
         velocity: Vec3::ZERO,
     });
+    world.insert_resource(super::burrow::materials(&content.substances));
     world.insert_resource(content.substances);
     world.insert_resource(content.elements);
     world.insert_resource(content.damage);
@@ -573,12 +639,12 @@ fn pump(world: &mut World) {
             .resource::<ArenaActorStreamInterests>()
             .positions
             .iter()
-            .filter(|p| p.is_finite() && p.distance(interest.position) < 220.0)
+            .filter(|p| p.is_finite())
             .map(|p| quantize(*p))
             .collect();
         actors.sort();
         actors.dedup();
-        actors.truncate(48);
+        actors.truncate(128);
         let mut key = vec![center, ahead, far];
         key.extend_from_slice(&actors);
         if state.interest_key.as_ref() != Some(&key) {
@@ -626,8 +692,27 @@ fn pump(world: &mut World) {
                         priority: 252,
                     }),
             );
-            match state.runtime.set_interests(requests) {
-                Ok(()) => state.interest_key = Some(key),
+            // A distant respawn request must not fail merely because the
+            // renderer is retaining an old detail fringe. Critical authority
+            // remains bounded; trim disposable retention before refusing it.
+            let result = state
+                .runtime
+                .set_interests(requests.clone())
+                .or_else(|_| {
+                    for request in &mut requests {
+                        request.retention_radius = request.radius;
+                    }
+                    state.runtime.set_interests(requests.clone())
+                })
+                .or_else(|_| {
+                    requests.retain(|request| request.id != "terrain-detail");
+                    state.runtime.set_interests(requests)
+                });
+            match result {
+                Ok(()) => {
+                    state.interest_key = Some(key);
+                    state.failure = None;
+                }
                 Err(e) => state.failure = Some(e.to_string()),
             }
         }
