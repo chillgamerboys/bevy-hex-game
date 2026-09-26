@@ -14,13 +14,13 @@ use hex_world_contracts::hash_serializable;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CancellationToken, ErrorKind, RuntimeError, RuntimeResult,
     persistence::write_immutable,
     runtime::validate_identity,
     source::{
         atomic_write_head, checked_existing_path, ensure_relative_directory, lock_directory,
         read_bounded, read_bytes_bounded, sync_directory,
     },
+    CancellationToken, ErrorKind, RuntimeError, RuntimeResult,
 };
 
 const CHECKPOINT_SCHEMA: u32 = 1;

@@ -27,8 +27,9 @@ fn main() -> AppExit {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |duration| duration.as_secs());
-                let _ = writeln!(file, "{timestamp} pid={} panic: {info}", std::process::id());
-                let _ = file.flush();
+                writeln!(file, "{timestamp} pid={} panic: {info}", std::process::id())
+                    .unwrap_or_default();
+                file.flush().unwrap_or_default();
             }
         }
         default_hook(info);

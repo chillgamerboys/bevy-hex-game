@@ -6,9 +6,9 @@
 
 mod compiler;
 mod geometry;
+pub mod grand;
 mod model;
 pub mod northern;
-pub mod grand;
 mod operators;
 mod sea;
 pub use sea::fill_sea_column;

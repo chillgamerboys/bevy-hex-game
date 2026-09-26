@@ -676,7 +676,11 @@ pub(super) fn frame_bounds(minimum: Vec3, maximum: Vec3, rear: bool) -> Transfor
 
 /// Conservative composition admission: a living subject must occupy a useful
 /// part of the real camera frustum and have an unobstructed terrain ray.
-pub(super) fn visible_subjects(session: &ArenaSession, camera: &Transform, view: &str) -> Vec<hex_arena::ActorId> {
+pub(super) fn visible_subjects(
+    session: &ArenaSession,
+    camera: &Transform,
+    view: &str,
+) -> Vec<hex_arena::ActorId> {
     let Some(human) = session.actors.first() else {
         return Vec::new();
     };

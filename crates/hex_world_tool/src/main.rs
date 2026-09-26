@@ -1,7 +1,7 @@
 //! Supported prebuilt V4 authoring command. Map edits are runtime inputs.
 
-mod northern;
 mod grand;
+mod northern;
 mod preview;
 mod replication_benchmark;
 mod runtime_benchmark;
@@ -120,7 +120,9 @@ fn execute(arguments: impl IntoIterator<Item = String>) -> Result<String, Box<dy
     let arguments = Arguments::parse(arguments)?;
     match arguments.command.as_str() {
         "help" => Ok(USAGE.to_owned()),
-        "grand-compile" => { grand::compile(&arguments.path("--source")?, &arguments.path("--output")?) },
+        "grand-compile" => {
+            grand::compile(&arguments.path("--source")?, &arguments.path("--output")?)
+        }
         "northern-compile" => {
             northern::compile(&arguments.path("--source")?, &arguments.path("--output")?)
         }

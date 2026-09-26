@@ -527,7 +527,10 @@ fn actual_grand_fresh_burrow_and_owned_checkpoint_round_trip() {
             if view.residency.as_ref()?.at(*c, geometry) != ArenaAvailability::Ready {
                 return None;
             }
-            spans.iter().find(|s| s.substance == stone).map(|s| (*c, *s))
+            spans
+                .iter()
+                .find(|s| s.substance == stone)
+                .map(|s| (*c, *s))
         })
         .expect("loaded compact stone");
     let pos = TilePos::new(coord, span.bottom.level);
@@ -597,12 +600,10 @@ fn actual_grand_fresh_burrow_and_owned_checkpoint_round_trip() {
             (p.coordinate == changed.column.chunk()).then_some(p)
         })
         .unwrap();
-    assert!(
-        partition
-            .terrain_edits
-            .iter()
-            .any(|e| e.position == changed && e.material.as_deref() == Some("dirt"))
-    );
+    assert!(partition
+        .terrain_edits
+        .iter()
+        .any(|e| e.position == changed && e.material.as_deref() == Some("dirt")));
     assert_eq!(
         app.world()
             .resource::<ArenaWorldState>()

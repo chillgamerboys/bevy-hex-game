@@ -819,12 +819,11 @@ mod tests {
             for span in &view.static_spans {
                 assert_eq!(span.bottom.level, span.top_level);
                 assert!(span.blocks_movement && span.blocks_projectiles && span.blocks_sight);
-                assert!(
-                    view.edit_protected
-                        .get(&span.bottom.coord)
-                        .expect("authored prop cell is protected")
-                        .contains(&(span.bottom.level, span.bottom.level))
-                );
+                assert!(view
+                    .edit_protected
+                    .get(&span.bottom.coord)
+                    .expect("authored prop cell is protected")
+                    .contains(&(span.bottom.level, span.bottom.level)));
             }
         }
     }

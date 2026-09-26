@@ -4,7 +4,7 @@ use std::{
     ffi::OsStr,
     path::PathBuf,
     process::Command,
-    sync::{Mutex, mpsc},
+    sync::{mpsc, Mutex},
 };
 
 use hex_core::arena::ArenaMap;
@@ -190,7 +190,7 @@ pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ViewState, hud};
+    use super::super::{hud, ViewState};
     use super::*;
     use bevy::prelude::*;
     use hex_arena::{ArenaBattleSetup, ArenaInput, ArenaSession, ArenaTuning};
@@ -268,12 +268,10 @@ mod tests {
         };
         assert!(!preparation.finish(Err("Python is unavailable".into())));
         assert!(!preparation.ready);
-        assert!(
-            preparation
-                .status()
-                .expect("visible failure")
-                .contains("Python is unavailable")
-        );
+        assert!(preparation
+            .status()
+            .expect("visible failure")
+            .contains("Python is unavailable"));
         preparation.cancel_selection();
         assert!(preparation.status().is_none());
     }
@@ -323,12 +321,10 @@ mod tests {
             !preparation.poll(),
             "an unfinished process cannot block the menu"
         );
-        assert!(
-            preparation
-                .status()
-                .expect("visible progress")
-                .starts_with("Preparing")
-        );
+        assert!(preparation
+            .status()
+            .expect("visible progress")
+            .starts_with("Preparing"));
         release.send(()).expect("release background worker");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while !preparation.poll() {
@@ -355,12 +351,10 @@ mod tests {
         assert!(!preparation.poll());
         assert!(preparation.completion.is_none());
         assert!(!preparation.ready);
-        assert!(
-            preparation
-                .status()
-                .expect("visible error")
-                .contains("without a result")
-        );
+        assert!(preparation
+            .status()
+            .expect("visible error")
+            .contains("without a result"));
     }
 
     #[test]
@@ -376,14 +370,13 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<ArenaSelection>().map, ArenaMap::Duel);
         assert_eq!(app.world().resource::<ArenaReset>().generation, generation);
-        assert!(
-            app.world()
-                .resource::<ViewState>()
-                .forest_preparation
-                .status()
-                .expect("visible error")
-                .contains("compiler unavailable")
-        );
+        assert!(app
+            .world()
+            .resource::<ViewState>()
+            .forest_preparation
+            .status()
+            .expect("visible error")
+            .contains("compiler unavailable"));
 
         inject_preparation(&mut app)
             .send(Ok(()))

@@ -719,7 +719,12 @@ Death returns you to the last shrine and keeps your progress.".into(),
                     format!("{}  /  {} / {} parties cleared", super::map_name(selection.map), summary.defeated_parties, session.parties().len())
                 }
             },
-            Label::Rewards if selection.map == ArenaMap::GrandV4 => session.grand_progress().map_or_else(String::new, |p| format!("Shrines: {:?}\nLast shrine: {:?}", p.shrines, p.respawn_anchor)),
+            Label::Rewards if selection.map == ArenaMap::GrandV4 => session.grand_progress().map_or_else(String::new, |p| {
+                let shrines = if p.shrines.is_empty() { "None yet".into() }
+                    else { p.shrines.iter().map(|shrine| format!("{shrine:?}")).collect::<Vec<_>>().join(", ") };
+                let respawn = p.respawn_anchor.map_or_else(|| "Starting beach".into(), |shrine| format!("{shrine:?} shrine"));
+                format!("Shrines: {shrines}\nRespawn: {respawn}")
+            }),
             Label::Rewards => expedition.as_ref().map_or(String::new(), |e| format!(
                 "Troll: +25 base damage / {}\nDragons {}/3: explosions / {}\nWisps {}/10: +15 Fireball speed and aim guide / {}\nGolems {}/3: +20 Shield speed, +2 × +2 dimensions / {}",
                 milestone_status(e, ExpeditionReward::TrollDamage), e.dragons_defeated,

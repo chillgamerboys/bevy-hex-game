@@ -11,7 +11,7 @@ pub use biomes::GrandBiomeMap;
 mod sites;
 #[cfg(test)]
 mod tests;
-use super::northern::{IslandSpec, NorthernOverview, nearest_hex, world_xz};
+use super::northern::{nearest_hex, world_xz, IslandSpec, NorthernOverview};
 use hex_world_contracts::*;
 use serde::{Deserialize, Serialize};
 pub use sites::GrandSites;

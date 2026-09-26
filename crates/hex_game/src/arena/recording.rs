@@ -4,14 +4,14 @@ mod backend;
 #[cfg(target_os = "macos")]
 mod macos;
 
-use std::sync::{Mutex, mpsc};
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowCloseRequested};
 use hex_arena::ArenaSession;
 use hex_core::arena::{ArenaReset, ArenaTerrainView};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::{ArenaFrame, ViewState};
 

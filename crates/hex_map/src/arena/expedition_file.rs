@@ -8,11 +8,11 @@ use std::{
 };
 
 use hex_core::{
-    HexCoord, TilePos,
     arena::{
         ArenaDeploymentRegion, ArenaEncounterSite, ArenaExpeditionRoute, ArenaExpeditionSites,
         ArenaFountainVolume, ArenaPackageIdentity, ArenaVoxelGeometry,
     },
+    HexCoord, TilePos,
 };
 use hex_world_contracts::{VoxelPosition, WorldHex, WorldManifest};
 use serde::Deserialize;
@@ -281,16 +281,14 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
     }
     #[test]
     fn companion_size_limit_precedes_parsing() {
-        assert!(
-            decode(
-                &vec![b' '; usize::try_from(MAX_BYTES).expect("16 MiB fits usize") + 1],
-                WORLD_ID,
-                42,
-                ArenaVoxelGeometry::default()
-            )
-            .expect_err("bounded read")
-            .contains("16 MiB")
-        );
+        assert!(decode(
+            &vec![b' '; usize::try_from(MAX_BYTES).expect("16 MiB fits usize") + 1],
+            WORLD_ID,
+            42,
+            ArenaVoxelGeometry::default()
+        )
+        .expect_err("bounded read")
+        .contains("16 MiB"));
     }
 
     #[test]
@@ -299,11 +297,9 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
             .join(format!("hex-sites-not-created-{}", std::process::id()))
             .join("package");
         let geometry = ArenaVoxelGeometry::default();
-        assert!(
-            load_identity(&missing, WORLD_ID, 42, geometry)
-                .expect_err("new world needs companion")
-                .contains("Required expedition companion")
-        );
+        assert!(load_identity(&missing, WORLD_ID, 42, geometry)
+            .expect_err("new world needs companion")
+            .contains("Required expedition companion"));
         assert_eq!(
             load_identity(&missing, "forest-massif-battle", 42, geometry)
                 .expect("legacy unaffected")
@@ -368,11 +364,9 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
             load_identity(&directory, WORLD_ID, 43, ArenaVoxelGeometry::default()).is_err(),
             "manifest binding still rejects a different package"
         );
-        assert!(
-            hex_core::arena::ArenaTerrainView::default()
-                .package_identity
-                .is_none()
-        );
+        assert!(hex_core::arena::ArenaTerrainView::default()
+            .package_identity
+            .is_none());
         std::fs::remove_dir_all(directory).expect("remove owned fixture directory");
     }
 }

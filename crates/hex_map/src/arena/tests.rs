@@ -77,11 +77,10 @@ fn authored_world_is_repeatable_bounded_and_has_two_supported_spawns() {
     let view = app.world().resource::<ArenaTerrainView>();
     let map = app.world().resource::<VoxelMap>();
     assert_eq!(map.len(), 469);
-    assert!(
-        view.voxels
-            .keys()
-            .all(|pos| geometry.contains_column(pos.coord))
-    );
+    assert!(view
+        .voxels
+        .keys()
+        .all(|pos| geometry.contains_column(pos.coord)));
     for feet in view.spawns {
         let support = geometry
             .voxel_at(feet - Vec3::Y * 0.001)
@@ -128,12 +127,11 @@ fn damage_uses_current_toughness_and_publishes_before_same_tick_consumers() {
         app.world().resource::<ArenaTerrainView>().revision,
         revision
     );
-    assert!(
-        app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&stone)
-    );
+    assert!(app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&stone));
     let second = impact(&mut app, 2, vec![stone], 2);
     let TerrainImpactResult::Applied(voxels) = second.result else {
         panic!("valid impact rejected");
@@ -146,19 +144,17 @@ fn damage_uses_current_toughness_and_publishes_before_same_tick_consumers() {
         app.world().resource::<ArenaTerrainView>().revision,
         revision + 1
     );
-    assert!(
-        !app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&stone)
-    );
+    assert!(!app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&stone));
     // The run above the destroyed voxel remains a separate physical stack.
-    assert!(
-        app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&stone.above())
-    );
+    assert!(app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&stone.above()));
 }
 
 #[test]
@@ -185,12 +181,11 @@ fn shield_edits_publish_whole_columns_and_cannot_replace_bedrock_or_extend_arena
     app.world_mut()
         .write_message(TerrainEdit::Clear { pos: bedrock });
     tick(&mut app);
-    assert!(
-        !app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&wall)
-    );
+    assert!(!app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&wall));
     assert_eq!(
         app.world()
             .resource::<ArenaTerrainView>()
@@ -241,11 +236,10 @@ fn reset_restores_material_health_and_batch_ledger_and_drops_queued_old_effects(
     app.world_mut().resource_mut::<ArenaReset>().generation += 1;
     tick(&mut app);
     assert_eq!(app.world().resource::<ArenaTerrainView>().voxels, initial);
-    assert!(
-        app.world()
-            .resource::<Messages<TerrainImpactOutcome>>()
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .resource::<Messages<TerrainImpactOutcome>>()
+        .is_empty());
     assert!(app.world().resource::<Messages<TerrainEdit>>().is_empty());
     assert!(app.world().resource::<Messages<TerrainImpact>>().is_empty());
     let fresh = impact(&mut app, 1, vec![stone], 2);
@@ -275,17 +269,15 @@ fn announcements_survive_paused_frames_without_mutating_until_the_next_tick() {
     for _ in 0..8 {
         app.update();
     }
-    assert!(
-        app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&pos)
-    );
+    assert!(app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&pos));
     tick(&mut app);
-    assert!(
-        !app.world()
-            .resource::<ArenaTerrainView>()
-            .voxels
-            .contains_key(&pos)
-    );
+    assert!(!app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .voxels
+        .contains_key(&pos));
 }

@@ -253,7 +253,10 @@ pub(super) fn focus_live(camera: &mut ObserverCamera, session: &ArenaSession) {
 }
 
 /// Public camera/frustum admission only; never treats this as a pixel verdict.
-pub(super) fn close_subjects(session: &ArenaSession, camera: &Transform) -> Vec<hex_arena::ActorId> {
+pub(super) fn close_subjects(
+    session: &ArenaSession,
+    camera: &Transform,
+) -> Vec<hex_arena::ActorId> {
     session
         .actors
         .iter()

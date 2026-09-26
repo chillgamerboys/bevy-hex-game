@@ -535,7 +535,12 @@ fn run_round(kind: ScriptKind, seed: u16, baseline: bool, max_seconds: u32) -> E
         let charges = session
             .actors
             .iter()
-            .map(|actor| (usize::try_from(actor.id).expect("actor index"), actor.charge()))
+            .map(|actor| {
+                (
+                    usize::try_from(actor.id).expect("actor index"),
+                    actor.charge(),
+                )
+            })
             .collect::<Vec<_>>();
         let (input, visible) = opponent.intent(
             elapsed,

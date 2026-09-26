@@ -1,10 +1,10 @@
 //! Atomic Worm conversion over admitted compact terrain; no dense-map fallback.
 use super::*;
-use hex_core::TerrainVoxelHealth;
 use hex_core::arena::{
     ArenaBurrowChange, ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRejection,
     ArenaBurrowRequest, ArenaBurrowResult, ArenaMaterials,
 };
+use hex_core::TerrainVoxelHealth;
 type Admission = Result<Vec<ArenaBurrowChange>, (Option<TilePos>, ArenaBurrowRejection)>;
 fn admit(world: &World, request: &ArenaBurrowRequest) -> Admission {
     use ArenaBurrowRejection as Reject;

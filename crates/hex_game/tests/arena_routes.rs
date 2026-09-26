@@ -220,12 +220,11 @@ fn roundtrip(app: &mut App, route: &[Waypoint], anchor: &str) {
     move_to(app, initial, anchor, points.len(), &mut ticks);
     settle(app);
     assert!(human_feet(app).distance(initial) < 0.18);
-    assert!(
-        app.world()
-            .resource::<ArenaSession>()
-            .projectiles
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .resource::<ArenaSession>()
+        .projectiles
+        .is_empty());
 }
 
 #[test]
@@ -454,13 +453,11 @@ fn tall_fort_route_wall_stops_motion_then_clear_and_retry_succeeds_without_telep
         .map(|level| TilePos::new(HexCoord::from_axial(8, -3), level))
         .collect();
     for pos in &cells {
-        assert!(
-            !fixture
-                .world()
-                .resource::<ArenaTerrainView>()
-                .voxels
-                .contains_key(pos)
-        );
+        assert!(!fixture
+            .world()
+            .resource::<ArenaTerrainView>()
+            .voxels
+            .contains_key(pos));
         fixture.world_mut().write_message(TerrainEdit::Set {
             pos: *pos,
             substance: stone,

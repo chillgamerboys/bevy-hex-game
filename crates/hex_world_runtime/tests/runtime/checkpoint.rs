@@ -215,15 +215,13 @@ fn session_interrupted_export_cancel_lock_and_stale_writer_preserve_old_head() {
             message: "simulated interruption after terrain export".into(),
         }),
     ];
-    assert!(
-        store
-            .commit(
-                Some(first.token()),
-                interrupted,
-                &CancellationToken::default()
-            )
-            .is_err()
-    );
+    assert!(store
+        .commit(
+            Some(first.token()),
+            interrupted,
+            &CancellationToken::default()
+        )
+        .is_err());
     assert_eq!(
         fs::read(slot.join("session.ron")).expect("old durable head"),
         old_head
@@ -353,15 +351,13 @@ fn session_rejects_source_format_and_body_corruption_without_empty_fallback() {
     fs::write(body, b"different!").expect("tamper body");
     assert!(snapshot.verify_all(&CancellationToken::default()).is_err());
     assert!(snapshot.record("world", "damage", "test-v1").is_err());
-    assert!(
-        store
-            .commit(
-                Some(snapshot.token()),
-                [record("world", "damage", b"partial-hp")],
-                &CancellationToken::default()
-            )
-            .is_err()
-    );
+    assert!(store
+        .commit(
+            Some(snapshot.token()),
+            [record("world", "damage", b"partial-hp")],
+            &CancellationToken::default()
+        )
+        .is_err());
     assert_eq!(
         store
             .load()
@@ -402,11 +398,9 @@ fn session_record_count_bytes_duplicates_and_metadata_are_bounded() {
         ],
         vec![record("world", "a", b"1"), record("world", "a", b"2")],
     ] {
-        assert!(
-            store
-                .commit(Some(first.token()), records, &CancellationToken::default())
-                .is_err()
-        );
+        assert!(store
+            .commit(Some(first.token()), records, &CancellationToken::default())
+            .is_err());
         assert_eq!(
             store.load().expect("load").expect("head").token(),
             first.token()
@@ -445,15 +439,13 @@ fn session_content_directory_symlink_cannot_write_outside_slot() {
     std::os::unix::fs::symlink(&outside, slot.join("session-records")).expect("symlink");
     let store =
         SessionCheckpointStore::new(&slot, identity(), CheckpointLimits::default()).expect("store");
-    assert!(
-        store
-            .commit(
-                None,
-                [record("world", "a", b"x")],
-                &CancellationToken::default()
-            )
-            .is_err()
-    );
+    assert!(store
+        .commit(
+            None,
+            [record("world", "a", b"x")],
+            &CancellationToken::default()
+        )
+        .is_err());
     assert_eq!(fs::read_dir(outside).expect("outside").count(), 0);
     assert!(store.load().expect("no head").is_none());
 }

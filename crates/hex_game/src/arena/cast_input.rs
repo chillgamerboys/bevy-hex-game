@@ -1,6 +1,6 @@
 //! Native gestures stay spell-tagged until the fixed simulation consumes them.
 use super::*;
-use bevy::input::{ButtonState, mouse::MouseButtonInput};
+use bevy::input::{mouse::MouseButtonInput, ButtonState};
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy)]
