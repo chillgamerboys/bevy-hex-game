@@ -1,5 +1,6 @@
 //! Bounded, deterministic natural silhouettes and authored landmark geometry.
 use super::*;
+mod landmarks;
 type Cells = BTreeMap<WorldHex, BTreeMap<i32, &'static str>>;
 const CAMPS: [(f64, f64); 6] = [
     (-55., 380.),
@@ -750,35 +751,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
         root,
         cells,
     )?);
-    // Shelves in the lower/upper library, never in the central staircase or encounters.
-    for (i, (x, z)) in [
-        (-420., -382.),
-        (-340., -382.),
-        (-430., -525.),
-        (-370., -540.),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let root = nearest_hex(x, z);
-        let floor = g.support(x, z, true).level + 1;
-        let mut cells = Cells::new();
-        for q in -4..=4 {
-            let p = WorldHex::new(root.q + q, root.r);
-            for y in 0..26 {
-                if y % 7 <= 1 || q.abs() == 4 {
-                    add(&mut cells, p, floor + y, floor + y + 1, "timber");
-                }
-            }
-        }
-        out.push(object(
-            g,
-            format!("grand/library-shelf/{i}"),
-            "structure/grand-bookshelf",
-            root,
-            cells,
-        )?);
-    }
+    out.extend(landmarks::compose(g)?);
     compose_forest(g, &mut out)?;
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
