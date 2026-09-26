@@ -449,3 +449,49 @@ fn compact_columns_require_real_material_conversion_and_exact_residency() {
         Admission::Blocked(StepRejection::Unloaded)
     ));
 }
+
+#[test]
+fn streamed_dirty_columns_refresh_worm_liquid_and_static_intervals() {
+    use hex_core::arena::{ArenaSolidSpan, ArenaStaticSpan};
+    let coord = HexCoord::ORIGIN;
+    let position = TilePos::new(coord, 1);
+    let mut view = ArenaTerrainView {
+        revision: 1,
+        full_rebuild: true,
+        ..Default::default()
+    };
+    let mut query = BurrowQuery::default();
+    query.refresh(&view);
+    assert!(query.blocked_cell(position, &view).is_none());
+    view.full_rebuild = false;
+    view.revision += 1;
+    view.dirty_columns.insert(coord);
+    view.liquids.push(ArenaSolidSpan {
+        bottom: position,
+        top_level: 2,
+        substance: SubstanceId(1),
+    });
+    query.refresh(&view);
+    assert_eq!(
+        query.blocked_cell(position, &view),
+        Some(StepRejection::Liquid)
+    );
+    view.revision += 1;
+    view.liquids.clear();
+    view.static_spans.push(ArenaStaticSpan {
+        bottom: position,
+        top_level: 2,
+        blocks_movement: false,
+        blocks_projectiles: false,
+        blocks_sight: false,
+    });
+    query.refresh(&view);
+    assert_eq!(
+        query.blocked_cell(position, &view),
+        Some(StepRejection::Static)
+    );
+    view.revision += 1;
+    view.static_spans.clear();
+    query.refresh(&view);
+    assert!(query.blocked_cell(position, &view).is_none());
+}

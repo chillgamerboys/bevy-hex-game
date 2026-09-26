@@ -77,13 +77,22 @@ impl BurrowQuery {
         if rebuild {
             self.static_cells.clear();
             self.liquid_cells.clear();
-            for span in &view.static_spans {
+        } else {
+            self.static_cells
+                .retain(|coord, _| !view.dirty_columns.contains(coord));
+            self.liquid_cells
+                .retain(|coord, _| !view.dirty_columns.contains(coord));
+        }
+        for span in &view.static_spans {
+            if rebuild || view.dirty_columns.contains(&span.bottom.coord) {
                 self.static_cells
                     .entry(span.bottom.coord)
                     .or_default()
                     .push((span.bottom.level, span.top_level));
             }
-            for span in &view.liquids {
+        }
+        for span in &view.liquids {
+            if rebuild || view.dirty_columns.contains(&span.bottom.coord) {
                 self.liquid_cells
                     .entry(span.bottom.coord)
                     .or_default()

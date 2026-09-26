@@ -31,7 +31,7 @@ impl ArenaSession {
         self.actors.truncate(1);
         if let Some(player) = self.actors.first_mut() {
             player.configure_expedition_player();
-            player.free_flight.get_or_insert_with(Default::default);
+            player.free_flight = None;
             let marine = player.marine.get_or_insert_with(Default::default);
             marine.lab = true;
             marine.glider_wind_scale = 0.65;
@@ -251,7 +251,7 @@ impl DormantParty {
             || projectiles.iter().filter(|p| p.owner == 0).any(|p| {
                 self.actors
                     .iter()
-                    .any(|a| a.feet.distance(player) < 210.0 && a.feet.distance(p.position) < 32.0)
+                    .any(|a| a.feet.distance(p.position) < 32.0)
             })
     }
 }
@@ -467,6 +467,28 @@ mod tests {
             content_revision: "content".into(),
         };
         let bytes = session.encode_grand_checkpoint(&identity).unwrap();
+        let mut long_shot =
+            ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 1).unwrap();
+        // An already sleeping party must wake for a player shot even when its
+        // owner is farther away than the old streaming-interest distance cap.
+        long_shot.actors[0].feet = Vec3::NEG_X * 100.0;
+        long_shot.release(
+            0,
+            Spell::Fireball,
+            &ArenaTuning::default(),
+            10.0,
+            &world,
+            geometry,
+            materials,
+            &mut CommandsOut::default(),
+        );
+        long_shot.projectiles[0].position = Vec3::X * 160.0;
+        assert!(long_shot
+            .grand_actor_interests()
+            .contains(&(Vec3::X * 160.0)));
+        long_shot.wake_grand_parties();
+        assert!(long_shot.encounter.dormant.is_empty());
+        assert!(long_shot.actors.iter().any(|a| a.id == 417));
         session =
             ArenaSession::decode_grand_checkpoint(&bytes, &identity, &world, geometry, 1).unwrap();
         session.tick = 1000;

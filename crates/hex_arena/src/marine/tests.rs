@@ -1241,3 +1241,32 @@ fn grand_favorable_wind_45_second_unupgraded_sailing_distance() {
     println!("Grand sail reference: from rest, 9u/s tailwind, forward held, 45sec -> {distance:.4}u, final speed {:.4}u/s", boat.velocity.length());
     assert!(distance > 600.0 && distance < 900.0);
 }
+
+#[test]
+fn grand_stream_interest_tracks_walking_boat_and_glider_without_powered_flight() {
+    let (mut actor, _, mut terrain, geometry, _) = fixture();
+    terrain.selection.map = ArenaMap::GrandV4;
+    actor.free_flight = None;
+    let mut session = ArenaSession::default();
+    session.reset(1, &terrain, geometry);
+    session.actors = vec![actor];
+    session.actors[0].body.control_velocity = Vec3::X * 5.0;
+    let walking = session.stream_interest().unwrap();
+    assert_eq!(walking.position, session.actors[0].feet);
+    assert_eq!(walking.velocity, Vec3::X * 5.0);
+    let state = session.actors[0].marine.as_mut().unwrap();
+    state.boat.active = true;
+    state.boat.velocity = Vec3::Z * 17.0;
+    let sailing = session.stream_interest().unwrap();
+    assert_eq!(sailing.position, session.actors[0].feet);
+    assert_eq!(sailing.velocity, Vec3::Z * 17.0);
+    assert!(session.start_exploration_glide(Vec3::Y * 12.0, Vec3::X, &terrain, geometry));
+    let gliding = session.stream_interest().unwrap();
+    assert_eq!(gliding.position, session.actors[0].feet);
+    assert_eq!(
+        gliding.velocity,
+        session.actors[0].glider().unwrap().velocity
+    );
+    assert!(gliding.velocity.length() > 0.0);
+    assert!(session.actors[0].free_flight.is_none());
+}

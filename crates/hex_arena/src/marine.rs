@@ -154,6 +154,7 @@ impl ArenaSession {
         {
             return false;
         }
+        let free_flight_enabled = self.is_exploration();
         let Some(id) = self.human_actor_id() else {
             return false;
         };
@@ -172,7 +173,8 @@ impl ArenaSession {
         let mut candidate = actor.clone();
         fold_boat(&mut candidate);
         candidate.clear_glider();
-        candidate.free_flight = Some(crate::exploration::FreeFlightState::default());
+        candidate.free_flight =
+            free_flight_enabled.then(crate::exploration::FreeFlightState::default);
         candidate.feet = feet;
         candidate.previous_feet = feet;
         candidate.grounded = false;
@@ -307,6 +309,17 @@ pub(crate) struct MarineWorld<'a> {
 }
 
 impl MarineWorld<'_> {
+    /// Reuse the authoritative dynamic shoreline when admitting a dry landing.
+    pub(crate) fn dry_support(&self, feet: Vec3, radius: f32) -> bool {
+        [Vec3::ZERO, Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z]
+            .into_iter()
+            .all(|offset| match self.sample(feet + offset * radius) {
+                OceanSurfaceState::ReadyDry => true,
+                OceanSurfaceState::ReadyWet(sample) => feet.y >= sample.height - crate::SKIN,
+                OceanSurfaceState::Unloaded | OceanSurfaceState::OutsideWorld => false,
+            })
+    }
+
     fn sample(&self, point: Vec3) -> OceanSurfaceState {
         let coord = HexCoord::from_world(point);
         let availability = self.terrain.residency.as_ref().map_or_else(

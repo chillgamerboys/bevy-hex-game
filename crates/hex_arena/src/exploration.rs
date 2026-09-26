@@ -61,10 +61,30 @@ impl ArenaSession {
             .actors
             .iter()
             .find(|actor| Some(actor.id) == self.human_actor_id() && actor.hp > 0.0)?;
-        let state = actor.free_flight.as_ref()?;
+        let velocity = if self.is_grand_run() {
+            // Residency follows the controlled body independently of whether
+            // this map grants the exploration-only powered-flight capability.
+            actor
+                .boat()
+                .filter(|boat| boat.active)
+                .map(|boat| boat.velocity)
+                .or_else(|| {
+                    actor
+                        .glider()
+                        .filter(|glider| glider.open)
+                        .map(|glider| glider.velocity)
+                })
+                .unwrap_or(
+                    actor.body.control_velocity
+                        + actor.body.impulse_velocity
+                        + Vec3::Y * actor.body.vertical_velocity,
+                )
+        } else {
+            actor.free_flight.as_ref()?.requested
+        };
         Some(ArenaStreamInterest {
             position: actor.feet,
-            velocity: state.requested,
+            velocity,
         })
     }
 

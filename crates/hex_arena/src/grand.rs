@@ -277,7 +277,7 @@ impl ArenaSession {
                         player.configure_expedition_player();
                         player.max_hp = max_hp;
                         player.hp = max_hp;
-                        player.free_flight = Some(Default::default());
+                        player.free_flight = None;
                         player.marine = Some(Default::default());
                         if let Some(m) = &mut player.marine {
                             m.lab = true;
@@ -323,10 +323,37 @@ impl ArenaSession {
                 }
             }
         }
+        // The one-shot X input and its aim belong to the same simulation step.
+        // Ordinary encounter movement applies aim later, after this interaction.
+        if let Some(player) = self.actors.get_mut(player_index) {
+            if intent.aim.is_finite() && intent.aim.length_squared() > 0.0001 {
+                player.aim = intent.aim.normalize();
+            }
+        }
         if intent.teleport && grand.teleport_unlocked && grand.teleport_cooldown <= STEP * 0.01 {
             if let Some(player) = self.actors.get(player_index) {
                 if let Some(target) =
-                    teleport_target(player, &self.actors, &self.collision, world, geometry)
+                    teleport_target(player, &self.actors, &self.collision, world, geometry).filter(
+                        |feet| {
+                            // Compact Grand terrain publishes the open ocean through
+                            // its sampler, so explicit inland liquid runs are not enough.
+                            self.ocean_environment.as_ref().map_or(
+                                world.residency.is_none(),
+                                |environment| {
+                                    crate::marine::MarineWorld {
+                                        terrain: world,
+                                        geometry,
+                                        environment: Some(environment),
+                                        time: self.ocean_time(),
+                                    }
+                                    .dry_support(
+                                        *feet,
+                                        player.dimensions.x.max(player.dimensions.z) * 0.5,
+                                    )
+                                },
+                            )
+                        },
+                    )
                 {
                     if let Some(player) = self.actors.get_mut(player_index) {
                         crate::marine::land_teleport(player);
