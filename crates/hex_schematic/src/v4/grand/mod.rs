@@ -117,7 +117,7 @@ impl GrandCompiler {
     pub fn new(source: GrandSpec) -> Result<Self, ContractError> {
         if source.version != 1
             || source.id != "grand-v4"
-            || source.canonical_mainland_columns != 92849
+            || source.canonical_mainland_columns != 93326
             || source.canonical_crystal_columns != 3169
         {
             return Err(ContractError::new(
@@ -295,7 +295,9 @@ impl GrandCompiler {
             h += (900. - h) * (1. - smooth((garden - 0.7) / 2.8));
             material = "moss";
         }
-        let lake = ((x - 330.) / 34.).hypot((z + 470.) / 27.);
+        let lake_angle = (z + 470.).atan2(x - 330.);
+        let lake = ((x - 330.) / 34.).hypot((z + 470.) / 27.)
+            / (1. + 0.10 * (lake_angle * 3. + 0.4).sin() + 0.05 * (lake_angle * 5.).cos());
         if lake < 2.5 {
             h += (if lake < 1. {
                 875. + 8. * lake.powi(2)
@@ -311,8 +313,9 @@ impl GrandCompiler {
         // The same authored centerline composes both banks and liquid, avoiding
         // free-standing water walls where natural terrain lies below river level.
         if (-450. ..=-140.).contains(&z) {
-            let cx = 330. + (z + 450.) * 0.23;
+            let cx = headwater_center(z);
             let d = (x - cx).abs();
+            let width = 13. + 2.5 * ((z + 450.) / 37.).sin();
             let top = if z < -370. {
                 900
             } else if z < -275. {
@@ -322,25 +325,29 @@ impl GrandCompiler {
             } else {
                 615
             };
-            if d < 90. {
+            if d < width + 76. {
                 let bank = f64::from(top + 15);
-                h += (bank - h) * (1. - smooth((d - 20.) / 70.));
+                h += (bank - h) * (1. - smooth((d - width - 6.) / 70.));
             }
-            if d < 20. {
-                h = f64::from(top - 12) + (d / 20.).powi(4) * 27.;
-                if d < 14. {
+            if d < width + 6. {
+                h = f64::from(top - 12) + (d / (width + 6.)).powi(4) * 27.;
+                if d < width {
                     water = Some(top);
                     material = "stone";
                 }
             }
             for (fall, upper, lower) in [(-370., 900, 790), (-275., 790, 680), (-170., 680, 615)] {
-                if (z - fall).abs() < 2.2 && d < 14. {
+                if (z - fall).abs() < 2.2 && d < width {
                     h = f64::from(lower - 12);
                     water = Some(upper);
                 }
             }
         }
-        let valley = ((x - 405.) / 63.).hypot((z + 115.) / 62.);
+        let valley_angle = (z + 115.).atan2(x - 405.);
+        let valley = ((x - 405.) / 70.).hypot((z + 115.) / 60.)
+            / (1.
+                + 0.14 * (valley_angle * 3. + 0.3).sin()
+                + 0.07 * (valley_angle * 5. - 0.6).cos());
         if valley < 2.4 {
             let bed = if valley < 1. {
                 580. + 12. * valley.powi(2)
@@ -354,15 +361,16 @@ impl GrandCompiler {
             }
         }
         // Gradual river descends into its bay, with broad concave banks.
-        if (-60. ..=490.).contains(&z) {
+        if (-65. ..=650.).contains(&z) {
             let t = ((z + 60.) / 525.).clamp(0., 1.);
-            let cx = 400. - 701. * t + 28. * (t * std::f64::consts::PI * 2.).sin();
+            let cx = river_center(z);
             let d = (x - cx).abs();
-            let width = 10. + 12. * t;
+            let width = 10. + 12. * t + 3. * (t * std::f64::consts::PI * 5.).sin();
+            let bank_width = 65. + 15. * (t * std::f64::consts::PI * 3.).cos();
             let top = (615. - 215. * t.powf(0.60)).round() as i32;
-            if d < width + 80. && depth > 0 {
+            if d < width + bank_width && depth > 0 {
                 let bank = f64::from(top + 12);
-                h += (bank - h) * (1. - smooth((d - width) / 80.));
+                h += (bank - h) * (1. - smooth((d - width) / bank_width));
             }
             if d < width && depth > 0 {
                 h = f64::from(top - 10) + 8. * (d / width).powi(2);
@@ -392,9 +400,10 @@ impl GrandCompiler {
         }
         // The Shadow tunnel passes seventy units below the library where their
         // horizontal projections cross, retaining two independent ceilings.
-        if (x + 105.).abs() < 24. && (-150. ..=-85.).contains(&z) {
-            let target = 521. + ((-z - 150.).abs() / 65.) * 65.;
+        if (x + 105.).abs() < 24. && (-150. ..=10.).contains(&z) {
             let weight = 1. - smooth(((x + 105.).abs() - 9.) / 15.);
+            let along = smooth((z + 150.) / 160.);
+            let target = 521. + (h - 521.) * along;
             h += (target - h) * weight;
         }
         // Open south entrance to the temple below the World Tree roots.
@@ -417,11 +426,23 @@ impl GrandCompiler {
         // Small precise supported shrine/encounter aprons blend into surrounding terrain.
         for site in sites::PADS {
             let d = (x - site.x).hypot(z - site.z);
+            if water.is_some() && d > site.radius {
+                continue;
+            }
             if d < site.radius + 32. {
                 let weight = 1. - smooth((d - site.radius) / 32.);
                 h += (f64::from(site.level + 1) - h) * weight;
                 material = site.material;
                 water = None;
+            }
+        }
+        // The garden pool drains by a narrow, gently curved rill into the lake.
+        if (276. ..=306.).contains(&x) {
+            let center = -474. + 4. * ((x - 276.) / 30.) + 1.5 * ((x - 276.) / 9.).sin();
+            if (z - center).abs() < 2.2 {
+                h = 895.;
+                water = Some(900);
+                material = "stone";
             }
         }
         let fountain = nearest_hex(276., -474.);
@@ -766,4 +787,15 @@ fn library_cavity(p: WorldHex) -> Option<(i32, i32)> {
         return Some((470, 503));
     }
     None
+}
+
+fn headwater_center(z: f64) -> f64 {
+    let t = ((z + 450.) / 310.).clamp(0., 1.);
+    330. + (z + 450.) * 0.23 + 9. * (t * std::f64::consts::TAU).sin()
+}
+fn river_center(z: f64) -> f64 {
+    let t = ((z + 60.) / 525.).clamp(0., 1.);
+    400. - 701. * t
+        + 28. * (t * std::f64::consts::TAU).sin()
+        + 13. * (t * std::f64::consts::TAU * 2.).sin()
 }

@@ -90,7 +90,9 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
     // Admission validates membership, materials and chunk hash through production IO.
     let admitted = FileChunkSource::open_workspace(&stage, IoLimits::default())?;
     for descriptor in &manifest.chunks {
-        let _checked = admitted.load_chunk(descriptor.coordinate)?;
+        let _checked = admitted
+            .load_chunk(descriptor.coordinate)
+            .map_err(|error| format!("Grand chunk {:?}: {error}", descriptor.coordinate))?;
     }
     let mut overview = compiler.overview();
     overview.package_fingerprint = manifest.fingerprint;

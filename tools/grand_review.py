@@ -14,6 +14,10 @@ def main():
  origin=[float(v) for v in re.search(r'origin_xz:\(([^)]+)\)',s)[1].split(',')];spacing=float(re.search(r'spacing:([\d.]+)',s)[1]);extent=[origin[0],origin[0]+(width-1)*spacing,origin[1]+(height-1)*spacing,origin[1]]
  cmap=LinearSegmentedColormap.from_list('grand',[(0,'#12304b'),(.24,'#276080'),(.249,'#b6ad7c'),(.26,'#819b63'),(.4,'#356b4c'),(.62,'#7b8581'),(.85,'#b8c0bc'),(1,'#eaf1f4')])
  rgb=LightSource(azdeg=315,altdeg=43).shade(h,cmap,vert_exag=2,dx=spacing,dy=spacing,vmin=0,vmax=560,blend_mode='soft')
+ ids=re.findall(r'id:"([^"]+)"',re.search(r'materials:\[(.*?)\],player_spawn:',s)[1])
+ materials=np.fromstring(re.search(r'surface_materials:\[([^]]+)\]',s)[1],sep=',',dtype=int).reshape(height,width)
+ rgb[h<140]=[.13,.34,.47,1.]
+ if 'water' in ids: rgb[materials==ids.index('water')]=[.16,.44,.62,1.]
  fig,axes=plt.subplots(1,2,figsize=(19,10),gridspec_kw={'width_ratios':[1.05,1]},facecolor='#0e1823')
  for ax in axes:ax.imshow(rgb,extent=extent);ax.set_facecolor('#0e1823');ax.tick_params(colors='#aebfca');ax.set_xlabel('World X',color='#aebfca');ax.set_ylabel('World Z (north is up)',color='#aebfca')
  axes[0].set_title('Full finite world · actual compiled relief',color='white',fontsize=17,pad=15)

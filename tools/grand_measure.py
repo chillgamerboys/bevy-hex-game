@@ -3,7 +3,7 @@
 
 Uses the production radius187, pitch22, nearest axial-hex-distance + CellId tie
 break. Excludes offshore Island facts and marine open water, includes inland
-MountainLake/ValleyLake. The mainland is the largest six-neighbour component.
+MountainLake/ValleyLake and their LakeIsland. The mainland is the largest six-neighbour component.
 No radius-disk substitution. Output rows describe occupied footprint columns,
 not solid volume; inland lakes are deliberately included.
 """
@@ -24,7 +24,7 @@ def measure():
     cells={}
     for m in re.finditer(r'\(id:(\d+),coord:\(q:(-?\d+),r:(-?\d+),s:-?\d+\),facts:\(surface:(\w+),landform:(\w+),.*?overlays:\[([^]]*)\]',raw):
         i,q,r,surf,form,overlays=m.groups()
-        cells[int(q),int(r)]=(int(i), surf=='Land' and form!='Island' or any(x in overlays for x in ['MountainLake','ValleyLake']))
+        cells[int(q),int(r)]=(int(i), (surf=='Land' and (form!='Island' or 'LakeIsland' in overlays)) or any(x in overlays for x in ['MountainLake','ValleyLake']))
     assert len(cells)==217
     mainland=set()
     offsets=[(q,r) for q in range(-2,3) for r in range(-2,3) if distance(q,r)<=2]

@@ -172,7 +172,7 @@ impl GrandCompiler {
             ("valley_lake", 405., -115., false, false),
             ("bay", -301., 465., false, false),
             ("volcano", -1180., 450., false, false),
-            ("sailing_start", -301., 465., false, false),
+            ("sailing_start", -301., 520., false, false),
             ("volcano_landing", -1095., 465., false, false),
         ] {
             anchors.push(WorldAnchor {
@@ -180,6 +180,11 @@ impl GrandCompiler {
                 region_id: "grand".into(),
                 position: if id == "party_start" {
                     self.beach_spawn()
+                } else if matches!(id, "sailing_start" | "volcano_landing") {
+                    VoxelPosition {
+                        column: nearest_hex(x, z),
+                        level: SEA_TOP - 1,
+                    }
                 } else {
                     self.support(x, z, inside)
                 },

@@ -6,7 +6,7 @@ fn full_measured_world_has_independent_crystal_and_exact_cave_sites() {
     ))
     .unwrap();
     let compiler = GrandCompiler::new(source).unwrap();
-    assert_eq!(compiler.mainland_columns, 92849 * 7);
+    assert_eq!(compiler.mainland_columns, 93326 * 7);
     assert_eq!(compiler.crystal.len(), 3169 * 7);
     let sites = compiler.sites(123).unwrap();
     assert_eq!(sites.encounters.len(), 14);
@@ -70,7 +70,12 @@ fn complete_stair_route_has_walkable_risers_and_tunnels_remain_separate() {
                 column: p,
                 level: floor,
             };
-            assert!(g.clear_support(support, 12), "blocked stair at {support:?}, column {:?}, surface {:?}",g.column(p),g.surface(p));
+            assert!(
+                g.clear_support(support, 12),
+                "blocked stair at {support:?}, column {:?}, surface {:?}",
+                g.column(p),
+                g.surface(p)
+            );
             if let Some(last) = previous {
                 assert!(
                     (floor - last).abs() <= 1,
@@ -102,4 +107,83 @@ fn complete_stair_route_has_walkable_risers_and_tunnels_remain_separate() {
         biome.label_at([x, f64::from(start.position.level + 1) * LEVEL_HEIGHT, z]),
         Some("Open Sea")
     );
+}
+
+#[test]
+fn watercourse_is_continuous_and_descends_from_garden_to_open_sea() {
+    let mut source: GrandSpec = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .unwrap();
+    source.full_dressing = false;
+    let g = GrandCompiler::new(source).unwrap();
+    let mut previous = 900;
+    for z in -448..=-145 {
+        let p = nearest_hex(headwater_center(f64::from(z)), f64::from(z));
+        let surface = g.surface(p);
+        let top = surface
+            .water
+            .expect("continuous headwater and waterfall center");
+        // A waterfall's upper curtain overlaps the lower reach by two cells.
+        assert!(
+            top <= previous,
+            "watercourse rises at {p:?}: {previous}->{top}"
+        );
+        previous = top;
+        assert!(surface.level < top);
+    }
+    previous = 615;
+    for z in -60..=600 {
+        let p = nearest_hex(river_center(f64::from(z)), f64::from(z));
+        let surface = g.surface(p);
+        let top = surface.water.unwrap_or(SEA_TOP);
+        assert!(top <= previous, "river rises at {p:?}: {previous}->{top}");
+        assert!(
+            surface.level < top,
+            "river interrupted at {p:?}: {surface:?}"
+        );
+        previous = top;
+    }
+    for x in 276..=306 {
+        let center =
+            -474. + 4. * (f64::from(x - 276) / 30.) + 1.5 * (f64::from(x - 276) / 9.).sin();
+        assert_eq!(
+            g.surface(nearest_hex(f64::from(x), center)).water,
+            Some(900)
+        );
+    }
+}
+
+#[test]
+fn offshore_sailing_reference_has_clear_sea_between_launch_and_landing() {
+    let mut source: GrandSpec = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .unwrap();
+    source.full_dressing = false;
+    let g = GrandCompiler::new(source).unwrap();
+    let a = g
+        .anchors
+        .iter()
+        .find(|a| a.id == "grand/anchor/sailing_start")
+        .unwrap();
+    let b = g
+        .anchors
+        .iter()
+        .find(|a| a.id == "grand/anchor/volcano_landing")
+        .unwrap();
+    let a = world_xz(a.position.column);
+    let b = world_xz(b.position.column);
+    let distance = (a[0] - b[0]).hypot(a[1] - b[1]);
+    // Controller calibration is 793.9485u/45s, while the route uses exact hex anchors.
+    assert!((790. ..=801.).contains(&distance));
+    for step in 0..=800 {
+        let t = f64::from(step) / 800.;
+        let p = nearest_hex(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+        assert!(!g.mainland(p), "sailing route crosses mainland at {p:?}");
+        assert!(
+            g.surface(p).level < SEA_TOP,
+            "sailing route crosses terrain at {p:?}"
+        );
+    }
 }

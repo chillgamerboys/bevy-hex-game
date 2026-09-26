@@ -33,8 +33,14 @@ fn object(
         if runs.is_empty() {
             continue;
         }
-        for r in &runs {
-            if terrain.runs.iter().any(|t| t.top == r.bottom) {
+        // Production admission uses the highest solid support per occupied
+        // column. Cavern ceilings can create more than one separated contact.
+        for r in runs.iter().rev() {
+            if terrain
+                .runs
+                .iter()
+                .any(|t| t.top == r.bottom && t.material != "water")
+            {
                 grounding.push(VoxelPosition {
                     column: p,
                     level: r.bottom - 1,
@@ -56,7 +62,8 @@ fn object(
         occupancy,
         grounding: Some(grounding),
     };
-    out.validate().map_err(|e|ContractError::new(&out.id,e.to_string()))?;
+    out.validate()
+        .map_err(|e| ContractError::new(&out.id, e.to_string()))?;
     Ok(out)
 }
 fn tree(
@@ -111,7 +118,11 @@ fn tree(
     }
     object(
         g,
-        format!("grand/tree/{index:05}"),
+        if giant {
+            "grand/world-tree".into()
+        } else {
+            format!("grand/tree/{index:05}")
+        },
         if giant {
             "plant/grand-world-tree"
         } else {
