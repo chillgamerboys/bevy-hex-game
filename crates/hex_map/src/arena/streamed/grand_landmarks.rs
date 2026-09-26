@@ -313,9 +313,9 @@ fn surface(
                 .runs
                 .iter()
                 .any(|neighbor| neighbor.top == run.bottom);
-            for index in 0..6 {
-                let a = center + CORNERS[index];
-                let b = center + CORNERS[(index + 1) % 6];
+            for (first, second) in CORNERS.iter().zip(CORNERS.iter().cycle().skip(1)) {
+                let a = center + *first;
+                let b = center + *second;
                 if cap_top {
                     out.triangle([center.with_y(top), a.with_y(top), b.with_y(top)], color)?;
                 }
@@ -325,8 +325,7 @@ fn surface(
                         color,
                     )?;
                 }
-                let neighbor =
-                    HexCoord::from_world(center + CORNERS[index] + CORNERS[(index + 1) % 6]);
+                let neighbor = HexCoord::from_world(center + *first + *second);
                 let neighbor = WorldHex::new(i64::from(neighbor.x()), i64::from(neighbor.y()));
                 let neighbors = columns.get(&neighbor).copied().unwrap_or(&[]);
                 for (lo, hi) in exposed(run.bottom, run.top, neighbors) {

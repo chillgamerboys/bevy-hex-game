@@ -1168,7 +1168,7 @@ impl MovementCaptureState {
 
         self.observed_pending_movement = true;
         self.pending_frames = self.pending_frames.saturating_add(1);
-        if self.pending_frames % self.every_frames != 0 {
+        if !self.pending_frames.is_multiple_of(self.every_frames) {
             return Ok(MovementCaptureTick::WaitingForInterval);
         }
         if self.requested >= self.capture_count {
@@ -3462,11 +3462,14 @@ mod tests {
         state.movement_capture = Some(MovementCaptureState::new("route".to_owned(), 1, 1));
         let mut time = Time::<Virtual>::default();
         begin_temporal_capture_time(&mut time);
-        assert_eq!(time.relative_speed(), TEMPORAL_CAPTURE_TIME_SCALE);
+        assert_eq!(
+            time.relative_speed().to_bits(),
+            TEMPORAL_CAPTURE_TIME_SCALE.to_bits()
+        );
 
         let reason = abort_movement_capture(&mut state, &mut time, "fixture failure".to_owned());
         assert_eq!(reason, "fixture failure");
-        assert_eq!(time.relative_speed(), WALK_TIME_SCALE);
+        assert_eq!(time.relative_speed().to_bits(), WALK_TIME_SCALE.to_bits());
         assert!(state.movement_capture.is_none());
         assert!(!partial.exists());
 
@@ -4777,17 +4780,22 @@ mod tests {
             captures.last(),
             Some(&"58-grand-v3-crystal-summit-first-person")
         );
-        for stop in captures[1..].chunks_exact(3) {
-            assert!(stop[0].ends_with("-map"), "{} is not a Map frame", stop[0]);
+        for stop in captures
+            .get(1..)
+            .expect("overview followed by camera stops")
+            .chunks_exact(3)
+        {
+            let [map, character, first_person] = stop else {
+                panic!("camera stop must contain three captures");
+            };
+            assert!(map.ends_with("-map"), "{map} is not a Map frame");
             assert!(
-                stop[1].ends_with("-character"),
-                "{} is not a Character frame",
-                stop[1]
+                character.ends_with("-character"),
+                "{character} is not a Character frame"
             );
             assert!(
-                stop[2].ends_with("-first-person"),
-                "{} is not a First Person frame",
-                stop[2]
+                first_person.ends_with("-first-person"),
+                "{first_person} is not a First Person frame"
             );
         }
         assert!(steps.ends_with(&[
@@ -4962,10 +4970,14 @@ mod tests {
                 let WalkStep::CaptureWhileMoving { .. } = step else {
                     return None;
                 };
-                let source = steps[..index].iter().rev().find_map(|prior| match prior {
-                    WalkStep::AssertSelectedAt { expected } => Some(*expected),
-                    _ => None,
-                })?;
+                let source = steps
+                    .iter()
+                    .take(index)
+                    .rev()
+                    .find_map(|prior| match prior {
+                        WalkStep::AssertSelectedAt { expected } => Some(*expected),
+                        _ => None,
+                    })?;
                 let destination = match steps.get(index.checked_sub(1)?)? {
                     WalkStep::ClickAnchor { expected, .. } => *expected,
                     _ => return None,

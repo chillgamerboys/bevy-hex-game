@@ -968,59 +968,6 @@ fn overview_corners(origin: Vec2, extent: Vec2, sea: f32, summit: f32) -> [Vec3;
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn waterline_fixture_waits_for_deep_admitted_water() {
-        use hex_core::arena::ArenaSolidSpan;
-        let geometry = ArenaVoxelGeometry {
-            level_height: 1.0,
-            vertical_offset: 1.0,
-            ..default()
-        };
-        let spawn = HexCoord::ORIGIN.to_world(10.0);
-        let deep = HexCoord::from_axial(2, 0);
-        let bay = deep.to_world(10.0);
-        let mut terrain = ArenaTerrainView::default();
-        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
-        terrain.liquids.push(ArenaSolidSpan {
-            bottom: hex_core::TilePos::new(HexCoord::from_axial(1, 0), 8),
-            top_level: 9,
-            substance: hex_core::SubstanceId::AIR,
-        });
-        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
-        terrain.liquids.push(ArenaSolidSpan {
-            bottom: hex_core::TilePos::new(deep, 2),
-            top_level: 9,
-            substance: hex_core::SubstanceId::AIR,
-        });
-        let site = waterline_site(&terrain, geometry, spawn, bay, 10.0)
-            .expect("the admitted deep interval is suitable for both water views");
-        assert_eq!(HexCoord::from_world(site), deep);
-    }
-
-    #[test]
-    fn overview_fits_complete_published_bounds_with_margin() {
-        let origin = Vec2::new(-1216.0, -1056.0);
-        let extent = Vec2::new(2432.0, 2112.0);
-        let interest = Vec3::new(-645.0, 161.7, -100.5);
-        let pose = overview_pose(origin, extent, 140.0, 442.75, interest);
-        let half_height = pose.overview_height.expect("orthographic overview") * 0.5;
-        let half_width = half_height * (16.0 / 9.0);
-        for corner in overview_corners(origin, extent, 140.0, 442.75) {
-            let local = pose.camera.rotation.inverse() * (corner - pose.camera.translation);
-            assert!(local.x.abs() <= half_width * 0.901);
-            assert!(local.y.abs() <= half_height * 0.901);
-            assert!(local.z < -0.035 && local.z > -24_000.0);
-        }
-        // The landscape occupies useful image width while all world edges remain included.
-        assert!(1528.0 / (2.0 * half_width) > 0.38);
-        assert_eq!(pose.interest, interest);
-    }
-}
-
 /// Explicit windowless fixture: move the player to admitted water and press B.
 /// The normal controller owns deployment; this is presentation staging, not travel evidence.
 pub(super) fn stage_boat_capture(world: &mut World, view: &str) -> Result<(), String> {
@@ -1123,4 +1070,57 @@ pub(super) fn boat_capture_ready(session: &ArenaSession, view: &str) -> bool {
             .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
             .and_then(hex_arena::Actor::boat)
             .is_some_and(|boat| boat.active)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waterline_fixture_waits_for_deep_admitted_water() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry {
+            level_height: 1.0,
+            vertical_offset: 1.0,
+            ..default()
+        };
+        let spawn = HexCoord::ORIGIN.to_world(10.0);
+        let deep = HexCoord::from_axial(2, 0);
+        let bay = deep.to_world(10.0);
+        let mut terrain = ArenaTerrainView::default();
+        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
+        terrain.liquids.push(ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(HexCoord::from_axial(1, 0), 8),
+            top_level: 9,
+            substance: hex_core::SubstanceId::AIR,
+        });
+        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
+        terrain.liquids.push(ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(deep, 2),
+            top_level: 9,
+            substance: hex_core::SubstanceId::AIR,
+        });
+        let site = waterline_site(&terrain, geometry, spawn, bay, 10.0)
+            .expect("the admitted deep interval is suitable for both water views");
+        assert_eq!(HexCoord::from_world(site), deep);
+    }
+
+    #[test]
+    fn overview_fits_complete_published_bounds_with_margin() {
+        let origin = Vec2::new(-1216.0, -1056.0);
+        let extent = Vec2::new(2432.0, 2112.0);
+        let interest = Vec3::new(-645.0, 161.7, -100.5);
+        let pose = overview_pose(origin, extent, 140.0, 442.75, interest);
+        let half_height = pose.overview_height.expect("orthographic overview") * 0.5;
+        let half_width = half_height * (16.0 / 9.0);
+        for corner in overview_corners(origin, extent, 140.0, 442.75) {
+            let local = pose.camera.rotation.inverse() * (corner - pose.camera.translation);
+            assert!(local.x.abs() <= half_width * 0.901);
+            assert!(local.y.abs() <= half_height * 0.901);
+            assert!(local.z < -0.035 && local.z > -24_000.0);
+        }
+        // The landscape occupies useful image width while all world edges remain included.
+        assert!(1528.0 / (2.0 * half_width) > 0.38);
+        assert_eq!(pose.interest, interest);
+    }
 }

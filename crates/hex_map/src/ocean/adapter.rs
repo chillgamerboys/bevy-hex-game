@@ -317,8 +317,8 @@ mod tests {
         let height = |at, seconds| adapter.surface_at(at, seconds, column).unwrap().height;
         let mut along_crest = false;
         let mut across_periods = false;
-        for tick in 0..90 {
-            let t = tick as f32 * 0.1;
+        for tick in 0_u16..90 {
+            let t = f32::from(tick) * 0.1;
             let center = height(Vec2::ZERO, t);
             along_crest |= (center - height(Vec2::new(0.0, 24.0), t)).abs() > 0.39;
             across_periods |= (center - height(Vec2::ZERO, t + 9.0)).abs() > 0.39;

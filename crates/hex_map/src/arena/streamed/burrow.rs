@@ -41,7 +41,7 @@ fn admit(world: &World, request: &ArenaBurrowRequest) -> Admission {
         };
         if p.column
             .checked_distance(WorldHex::new(0, 0))
-            .map_err(|_| (Some(position), Reject::OutsideWorld))?
+            .map_err(|_range_error| (Some(position), Reject::OutsideWorld))?
             > u64::from(geometry.radius)
             || !(geometry.min_level..=geometry.max_level).contains(&p.level)
         {

@@ -731,6 +731,64 @@ fn compact_static(view: &mut ArenaTerrainView) {
     view.static_spans = compact;
 }
 
+/// Cut spans only in dirty columns. Occupancy and damage queries use the same mask.
+pub(super) fn publish_carves(
+    view: &mut ArenaTerrainView,
+    finite: &FiniteWorldSession,
+    changed: &BTreeSet<HexCoord>,
+) {
+    for coord in changed {
+        if let Some(spans) = view.object_columns.get_mut(coord) {
+            let mut next = Vec::new();
+            for span in spans.iter() {
+                let mut begin = None;
+                for level in span.bottom.level..=span.top_level.saturating_add(1) {
+                    let survives = level <= span.top_level
+                        && !finite.object_removed(world_position(TilePos::new(*coord, level)));
+                    if survives && begin.is_none() {
+                        begin = Some(level);
+                    }
+                    if !survives {
+                        if let Some(bottom) = begin.take() {
+                            next.push(ArenaSolidSpan {
+                                bottom: TilePos::new(*coord, bottom),
+                                top_level: level - 1,
+                                substance: span.substance,
+                            });
+                        }
+                    }
+                }
+            }
+            *spans = next;
+        }
+    }
+    let mut next = Vec::with_capacity(view.static_spans.len());
+    for span in &view.static_spans {
+        if !changed.contains(&span.bottom.coord) {
+            next.push(*span);
+            continue;
+        }
+        let mut begin = None;
+        for level in span.bottom.level..=span.top_level.saturating_add(1) {
+            let survives = level <= span.top_level
+                && !finite.object_removed(world_position(TilePos::new(span.bottom.coord, level)));
+            if survives && begin.is_none() {
+                begin = Some(level);
+            }
+            if !survives {
+                if let Some(bottom) = begin.take() {
+                    next.push(hex_core::arena::ArenaStaticSpan {
+                        bottom: TilePos::new(span.bottom.coord, bottom),
+                        top_level: level - 1,
+                        ..*span
+                    });
+                }
+            }
+        }
+    }
+    view.static_spans = next;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1004,62 +1062,4 @@ mod tests {
             .expect("V4 destruction");
         assert_eq!(backend.runtime.voxel(query), QueryResult::Ready(None));
     }
-}
-
-/// Cut spans only in dirty columns. Occupancy and damage queries use the same mask.
-pub(super) fn publish_carves(
-    view: &mut ArenaTerrainView,
-    finite: &FiniteWorldSession,
-    changed: &BTreeSet<HexCoord>,
-) {
-    for coord in changed {
-        if let Some(spans) = view.object_columns.get_mut(coord) {
-            let mut next = Vec::new();
-            for span in spans.iter() {
-                let mut begin = None;
-                for level in span.bottom.level..=span.top_level.saturating_add(1) {
-                    let survives = level <= span.top_level
-                        && !finite.object_removed(world_position(TilePos::new(*coord, level)));
-                    if survives && begin.is_none() {
-                        begin = Some(level);
-                    }
-                    if !survives {
-                        if let Some(bottom) = begin.take() {
-                            next.push(ArenaSolidSpan {
-                                bottom: TilePos::new(*coord, bottom),
-                                top_level: level - 1,
-                                substance: span.substance,
-                            });
-                        }
-                    }
-                }
-            }
-            *spans = next;
-        }
-    }
-    let mut next = Vec::with_capacity(view.static_spans.len());
-    for span in &view.static_spans {
-        if !changed.contains(&span.bottom.coord) {
-            next.push(*span);
-            continue;
-        }
-        let mut begin = None;
-        for level in span.bottom.level..=span.top_level.saturating_add(1) {
-            let survives = level <= span.top_level
-                && !finite.object_removed(world_position(TilePos::new(span.bottom.coord, level)));
-            if survives && begin.is_none() {
-                begin = Some(level);
-            }
-            if !survives {
-                if let Some(bottom) = begin.take() {
-                    next.push(hex_core::arena::ArenaStaticSpan {
-                        bottom: TilePos::new(span.bottom.coord, bottom),
-                        top_level: level - 1,
-                        ..*span
-                    });
-                }
-            }
-        }
-    }
-    view.static_spans = next;
 }
