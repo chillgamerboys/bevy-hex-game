@@ -43,57 +43,72 @@ fn present(
     let Some(streamed) = active else {
         return;
     };
-    // Restrained local sources make the opaque chambers readable without changing
+    // Local sources are calibrated against the natural-environment exposure and
+    // ambient light. Their falloff makes the opaque chambers readable without changing
     // global daylight or revealing routes through missing/transparent roofs.
     for (anchor, offset, color, intensity, range) in [
         (
             "shrine_plant",
-            Vec3::new(0.0, 4.0, -3.0),
+            Vec3::new(0.0, 4.0, 4.0),
             Color::srgb(0.68, 1.0, 0.72),
-            28_000.0,
+            400_000.0,
             28.0,
         ),
         (
             "root_temple_entrance",
             Vec3::new(0.0, 5.0, -7.0),
             Color::srgb(1.0, 0.83, 0.59),
-            38_000.0,
+            1_200_000.0,
             30.0,
         ),
         (
             "library_entrance",
             Vec3::new(0.0, 5.0, 0.0),
             Color::srgb(1.0, 0.84, 0.63),
-            38_000.0,
+            1_200_000.0,
             30.0,
         ),
         (
             "library_hall",
             Vec3::new(0.0, 6.0, 0.0),
             Color::srgb(1.0, 0.86, 0.68),
-            55_000.0,
+            1_800_000.0,
             38.0,
         ),
         (
             "library_upper",
             Vec3::new(0.0, 6.0, 0.0),
             Color::srgb(1.0, 0.86, 0.68),
-            55_000.0,
+            1_800_000.0,
             38.0,
         ),
         (
             "shadow_tunnel",
-            Vec3::new(0.0, 7.0, -45.0),
+            Vec3::new(0.0, 6.0, -80.0),
             Color::srgb(0.63, 0.72, 1.0),
-            45_000.0,
-            60.0,
+            1_000_000.0,
+            80.0,
         ),
         (
             "shadow_tunnel",
-            Vec3::new(0.0, 7.0, 45.0),
+            Vec3::new(0.0, 6.0, -20.0),
             Color::srgb(0.63, 0.72, 1.0),
-            45_000.0,
-            60.0,
+            1_000_000.0,
+            80.0,
+        ),
+        (
+            "shadow_tunnel",
+            Vec3::new(0.0, 6.0, 40.0),
+            Color::srgb(0.63, 0.72, 1.0),
+            1_000_000.0,
+            80.0,
+        ),
+        (
+            "shadow_tunnel",
+            Vec3::new(0.0, 6.0, 100.0),
+            Color::srgb(0.63, 0.72, 1.0),
+            1_000_000.0,
+            80.0,
         ),
     ] {
         let Some(position) = streamed.overview.anchors.get(anchor) else {

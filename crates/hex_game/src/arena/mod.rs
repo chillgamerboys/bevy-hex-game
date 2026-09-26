@@ -656,6 +656,7 @@ fn setup(
     };
     commands.spawn((
         Camera3d::default(),
+        bevy::camera::ShadowLodOrigin,
         IsDefaultUiCamera,
         Camera {
             clear_color: ClearColorConfig::Default,
