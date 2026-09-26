@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+# Support direct script, discovery, and repository-root module invocations.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import grand_capture
 
 
