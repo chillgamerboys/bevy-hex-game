@@ -803,12 +803,12 @@ fn capture_pose(
             anchor("garden")?,
         )),
         "grand-forest-ground" => Some((
-            anchor("forest")? + Vec3::new(-35.0, 0.0, 25.0),
-            anchor("forest")?,
+            Vec3::new(-240.0, anchor("forest")?.y, 220.0),
+            Vec3::new(-160.0, anchor("forest")?.y, 220.0),
         )),
         "grand-forest-ground-reverse" => Some((
-            anchor("forest")? + Vec3::new(35.0, 0.0, -25.0),
-            anchor("forest")?,
+            Vec3::new(-162.0, anchor("forest")?.y, 219.0),
+            Vec3::new(-240.0, anchor("forest")?.y, 220.0),
         )),
         "grand-island-landing" => Some((anchor("volcano_landing")?, anchor("volcano")?)),
         "grand-river-exit" => Some((
