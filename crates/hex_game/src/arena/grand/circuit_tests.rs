@@ -46,6 +46,14 @@ fn chunk(position: Vec3) -> ChunkId {
     WorldHex::new(i64::from(coord.x()), i64::from(coord.y())).chunk()
 }
 
+fn detailed_revision(app: &mut App, coordinate: ChunkId) -> Option<u64> {
+    let mut roots = app.world_mut().query::<&ResidentChunk>();
+    roots
+        .iter(app.world())
+        .find(|root| root.coordinate == coordinate)
+        .map(|root| root.revision)
+}
+
 fn observe(app: &mut App, highwater: &mut Highwater, circuit: u32, site: &str) -> Observed {
     let state = app.world().resource::<StreamedArena>();
     assert!(state.failure.is_none(), "{site}: {:?}", state.failure);
@@ -159,7 +167,7 @@ fn visit(
     clippy::expect_used,
     reason = "The eviction fixture requires an actual nearby solid and an acknowledged world edit rather than an invented empty cell."
 )]
-fn carve_beach(app: &mut App, beach: Vec3) -> TilePos {
+fn carve_beach(app: &mut App, beach: Vec3) -> (TilePos, Option<u64>) {
     let origin = HexCoord::from_world(beach);
     let materials = *app.world().resource::<ArenaMaterials>();
     let terrain = app.world().resource::<ArenaTerrainView>();
@@ -174,6 +182,9 @@ fn carve_beach(app: &mut App, beach: Vec3) -> TilePos {
         })
         .expect("authored beach has a nearby destructible solid run");
     assert!(terrain.solid_at(position).is_some());
+    let coordinate =
+        WorldHex::new(i64::from(position.coord.x()), i64::from(position.coord.y())).chunk();
+    let detail_before = detailed_revision(app, coordinate);
     app.world_mut()
         .write_message(TerrainEdit::Clear { pos: position });
     settle(app.world_mut()).expect("actual world edit boundary");
@@ -182,7 +193,7 @@ fn carve_beach(app: &mut App, beach: Vec3) -> TilePos {
         .resource::<ArenaTerrainView>()
         .solid_at(position)
         .is_none());
-    position
+    (position, detail_before)
 }
 
 #[expect(
@@ -256,33 +267,29 @@ fn actual_grand_streaming_circuit() {
         total_deadline,
     );
     record(&mut log, &initial.sample);
-    let carved = carve_beach(&mut app, beach);
+    let (carved, detail_before) = carve_beach(&mut app, beach);
     let carved_column = WorldHex::new(i64::from(carved.coord.x()), i64::from(carved.coord.y()));
     let carved_chunk = carved_column.chunk();
-    // Establish that this exact edited chunk really had a detailed root before
-    // later absence is counted as detail eviction.
+    // A detailed root's revision is a renderer publication counter, not the
+    // finite edit authority revision. Wait for a new publication relative to
+    // the pre-edit root (or its first publication). The renderer rejects stale
+    // authority completions before publishing, so this establishes that the
+    // edited chunk was presented before later absence counts as eviction.
     let edit_deadline = (Instant::now() + STOP_LIMIT).min(total_deadline);
-    loop {
+    let detail_after = loop {
         app.update();
         observe(&mut app, &mut highwater, 0, "edited_beach");
-        let revision = app
-            .world()
-            .resource::<StreamedArena>()
-            .edits
-            .revision(carved_chunk);
-        let mut roots = app.world_mut().query::<&ResidentChunk>();
-        if roots
-            .iter(app.world())
-            .any(|root| root.coordinate == carved_chunk && Some(root.revision) == revision)
+        if let Some(revision) = detailed_revision(&mut app, carved_chunk)
+            .filter(|revision| Some(*revision) != detail_before)
         {
-            break;
+            break revision;
         }
         assert!(
             Instant::now() < edit_deadline,
             "edited beach detail was never published"
         );
         std::thread::sleep(Duration::from_millis(2));
-    }
+    };
     let baseline = world_records(app.world());
     let mut samples = vec![initial.sample];
     let mut evictions = 0;
@@ -377,6 +384,8 @@ fn actual_grand_streaming_circuit() {
         "circuits": CIRCUITS, "completed_stops": samples.len(),
         "stop_readiness": "217-column local collision disk and published detailed center chunk",
         "edited_detail_published_before_eviction": true,
+        "edited_detail_revision_before": detail_before,
+        "edited_detail_revision_after": detail_after,
         "carved_cell": carved, "old_area_evictions": evictions, "ready_revisits": revisits,
         "limits": { "source_chunks": SOURCE_LIMIT, "finite_sources": SOURCE_LIMIT,
             "detailed_chunks": DETAIL_LIMIT, "source_jobs": JOB_LIMIT },
