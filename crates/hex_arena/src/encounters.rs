@@ -714,6 +714,16 @@ impl ArenaSession {
                 };
             }
             self.advance_grand(human, world, geometry);
+            if self
+                .actors
+                .iter()
+                .any(|actor| actor.id == 0 && actor.hp <= 0.0)
+            {
+                // Recovery may stage a new streaming destination, but that is
+                // not a combat step. Hold every simulation clock until a safe
+                // pose is admitted, including a permanently unusable return.
+                return CommandsOut::default();
+            }
         }
         self.begin_simulation_tick();
         let mut out = CommandsOut::default();

@@ -930,6 +930,9 @@ impl ArenaSession {
 
     /// Advance shared simulation housekeeping after mode initialization succeeds.
     fn begin_simulation_tick(&mut self) {
+        if self.is_grand_run() {
+            self.advance_visual_effects();
+        }
         self.tick += 1;
         self.combat_cues
             .retain(|cue| self.tick.saturating_sub(cue.tick) <= 120);
@@ -942,6 +945,13 @@ impl ArenaSession {
             }
             self.shield_notice_until = None;
         }
+    }
+
+    fn advance_visual_effects(&mut self) {
+        for effect in &mut self.effects {
+            effect.age += STEP;
+        }
+        self.effects.retain(|effect| effect.age < effect.lifetime);
     }
 
     fn shield_no_room_notice(&mut self) {
@@ -1100,10 +1110,9 @@ impl ArenaSession {
         #[cfg(any(test, feature = "test-support"))]
         self.cpu.mark(ArenaCpuPhase::CollisionRefresh);
         let mut commands = CommandsOut::default();
-        for effect in &mut self.effects {
-            effect.age += STEP;
+        if !self.is_grand_run() {
+            self.advance_visual_effects();
         }
-        self.effects.retain(|effect| effect.age < effect.lifetime);
         for actor in self.actors.iter_mut().filter(|actor| actor.hp <= 0.0) {
             actor.clear_glider();
         }

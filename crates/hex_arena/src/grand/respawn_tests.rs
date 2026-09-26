@@ -185,6 +185,132 @@ fn grand_respawn_waits_for_unloaded_shrine_instead_of_abandoning_it() {
 }
 
 #[test]
+fn grand_recovery_wait_freezes_combat_clocks_until_one_safe_return_tick() {
+    for fallback in [false, true] {
+        let (mut session, mut world, geometry, shrine) = fixture();
+        let ready = world.residency.as_ref().unwrap().ready.clone();
+        let start = *world.spawns.first().unwrap();
+        let enemy_feet = if fallback {
+            shrine + Vec3::X * 25.0
+        } else {
+            start + Vec3::X * 5.0
+        } + Vec3::Y * 2.0;
+        let mut enemy = Actor::spawn(7, enemy_feet, Vec3::Y);
+        enemy.cooldowns = [2.0; 3];
+        session.actors.push(enemy);
+        session.release(
+            7,
+            crate::Spell::Fireball,
+            &crate::ArenaTuning::default(),
+            10.0,
+            &world,
+            geometry,
+            ArenaMaterials {
+                stone: SubstanceId(1),
+                reinforced_stone: Some(SubstanceId(6)),
+                bedrock: SubstanceId(2),
+                grass: SubstanceId(3),
+                dirt: SubstanceId(4),
+                fire: ElementId(1),
+            },
+            &mut crate::CommandsOut::default(),
+        );
+        session.record_high_jump(7, enemy_feet);
+        session.grand.as_mut().unwrap().teleport_cooldown = 3.0;
+        if fallback {
+            destroy_support(&mut world, shrine, 12, None);
+        }
+        world.residency.as_mut().unwrap().ready.retain(
+            |(q, _)| {
+                if fallback {
+                    *q >= 1
+                } else {
+                    *q < 1
+                }
+            },
+        );
+        world.revision += 1;
+        world.full_rebuild = true;
+        die(&mut session);
+        let clock = session.ocean_time();
+        let saved_tick = session.tick;
+        let combat = ron::ser::to_string(&(
+            session.actors.iter().find(|actor| actor.id == 7).unwrap(),
+            &session.projectiles,
+            &session.effects,
+            &session.combat_cues,
+        ))
+        .unwrap();
+        for _ in 0..4 {
+            tick(&mut session, &world, geometry);
+            assert_eq!(session.tick, saved_tick);
+            assert_eq!(session.ocean_time(), clock);
+            assert_eq!(
+                session
+                    .grand_progress()
+                    .unwrap()
+                    .teleport_cooldown
+                    .to_bits(),
+                3.0_f32.to_bits()
+            );
+            assert_eq!(
+                ron::ser::to_string(&(
+                    session.actors.iter().find(|actor| actor.id == 7).unwrap(),
+                    &session.projectiles,
+                    &session.effects,
+                    &session.combat_cues,
+                ))
+                .unwrap(),
+                combat,
+                "recovery loading must not move enemies or age combat and effects"
+            );
+            assert_eq!(session.grand_progress().unwrap().deaths, 0);
+            let grand = session.grand.as_ref().unwrap();
+            assert_eq!(
+                grand.respawn_stage,
+                if fallback {
+                    RespawnStage::Start
+                } else {
+                    RespawnStage::Shrine
+                }
+            );
+            assert_eq!(
+                grand.respawn_interest,
+                Some(if fallback { start } else { shrine })
+            );
+        }
+        // Destination metadata may progress to the starting beach while the
+        // simulation is frozen. Admitting it resumes exactly one ordinary tick.
+        world.residency.as_mut().unwrap().ready = ready;
+        world.revision += 1;
+        tick(&mut session, &world, geometry);
+        assert_eq!(session.tick, saved_tick + 1);
+        assert!(session.ocean_time().seconds > clock.seconds);
+        assert_eq!(session.grand_progress().unwrap().deaths, 1);
+        assert_eq!(
+            session.grand_progress().unwrap().respawn_anchor,
+            Some(ShrineId::Earth)
+        );
+        assert!(session.earth_construction(0));
+        assert!(session.actors.first().unwrap().hp > 0.0);
+        assert!(
+            session
+                .actors
+                .first()
+                .unwrap()
+                .feet
+                .distance(if fallback { start } else { shrine })
+                < 0.01
+        );
+        let enemy = session.actors.iter().find(|actor| actor.id == 7).unwrap();
+        assert!(enemy.cooldowns.iter().all(|cooldown| *cooldown < 2.0));
+        assert!(session.projectiles.first().unwrap().age > 0.0);
+        assert!(session.effects.first().unwrap().age > 0.0);
+        assert!(session.grand_progress().unwrap().teleport_cooldown < 3.0);
+    }
+}
+
+#[test]
 fn grand_respawn_falls_back_to_start_when_loaded_shrine_area_is_removed() {
     let (mut session, mut world, geometry, shrine) = fixture();
     destroy_support(&mut world, shrine, 12, None);

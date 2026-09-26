@@ -253,7 +253,6 @@ impl ArenaSession {
         let Some(mut grand) = self.grand.take() else {
             return;
         };
-        grand.teleport_cooldown = (grand.teleport_cooldown - STEP).max(0.0);
         grand.teleport_unlocked |= self
             .actors
             .iter()
@@ -276,6 +275,7 @@ impl ArenaSession {
             self.grand = Some(grand);
             return;
         }
+        grand.teleport_cooldown = (grand.teleport_cooldown - STEP).max(0.0);
         if let Some(player) = self.actors.get(player_index).filter(|a| a.hp > 0.0) {
             for shrine in ShrineId::ALL {
                 let Some(position) = world.anchors.get(shrine.anchor()).copied() else {
