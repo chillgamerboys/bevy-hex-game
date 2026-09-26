@@ -265,25 +265,138 @@ fn start_route(app: &mut App, point: Point) -> Result<Vec3, String> {
     }
 }
 
-fn object_ahead(world: &World, direction: Vec3) -> bool {
-    let player = human(world);
-    let geometry = *world.resource::<ArenaVoxelGeometry>();
-    let view = world.resource::<ArenaTerrainView>();
-    let side = direction.cross(Vec3::Y);
-    let radius = player.body_dimensions().x * 0.5;
-    [0.3, 0.6, 1.2, 2.4].into_iter().any(|distance| {
-        [-radius, 0.0, radius].into_iter().any(|offset| {
-            let point = player.feet + direction * distance + side * offset;
-            let coord = HexCoord::from_world(point);
-            view.object_columns.get(&coord).is_some_and(|spans| {
-                spans.iter().any(|s| {
-                    let low = geometry.top(s.bottom) - geometry.level_height;
-                    let high = geometry.top(TilePos::new(coord, s.top_level));
-                    high > player.feet.y + 0.05 && low < player.feet.y + player.body_dimensions().y
+/// Local object-only sensing. Terrain elevations never choose a direction;
+/// the unchanged production controller decides whether each step is legal.
+struct LocalObjects {
+    feet: Vec3,
+    radius: f32,
+    occupied: std::collections::BTreeSet<HexCoord>,
+}
+impl LocalObjects {
+    fn observe(world: &World) -> Self {
+        let player = human(world);
+        let geometry = *world.resource::<ArenaVoxelGeometry>();
+        let view = world.resource::<ArenaTerrainView>();
+        let occupied = HexCoord::from_world(player.feet)
+            .within_radius(4)
+            .into_iter()
+            .filter(|coord| {
+                view.object_columns.get(coord).is_some_and(|spans| {
+                    spans.iter().any(|span| {
+                        let low = geometry.top(span.bottom) - geometry.level_height;
+                        let high = geometry.top(TilePos::new(*coord, span.top_level));
+                        high > player.feet.y + 0.05
+                            && low < player.feet.y + player.body_dimensions().y
+                    })
                 })
             })
-        })
-    })
+            .collect();
+        Self {
+            feet: player.feet,
+            radius: player.body_dimensions().x * 0.5 + 0.1,
+            occupied,
+        }
+    }
+
+    fn blocked(&self, direction: Vec3, reach: f32) -> bool {
+        let side = direction.cross(Vec3::Y);
+        // Dense local body-width samples prevent the old sparse 0.6→1.2→2.4
+        // ray from missing a root between samples. This is steering advice,
+        // never collision admission or an excuse to alter the body's position.
+        let mut distance = 0.15;
+        while distance <= reach {
+            if [-self.radius, 0.0, self.radius].into_iter().any(|offset| {
+                self.occupied.contains(&HexCoord::from_world(
+                    self.feet + direction * distance + side * offset,
+                ))
+            }) {
+                return true;
+            }
+            distance += 0.15;
+        }
+        false
+    }
+}
+
+#[derive(Default)]
+struct ObjectFollower {
+    side: Option<f32>,
+    entry_distance: f32,
+    entries: u32,
+    heading: Vec3,
+}
+impl ObjectFollower {
+    fn steer(&mut self, feet: Vec3, target: Vec3, blocked: impl Fn(Vec3, f32) -> bool) -> Vec3 {
+        let direct = (target - feet.with_y(0.0)).normalize_or_zero();
+        let remaining = feet.with_y(0.0).distance(target);
+        if self.side.is_some() && remaining < self.entry_distance - 1.0 && !blocked(direct, 4.8) {
+            self.side = None;
+        }
+        if self.side.is_none() && !blocked(direct, 2.4) {
+            self.heading = direct;
+            return direct;
+        }
+        let angles = [
+            0.35,
+            0.70,
+            1.05,
+            1.40,
+            1.75,
+            2.10,
+            2.45,
+            2.80,
+            std::f32::consts::PI,
+        ];
+        if self.side.is_none() {
+            // Choose once at contact. Alternating the preferred side whenever
+            // a two-meter sidestep ends caused the old driver to circle roots.
+            let choice = angles.into_iter().find_map(|angle| {
+                [1.0, -1.0]
+                    .into_iter()
+                    .find(|sign| !blocked(Quat::from_rotation_y(angle * sign) * direct, 2.4))
+            });
+            self.side = Some(choice.unwrap_or(1.0));
+            self.entry_distance = remaining;
+            self.entries += 1;
+        }
+        let sign = self.side.unwrap_or(1.0);
+        // Reassess the same side every frame instead of blindly holding a
+        // direction after a second root has physically stopped it. The shorter
+        // probe lets the driver turn inside a narrow local gap; it still reads
+        // only objects and moves exclusively through ordinary forward input.
+        self.heading = [2.4, 0.75]
+            .into_iter()
+            .find_map(|reach| {
+                angles
+                    .into_iter()
+                    .map(|angle| Quat::from_rotation_y(angle * sign) * direct)
+                    .find(|direction| !blocked(*direction, reach))
+            })
+            .unwrap_or(Vec3::ZERO);
+        self.heading
+    }
+}
+
+#[test]
+fn object_follower_remembers_side_and_rechecks_a_blocked_heading() {
+    let mut follower = ObjectFollower::default();
+    let target = Vec3::X * 40.0;
+    let first = follower.steer(Vec3::ZERO, target, |d, _| d.z > -0.6);
+    assert!(first.z < -0.6);
+    let side = follower.side;
+    let second = follower.steer(Vec3::X, target, |d, _| d.z > -0.9);
+    assert!(
+        second.z < -0.9,
+        "a new obstacle must change the held heading"
+    );
+    assert_eq!(
+        follower.side, side,
+        "do not switch sides around the same object"
+    );
+    assert_eq!(follower.entries, 1);
+    let final_heading = follower.steer(Vec3::X * 3.0, target, |_, _| false);
+    assert_eq!(final_heading, Vec3::X);
+    assert!(follower.side.is_none());
 }
 
 fn block_reason(world: &World) -> Option<&'static str> {
@@ -326,6 +439,7 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
     let mut previous = start;
     let mut samples = vec![serde_json::json!({"tick":first_tick,"feet":start.to_array()})];
     let mut detours = 0_u32;
+    let mut steering_trace = Vec::new();
     let mut failed = None;
     let mut completed = 0;
     let mut maximum_step = 0.0_f32;
@@ -342,7 +456,8 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         let segment_tick = app.world().resource::<ArenaSession>().tick;
         let mut best = segment_distance;
         let mut progress_tick = segment_tick;
-        let mut detour = None::<(Vec3, Vec3, u64)>;
+        let mut follower = ObjectFollower::default();
+        let mut steering_sample_tick = segment_tick;
         loop {
             let feet = human(app.world()).feet;
             let tick = app.world().resource::<ArenaSession>().tick;
@@ -371,32 +486,25 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
                 samples.push(serde_json::json!({"segment":index,"target":point,"remaining":remaining,"block":body_state(app.world())}));
                 break;
             }
-            let direct = (target - feet.with_y(0.)).normalize_or_zero();
-            let direction = if let Some((origin, direction, chosen_tick)) =
-                detour.filter(|(origin, _, chosen_tick)| {
-                    let traveled = feet.with_y(0.).distance(origin.with_y(0.));
-                    traveled < 2.0 && (traveled > 0.15 || tick.saturating_sub(*chosen_tick) < 30)
-                }) {
-                detour = Some((origin, direction, chosen_tick));
-                direction
-            } else {
-                detour = None;
-                if object_ahead(app.world(), direct) {
-                    // Only small local object avoidance; terrain slope is never
-                    // searched around. Broad cross-country probes remain broad.
-                    let choice = [0.55, -0.55, 1.05, -1.05, 1.57, -1.57, 2.1, -2.1]
-                        .into_iter()
-                        .map(|yaw| Quat::from_rotation_y(yaw) * direct)
-                        .find(|d| !object_ahead(app.world(), *d));
-                    choice.map_or(direct, |direction| {
-                        detours += 1;
-                        detour = Some((feet, direction, tick));
-                        direction
-                    })
-                } else {
-                    direct
-                }
-            };
+            let objects = LocalObjects::observe(app.world());
+            let previous_side = follower.side;
+            let previous_entries = follower.entries;
+            let direction = follower.steer(feet, target, |heading, reach| {
+                objects.blocked(heading, reach)
+            });
+            detours += follower.entries - previous_entries;
+            if follower.side != previous_side
+                || (follower.side.is_some() && tick >= steering_sample_tick + 120)
+            {
+                steering_sample_tick = tick;
+                steering_trace.push(serde_json::json!({
+                    "tick":tick,"segment":index,"feet":feet.to_array(),"remaining":remaining,
+                    "side":follower.side,"heading":direction.to_array(),
+                    "entry_distance":follower.entry_distance,"nearby_object_columns":objects.occupied.len(),
+                    "direct_blocked":objects.blocked((target-feet.with_y(0.0)).normalize_or_zero(), 2.4),
+                    "event":if follower.side != previous_side { if follower.side.is_some() { "begin" } else { "clear" } } else { "follow" },
+                }));
+            }
             frame(app, direction);
             let player = human(app.world());
             distance += player.feet.with_y(0.).distance(previous.with_y(0.));
@@ -469,7 +577,7 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         "body_dimensions":human(app.world()).body_dimensions().to_array(),
         "simulation_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
         "wall_seconds":began.elapsed().as_secs_f64(),"distance":distance,"maximum_auto_step":maximum_step,
-        "object_detours":detours,"completed_segments":completed,"required_segments":route.points.len()-1,
+        "object_detours":detours,"object_steering_trace":steering_trace,"completed_segments":completed,"required_segments":route.points.len()-1,
         "waypoints":route.points,"samples":samples,
     })
 }
