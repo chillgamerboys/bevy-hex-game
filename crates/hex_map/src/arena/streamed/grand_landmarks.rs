@@ -129,7 +129,8 @@ impl Tree {
         match self.geometry.refresh(edits) {
             Ok(Some(mesh)) => {
                 self.current_surface = mesh.count_vertices() > 0;
-                if let Some(mut existing) = world.resource_mut::<Assets<Mesh>>().get_mut(&self.mesh) {
+                if let Some(mut existing) = world.resource_mut::<Assets<Mesh>>().get_mut(&self.mesh)
+                {
                     *existing = mesh;
                 } else {
                     self.current_surface = false;
@@ -643,12 +644,12 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         while runtime.resident_chunks().count() != 2 {
             let update = runtime.pump();
-            assert!(
-                update.failures.is_empty(),
-                "fixture source failures: {:?}",
-                update.failures
-            );
-            assert!(Instant::now() < deadline, "bounded fixture admission");
+            if !update.failures.is_empty() {
+                return Err(format!("fixture source failures: {:?}", update.failures).into());
+            }
+            if Instant::now() >= deadline {
+                return Err("bounded fixture admission timed out".into());
+            }
             std::thread::sleep(Duration::from_millis(1));
         }
         let edits = FiniteWorldSession::streamed(&runtime, 0, 50)?;

@@ -11,10 +11,6 @@ use hex_world_contracts::{
 use hex_world_runtime::{FiniteWorldSession, MemoryChunkSource, RuntimeConfig, WorldRuntime};
 use std::time::{Duration, Instant};
 
-#[expect(
-    clippy::expect_used,
-    reason = "The bounded in-memory fixture must pass the production package and residency validators before testing its visual adapter."
-)]
 fn fixture() -> StreamedArena {
     let chunk = ChunkId { q: 0, r: 0 };
     // Sea, a raised cascade and its lower receiving pool, one level above sea,

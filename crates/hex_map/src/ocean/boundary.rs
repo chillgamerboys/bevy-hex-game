@@ -193,7 +193,10 @@ mod tests {
         let (origin, size, values) = boundary.mask(0.0).unwrap();
         assert_eq!(origin, IVec2::new(-2, 3));
         assert_eq!(size, UVec2::new(3, 1));
-        assert!(values[0] > 0.5 && values[1].abs() < 0.01 && values[2] < -0.5);
+        let [wet, unknown, dry] = values.as_slice() else {
+            panic!("three mask cells");
+        };
+        assert!(*wet > 0.5 && unknown.abs() < 0.01 && *dry < -0.5);
         boundary.known_columns.insert(HexCoord::from_axial(600, 3));
         assert!(boundary.mask(0.0).is_none());
     }
@@ -226,8 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn raised_water_occludes_sea_faces_without_emitting_duplicate_boundaries(
-    ) -> Result<(), &'static str> {
+    fn raised_water_occludes_sea_faces_without_emitting_duplicate_boundaries() {
         let sea = OceanBoundaryColumn {
             coordinate: HexCoord::ORIGIN,
             bottom: 138.6,
@@ -244,18 +246,18 @@ mod tests {
             known_columns: HexCoord::ORIGIN.within_radius(1).into_iter().collect(),
             ..default()
         };
-        let mesh = boundary.build(140.0).ok_or("valid mixed water boundary")?;
+        let mesh = boundary.build(140.0).expect("valid mixed water boundary");
         assert_eq!(mesh.count_vertices(), 27, "one bottom and five sea sides");
-        assert_eq!(mesh.indices().ok_or("boundary indices")?.len(), 48);
+        assert_eq!(mesh.indices().expect("boundary indices").len(), 48);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
-            return Err("boundary positions");
+            panic!("boundary positions");
         };
         assert!(positions
             .iter()
             .all(|&[x, y, z]| { x.hypot(z) <= 1.000_001 && (sea.bottom..=sea.top).contains(&y) }));
-        let (_, _, mask) = boundary.mask(140.0).ok_or("valid mixed water mask")?;
+        let (_, _, mask) = boundary.mask(140.0).expect("valid mixed water mask");
         assert_eq!(mask.iter().filter(|value| **value > 0.5).count(), 1);
 
         let inland_only = OceanNearBoundary {
@@ -265,12 +267,11 @@ mod tests {
         assert_eq!(
             inland_only
                 .build(140.0)
-                .ok_or("valid inland coverage")?
+                .expect("valid inland coverage")
                 .count_vertices(),
             0,
             "inland geometry has exactly one renderer"
         );
         assert!(inland_only.build(f32::NAN).is_none());
-        Ok(())
     }
 }
