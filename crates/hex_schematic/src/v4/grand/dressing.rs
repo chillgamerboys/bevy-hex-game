@@ -56,7 +56,7 @@ fn object(
         occupancy,
         grounding: Some(grounding),
     };
-    out.validate()?;
+    out.validate().map_err(|e|ContractError::new(&out.id,e.to_string()))?;
     Ok(out)
 }
 fn tree(
@@ -161,7 +161,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
             let root = WorldHex::new(q + (r * 7_i64).rem_euclid(5), r);
             let [x, z] = world_xz(root);
             let s = g.surface(root);
-            let forest = ((x + 20.) / 480.).hypot((z - 190.) / 360.);
+            let forest = biomes::forest_extent(x, z);
             let frozen = ((x + 200.) / 80.).hypot((z + 610.) / 45.);
             if !g.mainland(root)
                 || s.water.is_some()
@@ -177,6 +177,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
                 .any(|a| (x - a.x).hypot(z - a.z) < a.radius + 22.)
                 || ((x + 60.) / 65.).hypot((z - 150.) / 105.) < 1.
                 || g.cavity(root).is_some()
+                || sites::reserved_encounter(x, z)
             {
                 continue;
             }

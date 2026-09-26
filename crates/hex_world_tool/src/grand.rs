@@ -97,6 +97,10 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
     fs::write(stage.join("grand-overview.ron"), ron::to_string(&overview)?)?;
     let sites = compiler.sites(manifest.fingerprint)?;
     fs::write(stage.join("arena-sites.ron"), ron::to_string(&sites)?)?;
+    fs::write(
+        stage.join("grand-biomes.ron"),
+        ron::to_string(&compiler.biomes(manifest.fingerprint))?,
+    )?;
     let receipt = Receipt {
         world_id: manifest.world_id.clone(),
         source_fingerprint: manifest.source_fingerprint,
@@ -117,7 +121,7 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         canonical_crystal_columns: compiler.source.canonical_crystal_columns,
         sailing_reference_seconds: 45.0,
         sailing_reference_wind_speed: 9.0,
-        sailing_reference_integrated_units: 793.9410001655865,
+        sailing_reference_integrated_units: 793.9485,
         sailing_verified_in_engine: false,
         strict: true,
         presentation_reviewed: false,

@@ -12,7 +12,7 @@ def main():
     sig=signature(a.source)+('-plain' if a.plain else '-dressed')
     if a.output.exists():
         stamp=a.output/'authoring-identity.json'
-        if a.mode=='ensure' and all((a.output/f).is_file() for f in ['manifest.ron','grand-overview.ron','arena-sites.ron']) and stamp.is_file() and json.loads(stamp.read_text()).get('signature')==sig:return 0
+        if a.mode=='ensure' and all((a.output/f).is_file() for f in ['manifest.ron','grand-overview.ron','arena-sites.ron','grand-biomes.ron']) and stamp.is_file() and json.loads(stamp.read_text()).get('signature')==sig:return 0
         ap.error('Output already exists or is stale. Compile to a fresh --output and select it with HEX_GRAND_WORLD; immutable packages are never overwritten.')
     a.output.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='grand-source-',dir=a.output.parent) as tmp:

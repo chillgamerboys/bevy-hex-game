@@ -46,19 +46,24 @@ def measure():
     canonical=max(components,key=len)
     scale=math.sqrt(7); expanded=set()
     # Keep the geographic center unchanged. Ocean is enlarged separately.
-    for q in range(-496,497):
-        for r in range(-496,497):
-            if nearest(q/scale,r/scale) in canonical:expanded.add((q,r))
+    for q in range(-550,551):
+        for r in range(-550,551):
+            # A smooth bijective-scale coastal warp removes the clipped paper-grid
+            # edges while preserving landmark ordering. Exact area is corrected below.
+            aq=q/scale + 8*math.sin(q*.019+r*.004)+6*math.sin(r*.035)
+            ar=r/scale + 8*math.sin(q*.022)-7*math.sin((q+r)*.027)
+            if nearest(aq,ar) in canonical:expanded.add((q,r))
     raw_count=len(expanded); target=len(canonical)*7
     # Discrete resampling is rounded only at the coast. Add/remove deterministic
     # boundary cells to make the agreed integer area exact without moving sites.
-    if len(expanded)<target:
-        rim={ (q+dq,r+dr) for q,r in expanded for dq,dr in DIRS if (q+dq,r+dr) not in expanded }
-        ordered=sorted(rim,key=lambda p:(distance(*p),p))
-        expanded.update(ordered[:target-len(expanded)])
-    elif len(expanded)>target:
-        rim=[p for p in expanded if sum((p[0]+dq,p[1]+dr) in expanded for dq,dr in DIRS)>=3 and any((p[0]+dq,p[1]+dr) not in expanded for dq,dr in DIRS)]
-        for p in sorted(rim,key=lambda p:(-distance(*p),p))[:len(expanded)-target]:expanded.remove(p)
+    while len(expanded)!=target:
+        if len(expanded)<target:
+            rim={ (q+dq,r+dr) for q,r in expanded for dq,dr in DIRS if (q+dq,r+dr) not in expanded }
+            ordered=sorted(rim,key=lambda p:(((p[0]*73856093)^(p[1]*19349663))%2147483647,p))
+            expanded.update(ordered[:target-len(expanded)])
+        elif len(expanded)>target:
+            rim=[p for p in expanded if sum((p[0]+dq,p[1]+dr) in expanded for dq,dr in DIRS)>=3 and any((p[0]+dq,p[1]+dr) not in expanded for dq,dr in DIRS)]
+            for p in sorted(rim,key=lambda p:(((p[0]*73856093)^(p[1]*19349663))%2147483647,p))[:len(expanded)-target]:expanded.remove(p)
     assert len(expanded)==target
     rows=[]
     grouped=collections.defaultdict(list)
@@ -71,7 +76,7 @@ def measure():
             prev=q
         rows.append((r,start,prev))
     # Standalone Crystal map radius40 is NOT the embedded Grand footprint32.
-    receipt=dict(canonical_source=str(source.relative_to(ROOT)),canonical_sha256=hashlib.sha256(raw.encode()).hexdigest(),fine_radius=187,coarse_pitch=22,full_disk_columns=1+3*187*188,canonical_mainland_columns=len(canonical),other_included_component_columns=sorted(len(c) for c in components if c is not canonical),mainland_columns=len(expanded),mainland_area_ratio=len(expanded)/len(canonical),linear_scale=scale,coast_rounding_columns=abs(raw_count-target),canonical_crystal_radius=32,canonical_crystal_columns=1+3*32*33,crystal_target_columns=(1+3*32*33)*7,hex_column_area=3*math.sqrt(3)/2)
+    receipt=dict(canonical_source=str(source.relative_to(ROOT)),canonical_sha256=hashlib.sha256(raw.encode()).hexdigest(),fine_radius=187,coarse_pitch=22,full_disk_columns=1+3*187*188,canonical_mainland_columns=len(canonical),other_included_component_columns=sorted(len(c) for c in components if c is not canonical),mainland_columns=len(expanded),mainland_area_ratio=len(expanded)/len(canonical),linear_scale=scale,coast_shape="smooth bounded warp of canonical footprint; exact area preserved",coast_rounding_columns=abs(raw_count-target),canonical_crystal_radius=32,canonical_crystal_columns=1+3*32*33,crystal_target_columns=(1+3*32*33)*7,hex_column_area=3*math.sqrt(3)/2)
     return rows,receipt
 
 def main():

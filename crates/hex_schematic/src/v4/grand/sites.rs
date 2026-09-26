@@ -9,7 +9,6 @@ pub(super) struct Pad {
     pub(super) material: &'static str,
 }
 pub(super) const PADS: &[Pad] = &[
-    Pad{x:-300.0,z:450.0,radius:10.0,level:405,material:"sand"},
     Pad {
         x: 275.,
         z: -490.,
@@ -21,7 +20,7 @@ pub(super) const PADS: &[Pad] = &[
         x: -400.,
         z: -565.,
         radius: 12.,
-        level: 1146,
+        level: 1128,
         material: "stone",
     },
     Pad {
@@ -46,52 +45,10 @@ pub(super) const PADS: &[Pad] = &[
         material: "basalt",
     },
     Pad {
-        x: -80.,
-        z: 350.,
-        radius: 14.,
-        level: 455,
-        material: "moss",
-    },
-    Pad {
-        x: -230.,
-        z: 250.,
-        radius: 14.,
-        level: 475,
-        material: "moss",
-    },
-    Pad {
-        x: 100.,
-        z: 270.,
-        radius: 16.,
-        level: 480,
-        material: "moss",
-    },
-    Pad {
-        x: -160.,
-        z: 160.,
-        radius: 17.,
-        level: 490,
-        material: "moss",
-    },
-    Pad {
-        x: 80.,
-        z: 125.,
-        radius: 20.,
-        level: 495,
-        material: "moss",
-    },
-    Pad {
-        x: 0.,
-        z: 180.,
-        radius: 24.,
-        level: 505,
-        material: "moss",
-    },
-    Pad {
         x: -60.,
         z: 225.,
-        radius: 24.,
-        level: 510,
+        radius: 16.,
+        level: 500,
         material: "moss",
     },
 ];
@@ -161,6 +118,35 @@ impl GrandCompiler {
             },
         }
     }
+    fn beach_spawn(&self) -> VoxelPosition {
+        let mut best = None;
+        for r in 180..=380 {
+            for q in -440..=-220 {
+                let p = WorldHex::new(q, r);
+                let depth = index(p).map_or(0, |i| self.coast[i]);
+                if !(4..=6).contains(&depth) {
+                    continue;
+                }
+                let [x, z] = world_xz(p);
+                let s = self.surface(p);
+                if s.water.is_some() || s.level < 400 || s.level > 420 {
+                    continue;
+                }
+                let distance = (x + 300.).powi(2) + (z - 450.).powi(2);
+                if best.is_none_or(|(old, _)| distance < old) {
+                    best = Some((
+                        distance,
+                        VoxelPosition {
+                            column: p,
+                            level: s.level,
+                        },
+                    ));
+                }
+            }
+        }
+        best.expect("authored bay has a dry shallow starting beach")
+            .1
+    }
     pub(super) fn make_anchors(&self) -> Vec<WorldAnchor> {
         let mut anchors = vec![];
         for (id, x, z, inside, gameplay) in [
@@ -176,7 +162,7 @@ impl GrandCompiler {
             ("library_entrance", 305., -348., true, true),
             ("library_hall", -370., -348., true, true),
             ("library_upper", -400., -530., true, true),
-            ("shadow_entrance", -105., -150., true, true),
+            ("shadow_entrance", -105., -151., true, true),
             ("shadow_tunnel", -105., -295., true, true),
             ("crystal_ascent", -201., -524., false, false),
             ("frozen_woods", -215., -604., false, false),
@@ -192,7 +178,11 @@ impl GrandCompiler {
             anchors.push(WorldAnchor {
                 id: format!("grand/anchor/{id}"),
                 region_id: "grand".into(),
-                position: self.support(x, z, inside),
+                position: if id == "party_start" {
+                    self.beach_spawn()
+                } else {
+                    self.support(x, z, inside)
+                },
                 role: if gameplay {
                     AnchorRole::Gameplay
                 } else {
@@ -249,18 +239,23 @@ impl GrandCompiler {
                 position: a.position,
             })
             .collect();
-        let center = nearest_hex(285., -489.);
-        let top = self.surface(center).level;
-        let cells = vec![
-            VoxelPosition {
-                column: center,
-                level: top + 1,
-            },
-            VoxelPosition {
-                column: center,
-                level: top + 2,
-            },
-        ];
+        let center = nearest_hex(276., -474.);
+        let mut cells = vec![];
+        for q in -3_i64..=3 {
+            for r in -3_i64..=3 {
+                if q.abs().max(r.abs()).max((q + r).abs()) > 3 {
+                    continue;
+                }
+                let p = WorldHex::new(center.q + q, center.r + r);
+                let (_, liquid) = self.column(p);
+                if let Some(liquid) = liquid {
+                    for level in liquid.bottom..liquid.top {
+                        cells.push(VoxelPosition { column: p, level });
+                    }
+                }
+            }
+        }
+        cells.sort();
         let sites = GrandSites {
             version: 1,
             world_id: self.source.id.clone(),
@@ -308,4 +303,11 @@ impl GrandCompiler {
                     })
                 })
     }
+}
+
+/// Exact deployment disks reserve canopy and trunk clearance before any tree is placed.
+pub(super) fn reserved_encounter(x: f64, z: f64) -> bool {
+    ENCOUNTERS
+        .iter()
+        .any(|(_, a, b, _)| (x - a).hypot(z - b) < 35.)
 }

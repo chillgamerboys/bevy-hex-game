@@ -5,7 +5,9 @@
     clippy::cast_sign_loss,
     reason = "Finite authored geometry is bounded by radius900 and1600levels; rounding is the voxelization contract."
 )]
+mod biomes;
 mod dressing;
+pub use biomes::GrandBiomeMap;
 mod sites;
 #[cfg(test)]
 mod tests;
@@ -22,8 +24,8 @@ pub const LEVEL_HEIGHT: f64 = 0.35;
 pub const SEA_TOP: i32 = 400;
 /// Inclusive vertical storage bound.
 pub const MAX_LEVEL: i32 = 1600;
-const GRID: usize = 1001;
-const OFFSET: i64 = 500;
+const GRID: usize = 1101;
+const OFFSET: i64 = 550;
 const DIRS: [(i64, i64); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
 /// Small measured authoring input. Rows are (r, first q, last q), inclusive.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,6 +71,7 @@ pub struct GrandCompiler {
     /// Number of globally reserved tree objects.
     pub tree_count: usize,
     coast: Vec<u16>,
+    offshore_distance: Vec<u16>,
     crystal: std::collections::BTreeSet<WorldHex>,
     anchors: Vec<WorldAnchor>,
     objects: BTreeMap<ChunkId, Vec<ObjectInstance>>,
@@ -172,6 +175,35 @@ impl GrandCompiler {
                 }
             }
         }
+        let mut offshore_distance = vec![u16::MAX; GRID * GRID];
+        let mut offshore = VecDeque::new();
+        for r in -OFFSET..=OFFSET {
+            for q in -OFFSET..=OFFSET {
+                let p = WorldHex::new(q, r);
+                let i = index(p).unwrap();
+                if coast[i] > 0 {
+                    offshore_distance[i] = 0;
+                    if coast[i] == 1 {
+                        offshore.push_back(p);
+                    }
+                }
+            }
+        }
+        while let Some(p) = offshore.pop_front() {
+            let d = offshore_distance[index(p).unwrap()];
+            if d >= 100 {
+                continue;
+            }
+            for (a, b) in DIRS {
+                let n = WorldHex::new(p.q + a, p.r + b);
+                if let Some(i) = index(n) {
+                    if offshore_distance[i] == u16::MAX {
+                        offshore_distance[i] = d + 1;
+                        offshore.push_back(n);
+                    }
+                }
+            }
+        }
         let root = nearest_hex(-201., -524.);
         let mut candidates = Vec::new();
         for q in -95_i64..=95 {
@@ -196,13 +228,18 @@ impl GrandCompiler {
             crystal_columns: 22183,
             tree_count: 0,
             coast,
+            offshore_distance,
             crystal,
             anchors: vec![],
             objects: BTreeMap::new(),
             influences: BTreeMap::new(),
         };
         result.anchors = result.make_anchors();
-        let objects = if result.source.full_dressing { dressing::compose(&result)? } else { vec![] };
+        let objects = if result.source.full_dressing {
+            dressing::compose(&result)?
+        } else {
+            vec![]
+        };
         result.tree_count = objects
             .iter()
             .filter(|o| o.asset.starts_with("plant/"))
@@ -228,15 +265,19 @@ impl GrandCompiler {
         let [x, z] = world_xz(p);
         let depth = index(p).map_or(0, |i| self.coast[i]);
         let mut h = if depth > 0 {
-            let base = 445.
-                + 40. * (x * 0.006).sin() * (z * 0.004).cos()
-                + 30. * (x * 0.019 + z * 0.009).sin();
-            let mountains = 690. * gaussian(x, z, -410., -420., 225., 210.)
-                + 300. * gaussian(x, z, -400., -570., 120., 110.);
-            let eastern = 330. * gaussian(x, z, 420., -430., 250., 220.);
-            400. + (base + mountains + eastern - 400.) * smooth(f64::from(depth) / 22.)
+            let base = 480.
+                + 45. * gaussian(x, z, -60., 125., 220., 180.)
+                + 14. * (x * 0.006).sin() * (z * 0.004).cos()
+                + 9. * (x * 0.019 + z * 0.009).sin();
+            let mountains = 530. * gaussian(x, z, -410., -420., 250., 225.)
+                + 240. * gaussian(x, z, -400., -570., 150., 125.);
+            let saddle = 290. * gaussian(x, z, 20., -350., 520., 160.);
+            let eastern = 430. * gaussian(x, z, 320., -490., 240., 180.);
+            401. + (base + mountains + saddle + eastern - 401.) * smooth(f64::from(depth) / 28.)
         } else {
-            95. + 25. * (x * 0.003 + z * 0.005).sin()
+            let distance = index(p).map_or(100, |i| self.offshore_distance[i]).min(100);
+            400. - 3. * f64::from(distance)
+                + 10. * (x * 0.003 + z * 0.005).sin() * smooth(f64::from(distance) / 30.)
         };
         let mut material = if h > 1100. {
             "snow"
@@ -250,68 +291,83 @@ impl GrandCompiler {
         let mut water = None;
         // Intimate garden and headwater lake retain human scale within the enlarged land.
         let garden = ((x - 275.) / 43.).hypot((z + 490.) / 35.);
-        if garden < 1.5 {
-            h += (900. - h) * (1. - smooth((garden - 1.) / 0.5));
+        if garden < 3.5 {
+            h += (900. - h) * (1. - smooth((garden - 0.7) / 2.8));
             material = "moss";
         }
         let lake = ((x - 330.) / 34.).hypot((z + 470.) / 27.);
-        if lake < 1.35 {
+        if lake < 2.5 {
             h += (if lake < 1. {
                 875. + 8. * lake.powi(2)
             } else {
                 905.
             } - h)
-                * (1. - smooth((lake - 1.) / 0.35));
+                * (1. - smooth((lake - 1.) / 1.5));
             if lake < 1. {
                 water = Some(900);
                 material = "sand";
             }
         }
-        // Three descending falls connect the upper lake to the elevated valley lake.
-        if (-450. ..=-150.).contains(&z) {
+        // The same authored centerline composes both banks and liquid, avoiding
+        // free-standing water walls where natural terrain lies below river level.
+        if (-450. ..=-140.).contains(&z) {
             let cx = 330. + (z + 450.) * 0.23;
             let d = (x - cx).abs();
-            if d < 19. {
-                let top = if z < -370. {
-                    900
-                } else if z < -275. {
-                    790
-                } else {
-                    680
-                };
-                h = h.min(f64::from(top - 12) + (d / 19.).powi(4) * 40.);
-                if d < 12. {
+            let top = if z < -370. {
+                900
+            } else if z < -275. {
+                790
+            } else if z < -170. {
+                680
+            } else {
+                615
+            };
+            if d < 90. {
+                let bank = f64::from(top + 15);
+                h += (bank - h) * (1. - smooth((d - 20.) / 70.));
+            }
+            if d < 20. {
+                h = f64::from(top - 12) + (d / 20.).powi(4) * 27.;
+                if d < 14. {
                     water = Some(top);
                     material = "stone";
                 }
             }
+            for (fall, upper, lower) in [(-370., 900, 790), (-275., 790, 680), (-170., 680, 615)] {
+                if (z - fall).abs() < 2.2 && d < 14. {
+                    h = f64::from(lower - 12);
+                    water = Some(upper);
+                }
+            }
         }
         let valley = ((x - 405.) / 63.).hypot((z + 115.) / 62.);
-        if valley < 1.35 {
-            h += (if valley < 1. {
+        if valley < 2.4 {
+            let bed = if valley < 1. {
                 580. + 12. * valley.powi(2)
             } else {
                 625.
-            } - h)
-                * (1. - smooth((valley - 1.) / 0.35));
+            };
+            h += (bed - h) * (1. - smooth((valley - 1.) / 1.4));
             if valley < 1. {
                 water = Some(615);
                 material = "sand";
             }
         }
-        // A falling inland river becomes level at the southern marine bay.
-        if (-60. ..=465.).contains(&z) {
-            let t = (z + 60.) / 525.;
+        // Gradual river descends into its bay, with broad concave banks.
+        if (-60. ..=490.).contains(&z) {
+            let t = ((z + 60.) / 525.).clamp(0., 1.);
             let cx = 400. - 701. * t + 28. * (t * std::f64::consts::PI * 2.).sin();
             let d = (x - cx).abs();
-            let width = 8. + 12. * t;
+            let width = 10. + 12. * t;
             let top = (615. - 215. * t.powf(0.60)).round() as i32;
-            if d < width + 12. {
-                h = h.min(f64::from(top - 9) + (d / width).powi(4) * 10.);
-                if d < width && depth > 0 {
-                    water = Some(top.max(400));
-                    material = "sand";
-                }
+            if d < width + 80. && depth > 0 {
+                let bank = f64::from(top + 12);
+                h += (bank - h) * (1. - smooth((d - width) / 80.));
+            }
+            if d < width && depth > 0 {
+                h = f64::from(top - 10) + 8. * (d / width).powi(2);
+                water = Some(top.max(400));
+                material = "sand";
             }
         }
         // Broad independent Crystal footprint: winding ascending terraces plus snowy crown.
@@ -323,28 +379,29 @@ impl GrandCompiler {
             let phase = (angle + std::f64::consts::PI) / (2. * std::f64::consts::PI);
             let rings = (145. - radius).max(0.) / 25.;
             let elevation = 680. + (rings.floor() + phase) * 77.;
-            h = h.max(elevation.min(1170.));
+            let weight = smooth((151. - radius) / 30.);
+            h += (h.max(elevation.min(1170.)) - h) * weight;
             material = if h > 1070. { "snow" } else { "slate" };
         }
-        // A straight independent Shadow ridge/tunnel. A dry south mouth reaches its floor.
-        let shadow = (x + 105.).abs();
-        if (-410. ..=-130.).contains(&z) && shadow < 40. {
-            let roof = 721. + 75. * smooth((-z - 130.) / 30.);
-            h = h
-                .max(roof * (1. - smooth((shadow - 18.) / 22.)) + h * smooth((shadow - 18.) / 22.));
+        // Broad massif shoulders already cover the library. Entrances alone
+        // taper down to exact dry floor supports; no corridor-shaped surface ridges.
+        if (x - 310.).abs() < 24. && (z + 348.).abs() < 14. {
+            let d = (x - 310.).abs().max((z + 348.).abs() * 1.5);
+            h += (721. - h) * (1. - smooth((d - 8.) / 16.));
+            water = None;
         }
-        // Geometric library and its staircase sit inside the western massif.
-        if let Some((floor, ceiling)) = self.cavity(p) {
-            if z < -320. && x < 300. {
-                h = h.max(f64::from(ceiling + 20));
-            } else if x > 270. && z < -330. {
-                h = f64::from(floor + 1);
-            }
+        // The Shadow tunnel passes seventy units below the library where their
+        // horizontal projections cross, retaining two independent ceilings.
+        if (x + 105.).abs() < 24. && (-150. ..=-85.).contains(&z) {
+            let target = 521. + ((-z - 150.).abs() / 65.) * 65.;
+            let weight = 1. - smooth(((x + 105.).abs() - 9.) / 15.);
+            h += (target - h) * weight;
         }
-        // World tree forecourt and open root-temple entrance.
-        let court = ((x + 60.) / 45.).hypot((z - 160.) / 55.);
-        if court < 1.4 {
-            h += (510. - h) * (1. - smooth((court - 1.) / 0.4));
+        // Open south entrance to the temple below the World Tree roots.
+        if (x + 60.).abs() < 14. && (188. ..=225.).contains(&z) {
+            let target = 471. + ((z - 190.) / 35.).clamp(0., 1.) * 40.;
+            let weight = 1. - smooth(((x + 60.).abs() - 6.) / 8.);
+            h += (target - h) * weight;
         }
         // Offshore volcanic cone, separate from mainland area accounting.
         let vr = ((x + 1180.) / 86.).hypot((z - 450.) / 77.);
@@ -360,11 +417,30 @@ impl GrandCompiler {
         // Small precise supported shrine/encounter aprons blend into surrounding terrain.
         for site in sites::PADS {
             let d = (x - site.x).hypot(z - site.z);
-            if d < site.radius + 10. {
-                let weight = 1. - smooth((d - site.radius) / 10.);
+            if d < site.radius + 32. {
+                let weight = 1. - smooth((d - site.radius) / 32.);
                 h += (f64::from(site.level + 1) - h) * weight;
                 material = site.material;
                 water = None;
+            }
+        }
+        let fountain = nearest_hex(276., -474.);
+        if p.checked_distance(fountain).is_ok_and(|d| d <= 3) {
+            h = 894.;
+            water = Some(900);
+            material = "stone";
+        }
+        // Only the explicit offshore island can add land outside the measured
+        // mainland footprint. Local aprons never alter coastline area.
+        if depth == 0 && vr >= 1. {
+            water = None;
+            let distance = index(p).map_or(100, |i| self.offshore_distance[i]).min(100);
+            h = 400. - 3. * f64::from(distance);
+            material = "sand";
+        }
+        if depth > 0 {
+            if let Some((floor, _)) = library_cavity(p) {
+                h = h.max(f64::from(floor + 1));
             }
         }
         GrandSurface {
@@ -376,32 +452,11 @@ impl GrandCompiler {
     /// Exact clear interval [floor+1, ceiling), inclusive support under actors.
     pub fn cavity(&self, p: WorldHex) -> Option<(i32, i32)> {
         let [x, z] = world_xz(p);
-        // Separate tall, uniform Shadow tunnel, no turns or library connection.
+        if let Some(interval) = library_cavity(p) {
+            return Some(interval);
+        }
         if (x + 105.).abs() < 9. && (-408. ..=-150.).contains(&z) {
-            return Some((720, 785));
-        }
-        // Waterfall gallery, lower grand hall, perpendicular ascending grand stair.
-        if (x + 40.).abs() < 365. && (z + 348.).abs() < 8. {
-            return Some((720, 768));
-        }
-        if (-440. ..=-310.).contains(&x) && (-392. ..=-305.).contains(&z) {
-            return Some((720, 825));
-        }
-        if (x + 400.).abs() < 14. && (-560. ..=-345.).contains(&z) {
-            let floor = 720 + (((-z - 345.).max(0.) / 3.).floor() as i32) * 6;
-            return Some((floor, floor + 64));
-        }
-        if (-450. ..=-350.).contains(&x) && (-475. ..=-435.).contains(&z) {
-            return Some((900, 1000));
-        }
-        if (-438. ..=-365.).contains(&x) && (-555. ..=-515.).contains(&z) {
-            return Some((1100, 1190));
-        }
-        // Temple below the roots, with a southern passage under the trunk.
-        if ((x + 60.) / 26.).hypot((z - 125.) / 22.) < 1.
-            || (x + 60.).abs() < 7. && (130. ..=196.).contains(&z)
-        {
-            return Some((470, 503));
+            return Some((520, 585));
         }
         None
     }
@@ -424,8 +479,12 @@ impl GrandCompiler {
             run(top - 1, top, s.material),
         ];
         runs.retain(|r| r.bottom < r.top);
-        if let Some((floor, ceiling)) = self.cavity(p) {
+        if let Some((floor, ceiling)) = library_cavity(p) {
             cut(&mut runs, floor + 1, ceiling);
+        }
+        let [x, z] = world_xz(p);
+        if (x + 105.).abs() < 9. && (-408. ..=-150.).contains(&z) {
+            cut(&mut runs, 521, 585);
         }
         let liquid = super::fill_sea_column(
             p,
@@ -550,7 +609,13 @@ impl GrandCompiler {
                 surface_materials.push(
                     self.materials
                         .iter()
-                        .position(|m| m.id == s.material)
+                        .position(|m| {
+                            m.id == if s.water.is_some() {
+                                "water"
+                            } else {
+                                s.material
+                            }
+                        })
                         .unwrap() as u16,
                 );
             }
@@ -600,7 +665,7 @@ impl GrandCompiler {
                 crater: true,
             }],
             tree_count: self.tree_count,
-            building_count: 8,
+            building_count: if self.source.full_dressing { 8 } else { 0 },
         }
     }
 }
@@ -612,6 +677,7 @@ fn palette() -> Vec<MaterialSpec> {
         ("basalt", [62, 53, 57, 255]),
         ("slate", [83, 99, 123, 255]),
         ("soil", [87, 75, 58, 255]),
+        ("dirt", [87, 75, 58, 255]),
         ("moss", [66, 110, 70, 255]),
         ("snow", [219, 235, 245, 255]),
         ("sand", [184, 169, 129, 255]),
@@ -630,4 +696,74 @@ fn palette() -> Vec<MaterialSpec> {
     .collect();
     v.sort_by(|a, b| a.id.cmp(&b.id));
     v
+}
+
+fn library_cavity(p: WorldHex) -> Option<(i32, i32)> {
+    let [x, z] = world_xz(p);
+    // Waterfall gallery, lower grand hall, perpendicular ascending grand stair.
+    if (x + 40.).abs() < 365. && (z + 348.).abs() < 8. {
+        return Some((720, 768));
+    }
+    // Stair centerline follows exact neighbouring hexes. One level per step
+    // keeps its 0.35-unit risers within the ordinary 0.4-unit controller step.
+    if (-460. ..=-275.).contains(&x) && (-578. ..=-355.).contains(&z) {
+        const PATH: [(i64, i64); 12] = [
+            (-119, -247),
+            (-111, -263),
+            (-42, -263),
+            (-28, -290),
+            (-106, -290),
+            (-93, -317),
+            (-26, -317),
+            (-13, -343),
+            (-68, -343),
+            (-55, -370),
+            (-46, -370),
+            (-42, -377),
+        ];
+        let mut prefix = 0_i32;
+        let mut best: Option<(f64, i32)> = None;
+        for pair in PATH.windows(2) {
+            let [(aq, ar), (bq, br)] = pair else {
+                continue;
+            };
+            let dq = (bq - aq) as f64;
+            let dr = (br - ar) as f64;
+            let pq = (p.q - aq) as f64;
+            let pr = (p.r - ar) as f64;
+            let metric = dq * dq + dq * dr + dr * dr;
+            let t = ((pq * dq + (pq * dr + pr * dq) * 0.5 + pr * dr) / metric).clamp(0., 1.);
+            let eq = pq - t * dq;
+            let er = pr - t * dr;
+            let d = eq * eq + eq * er + er * er;
+            let steps = (bq - aq)
+                .abs()
+                .max((br - ar).abs())
+                .max((bq + br - aq - ar).abs()) as i32;
+            let floor = 720 + prefix + (t * f64::from(steps)).round() as i32;
+            if d <= 25. && best.is_none_or(|(old, _)| d < old) {
+                best = Some((d, floor));
+            }
+            prefix += steps;
+        }
+        if let Some((_, floor)) = best {
+            return Some((floor, floor + 64));
+        }
+    }
+    if (-440. ..=-310.).contains(&x) && (-392. ..=-305.).contains(&z) {
+        return Some((720, 825));
+    }
+    if (-450. ..=-350.).contains(&x) && (-475. ..=-435.).contains(&z) {
+        return Some((900, 1000));
+    }
+    if (-438. ..=-365.).contains(&x) && (-555. ..=-515.).contains(&z) {
+        return Some((1100, 1190));
+    }
+    // Temple below the roots, with a southern passage under the trunk.
+    if ((x + 60.) / 26.).hypot((z - 125.) / 22.) < 1.
+        || (x + 60.).abs() < 7. && (130. ..=196.).contains(&z)
+    {
+        return Some((470, 503));
+    }
+    None
 }
