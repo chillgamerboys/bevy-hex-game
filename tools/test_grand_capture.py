@@ -14,6 +14,21 @@ import grand_capture
 
 
 class GrandCaptureProvenanceTests(unittest.TestCase):
+    def test_profile_commands_keep_legacy_features_and_allow_lean_ci(self):
+        dev = grand_capture.cargo_arguments("dev")
+        ci = grand_capture.cargo_arguments("ci")
+        self.assertIn("dev,arena-prototype", dev)
+        self.assertIn("arena-prototype", ci)
+        self.assertNotIn("dev,arena-prototype", ci)
+        self.assertIn("arena-prototype,test-support", grand_capture.cargo_arguments("ci", test_support=True))
+        original = grand_capture.arena.CARGO_ARGS
+        for supplied, expected in ((None, original), (ci, ci)):
+            with patch.object(grand_capture.arena.subprocess, "Popen", side_effect=RuntimeError("launch intercepted")) as launch:
+                with self.assertRaisesRegex(RuntimeError, "launch intercepted"):
+                    grand_capture.arena.run_cargo({}, None, 1, args=supplied)
+                self.assertEqual(launch.call_args.args[0], ("cargo", *expected))
+        self.assertEqual(grand_capture.arena.CARGO_ARGS, original)
+
     def package(self, directory: Path, identity: dict | None) -> None:
         for name in ("manifest.ron", "grand-overview.ron", "arena-sites.ron", "grand-biomes.ron"):
             (directory / name).write_text("fixture")
@@ -45,12 +60,22 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
     def test_matching_dressed_identity_is_recorded_with_frozen_file_hash(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            identity = {"signature": "current-dressed", "plain": False}
+            identity = {"signature": "current-dressed", "plain": False, "compiler_mode": "cargo-current-source", "cargo_profile": "ci"}
             self.package(directory, identity)
             with patch.object(grand_capture.grand_package, "signature", return_value="current"):
                 result = grand_capture.package_state(directory)
             self.assertEqual(result["authoring_identity"], identity)
             self.assertIn("sha256", result["files"]["authoring-identity.json"])
+
+    def test_current_signature_cannot_approve_unverified_prebuilt_compiler(self):
+        for compiler_mode in (None, "prebuilt-unverified"):
+            with self.subTest(mode=compiler_mode), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                self.package(directory, {"signature": "current-dressed", "plain": False,
+                                         "compiler_mode": compiler_mode})
+                with patch.object(grand_capture.grand_package, "signature", return_value="current"):
+                    with self.assertRaisesRegex(RuntimeError, "current-source compiler provenance"):
+                        grand_capture.package_state(directory)
 
     def receipt(self, selected=None, captured=None):
         receipt = grand_capture.matrix_contract(selected)

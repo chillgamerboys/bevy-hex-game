@@ -35,6 +35,16 @@ MOTION_ROUTE = (
 )
 
 
+def cargo_arguments(profile: str, *, test_support: bool = False) -> tuple[str, ...]:
+    """CI omits inspector/dylib features; default development captures stay unchanged."""
+    if profile not in ("dev", "ci"):
+        raise RuntimeError("Unknown Grand capture Cargo profile")
+    features = "dev,arena-prototype" if profile == "dev" else "arena-prototype"
+    if test_support:
+        features += ",test-support"
+    return ("run", "--profile", profile, "-p", "hex_game", "--features", features, "--", "--arena")
+
+
 def package_state(directory: Path) -> dict:
     if directory.is_symlink() or not directory.is_dir():
         raise RuntimeError("Package must be a real compiled directory")
@@ -51,6 +61,8 @@ def package_state(directory: Path) -> dict:
     expected_signature = grand_package.signature(ROOT / "assets/config/v4/grand-v4/world.ron") + "-dressed"
     if identity.get("plain") is not False or identity.get("signature") != expected_signature:
         raise RuntimeError("Package authoring identity is stale or not dressed; compile current source to a fresh directory")
+    if identity.get("compiler_mode") != "cargo-current-source":
+        raise RuntimeError("Package lacks current-source compiler provenance; rebuild through Cargo before capture")
     receipt = json.loads((directory / "compile-receipt.json").read_text())
     if (receipt.get("strict") is not True or receipt.get("world_id") != "grand-v4"
             or receipt.get("mainland_columns") != 7 * receipt.get("canonical_mainland_columns", 0)
@@ -116,6 +128,7 @@ def capture(args: argparse.Namespace) -> int:
     if pack.exists():
         raise RuntimeError(f"Evidence exists already: {pack}")
     package = package_state(args.package)
+    command = cargo_arguments(args.cargo_profile)
     env, removed = arena.environment(args.target_dir)
     env.update(HEX_GRAND_WORLD=str(args.package), HEX_ARENA_MAP="grand-v4")
     pack.mkdir(parents=True)
@@ -123,6 +136,7 @@ def capture(args: argparse.Namespace) -> int:
     (pack / "unstaged.patch").write_bytes(unstaged)
     atomic_json(pack / "package-state.json", package)
     receipt = {"source": source, "package": package, **matrix,
+               "cargo_profile": args.cargo_profile, "command": ["cargo", *command],
                "source_label": "UNAPPROVABLE-DIRTY" if source["dirty"] else "COMMITTED-CANDIDATE",
                "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
                "motion_route": MOTION_ROUTE, "mechanical_status": "INCOMPLETE",
@@ -137,13 +151,13 @@ def capture(args: argparse.Namespace) -> int:
             frame_env = dict(env, HEX_ARENA_CAPTURE=str(png), HEX_ARENA_VIEW=view,
                              HEX_ARENA_CAPTURE_SETTLE_FRAMES=str(args.settle_frames),
                              HEX_GAME_DATA_DIR=str(pack / "disposable-user-data"))
-            row = {"view": view, "started_at": arena.utc_now(), "command": ["cargo", *arena.CARGO_ARGS],
+            row = {"view": view, "started_at": arena.utc_now(), "command": ["cargo", *command],
                    "static_review": "UNREVIEWED", "log": log.name}
             receipt["frames"].append(row)
             atomic_json(pack / "receipt.json", receipt)
             started = time.monotonic()
             print(f"Capturing {view}…", flush=True)
-            row["exit_code"] = arena.run_cargo(frame_env, log, args.timeout)
+            row["exit_code"] = arena.run_cargo(frame_env, log, args.timeout, args=command)
             row["wall_seconds"] = time.monotonic() - started
             row["warnings"] = scan_log(log)
             if row["exit_code"]:
@@ -182,6 +196,7 @@ def main() -> int:
     parser.add_argument("--label", required=True)
     parser.add_argument("--view", choices=VIEWS, action="append")
     parser.add_argument("--dirty-diagnostic", action="store_true")
+    parser.add_argument("--cargo-profile", choices=("dev", "ci"), default="dev")
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--settle-frames", type=int, default=4)
     args = parser.parse_args()

@@ -346,9 +346,10 @@ def stop_process(process: subprocess.Popen) -> None:
         process.wait()
 
 
-def run_cargo(env: dict[str, str], log_path: Path | None, timeout: float | None) -> int:
+def run_cargo(env: dict[str, str], log_path: Path | None, timeout: float | None,
+              *, args: tuple[str, ...] | None = None) -> int:
     """Stream native output, retain capture logs, and stop on missing asset errors."""
-    command = ("cargo", *CARGO_ARGS)
+    command = ("cargo", *(CARGO_ARGS if args is None else args))
     log = log_path.open("wb") if log_path else None
     process = None
     started = time.monotonic()
