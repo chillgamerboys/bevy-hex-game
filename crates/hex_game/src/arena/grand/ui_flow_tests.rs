@@ -249,8 +249,23 @@ fn pending_shrine_fallback_restores_start_interest_and_waits_for_ready_adoption(
     }
     let identity = gameplay_identity(app.world().resource::<State>()).expect("fixture identity");
     let session = app.world().resource::<ArenaSession>();
-    assert!(session.notice.contains("Loading safe ground"));
-    assert!(session.grand_actor_interests().contains(&start));
+    assert_eq!(
+        session
+            .actors
+            .first()
+            .expect("waiting dead player")
+            .hp
+            .to_bits(),
+        0.0_f32.to_bits(),
+        "fallback must stay pending while start is unloaded: {}",
+        session.notice
+    );
+    assert!(
+        session.grand_actor_interests().contains(&start),
+        "pending fallback must request the start, notice={:?}, interests={:?}",
+        session.notice,
+        session.grand_actor_interests()
+    );
     assert!(!session.grand_actor_interests().contains(&shrine));
     let bytes = session
         .encode_grand_checkpoint(&identity)
