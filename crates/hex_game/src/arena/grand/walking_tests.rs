@@ -34,6 +34,22 @@ const ROUTES: &[Route] = &[
         points: &[[-21., 270.], [130., 270.]],
     },
     Route {
+        name: "island_landing_and_ascent",
+        category: "island",
+        points: &[
+            [-1099., 465.],
+            [-1118., 475.],
+            [-1131., 502.],
+            [-1184., 510.],
+            [-1238., 484.],
+            [-1240., 431.],
+            [-1207., 395.],
+            [-1161., 406.],
+            [-1145., 439.],
+            [-1170., 455.],
+        ],
+    },
+    Route {
         name: "western_hill_north",
         category: "cross_country",
         points: &[[-240., 220.], [-240., 140.]],
@@ -57,22 +73,6 @@ const ROUTES: &[Route] = &[
         name: "eastern_valley_diagonal",
         category: "cross_country",
         points: &[[480., 90.], [600., 200.], [400., 310.]],
-    },
-    Route {
-        name: "island_landing_and_ascent",
-        category: "island",
-        points: &[
-            [-1099., 465.],
-            [-1118., 475.],
-            [-1131., 502.],
-            [-1184., 510.],
-            [-1238., 484.],
-            [-1240., 431.],
-            [-1207., 395.],
-            [-1161., 406.],
-            [-1145., 439.],
-            [-1170., 455.],
-        ],
     },
     Route {
         name: "garden_ascent",
@@ -157,6 +157,14 @@ fn body_state(world: &World) -> serde_json::Value {
         "volume_valid": world.resource::<ArenaSession>().actor_volume_valid(0, view, geometry),
         "support_valid": world.resource::<ArenaSession>().actor_pose_valid(0, view, geometry),
         "nearby_columns": nearby,
+        "primary_interest": world.resource::<ArenaStreamInterest>().position.to_array(),
+        "actor_interests": world.resource::<ArenaSession>().grand_actor_interests().iter().map(|p| p.to_array()).collect::<Vec<_>>(),
+        "encounter_readiness": view.expedition.as_ref().map(|sites| sites.encounters.iter().map(|(name,site)| {
+            let pos = site.deployment.preferred;
+            let preferred = pos.coord.to_world(geometry.top(pos));
+            let ready = site.deployment.surfaces.iter().filter(|p| view.residency.as_ref().is_some_and(|r|r.at(p.coord,geometry)==ArenaAvailability::Ready)).count();
+            serde_json::json!({"name":name,"preferred":preferred.to_array(),"player_distance":preferred.distance(player.feet),"ready_surfaces":ready,"total_surfaces":site.deployment.surfaces.len()})
+        }).collect::<Vec<_>>()),
     })
 }
 
@@ -261,14 +269,18 @@ fn object_ahead(world: &World, direction: Vec3) -> bool {
     let player = human(world);
     let geometry = *world.resource::<ArenaVoxelGeometry>();
     let view = world.resource::<ArenaTerrainView>();
-    [0.8, 1.6, 2.4].into_iter().any(|distance| {
-        let point = player.feet + direction * distance;
-        let coord = HexCoord::from_world(point);
-        view.object_columns.get(&coord).is_some_and(|spans| {
-            spans.iter().any(|s| {
-                let low = geometry.top(s.bottom) - geometry.level_height;
-                let high = geometry.top(TilePos::new(coord, s.top_level));
-                high > player.feet.y + 0.05 && low < player.feet.y + player.body_dimensions().y
+    let side = direction.cross(Vec3::Y);
+    let radius = player.body_dimensions().x * 0.5;
+    [0.3, 0.6, 1.2, 2.4].into_iter().any(|distance| {
+        [-radius, 0.0, radius].into_iter().any(|offset| {
+            let point = player.feet + direction * distance + side * offset;
+            let coord = HexCoord::from_world(point);
+            view.object_columns.get(&coord).is_some_and(|spans| {
+                spans.iter().any(|s| {
+                    let low = geometry.top(s.bottom) - geometry.level_height;
+                    let high = geometry.top(TilePos::new(coord, s.top_level));
+                    high > player.feet.y + 0.05 && low < player.feet.y + player.body_dimensions().y
+                })
             })
         })
     })
@@ -317,6 +329,7 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
     let mut failed = None;
     let mut completed = 0;
     let mut maximum_step = 0.0_f32;
+    let mut sample_tick = first_tick;
     for (index, point) in route.points.iter().skip(1).enumerate() {
         let &[x, z] = point;
         let target = Vec3::new(x, 0., z);
@@ -329,7 +342,7 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         let segment_tick = app.world().resource::<ArenaSession>().tick;
         let mut best = segment_distance;
         let mut progress_tick = segment_tick;
-        let mut detour = None::<(Vec3, Vec3)>;
+        let mut detour = None::<(Vec3, Vec3, u64)>;
         loop {
             let feet = human(app.world()).feet;
             let tick = app.world().resource::<ArenaSession>().tick;
@@ -359,23 +372,25 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
                 break;
             }
             let direct = (target - feet.with_y(0.)).normalize_or_zero();
-            let direction = if let Some((origin, direction)) =
-                detour.filter(|(origin, _)| feet.with_y(0.).distance(origin.with_y(0.)) < 2.0)
-            {
-                detour = Some((origin, direction));
+            let direction = if let Some((origin, direction, chosen_tick)) =
+                detour.filter(|(origin, _, chosen_tick)| {
+                    let traveled = feet.with_y(0.).distance(origin.with_y(0.));
+                    traveled < 2.0 && (traveled > 0.15 || tick.saturating_sub(*chosen_tick) < 30)
+                }) {
+                detour = Some((origin, direction, chosen_tick));
                 direction
             } else {
                 detour = None;
                 if object_ahead(app.world(), direct) {
                     // Only small local object avoidance; terrain slope is never
                     // searched around. Broad cross-country probes remain broad.
-                    let choice = [0.55, -0.55, 1.05, -1.05, 1.57, -1.57]
+                    let choice = [0.55, -0.55, 1.05, -1.05, 1.57, -1.57, 2.1, -2.1]
                         .into_iter()
                         .map(|yaw| Quat::from_rotation_y(yaw) * direct)
                         .find(|d| !object_ahead(app.world(), *d));
                     choice.map_or(direct, |direction| {
                         detours += 1;
-                        detour = Some((feet, direction));
+                        detour = Some((feet, direction, tick));
                         direction
                     })
                 } else {
@@ -387,7 +402,8 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
             distance += player.feet.with_y(0.).distance(previous.with_y(0.));
             previous = player.feet;
             maximum_step = maximum_step.max(player.step_rise_this_tick());
-            if tick % 600 == 0 {
+            if tick >= sample_tick + 600 {
+                sample_tick = tick;
                 samples.push(
                     serde_json::json!({"tick":tick,"feet":player.feet.to_array(),"segment":index}),
                 );
@@ -464,10 +480,16 @@ fn actual_grand_ordinary_walking() {
     {
         // Each start is an independent fixture. A prior failure must not carry
         // a respawn, velocity, HP change or acquired state into the next probe.
-        if !results.is_empty() {
-            app = fixture();
-        }
-        let result = walk_route(&mut app, route, deadline);
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !results.is_empty() {
+                app = fixture();
+            }
+            walk_route(&mut app, route, deadline)
+        }));
+        let result = attempt.unwrap_or_else(|payload| {
+            let message = payload.downcast_ref::<String>().cloned().or_else(||payload.downcast_ref::<&str>().map(|s|(*s).to_string())).unwrap_or_else(||"non-string fixture panic".to_string());
+            serde_json::json!({"name":route.name,"category":route.category,"status":"FAIL","phase":"fixture_or_route_panic","error":message})
+        });
         println!("GRAND_WALK_ROUTE {result}");
         results.push(result);
         let pass = results
