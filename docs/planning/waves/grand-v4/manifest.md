@@ -130,3 +130,29 @@ tree cuts and exclusive water-boundary ownership. These are logical and bounded
 residency results; they make no native movement, appearance or frame-rate claim.
 The full gate still encounters inherited V3/map lint failures. Fresh windowless
 review and native acceptance remain required before completion or merge.
+
+## Review checkpoint before user play
+
+Combined draft PR: https://github.com/chillgamerboys/bevy-hex-game/pull/224.
+The latest launchable source is `53a66990411ddf01ae0840830c62d2d7e306bb03`
+with immutable final4 package fingerprint `13408690208396973052`.
+A fresh twelve-view windowless correction pack completed mechanically at that head.
+Static inspection confirms restored inland water, a broader dominant tree, a visible
+Earth marker and an unburied Frozen Woods camera. It does **not** approve the full
+presentation: garden dressing is sparse, library depth/identity remains weak,
+the waterfall is rigid, and the ordinary forest has a conspicuous rectangular edge.
+Paired bay frames retain visible stepped/striped surface detail; native motion is
+still needed. The remaining eighteen matrix views and native route are pending.
+
+At the same source, the required combined workspace Clippy command still fails in
+`hex_map` with 517 errors in inherited V3/map files; downstream full-gate checks
+remain not run. The preceding dependency audit and format checks pass. Focused
+logical evidence above remains useful but does not replace this failed gate.
+
+The user's additional river direction is a relatively uniform travelling wave
+moving downhill. A world-only follow-up is being prepared in the runtime lane:
+author exact Directed/Waterfall links, keep physical surfaces unchanged, and drive
+steady downstream shading from the saved ocean clock within existing mesh ownership.
+It is not part of the launchable final4 candidate until compiled and validated.
+The user explicitly requests stopping development at 10% weekly allowance remaining
+and opening the most recent valid map; this replaces all historical usage floors.
