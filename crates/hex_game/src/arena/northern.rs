@@ -220,7 +220,7 @@ pub(super) fn snapshot(
     clippy::too_many_arguments,
     reason = "Atomic map presentation setup joins immutable publication with four presentation resources."
 )]
-fn configure(
+pub(super) fn configure(
     mut commands: Commands,
     environment: Option<Res<OceanEnvironmentView>>,
     selection: Res<ArenaSelection>,

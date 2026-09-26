@@ -22,6 +22,8 @@ use std::{
 mod admission_tests;
 #[path = "circuit_tests.rs"]
 mod circuit_tests;
+#[path = "sailing_tests.rs"]
+mod sailing_tests;
 #[path = "ui_flow_tests.rs"]
 mod ui_flow_tests;
 #[cfg(feature = "test-support")]
