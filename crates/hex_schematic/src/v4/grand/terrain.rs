@@ -240,6 +240,17 @@ fn watercourse(
     x: f64,
     z: f64,
 ) {
+    // Compose the broad receiving valley before the lake and headwater. Applying
+    // this cap afterward shaved through their solid beds/banks but retained the
+    // high water intervals, exposing long vertical liquid walls along each reach.
+    let angle = (z + 115.).atan2(x - 405.);
+    let valley = ((x - 405.) / 70.).hypot((z + 115.) / 60.)
+        / (1. + 0.14 * (angle * 3. + 0.3).sin() + 0.07 * (angle * 5. - 0.6).cos());
+    let north = (-z - 175.).max(0.);
+    let lateral = ((x - 405.).abs() - 70.).max(0.);
+    let south = (z + 55.).max(0.);
+    let bank = f64::from(VALLEY_TOP + 1) + lateral.hypot(south) * 0.35 + north * 0.8;
+    *h = h.min(bank);
     let angle = (z + 470.).atan2(x - 330.);
     let lake = ((x - 330.) / 34.).hypot((z + 470.) / 27.)
         / (1. + 0.10 * (angle * 3. + 0.4).sin() + 0.05 * (angle * 5.).cos());
@@ -248,7 +259,12 @@ fn watercourse(
         *water = Some(LAKE_TOP);
         *material = "sand";
     } else if lake < 3. {
-        *h = h.min(f64::from(LAKE_TOP + 1) + (lake - 1.) * 27. * 0.4);
+        let rim = f64::from(LAKE_TOP + 2) + (lake - 1.) * 27. * 0.4;
+        // The first dry ring actually contains the lake. Its graded shoulder
+        // rejoins the existing mountain continuously, with no stamped outer rim.
+        let retained = h.max(f64::from(LAKE_TOP + 2));
+        let shore = retained.min(rim);
+        *h = shore + (*h - shore) * smooth((lake - 1.2) / 1.8);
     }
     if (-450. ..=-140.).contains(&z) {
         let d = (x - headwater_center(z)).abs();
@@ -271,23 +287,12 @@ fn watercourse(
             }
         }
     }
-    let angle = (z + 115.).atan2(x - 405.);
-    let lake = ((x - 405.) / 70.).hypot((z + 115.) / 60.)
-        / (1. + 0.14 * (angle * 3. + 0.3).sin() + 0.07 * (angle * 5. - 0.6).cos());
     if river_receiver(p, VALLEY_TOP) {
-        *h = f64::from(VALLEY_TOP - 9) + 7. * lake.powi(3);
+        *h = f64::from(VALLEY_TOP - 9) + 7. * valley.powi(3);
         *water = Some(VALLEY_TOP);
         *material = "sand";
-    } else {
-        // A whole valley envelope has no artificial outer mask cliff. Gentle
-        // banks open broadly south/east/west; the northern side joins the
-        // mountain shoulder on a higher gradient, with its authored ascent.
-        let north = (-z - 175.).max(0.);
-        let lateral = ((x - 405.).abs() - 70.).max(0.);
-        let south = (z + 55.).max(0.);
-        let bank = f64::from(VALLEY_TOP + 1) + lateral.hypot(south) * 0.35 + north * 0.8;
-        *h = h.min(bank);
     }
+
     if (-65. ..=650.).contains(&z) {
         let t = ((z + 60.) / 525.).clamp(0., 1.);
         let d = (x - river_center(z)).abs();

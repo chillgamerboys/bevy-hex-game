@@ -188,3 +188,170 @@ fn shadow_outlet_flat_landing_joins_crystal_shoulder_without_a_lip() {
         }
     }
 }
+
+#[test]
+fn headwater_reaches_have_shallow_exact_beds_and_retained_banks() {
+    let g = plain();
+    let mut reaches = BTreeMap::<i32, usize>::new();
+    for r in -296..=-124 {
+        let z = world_xz(WorldHex::new(0, r))[1];
+        // These three narrow strips are intentional exposed waterfall faces.
+        if [-370.0, -275.0, -170.0]
+            .iter()
+            .any(|fall| (z - fall).abs() < 5.0)
+        {
+            continue;
+        }
+        let mut width = 0;
+        for q in 200..=400 {
+            let p = WorldHex::new(q, r);
+            if !river_channel(p) {
+                continue;
+            }
+            let (column, liquid) = g.column(p);
+            let liquid = liquid.expect("regular headwater publishes an exact liquid interval");
+            assert!(matches!(liquid.top, 540 | 620 | 700));
+            let water = column
+                .runs
+                .iter()
+                .find(|run| run.material == "water")
+                .expect("liquid semantics have corresponding emitted water voxels");
+            assert_eq!(water.top, liquid.top);
+            assert!(
+                (2..=6).contains(&(water.top - water.bottom)),
+                "unsupported regular reach at {p:?}: {water:?}"
+            );
+            for (dq, dr) in DIRS {
+                let neighbor = WorldHex::new(q + dq, r + dr);
+                let (bank, next_liquid) = g.column(neighbor);
+                if next_liquid.is_some() {
+                    continue;
+                }
+                let support = bank.runs.iter().map(|run| run.top).max().unwrap();
+                assert!(
+                    support >= water.top,
+                    "exposed reach side {p:?}:{water:?} beside {neighbor:?} bank {support}"
+                );
+            }
+            width += 1;
+            *reaches.entry(liquid.top).or_default() += 1;
+        }
+        assert!(width >= 10, "headwater narrowed at row {r}: {width} cells");
+    }
+    assert_eq!(reaches.len(), 3);
+    assert!(reaches.values().all(|count| *count > 400));
+    for (z, upper, lower) in [(-370.0, 700, 620), (-275.0, 620, 540)] {
+        let p = nearest_hex(headwater_center(z), z);
+        let (column, _) = g.column(p);
+        let water = column
+            .runs
+            .iter()
+            .find(|run| run.material == "water")
+            .unwrap();
+        assert_eq!(water.top, upper, "named waterfall disappeared at {p:?}");
+        assert_eq!(water.bottom, lower - 5, "waterfall bed moved at {p:?}");
+    }
+    // The last fall meets the irregular receiving-lake shore, which slightly
+    // precedes its nominal cut at the centerline. Preserve that localized join.
+    let mut last_drop = Vec::new();
+    for r in -126..=-100 {
+        let z = world_xz(WorldHex::new(0, r))[1];
+        let p = nearest_hex(headwater_center(z), z);
+        let (_, liquid) = g.column(p);
+        let top = liquid.expect("lower headwater joins the valley lake").top;
+        if last_drop.last() != Some(&top) {
+            last_drop.push(top);
+        }
+    }
+    assert_eq!(last_drop, [540, terrain::VALLEY_TOP]);
+}
+
+#[test]
+fn source_lake_and_fountain_intake_are_contained_and_connected() {
+    let g = plain();
+    let mut wet = BTreeSet::new();
+    for r in -340..=-292 {
+        for q in 280..=400 {
+            let p = WorldHex::new(q, r);
+            let [x, z] = world_xz(p);
+            if !(260.0..=385.0).contains(&x) || z > -438.0 {
+                continue;
+            }
+            let (column, liquid) = g.column(p);
+            if !liquid.is_some_and(|liquid| liquid.top == terrain::LAKE_TOP) {
+                continue;
+            }
+            wet.insert(p);
+            let water = column
+                .runs
+                .iter()
+                .find(|run| run.material == "water")
+                .unwrap();
+            assert!(
+                water.top - water.bottom <= 10,
+                "deep intake at {p:?}: {water:?}"
+            );
+            for (dq, dr) in DIRS {
+                let neighbor = WorldHex::new(q + dq, r + dr);
+                let (bank, next_liquid) = g.column(neighbor);
+                if next_liquid.is_some() {
+                    continue;
+                }
+                let support = bank.runs.iter().map(|run| run.top).max().unwrap();
+                assert!(
+                    support >= terrain::LAKE_TOP,
+                    "uncontained lake/intake at {p:?} beside {neighbor:?}, bank {support}"
+                );
+            }
+        }
+    }
+    let intake = nearest_hex(276.0, -474.0);
+    let outlet = nearest_hex(headwater_center(-442.5), -442.5);
+    assert!(wet.contains(&intake));
+    assert!(wet.contains(&outlet));
+    let mut reached = BTreeSet::from([intake]);
+    let mut queue = VecDeque::from([intake]);
+    while let Some(p) = queue.pop_front() {
+        for (dq, dr) in DIRS {
+            let neighbor = WorldHex::new(p.q + dq, p.r + dr);
+            if wet.contains(&neighbor) && reached.insert(neighbor) {
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    assert!(
+        reached.contains(&outlet),
+        "fountain intake does not reach the headwater"
+    );
+    assert_eq!(wet, reached, "source water contains a disconnected pocket");
+}
+
+#[test]
+fn retained_lake_shore_preserves_the_garden_approach() {
+    let g = plain();
+    // The final broad Garden ascent skirts the lake's newly retained dry rim.
+    // Check parallel ordinary walking lines through that overlap using emitted
+    // columns, including the transition onto the shrine's existing support pad.
+    for offset in [-2.0, 0.0, 2.0] {
+        let mut previous: Option<(WorldHex, i32)> = None;
+        for step in 0..=140 {
+            let t = f64::from(step) / 140.0;
+            let p = nearest_hex(330.0 - 55.0 * t + offset, -535.0 + 45.0 * t);
+            let (column, liquid) = g.column(p);
+            assert!(
+                liquid.is_none(),
+                "lake flooded the Garden approach at {p:?}"
+            );
+            let h = column.runs.iter().map(|run| run.top).max().unwrap();
+            if let Some((old_p, old_h)) = previous {
+                if old_p != p {
+                    assert!(
+                        (h - old_h).abs() <= 1,
+                        "retained lake rim blocks Garden approach {old_p:?}:{old_h} -> {p:?}:{h}"
+                    );
+                }
+            }
+            previous = Some((p, h));
+        }
+    }
+}
