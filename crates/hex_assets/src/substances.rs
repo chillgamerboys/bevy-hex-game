@@ -516,6 +516,7 @@ const SUBSTANCE_COMPATIBILITY_REGISTRY: &[&str] = &[
     "timber",
     "terracotta",
     "sand",
+    "reinforced_stone",
 ];
 
 /// Turns the loaded file into the indexed table, and rebuilds it on hot-reload.
@@ -893,6 +894,7 @@ mod tests {
             ("water", 11),
             ("worked_stone", 12),
             ("sand", 17),
+            ("reinforced_stone", 18),
         ] {
             assert_eq!(
                 table.id(name),
