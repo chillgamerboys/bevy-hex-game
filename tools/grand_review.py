@@ -21,7 +21,7 @@ def main():
  fig,axes=plt.subplots(1,2,figsize=(19,10),gridspec_kw={'width_ratios':[1.05,1]},facecolor='#0e1823')
  for ax in axes:ax.imshow(rgb,extent=extent);ax.set_facecolor('#0e1823');ax.tick_params(colors='#aebfca');ax.set_xlabel('World X',color='#aebfca');ax.set_ylabel('World Z (north is up)',color='#aebfca')
  axes[0].set_title('Full finite world · actual compiled relief',color='white',fontsize=17,pad=15)
- axes[1].set_title('Mainland · terrain before object dressing',color='white',fontsize=17,pad=15);axes[1].set_xlim(-875,875);axes[1].set_ylim(780,-790)
+ axes[1].set_title('Mainland · solid relief (objects omitted)',color='white',fontsize=17,pad=15);axes[1].set_xlim(-875,875);axes[1].set_ylim(780,-790)
  anchors=re.search(r'anchors:\{(.*?)\},islands:',s)[1]
  points={name:tuple(map(float,v.split(','))) for name,v in re.findall(r'"([^"]+)":\(([^)]+)\)',anchors)}
  for key,label in [('garden','Garden / Water'),('library_hall','Library'),('shrine_air','Air summit'),('shadow_tunnel','Shadow tunnel'),('crystal_ascent','Crystal / Earth'),('world_tree','World tree / Plant'),('goblin_fort','Goblin fort'),('valley_lake','Valley lake'),('bay','Bay'),('volcano','Volcano / Fire')]:
