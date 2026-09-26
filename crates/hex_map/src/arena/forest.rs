@@ -22,7 +22,7 @@ use crate::procedural_v3::{
 };
 
 #[path = "expedition_file.rs"]
-mod expedition_file;
+pub(super) mod expedition_file;
 
 pub(super) fn asset_root() -> PathBuf {
     std::env::var_os("BEVY_ASSET_ROOT")
@@ -819,11 +819,12 @@ mod tests {
             for span in &view.static_spans {
                 assert_eq!(span.bottom.level, span.top_level);
                 assert!(span.blocks_movement && span.blocks_projectiles && span.blocks_sight);
-                assert!(view
-                    .edit_protected
-                    .get(&span.bottom.coord)
-                    .expect("authored prop cell is protected")
-                    .contains(&(span.bottom.level, span.bottom.level)));
+                assert!(
+                    view.edit_protected
+                        .get(&span.bottom.coord)
+                        .expect("authored prop cell is protected")
+                        .contains(&(span.bottom.level, span.bottom.level))
+                );
             }
         }
     }

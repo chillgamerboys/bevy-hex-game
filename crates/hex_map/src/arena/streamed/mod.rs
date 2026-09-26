@@ -3,9 +3,9 @@
 use super::{ArenaInbox, ArenaWorldState, Content};
 use bevy::prelude::*;
 use hex_core::arena::{
-    ArenaAvailability, ArenaOverview, ArenaPackageIdentity, ArenaReset, ArenaResidency,
-    ArenaSelection, ArenaSolidSpan, ArenaStaticSpan, ArenaStreamInterest, ArenaSystems,
-    ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
+    ArenaActorStreamInterests, ArenaAvailability, ArenaMap, ArenaOverview, ArenaPackageIdentity,
+    ArenaReset, ArenaResidency, ArenaSelection, ArenaSolidSpan, ArenaStaticSpan,
+    ArenaStreamInterest, ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
 use hex_core::{
     DamagedVoxels, HexCoord, SubstanceId, TerrainEdit, TerrainImpactOutcome,
@@ -24,6 +24,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+pub mod checkpoint;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -43,7 +44,7 @@ pub struct StreamedArena {
     pub overview: Arc<NorthernOverview>,
     generation: u64,
     projected: BTreeMap<ChunkId, u64>,
-    interest_key: Option<(WorldHex, WorldHex, WorldHex)>,
+    interest_key: Option<Vec<WorldHex>>,
     next_transaction: u64,
     policies: BTreeMap<String, SubstanceId>,
     /// Most recent asynchronous source failure, surfaced in the host UI/log.
@@ -56,6 +57,7 @@ pub struct StreamedArena {
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<ArenaStreamInterest>()
+        .init_resource::<ArenaActorStreamInterests>()
         .add_systems(Update, pump.run_if(resource_exists::<StreamedArena>))
         .add_systems(
             ArenaTick,
@@ -76,11 +78,32 @@ pub fn package_path() -> PathBuf {
         })
 }
 
-pub(super) fn initialize(world: &mut World, content: Content) -> Result<(), String> {
-    let directory = package_path();
+/// Package selected by map identity; existing Northern path remains supported.
+pub fn package_path_for(map: ArenaMap) -> PathBuf {
+    if map == ArenaMap::GrandV4 {
+        std::env::var_os("HEX_GRAND_WORLD")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                super::forest::asset_root().join("assets/config/v4/grand-v4/compiled")
+            })
+    } else {
+        package_path()
+    }
+}
+pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), String> {
+    let selection = *world.resource::<ArenaSelection>();
+    let grand = selection.map == ArenaMap::GrandV4;
+    let directory = package_path_for(selection.map);
+    if grand {
+        content.materials.reinforced_stone = content.substances.id("reinforced_stone");
+    }
+    let overview_name = if grand {
+        "grand-overview.ron"
+    } else {
+        "northern-overview.ron"
+    };
     let overview: NorthernOverview = ron::from_str(
-        &std::fs::read_to_string(directory.join("northern-overview.ron"))
-            .map_err(|e| e.to_string())?,
+        &std::fs::read_to_string(directory.join(overview_name)).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     let overview = Arc::new(overview);
@@ -137,7 +160,12 @@ pub(super) fn initialize(world: &mut World, content: Content) -> Result<(), Stri
                 .anchors
                 .iter()
                 .find(|anchor| {
-                    anchor.id == "northern/anchor/party_start"
+                    anchor.id
+                        == if grand {
+                            "grand/anchor/party_start"
+                        } else {
+                            "northern/anchor/party_start"
+                        }
                         && anchor.role == hex_world_contracts::AnchorRole::Gameplay
                 })
                 .cloned()
@@ -188,15 +216,28 @@ pub(super) fn initialize(world: &mut World, content: Content) -> Result<(), Stri
     if let Some(bay) = anchors.get("bay").copied() {
         anchors.insert("player_look_at".into(), bay);
     }
+    let companion = if grand {
+        Some(super::forest::expedition_file::load(
+            &directory,
+            runtime.manifest(),
+            geometry,
+        )?)
+    } else {
+        None
+    };
     let view = ArenaTerrainView {
         selection,
         anchors,
         spawns: [spawn, spawn],
-        package_identity: Some(ArenaPackageIdentity {
-            world_id: runtime.manifest().world_id.clone(),
-            manifest_fingerprint: runtime.manifest().fingerprint,
-            sites_fingerprint: None,
-        }),
+        expedition: companion.as_ref().and_then(|c| c.sites.clone()),
+        package_identity: Some(companion.map_or_else(
+            || ArenaPackageIdentity {
+                world_id: runtime.manifest().world_id.clone(),
+                manifest_fingerprint: runtime.manifest().fingerprint,
+                sites_fingerprint: None,
+            },
+            |c| c.identity,
+        )),
         residency: Some(ArenaResidency {
             catalogue,
             ready: BTreeSet::new(),
@@ -249,6 +290,12 @@ fn validate_overview(
     overview: &NorthernOverview,
     manifest: &hex_world_contracts::WorldManifest,
 ) -> Result<(), String> {
+    let grand = manifest.world_id == "grand-v4";
+    let radius = if grand { 900 } else { 700 };
+    let max_level = if grand { 1600 } else { 1400 };
+    let extent_x = if grand { 1564.0 } else { 1216.0 };
+    let extent_z = if grand { 1356.0 } else { 1056.0 };
+    let max_height = if grand { 560.0 } else { 490.0 };
     let [region] = manifest.regions.as_slice() else {
         return Err("Northern package requires one finite region".into());
     };
@@ -259,8 +306,8 @@ fn validate_overview(
         || overview.materials != manifest.materials
         || region.origin != WorldHex::new(0, 0)
         || region.radius != overview.radius
-        || overview.radius != 700
-        || overview.level_bounds != [0, 1400]
+        || overview.radius != radius
+        || overview.level_bounds != [0, max_level]
         || overview.hex_radius.to_bits() != 1.0_f32.to_bits()
         || overview.level_height.to_bits() != 0.35_f32.to_bits()
         || overview.vertical_offset.to_bits() != 0.35_f32.to_bits()
@@ -279,9 +326,9 @@ fn validate_overview(
     if overview.width < 2
         || overview.height < 2
         || samples > 1_048_576
-        || overview.player_spawn[0].abs() > 1216.0
-        || overview.player_spawn[2].abs() > 1056.0
-        || !(0.0..=490.0).contains(&overview.player_spawn[1])
+        || overview.player_spawn[0].abs() > extent_x
+        || overview.player_spawn[2].abs() > extent_z
+        || !(0.0..=max_height).contains(&overview.player_spawn[1])
         || overview.bed_heights.len() != samples
         || overview.surface_materials.len() != samples
         || !overview.spacing.is_finite()
@@ -295,7 +342,7 @@ fn validate_overview(
         || overview
             .bed_heights
             .iter()
-            .any(|height| !height.is_finite() || !(0.0..=490.0).contains(height))
+            .any(|height| !height.is_finite() || !(0.0..=max_height).contains(height))
         || overview
             .surface_materials
             .iter()
@@ -312,10 +359,10 @@ fn validate_overview(
         .map_err(|error| format!("Northern overview height exceeds its grid bound: {error}"))?;
     let end_x = ox + f32::from(width) * overview.spacing;
     let end_z = oz + f32::from(height) * overview.spacing;
-    if ox > -1213.0
-        || oz > -1051.0
-        || end_x < 1213.0
-        || end_z < 1051.0
+    if ox > -extent_x + 3.0
+        || oz > -extent_z + 5.0
+        || end_x < extent_x - 3.0
+        || end_z < extent_z - 5.0
         || !end_x.is_finite()
         || !end_z.is_finite()
         || world_hex(HexCoord::from_world(Vec3::from_array(
@@ -323,7 +370,7 @@ fn validate_overview(
         )))
         .checked_distance(WorldHex::new(0, 0))
         .map_err(|error| error.to_string())?
-            > 700
+            > u64::from(radius)
     {
         return Err(
             "Northern overview does not cover the finite region or has an outside-world spawn"
@@ -522,9 +569,20 @@ fn pump(world: &mut World) {
         let center = quantize(interest.position);
         let ahead = quantize(interest.position + interest.velocity);
         let far = quantize(interest.position + interest.velocity * 2.0);
-        let key = (center, ahead, far);
-        if state.interest_key != Some(key) {
-            let requests = vec![
+        let mut actors: Vec<_> = world
+            .resource::<ArenaActorStreamInterests>()
+            .positions
+            .iter()
+            .filter(|p| p.is_finite() && p.distance(interest.position) < 220.0)
+            .map(|p| quantize(*p))
+            .collect();
+        actors.sort();
+        actors.dedup();
+        actors.truncate(48);
+        let mut key = vec![center, ahead, far];
+        key.extend_from_slice(&actors);
+        if state.interest_key.as_ref() != Some(&key) {
+            let mut requests = vec![
                 ResidencyRequest {
                     id: "player-body".into(),
                     center,
@@ -556,6 +614,18 @@ fn pump(world: &mut World) {
                     priority: 253,
                 },
             ];
+            requests.extend(
+                actors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, center)| ResidencyRequest {
+                        id: format!("actor-{i}"),
+                        center: *center,
+                        radius: 16,
+                        retention_radius: 16,
+                        priority: 252,
+                    }),
+            );
             match state.runtime.set_interests(requests) {
                 Ok(()) => state.interest_key = Some(key),
                 Err(e) => state.failure = Some(e.to_string()),

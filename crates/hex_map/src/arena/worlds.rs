@@ -145,8 +145,8 @@ pub(super) fn build(
                 MapPresentationProjection::default(),
             )
         }
-        ArenaMap::NorthernArchipelago => {
-            return Err("Northern must load through the streamed adapter".into())
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4 => {
+            return Err("Northern must load through the streamed adapter".into());
         }
         ArenaMap::ForestMassif => return Err("Forest must load through its V4 adapter".into()),
         ArenaMap::Fort | ArenaMap::SevenRegions => {
@@ -261,6 +261,7 @@ fn battle_deployment(
         ArenaMap::SevenRegions
         | ArenaMap::ForestMassif
         | ArenaMap::NorthernArchipelago
+        | ArenaMap::GrandV4
         | ArenaMap::WaterLab => return Ok(None),
     };
     let regions = centers.map(|(q, r)| {

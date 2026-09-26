@@ -23,6 +23,15 @@ pub(crate) struct TerrainDamageState {
 }
 
 impl TerrainDamageState {
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn checkpoint_batches(&self) -> Vec<u64> {
+        self.consumed_batches.iter().map(|id| id.0).collect()
+    }
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn restore_checkpoint_batches(&mut self, values: Vec<u64>) {
+        self.consumed_batches = values.into_iter().map(TerrainBatchId).collect();
+    }
+
     /// Claims the first processed use of a batch id, including rejected batches.
     pub(crate) fn consume_batch(&mut self, batch: TerrainBatchId) -> bool {
         self.consumed_batches.insert(batch)

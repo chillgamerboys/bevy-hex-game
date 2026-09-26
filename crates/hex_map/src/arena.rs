@@ -34,6 +34,7 @@ mod overview;
 mod real_world_tests;
 mod render;
 pub mod streamed;
+pub use streamed::checkpoint;
 #[cfg(test)]
 mod tests;
 mod worlds;
@@ -44,7 +45,7 @@ const GROUND_LEVEL: i32 = 8;
 struct ArenaWorldState {
     generation: u64,
     forest: Option<forest::ForestRuntime>,
-    burrow_sequences: BTreeMap<u8, u64>,
+    burrow_sequences: BTreeMap<u32, u64>,
     changed: BTreeSet<HexCoord>,
     render_dirty: BTreeSet<HexCoord>,
     original: Option<worlds::WorldRecipe>,
@@ -159,6 +160,7 @@ fn load_content() -> Result<Content, String> {
     };
     let materials = ArenaMaterials {
         stone: id("stone")?,
+        reinforced_stone: None,
         bedrock: id("bedrock")?,
         grass: id("grass")?,
         dirt: id("dirt")?,
