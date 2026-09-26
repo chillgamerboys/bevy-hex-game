@@ -24,6 +24,9 @@ mod admission_tests;
 mod circuit_tests;
 #[path = "ui_flow_tests.rs"]
 mod ui_flow_tests;
+#[cfg(feature = "test-support")]
+#[path = "walking_tests.rs"]
+mod walking_tests;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Receipt {
