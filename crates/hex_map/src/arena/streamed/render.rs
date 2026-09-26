@@ -65,6 +65,7 @@ pub(super) fn plugin(app: &mut App) {
 pub(super) fn clear(world: &mut World) {
     super::grand_landmarks::clear(world);
     super::grand_forest::clear(world);
+    super::grand_ground_cover::clear(world);
     if let Some(mut render) = world.remove_resource::<Renderer>() {
         render.presenter.clear(world);
         for (_, (entity, mesh)) in render.proxies {
@@ -378,6 +379,7 @@ fn draw(world: &mut World) {
                 .receipts()
                 .map(|receipt| receipt.coordinate)
                 .collect();
+            super::grand_ground_cover::sync(world, &state, &renderer.accepted, &detailed, center);
             for chunk in renderer.hidden_proxies.symmetric_difference(&detailed) {
                 let Some((entity, _)) = renderer.proxies.get(chunk) else {
                     continue;
@@ -1246,8 +1248,11 @@ mod tests {
                                 });
                             if another_complete_object {
                                 shared_voxels += 1;
-                                assert_eq!(presented.material_at(level), Some(run.material.as_str()),
-                                    "shared crown cells still belong to a complete neighboring tree");
+                                assert_eq!(
+                                    presented.material_at(level),
+                                    Some(run.material.as_str()),
+                                    "shared crown cells still belong to a complete neighboring tree"
+                                );
                             } else {
                                 exclusive_voxels += 1;
                                 assert_ne!(
@@ -1312,6 +1317,7 @@ mod tests {
             islands: Vec::new(),
             tree_count: 0,
             forest: None,
+            ground_cover: None,
             building_count: 0,
         }
     }

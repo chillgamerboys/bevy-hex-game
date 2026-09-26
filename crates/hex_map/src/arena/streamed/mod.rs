@@ -28,6 +28,7 @@ use std::{
 mod burrow;
 pub mod checkpoint;
 mod grand_forest;
+mod grand_ground_cover;
 mod grand_landmarks;
 mod render;
 #[cfg(test)]
@@ -393,6 +394,12 @@ fn validate_overview(
         forest
             .validate_catalog(&manifest.features)
             .map_err(|e| e.to_string())?;
+    }
+    if let Some(cover) = &overview.ground_cover {
+        if !grand {
+            return Err("Ground cover companion is only supported for Grand".into());
+        }
+        cover.validate().map_err(|e| e.to_string())?;
     }
     let samples = overview
         .width

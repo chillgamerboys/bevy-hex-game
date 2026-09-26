@@ -36,6 +36,13 @@ fn nearest_grade(x: f64, z: f64, path: &[Pin]) -> Option<(f64, f64)> {
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
+// Keep the central six-unit walking margins of authored mountain approaches open.
+pub(super) fn cover_reserved(x: f64, z: f64) -> bool {
+    [WESTERN_ASCENT, GARDEN_ASCENT]
+        .into_iter()
+        .any(|path| nearest_grade(x, z, path).is_some_and(|(distance, _)| distance < 6.))
+}
+
 fn hill(x: f64, z: f64, center: Pin, bench: f64, slope: f64) -> f64 {
     let [cx, cz, top] = center;
     top - ((x - cx).hypot(z - cz) - bench).max(0.) * slope

@@ -166,7 +166,7 @@ fn turn(mut q: i64, mut r: i64, rotation: u64) -> (i64, i64) {
     }
     (q, r)
 }
-fn forest_hash(seed: u64, p: WorldHex) -> u64 {
+pub(super) fn forest_hash(seed: u64, p: WorldHex) -> u64 {
     let mut value = seed
         ^ u64::from_le_bytes(p.q.to_le_bytes()).wrapping_mul(0x9e3779b97f4a7c15)
         ^ u64::from_le_bytes(p.r.to_le_bytes()).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -174,7 +174,7 @@ fn forest_hash(seed: u64, p: WorldHex) -> u64 {
     value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
     value ^ (value >> 31)
 }
-fn forest_density(x: f64, z: f64) -> f64 {
+pub(super) fn forest_density(x: f64, z: f64) -> f64 {
     // A shared biome envelope with a feathered, irregular boundary, not a grid
     // clipped to a hard ellipse. Large gaps form glades rather than missing rows.
     let edge = biomes::forest_extent(
@@ -193,7 +193,7 @@ fn forest_density(x: f64, z: f64) -> f64 {
     .fold(0_f64, f64::max);
     boundary * groves * (1. - smooth((glades - 0.30) / 0.50))
 }
-fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
+pub(super) fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
     let [x, z] = world_xz(p);
     sites::reserved_encounter(x, z)
         || sites::PADS
@@ -1216,7 +1216,11 @@ mod forest_tests {
         // denominator. The giant landmark is deliberately excluded from coverage.
         let fraction = f64::from(covered) / f64::from(domain);
         let core_fraction = f64::from(covered_core) / f64::from(core);
-        println!("GRAND_FOREST trees={} families={} columns={covered}/{domain} coverage={fraction:.4} core={covered_core}/{core} core_coverage={core_fraction:.4}", trees.len(), families.len());
+        println!(
+            "GRAND_FOREST trees={} families={} columns={covered}/{domain} coverage={fraction:.4} core={covered_core}/{core} core_coverage={core_fraction:.4}",
+            trees.len(),
+            families.len()
+        );
         assert!(
             fraction >= 0.40,
             "forest must retain substantial foliage between its glades"

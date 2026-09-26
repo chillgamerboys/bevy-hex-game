@@ -5,6 +5,7 @@
     reason = "The fixed radius700,1400-level package and bounded finite authored dimensions fit integer/f32 publications; quantization deliberately rounds voxel levels."
 )]
 pub mod forest;
+pub mod ground_cover;
 mod objects;
 #[cfg(test)]
 mod tests;
@@ -206,6 +207,9 @@ pub struct NorthernOverview {
     /// Optional shared authored tree shapes and placements for distant presentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forest: Option<forest::ForestOverview>,
+    /// Optional decorative nonblocking grounded plants, independent of occupancy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ground_cover: Option<ground_cover::GroundCover>,
     /// Exact building count, excluding field.
     pub building_count: usize,
 }
@@ -644,6 +648,7 @@ impl NorthernCompiler {
             islands: self.source.islands.clone(),
             tree_count: self.tree_count,
             forest: None,
+            ground_cover: None,
             building_count: 4,
         }
     }

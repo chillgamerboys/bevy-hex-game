@@ -248,6 +248,13 @@ impl FiniteWorldSession {
         )
     }
 
+    /// Whether this session explicitly edited an original terrain cell, even if
+    /// a later refill restored its original material. Survives eviction/resume.
+    #[must_use]
+    pub fn terrain_edited(&self, at: VoxelPosition) -> bool {
+        self.terrain_edits.contains_key(&at)
+    }
+
     /// Current exact material with terrain taking precedence over object overlap.
     #[must_use]
     pub fn material_at(&self, at: VoxelPosition) -> Option<&str> {
