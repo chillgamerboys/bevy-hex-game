@@ -3,7 +3,7 @@
 import argparse, hashlib, json, os, pathlib, subprocess, tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 def signature(source):
-    paths=[source,*sorted((ROOT/'crates/hex_schematic/src/v4/grand').rglob('*.rs')),ROOT/'crates/hex_world_tool/src/grand.rs',ROOT/'crates/hex_schematic/src/v4/northern/mod.rs',ROOT/'assets/config/v4/grand-v4/forest/trees.ron']
+    paths=[source,*sorted((ROOT/'crates/hex_schematic/src/v4/grand').rglob('*.rs')),*sorted((ROOT/'crates/hex_schematic/src/v4/northern').rglob('*.rs')),ROOT/'crates/hex_world_tool/src/grand.rs',ROOT/'assets/config/v4/grand-v4/forest/trees.ron']
     h=hashlib.sha256()
     for p in paths:h.update(p.read_bytes())
     return h.hexdigest()
