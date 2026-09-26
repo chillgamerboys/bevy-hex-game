@@ -306,7 +306,11 @@ mod tests {
         }
     }
 
-    fn spawn(app: &mut App, pools: &FountainWater) -> Result<Vec<Entity>, String> {
+    fn spawn(
+        app: &mut App,
+        pools: &FountainWater,
+        water_style: WaterSurfaceStyle,
+    ) -> Result<Vec<Entity>, String> {
         let table = super::super::tests::liquid_table();
         let water = table.id("water").ok_or("water missing from test table")?;
         let lava = table.id("lava").ok_or("lava missing from test table")?;
@@ -335,7 +339,7 @@ mod tests {
             &table,
             0.35,
             0.0,
-            WaterSurfaceStyle::Translucent,
+            water_style,
             None,
             pools,
         )
@@ -347,89 +351,112 @@ mod tests {
 
     #[test]
     fn fountain_live_handles_follow_charge_consumption_stale_generation_and_reset() {
-        let mut app = App::new();
-        app.init_resource::<ArenaFountainVisuals>()
-            .init_resource::<Assets<LiquidMaterial>>()
-            .init_resource::<Time>()
-            .insert_resource(LiquidVisualTime::frozen_at(21.0).expect("finite phase"))
-            .add_systems(
-                Update,
-                (advance_liquid_visual_time, sync_fountain_materials).chain(),
-            );
-        let old_entities = spawn(&mut app, &sites(7)).expect("initial fountain presentations");
-        let assert_charged = |app: &mut App, expected: &BTreeSet<&str>| {
-            let mut query = app
-                .world_mut()
-                .query::<(&FountainMaterial, &MeshMaterial3d<LiquidMaterial>)>();
-            let mut found = BTreeSet::new();
-            let mut bindings = 0;
-            for (pool, material) in query.iter(app.world()) {
-                bindings += 1;
-                found.insert(pool.name.as_str());
-                assert_eq!(
-                    material.0,
-                    if expected.contains(pool.name.as_str()) {
-                        pool.charged.clone()
+        for water_style in [WaterSurfaceStyle::Opaque, WaterSurfaceStyle::Translucent] {
+            let mut app = App::new();
+            app.init_resource::<ArenaFountainVisuals>()
+                .init_resource::<Assets<LiquidMaterial>>()
+                .init_resource::<Time>()
+                .insert_resource(LiquidVisualTime::frozen_at(21.0).expect("finite phase"))
+                .add_systems(
+                    Update,
+                    (advance_liquid_visual_time, sync_fountain_materials).chain(),
+                );
+            let old_entities =
+                spawn(&mut app, &sites(7), water_style).expect("initial fountain presentations");
+            let assert_charged = |app: &mut App, expected: &BTreeSet<&str>| {
+                let mut query = app.world_mut().query::<(
+                    &FountainMaterial,
+                    &MeshMaterial3d<LiquidMaterial>,
+                    Option<&LiquidCapBatch>,
+                )>();
+                let mut found = BTreeSet::new();
+                let mut caps = 0;
+                let mut curtains = 0;
+                for (pool, material, cap) in query.iter(app.world()) {
+                    if let Some(cap) = cap {
+                        caps += 1;
+                        assert_eq!(
+                            cap.surfaces.is_empty(),
+                            water_style == WaterSurfaceStyle::Translucent,
+                            "closed volumes own their complete boundary; opaque caps retain surface facts"
+                        );
                     } else {
-                        pool.ordinary.clone()
+                        curtains += 1;
                     }
+                    found.insert(pool.name.as_str());
+                    assert_eq!(
+                        material.0,
+                        if expected.contains(pool.name.as_str()) {
+                            pool.charged.clone()
+                        } else {
+                            pool.ordinary.clone()
+                        }
+                    );
+                }
+                assert_eq!(
+                    caps, 2,
+                    "each fountain has one surface or closed-volume batch"
+                );
+                assert_eq!(
+                    curtains,
+                    usize::from(water_style == WaterSurfaceStyle::Opaque),
+                    "only opaque water adds the existing side curtain; closed volumes already own sides"
+                );
+                assert_eq!(found, BTreeSet::from(["first", "second"]));
+            };
+            app.update();
+            assert_charged(&mut app, &BTreeSet::new());
+            app.insert_resource(ArenaFountainVisuals {
+                generation: 7,
+                charged: BTreeSet::from([
+                    "first".to_owned(),
+                    "second".to_owned(),
+                    "unknown".to_owned(),
+                ]),
+            });
+            app.update();
+            assert_charged(&mut app, &BTreeSet::from(["first", "second"]));
+            app.world_mut()
+                .resource_mut::<ArenaFountainVisuals>()
+                .charged
+                .remove("first");
+            app.update();
+            assert_charged(&mut app, &BTreeSet::from(["second"]));
+            app.world_mut()
+                .resource_mut::<ArenaFountainVisuals>()
+                .generation = 8;
+            app.update();
+            assert_charged(&mut app, &BTreeSet::new());
+            for entity in old_entities {
+                app.world_mut().despawn(entity);
+            }
+            spawn(&mut app, &sites(8), water_style).expect("reset fountain presentations");
+            app.world_mut()
+                .resource_mut::<ArenaFountainVisuals>()
+                .charged
+                .insert("first".to_owned());
+            app.update();
+            assert_charged(&mut app, &BTreeSet::from(["first", "second"]));
+            assert_eq!(
+                app.world()
+                    .resource::<LiquidMaterialHandles>()
+                    .handles
+                    .len(),
+                6,
+                "water, lava and one shared charged pair stay phase-registered after reset"
+            );
+            for handle in &app.world().resource::<LiquidMaterialHandles>().handles {
+                let material = app
+                    .world()
+                    .resource::<Assets<LiquidMaterial>>()
+                    .get(handle)
+                    .expect("registered material");
+                assert_eq!(
+                    material.extension.params.flow_phase_scale.z.to_bits(),
+                    21.0_f32.to_bits(),
+                    "inactive and active handles share the ordinary visual phase"
                 );
             }
-            assert_eq!(bindings, 3, "two caps and one existing side curtain");
-            assert_eq!(found, BTreeSet::from(["first", "second"]));
-        };
-        app.update();
-        assert_charged(&mut app, &BTreeSet::new());
-        app.insert_resource(ArenaFountainVisuals {
-            generation: 7,
-            charged: BTreeSet::from([
-                "first".to_owned(),
-                "second".to_owned(),
-                "unknown".to_owned(),
-            ]),
-        });
-        app.update();
-        assert_charged(&mut app, &BTreeSet::from(["first", "second"]));
-        app.world_mut()
-            .resource_mut::<ArenaFountainVisuals>()
-            .charged
-            .remove("first");
-        app.update();
-        assert_charged(&mut app, &BTreeSet::from(["second"]));
-        app.world_mut()
-            .resource_mut::<ArenaFountainVisuals>()
-            .generation = 8;
-        app.update();
-        assert_charged(&mut app, &BTreeSet::new());
-        for entity in old_entities {
-            app.world_mut().despawn(entity);
-        }
-        spawn(&mut app, &sites(8)).expect("reset fountain presentations");
-        app.world_mut()
-            .resource_mut::<ArenaFountainVisuals>()
-            .charged
-            .insert("first".to_owned());
-        app.update();
-        assert_charged(&mut app, &BTreeSet::from(["first", "second"]));
-        assert_eq!(
-            app.world()
-                .resource::<LiquidMaterialHandles>()
-                .handles
-                .len(),
-            6,
-            "water, lava and one shared charged pair stay phase-registered after reset"
-        );
-        for handle in &app.world().resource::<LiquidMaterialHandles>().handles {
-            let material = app
-                .world()
-                .resource::<Assets<LiquidMaterial>>()
-                .get(handle)
-                .expect("registered material");
-            assert_eq!(
-                material.extension.params.flow_phase_scale.z.to_bits(),
-                21.0_f32.to_bits(),
-                "inactive and active handles share the ordinary visual phase"
-            );
         }
     }
 }
