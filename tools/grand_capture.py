@@ -16,7 +16,8 @@ from northern_review import metadata_unchanged, scan_log
 from v4_review import atomic_json, file_record, png_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
-VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-garden-ground", "grand-waterfall",
+VIEWS = ("grand-overview", "grand-mainland", "grand-mainland-south", "grand-mainland-east", "grand-mainland-northwest",
+         "grand-garden", "grand-garden-ground", "grand-waterfall",
          "grand-valley-lake", "grand-world-tree", "grand-roots-entrance", "grand-shrine-plant",
          "grand-forest", "grand-forest-ground", "grand-forest-ground-reverse", "grand-river-exit",
          "grand-island-landing", "grand-summit", "grand-shrine-air", "grand-crystal", "grand-shrine-earth",
@@ -77,7 +78,7 @@ def matrix_contract(selected: list[str] | None) -> dict:
     if not requested or len(requested) != len(set(requested)) or not set(requested) <= set(VIEWS):
         raise RuntimeError("Capture views must be a nonempty, unique subset of the declared matrix")
     full = set(requested) == set(VIEWS)
-    return {"matrix": "grand-v4-composition-v3", "matrix_scope": "FULL" if full else "FOCUSED-DIAGNOSTIC",
+    return {"matrix": "grand-v4-composition-v4", "matrix_scope": "FULL" if full else "FOCUSED-DIAGNOSTIC",
             "expected_views": list(VIEWS), "requested_views": requested,
             "completed_views": [], "missing_views": list(VIEWS), "full_matrix_completed": False}
 

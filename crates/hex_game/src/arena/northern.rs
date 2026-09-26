@@ -1,19 +1,19 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
-use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
+use super::{ArenaCamera, ArenaFrame, ViewState, environment::UnderwaterTint};
 use bevy::camera::ScalingMode;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
+use hex_core::HexCoord;
 use hex_core::arena::{
     ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
     ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
 };
 use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfile};
-use hex_core::HexCoord;
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
-    sample_local_surface_at_time, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
-    OceanNearBoundary, OceanRenderStatus, OceanSurfaceAdapter, OceanSurfaceProfile,
+    OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary, OceanRenderStatus,
+    OceanSurfaceAdapter, OceanSurfaceProfile, sample_local_surface_at_time, sample_surface,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
 use std::sync::Arc;
@@ -769,6 +769,29 @@ fn capture_pose(
         ));
     }
     let anchor = |name: &str| map.anchors.get(name).copied().map(Vec3::from_array);
+    let mainland_direction = match view {
+        "grand-mainland-south" => Some(Vec3::new(0.0, 1.35, 1.0)),
+        "grand-mainland-east" => Some(Vec3::new(1.0, 1.35, 0.35)),
+        "grand-mainland-northwest" => Some(Vec3::new(-1.0, 1.35, -1.0)),
+        _ => None,
+    };
+    if let Some(direction) = mainland_direction {
+        // The measured mainland spans x ±871.23, z ±784.5. Include its
+        // complete coastline, with room for voxel edges and tall landmarks.
+        // These are mainland proportion views; the offshore volcano is outside.
+        return Some(overview_pose_from(
+            Vec2::new(-880.0, -795.0),
+            Vec2::new(1760.0, 1590.0),
+            map.sea_level,
+            map.bed_heights
+                .iter()
+                .copied()
+                .fold(map.sea_level, f32::max)
+                + 80.0,
+            anchor("forest")?,
+            direction,
+        ));
+    }
     let bay = anchor("bay")?.with_y(map.sea_level);
     if matches!(view, "grand-waterline" | "grand-underwater") {
         let offshore = bay + Vec3::new(-65.0, 0.0, 80.0);
@@ -1063,17 +1086,36 @@ fn waterline_site(
 /// a ten-percent frame margin. Orthographic overview avoids the old distant wide
 /// lens shrinking all three clusters; other captures retain the gameplay lens.
 fn overview_pose(origin: Vec2, extent: Vec2, sea: f32, summit: f32, interest: Vec3) -> CapturePose {
+    overview_pose_from(
+        origin,
+        extent,
+        sea,
+        summit,
+        interest,
+        Vec3::new(0.0, 1.65, 1.0),
+    )
+}
+
+fn overview_pose_from(
+    origin: Vec2,
+    extent: Vec2,
+    sea: f32,
+    summit: f32,
+    interest: Vec3,
+    direction: Vec3,
+) -> CapturePose {
     let center = origin + extent * 0.5;
     let target = Vec3::new(center.x, (sea + summit) * 0.5, center.y);
-    let back = Vec3::new(0.0, 1.65, 1.0).normalize();
-    let up = back.cross(Vec3::X);
+    let back = direction.normalize();
+    let right = Vec3::Y.cross(back).normalize();
+    let up = back.cross(right);
     let corners = overview_corners(origin, extent, sea, summit);
     let mut half_width: f32 = 0.0;
     let mut half_height: f32 = 0.0;
     let mut near_depth: f32 = 0.0;
     for corner in corners {
         let local = corner - target;
-        half_width = half_width.max(local.x.abs());
+        half_width = half_width.max(local.dot(right).abs());
         half_height = half_height.max(local.dot(up).abs());
         near_depth = near_depth.max(local.dot(back));
     }
@@ -1304,5 +1346,26 @@ mod tests {
         // The landscape occupies useful image width while all world edges remain included.
         assert!(1528.0 / (2.0 * half_width) > 0.38);
         assert_eq!(pose.interest, interest);
+    }
+
+    #[test]
+    fn mainland_proportion_views_fit_bounds_from_every_requested_direction() {
+        let origin = Vec2::new(-880.0, -795.0);
+        let extent = Vec2::new(1760.0, 1590.0);
+        for direction in [
+            Vec3::new(0.0, 1.35, 1.0),
+            Vec3::new(1.0, 1.35, 0.35),
+            Vec3::new(-1.0, 1.35, -1.0),
+        ] {
+            let pose = overview_pose_from(origin, extent, 140.0, 395.0, Vec3::ZERO, direction);
+            let half_height = pose.overview_height.expect("orthographic mainland") * 0.5;
+            let half_width = half_height * (16.0 / 9.0);
+            for corner in overview_corners(origin, extent, 140.0, 395.0) {
+                let local = pose.camera.rotation.inverse() * (corner - pose.camera.translation);
+                assert!(local.x.abs() <= half_width * 0.901);
+                assert!(local.y.abs() <= half_height * 0.901);
+                assert!(local.z < -0.035 && local.z > -24_000.0);
+            }
+        }
     }
 }
