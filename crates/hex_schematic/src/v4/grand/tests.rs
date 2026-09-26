@@ -14,7 +14,7 @@ fn full_measured_world_has_independent_crystal_and_exact_cave_sites() {
         assert!(compiler.clear_support(site.preferred, 16));
     }
     let cave = compiler.support(-105., -295., true);
-    assert_eq!(cave.level, 520);
+    assert_eq!(cave.level, 460);
     let (column, _) = compiler.column(cave.column);
     assert!(column.runs.iter().any(|r| r.bottom > cave.level + 16));
     let site_chunks: std::collections::BTreeSet<_> = sites
@@ -87,10 +87,10 @@ fn complete_stair_route_has_walkable_risers_and_tunnels_remain_separate() {
     }
     let p = nearest_hex(-105., -348.);
     let (column, _) = g.column(p);
-    assert_eq!(column.material_at(522), None);
-    assert_eq!(column.material_at(723), None);
+    assert_eq!(column.material_at(462), None);
+    assert_eq!(column.material_at(603), None);
     assert!(
-        column.material_at(620).is_some(),
+        column.material_at(555).is_some(),
         "Shadow tunnel must not connect to library"
     );
     let sites = g.sites(9).unwrap();
@@ -119,7 +119,7 @@ fn shadow_route_walks_from_south_mouth_to_open_crystal_landing() {
     let mut previous: Option<VoxelPosition> = None;
     for r in (-414..=-101).rev() {
         let p = nearest_hex(-105., r as f64 * 1.5);
-        let floor = shadow_cavity(p).map_or(651, |(floor, _)| floor);
+        let floor = shadow_cavity(p).map_or(591, |(floor, _)| floor);
         let support = VoxelPosition {
             column: p,
             level: floor,
@@ -136,12 +136,12 @@ fn shadow_route_walks_from_south_mouth_to_open_crystal_landing() {
             );
         }
         if r >= -272 {
-            assert_eq!(floor, 520, "original Shadow bore stays uniform");
+            assert_eq!(floor, 460, "original Shadow bore stays uniform");
         }
         previous = Some(support);
     }
     let exit = g.support(-105., -618., true);
-    assert_eq!(exit.level, 651);
+    assert_eq!(exit.level, 591);
     assert!(
         g.crystal.contains(&exit.column),
         "exit joins the authored Crystal footprint"
@@ -153,7 +153,7 @@ fn shadow_route_walks_from_south_mouth_to_open_crystal_landing() {
     );
     let crossing = nearest_hex(-105., -348.);
     assert!(
-        g.column(crossing).0.material_at(620).is_some(),
+        g.column(crossing).0.material_at(555).is_some(),
         "library separator remains intact"
     );
 }
@@ -166,7 +166,7 @@ fn watercourse_is_continuous_and_descends_from_garden_to_open_sea() {
     .unwrap();
     source.full_dressing = false;
     let g = GrandCompiler::new(source).unwrap();
-    let mut previous = 900;
+    let mut previous = 700;
     for z in -448..=-145 {
         let p = nearest_hex(headwater_center(f64::from(z)), f64::from(z));
         let surface = g.surface(p);
@@ -181,7 +181,7 @@ fn watercourse_is_continuous_and_descends_from_garden_to_open_sea() {
         previous = top;
         assert!(surface.level < top);
     }
-    previous = 615;
+    previous = 460;
     for z in -60..=600 {
         let p = nearest_hex(river_center(f64::from(z)), f64::from(z));
         let surface = g.surface(p);
@@ -198,7 +198,7 @@ fn watercourse_is_continuous_and_descends_from_garden_to_open_sea() {
             -474. + 4. * (f64::from(x - 276) / 30.) + 1.5 * (f64::from(x - 276) / 9.).sin();
         assert_eq!(
             g.surface(nearest_hex(f64::from(x), center)).water,
-            Some(900)
+            Some(700)
         );
     }
 }

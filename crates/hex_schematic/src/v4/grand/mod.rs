@@ -10,6 +10,9 @@ mod flow;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
 mod sites;
+mod terrain;
+#[cfg(test)]
+mod terrain_tests;
 #[cfg(test)]
 mod tests;
 use super::northern::{nearest_hex, world_xz, IslandSpec, NorthernOverview};
@@ -103,6 +106,7 @@ fn smooth(t: f64) -> f64 {
     let t = t.clamp(0., 1.);
     t * t * (3. - 2. * t)
 }
+// Existing vegetation density field; terrain no longer composes these heights.
 fn gaussian(x: f64, z: f64, cx: f64, cz: f64, rx: f64, rz: f64) -> f64 {
     (-((x - cx) / rx).powi(2) - ((z - cz) / rz).powi(2)).exp()
 }
@@ -278,247 +282,9 @@ impl GrandCompiler {
     }
     /// Quantized solid surface before exact caves and above-ground structures.
     pub fn surface(&self, p: WorldHex) -> GrandSurface {
-        let [x, z] = world_xz(p);
-        let depth = grid_value(&self.coast, p, 0);
-        let mut h = if depth > 0 {
-            let base = 480.
-                + 45. * gaussian(x, z, -60., 125., 220., 180.)
-                + 14. * (x * 0.006).sin() * (z * 0.004).cos()
-                + 9. * (x * 0.019 + z * 0.009).sin();
-            let mountains = 530. * gaussian(x, z, -410., -420., 250., 225.)
-                + 240. * gaussian(x, z, -400., -570., 150., 125.);
-            let saddle = 290. * gaussian(x, z, 20., -350., 520., 160.);
-            let eastern = 430. * gaussian(x, z, 320., -490., 240., 180.);
-            401. + (base + mountains + saddle + eastern - 401.) * smooth(f64::from(depth) / 28.)
-        } else {
-            let distance = grid_value(&self.offshore_distance, p, 100).min(100);
-            400. - 3. * f64::from(distance)
-                + 10. * (x * 0.003 + z * 0.005).sin() * smooth(f64::from(distance) / 30.)
-        };
-        let mut material = if h > 1100. {
-            "snow"
-        } else if h > 750. {
-            "stone"
-        } else if depth < 8 {
-            "sand"
-        } else {
-            "moss"
-        };
-        let mut water = None;
-        // Intimate garden and headwater lake retain human scale within the enlarged land.
-        let garden = ((x - 275.) / 43.).hypot((z + 490.) / 35.);
-        if garden < 3.5 {
-            h += (900. - h) * (1. - smooth((garden - 0.7) / 2.8));
-            material = "moss";
-        }
-        let lake_angle = (z + 470.).atan2(x - 330.);
-        let lake = ((x - 330.) / 34.).hypot((z + 470.) / 27.)
-            / (1. + 0.10 * (lake_angle * 3. + 0.4).sin() + 0.05 * (lake_angle * 5.).cos());
-        if lake < 2.5 {
-            h += (if lake < 1. {
-                875. + 8. * lake.powi(2)
-            } else {
-                905.
-            } - h)
-                * (1. - smooth((lake - 1.) / 1.5));
-            if lake < 1. {
-                water = Some(900);
-                material = "sand";
-            }
-        }
-        // The same authored centerline composes both banks and liquid, avoiding
-        // free-standing water walls where natural terrain lies below river level.
-        if (-450. ..=-140.).contains(&z) {
-            let cx = headwater_center(z);
-            let d = (x - cx).abs();
-            let width = 13. + 2.5 * ((z + 450.) / 37.).sin();
-            let top = if z < -370. {
-                900
-            } else if z < -275. {
-                790
-            } else if z < -170. {
-                680
-            } else {
-                615
-            };
-            if d < width + 76. {
-                let bank = f64::from(top + 15);
-                h += (bank - h) * (1. - smooth((d - width - 6.) / 70.));
-            }
-            if d < width + 6. {
-                h = f64::from(top - 12) + (d / (width + 6.)).powi(4) * 27.;
-                if d < width {
-                    water = Some(top);
-                    material = "stone";
-                }
-            }
-            for (fall, upper, lower) in [(-370., 900, 790), (-275., 790, 680), (-170., 680, 615)] {
-                if (z - fall).abs() < 2.2 && d < width {
-                    h = f64::from(lower - 12);
-                    water = Some(upper);
-                }
-            }
-        }
-        let valley_angle = (z + 115.).atan2(x - 405.);
-        let valley = ((x - 405.) / 70.).hypot((z + 115.) / 60.)
-            / (1.
-                + 0.14 * (valley_angle * 3. + 0.3).sin()
-                + 0.07 * (valley_angle * 5. - 0.6).cos());
-        if valley < 2.4 {
-            let bed = if valley < 1. {
-                580. + 12. * valley.powi(2)
-            } else {
-                625.
-            };
-            h += (bed - h) * (1. - smooth((valley - 1.) / 1.4));
-            if valley < 1. {
-                water = Some(615);
-                material = "sand";
-            }
-        }
-        // Gradual river descends into its bay, with broad concave banks.
-        if (-65. ..=650.).contains(&z) {
-            let t = ((z + 60.) / 525.).clamp(0., 1.);
-            let cx = river_center(z);
-            let d = (x - cx).abs();
-            let width = 10. + 12. * t + 3. * (t * std::f64::consts::PI * 5.).sin();
-            let bank_width = 65. + 15. * (t * std::f64::consts::PI * 3.).cos();
-            let top = (615. - 215. * t.powf(0.60)).round() as i32;
-            if d < width + bank_width && depth > 0 {
-                let bank = f64::from(top + 12);
-                h += (bank - h) * (1. - smooth((d - width) / bank_width));
-            }
-            if d < width && depth > 0 {
-                h = f64::from(top - 10) + 8. * (d / width).powi(2);
-                water = Some(top.max(400));
-                material = "sand";
-            }
-        }
-        // Broad independent Crystal footprint: winding ascending terraces plus snowy crown.
-        if self.crystal.contains(&p) {
-            let dx = x + 201.;
-            let dz = z + 524.;
-            let radius = dx.hypot(dz);
-            let angle = dz.atan2(dx);
-            let phase = (angle + std::f64::consts::PI) / (2. * std::f64::consts::PI);
-            let rings = (145. - radius).max(0.) / 25.;
-            let elevation = 680. + (rings.floor() + phase) * 77.;
-            let weight = smooth((151. - radius) / 30.);
-            h += (h.max(elevation.min(1170.)) - h) * weight;
-            material = if h > 1070. { "snow" } else { "slate" };
-        }
-        // Broad massif shoulders already cover the library. Entrances alone
-        // taper down to exact dry floor supports; no corridor-shaped surface ridges.
-        if (x - 310.).abs() < 24. && (z + 348.).abs() < 14. {
-            let d = (x - 310.).abs().max((z + 348.).abs() * 1.5);
-            h += (721. - h) * (1. - smooth((d - 8.) / 16.));
-            water = None;
-        }
-        // The Shadow tunnel passes seventy units below the library where their
-        // horizontal projections cross, retaining two independent ceilings.
-        if (x + 105.).abs() < 24. && (-150. ..=10.).contains(&z) {
-            let weight = 1. - smooth(((x + 105.).abs() - 9.) / 15.);
-            let along = smooth((z + 150.) / 160.);
-            let target = 521. + (h - 521.) * along;
-            h += (target - h) * weight;
-        }
-        // Open south entrance to the temple below the World Tree roots.
-        if (x + 60.).abs() < 14. && (188. ..=225.).contains(&z) {
-            let target = 471. + ((z - 190.) / 35.).clamp(0., 1.) * 40.;
-            let weight = 1. - smooth(((x + 60.).abs() - 6.) / 8.);
-            h += (target - h) * weight;
-        }
-        // Offshore volcanic cone, separate from mainland area accounting.
-        let vr = ((x + 1180.) / 86.).hypot((z - 450.) / 77.);
-        if vr < 1.35 {
-            let cone = 400. + 260. * (1. - vr).max(0.).powf(0.7);
-            let crater = if vr < 0.24 { 555. + vr * 60. } else { cone };
-            h = h.max(crater);
-            material = "basalt";
-            if vr > 0.94 {
-                material = "sand";
-            }
-        }
-        // Small precise supported shrine/encounter aprons blend into surrounding terrain.
-        for site in sites::PADS {
-            let d = (x - site.x).hypot(z - site.z);
-            if water.is_some() && d > site.radius {
-                continue;
-            }
-            if d < site.radius + 32. {
-                let weight = 1. - smooth((d - site.radius) / 32.);
-                h += (f64::from(site.level + 1) - h) * weight;
-                material = site.material;
-                water = None;
-            }
-        }
-        // The shrine aprons erased the old central crater. This irregular
-        // caldera occupies the southwest summit shoulder outside both exact pads.
-        let angle = (z - 472.).atan2(x + 1195.);
-        let crater = ((x + 1195.) / 20.).hypot((z - 472.) / 16.) / (1. + 0.08 * (angle * 3.).sin());
-        let clear_pad = sites::PADS
-            .iter()
-            .filter(|site| site.x < -1000.)
-            .all(|site| (x - site.x).hypot(z - site.z) > site.radius + 4.);
-        if crater < 1.5 && clear_pad {
-            let target = if crater < 1. {
-                511. + 77. * crater.powi(6)
-            } else {
-                620. + 8. * (angle * 5.).sin()
-            };
-            h += (target - h) * (1. - smooth((crater - 1.) / 0.5));
-            material = "basalt";
-            water = None;
-        }
-        // The garden pool drains by a narrow, gently curved rill into the lake.
-        if (276. ..=306.).contains(&x) {
-            let center = -474. + 4. * ((x - 276.) / 30.) + 1.5 * ((x - 276.) / 9.).sin();
-            if (z - center).abs() < 2.2 {
-                h = 895.;
-                water = Some(900);
-                material = "stone";
-            }
-        }
-        let fountain = nearest_hex(276., -474.);
-        if p.checked_distance(fountain).is_ok_and(|d| d <= 3) {
-            h = 894.;
-            water = Some(900);
-            material = "stone";
-        }
-        // Only the explicit offshore island can add land outside the measured
-        // mainland footprint. Local aprons never alter coastline area.
-        if depth == 0 && vr >= 1. {
-            water = None;
-            let distance = grid_value(&self.offshore_distance, p, 100).min(100);
-            h = 400. - 3. * f64::from(distance);
-            material = "sand";
-        }
-        if depth > 0 {
-            if let Some((floor, _)) = library_cavity(p) {
-                h = h.max(f64::from(floor + 1));
-            }
-            if let Some((floor, _)) = shadow_cavity(p) {
-                h = h.max(f64::from(floor + 1));
-            }
-            // A small open landing joins the north stair to the existing lower
-            // Crystal terrace. The broader ascent silhouette is unchanged.
-            if ((x + 105.) / 7.).hypot((z + 618.) / 4.5) < 1. {
-                h = 652.;
-                material = "slate";
-            }
-            // The fort pad must not overwrite the walkable temple approach.
-            // One level per row joins the temple floor to both fort gates.
-            if (x + 60.).abs() < 7. && (180. ..=225.).contains(&z) {
-                h = f64::from(471 + (p.r - 120).clamp(0, 30) as i32);
-                material = "sand";
-            }
-        }
-        GrandSurface {
-            level: h.floor().clamp(3., 1500.) as i32 - 1,
-            material,
-            water,
-        }
+        terrain::surface(self, p)
     }
+
     /// Exact clear interval [floor+1, ceiling), inclusive support under actors.
     pub fn cavity(&self, p: WorldHex) -> Option<(i32, i32)> {
         if let Some(interval) = library_cavity(p) {
@@ -779,7 +545,7 @@ fn shadow_cavity(p: WorldHex) -> Option<(i32, i32)> {
         return None;
     }
     let steps = (-272 - p.r).max(0);
-    let floor = 520 + (steps * 131 / 140) as i32;
+    let floor = terrain::SHADOW_FLOOR + (steps * 131 / 140) as i32;
     Some((floor, floor + 65))
 }
 fn palette() -> Vec<MaterialSpec> {
@@ -797,7 +563,9 @@ fn palette() -> Vec<MaterialSpec> {
         ("snow", [219, 235, 245, 255]),
         ("sand", [184, 169, 129, 255]),
         ("timber", [108, 73, 45, 255]),
-        ("foliage", [34, 94, 61, 255]),
+        ("foliage", [20, 110, 20, 255]),
+        ("foliage_dark", [8, 56, 15, 255]),
+        ("foliage_light", [82, 173, 20, 255]),
         ("crystal", [83, 157, 204, 255]),
         ("water", [37, 104, 150, 180]),
     ]
@@ -817,7 +585,7 @@ fn library_cavity(p: WorldHex) -> Option<(i32, i32)> {
     let [x, z] = world_xz(p);
     // Waterfall gallery, lower grand hall, perpendicular ascending grand stair.
     if (x + 40.).abs() < 365. && (z + 348.).abs() < 8. {
-        return Some((720, 768));
+        return Some((terrain::LIBRARY_FLOOR, terrain::LIBRARY_FLOOR + 36));
     }
     // Stair centerline follows exact neighbouring hexes. One level per step
     // keeps its 0.35-unit risers within the ordinary 0.4-unit controller step.
@@ -855,24 +623,25 @@ fn library_cavity(p: WorldHex) -> Option<(i32, i32)> {
                 .abs()
                 .max((br - ar).abs())
                 .max((bq + br - aq - ar).abs()) as i32;
-            let floor = 720 + prefix + (t * f64::from(steps)).round() as i32;
+            let original_rise = prefix + (t * f64::from(steps)).round() as i32;
+            let floor = terrain::LIBRARY_FLOOR + original_rise * 240 / 408;
             if d <= 25. && best.is_none_or(|(old, _)| d < old) {
                 best = Some((d, floor));
             }
             prefix += steps;
         }
         if let Some((_, floor)) = best {
-            return Some((floor, floor + 64));
+            return Some((floor, floor + 48));
         }
     }
     if (-440. ..=-310.).contains(&x) && (-392. ..=-305.).contains(&z) {
-        return Some((720, 825));
+        return Some((terrain::LIBRARY_FLOOR, terrain::LIBRARY_FLOOR + 65));
     }
     if (-450. ..=-350.).contains(&x) && (-475. ..=-435.).contains(&z) {
-        return Some((900, 1000));
+        return Some((706, 768));
     }
     if (-438. ..=-365.).contains(&x) && (-555. ..=-515.).contains(&z) {
-        return Some((1100, 1190));
+        return Some((824, 878));
     }
     // Temple below the roots, with a southern passage under the trunk.
     if ((x + 60.) / 26.).hypot((z - 125.) / 22.) < 1. {
@@ -894,4 +663,27 @@ fn river_center(z: f64) -> f64 {
     400. - 701. * t
         + 28. * (t * std::f64::consts::TAU).sin()
         + 13. * (t * std::f64::consts::TAU * 2.).sin()
+}
+
+/// Authored flowing corridors; receiving lake and ocean are separate terminals.
+pub(super) fn river_channel(p: WorldHex) -> bool {
+    let [x, z] = world_xz(p);
+    let headwater = (-450. ..=-140.).contains(&z)
+        && (x - headwater_center(z)).abs() < 13. + 2.5 * ((z + 450.) / 37.).sin();
+    let t = ((z + 60.) / 525.).clamp(0., 1.);
+    let lower = (-65. ..=465.).contains(&z)
+        && (x - river_center(z)).abs() < 10. + 12. * t + 3. * (t * std::f64::consts::PI * 5.).sin();
+    headwater || lower
+}
+
+/// A channel may discharge only to its actual lower lake or mean-sea terminus.
+pub(super) fn river_receiver(p: WorldHex, top: i32) -> bool {
+    if top == SEA_TOP {
+        return true;
+    }
+    let [x, z] = world_xz(p);
+    let angle = (z + 115.).atan2(x - 405.);
+    let lake = ((x - 405.) / 70.).hypot((z + 115.) / 60.)
+        / (1. + 0.14 * (angle * 3. + 0.3).sin() + 0.07 * (angle * 5. - 0.6).cos());
+    top == terrain::VALLEY_TOP && lake < 1.
 }
