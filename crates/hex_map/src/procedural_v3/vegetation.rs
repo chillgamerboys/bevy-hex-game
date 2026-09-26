@@ -1082,11 +1082,6 @@ pub(crate) mod tests {
                 "/../../assets/art/voxel_styles.ron"
             )))
             .expect("tracked voxel styles should parse");
-            let manifest: ObjectCatalogFile = ron::from_str(include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../assets/art/object_catalog.ron"
-            )))
-            .expect("tracked object catalog should parse");
             let mut objects = BTreeMap::new();
             for source in [
                 include_str!(concat!(
@@ -1154,8 +1149,12 @@ pub(crate) mod tests {
                     ron::from_str(source).expect("tracked object blueprint should parse");
                 objects.insert(blueprint.id.clone(), blueprint);
             }
+            // This fixture intentionally supplies only the legacy vegetation set,
+            // independent of unrelated assets added to the production catalog.
+            let manifest = ObjectCatalogFile::new(objects.keys().cloned())
+                .expect("vegetation fixture manifest should validate");
             RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
-                .expect("tracked runtime art graph should resolve")
+                .expect("vegetation fixture art graph should resolve")
         })
     }
 
