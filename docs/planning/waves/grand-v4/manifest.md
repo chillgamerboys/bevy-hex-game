@@ -122,7 +122,7 @@ Resolve source conflicts, invalid shared facts, actual budget failures and faili
   shared file still has one writer. Failed exact-head frames remain preserved; corrections
   require a new immutable package where authoring changes and fresh captures.
 
-## Close-out
+## Historical September 25 integration checkpoint
 Source lanes and the first visual repairs are integrated. The
 [candidate guide](../../../development/grand-v4.md) records launch, owner contracts,
 focused acceptance commands, and the deferred backlog. At
@@ -134,8 +134,8 @@ partial health participate in the restart comparison. The revised package also
 passes seven geometry checks and the focused world suite, including persistent
 tree cuts and exclusive water-boundary ownership. These are logical and bounded
 residency results; they make no native movement, appearance or frame-rate claim.
-The full gate still encounters inherited V3/map lint failures. Fresh windowless
-review and native acceptance remain required before completion or merge.
+At that checkpoint, the full gate encountered inherited V3/map lint failures.
+The September 26 record below supersedes its validation and repair status.
 
 ## Historical September 25 review checkpoint before user play
 
@@ -252,9 +252,9 @@ admit their 127 stable enemies. Three streaming circuits complete 31 stops, with
 high waters of 48 source chunks, 17 detailed chunks and two jobs. These paused
 circuits establish bounded residency and edit revisits, not native FPS or memory.
 
-Independent final-column inspection finds all 24,125 mainland tread columns
-connected through dry terrain and cave floors/stairs with four levels of clearance.
-The 236 steep top-view edges are intentional cave-mouth drops; upper-hall access
+Independent final-column inspection finds all 24,125 audited western/Crystal
+mountain-approach tread columns connected through dry terrain and cave floors/stairs
+with four levels of clearance. The 236 steep directed top-view edges are intentional cave-mouth drops; upper-hall access
 continues through the covered library. This graph excludes objects/body width and
 does not replace the controller run. All 9,768 directed river columns have exact
 neighbor targets, descend or stay level, and terminate at the lake or sea without
