@@ -214,7 +214,26 @@ fn visual_package(
         .collect();
     // This disposable source contains surviving geometry, never fresh gameplay
     // promises for a carved object or partial root. Authority retains the source.
-    package.semantics = default();
+    let liquids = package
+        .semantics
+        .liquids
+        .iter()
+        .filter(|liquid| {
+            package.columns.iter().any(|column| {
+                column.position == liquid.column
+                    && column.runs.iter().any(|run| {
+                        run.material == "water"
+                            && run.bottom == liquid.bottom
+                            && run.top == liquid.top
+                    })
+            })
+        })
+        .cloned()
+        .collect();
+    package.semantics = hex_world_contracts::ChunkSemantics {
+        liquids,
+        ..default()
+    };
     package.seal().map_err(|e| e.to_string())?;
     Ok(Arc::new(package))
 }

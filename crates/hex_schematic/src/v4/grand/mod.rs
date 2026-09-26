@@ -6,7 +6,9 @@
 )]
 mod biomes;
 mod dressing;
+mod flow;
 pub use biomes::GrandBiomeMap;
+pub use flow::RIVER_PHASE_DIRECTION;
 mod sites;
 #[cfg(test)]
 mod tests;
@@ -602,7 +604,8 @@ impl GrandCompiler {
                 }
                 let (c, l) = self.column(p);
                 columns.push(c);
-                if let Some(l) = l {
+                if let Some(mut l) = l {
+                    self.direct_river(&mut l);
                     liquids.push(l);
                 }
             }
@@ -659,7 +662,7 @@ impl GrandCompiler {
         WorldManifest {
             schema_version: SCHEMA_VERSION,
             world_id: self.source.id.clone(),
-            compiler_version: "hex-grand/1".into(),
+            compiler_version: "hex-grand/2".into(),
             source_fingerprint: self.source_fingerprint,
             materials: self.materials.clone(),
             regions: vec![RegionDescriptor {

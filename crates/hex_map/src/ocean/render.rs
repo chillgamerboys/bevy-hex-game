@@ -93,6 +93,7 @@ struct Surface;
 /// Call once during application composition, then update `OceanFrame` before
 /// `PostUpdate`. No scene is spawned until the first valid enabled frame.
 pub fn install(app: &mut App) {
+    crate::v4::river::install(app);
     app.add_plugins(MaterialPlugin::<OceanMaterial>::default())
         .init_resource::<OceanSurfaceProfile>()
         .init_resource::<OceanBathymetry>()

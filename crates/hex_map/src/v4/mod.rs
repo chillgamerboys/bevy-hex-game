@@ -10,6 +10,7 @@
 mod halo;
 mod prepare;
 mod publish;
+pub(crate) mod river;
 
 pub use halo::{RenderHalo, RenderHaloDependency, RenderNeighbor, MAX_RENDER_HALO_COLUMNS};
 pub use prepare::{PreparedChunk, PresentationLimits, RenderOrigin, TerrainPreparer};

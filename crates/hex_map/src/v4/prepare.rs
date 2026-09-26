@@ -157,6 +157,7 @@ pub struct PreparedChunk {
 }
 
 pub(super) struct PreparedBatch {
+    pub river: Option<super::river::Style>,
     pub substance: SubstanceId,
     pub material: MaterialSpec,
     pub mesh: Option<Mesh>,
@@ -260,7 +261,8 @@ impl TerrainPreparer {
         validate_suppression(package, suppression, self.limits.max_runs_per_chunk)?;
         let suppression_fingerprint = hex_world_contracts::hash_serializable(suppression)?;
         let mut projected = BTreeMap::new();
-        let mut grouped: BTreeMap<SubstanceId, Vec<PreparedRun>> = BTreeMap::new();
+        let mut grouped: BTreeMap<(SubstanceId, Option<super::river::Style>), Vec<PreparedRun>> =
+            BTreeMap::new();
         let mut run_count = 0_usize;
         for column in &package.columns {
             let local = self.origin.local_hex(column.position)?;
@@ -329,7 +331,11 @@ impl TerrainPreparer {
                         cutaway: None,
                     });
                 }
-                grouped.entry(*substance).or_default().push(prepared_run);
+                let river = super::river::style(package, column.position, run);
+                grouped
+                    .entry((*substance, river))
+                    .or_default()
+                    .push(prepared_run);
             }
             projected.insert(local, geometry);
         }
@@ -380,7 +386,7 @@ impl TerrainPreparer {
             .map(|(id, _)| *id)
             .collect();
         let mut batches = Vec::new();
-        for (substance, runs) in grouped {
+        for ((substance, river), runs) in grouped {
             let material = self
                 .palette
                 .values()
@@ -430,6 +436,7 @@ impl TerrainPreparer {
                     )
                 };
                 batches.push(PreparedBatch {
+                    river,
                     substance,
                     material: material.clone(),
                     mesh,

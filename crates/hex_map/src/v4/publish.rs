@@ -74,6 +74,7 @@ pub struct TerrainPresenter {
     context: TerrainPreparer,
     resident: BTreeMap<ChunkId, PublishedChunk>,
     materials: BTreeMap<SubstanceId, Handle<StandardMaterial>>,
+    river_materials: BTreeMap<super::river::Style, Handle<super::river::RiverMaterial>>,
 }
 
 impl TerrainPresenter {
@@ -130,6 +131,7 @@ impl TerrainPresenter {
             },
             resident: BTreeMap::new(),
             materials: BTreeMap::new(),
+            river_materials: BTreeMap::new(),
         })
     }
 
@@ -310,11 +312,19 @@ impl TerrainPresenter {
         } else {
             self.materials.clear();
         }
+        if let Some(mut assets) = world.get_resource_mut::<Assets<super::river::RiverMaterial>>() {
+            for handle in std::mem::take(&mut self.river_materials).into_values() {
+                assets.remove(handle.id());
+            }
+        } else {
+            self.river_materials.clear();
+        }
     }
 
     fn install(&mut self, world: &mut World, prepared: PreparedChunk) -> ChunkReceipt {
         world.init_resource::<Assets<Mesh>>();
         world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<super::river::RiverMaterial>>();
         let coordinate = prepared.coordinate();
         let root = world
             .spawn((
@@ -406,9 +416,36 @@ impl TerrainPresenter {
             if let Some(raw) = batch.mesh {
                 receipt.vertices += raw.count_vertices();
                 let mesh = world.resource_mut::<Assets<Mesh>>().add(raw);
-                world
-                    .entity_mut(batch_entity)
-                    .insert((Mesh3d(mesh.clone()), MeshMaterial3d(material)));
+                world.entity_mut(batch_entity).insert(Mesh3d(mesh.clone()));
+                // Other V4 hosts may not install the optional river material;
+                // preserve their exact static liquid mesh in that case.
+                if let Some(style) = batch
+                    .river
+                    .filter(|_| world.contains_resource::<super::river::Enabled>())
+                {
+                    let river = self
+                        .river_materials
+                        .entry(style)
+                        .or_insert_with(|| {
+                            let [r, g, b, a] = batch.material.color;
+                            let seconds = world
+                                .get_resource::<crate::ocean::OceanFrame>()
+                                .map_or(0.0, |frame| frame.time().seconds);
+                            world
+                                .resource_mut::<Assets<super::river::RiverMaterial>>()
+                                .add(super::river::material(
+                                    style,
+                                    Color::srgba_u8(r, g, b, a),
+                                    seconds,
+                                ))
+                        })
+                        .clone();
+                    world.entity_mut(batch_entity).insert(MeshMaterial3d(river));
+                } else {
+                    world
+                        .entity_mut(batch_entity)
+                        .insert(MeshMaterial3d(material));
+                }
                 meshes.push(mesh);
             }
             children.push(batch_entity);
