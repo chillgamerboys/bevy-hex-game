@@ -4483,8 +4483,8 @@ mod tests {
         press_camera_cycle_through_input_plugin(&mut app);
         assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
         assert_eq!(
-            perspective_projection(&app, camera).2,
-            generated_projection.2
+            perspective_projection(&app, camera).2.to_bits(),
+            generated_projection.2.to_bits()
         );
         press_camera_cycle_through_input_plugin(&mut app);
         assert_eq!(
@@ -4492,8 +4492,8 @@ mod tests {
             CameraMode::FirstPerson
         );
         assert_eq!(
-            perspective_projection(&app, camera).2,
-            generated_projection.2
+            perspective_projection(&app, camera).2.to_bits(),
+            generated_projection.2.to_bits()
         );
         press_camera_cycle_through_input_plugin(&mut app);
 
@@ -4506,7 +4506,11 @@ mod tests {
         app.world_mut().remove_resource::<MapViewHint>();
         enter(&mut app, Screen::Gameplay);
 
-        assert_eq!(perspective_projection(&app, camera).2, authored_far);
+        // The authored far plane is restored verbatim, without recomputation.
+        assert_eq!(
+            perspective_projection(&app, camera).2.to_bits(),
+            authored_far.to_bits()
+        );
         assert!(
             !app.world()
                 .entity(camera)
