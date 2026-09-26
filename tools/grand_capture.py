@@ -11,6 +11,7 @@ import sys
 import time
 
 import arena
+import grand_package
 from northern_review import metadata_unchanged, scan_log
 from v4_review import atomic_json, file_record, png_coverage
 
@@ -43,15 +44,49 @@ def package_state(directory: Path) -> dict:
             raise RuntimeError(f"Package contains a symlink: {path}")
         if path.is_file():
             files[path.relative_to(directory).as_posix()] = file_record(path)
-    for required in ("manifest.ron", "grand-overview.ron", "arena-sites.ron", "grand-biomes.ron", "compile-receipt.json"):
+    for required in ("manifest.ron", "grand-overview.ron", "arena-sites.ron", "grand-biomes.ron", "compile-receipt.json", "authoring-identity.json"):
         if required not in files:
             raise RuntimeError(f"Grand package lacks {required}")
+    identity = json.loads((directory / "authoring-identity.json").read_text())
+    expected_signature = grand_package.signature(ROOT / "assets/config/v4/grand-v4/world.ron") + "-dressed"
+    if identity.get("plain") is not False or identity.get("signature") != expected_signature:
+        raise RuntimeError("Package authoring identity is stale or not dressed; compile current source to a fresh directory")
     receipt = json.loads((directory / "compile-receipt.json").read_text())
     if (receipt.get("strict") is not True or receipt.get("world_id") != "grand-v4"
             or receipt.get("mainland_columns") != 7 * receipt.get("canonical_mainland_columns", 0)
             or receipt.get("crystal_columns") != 7 * receipt.get("canonical_crystal_columns", 0)):
         raise RuntimeError("Package does not establish the Grand area contract")
-    return {"directory": str(directory), "compiler_receipt": receipt, "files": files}
+    return {"directory": str(directory), "compiler_receipt": receipt,
+            "authoring_identity": identity, "files": files}
+
+
+def matrix_contract(selected: list[str] | None) -> dict:
+    requested = list(VIEWS if selected is None else selected)
+    if not requested or len(requested) != len(set(requested)) or not set(requested) <= set(VIEWS):
+        raise RuntimeError("Capture views must be a nonempty, unique subset of the declared matrix")
+    full = set(requested) == set(VIEWS)
+    return {"matrix": "grand-v4-composition-v3", "matrix_scope": "FULL" if full else "FOCUSED-DIAGNOSTIC",
+            "expected_views": list(VIEWS), "requested_views": requested,
+            "completed_views": [], "missing_views": list(VIEWS), "full_matrix_completed": False}
+
+
+def update_coverage(receipt: dict) -> None:
+    receipt["completed_views"] = [row["view"] for row in receipt["frames"]
+                                  if row.get("mechanical_status") == "CAPTURED"]
+    receipt["missing_views"] = [view for view in receipt["expected_views"]
+                                if view not in receipt["completed_views"]]
+    receipt["full_matrix_completed"] = (
+        receipt.get("mechanical_status") == "COMPLETE"
+        and receipt["matrix_scope"] == "FULL" and not receipt["missing_views"]
+        and len(receipt["completed_views"]) == len(receipt["expected_views"]))
+
+
+def complete_matrix(receipt: dict) -> None:
+    update_coverage(receipt)
+    if receipt["completed_views"] != receipt["requested_views"]:
+        raise RuntimeError("Requested matrix views were not all captured exactly once")
+    receipt["mechanical_status"] = "COMPLETE" if receipt["matrix_scope"] == "FULL" else "PARTIAL_COMPLETE"
+    update_coverage(receipt)
 
 
 def validate_native(path: Path, view: str, package: dict) -> dict:
@@ -74,7 +109,8 @@ def capture(args: argparse.Namespace) -> int:
     source, staged, unstaged = arena.source_state()
     if source["dirty"] and not args.dirty_diagnostic:
         raise RuntimeError("Commit the candidate first, or request --dirty-diagnostic scratch evidence")
-    views = args.view or VIEWS
+    matrix = matrix_contract(args.view)
+    views = matrix["requested_views"]
     label = source["head"] + ("-dirty-" + source["state_sha256"][:12] if source["dirty"] else "")
     pack = ROOT / ".context/grand-review" / label / args.label
     if pack.exists():
@@ -86,7 +122,7 @@ def capture(args: argparse.Namespace) -> int:
     (pack / "staged.patch").write_bytes(staged)
     (pack / "unstaged.patch").write_bytes(unstaged)
     atomic_json(pack / "package-state.json", package)
-    receipt = {"source": source, "package": package, "matrix": "grand-v4-composition-v2",
+    receipt = {"source": source, "package": package, **matrix,
                "source_label": "UNAPPROVABLE-DIRTY" if source["dirty"] else "COMMITTED-CANDIDATE",
                "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
                "motion_route": MOTION_ROUTE, "mechanical_status": "INCOMPLETE",
@@ -122,14 +158,17 @@ def capture(args: argparse.Namespace) -> int:
             atomic_json(pack / "receipt.json", receipt)
         if arena.source_state()[0] != source or package_state(args.package) != package:
             raise RuntimeError("Source/package changed during capture")
-        receipt["mechanical_status"] = "COMPLETE"
+        complete_matrix(receipt)
     except (Exception, KeyboardInterrupt) as error:
         receipt.update(mechanical_status="BLOCKED", error=str(error) or "Interrupted")
         raise
     finally:
+        update_coverage(receipt)
         receipt["finished_at"] = arena.utc_now()
         atomic_json(pack / "receipt.json", receipt)
         rows = [f"# Grand V4 — {label}", "", f"Mechanical: {receipt['mechanical_status']}. Static: UNREVIEWED.",
+                f"Matrix: {receipt['matrix_scope']}; {len(receipt['completed_views'])}/{len(VIEWS)} full-matrix views captured.",
+                "Full-matrix presentation approval is unavailable for focused subsets." if receipt["matrix_scope"] != "FULL" else "Full matrix captured only after all declared views complete; independent static review is still required.",
                 "Native movement: HUMAN-MOTION-PENDING.", "", MOTION_ROUTE, ""]
         rows += [f"- [{row['view']}]({row['view']}.png): UNREVIEWED" for row in receipt["frames"]]
         (pack / "review-index.md").write_text("\n".join(rows) + "\n")
