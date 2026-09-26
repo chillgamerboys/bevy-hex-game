@@ -795,6 +795,11 @@ fn capture_pose(
             "waterfall" => ("waterfall", Vec3::new(-35.0, 22.0, 48.0)),
             "valley-lake" => ("valley_lake", Vec3::new(60.0, 40.0, 70.0)),
             "world-tree" => ("world_tree", Vec3::new(-100.0, 70.0, 140.0)),
+            "roots-entrance" => ("shrine_plant", Vec3::new(0.0, 2.0, 65.0)),
+            "shrine-plant" => ("shrine_plant", Vec3::new(5.0, 2.0, 7.0)),
+            "shrine-earth" => ("shrine_earth", Vec3::new(8.0, 3.0, 10.0)),
+            "shrine-fire" => ("shrine_fire", Vec3::new(8.0, 3.0, 10.0)),
+            "shrine-air" => ("shrine_air", Vec3::new(8.0, 3.0, 10.0)),
             "forest" => ("forest", Vec3::new(45.0, 30.0, 60.0)),
             "summit" => ("shrine_air", Vec3::new(72.0, 50.0, 92.0)),
             "crystal" => ("crystal_ascent", Vec3::new(-85.0, 65.0, 100.0)),
@@ -803,18 +808,31 @@ fn capture_pose(
             "bay" | "bay-baseline" => ("bay", Vec3::new(-18.0, 8.0, 24.0)),
             "bay-reverse" => ("bay", Vec3::new(24.0, 8.0, -18.0)),
             "library" => ("library_hall", Vec3::new(-5.0, 2.2, 6.0)),
+            "library-upper" => ("library_upper", Vec3::new(-22.0, 2.4, 6.0)),
+            "waterfall-cave" => ("library_entrance", Vec3::new(-4.0, 2.0, 0.0)),
             "shadow-tunnel" => ("shadow_entrance", Vec3::new(0.0, 2.0, 3.0)),
+            "shadow-reverse" => ("shadow_tunnel", Vec3::new(0.0, 2.0, -80.0)),
             _ => return None,
         };
         let site = anchor(site_name)?;
-        let target = if name == "shadow-tunnel" {
-            anchor("shadow_tunnel")? + Vec3::Y * 1.7
-        } else {
-            site + Vec3::Y * 1.4
+        let target = match name {
+            "shadow-tunnel" => anchor("shadow_tunnel")? + Vec3::Y * 1.7,
+            "shadow-reverse" => anchor("shadow_entrance")? + Vec3::Y * 1.7,
+            "world-tree" => site + Vec3::Y * 55.0,
+            "roots-entrance" => site + Vec3::Y * 1.5,
+            "shrine-plant" => site + Vec3::new(0.0, 1.8, -4.5),
+            "shrine-earth" | "shrine-fire" | "shrine-air" => site + Vec3::new(0.0, 2.0, -3.0),
+            "library-upper" => site + Vec3::new(9.0, 4.0, -9.0),
+            "waterfall-cave" => anchor("waterfall")? + Vec3::Y * 4.5,
+            _ => site + Vec3::Y * 1.4,
         };
         return Some(CapturePose {
             camera: Transform::from_translation(site + offset).looking_at(target, Vec3::Y),
-            interest: site,
+            interest: if name == "shadow-reverse" {
+                site + offset
+            } else {
+                site
+            },
             overview_height: None,
         });
     }

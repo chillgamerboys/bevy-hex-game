@@ -16,10 +16,12 @@ from water_lab_review import atomic_json, file_record, png_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
 VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-waterfall",
-         "grand-valley-lake", "grand-world-tree", "grand-forest", "grand-summit",
-         "grand-crystal", "grand-frozen-woods", "grand-volcano", "grand-bay",
+         "grand-valley-lake", "grand-world-tree", "grand-roots-entrance", "grand-shrine-plant",
+         "grand-forest", "grand-summit", "grand-shrine-air", "grand-crystal", "grand-shrine-earth",
+         "grand-frozen-woods", "grand-volcano", "grand-shrine-fire", "grand-bay",
          "grand-bay-baseline", "grand-bay-reverse", "grand-waterline", "grand-underwater",
-         "grand-library", "grand-shadow-tunnel", "first", "third", "start")
+         "grand-waterfall-cave", "grand-library", "grand-library-upper",
+         "grand-shadow-tunnel", "grand-shadow-reverse", "first", "third", "start")
 MOTION_ROUTE = (
     "Start at the beach; enter water, deploy/steer/fold the boat, sail to Fire; "
     "walk the river to the world tree and garden; follow water to the waterfall cave; "
