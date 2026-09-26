@@ -12,7 +12,7 @@ import time
 
 import arena
 from northern_review import metadata_unchanged, scan_log
-from water_lab_review import atomic_json, file_record, png_coverage
+from v4_review import atomic_json, file_record, png_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
 VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-waterfall",

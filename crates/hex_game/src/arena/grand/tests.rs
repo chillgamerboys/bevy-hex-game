@@ -1,6 +1,8 @@
 //! Opt-in, separate-process validation of the real application checkpoint boundary.
 //! `tools/grand_verify.py` supplies a real package and isolated storage for each case.
+use super::super::hud;
 use super::*;
+use bevy::ecs::system::RunSystemOnce;
 use hex_arena::{ActorIntent, ShrineId, Spell};
 use hex_core::arena::{ArenaAvailability, ArenaMaterials};
 use hex_core::ocean::OceanEnvironmentView;
@@ -20,6 +22,8 @@ use std::{
 mod admission_tests;
 #[path = "circuit_tests.rs"]
 mod circuit_tests;
+#[path = "ui_flow_tests.rs"]
+mod ui_flow_tests;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Receipt {
@@ -53,6 +57,7 @@ fn fixture() -> App {
             capture: None,
             ..default()
         })
+        .add_message::<AppExit>()
         .configure_sets(
             Update,
             (ArenaFrame::Input, ArenaFrame::Tick, ArenaFrame::Present).chain(),
@@ -72,6 +77,18 @@ fn fixture() -> App {
     app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
     publish_ocean(app.world_mut());
     app
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "A real menu action must run through the production HUD system or fail this UX acceptance test."
+)]
+fn press_menu_action(app: &mut App, action: hud::Action) {
+    let button = app.world_mut().spawn((Interaction::Pressed, action)).id();
+    app.world_mut()
+        .run_system_once(hud::buttons)
+        .expect("Grand HUD button system");
+    app.world_mut().despawn(button);
 }
 
 fn pump_until(app: &mut App, reason: &str, ready: impl Fn(&World) -> bool) {
@@ -443,8 +460,54 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         !slot_path().exists(),
         "writer fixture must start in isolated empty storage"
     );
-    new_run(app.world_mut()).expect("application New Run");
+    let initial_generation = app.world().resource::<ArenaReset>().generation;
+    press_menu_action(app, hud::Action::NewRun);
+    update(app.world_mut());
+    assert!(app.world().resource::<State>().confirmation);
+    assert!(app.world().resource::<ViewState>().paused);
+    assert_eq!(
+        app.world().resource::<ArenaReset>().generation,
+        initial_generation
+    );
+    assert!(
+        !slot_path().exists(),
+        "requesting New Run cannot create a slot"
+    );
+    press_menu_action(app, hud::Action::CancelNew);
+    update(app.world_mut());
+    assert!(!app.world().resource::<State>().confirmation);
+    press_menu_action(app, hud::Action::ConfirmNew);
+    update(app.world_mut());
+    assert_eq!(
+        app.world().resource::<ArenaReset>().generation,
+        initial_generation
+    );
+    assert!(
+        !slot_path().exists(),
+        "cancelled or unsolicited confirmation cannot reset storage"
+    );
+    assert!(!app.world().resource::<State>().active);
+
+    press_menu_action(app, hud::Action::NewRun);
+    update(app.world_mut());
+    press_menu_action(app, hud::Action::ConfirmNew);
+    update(app.world_mut());
+    assert!(!app.world().resource::<State>().confirmation);
+    assert!(app.world().resource::<State>().active);
+    assert!(app.world().resource::<ViewState>().started);
+    assert_eq!(
+        app.world().resource::<ArenaReset>().generation,
+        initial_generation + 1
+    );
     app.world_mut().resource_mut::<ViewState>().pause();
+    pump_until(app, "confirmed New Run initial autosave", |world| {
+        !world.resource::<State>().busy()
+    });
+    assert!(
+        app.world().resource::<State>().available,
+        "{}",
+        app.world().resource::<State>().status
+    );
     {
         let mut state = app.world_mut().resource_mut::<State>();
         state.active = false; // fixture setup is explicitly outside ordinary autosave policy
@@ -543,7 +606,6 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         view.pitch = -0.21;
         view.third_person = true;
     }
-    let reward = reward_key(app.world().resource::<ArenaSession>());
     let boundary_carved = app
         .world()
         .resource::<ArenaTerrainView>()
@@ -558,7 +620,23 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
     app.world_mut().write_message(TerrainEdit::Clear {
         pos: boundary_carved,
     });
-    begin_save(app.world_mut(), reward).expect("application atomic save");
+    app.world_mut().resource_mut::<State>().active = true;
+    press_menu_action(app, hud::Action::Quit);
+    assert!(matches!(
+        app.world().resource::<State>().request,
+        Some(Request::SaveQuit)
+    ));
+    assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+    update(app.world_mut());
+    assert!(app.world().resource::<ViewState>().paused);
+    assert!(
+        app.world().resource::<State>().busy(),
+        "Save & Quit must wait for its save worker"
+    );
+    assert!(
+        app.world().resource::<Messages<AppExit>>().is_empty(),
+        "no exit before durable save completion"
+    );
     assert!(
         app.world()
             .resource::<ArenaTerrainView>()
@@ -573,6 +651,15 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         app.world().resource::<State>().available,
         "{}",
         app.world().resource::<State>().status
+    );
+    let exits = app
+        .world_mut()
+        .resource_mut::<Messages<AppExit>>()
+        .drain()
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(exits.as_slice(), [AppExit::Success]),
+        "Save & Quit exits once after the durable save"
     );
     let session = app.world().resource::<ArenaSession>();
     let player = session
@@ -635,7 +722,35 @@ fn read_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         .expect("gameplay record")
         .expect("body");
     let before_token = snapshot.token();
-    begin_restore(app.world_mut()).expect("application staged restore");
+    let initial_generation = app.world().resource::<ArenaReset>().generation;
+    press_menu_action(app, hud::Action::NewRun);
+    update(app.world_mut());
+    assert!(app.world().resource::<State>().confirmation);
+    press_menu_action(app, hud::Action::CancelNew);
+    update(app.world_mut());
+    assert!(!app.world().resource::<State>().confirmation);
+    assert!(app.world().resource::<State>().available);
+    assert_eq!(app.world().resource::<State>().token, Some(before_token));
+    assert_eq!(
+        app.world().resource::<ArenaReset>().generation,
+        initial_generation
+    );
+    assert_eq!(
+        store(app.world().resource::<State>())
+            .expect("store after Cancel")
+            .load()
+            .expect("head after Cancel")
+            .expect("retained resume")
+            .token(),
+        before_token,
+        "Cancel must retain the exact durable resume slot"
+    );
+    press_menu_action(app, hud::Action::Start);
+    assert!(matches!(
+        app.world().resource::<State>().request,
+        Some(Request::Primary)
+    ));
+    update(app.world_mut());
     pump_until(
         app,
         "application adoption after collision residency",
