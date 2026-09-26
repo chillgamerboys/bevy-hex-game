@@ -721,3 +721,505 @@ fn teleport_rejects_implicit_ocean_above_visible_seabed() {
     assert_eq!(player(&session).feet, before);
     assert_exact_f32(session.grand_progress().unwrap().teleport_cooldown, 0.0);
 }
+
+fn checkpoint_materials() -> hex_core::arena::ArenaMaterials {
+    hex_core::arena::ArenaMaterials {
+        // Shipped compatibility slots: these do not depend on RON map order.
+        stone: hex_core::SubstanceId(10),
+        reinforced_stone: Some(hex_core::SubstanceId(18)),
+        bedrock: hex_core::SubstanceId(2),
+        grass: hex_core::SubstanceId(4),
+        dirt: hex_core::SubstanceId(3),
+        fire: hex_core::ElementId(1),
+    }
+}
+
+fn cast_construction(
+    session: &mut ArenaSession,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    aim: Vec3,
+) -> Vec<hex_core::TerrainEdit> {
+    let tuning = crate::ArenaTuning::default();
+    let materials = checkpoint_materials();
+    for _ in 0..720 {
+        if player(session)
+            .cooldowns
+            .get(crate::Spell::Shield.index())
+            .is_some_and(|c| *c <= 0.0)
+        {
+            break;
+        }
+        let out = session.advance(ActorIntent::default(), world, geometry, materials, &tuning);
+        assert!(out.edits.is_empty() && out.impacts.is_empty());
+    }
+    let mut edits = Vec::new();
+    for tick in 0..240 {
+        let out = session.advance(
+            ActorIntent {
+                aim,
+                selected: Some(crate::Spell::Shield),
+                cast_pressed: tick == 0,
+                cast_held: tick < 12,
+                cast_released: tick == 12,
+                ..Default::default()
+            },
+            world,
+            geometry,
+            materials,
+            &tuning,
+        );
+        assert!(out.impacts.is_empty(), "Shield must not emit damage");
+        edits.extend(out.edits);
+        if !edits.is_empty() {
+            break;
+        }
+    }
+    edits
+        .first()
+        .expect("a real Shield impact must emit terrain");
+    assert!(session.projectiles.is_empty() && session.pending_walls.is_empty());
+    edits
+}
+
+#[test]
+fn earth_blesses_only_new_shield_materials_without_changing_existing_stone_or_health() {
+    #[derive(Deserialize)]
+    struct Substance {
+        toughness: Option<u8>,
+        solid: bool,
+        conjurable: bool,
+    }
+    #[derive(Deserialize)]
+    struct Catalogue {
+        substances: std::collections::BTreeMap<String, Substance>,
+    }
+    let catalogue: Catalogue =
+        ron::from_str(include_str!("../../../../assets/config/substances.ron"))
+            .expect("the shipped material definitions");
+    let ordinary = catalogue.substances.get("stone").expect("ordinary stone");
+    let reinforced = catalogue
+        .substances
+        .get("reinforced_stone")
+        .expect("Earth construction material");
+    assert!(ordinary.solid && ordinary.conjurable && reinforced.solid && reinforced.conjurable);
+    assert_eq!(ordinary.toughness, Some(4));
+    assert_eq!(reinforced.toughness, Some(8));
+
+    let (mut session, mut world, geometry) = fixture();
+    world.expedition = Some(Default::default());
+    session.bot_enabled = false;
+    let health = (player(&session).hp, player(&session).max_hp);
+    let materials = checkpoint_materials();
+    let old = cast_construction(
+        &mut session,
+        &world,
+        geometry,
+        (Vec3::X - Vec3::Y * 0.35).normalize(),
+    );
+    let mut old_cells = std::collections::BTreeMap::new();
+    for edit in old {
+        let hex_core::TerrainEdit::Set { pos, substance } = edit else {
+            panic!("Shield must create material, never clear it");
+        };
+        assert_eq!(
+            substance, materials.stone,
+            "pre-Earth material has toughness4"
+        );
+        assert!(world.voxels.insert(pos, substance).is_none());
+        old_cells.insert(pos, substance);
+    }
+    world.revision += 1;
+    world
+        .anchors
+        .insert(ShrineId::Earth.anchor().into(), player(&session).feet);
+    let blessing = session.advance(
+        ActorIntent {
+            interact: true,
+            ..Default::default()
+        },
+        &world,
+        geometry,
+        materials,
+        &crate::ArenaTuning::default(),
+    );
+    assert!(session.earth_construction(0));
+    assert!(
+        blessing.edits.is_empty(),
+        "claiming Earth does not rewrite old terrain"
+    );
+    let new = cast_construction(
+        &mut session,
+        &world,
+        geometry,
+        (Vec3::Z - Vec3::Y * 0.35).normalize(),
+    );
+    for edit in new {
+        let hex_core::TerrainEdit::Set { pos, substance } = edit else {
+            panic!("Shield must create material, never clear it");
+        };
+        assert_eq!(
+            Some(substance),
+            materials.reinforced_stone,
+            "post-Earth material has toughness8"
+        );
+        assert!(!old_cells.contains_key(&pos));
+        assert!(world.voxels.insert(pos, substance).is_none());
+    }
+    assert_eq!(session.shields_raised, 2);
+    for (pos, substance) in old_cells {
+        assert_eq!(world.voxels.get(&pos), Some(&substance));
+        assert_eq!(substance, materials.stone);
+    }
+    assert_exact_f32(player(&session).hp, health.0);
+    assert_exact_f32(player(&session).max_hp, health.1);
+}
+
+#[derive(Debug, Deserialize)]
+struct AbilityCheckpointProbe {
+    session: AbilitySessionProbe,
+}
+#[derive(Debug, Deserialize)]
+struct AbilitySessionProbe {
+    encounter: AbilityEncounterProbe,
+}
+#[derive(Debug, Deserialize)]
+struct AbilityEncounterProbe {
+    brains: std::collections::BTreeMap<crate::ActorId, AbilityBrainProbe>,
+}
+#[derive(Debug, Deserialize)]
+struct AbilityBrainProbe {
+    active: Option<AbilityCastProbe>,
+}
+#[derive(Debug, Deserialize)]
+struct AbilityCastProbe {
+    kind: crate::CreatureAbility,
+    pulses: u8,
+    actor_damage: std::collections::BTreeMap<crate::ActorId, f32>,
+    voxels: BTreeSet<hex_core::TilePos>,
+}
+
+fn cast_probe(bytes: &[u8], owner: crate::ActorId) -> AbilityCastProbe {
+    let mut probe: AbilityCheckpointProbe =
+        ron::de::from_bytes(bytes).expect("typed checkpoint probe");
+    probe
+        .session
+        .encounter
+        .brains
+        .remove(&owner)
+        .expect("saved enemy brain")
+        .active
+        .expect("saved active ability")
+}
+
+fn advance_over_bedrock(
+    session: &mut ArenaSession,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> crate::CommandsOut {
+    use hex_core::{
+        TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactResult, TerrainVoxelOutcome,
+    };
+    let materials = checkpoint_materials();
+    let out = session.advance(
+        ActorIntent::default(),
+        world,
+        geometry,
+        materials,
+        &crate::ArenaTuning::default(),
+    );
+    assert!(out.edits.is_empty() && out.burrows.is_empty());
+    let acknowledged: Vec<_> = out
+        .impacts
+        .iter()
+        .map(|impact| {
+            let result = TerrainImpactResult::Applied(
+                impact
+                    .volume
+                    .iter()
+                    .map(|pos| {
+                        assert_eq!(
+                            world.solid_at(*pos),
+                            Some(materials.bedrock),
+                            "this fixture contains only protected ground"
+                        );
+                        TerrainVoxelOutcome {
+                            pos: *pos,
+                            disposition: TerrainImpactDisposition::Resisted,
+                            before: Some(materials.bedrock),
+                            after: Some(materials.bedrock),
+                            health_before: None,
+                            health_after: None,
+                        }
+                    })
+                    .collect(),
+            );
+            let outcome = TerrainImpactOutcome {
+                batch: impact.batch,
+                result,
+            };
+            assert!(outcome.is_consistent_with(impact));
+            outcome
+        })
+        .collect();
+    session
+        .settle_checkpoint_outcomes(&acknowledged, &[])
+        .expect("settled protected ground");
+    out
+}
+
+#[test]
+fn real_enemy_windup_and_pulses_resume_without_replaying_damage_terrain_or_rewards() {
+    use crate::{AttackPhase, CreatureAbility, Spell};
+    use hex_core::arena::{ArenaDeploymentRegion, ArenaEncounterSite, ArenaExpeditionSites};
+    use hex_core::{HexCoord, TilePos};
+    let (mut session, mut world, geometry) = fixture();
+    let materials = checkpoint_materials();
+    world.voxels = HexCoord::ORIGIN
+        .within_radius(40)
+        .into_iter()
+        .map(|coord| (TilePos::new(coord, 0), materials.bedrock))
+        .collect();
+    let home = HexCoord::from_axial(6, 0);
+    world.expedition = Some(ArenaExpeditionSites {
+        encounters: [(
+            "grand_dragon_01".into(),
+            ArenaEncounterSite {
+                deployment: ArenaDeploymentRegion {
+                    preferred: TilePos::new(home, 0),
+                    surfaces: home
+                        .within_radius(7)
+                        .into_iter()
+                        .map(|coord| TilePos::new(coord, 0))
+                        .collect(),
+                },
+                rally_entry: None,
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+    session.bot_enabled = false;
+    advance_over_bedrock(&mut session, &world, geometry);
+    assert_eq!(
+        session.actors.iter().map(|a| a.id).collect::<BTreeSet<_>>(),
+        BTreeSet::from([0, 225, 226, 227])
+    );
+    // Keep a living target throughout two unmodified Dragon bursts. This extra
+    // fixture health is unrelated to shrine tuning and never changes after save.
+    player_mut(&mut session).max_hp = 1000.0;
+    player_mut(&mut session).hp = 1000.0;
+    let player_eye = player(&session).eye();
+    let victim_id = session
+        .actors
+        .iter()
+        .filter(|a| a.id != 0)
+        .min_by(|a, b| {
+            a.center()
+                .distance_squared(player_eye)
+                .total_cmp(&b.center().distance_squared(player_eye))
+        })
+        .expect("nearest admitted Dragon")
+        .id;
+    let victim = session
+        .actors
+        .iter_mut()
+        .find(|a| a.id == victim_id)
+        .expect("authored Dragon");
+    victim.hp = 1.0;
+    let target = victim.center();
+    player_mut(&mut session).aim = crate::bot::ballistic_aim(
+        player(&session).eye(),
+        target,
+        &crate::ArenaTuning::default(),
+        30.0,
+    )
+    .expect("reachable Dragon at the real projectile gravity")
+    .0;
+    session.release(
+        0,
+        Spell::Fireball,
+        &crate::ArenaTuning::default(),
+        30.0,
+        &world,
+        geometry,
+        materials,
+        &mut crate::CommandsOut::default(),
+    );
+    for _ in 0..240 {
+        advance_over_bedrock(&mut session, &world, geometry);
+        if session
+            .actors
+            .iter()
+            .find(|a| a.id == victim_id)
+            .expect("retained Dragon")
+            .hp
+            <= 0.0
+        {
+            break;
+        }
+    }
+    assert!(
+        session
+            .actors
+            .iter()
+            .find(|a| a.id == victim_id)
+            .expect("retained Dragon")
+            .hp
+            <= 0.0,
+        "real Fireball must earn the prior reward: {:?}, projectiles={:?}",
+        session
+            .actors
+            .iter()
+            .map(|a| (a.id, a.hp, a.feet, a.team))
+            .collect::<Vec<_>>(),
+        session
+            .projectiles
+            .iter()
+            .map(|p| (p.position, p.velocity))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(session.progress().expect("Grand XP").total_xp, 20);
+    assert_eq!(session.progress().expect("Grand XP").dragons_defeated, 1);
+    session.bot_enabled = true;
+    let mut owner = None;
+    for _ in 0..1200 {
+        advance_over_bedrock(&mut session, &world, geometry);
+        owner = session
+            .actors
+            .iter()
+            .find(|a| {
+                a.attack_state().is_some_and(|s| {
+                    s.kind == CreatureAbility::FireCone && s.phase == AttackPhase::Windup
+                })
+            })
+            .map(|a| a.id);
+        if owner.is_some() {
+            break;
+        }
+    }
+    let owner = owner.expect("ordinary Grand AI must reach a real FireCone windup");
+    let identity = GrandCheckpointIdentity {
+        world_id: "grand-test".into(),
+        content_revision: "active-enemy-ability".into(),
+    };
+    let windup = session
+        .encode_grand_checkpoint(&identity)
+        .expect("settled windup save");
+    assert_eq!(cast_probe(&windup, owner).pulses, 0);
+    let mut windup_resumed =
+        ArenaSession::decode_grand_checkpoint(&windup, &identity, &world, geometry, 4)
+            .expect("windup restore");
+    let hp_before_pulse = player(&session).hp;
+    let mut first_pulse = None;
+    for _ in 0..180 {
+        let direct = advance_over_bedrock(&mut session, &world, geometry);
+        let restored = advance_over_bedrock(&mut windup_resumed, &world, geometry);
+        assert_eq!(
+            direct.impacts, restored.impacts,
+            "windup resume must emit the same actual terrain operations"
+        );
+        assert_exact_f32(player(&session).hp, player(&windup_resumed).hp);
+        if session
+            .actors
+            .iter()
+            .find(|a| a.id == owner)
+            .and_then(Actor::attack_state)
+            .is_some_and(|s| s.phase == AttackPhase::Active)
+        {
+            let bytes = session
+                .encode_grand_checkpoint(&identity)
+                .expect("settled active save");
+            let cast = cast_probe(&bytes, owner);
+            if cast.pulses == 1
+                && cast
+                    .actor_damage
+                    .get(&0)
+                    .is_some_and(|damage| *damage > 0.0)
+                && !cast.voxels.is_empty()
+            {
+                first_pulse = Some((bytes, cast));
+                break;
+            }
+        }
+    }
+    let (pulse_bytes, saved_cast) =
+        first_pulse.expect("the real first pulse must hit the player and protected terrain");
+    assert!(player(&session).hp < hp_before_pulse);
+    assert_eq!(saved_cast.kind, CreatureAbility::FireCone);
+    assert_eq!(saved_cast.pulses, 1);
+    let mut pulse_resumed =
+        ArenaSession::decode_grand_checkpoint(&pulse_bytes, &identity, &world, geometry, 4)
+            .expect("active pulse restore");
+    let reencoded = pulse_resumed
+        .encode_grand_checkpoint(&identity)
+        .expect("restored ledger");
+    let restored_cast = cast_probe(&reencoded, owner);
+    assert_eq!(restored_cast.pulses, saved_cast.pulses);
+    assert_eq!(restored_cast.voxels, saved_cast.voxels);
+    assert_exact_f32(
+        *restored_cast.actor_damage.get(&0).expect("saved hit"),
+        *saved_cast.actor_damage.get(&0).expect("real hit"),
+    );
+    let hp_at_save = player(&session).hp;
+    let mut last_pulses = saved_cast.pulses;
+    let mut finished = false;
+    for _ in 0..120 {
+        let direct = advance_over_bedrock(&mut session, &world, geometry);
+        let from_windup = advance_over_bedrock(&mut windup_resumed, &world, geometry);
+        let from_pulse = advance_over_bedrock(&mut pulse_resumed, &world, geometry);
+        assert_eq!(direct.impacts, from_windup.impacts);
+        assert_eq!(direct.impacts, from_pulse.impacts);
+        if !finished {
+            let caster = pulse_resumed
+                .actors
+                .iter()
+                .find(|a| a.id == owner)
+                .expect("restored caster");
+            if caster.attack_state().is_some() {
+                let bytes = pulse_resumed
+                    .encode_grand_checkpoint(&identity)
+                    .expect("continuing real cast");
+                let cast = cast_probe(&bytes, owner);
+                assert_eq!(cast.kind, CreatureAbility::FireCone);
+                assert!((last_pulses..=3).contains(&cast.pulses));
+                last_pulses = cast.pulses;
+                assert!(saved_cast.voxels.is_subset(&cast.voxels));
+                let admitted = *cast.actor_damage.get(&0).expect("retained player hit");
+                assert!(admitted >= *saved_cast.actor_damage.get(&0).expect("saved hit"));
+                assert!(admitted <= crate::ArenaTuning::default().encounters.breath_damage);
+            } else {
+                finished = true;
+            }
+        }
+        assert_exact_f32(player(&session).hp, player(&windup_resumed).hp);
+        assert_exact_f32(player(&session).hp, player(&pulse_resumed).hp);
+        assert_eq!(session.tick, pulse_resumed.tick);
+        for run in [&session, &windup_resumed, &pulse_resumed] {
+            let progress = run.progress().expect("Grand XP");
+            assert_eq!(
+                progress.total_xp, 20,
+                "a restored credited corpse must not grant XP again"
+            );
+            assert_eq!(progress.dragons_defeated, 1);
+            assert_eq!(run.grand_progress().expect("Grand state").deaths, 0);
+        }
+    }
+    assert!(
+        player(&session).hp < hp_at_save,
+        "remaining real breath pulses must still execute"
+    );
+    assert_eq!(
+        last_pulses, 3,
+        "the restored cast must finish all three pulses"
+    );
+    assert!(finished, "the resumed finite cast must finish");
+    assert_eq!(
+        pulse_resumed
+            .encode_grand_checkpoint(&identity)
+            .expect("completed resumed checkpoint"),
+        session
+            .encode_grand_checkpoint(&identity)
+            .expect("completed uninterrupted checkpoint")
+    );
+}
