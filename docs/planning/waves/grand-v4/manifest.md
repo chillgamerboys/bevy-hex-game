@@ -218,8 +218,8 @@ contracts. These scoped checks do not replace the final selector-chosen gate.
 The static matrix now contains 36 views, including admitted ground-level forest
 and fountain cameras and a reverse library view. Capture admission rejects stale
 authoring signatures and labels subsets as partial diagnostics. Continuous
-windowless river/forest sequences are being added separately; native control feel
-and the 30-minute session remain pending while the workstation is locked.
+windowless river/forest sequences are implemented separately; native control feel
+and the 30-minute session remain pending.
 
 Disk capacity is a separate validation constraint. Package-scoped development-cache
 cleanup was explicitly approved by the user after a Cargo dry run and exact
@@ -228,3 +228,46 @@ only `hex_game` and `hex_map` development artifacts, recovering about 26 GiB.
 Source, packages, saves and captures were preserved. No other cache was cleaned.
 The large-spells chat received the requested post-reset resumption message; its
 prototype work remains separate from Grand’s retained advanced-spell backlog.
+
+### Package04 physical checkpoint
+
+Clean source `c8f1b8e200442621137c1182f4b65e81f3594fb8` strictly compiled immutable
+package04, fingerprint `4216780698166138326`, preserving the 653,282-column mainland
+and 22,183-column Crystal footprint. Full-width mountain grading removes the
+polyline turn discontinuities; the upper western route remains on the existing
+coastline. An outer library collar closes unintended roof-side openings, and an
+irregular elevation contour replaces the straight mountain material boundary.
+
+The actual-package production-controller run passes all eleven walking routes:
+both riverbank exits, four western cross-country hill directions, the eastern
+valley, garden ascent, island landing/ascent, western massif and Crystal shoulder.
+Each uses ordinary walking without jump, glider, flight, teleport or upgrades;
+static-object collision remains active. Local obstacle steering belongs only to
+the test driver. The unupgraded authored sailing route measures 43.9 simulation
+seconds, against the approximate 45-second separation request.
+
+Separate-process land/boat/air restoration passes with exact owner state, active
+projectiles, destruction and partial health retained. All fourteen authored parties
+admit their 127 stable enemies. Three streaming circuits complete 31 stops, with
+high waters of 48 source chunks, 17 detailed chunks and two jobs. These paused
+circuits establish bounded residency and edit revisits, not native FPS or memory.
+
+Independent final-column inspection finds all 24,125 mainland tread columns
+connected through dry terrain and cave floors/stairs with four levels of clearance.
+The 236 steep top-view edges are intentional cave-mouth drops; upper-hall access
+continues through the covered library. This graph excludes objects/body width and
+does not replace the controller run. All 9,768 directed river columns have exact
+neighbor targets, descend or stay level, and terminate at the lake or sea without
+cycles. Topology does not establish the moving-wave appearance.
+
+A shared Cargo cache initially linked old gameplay into a new app test. Refreshing
+all local dependency entrypoints under the shared build lock reproduced a current
+build, whose linked recovery markers and staged-respawn, ground-camera and motion
+fixture tests pass. The mixed-cache result is preserved as diagnostic evidence.
+Future cross-worktree builds must establish local dependency freshness explicitly.
+
+Package03's six static diagnostics found a library gap, a straight material seam
+and an obstructed forest review camera; source repairs still require fresh pixels.
+The full static/temporal matrix, exact combined CI gate, native movement and
+30-minute measured session remain open. This checkpoint is physical validation,
+not final terrain taste or presentation acceptance. Linear remains disconnected.

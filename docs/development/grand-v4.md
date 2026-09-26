@@ -38,6 +38,10 @@ Continue restores the saved expedition. Save & Quit completes an atomic checkpoi
 before exit. New Run requires an explicit confirmation. Death returns the player
 to the last activated shrine, or the starting beach, preserving enemies, progress
 and edits. Nearby valid support is used when the old support has been destroyed.
+If that loaded area has no usable ground, recovery stages and loads the starting
+beach. Pending recovery survives saving; it does not heal or advance the session
+while required terrain is unavailable. If both bounded areas are unusable, the run
+is retained with an explicit recovery notice.
 
 The dedicated `grand-v4-resume` slot is beside application preferences and honors
 `HEX_GAME_DATA_DIR`. It preserves the exact movement mode, boat/glider velocity,
@@ -72,7 +76,7 @@ caves readable without changing global daylight or gameplay visibility.
 Ordinary forest trees also publish authored distant silhouettes, independent of
 source-chunk residency. Shared crown/trunk meshes yield atomically to detailed
 objects, retain persistent cuts and never pin source chunks. The bounded overview
-contains 774 trees from 13 recipe families; its full intact geometry is about
+contains 773 ordinary trees from 13 recipe families; its full intact geometry is about
 1.41 million vertices against a 1.6-million limit. Ground edits do not erase trees.
 The recipes reuse the earlier Dragon/Goblin expedition’s curved timber and layered
 foliage, with irregular grove edges and understory. The garden now has an open

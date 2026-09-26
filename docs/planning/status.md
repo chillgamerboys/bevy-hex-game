@@ -9,17 +9,20 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-**Grand V4 — combined candidate, 2026-09-25.** `wave/grand-v4` preserves the
+**Grand V4 — corrective candidate, 2026-09-26.** `wave/grand-v4` preserves the
 playable `873a2c37` baseline from draft PRs #222/#223 and adds the seven-times
 mainland and independently enlarged Crystal Ascent, five cumulative shrines,
 127 authored enemies, Shadow-earned teleport, durable resume and shrine respawn.
-The corrected World Tree, temple approach, caves, inland water and ocean boundary
-share one integrated candidate. Actual-package land/boat/air process restart,
-repeated streaming circuits and all fourteen encounter admissions pass at
-`36eb903487124e953103ed0ee9ea6c789f11984f`. Focused world and gameplay checks are
-recorded separately; they do not replace the full gate, which remains blocked by
-inherited map lint debt. Fresh presentation review and native performance/control
-acceptance remain separate requirements. This is **not delivered on `dev`**.
+The earlier final4 terrain failed the user's traversal review. The replacement
+uses broad lowlands, accessible banks/coasts, graded mountain shoulders and the
+earlier Dragon/Goblin V4 forest recipes. At `c8f1b8e200442621137c1182f4b65e81f3594fb8`,
+strict package `4216780698166138326` passes all eleven ordinary controller walking
+routes, land/boat/air process restart, three streaming circuits and all fourteen
+encounter admissions. The unupgraded crossing measures 43.9 simulation seconds.
+Staged safe-ground respawn also passes current-dependency app checks. The inherited
+map lint repairs are integrated, but the full selector gate remains incomplete.
+Fresh presentation review and native performance/control acceptance remain separate
+requirements. This is **not delivered on `dev`**.
 See the [candidate guide](../development/grand-v4.md) and
 [integration record](waves/grand-v4/manifest.md). Linear reconciliation is unverified
 until the connector is reconnected.
