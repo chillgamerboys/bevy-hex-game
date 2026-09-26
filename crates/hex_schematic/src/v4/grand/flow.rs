@@ -12,20 +12,11 @@ fn progress(p: WorldHex) -> f64 {
 }
 
 fn in_channel(p: WorldHex) -> bool {
-    let [x, z] = world_xz(p);
-    if (-450. ..=-140.).contains(&z) {
-        (x - headwater_center(z)).abs() < 13. + 2.5 * ((z + 450.) / 37.).sin()
-    } else if (-65. ..=465.).contains(&z) {
-        let t = ((z + 60.) / 525.).clamp(0., 1.);
-        (x - river_center(z)).abs() < 10. + 12. * t + 3. * (t * std::f64::consts::PI * 5.).sin()
-    } else {
-        false
-    }
+    river_channel(p)
 }
 
 fn is_receiver(liquid: &LiquidColumn) -> bool {
-    let [x, z] = world_xz(liquid.column);
-    liquid.top == SEA_TOP || (liquid.top == 615 && ((x - 405.) / 90.).hypot((z + 115.) / 80.) < 1.2)
+    river_receiver(liquid.column, liquid.top)
 }
 
 impl GrandCompiler {
@@ -217,7 +208,7 @@ mod tests {
                 let [x, z] = world_xz(position);
                 assert!(
                     receiving.top == SEA_TOP
-                        || (receiving.top == 615
+                        || (receiving.top == terrain::VALLEY_TOP
                             && ((x - 405.) / 90.).hypot((z + 115.) / 80.) < 1.2),
                     "path from {start:?} terminates outside receiving lake/ocean: {receiving:?}"
                 );
