@@ -795,6 +795,10 @@ fn capture_pose(
         ));
     }
     let ground_site = match view {
+        "grand-garden-ground" => Some((
+            Vec3::new(276.0, anchor("garden")?.y, -464.0),
+            anchor("garden")?,
+        )),
         "grand-forest-ground" => Some((
             anchor("forest")? + Vec3::new(-35.0, 0.0, 25.0),
             anchor("forest")?,
@@ -811,12 +815,19 @@ fn capture_pose(
         _ => None,
     };
     if let Some((desired, toward)) = ground_site {
+        let human = session.human_actor_id()?;
+        let actor = session.actors.iter().find(|actor| actor.id == human)?;
         return Some(ground_capture_pose(
             terrain,
             geometry,
             desired,
             toward,
             map.sea_level,
+            GroundCaptureProfile {
+                eye: actor.eye().y - actor.feet.y,
+                height: actor.body_dimensions().y,
+                radius: actor.body_dimensions().x * 0.5,
+            },
         ));
     }
     if let Some(name) = view.strip_prefix("grand-") {
@@ -838,6 +849,7 @@ fn capture_pose(
             "bay" | "bay-baseline" => ("bay", Vec3::new(-18.0, 8.0, 24.0)),
             "bay-reverse" => ("bay", Vec3::new(24.0, 8.0, -18.0)),
             "library" => ("library_hall", Vec3::new(-5.0, 2.2, 6.0)),
+            "library-reverse" => ("library_hall", Vec3::new(30.0, 1.05, -25.0)),
             "library-upper" => ("library_upper", Vec3::new(-22.0, 2.4, 6.0)),
             "waterfall-cave" => ("library_entrance", Vec3::new(-4.0, 2.0, 0.0)),
             "shadow-tunnel" => ("shadow_entrance", Vec3::new(0.0, 2.0, 3.0)),
@@ -855,6 +867,7 @@ fn capture_pose(
             "shrine-plant" => site + Vec3::new(0.0, 1.8, -4.5),
             "shrine-earth" | "shrine-fire" | "shrine-air" => site + Vec3::new(0.0, 2.0, -3.0),
             "library-upper" => site + Vec3::new(9.0, 4.0, -9.0),
+            "library-reverse" => site + Vec3::new(-15.0, 5.0, 26.0),
             "waterfall-cave" => anchor("waterfall")? + Vec3::Y * 4.5,
             _ => site + Vec3::Y * 1.4,
         };
@@ -937,12 +950,20 @@ fn capture_pose(
 /// Review-only eye height follows admitted terrain rather than a coarse overview
 /// or a landmark's distant elevation. Pending interest loads the exact ground;
 /// neither this camera nor its bounded clearance search relocates the player.
+#[derive(Clone, Copy)]
+struct GroundCaptureProfile {
+    eye: f32,
+    height: f32,
+    radius: f32,
+}
+
 fn ground_capture_pose(
     terrain: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
     desired: Vec3,
     toward: Vec3,
     sea: f32,
+    body: GroundCaptureProfile,
 ) -> CapturePose {
     let mut candidates = HexCoord::from_world(desired).within_radius(6);
     candidates.sort_by(|a, b| {
@@ -973,25 +994,29 @@ fn ground_capture_pose(
         {
             return None;
         }
-        let eye = coord.to_world(ground + 1.7);
+        let eye = coord.to_world(ground + body.eye);
         let clear = [
             Vec3::ZERO,
-            Vec3::X * 0.2,
-            -Vec3::X * 0.2,
-            Vec3::Z * 0.2,
-            -Vec3::Z * 0.2,
+            Vec3::X * body.radius,
+            -Vec3::X * body.radius,
+            Vec3::Z * body.radius,
+            -Vec3::Z * body.radius,
         ]
         .into_iter()
         .all(|offset| {
-            [0.2, 0.8, 1.7, 1.9].into_iter().all(|height| {
-                geometry
-                    .voxel_at(eye.with_y(ground + height) + offset)
-                    .is_some_and(|position| terrain.solid_at(position).is_none())
+            let low = geometry.voxel_at(eye.with_y(ground + 0.02) + offset);
+            let high = geometry.voxel_at(eye.with_y(ground + body.height - 0.02) + offset);
+            low.zip(high).is_some_and(|(low, high)| {
+                (low.level..=high.level).all(|level| {
+                    terrain
+                        .solid_at(hex_core::TilePos::new(low.coord, level))
+                        .is_none()
+                })
             })
         });
         clear.then_some(eye)
     });
-    let position = eye.unwrap_or(desired + Vec3::Y * 1.7);
+    let position = eye.unwrap_or(desired + Vec3::Y * body.eye);
     let direction = (toward - desired).with_y(0.0).normalize_or(Vec3::NEG_Z);
     CapturePose {
         camera: Transform::from_translation(position)
@@ -1213,18 +1238,25 @@ mod tests {
         use hex_core::arena::ArenaSolidSpan;
         let geometry = ArenaVoxelGeometry::default();
         let mut terrain = ArenaTerrainView::default();
+        let body = GroundCaptureProfile {
+            eye: 0.93,
+            height: 1.2,
+            radius: 0.25,
+        };
         let desired = Vec3::ZERO;
         let toward = Vec3::NEG_Z * 30.0;
-        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0).ground_pending);
+        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body).ground_pending);
         let floor = ArenaSolidSpan {
             bottom: hex_core::TilePos::new(HexCoord::ORIGIN, 0),
             top_level: 80,
             substance: hex_core::SubstanceId::AIR,
         };
         terrain.columns.insert(HexCoord::ORIGIN, vec![floor]);
-        let pose = ground_capture_pose(&terrain, geometry, desired, toward, 0.0);
+        let pose = ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body);
         assert!(!pose.ground_pending);
-        assert!((pose.camera.translation.y - (80.0 * geometry.level_height + 1.7)).abs() < 0.001);
+        assert!(
+            (pose.camera.translation.y - (80.0 * geometry.level_height + body.eye)).abs() < 0.001
+        );
         terrain.object_columns.insert(
             HexCoord::ORIGIN,
             vec![ArenaSolidSpan {
@@ -1233,7 +1265,23 @@ mod tests {
                 substance: hex_core::SubstanceId::AIR,
             }],
         );
-        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0).ground_pending);
+        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body).ground_pending);
+        // An overhead ornament above the actual 1.2-unit body must not demand
+        // the former hardcoded 1.9-unit clearance; a lower obstruction must wait.
+        for (bottom, blocked) in [(85, false), (83, true)] {
+            terrain.object_columns.insert(
+                HexCoord::ORIGIN,
+                vec![ArenaSolidSpan {
+                    bottom: hex_core::TilePos::new(HexCoord::ORIGIN, bottom),
+                    top_level: 90,
+                    substance: hex_core::SubstanceId::AIR,
+                }],
+            );
+            assert_eq!(
+                ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body).ground_pending,
+                blocked
+            );
+        }
     }
 
     #[test]

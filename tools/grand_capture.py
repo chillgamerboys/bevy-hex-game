@@ -16,13 +16,13 @@ from northern_review import metadata_unchanged, scan_log
 from v4_review import atomic_json, file_record, png_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
-VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-waterfall",
+VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-garden-ground", "grand-waterfall",
          "grand-valley-lake", "grand-world-tree", "grand-roots-entrance", "grand-shrine-plant",
          "grand-forest", "grand-forest-ground", "grand-forest-ground-reverse", "grand-river-exit",
          "grand-island-landing", "grand-summit", "grand-shrine-air", "grand-crystal", "grand-shrine-earth",
          "grand-frozen-woods", "grand-volcano", "grand-shrine-fire", "grand-bay",
          "grand-bay-baseline", "grand-bay-reverse", "grand-waterline", "grand-underwater",
-         "grand-waterfall-cave", "grand-library", "grand-library-upper",
+         "grand-waterfall-cave", "grand-library", "grand-library-reverse", "grand-library-upper",
          "grand-shadow-tunnel", "grand-shadow-reverse", "grand-shadow-exit", "first", "third", "start")
 MOTION_ROUTE = (
     "Start at the beach; enter water, deploy/steer/fold the boat, sail to Fire; "
