@@ -50,6 +50,17 @@ fn admit(world: &World, request: &ArenaBurrowRequest) -> Admission {
         if !ready_voxel(view, geometry, position) {
             return Err((Some(position), Reject::TerrainUnavailable));
         }
+        if view
+            .edit_protected
+            .get(&position.coord)
+            .is_some_and(|intervals| {
+                intervals
+                    .iter()
+                    .any(|(low, high)| (*low..=*high).contains(&position.level))
+            })
+        {
+            return Err((Some(position), Reject::Protected));
+        }
         if state.edits.object_at(p).is_some() {
             return Err((Some(position), Reject::StaticObject));
         }

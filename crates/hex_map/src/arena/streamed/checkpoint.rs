@@ -100,6 +100,78 @@ pub fn export_records(
     });
     Ok(std::iter::once(Ok(header)).chain(finite).chain(damage))
 }
+/// Owned sparse snapshot for off-thread encoding and atomic partitioned writes.
+/// Generated terrain packages, resident source bytes, and meshes are never copied.
+pub struct OwnedMapCheckpoint {
+    header: Header,
+    partitions: Vec<FiniteChunkCheckpoint>,
+    damage: BTreeMap<ChunkId, Vec<DamageCell>>,
+}
+impl OwnedMapCheckpoint {
+    /// Encode one bounded owner partition per worker iteration.
+    pub fn into_records(self) -> impl Iterator<Item = RuntimeResult<OwnerRecord>> + Send + 'static {
+        let Self {
+            header,
+            partitions,
+            damage,
+        } = self;
+        let header = std::iter::once_with(move || encode("header".into(), &header));
+        let finite = partitions
+            .into_iter()
+            .map(|part| encode(finite_key(part.coordinate), &part));
+        let damage = damage.into_iter().map(|(id, mut cells)| {
+            cells.sort_by_key(|c| c.position);
+            encode(damage_key(id), &cells)
+        });
+        header.chain(finite).chain(damage)
+    }
+}
+/// Capture only sparse edits, partial health and counters at a settled owner boundary.
+/// Serialization and filesystem work belong to the consumer's background worker.
+pub fn snapshot_records(world: &World) -> Result<OwnedMapCheckpoint, String> {
+    let state = world
+        .get_resource::<StreamedArena>()
+        .ok_or("no streamed world to save")?;
+    let damaged = world
+        .get_resource::<DamagedVoxels>()
+        .ok_or("no terrain damage projection")?;
+    let mut damage: BTreeMap<ChunkId, Vec<DamageCell>> = BTreeMap::new();
+    for (pos, health) in damaged.iter() {
+        let position = VoxelPosition {
+            column: world_hex(pos.coord),
+            level: pos.level,
+        };
+        damage
+            .entry(position.column.chunk())
+            .or_default()
+            .push(DamageCell {
+                position,
+                remaining: health.remaining,
+                maximum: health.maximum,
+            });
+    }
+    let header = Header {
+        version: 1,
+        finite: state.edits.checkpoint_header(),
+        next_transaction: state.next_transaction,
+        burrow_sequences: world.resource::<ArenaWorldState>().burrow_sequences.clone(),
+        consumed_batches: world
+            .resource::<crate::terrain_damage::TerrainDamageState>()
+            .checkpoint_batches(),
+        damage_chunks: damage.keys().copied().collect(),
+    };
+    let partitions = state
+        .edits
+        .checkpoint_partitions()
+        .collect::<RuntimeResult<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(OwnedMapCheckpoint {
+        header,
+        partitions,
+        damage,
+    })
+}
+
 /// Completely validated sparse replacement. It holds no extra nonresident terrain bytes.
 pub struct StagedMapCheckpoint {
     session: FiniteWorldSession,

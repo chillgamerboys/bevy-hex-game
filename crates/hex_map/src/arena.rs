@@ -96,6 +96,14 @@ pub fn plugin(app: &mut App) {
         // Commit the adapter change at that same boundary, before either adapter
         // sees the reset; waiting for the next PreUpdate uses the old loader.
         .add_systems(ArenaTick, switch_mode.before(ArenaSystems::ApplyTerrain))
+        // A save/settle tick may follow Simulate without another app frame.
+        // Draining here admits those fresh announcements at the same boundary.
+        .add_systems(
+            ArenaTick,
+            retain_announcements
+                .after(switch_mode)
+                .before(ArenaSystems::ApplyTerrain),
+        )
         .add_systems(
             ArenaTick,
             apply_terrain
