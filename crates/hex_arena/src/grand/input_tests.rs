@@ -381,3 +381,97 @@ fn unloaded_teleport_target_refusal_consumes_x_without_spending_cooldown() {
         "loading the target must not retry a refused X"
     );
 }
+
+#[test]
+fn submerged_swimming_checkpoint_preserves_oxygen_velocity_and_next_tick() {
+    let mut app = fixture(true);
+    // Stage only the initial pose. Actual Grand swimming establishes movement
+    // and depletes oxygen; neither reserve nor velocity is injected.
+    let underwater = Vec3::new(0.0, -2.0, 0.0);
+    stage(&mut app, underwater);
+    let swimming = ActorIntent {
+        aim: Vec3::X,
+        movement: Vec2::Y,
+        flight_vertical: -1.0,
+        ..Default::default()
+    };
+    let initial_tick = app.world().resource::<ArenaSession>().tick;
+    for _ in 0..90 {
+        app.world_mut().resource_mut::<ArenaInput>().human = swimming;
+        app.world_mut().run_schedule(ArenaTick);
+    }
+    let identity = GrandCheckpointIdentity {
+        world_id: "grand-input-test".into(),
+        content_revision: "swimming-resume".into(),
+    };
+    let session = app.world().resource::<ArenaSession>();
+    assert_eq!(session.tick, initial_tick + 90);
+    let saved_swim = player(&app).swimming().expect("Grand swimming");
+    assert!(saved_swim.active && saved_swim.submerged);
+    assert!(saved_swim.oxygen_seconds > 0.0);
+    assert!(saved_swim.oxygen_seconds < saved_swim.oxygen_capacity_seconds - 0.5);
+    assert!(!player(&app).boat().expect("folded boat").active);
+    assert!(!player(&app).glider().expect("folded glider").open);
+    assert!(player(&app).free_flight().is_none());
+    let saved_feet = player(&app).feet;
+    let saved_velocity = session.stream_interest().expect("swim interest").velocity;
+    assert!(saved_feet.x > underwater.x + 0.5 && saved_feet.y < underwater.y);
+    assert!(saved_velocity.x > 1.0 && saved_velocity.y < -1.0);
+    let saved_tick = session.tick;
+    let saved_clock = session.ocean_time();
+    let bytes = session
+        .encode_grand_checkpoint(&identity)
+        .expect("swim save");
+    let terrain = app.world().resource::<ArenaTerrainView>().clone();
+    let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+    let generation = app.world().resource::<ArenaReset>().generation;
+
+    // The uninterrupted run is the oracle for the same first ordinary input
+    // after adoption, including the internal marine velocity and all clocks.
+    app.world_mut().resource_mut::<ArenaInput>().human = swimming;
+    app.world_mut().run_schedule(ArenaTick);
+    let uninterrupted = app.world().resource::<ArenaSession>();
+    assert_eq!(uninterrupted.tick, saved_tick + 1);
+    assert!(player(&app).feet.distance(saved_feet) > 0.01);
+    let next_swim = player(&app).swimming().expect("continued swimming");
+    assert!(next_swim.active && next_swim.submerged);
+    assert!(next_swim.oxygen_seconds < saved_swim.oxygen_seconds);
+    let expected = uninterrupted
+        .encode_grand_checkpoint(&identity)
+        .expect("uninterrupted swim");
+
+    let mut restored =
+        ArenaSession::decode_grand_checkpoint(&bytes, &identity, &terrain, geometry, generation)
+            .expect("decode active swim");
+    restored
+        .rebind_grand_terrain(&terrain, geometry, generation)
+        .expect("admit underwater body without requiring dry ground");
+    assert_eq!(restored.tick, saved_tick);
+    assert_eq!(restored.ocean_time(), saved_clock);
+    assert_eq!(
+        restored.stream_interest().expect("restored swim").velocity,
+        saved_velocity
+    );
+    assert_eq!(
+        restored
+            .encode_grand_checkpoint(&identity)
+            .expect("rebound swim"),
+        bytes,
+        "adoption must not refill oxygen, change mode or discard marine state"
+    );
+    *app.world_mut().resource_mut::<ArenaSession>() = restored;
+    assert_eq!(player(&app).feet, saved_feet);
+    assert_eq!(player(&app).swimming(), Some(saved_swim));
+    app.world_mut().resource_mut::<ArenaInput>().human = swimming;
+    app.world_mut().run_schedule(ArenaTick);
+    let resumed = app.world().resource::<ArenaSession>();
+    assert_eq!(resumed.tick, saved_tick + 1);
+    assert_eq!(player(&app).swimming(), Some(next_swim));
+    assert_eq!(
+        resumed
+            .encode_grand_checkpoint(&identity)
+            .expect("resumed swim"),
+        expected,
+        "the first resumed tick must match uninterrupted submerged movement"
+    );
+}
