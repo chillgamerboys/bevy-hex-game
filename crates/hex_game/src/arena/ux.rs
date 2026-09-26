@@ -240,7 +240,7 @@ pub(super) fn spawn_map(parent: &mut ChildSpawnerCommands, large: bool, size: f3
             Name::new(if large { "Expanded map" } else { "Minimap" }),
         ))
         .with_children(|map| {
-            for index in 0..16 {
+            for index in 0..32 {
                 map.spawn((
                     Node {
                         position_type: PositionType::Absolute,
@@ -584,6 +584,7 @@ fn present_map(
     mut ux: ResMut<UxState>,
     overview: Option<Res<ArenaOverview>>,
     session: Res<ArenaSession>,
+    terrain: Option<Res<ArenaTerrainView>>,
     mut images: ResMut<Assets<Image>>,
     scrolls: Query<&ComputedNode, With<MenuScroll>>,
     mut canvases: Query<
@@ -691,6 +692,25 @@ fn present_map(
         markers.push(None);
     }
     markers.push(ux.pin.map(|p| (p, "◆", Color::srgb(1.0, 0.84, 0.35))));
+    if let (Some(progress), Some(terrain)) = (session.grand_progress(), terrain.as_deref()) {
+        for shrine in &progress.discovered_shrines {
+            if let Some(position) = terrain.anchors.get(shrine.anchor()) {
+                let glyph = match shrine {
+                    hex_arena::ShrineId::Fire => "F",
+                    hex_arena::ShrineId::Air => "A",
+                    hex_arena::ShrineId::Water => "W",
+                    hex_arena::ShrineId::Earth => "E",
+                    hex_arena::ShrineId::Plant => "P",
+                };
+                let color = if progress.shrines.contains(shrine) {
+                    Color::srgb(0.5, 1.0, 0.76)
+                } else {
+                    Color::srgb(1.0, 0.84, 0.35)
+                };
+                markers.push(Some((position.xz(), glyph, color)));
+            }
+        }
+    }
     for m in session.discovered_landmarks() {
         let (glyph, color) = if m.kind == LandmarkKind::Fountain {
             if m.consumed {
@@ -810,6 +830,7 @@ fn present_menus(
     ux: Res<UxState>,
     state: Res<ViewState>,
     session: Res<ArenaSession>,
+    grand: Option<Res<super::grand::State>>,
     recorder: Option<Res<Recorder>>,
     mut labels: Query<(&UxLabel, &mut Text, &mut Node), Without<PageBody>>,
     mut pages: Query<(&PageBody, &mut Node), Without<UxLabel>>,
@@ -838,7 +859,8 @@ fn present_menus(
                 let status = state
                     .forest_preparation
                     .status()
-                    .or_else(|| state.northern_preparation.status());
+                    .or_else(|| state.northern_preparation.status())
+                    .or_else(|| state.grand_preparation.status());
                 set_display(
                     &mut node,
                     if status.is_some() {
@@ -850,15 +872,22 @@ fn present_menus(
                 status.unwrap_or_default().into()
             }
             UxLabel::Notice => {
+                let biome = grand
+                    .as_ref()
+                    .map_or("", |state| state.biome_notice.as_str());
                 set_display(
                     &mut node,
-                    if ux.notice_remaining > 0.0 {
+                    if ux.notice_remaining > 0.0 || !biome.is_empty() {
                         Display::Flex
                     } else {
                         Display::None
                     },
                 );
-                ux.notice.clone()
+                if ux.notice_remaining > 0.0 {
+                    ux.notice.clone()
+                } else {
+                    biome.into()
+                }
             }
             UxLabel::Recording => {
                 set_display(

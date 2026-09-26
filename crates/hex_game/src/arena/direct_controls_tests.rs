@@ -205,7 +205,7 @@ fn two_successive_taps_before_physics_remain_two_ordered_spells() {
 }
 
 #[test]
-fn cooldown_rejection_keeps_gesture_ownership_without_buffering_held_buttons() {
+fn held_fireball_starts_when_ready_and_keeps_gesture_ownership() {
     let (mut app, _) = ready(60);
     *app.world_mut()
         .resource_mut::<ArenaSession>()
@@ -220,17 +220,17 @@ fn cooldown_rejection_keeps_gesture_ownership_without_buffering_held_buttons() {
     for _ in 0..15 {
         frame(&mut app);
     }
-    assert!(charge(&app).is_none());
+    assert_eq!(charge(&app), Some(Spell::Fireball));
     mouse(&mut app, MouseButton::Right, true);
     frame(&mut app);
-    assert!(charge(&app).is_none());
+    assert_eq!(charge(&app), Some(Spell::Fireball));
     mouse(&mut app, MouseButton::Left, false);
     frame(&mut app);
     for _ in 0..3 {
         frame(&mut app);
     }
     assert!(charge(&app).is_none());
-    assert_eq!(casts(&app, Spell::Fireball), 0);
+    assert_eq!(casts(&app, Spell::Fireball), 1);
     assert_eq!(casts(&app, Spell::Shield), 0);
     mouse(&mut app, MouseButton::Right, false);
     frame(&mut app);

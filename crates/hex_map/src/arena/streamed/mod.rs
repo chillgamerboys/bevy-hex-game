@@ -27,6 +27,7 @@ use std::{
 };
 mod burrow;
 pub mod checkpoint;
+mod grand_landmarks;
 mod render;
 #[cfg(test)]
 mod tests;

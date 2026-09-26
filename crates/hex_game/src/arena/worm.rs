@@ -30,12 +30,12 @@ enum PartKind {
 #[derive(Component)]
 #[require(Visibility)]
 pub(super) struct WormPart {
-    actor: u8,
+    actor: hex_arena::ActorId,
     kind: PartKind,
 }
 
 impl WormPart {
-    pub(super) fn actor_id(&self) -> u8 {
+    pub(super) fn actor_id(&self) -> hex_arena::ActorId {
         self.actor
     }
 

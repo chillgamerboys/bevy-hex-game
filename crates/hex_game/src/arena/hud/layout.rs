@@ -194,6 +194,7 @@ pub(crate) fn setup(
                         health.spawn((text("", 24.0, INK), Label::Health));
                         health.spawn((text("", 24.0, INK), ux::combat_cues::PlayerLevel));
                         health.spawn((text("", 20.0, INK), ux::combat_cues::GliderStatus));
+                        health.spawn((text("", 20.0, INK), Label::Teleport));
                         health.spawn((
                             text("", 20.0, INK),
                             super::super::marine_visual::MarineStatus,
@@ -345,7 +346,7 @@ pub(crate) fn setup(
                 });
                 p.spawn(text("Choose your map",26.0,INK));
                 p.spawn(scroll_content(row())).with_children(|r| {
-                    for map in [ArenaMap::ForestMassif,ArenaMap::NorthernArchipelago,ArenaMap::WaterLab,ArenaMap::Duel,ArenaMap::Fort,ArenaMap::SevenRegions] { button(r,crate::arena::map_name(map),Action::Map(map)); }
+                    for map in [ArenaMap::GrandV4,ArenaMap::ForestMassif,ArenaMap::NorthernArchipelago,ArenaMap::WaterLab,ArenaMap::Duel,ArenaMap::Fort,ArenaMap::SevenRegions] { button(r,crate::arena::map_name(map),Action::Map(map)); }
                 });
                 p.spawn((scroll_content(column()),ModeContent(ArenaControl::Player))).with_children(|p| {
                     p.spawn(text("Enemy party",26.0,INK));
@@ -364,13 +365,15 @@ pub(crate) fn setup(
                 p.spawn(text("M toggles your map. Esc opens upgrades, settings and recording.\nCombat waits until you start.",24.0,INK));
             });
             p.spawn((Node {flex_shrink:0.0,display:Display::None,..default()},text("",20.0,INK),ux::MenuScrollHint));
+            p.spawn((text("",22.0,INK),Label::SaveStatus));
+            grand_actions(p, true);
             // Fixed action positions: Restart reopens a safe Start button.
             p.spawn(row()).with_children(|r| {
                 button(r,"FULLSCREEN",Action::Fullscreen);
                 button(r,"UI SIZE",UxAction::Scale);
-                button(r,"QUIT GAME",Action::Quit);
+                r.spawn((Button,Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default() },BackgroundColor(Color::srgb(0.12,0.24,0.29)),Action::Quit)).with_children(|b|{ b.spawn((text("QUIT GAME",26.0,INK),Label::Quit)); });
             });
-            p.spawn((Button,BorderColor::all(Color::NONE),Node { border:UiRect::all(px(2)), width:percent(100),min_height:px(58),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,..default() },BackgroundColor(Color::srgb(0.16,0.37,0.41)),Action::Start)).with_children(|r|{r.spawn(text("START  /  ENTER",28.0,INK));});
+            p.spawn((Button,BorderColor::all(Color::NONE),Node { border:UiRect::all(px(2)), width:percent(100),min_height:px(58),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,..default() },BackgroundColor(Color::srgb(0.16,0.37,0.41)),Action::Start)).with_children(|r|{r.spawn((text("START  /  ENTER",28.0,INK),Label::Start));});
         });
     });
     commands.spawn((Node { display:Display::None,..overlay() },BackgroundColor(Color::srgba(0.01,0.02,0.035,0.8)),GlobalZIndex(20),PausePanel)).with_children(|overlay| {
@@ -397,7 +400,7 @@ pub(crate) fn setup(
                                     row.spawn(Node {flex_grow:1.0,flex_basis:px(0),min_width:px(0),padding:UiRect::right(px(CLIP_EDGE_INSET)),..scroll_content(column())}).with_children(|details| {
                                         details.spawn((text("",24.0,INK),UxLabel::MapSelection));
                                         button(details,"CLEAR DESTINATION",UxAction::ClearPin);
-                                        details.spawn(text("D  Dragon     S  Shadow     T  Troll     G  Golem\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
+                                        details.spawn(text("D  Dragon     S  Shadow     T  Troll     G  Golem\n+  Charged fountain\n○  Spent fountain     ×  Defeated\nGrand shrines: F Fire · A Air · W Water · E Earth · P Plant\nGold: discovered · Green: acquired\nClick a marker to inspect it. Click terrain to place your destination.",22.0,INK));
                                     });
                                 });
                             }
@@ -414,7 +417,7 @@ pub(crate) fn setup(
                                 p.spawn((Button, Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),border:UiRect::all(px(2)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,flex_shrink:0.0,overflow:Overflow::clip(),..default() }, BackgroundColor(Color::srgb(0.12, 0.24, 0.29)), BorderColor::all(Color::NONE), Action::Fullscreen)).with_children(|b| {b.spawn((text("Fullscreen",26.0,INK),Label::WindowMode));});
                                 p.spawn(text("C switches first / third person.\nUI preferences persist; Restart resets only your run.",26.0,INK));
                             }
-                            Page::Controls => {p.spawn(text(format!("{}\n\nWASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nG   Open / fold glider (Expedition)\nCharging or High Jump folds the glider.\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nV   Toggle wind direction and speed (Ocean)\nEsc / Tab   Pause / resume\nShift+R   Restart run\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls", super::super::northern::controls_text()),26.0,INK));}
+                            Page::Controls => {p.spawn((text("",26.0,INK),Label::Controls));}
                         }
                     });
                 }
@@ -423,16 +426,28 @@ pub(crate) fn setup(
             p.spawn(row()).with_children(|r| {
                 r.spawn((Button,BorderColor::all(Color::NONE),Node { border:UiRect::all(px(2)), min_height:px(52),padding:UiRect::axes(px(18),px(10)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default() },BackgroundColor(Color::srgb(0.12,0.24,0.29)),UxAction::Record)).with_children(|b|{b.spawn((text("START RECORDING",26.0,INK),UxLabel::RecordButton));});
                 button(r,"OPEN RECORDINGS",UxAction::OpenFolder);
-                button(r,"QUIT GAME",Action::Quit);
+                r.spawn((Button,Node { min_height:px(52),padding:UiRect::axes(px(18),px(10)),align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default() },BackgroundColor(Color::srgb(0.12,0.24,0.29)),Action::Quit)).with_children(|b|{ b.spawn((text("QUIT GAME",26.0,INK),Label::Quit)); });
             });
             p.spawn((text("",20.0,INK),UxLabel::RecorderDetail));
+            p.spawn((text("",22.0,INK),Label::SaveStatus));
+            grand_actions(p, false);
             p.spawn(Node {width:percent(100),column_gap:px(12),flex_shrink:0.0,..default()}).with_children(|r| {
                 for (name,action) in [("RESUME",Action::Resume),("RESTART",Action::Restart)] {
                     r.spawn((Button,BorderColor::all(Color::NONE),Node { border:UiRect::all(px(2)),flex_grow:1.0,flex_basis:px(0),min_width:px(0),min_height:px(58),align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default()},BackgroundColor(Color::srgb(0.16,0.37,0.41)),action)).with_children(|b|{
-                        let mut label=b.spawn(text(name,26.0,INK));if matches!(action,Action::Resume){label.insert(Label::Resume);}
+                        let mut label=b.spawn(text(name,26.0,INK));if matches!(action,Action::Resume){label.insert(Label::Resume);}else{label.insert(Label::Restart);}
                     });
                 }
             });
         });
+    });
+}
+
+fn grand_actions(parent: &mut ChildSpawnerCommands, include_new: bool) {
+    parent.spawn(row()).with_children(|row| {
+        if include_new {
+            button(row, "NEW RUN", Action::NewRun);
+        }
+        button(row, "CONFIRM NEW RUN", Action::ConfirmNew);
+        button(row, "CANCEL", Action::CancelNew);
     });
 }

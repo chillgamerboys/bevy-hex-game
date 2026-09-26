@@ -57,7 +57,7 @@ CHARGE_VIEWS = (
     "shield-partial-preview-first", "shield-partial-preview-third",
 )
 # Explicit recipes preserve the legacy two-actor regression matrices.
-MAPS = ("duel", "fort", "seven-regions", "forest-massif", "northern-archipelago", "water-lab")
+MAPS = ("duel", "fort", "seven-regions", "forest-massif", "northern-archipelago", "water-lab", "grand-v4")
 ENCOUNTERS = ("dragon", "goblins", "shaman-party", "shadow", "golem", "goblin", "wisp", "wisps-2", "wisps-4", "wisps-8", "wisps-12", "worm")
 PRESET_MEMBERS = {"shadow": ["Shadow"], "dragon": ["Dragon"], "goblins": ["Goblin"] * 10,
                   "shaman-party": ["Shaman", *(["Goblin"] * 5)], "golem": ["Golem"],
@@ -306,7 +306,7 @@ def source_state() -> tuple[dict, bytes, bytes]:
 def environment(target: Path) -> tuple[dict[str, str], list[str]]:
     """Discard inherited game capabilities; only this invocation may opt them in."""
     env = dict(os.environ)
-    removed = sorted(key for key in env if key.startswith("HEX_") and key not in ("HEX_FOREST_WORLD", "HEX_NORTHERN_WORLD"))
+    removed = sorted(key for key in env if key.startswith("HEX_") and key not in ("HEX_FOREST_WORLD", "HEX_NORTHERN_WORLD", "HEX_GRAND_WORLD"))
     for key in removed:
         del env[key]
     # Let .cargo/config.toml supply the checkout's asset root, even from Finder.
@@ -1053,6 +1053,10 @@ def capture(args: argparse.Namespace) -> int:
             raise RuntimeError("Capture output inside the checkout must be Git-ignored (use .context/).")
     env, removed = environment(args.target_dir)
     env.update(ux_environment(args))
+    if getattr(args, "northern_world", None):
+        env["HEX_NORTHERN_WORLD"] = str(args.northern_world.resolve())
+    if getattr(args, "grand_world", None):
+        env["HEX_GRAND_WORLD"] = str(args.grand_world.resolve())
     if getattr(args, "forest_world", None):
         if any(entry[2] != "forest-massif" for entry in entries):
             raise RuntimeError("--forest-world requires a Forest-only capture matrix.")
@@ -1197,6 +1201,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--forest-world", type=Path,
                              help="Explicit absolute compiled V4 Forest package directory; the default package is otherwise retained.")
         command.add_argument("--northern-world", type=Path, help="Explicit compiled Northern Archipelago package.")
+        command.add_argument("--grand-world", type=Path, help="Explicit compiled Grand V4 package.")
         command.add_argument("--ux-performance", action="store_true",
                              help="Record Battle interface performance diagnostics for this invocation.")
     captures.add_argument("--output", type=Path, required=True,
@@ -1246,6 +1251,8 @@ def main(argv: list[str] | None = None) -> int:
         env.update(ux_environment(args))
         if args.northern_world is not None:
             env["HEX_NORTHERN_WORLD"] = str(args.northern_world.resolve())
+        if args.grand_world is not None:
+            env["HEX_GRAND_WORLD"] = str(args.grand_world.resolve())
         if args.forest_world is not None:
             # Packages remain available when the player changes maps at the ready screen.
             env["HEX_FOREST_WORLD"] = str(args.forest_world)

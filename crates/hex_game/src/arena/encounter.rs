@@ -45,7 +45,7 @@ pub(super) fn stress_view(view: &str) -> bool {
 
 #[derive(serde::Serialize)]
 pub(super) struct StressStimulus {
-    representative: u8,
+    representative: hex_arena::ActorId,
     human_feet: [f32; 3],
     cast_requested: bool,
     visit: u32,
@@ -214,8 +214,8 @@ pub(super) fn prepare_stress_tick(world: &mut World) -> Option<StressStimulus> {
 #[must_use]
 pub fn stress_target_pose(
     session: &ArenaSession,
-    actor: u8,
-    representative: u8,
+    actor: hex_arena::ActorId,
+    representative: hex_arena::ActorId,
     previous: Option<Vec3>,
     home: Vec3,
     terrain: &ArenaTerrainView,
@@ -470,14 +470,14 @@ fn phase_owner(
     view: &str,
     actors: impl IntoIterator<
         Item = (
-            u8,
+            hex_arena::ActorId,
             Option<hex_arena::ChargeState>,
             Option<hex_arena::AttackSnapshot>,
         ),
     >,
     barriers: &[hex_arena::BarrierSnapshot],
     auras: &[hex_arena::AuraSnapshot],
-) -> Option<u8> {
+) -> Option<hex_arena::ActorId> {
     let view = view.strip_suffix("-rear").unwrap_or(view);
     if view == "encounter-barrier" {
         return barriers.first().map(|barrier| barrier.owner);
@@ -676,7 +676,7 @@ pub(super) fn frame_bounds(minimum: Vec3, maximum: Vec3, rear: bool) -> Transfor
 
 /// Conservative composition admission: a living subject must occupy a useful
 /// part of the real camera frustum and have an unobstructed terrain ray.
-pub(super) fn visible_subjects(session: &ArenaSession, camera: &Transform, view: &str) -> Vec<u8> {
+pub(super) fn visible_subjects(session: &ArenaSession, camera: &Transform, view: &str) -> Vec<hex_arena::ActorId> {
     let Some(human) = session.actors.first() else {
         return Vec::new();
     };

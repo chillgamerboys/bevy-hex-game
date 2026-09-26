@@ -21,7 +21,7 @@ struct ChangedCell {
 #[derive(Clone, serde::Serialize)]
 struct Conversion {
     generation: u64,
-    actor: u8,
+    actor: hex_arena::ActorId,
     sequence: u64,
     frame: u32,
     tick: u64,

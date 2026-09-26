@@ -12,7 +12,7 @@ use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfil
 use hex_core::HexCoord;
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
-    sample_local_surface, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
+    sample_local_surface_at_time, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
     OceanNearBoundary, OceanRenderStatus, OceanSurfaceAdapter, OceanSurfaceProfile,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
@@ -74,7 +74,10 @@ fn ocean_depth(
     selection: Res<ArenaSelection>,
     cameras: Query<(Entity, Has<DepthPrepass>), With<ArenaCamera>>,
 ) {
-    let enabled = selection.map == ArenaMap::NorthernArchipelago;
+    let enabled = matches!(
+        selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    );
     for (entity, present) in &cameras {
         if enabled && !present {
             commands.entity(entity).insert(DepthPrepass);
@@ -98,18 +101,42 @@ pub(super) fn controls_text() -> &'static str {
     "M: minimap · V: wind direction/speed (arrow points downwind)\nF: open/fold exploration flight · WASD + mouse: steer · Space/Ctrl: rise/drop · Shift: fast flight\nB: deploy/fold sailboat near water · W: sail/paddle · A/D: steer · S: brake\nSwimming: Space rises, Ctrl dives · 90 seconds of oxygen\nG: momentum glider · Fireball and Shield work in flight · High Jump returns to gravity"
 }
 
+/// Grand's ordinary prevailing wind follows the authored outbound sailing route.
+/// Northern keeps its accepted easterly profile. Waves and controllers share this value.
+pub(super) fn prevailing_wind(streamed: &StreamedArena, selection: ArenaMap) -> OceanWindProfile {
+    let heading_radians = if selection == ArenaMap::GrandV4 {
+        streamed
+            .overview
+            .anchors
+            .get("sailing_start")
+            .zip(streamed.overview.anchors.get("volcano_landing"))
+            .map(|(start, end)| Vec3::from_array(*end) - Vec3::from_array(*start))
+            .filter(|direction| direction.with_y(0.0).length_squared() > 1.0)
+            .map_or(-std::f32::consts::FRAC_PI_2, |direction| {
+                direction.x.atan2(-direction.z)
+            })
+    } else {
+        std::f32::consts::FRAC_PI_2
+    };
+    OceanWindProfile {
+        heading_radians,
+        speed: 9.0,
+    }
+}
+
 pub(super) fn fixture_view(view: &str) -> bool {
-    matches!(
-        view,
-        "northern-overview"
-            | "northern-bay"
-            | "northern-bay-flat"
-            | "northern-settlement"
-            | "northern-summit"
-            | "northern-waterline"
-            | "northern-underwater"
-            | "northern-boat"
-    )
+    view.starts_with("grand-")
+        || matches!(
+            view,
+            "northern-overview"
+                | "northern-bay"
+                | "northern-bay-flat"
+                | "northern-settlement"
+                | "northern-summit"
+                | "northern-waterline"
+                | "northern-underwater"
+                | "northern-boat"
+        )
 }
 
 /// Static publication readiness, independent of native motion and control feel.
@@ -150,6 +177,8 @@ pub(super) fn snapshot(
     streamed: Option<&StreamedArena>,
     terrain: Option<&ArenaRenderStatus>,
     ocean: Option<&OceanRenderStatus>,
+    frame: &OceanFrame,
+    profile: &OceanSurfaceProfile,
 ) -> serde_json::Value {
     let Some(world) = streamed else {
         return serde_json::Value::Null;
@@ -170,6 +199,10 @@ pub(super) fn snapshot(
         "source_chunks_retained": world.edits.resident_source_count(),
         "last_publication_ms": world.publication_ms,
         "failure": world.failure,
+        "surface_time_seconds": frame.time().seconds,
+        "wind_response": profile.wind_response.map(|wind| serde_json::json!({
+            "heading_radians": wind.heading_radians, "speed": wind.speed,
+        })),
         "terrain_pending": terrain.map(|value| value.pending_chunks),
         "ocean": ocean.map(|value| serde_json::json!({
             "ready": value.ready,
@@ -202,7 +235,10 @@ fn configure(
     mut sky_profile: ResMut<BattleSkyProfile>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let enabled = selection.map == ArenaMap::NorthernArchipelago;
+    let enabled = matches!(
+        selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    );
     if enabled != cache.enabled {
         *sky_profile = if enabled {
             BattleSkyProfile::northern()
@@ -224,6 +260,7 @@ fn configure(
         return;
     };
     let map = &streamed.overview;
+    let wind = prevailing_wind(&streamed, selection.map);
     if cache.package != Some(map.package_fingerprint) {
         let prepared = OceanBathymetry {
             revision: map.package_fingerprint,
@@ -244,6 +281,9 @@ fn configure(
             }
         }
         *profile = OceanSurfaceProfile::regular_voxels(map.sea_level, geometry.level_height);
+        if selection.map == ArenaMap::GrandV4 && state.capture_view != "grand-bay-baseline" {
+            *profile = profile.clone().with_wind_response(wind);
+        }
         // Capture-only baseline retains identical water membership and opaque color.
         if state.capture.is_some() && state.capture_view == "northern-bay-flat" {
             for wave in &mut profile.waves {
@@ -284,10 +324,7 @@ fn configure(
             commands.insert_resource(OceanEnvironmentView {
                 package_fingerprint: map.package_fingerprint,
                 sampler: Arc::new(adapter.clone().with_wind_field(field)),
-                wind: OceanWindProfile {
-                    heading_radians: std::f32::consts::FRAC_PI_2,
-                    speed: 9.0,
-                },
+                wind,
             });
             cache.wind_publication = Some(publication);
         }
@@ -378,7 +415,9 @@ fn stage_summit(
     state.initialized = true;
     cache.summit_pending = None;
     cache.summit_staged = true;
-    info!("Ocean summit glider staged: feet={feet:?}, heading={heading:?}, open=true, wind=natural-field");
+    info!(
+        "Ocean summit glider staged: feet={feet:?}, heading={heading:?}, open=true, wind=natural-field"
+    );
 }
 
 fn interest(
@@ -445,6 +484,7 @@ fn present(
     state: Res<ViewState>,
     view: Res<ArenaTerrainView>,
     geometry: Res<ArenaVoxelGeometry>,
+    session: Res<ArenaSession>,
     mut cache: ResMut<NorthernPresentation>,
     mut sky: ResMut<BattleSkyFrame>,
     profile: Res<OceanSurfaceProfile>,
@@ -464,6 +504,16 @@ fn present(
     } else {
         time.phase_seconds()
     };
+    frame.simulation_time = Some(
+        if state.capture.is_some() && state.capture_view != "northern-boat" {
+            OceanSimulationTime {
+                generation: time.generation,
+                seconds: 0.0,
+            }
+        } else {
+            *time
+        },
+    );
     sky.enabled = true;
     sky.sun_direction = sun_direction();
     #[expect(
@@ -494,8 +544,11 @@ fn present(
             &bath,
             &boundary,
             camera.translation,
-            frame.phase_seconds,
-        );
+            frame.time(),
+        )
+        .or_else(|| {
+            super::environment::water_color(&view, *geometry, camera.translation, &session)
+        });
         fog.color = water.unwrap_or(Color::srgb(0.46, 0.59, 0.73));
         fog.falloff = FogFalloff::Exponential {
             density: if water.is_some() { 0.09 } else { 0.00016 },
@@ -532,15 +585,10 @@ fn camera_water(
     bath: &OceanBathymetry,
     boundary: &OceanNearBoundary,
     camera: Vec3,
-    phase: f32,
+    time: OceanSimulationTime,
 ) -> Option<Color> {
-    let sample = sample_local_surface(
-        profile,
-        bath,
-        boundary,
-        Vec2::new(camera.x, camera.z),
-        phase,
-    )?;
+    let sample =
+        sample_local_surface_at_time(profile, bath, boundary, Vec2::new(camera.x, camera.z), time)?;
     if camera.y >= sample.height {
         return None;
     }
@@ -698,7 +746,7 @@ fn capture_pose(
 ) -> Option<CapturePose> {
     let map = &streamed.overview;
     let spawn = Vec3::from_array(map.player_spawn);
-    if view == "northern-overview" {
+    if matches!(view, "northern-overview" | "grand-overview") {
         return Some(overview_pose(
             Vec2::from_array(map.origin_xz),
             Vec2::new(
@@ -715,6 +763,61 @@ fn capture_pose(
     }
     let anchor = |name: &str| map.anchors.get(name).copied().map(Vec3::from_array);
     let bay = anchor("bay")?.with_y(map.sea_level);
+    if matches!(view, "grand-waterline" | "grand-underwater") {
+        let offshore = bay + Vec3::new(-65.0, 0.0, 80.0);
+        let site = waterline_site(terrain, geometry, bay, offshore, map.sea_level)?;
+        let surface = sample_surface(profile, bath, Vec2::new(site.x, site.z), 0.0)
+            .map_or(map.sea_level, |sample| sample.height);
+        let height = if view == "grand-underwater" {
+            -1.2
+        } else {
+            0.7
+        };
+        return Some(CapturePose {
+            camera: Transform::from_translation(site.with_y(surface + height))
+                .looking_at(bay.with_y(map.sea_level + 1.0), Vec3::Y),
+            interest: site,
+            overview_height: None,
+        });
+    }
+    if view == "grand-mainland" {
+        return Some(overview_pose(
+            Vec2::new(-950.0, -850.0),
+            Vec2::new(1900.0, 1700.0),
+            map.sea_level,
+            560.0,
+            anchor("forest")?,
+        ));
+    }
+    if let Some(name) = view.strip_prefix("grand-") {
+        let (site_name, offset) = match name {
+            "garden" => ("garden", Vec3::new(38.0, 26.0, 45.0)),
+            "waterfall" => ("waterfall", Vec3::new(-35.0, 22.0, 48.0)),
+            "valley-lake" => ("valley_lake", Vec3::new(60.0, 40.0, 70.0)),
+            "world-tree" => ("world_tree", Vec3::new(-100.0, 70.0, 140.0)),
+            "forest" => ("forest", Vec3::new(45.0, 30.0, 60.0)),
+            "summit" => ("shrine_air", Vec3::new(72.0, 50.0, 92.0)),
+            "crystal" => ("crystal_ascent", Vec3::new(-85.0, 65.0, 100.0)),
+            "frozen-woods" => ("frozen_woods", Vec3::new(45.0, 35.0, 55.0)),
+            "volcano" => ("volcano", Vec3::new(125.0, 95.0, 155.0)),
+            "bay" | "bay-baseline" => ("bay", Vec3::new(-18.0, 8.0, 24.0)),
+            "bay-reverse" => ("bay", Vec3::new(24.0, 8.0, -18.0)),
+            "library" => ("library_hall", Vec3::new(-5.0, 2.2, 6.0)),
+            "shadow-tunnel" => ("shadow_entrance", Vec3::new(0.0, 2.0, 3.0)),
+            _ => return None,
+        };
+        let site = anchor(site_name)?;
+        let target = if name == "shadow-tunnel" {
+            anchor("shadow_tunnel")? + Vec3::Y * 1.7
+        } else {
+            site + Vec3::Y * 1.4
+        };
+        return Some(CapturePose {
+            camera: Transform::from_translation(site + offset).looking_at(target, Vec3::Y),
+            interest: site,
+            overview_height: None,
+        });
+    }
     let (position, target, interest) = match view {
         "northern-boat" => {
             let actor = session

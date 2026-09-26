@@ -1,6 +1,6 @@
 //! Native gestures stay spell-tagged until the fixed simulation consumes them.
 use super::*;
-use bevy::input::{mouse::MouseButtonInput, ButtonState};
+use bevy::input::{ButtonState, mouse::MouseButtonInput};
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy)]
@@ -38,6 +38,20 @@ impl CastInput {
         self.owner = None;
         self.latched = [false; 2];
         self.queue.clear();
+    }
+
+    pub fn resume_existing(&mut self, spell: Spell, held: bool, aim: Vec3) {
+        self.clear();
+        self.managed = true;
+        self.last_used = spell;
+        self.aim = aim;
+        self.owner = Some(spell);
+        if let Some(latched) = self.latched.get_mut(spell.index()) {
+            *latched = held;
+        }
+        if !held {
+            self.release(spell, aim);
+        }
     }
 
     pub fn spell(&self) -> Spell {

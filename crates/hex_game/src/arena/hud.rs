@@ -50,6 +50,12 @@ pub(super) enum Label {
     Resume,
     MenuRules,
     WindowMode,
+    Start,
+    Restart,
+    Quit,
+    Teleport,
+    SaveStatus,
+    Controls,
 }
 #[derive(Component)]
 pub(super) struct PausePanel;
@@ -68,6 +74,9 @@ pub(super) enum Action {
     Start,
     Resume,
     Restart,
+    NewRun,
+    ConfirmNew,
+    CancelNew,
     Fullscreen,
     Quit,
     Change(usize, f32),
@@ -109,7 +118,9 @@ pub(super) fn buttons(
     mut exit: MessageWriter<AppExit>,
     recorder: Option<ResMut<super::recording::Recorder>>,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
+    grand: Option<ResMut<super::grand::State>>,
 ) {
+    let mut grand = grand;
     let mut recorder = recorder;
     let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     let chooses_something_else = state.paused
@@ -157,6 +168,25 @@ pub(super) fn buttons(
         );
         return;
     }
+    let cancels_grand = state.paused
+        && windows.iter().all(|window| window.focused)
+        && interactions.iter().any(|(interaction, action)| {
+            *interaction == Interaction::Pressed
+                && !matches!(action, Action::Map(ArenaMap::GrandV4) | Action::Fullscreen)
+        });
+    if state.started || battle.control == ArenaControl::Spectator || cancels_grand {
+        state.grand_preparation.cancel_selection();
+    }
+    if state.grand_preparation.poll() {
+        apply_map_selection(
+            ArenaMap::GrandV4,
+            &mut state,
+            &mut reset,
+            &mut selection,
+            &mut battle,
+        );
+        return;
+    }
     for (interaction, action) in &interactions {
         if *interaction != Interaction::Pressed
             || !state.paused
@@ -186,6 +216,7 @@ pub(super) fn buttons(
                             ArenaMap::SevenRegions
                                 | ArenaMap::ForestMassif
                                 | ArenaMap::NorthernArchipelago
+                                | ArenaMap::GrandV4
                         )) =>
             {
                 if map == ArenaMap::ForestMassif && !state.forest_preparation.request() {
@@ -196,6 +227,9 @@ pub(super) fn buttons(
                 {
                     continue;
                 }
+                if map == ArenaMap::GrandV4 && !state.grand_preparation.request_for(map) {
+                    continue;
+                }
                 apply_map_selection(map, &mut state, &mut reset, &mut selection, &mut battle);
             }
             Action::Control(control)
@@ -203,7 +237,10 @@ pub(super) fn buttons(
                     && battle.control != control
                     && !(matches!(
                         selection.map,
-                        ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago | ArenaMap::WaterLab
+                        ArenaMap::ForestMassif
+                            | ArenaMap::NorthernArchipelago
+                            | ArenaMap::WaterLab
+                            | ArenaMap::GrandV4
                     ) && control == ArenaControl::Spectator) =>
             {
                 battle.control = control;
@@ -264,13 +301,43 @@ pub(super) fn buttons(
                 reset.generation = reset.generation.saturating_add(1);
                 state.prepare_round();
             }
-            Action::Start if !state.started && terrain_ready => state.begin_play(),
-            Action::Resume if state.started && !session.is_finished() && terrain_ready => {
+            Action::Start if !state.started && terrain_ready => {
+                if selection.map == ArenaMap::GrandV4 {
+                    if let Some(grand) = grand.as_mut() {
+                        grand.request = Some(super::grand::Request::Primary);
+                    }
+                } else {
+                    state.begin_play();
+                }
+            }
+            Action::Resume
+                if state.started
+                    && !session.is_finished()
+                    && terrain_ready
+                    && grand.as_ref().is_none_or(|g| !g.busy() && !g.confirmation) =>
+            {
                 state.begin_play()
             }
             Action::Restart if state.started => {
-                reset.generation = reset.generation.saturating_add(1);
-                state.prepare_round();
+                if selection.map == ArenaMap::GrandV4 {
+                    if let Some(grand) = grand.as_mut() {
+                        grand.request_new();
+                    }
+                } else {
+                    reset.generation = reset.generation.saturating_add(1);
+                    state.prepare_round();
+                }
+            }
+            Action::NewRun | Action::ConfirmNew | Action::CancelNew
+                if selection.map == ArenaMap::GrandV4 =>
+            {
+                if let Some(grand) = grand.as_mut() {
+                    grand.request = Some(match action {
+                        Action::ConfirmNew => super::grand::Request::ConfirmNew,
+                        Action::CancelNew => super::grand::Request::CancelNew,
+                        _ => super::grand::Request::NewRun,
+                    });
+                }
             }
             Action::Fullscreen => {
                 for mut window in &mut windows {
@@ -282,14 +349,18 @@ pub(super) fn buttons(
                 }
             }
             Action::Quit => {
-                if let Some(recorder) = recorder.as_mut() {
+                if selection.map == ArenaMap::GrandV4 {
+                    if let Some(grand) = grand.as_mut() {
+                        grand.request = Some(super::grand::Request::SaveQuit);
+                    }
+                } else if let Some(recorder) = recorder.as_mut() {
                     recorder.request_quit();
                 } else {
                     exit.write(AppExit::Success);
                 }
             }
             Action::Change(index, direction) if state.started => {
-                if session.is_forest_run() {
+                if session.progress().is_some() {
                     if direction > 0.0 {
                         if let Some(stat) = upgrade_stat(index) {
                             session.spend_upgrade(stat);
@@ -302,7 +373,9 @@ pub(super) fn buttons(
             _ => continue,
         }
         // UI clicks cannot leak into casting when the simulation resumes.
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         input.human = ActorIntent {
             aim: super::aim(&state),
             glider_look: super::aim(&state),
@@ -324,6 +397,7 @@ fn apply_map_selection(
             | ArenaMap::ForestMassif
             | ArenaMap::NorthernArchipelago
             | ArenaMap::WaterLab
+            | ArenaMap::GrandV4
     ))
     .then(|| super::player_preset(*selection, battle));
     selection.map = map;
@@ -333,6 +407,7 @@ fn apply_map_selection(
             | ArenaMap::ForestMassif
             | ArenaMap::NorthernArchipelago
             | ArenaMap::WaterLab
+            | ArenaMap::GrandV4
     ) || battle.control == ArenaControl::Spectator
     {
         battle.player_recipe = None;
@@ -424,7 +499,9 @@ pub(super) fn update(
     >,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    grand: Option<Res<super::grand::State>>,
 ) {
+    let grand = grand.as_deref();
     let pending = render.map_or(0, |status| status.pending_chunks);
     let tuning = session.player_tuning(&tuning);
     let run = session.progress();
@@ -443,6 +520,27 @@ pub(super) fn update(
         );
     }
     for (action, mut color, mut node) in &mut choices {
+        if matches!(
+            action,
+            Action::NewRun | Action::ConfirmNew | Action::CancelNew
+        ) {
+            let confirm = grand.is_some_and(|state| state.confirmation);
+            let visible = selection.map == ArenaMap::GrandV4
+                && if matches!(action, Action::NewRun) {
+                    !confirm && grand.is_some_and(|state| state.available)
+                } else {
+                    confirm
+                };
+            set_display(
+                &mut node,
+                if visible {
+                    Display::Flex
+                } else {
+                    Display::None
+                },
+            );
+            continue;
+        }
         if let Action::Change(index, direction) = action {
             if run.is_some() {
                 let stat = upgrade_stat(*index);
@@ -546,6 +644,17 @@ pub(super) fn update(
     };
     for (label, mut text) in &mut labels {
         let next = match label {
+            Label::Controls => controls_text(selection.map),
+            Label::Start if selection.map == ArenaMap::GrandV4 => if grand.is_some_and(|state| state.available) { "CONTINUE  /  ENTER" } else { "NEW RUN  /  ENTER" }.into(),
+            Label::Start => "START  /  ENTER".into(),
+            Label::Restart => if selection.map == ArenaMap::GrandV4 { "NEW RUN" } else { "RESTART" }.into(),
+            Label::Quit => if selection.map == ArenaMap::GrandV4 && state.started { "SAVE & QUIT" } else { "QUIT GAME" }.into(),
+            Label::SaveStatus => if selection.map == ArenaMap::GrandV4 { grand.map_or_else(String::new, |state| state.status.clone()) } else { String::new() },
+            Label::Teleport => session.grand_progress().map_or_else(String::new, |p| {
+                if !p.teleport_unlocked { "X  TELEPORT · Defeat Shadow".into() }
+                else if p.teleport_cooldown > 0.0 { format!("X  TELEPORT · {:.1}s", p.teleport_cooldown) }
+                else { "X  TELEPORT · Ready".into() }
+            }),
             Label::WindowMode => if windows.iter().next().is_some_and(|w| w.mode != WindowMode::Windowed) {"Windowed".into()} else {"Fullscreen".into()},
             Label::MenuTitle if forest_knocked_out => "RUN ENDED / KNOCKED OUT".into(),
             Label::MenuTitle if session.completed_run() => "VICTORY / EXPLORE THE MAP".into(),
@@ -570,6 +679,7 @@ pub(super) fn update(
             Label::Team(slot) => format!("TEAM {}  /  {}", slot + 1, spectator::preset_for(&battle, *slot).map_or("Custom", BattlePreset::label)),
             Label::ObserverTeams => session.battle_summary().map_or_else(String::new, |summary| spectator::team_status(&summary)),
             Label::ObserverStatus => session.battle_summary().map_or_else(String::new, |summary| spectator::battle_status(&summary, state.observer.mode, state.paused)),
+            Label::Help if state.grand_preparation.status().is_some() => state.grand_preparation.status().unwrap_or_default().into(),
             Label::Help if state.northern_preparation.status().is_some() => state.northern_preparation.status().unwrap_or_default().into(),
             Label::Help if state.forest_preparation.status().is_some() => state.forest_preparation.status().unwrap_or_default().into(),
             Label::Help if pending > 0 => format!("Preparing terrain: {pending} chunks remaining. Start unlocks when ready."),
@@ -582,14 +692,19 @@ G opens or folds your glider; diving gains speed, climbing loses it.
 Casting folds the glider. High Jump keeps your charge. Movement speed is {} units/s.", if selection.map.capabilities().expedition_player { "5.906" } else { "4.5" }),
             Label::Selection if battle.control == ArenaControl::Spectator => format!("{} / Seed {} / Two independent teams
 Seven Regions is available in Play mode.", super::map_name(selection.map), battle.seed),
+            Label::Selection if selection.map == ArenaMap::GrandV4 => "Grand V4: explore the forest, mountains and volcano.
+Activate all five elemental shrines with R. Defeat Shadow to earn teleport.
+Death returns you to the last shrine and keeps your progress.".into(),
             Label::Selection if expedition.is_some() => "Forest Expedition: 107 Goblins, 2 Shamans and the Troll.\nThree Dragons and a Shadow guard the mountains; 3 Golems and 10 Wisps inhabit the lowlands.\nStart on the bridge. Hidden fountains are your only healing.".into(),
             Label::Selection => match selection.map {
                 ArenaMap::Duel | ArenaMap::Fort => format!("{}: {}. Restart keeps this enemy party.", super::map_name(selection.map), super::player_preset(selection, &battle).label()),
+                ArenaMap::GrandV4 => "Grand V4: five elemental shrines across the forest, mountains and volcano. X teleports after defeating Shadow. Continue resumes your expedition.".into(),
                 ArenaMap::WaterLab => "Water Lab: shore, swimming, boat and glider comparisons. F1 toggles lab controls. B deploys/folds the boat; G glider; F free flight.".into(),
                 ArenaMap::NorthernArchipelago => "Northern Archipelago: an open exploration map. F toggles free flight; Shift accelerates; Space/Ctrl rise/descend. B deploys a sailboat near water; Space/Ctrl swim up/down. No encounters or victory objective.".into(),
                 ArenaMap::ForestMassif => "Forest Massif: 20 Goblins + 2 Shamans in the forest.\nThree Dragons guard the massif beyond the central bridge.".into(),
                 ArenaMap::SevenRegions => "Seven Regions: Dragon, Shaman party and Goblins.\nThis map has three fixed enemy parties.".into(),
             },
+            Label::Encounter if selection.map == ArenaMap::GrandV4 => session.grand_progress().map_or_else(String::new, |p| format!("GRAND V4  /  {} OF 5 SHRINES\nSHADOW TELEPORT: {}  /  DEATHS {}", p.shrines.len(), if p.teleport_unlocked { "EARNED" } else { "LOCKED" }, p.deaths)),
             Label::Encounter if expedition.is_some() => expedition.as_ref().zip(run).map_or_else(String::new, |(e, p)| format!("FOREST {}/{}  /  DRAGONS {}/3  /  ALL {}/{}\nLEVEL {}  /  XP {} of {}  /  {} upgrade points", e.forest_defeated, e.forest_total, e.dragons_defeated, e.enemies_defeated, e.enemies_total, p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::Encounter if run.is_some() => run.map_or_else(String::new, |p| format!("FOREST {}/22  /  DRAGONS {}/3\nLEVEL {}  /  XP {} of {}  /  {} upgrade points", p.forest_defeated, p.dragons_defeated, p.level, p.xp, p.xp_to_next, p.available_upgrades)),
             Label::Encounter => {
@@ -604,6 +719,7 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     format!("{}  /  {} / {} parties cleared", super::map_name(selection.map), summary.defeated_parties, session.parties().len())
                 }
             },
+            Label::Rewards if selection.map == ArenaMap::GrandV4 => session.grand_progress().map_or_else(String::new, |p| format!("Shrines: {:?}\nLast shrine: {:?}", p.shrines, p.respawn_anchor)),
             Label::Rewards => expedition.as_ref().map_or(String::new(), |e| format!(
                 "Troll: +25 base damage / {}\nDragons {}/3: explosions / {}\nWisps {}/10: +15 Fireball speed and aim guide / {}\nGolems {}/3: +20 Shield speed, +2 × +2 dimensions / {}",
                 milestone_status(e, ExpeditionReward::TrollDamage), e.dragons_defeated,
@@ -652,9 +768,11 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
                     hex_arena::SpellAvailabilityState::Unavailable => "UNAVAILABLE".into(),
                 }
             }
+            Label::MenuRules if selection.map == ArenaMap::GrandV4 => "R activates a nearby shrine once. Shrine effects combine with XP upgrades.\nShadow grants X teleport: visible ground within 12 units, 6s cooldown.\nDeath keeps progress, enemies and world edits. Save & Quit keeps your exact movement state.".into(),
             Label::MenuRules if expedition.is_some() => expedition.as_ref().map_or_else(String::new, |e| format!("Shadow: +25 maximum HP, no healing / {}\nHidden fountains heal up to 40 HP once. Enemies give XP, never HP.\nEach level grants one + upgrade; cooldown + makes it faster.", milestone_status(e, ExpeditionReward::ShadowVitality))),
             Label::MenuRules if run.is_some() => "Each level grants one + upgrade; cooldown + makes it faster.\nClear forest: +25 damage. Slay 3 Dragons: explosions. Reset clears upgrades.".into(),
             Label::MenuRules => "Splash passes through walls. Fireballs can hurt their caster.\nShield walls remain until destroyed; restart restores all terrain.".into(),
+            Label::Parameter(1) if selection.map == ArenaMap::GrandV4 && run.is_some_and(|p| !p.explosions_unlocked) => "Contact only / activate the Fire shrine".into(),
             Label::Parameter(1) if expedition.is_some() && run.is_some_and(|p| !p.explosions_unlocked) => "Contact only / collect the Dragon orb".into(),
             Label::Parameter(1) if run.is_some_and(|p| !p.explosions_unlocked) => "Fireball impact only - slay 3 Dragons".into(),
             Label::Parameter(4) if run.is_some() => "Gravity (fixed)           12 units/s^2".into(),
@@ -708,6 +826,15 @@ Seven Regions is available in Play mode.", super::map_name(selection.map), battl
             _ => MUTED,
         }));
     }
+}
+
+fn controls_text(map: ArenaMap) -> String {
+    let travel = if map == ArenaMap::GrandV4 {
+        "B: deploy/fold sailboat near water · W: sail/paddle · A/D: steer · S: brake\nSwimming: Space rises, Ctrl dives · 90 seconds of oxygen\nX: Shadow teleport when earned · R: activate nearby shrine"
+    } else {
+        super::northern::controls_text()
+    };
+    format!("{travel}\n\nWASD   Move\nMouse   Look\nSpace   Jump\nE   High Jump\nG   Open / fold glider\nCharging or High Jump folds the glider.\nHold LMB / release   Charge / cast Fireball\nHold RMB / release   Charge / cast Shield\nC   First / third person\nT   Trajectory preview\nM   Toggle minimap\nV   Toggle wind direction and speed\nEsc / Tab   Pause / resume\nShift+R   New Run (Grand asks for confirmation)\nF9   Bookmark a recording\nMenus: arrows select, Enter activates, wheel scrolls")
 }
 
 fn upgrade_description(index: usize, preview: hex_arena::UpgradePreview) -> String {

@@ -227,7 +227,7 @@ fn press_action(app: &mut App, action: hud::Action) {
 #[derive(Debug, PartialEq)]
 struct CombatSnapshot {
     tick: u64,
-    actors: Vec<(u8, Vec3, f32, [f32; 3])>,
+    actors: Vec<(hex_arena::ActorId, Vec3, f32, [f32; 3])>,
     projectiles: Vec<(Vec3, Vec3, f32)>,
     terrain_revision: u64,
 }

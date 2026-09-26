@@ -50,6 +50,7 @@ pub(super) fn plugin(app: &mut App) {
     );
 }
 pub(super) fn clear(world: &mut World) {
+    super::grand_landmarks::clear(world);
     if let Some(mut render) = world.remove_resource::<Renderer>() {
         render.presenter.clear(world);
         for (_, (entity, mesh)) in render.proxies {
@@ -331,6 +332,7 @@ fn draw(world: &mut World) {
                     }
                 }
             }
+            super::grand_landmarks::sync(world, &state, &renderer.visible_objects);
             // The static seabed covers the whole finite world. Only the bounded
             // detailed set changes visibility; do not touch thousands of distant
             // proxy entities every frame or invalidate their visibility caches.

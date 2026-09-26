@@ -42,7 +42,7 @@ fn spawn_tint(mut commands: Commands) {
         UnderwaterTint,
     ));
 }
-fn water_color(
+pub(super) fn water_color(
     view: &ArenaTerrainView,
     geometry: ArenaVoxelGeometry,
     camera: Vec3,
@@ -87,7 +87,10 @@ pub(super) fn present(
     mut overlays: Query<(&mut Node, &mut BackgroundColor), With<UnderwaterTint>>,
 ) {
     let forest = selection.map.capabilities().natural_environment;
-    if selection.map == ArenaMap::NorthernArchipelago {
+    if matches!(
+        selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    ) {
         return;
     }
     let mut water = None;

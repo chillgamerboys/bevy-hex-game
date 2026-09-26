@@ -15,6 +15,7 @@ mod marine_visual;
 #[cfg(feature = "test-support")]
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
+mod grand;
 mod hud;
 mod northern;
 mod presentation;
@@ -54,6 +55,7 @@ fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaS
         "forest-massif" => ArenaMap::ForestMassif,
         "northern-archipelago" => ArenaMap::NorthernArchipelago,
         "water-lab" => ArenaMap::WaterLab,
+        "grand-v4" => ArenaMap::GrandV4,
         value => return Err(format!("Unknown arena map: {value}")),
     };
     if map == ArenaMap::ForestMassif && encounter.is_some_and(|value| value != "dragon") {
@@ -155,6 +157,7 @@ fn map_name(map: ArenaMap) -> &'static str {
         ArenaMap::ForestMassif => "Forest Massif",
         ArenaMap::NorthernArchipelago => "Northern Archipelago",
         ArenaMap::WaterLab => "Water Lab",
+        ArenaMap::GrandV4 => "Grand V4",
     }
 }
 
@@ -171,6 +174,7 @@ fn encounter_name(encounter: ArenaEncounter) -> &'static str {
 struct ViewState {
     forest_preparation: bootstrap::Preparation,
     northern_preparation: bootstrap::Preparation,
+    grand_preparation: bootstrap::Preparation,
     started: bool,
     paused: bool,
     third_person: bool,
@@ -181,6 +185,7 @@ struct ViewState {
     previews: [bool; 2],
     fireball_guide_seen: bool,
     suppress_click: bool,
+    reconcile_cast: bool,
     casts: cast_input::CastInput,
     suppress_high_jump: bool,
     capture: Option<PathBuf>,
@@ -207,7 +212,7 @@ struct ViewState {
     capture_route_step: usize,
     capture_approach_frame: Option<u32>,
     capture_composition_frame: Option<u32>,
-    capture_subjects: Vec<u8>,
+    capture_subjects: Vec<hex_arena::ActorId>,
     capture_observer_inputs: Vec<spectator::CameraSample>,
     capture_wisp_nominal_hp: Option<f32>,
     capture_wisp_config_loaded: bool,
@@ -237,6 +242,7 @@ impl Default for ViewState {
         Self {
             forest_preparation: Default::default(),
             northern_preparation: Default::default(),
+            grand_preparation: Default::default(),
             started,
             paused: !started,
             third_person: false,
@@ -247,6 +253,7 @@ impl Default for ViewState {
             previews: [true, false],
             fireball_guide_seen: false,
             suppress_click: true,
+            reconcile_cast: false,
             casts: Default::default(),
             suppress_high_jump: true,
             capture,
@@ -302,8 +309,10 @@ impl ViewState {
     fn begin_play(&mut self) {
         self.forest_preparation.cancel_selection();
         self.northern_preparation.cancel_selection();
+        self.grand_preparation.cancel_selection();
         self.started = true;
         self.paused = false;
+        self.reconcile_cast = true;
         self.suppress_click = true;
         self.casts.clear();
         self.suppress_high_jump = true;
@@ -321,6 +330,7 @@ impl ViewState {
     fn prepare_round(&mut self) {
         self.forest_preparation.cancel_selection();
         self.northern_preparation.cancel_selection();
+        self.grand_preparation.cancel_selection();
         self.started = false;
         self.previews = [true, false];
         self.fireball_guide_seen = false;
@@ -452,6 +462,7 @@ pub fn run() -> AppExit {
     water_lab::install(&mut app);
     glider_visual::install(&mut app);
     marine_visual::install(&mut app);
+    grand::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
         .insert_resource(selection)
@@ -725,7 +736,10 @@ fn update_map_lighting(
             Color::WHITE
         };
         let origin = if forest {
-            if selection.map == ArenaMap::NorthernArchipelago {
+            if matches!(
+                selection.map,
+                ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+            ) {
                 northern::sun_direction()
             } else {
                 environment::sun_direction()
@@ -768,7 +782,14 @@ fn input(
     mut reset: ResMut<ArenaReset>,
     render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
     ui: Option<Res<ux::UxState>>,
+    grand: Option<ResMut<grand::State>>,
+    selection: Option<Res<ArenaSelection>>,
 ) {
+    let mut grand = grand;
+    let grand_selected = selection.as_ref().map_or_else(
+        || session.is_grand_run(),
+        |selection| selection.map == ArenaMap::GrandV4,
+    );
     let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
     let mouse_events = buttons.read().copied().collect::<Vec<_>>();
     if state.capture.is_some() {
@@ -785,7 +806,9 @@ fn input(
         wheel.clear();
         state.pause();
         intent.human = ActorIntent::default();
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         return;
     };
     let observing = spectator::active(&session);
@@ -808,24 +831,49 @@ fn input(
         && keys.just_pressed(KeyCode::Enter)
         && ui.is_none_or(|ui| !ui.has_menu_focus())
     {
-        session.cancel_charges();
-        intent.human = ActorIntent::default();
-        state.begin_play();
+        if grand_selected {
+            if let Some(grand) = grand.as_mut() {
+                grand.request = Some(grand::Request::Primary);
+            }
+        } else {
+            if !session.is_grand_run() {
+                session.cancel_charges();
+            }
+            intent.human = ActorIntent::default();
+            state.begin_play();
+        }
     }
     if window.focused
         && state.started
         && (keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Tab))
     {
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         intent.human = ActorIntent::default();
-        if state.paused && !session.is_finished() && terrain_ready {
+        if grand.as_ref().is_some_and(|grand| grand.confirmation) {
+            if let Some(grand) = grand.as_mut() {
+                grand.request = Some(grand::Request::CancelNew);
+            }
+        } else if state.paused
+            && !session.is_finished()
+            && terrain_ready
+            && !grand.as_ref().is_some_and(|grand| grand.busy())
+        {
             state.begin_play();
         } else {
             state.pause();
         }
     }
     if window.focused && state.started && restart_shortcut(&keys) {
-        reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
+        if session.is_grand_run() {
+            state.pause();
+            if let Some(grand) = grand.as_mut() {
+                grand.request_new();
+            }
+        } else {
+            reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
+        }
     }
     if window.focused
         && state.started
@@ -892,7 +940,9 @@ fn input(
         }
         if !active {
             state.suppress_click = true;
-            session.cancel_charges();
+            if !session.is_grand_run() {
+                session.cancel_charges();
+            }
         }
         if !mouse.pressed(MouseButton::Left) && active {
             state.suppress_click = false;
@@ -901,7 +951,9 @@ fn input(
     }
     if !active {
         state.suppress_click = true;
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         intent.human = ActorIntent::default();
         return;
     }
@@ -927,6 +979,8 @@ fn input(
     intent.human.glider_toggle |= keys.just_pressed(KeyCode::KeyG);
     intent.human.flight_toggle |= keys.just_pressed(KeyCode::KeyF);
     intent.human.boat_toggle |= keys.just_pressed(KeyCode::KeyB);
+    intent.human.teleport |= keys.just_pressed(KeyCode::KeyX);
+    intent.human.interact |= keys.just_pressed(KeyCode::KeyR) && !restart_shortcut(&keys);
     intent.human.flight_vertical = f32::from(u8::from(keys.pressed(KeyCode::Space)))
         - f32::from(u8::from(
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
@@ -934,6 +988,22 @@ fn input(
     intent.human.flight_fast =
         keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     intent.human.aim = current_aim;
+    if state.reconcile_cast && session.is_grand_run() {
+        state.reconcile_cast = false;
+        if let Some(spell) = session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+            .and_then(hex_arena::Actor::resume_cast_spell)
+        {
+            let held = match spell {
+                Spell::Fireball => mouse.pressed(MouseButton::Left),
+                Spell::Shield => mouse.pressed(MouseButton::Right),
+                Spell::HighJump => false,
+            };
+            state.casts.resume_existing(spell, held, current_aim);
+            state.suppress_click = false;
+        }
+    }
     if state.suppress_click {
         state.casts.clear();
         if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {
@@ -1137,7 +1207,9 @@ fn drive_simulation(world: &mut World) {
         // A single setup/reset tick publishes the complete world and actors.
         // It must not consume player input or advance the bot's reaction clock.
         world.resource_mut::<ArenaInput>().human = ActorIntent::default();
-        world.resource_mut::<ArenaSession>().cancel_charges();
+        if !world.resource::<ArenaSession>().is_grand_run() {
+            world.resource_mut::<ArenaSession>().cancel_charges();
+        }
         world.resource_mut::<ArenaSession>().bot_enabled = false;
     }
     for _ in 0..steps {
@@ -1555,6 +1627,8 @@ fn capture_frame(
         Res<hex_core::water_lab::WaterLabSettings>,
         Res<hex_map::water_lab::WaterLabFrame>,
         Res<ux::wind::field::FieldDisplay>,
+        Res<hex_map::ocean::OceanFrame>,
+        Res<hex_map::ocean::OceanSurfaceProfile>,
     ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
@@ -1576,6 +1650,8 @@ fn capture_frame(
         lab_settings,
         lab_frame,
         wind_field,
+        ocean_frame,
+        ocean_profile,
     ) = render_context;
     if state.capture_view.starts_with("water-lab-motion") {
         return;
@@ -1614,8 +1690,10 @@ fn capture_frame(
                     })
             })
         });
-    let authored_assets_ready = view.selection.map == ArenaMap::NorthernArchipelago
-        || !needs_objects
+    let authored_assets_ready = matches!(
+        view.selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    ) || !needs_objects
         || (object_count > 0
             && chunk_count > 0
             && every_forest_object_ready
@@ -1960,7 +2038,7 @@ fn capture_frame(
         ("progress", serde_json::json!(session.progress())),
         ("expedition", serde_json::json!(session.expedition_progress())),
         ("package_identity", serde_json::json!(view.package_identity)),
-        ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref())),
+        ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref(), &ocean_frame, &ocean_profile)),
         ("water_lab", water_lab::snapshot(&lab_settings, &lab_frame, &wind_field)),
         ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
         ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),

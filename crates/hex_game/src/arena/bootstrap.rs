@@ -4,7 +4,7 @@ use std::{
     ffi::OsStr,
     path::PathBuf,
     process::Command,
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
 };
 
 use hex_core::arena::ArenaMap;
@@ -28,11 +28,7 @@ impl Preparation {
 
     pub fn request_for(&mut self, map: ArenaMap) -> bool {
         self.map = Some(map);
-        let override_name = if map == ArenaMap::NorthernArchipelago {
-            "HEX_NORTHERN_WORLD"
-        } else {
-            "HEX_FOREST_WORLD"
-        };
+        let override_name = package_variable(map);
         if !requires_preparation(map, std::env::var_os(override_name).as_deref()) || self.ready {
             return true;
         }
@@ -115,9 +111,19 @@ impl Preparation {
     }
 }
 
+fn package_variable(map: ArenaMap) -> &'static str {
+    match map {
+        ArenaMap::GrandV4 => "HEX_GRAND_WORLD",
+        ArenaMap::NorthernArchipelago => "HEX_NORTHERN_WORLD",
+        _ => "HEX_FOREST_WORLD",
+    }
+}
+
 fn requires_preparation(map: ArenaMap, package_override: Option<&OsStr>) -> bool {
-    matches!(map, ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago)
-        && package_override.is_none()
+    matches!(
+        map,
+        ArenaMap::ForestMassif | ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    ) && package_override.is_none()
 }
 
 fn authoring_target(root: &std::path::Path, app_target: Option<&OsStr>) -> PathBuf {
@@ -145,11 +151,7 @@ fn authoring_target(root: &std::path::Path, app_target: Option<&OsStr>) -> PathB
 }
 
 pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
-    let package_override = std::env::var_os(if map == ArenaMap::NorthernArchipelago {
-        "HEX_NORTHERN_WORLD"
-    } else {
-        "HEX_FOREST_WORLD"
-    });
+    let package_override = std::env::var_os(package_variable(map));
     if !requires_preparation(map, package_override.as_deref()) {
         return Ok(());
     }
@@ -162,10 +164,10 @@ pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
     // The child may build worldc; never inherit the currently running app target.
     let target = authoring_target(&root, std::env::var_os("CARGO_TARGET_DIR").as_deref());
     let status = Command::new("python3")
-        .arg(root.join(if map == ArenaMap::NorthernArchipelago {
-            "tools/northern_package.py"
-        } else {
-            "tools/forest_package.py"
+        .arg(root.join(match map {
+            ArenaMap::GrandV4 => "tools/grand_package.py",
+            ArenaMap::NorthernArchipelago => "tools/northern_package.py",
+            _ => "tools/forest_package.py",
         }))
         .arg("ensure")
         .arg("--target-dir")
@@ -188,7 +190,7 @@ pub(super) fn prepare_default(map: ArenaMap) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{hud, ViewState};
+    use super::super::{ViewState, hud};
     use super::*;
     use bevy::prelude::*;
     use hex_arena::{ArenaBattleSetup, ArenaInput, ArenaSession, ArenaTuning};
@@ -266,10 +268,12 @@ mod tests {
         };
         assert!(!preparation.finish(Err("Python is unavailable".into())));
         assert!(!preparation.ready);
-        assert!(preparation
-            .status()
-            .expect("visible failure")
-            .contains("Python is unavailable"));
+        assert!(
+            preparation
+                .status()
+                .expect("visible failure")
+                .contains("Python is unavailable")
+        );
         preparation.cancel_selection();
         assert!(preparation.status().is_none());
     }
@@ -319,10 +323,12 @@ mod tests {
             !preparation.poll(),
             "an unfinished process cannot block the menu"
         );
-        assert!(preparation
-            .status()
-            .expect("visible progress")
-            .starts_with("Preparing"));
+        assert!(
+            preparation
+                .status()
+                .expect("visible progress")
+                .starts_with("Preparing")
+        );
         release.send(()).expect("release background worker");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while !preparation.poll() {
@@ -349,10 +355,12 @@ mod tests {
         assert!(!preparation.poll());
         assert!(preparation.completion.is_none());
         assert!(!preparation.ready);
-        assert!(preparation
-            .status()
-            .expect("visible error")
-            .contains("without a result"));
+        assert!(
+            preparation
+                .status()
+                .expect("visible error")
+                .contains("without a result")
+        );
     }
 
     #[test]
@@ -368,13 +376,14 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<ArenaSelection>().map, ArenaMap::Duel);
         assert_eq!(app.world().resource::<ArenaReset>().generation, generation);
-        assert!(app
-            .world()
-            .resource::<ViewState>()
-            .forest_preparation
-            .status()
-            .expect("visible error")
-            .contains("compiler unavailable"));
+        assert!(
+            app.world()
+                .resource::<ViewState>()
+                .forest_preparation
+                .status()
+                .expect("visible error")
+                .contains("compiler unavailable")
+        );
 
         inject_preparation(&mut app)
             .send(Ok(()))

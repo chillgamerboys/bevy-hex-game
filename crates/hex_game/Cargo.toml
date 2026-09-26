@@ -59,7 +59,7 @@ hex_test_app = { workspace = true }
 # Use `cargo dev` (aliased in .cargo/config.toml) for development tooling.
 default = ["arena-prototype"]
 # Isolated real-time combat; no tactical or network plugins installed by --arena.
-arena-prototype = ["dep:hex_arena", "hex_map/arena-prototype"]
+arena-prototype = ["dep:hex_arena", "hex_map/arena-prototype", "dep:hex_world_contracts", "dep:hex_world_runtime"]
 # Explicit V4 map-platform explorer.
 v4-world = ["dep:hex_world_contracts", "dep:hex_world_runtime"]
 # Store-neutral EOS integration. Merely compiling this feature does not load an EOS

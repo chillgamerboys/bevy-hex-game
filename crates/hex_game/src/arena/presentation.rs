@@ -7,7 +7,7 @@ use hex_arena::{preview, ArenaSession, ArenaTuning, ExpeditionRole, Species, Spe
 use hex_core::arena::{ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 
 #[derive(Component)]
-pub(super) struct ActorModel(u8, Species, u64);
+pub(super) struct ActorModel(hex_arena::ActorId, Species, u64);
 
 fn player_camera(session: &ArenaSession, state: &ViewState, actor: &hex_arena::Actor) -> Transform {
     let direction = if state.capture.is_none() && state.initialized {

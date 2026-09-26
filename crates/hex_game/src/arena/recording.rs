@@ -4,14 +4,14 @@ mod backend;
 #[cfg(target_os = "macos")]
 mod macos;
 
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowCloseRequested};
 use hex_arena::ArenaSession;
 use hex_core::arena::{ArenaReset, ArenaTerrainView};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{ArenaFrame, ViewState};
 
@@ -187,7 +187,9 @@ fn update(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut closing: MessageReader<WindowCloseRequested>,
     mut exit: MessageWriter<AppExit>,
+    grand: Option<ResMut<super::grand::State>>,
 ) {
+    let mut grand = grand;
     for response in recorder.receive() {
         match response {
             backend::Response::Supported(supported, message) => {
@@ -221,7 +223,13 @@ fn update(
         && keys.just_pressed(KeyCode::KeyQ)
         && keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]);
     if closing.read().next().is_some() || command_quit {
-        recorder.request_quit();
+        if terrain.selection.map == hex_core::arena::ArenaMap::GrandV4 {
+            if let Some(grand) = grand.as_mut() {
+                grand.request = Some(super::grand::Request::SaveQuit);
+            }
+        } else {
+            recorder.request_quit();
+        }
     }
     if recorder.quit && !recorder.quit_sent {
         if let Some(outcome) = recorder.dispatch_quit(Instant::now()) {

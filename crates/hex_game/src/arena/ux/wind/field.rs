@@ -165,7 +165,7 @@ fn present(
 ) {
     let Some(environment) = environment.filter(|env| {
         env.package_fingerprint == WATER_LAB_ID
-            || view.selection.map == hex_core::arena::ArenaMap::NorthernArchipelago
+            || matches!(view.selection.map, hex_core::arena::ArenaMap::NorthernArchipelago | hex_core::arena::ArenaMap::GrandV4)
     }) else {
         display.enabled = false;
         display.samples.clear();
