@@ -1,6 +1,6 @@
 # Grand V4 integration wave
 
-Status: dispatching
+Status: combined implementation; acceptance in progress
 Wave: `wave/grand-v4`
 Verified remote dev: `bb556963632de933b44fb75b1d306aca79258cef`
 Playable integration base: `873a2c37eeb8eda23c11d398ce7d68d7965a64db`
@@ -47,7 +47,7 @@ Existing ArenaTick, exact TilePos, ArenaExpeditionSites, ArenaAvailability, fini
   selector: {concerns: [full], full: true}
   evidence: motion-or-feel
   sizing: {model: inherited, effort: inherited}
-  state: dispatched
+  state: integrated
   pr: null
 - id: L2
   title: Gameplay progression and checkpoint
@@ -66,7 +66,7 @@ Existing ArenaTick, exact TilePos, ArenaExpeditionSites, ArenaAvailability, fini
   selector: {concerns: [full], full: true}
   evidence: motion-or-feel
   sizing: {model: inherited, effort: inherited}
-  state: dispatched
+  state: integrated
   pr: null
 - id: L3
   title: Finite persistence and water field
@@ -85,7 +85,7 @@ Existing ArenaTick, exact TilePos, ArenaExpeditionSites, ArenaAvailability, fini
   selector: {concerns: [full], full: true}
   evidence: motion-or-feel
   sizing: {model: inherited, effort: inherited}
-  state: dispatched
+  state: integrated
   pr: null
 ```
 
@@ -93,7 +93,7 @@ Existing ArenaTick, exact TilePos, ArenaExpeditionSites, ArenaAvailability, fini
 Lane paths above are exclusive. Root owns hex_core shared arena vocabulary, hex_game, tools/arena.py, shared docs, shader composition and Cargo coordination. Request an explicit seam before touching another lane. All lane commits remain identifiable. No worker stages another worktree. Manifest updates limited to own row; coordinator resolves composition.
 
 ## Territory
-#223 feat/water-lab -> #222 wave/northern-archipelago -> dev. #220/#219 and #210-213 are historical overlapping ancestors; preserve and do not merge tips blindly. #196 lattice fusion is separate and untouched. Base was clean. GitHub fetch on Sep25 failed with unresolved pack deltas; use pinned available revisions and live GitHub metadata until repaired. Actual GitHub remote is github; origin is an old local checkout.
+#223 feat/water-lab -> #222 wave/northern-archipelago -> dev. Both draft PR heads are ancestors of this candidate. #220/#219 and #210-213 are historical overlapping ancestors; preserve and do not merge tips blindly. #196 lattice fusion is separate and untouched. The targeted GitHub dev fetch succeeded after an initial pack failure; the verified base is still `bb556963632de933b44fb75b1d306aca79258cef`. Actual GitHub remote is github; origin is an old local checkout. Published branches and PRs remain untouched.
 
 ## Integration order
 Source lanes start together. Root lands vocabulary first, then coherent world/runtime/gameplay commits, then shared app adapters, checkpoint UI and water presentation. Shared heavy Cargo target is serialized by root; workers may run pure Python or lightweight tests only with agreed target. Final candidate targets dev, no force-push or automatic old PR closure.
@@ -108,4 +108,4 @@ Resolve source conflicts, invalid shared facts, actual budget failures and faili
 - Sep25: user approved implementation; three isolated source lanes and root integration started.
 
 ## Close-out
-Pending; no claim of runtime, CI, visuals, native performance, save acceptance or merge yet.
+Source lanes are integrated. The [candidate guide](../../../development/grand-v4.md) records launch, owner contracts, focused acceptance commands, and the deferred backlog. Combined process restart, rendering, residency, and native acceptance remain distinct from the focused gameplay and compiler tests. The exact final gate and evidence receipts must be recorded before any completion or merge claim.
