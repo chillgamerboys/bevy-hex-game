@@ -82,6 +82,14 @@ pub struct ArenaStreamInterest {
     pub velocity: Vec3,
 }
 
+/// Bounded additional actor-owned interests for nearby combat and pending respawn.
+/// The world owner deduplicates and caps these without treating unloaded space as air.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct ArenaActorStreamInterests {
+    /// Absolute body/projectile positions; dormant distant encounters contribute none.
+    pub positions: Vec<Vec3>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

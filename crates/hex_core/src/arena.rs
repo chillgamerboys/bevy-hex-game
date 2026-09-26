@@ -4,7 +4,7 @@ mod burrow;
 mod expedition;
 mod exploration;
 pub use exploration::{
-    ArenaAvailability, ArenaMapCapabilities, ArenaResidency, ArenaStreamInterest,
+    ArenaActorStreamInterests, ArenaAvailability, ArenaMapCapabilities, ArenaResidency, ArenaStreamInterest,
 };
 
 pub use burrow::{
