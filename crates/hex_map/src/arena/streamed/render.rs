@@ -42,6 +42,19 @@ struct Renderer {
     epoch: u64,
 }
 
+// The animated ocean owns the public sea-level surface and everything below it.
+// Raised authored water (pools, channels and falling intervals) has no ocean
+// surface and must remain in the exact detailed mesh. Match TerrainPreparer's
+// exclusive-level transform; solidity is a collision property, not visibility.
+fn raised_water(run: &VoxelRun, level_height: f32, sea_level: f32) -> bool {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "streamed package levels are validated within the exact f32 integer envelope"
+    )]
+    let top = run.top as f32 * level_height;
+    run.material == "water" && top > sea_level
+}
+
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         PostUpdate,
@@ -189,7 +202,10 @@ fn visual_package(
                 object.as_ref().map_or(&[], |c| c.runs.as_slice()),
                 admitted.get(&column.position).map_or(&[], Vec::as_slice),
             );
-            runs.retain(|r| solid.contains(r.material.as_str()));
+            runs.retain(|r| {
+                solid.contains(r.material.as_str())
+                    || raised_water(r, state.overview.level_height, state.overview.sea_level)
+            });
             Some(ColumnData {
                 position: column.position,
                 runs,
@@ -1069,6 +1085,10 @@ fn proxy_updates(
 }
 
 #[cfg(test)]
+#[path = "liquid_tests.rs"]
+mod liquid_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use hex_schematic::v4::northern::NorthernOverview;
@@ -1240,7 +1260,7 @@ mod tests {
         }
     }
 
-    fn planar_overview() -> NorthernOverview {
+    pub(super) fn planar_overview() -> NorthernOverview {
         NorthernOverview {
             version: 1,
             source_fingerprint: 0,
