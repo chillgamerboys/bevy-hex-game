@@ -235,7 +235,15 @@ impl ArenaSession {
                 a.dimensions.y,
                 a.dimensions.x.max(a.dimensions.z) * 0.5,
             )
-        }) {
+        }) || self
+            .projectiles
+            .iter()
+            .any(|p| p.waiting_for_terrain(&self.collision))
+            || self
+                .pending_walls
+                .iter()
+                .any(|w| w.waiting_for_terrain(world, geometry))
+        {
             return Err("Grand checkpoint destination terrain is not ready".into());
         }
         if let Some(actor) = self

@@ -51,7 +51,31 @@ pub(crate) struct PendingWall {
     reinforced: bool,
 }
 
+impl PendingWall {
+    pub(crate) fn waiting_for_terrain(
+        &self,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+    ) -> bool {
+        world.residency.as_ref().is_some_and(|r| {
+            self.candidates
+                .iter()
+                .any(|p| r.at(p.coord, geometry) == hex_core::arena::ArenaAvailability::Unloaded)
+        })
+    }
+}
+
 impl Projectile {
+    pub(crate) fn waiting_for_terrain(&self, collision: &CollisionWorld) -> bool {
+        let radius = self.parameters.collision_radius;
+        collision.needs_terrain(
+            self.position - Vec3::Y * radius,
+            displacement(self.velocity, self.parameters.gravity),
+            radius * 2.0,
+            radius,
+        )
+    }
+
     /// Frozen contact or radial response; rewards never mutate an in-flight shot.
     #[must_use]
     pub fn fireball_mode(&self) -> crate::FireballMode {

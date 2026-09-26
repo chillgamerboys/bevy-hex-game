@@ -494,7 +494,7 @@ impl ArenaSession {
         }
         let mut expected = BTreeMap::new();
         let mut expected_parties = std::collections::BTreeSet::new();
-        for (ordinal, &(name, leader, count)) in SITES
+        for (ordinal, &(_name, leader, count)) in SITES
             .iter()
             .enumerate()
             .filter(|(_, site)| grand.admitted.contains(site.0))

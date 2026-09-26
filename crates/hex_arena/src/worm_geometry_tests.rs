@@ -415,22 +415,29 @@ fn compact_columns_require_real_material_conversion_and_exact_residency() {
     };
     let mut query = BurrowQuery::default();
     query.refresh(&view);
-    let context = |view| BurrowContext {
-        world: view,
-        policy: &policy,
-        dirt,
-        bodies: &[],
-        owner: 0,
-        geometry,
-    };
+    fn context<'a>(
+        view: &'a ArenaTerrainView,
+        policy: &'a ArenaBurrowMaterials,
+        dirt: SubstanceId,
+        geometry: ArenaVoxelGeometry,
+    ) -> BurrowContext<'a> {
+        BurrowContext {
+            world: view,
+            policy,
+            dirt,
+            bodies: &[],
+            owner: 0,
+            geometry,
+        }
+    }
     assert!(matches!(
-        query.admit(pose, pose, &context(&view)),
+        query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
         Admission::NeedsConversion(_)
     ));
     assert!(!query.above_ground_clear(pose, &view, geometry));
     view.columns.get_mut(&cell.coord).unwrap()[0].substance = dirt;
     assert!(matches!(
-        query.admit(pose, pose, &context(&view)),
+        query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
         Admission::Clear
     ));
     view.residency = Some(ArenaResidency {
@@ -438,7 +445,7 @@ fn compact_columns_require_real_material_conversion_and_exact_residency() {
         ready: Default::default(),
     });
     assert!(matches!(
-        query.admit(pose, pose, &context(&view)),
+        query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
         Admission::Blocked(StepRejection::Unloaded)
     ));
 }

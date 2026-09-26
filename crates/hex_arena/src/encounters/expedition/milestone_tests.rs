@@ -777,7 +777,7 @@ fn reward_survives_complete_support_loss_near_the_living_player_without_healing(
 #[test]
 fn downhill_death_settles_on_actual_nearby_ground_outside_authored_shelves() {
     let (mut session, mut view, geometry, materials, _) = start();
-    let ground = TilePos::new(HexCoord::from_axial(200, 0), 0);
+    let ground = TilePos::new(HexCoord::from_axial(120, 0), 0);
     for coord in ground.coord.within_radius(3) {
         view.voxels.insert(TilePos::new(coord, 0), materials.stone);
     }
