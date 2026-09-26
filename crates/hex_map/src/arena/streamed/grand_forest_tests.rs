@@ -1,8 +1,8 @@
 use super::*;
 use hex_world_contracts::{
     ChunkDescriptor, ChunkPackage, ChunkSemantics, ColumnData, ObjectInstance, RegionDescriptor,
-    ResidencyRequest, SCHEMA_VERSION, VoxelEdit, VoxelRun, WorldEditTransaction, WorldHex,
-    WorldManifest, WorldPackage,
+    ResidencyRequest, VoxelEdit, VoxelRun, WorldEditTransaction, WorldHex, WorldManifest,
+    WorldPackage, SCHEMA_VERSION,
 };
 use hex_world_runtime::{
     CancellationToken, FiniteChunkCheckpoint, FiniteSessionHeader, MemoryChunkSource,
@@ -243,8 +243,8 @@ fn forest_ground_only_edits_keep_shared_geometry_and_partial_detail_keeps_whole_
     )
     .expect("terrain edit");
     assert!(tree.changed(&f.edits));
-    assert!(
-        tree.refresh(
+    assert!(tree
+        .refresh(
             &mut world,
             shape,
             &f.edits,
@@ -252,8 +252,7 @@ fn forest_ground_only_edits_keep_shared_geometry_and_partial_detail_keeps_whole_
             forest.submitted_vertices
         )
         .expect("refresh")
-        .is_none()
-    );
+        .is_none());
     assert_eq!(world.get::<Mesh3d>(tree.body).expect("body").0, handle);
     assert!(tree.edited.is_none());
     assert_eq!(mask_mesh(&f.source, &f.edits).expect("same mesh"), before);
@@ -428,7 +427,9 @@ fn forest_local_rotation_matches_exact_axial_placement_and_normals_face_outward(
             instance.origin.column.r + logical.r,
         ))
         .expect("column")
-        .to_world(instance.base_level as f32 * 0.35);
+        .to_world(
+            f32::from(i16::try_from(instance.base_level).expect("bounded fixture level")) * 0.35,
+        );
         assert!(transform.transform_point(point).distance(logical) < 0.0001);
     }
     let mesh = mask_mesh(&f.source, &f.edits).expect("opaque mesh");
