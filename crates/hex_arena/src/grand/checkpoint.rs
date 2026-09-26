@@ -76,6 +76,12 @@ fn validate(session: &ArenaSession) -> Result<(), String> {
     {
         return Err("Grand gameplay checkpoint has invalid state bounds".into());
     }
+    if grand.respawn_stage != RespawnStage::Shrine
+        && (session.actors.iter().any(|a| a.id == 0 && a.hp > 0.0)
+            || grand.respawn_interest != Some(grand.start))
+    {
+        return Err("Grand checkpoint has an inconsistent death-recovery destination".into());
+    }
     let mut ids = BTreeSet::new();
     for actor in session.actors.iter().chain(
         session
@@ -209,7 +215,7 @@ impl ArenaSession {
                     session
                         .grand
                         .as_ref()
-                        .map_or(a.feet, |g| g.respawn_position)
+                        .map_or(a.feet, |g| g.respawn_interest.unwrap_or(g.respawn_position))
                 }
             })
             .ok_or_else(|| "Grand checkpoint has no player".into())

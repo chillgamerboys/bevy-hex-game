@@ -7,9 +7,12 @@ use std::collections::BTreeSet;
 
 mod checkpoint;
 mod finite;
+mod respawn;
 pub use checkpoint::GrandCheckpointIdentity;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod respawn_tests;
 #[cfg(test)]
 mod tests;
 
@@ -122,6 +125,16 @@ pub struct GrandProgressSnapshot {
     pub deaths: u32,
 }
 
+// Recovery is saved between streamed destinations. Old checkpoints begin with
+// the last-shrine preference; they never silently inherit a failed fallback.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum RespawnStage {
+    #[default]
+    Shrine,
+    Start,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GrandState {
     pub(super) acquired: BTreeSet<ShrineId>,
@@ -135,6 +148,8 @@ pub(crate) struct GrandState {
     pub(crate) admitted: BTreeSet<String>,
     pub(crate) sites: std::collections::BTreeMap<String, Vec3>,
     pub(crate) respawn_interest: Option<Vec3>,
+    #[serde(default)]
+    respawn_stage: RespawnStage,
     pub(crate) tuning: GrandTuning,
 }
 impl GrandState {
@@ -151,6 +166,7 @@ impl GrandState {
             admitted: BTreeSet::new(),
             sites: Default::default(),
             respawn_interest: None,
+            respawn_stage: RespawnStage::default(),
             tuning: GrandTuning::default(),
         }
     }
@@ -206,7 +222,7 @@ impl ArenaSession {
         interests.extend(self.projectiles.iter().map(|p| p.position));
         interests.extend(self.pending_walls.iter().map(|w| w.center));
         interests.extend(g.respawn_interest);
-        if player.hp <= 0.0 {
+        if player.hp <= 0.0 && g.respawn_interest.is_none() {
             interests.push(g.respawn_position);
         }
         interests.extend(
@@ -252,49 +268,13 @@ impl ArenaSession {
             self.grand = Some(grand);
             return;
         };
-        if self.actors.get(player_index).is_some_and(|a| a.hp <= 0.0) {
-            let desired = grand
-                .last_shrine
-                .and_then(|s| world.anchors.get(s.anchor()).copied())
-                .unwrap_or(grand.start);
-            grand.respawn_interest = Some(desired);
-            let template = self.actors.get(player_index).cloned();
-            if let Some(mut player) = template {
-                if !self.collision.needs_terrain(
-                    desired,
-                    Vec3::ZERO,
-                    player.dimensions.y,
-                    player.dimensions.x * 0.5,
-                ) {
-                    if let Some(feet) = crate::encounters::safe_spawn(
-                        &player,
-                        desired,
-                        &self.actors,
-                        &self.collision,
-                        world,
-                        geometry,
-                    ) {
-                        let max_hp = player.max_hp;
-                        player = Actor::spawn(0, feet, player.aim);
-                        player.configure_expedition_player();
-                        player.max_hp = max_hp;
-                        player.hp = max_hp;
-                        player.free_flight = None;
-                        player.marine = Some(Default::default());
-                        if let Some(m) = &mut player.marine {
-                            m.lab = true;
-                            m.glider_wind_scale = 0.65;
-                        }
-                        if let Some(slot) = self.actors.get_mut(player_index) {
-                            *slot = player;
-                        }
-                        grand.respawn_interest = None;
-                        grand.deaths = grand.deaths.saturating_add(1);
-                        self.outcome = None;
-                        self.notice = "Returned to your last shrine. Progress and the changed world are retained.".into();
-                    }
-                }
-            }
+        if self.actors.get(player_index).is_some_and(|a| a.hp <= 0.0)
+            && !self.recover_grand_player(&mut grand, player_index, world, geometry)
+        {
+            // A dead body cannot claim a shrine or consume a teleport while its
+            // recovery destination is loading or permanently unusable.
+            self.grand = Some(grand);
+            return;
         }
         if let Some(player) = self.actors.get(player_index).filter(|a| a.hp > 0.0) {
             for shrine in ShrineId::ALL {
