@@ -121,6 +121,40 @@ retroactively acquire attachments. A failure before the head switch preserves bo
 the prior terrain and prior owner references, including when new immutable bodies
 have already been flushed.
 
+## Finite arena session checkpoints
+
+`SessionCheckpointStore` uses the same immutable content files, OS writer lock,
+bounded reads, and flushed atomic head publication as ordinary world saves. Its
+separate `session.ron` head binds an exact `CheckpointIdentity` (world ID,
+manifest fingerprint, application content version). `commit(expected_token,
+records, cancellation)` consumes a complete iterator of opaque `OwnerRecord`
+values from all participating owners at one quiescent application boundary.
+The atomic head switches only after every body is durable. A stale writer,
+incompatible source, failed export, or pre-publication cancellation keeps the old
+head intact. Complete snapshots remove omitted keys; this is not an update batch.
+
+Default limits are 8 MiB per body, 131,072 records, 512 MiB total payload and a
+64 MiB head. Bodies are streamed individually, avoiding the strict editor's
+64-attachment/8-MiB transaction-batch limit. `load` reads metadata only; `record`
+checks exact owner format, byte length and content fingerprint. `verify_all`
+validates bodies sequentially. Owners still decode and validate their own state
+into candidates; the app adopts all staged owners together. No missing/corrupt
+payload is replaced by defaults. Prior immutable bodies are retained for crash
+safety and old-snapshot readers; garbage collection remains a separate operation.
+
+`FiniteWorldSession::checkpoint_header` plus `checkpoint_partitions` export only
+final sparse cell assignments, object removals and per-chunk revisions. The header
+lists every edited chunk, so missing partitions cannot silently heal destruction.
+`restore_checkpoint` requires the exact package and trusted vertical bounds,
+verifies actual original source bytes one changed chunk at a time, and returns a
+new session without changing live runtime residency. It retains the arena's
+existing ability to carve bedrock and unsupported objects, while refusing liquid,
+out-of-bounds, unknown-material and inconsistent object-mask edits. Generated
+columns, meshes and historical transaction bodies are not stored. The map owner
+must separately preserve partial material HP, mutation request counters and other
+owner state; the gameplay owner must preserve its complete play state. Resumed
+requests continue their saved counter; old transaction retries are not replayed.
+
 ## Principal-private knowledge and reconnect
 
 `KnowledgeStore::open(root, &manifest, limits, config)` reads metadata only.

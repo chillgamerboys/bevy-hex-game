@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
+use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite};
 use hex_world_contracts::{
     hash_serializable, ChunkId, ChunkPackage, ColumnData, ManifestIndex, WorldChange,
     WorldEditTransaction, SCHEMA_VERSION,
@@ -23,7 +23,7 @@ use crate::{
     history::{HistoryEntry, JournalDescriptor},
     source::{
         checked_existing_path, checked_relative_path, encode_bounded, read_bounded,
-        read_bytes_bounded, sync_directory, write_new,
+        read_bytes_bounded, sync_directory,
     },
     AttachmentUpdate, CancellationToken, ErrorKind, IoLimits, RuntimeError, RuntimeResult,
     WorldRuntime,
@@ -588,7 +588,10 @@ impl WorldRuntime {
                             .map(|edit| edit.journal.fingerprint)
                     });
                 if fingerprint != Some(descriptor.fingerprint) {
-                    return Err(RuntimeError::new(ErrorKind::Conflict, "save has acknowledged transactions absent from this authority; restore before writing"));
+                    return Err(RuntimeError::new(
+                        ErrorKind::Conflict,
+                        "save has acknowledged transactions absent from this authority; restore before writing",
+                    ));
                 }
             }
             for descriptor in &existing.partitions {
@@ -785,5 +788,12 @@ pub(crate) fn write_immutable(root: &Path, relative: &str, bytes: &[u8]) -> Runt
         }
         return Ok(());
     }
-    write_new(&path, bytes)
+    // Publish complete immutable bytes only. A crash during a direct create/write
+    // would leave a truncated content-addressed file and poison future retries.
+    AtomicFile::new(path, DisallowOverwrite)
+        .write(|file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
+        .map_err(RuntimeError::io)
 }

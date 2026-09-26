@@ -2815,3 +2815,6 @@ fn successful_load_timing_includes_delayed_source_and_admission_queue_without_sa
 
 #[path = "runtime/finite.rs"]
 mod finite;
+
+#[path = "runtime/checkpoint.rs"]
+mod checkpoint;

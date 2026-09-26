@@ -11,15 +11,20 @@ use std::{
 
 use crate::{RuntimeError, RuntimeResult, WorldRuntime};
 use hex_world_contracts::{
-    hash_serializable, ChunkId, ChunkPackage, ColumnData, MaterialSpec, VoxelPosition, VoxelRun,
-    WorldChange, WorldEditTransaction, WorldHex,
+    hash_serializable, ChunkId, ChunkPackage, ColumnData, ManifestIndex, MaterialSpec,
+    VoxelPosition, VoxelRun, WorldChange, WorldEditTransaction, WorldHex,
 };
+
+mod checkpoint;
+pub use checkpoint::{FiniteChunkCheckpoint, FiniteSessionHeader};
 
 /// Explicit session authority for a finite destructible world, resident or streamed.
 /// Source packages/blueprints remain unchanged; only edited cells consume storage.
-/// Dropping this value restores the source. It intentionally has no save method.
+/// Dropping this value restores the source unless the owner explicitly restores a
+/// sparse checkpoint. Persistence never applies strict authoring-edit constraints.
 #[derive(Debug)]
 pub struct FiniteWorldSession {
+    manifest_index: Arc<ManifestIndex>,
     sources: BTreeMap<ChunkId, Arc<ChunkPackage>>,
     materials: BTreeMap<String, MaterialSpec>,
     revisions: BTreeMap<ChunkId, u64>,
@@ -38,6 +43,7 @@ impl FiniteWorldSession {
             return Err(RuntimeError::invalid("invalid streamed edit height bounds"));
         }
         let mut result = Self {
+            manifest_index: Arc::clone(&runtime.manifest_index),
             sources: BTreeMap::new(),
             materials: runtime
                 .manifest()
@@ -191,6 +197,7 @@ impl FiniteWorldSession {
             ));
         }
         Ok(Self {
+            manifest_index: Arc::clone(&runtime.manifest_index),
             sources: products
                 .iter()
                 .map(|p| (p.coordinate, p.package.clone()))
@@ -346,6 +353,9 @@ impl FiniteWorldSession {
         for (chunk, expected) in &request.expected_revisions {
             if self.revision(*chunk) != Some(*expected) {
                 return Err(RuntimeError::invalid("stale finite chunk revision"));
+            }
+            if expected.checked_add(1).is_none() {
+                return Err(RuntimeError::invalid("finite chunk revision exhausted"));
             }
         }
         for edit in &request.edits {

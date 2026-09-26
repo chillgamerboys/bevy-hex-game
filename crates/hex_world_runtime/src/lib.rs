@@ -6,6 +6,7 @@
 //! its own engine; this crate never owns a renderer, combat clock, or ECS schedule.
 
 mod attachments;
+mod checkpoint;
 mod disclosure;
 mod edits;
 mod finite;
@@ -17,13 +18,17 @@ mod runtime;
 mod source;
 
 pub use attachments::{AttachmentUpdate, CheckpointAttachment};
+pub use checkpoint::{
+    CheckpointIdentity, CheckpointLimits, CheckpointToken, OwnerRecord, OwnerRecordDescriptor,
+    SessionCheckpoint, SessionCheckpointStore,
+};
 pub use disclosure::{
     AuthorizedInterest, DisclosureConfig, DisclosureStream, KnowledgeAck,
     KnowledgeCheckpointCursor, KnowledgeCheckpointIdentity, KnowledgeCheckpointPage,
     KnowledgeReplay, SequencedKnowledgeBatch,
 };
 pub use edits::{ChunkDelta, WorldDelta};
-pub use finite::FiniteWorldSession;
+pub use finite::{FiniteChunkCheckpoint, FiniteSessionHeader, FiniteWorldSession};
 pub use history::HistoryCounts;
 pub use knowledge::{
     KnowledgeConfig, KnowledgePartition, KnowledgeReceipt, KnowledgeStore, ObservedLandmark,
