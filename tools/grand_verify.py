@@ -7,6 +7,7 @@ Every case has explicit disposable HEX_GAME_DATA_DIR storage and a real package.
 With --circuit, the same current-source binary also performs three streaming loops
 with CPU terrain presentation, checking typed residency and sparse-edit retention.
 With --admissions, it verifies all fourteen authored enemy parties and their codec.
+With --walking or --sailing, it exercises ordinary movement through the same build.
 This checks persistence, not visual quality or native control feel.
 """
 from __future__ import annotations
@@ -26,6 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST = "arena::grand::tests::process_checkpoint_child"
 CIRCUIT_TEST = "arena::grand::tests::circuit_tests::actual_grand_streaming_circuit"
 ADMISSION_TEST = "arena::grand::tests::admission_tests::actual_grand_all_authored_parties_admit_and_checkpoint"
+TRAVERSAL_TESTS = {
+    "walking": "arena::grand::tests::walking_tests::actual_grand_ordinary_walking",
+    "sailing": "arena::grand::tests::sailing_tests::actual_grand_unupgraded_authored_sailing",
+}
 
 
 def git(*arguments: str) -> str:
@@ -211,6 +216,44 @@ def execute_admissions(binary: Path, output: Path, environment: dict[str, str], 
     return receipt
 
 
+def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str]) -> dict:
+    data = output / mode
+    data.mkdir()
+    (data / "grand-verification-only").write_text("Disposable actual-package traversal verification.\n")
+    child = environment | {"HEX_GAME_DATA_DIR": str(data)}
+    for key in ("HEX_GRAND_VERIFY_MODE", "HEX_GRAND_VERIFY_PHASE", "HEX_GRAND_WALK_ROUTE"):
+        child.pop(key, None)
+    command = [str(binary), TRAVERSAL_TESTS[mode], "--exact", "--ignored", "--nocapture", "--test-threads=1"]
+    log_path = data / f"{mode}.log"
+    with log_path.open("w") as log:
+        result = subprocess.run(command, cwd=ROOT, env=child, stdout=log, stderr=subprocess.STDOUT,
+                                timeout=1260 if mode == "walking" else 420, check=False)
+    if result.returncode or "running 1 test" not in log_path.read_text():
+        raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
+    receipt = json.loads((data / f"{mode}.json").read_text())
+    kind = "grand-ordinary-walking-v1" if mode == "walking" else "grand-authored-sailing-v1"
+    if receipt.get("kind") != kind or receipt.get("status") != "PASS":
+        raise RuntimeError(f"Actual {mode} receipt did not report completion")
+    if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
+        raise RuntimeError(f"Actual {mode} used a different immutable package")
+    if mode == "walking":
+        routes = receipt.get("routes", [])
+        if (receipt.get("selected_route") is not None or receipt.get("expected_routes") != 11
+                or len(routes) != 11 or len({route["name"] for route in routes}) != 11
+                or any(route.get("status") != "PASS"
+                       or route.get("completed_segments") != route.get("required_segments")
+                       or route.get("simulation_ticks", 0) <= 40 for route in routes)):
+            raise RuntimeError("Ordinary walking did not complete all eleven live routes")
+    else:
+        measurement = receipt.get("measurement", {})
+        if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"
+                or measurement.get("simulation_ticks", 0) <= 0
+                or not measurement.get("endpoint_liveness_probe")
+                or measurement.get("remaining", math.inf) > measurement.get("arrival_radius", 0)):
+            raise RuntimeError("Sailing did not complete the unupgraded live crossing")
+    return receipt
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", required=True, type=Path, help="Explicit actual Grand compiled package directory")
@@ -220,6 +263,8 @@ def main() -> None:
     parser.add_argument("--case", action="append", choices=("land", "boat", "air"), dest="cases")
     parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
     parser.add_argument("--admissions", action="store_true", help="Also verify all fourteen actual-package enemy parties using the same test build")
+    parser.add_argument("--walking", action="store_true", help="Also walk all eleven actual-package terrain routes with ordinary movement")
+    parser.add_argument("--sailing", action="store_true", help="Also measure the authored unupgraded boat crossing with production input")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
     parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")
     parser.add_argument("--admission-timeout", type=float, default=420.0, help="Maximum seconds for the optional all-party admission oracle")
@@ -258,6 +303,8 @@ def main() -> None:
         "scope": "Production app/world/gameplay checkpoint composition; no window, pixels, or native motion.",
         "circuit_requested": arguments.circuit,
         "admissions_requested": arguments.admissions,
+        "walking_requested": arguments.walking,
+        "sailing_requested": arguments.sailing,
         "cargo_profile": arguments.cargo_profile,
         "cases": [],
     }
@@ -279,6 +326,9 @@ def main() -> None:
                 report["circuit"] = execute_circuit(binary, output, environment, arguments.circuit_timeout)
             if arguments.admissions:
                 report["admissions"] = execute_admissions(binary, output, environment, arguments.admission_timeout)
+            for mode in TRAVERSAL_TESTS:
+                if getattr(arguments, mode):
+                    report[mode] = execute_traversal(binary, mode, output, environment)
         finally:
             provenance["after_execution"] = source_snapshot()
             provenance["execution_changed_fields"] = changed_source(before_build, provenance["after_execution"])
