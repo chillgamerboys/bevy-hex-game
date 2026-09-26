@@ -108,6 +108,8 @@ pub enum ArenaBurrowRejection {
     ReusedSequence,
     /// A cell is outside the current horizontal or vertical world bounds.
     OutsideWorld,
+    /// Required authoritative terrain has not finished loading.
+    TerrainUnavailable,
     /// A current edit-protected interval includes this cell, including protected air.
     Protected,
     /// Non-solid liquid occupies this cell.
