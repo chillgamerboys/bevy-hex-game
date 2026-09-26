@@ -451,27 +451,28 @@ mod revision_tests {
     use hex_core::ocean::{OceanEnvironmentView, OceanSurfaceState};
     use std::sync::Arc;
 
-    fn fixture() -> LabSurface {
+    fn fixture() -> Result<LabSurface, std::num::TryFromIntError> {
         let beds = CENTERS
             .into_iter()
             .flat_map(|(q, r)| HexCoord::from_axial(q, r).within_radius(12))
             .map(|coord| {
                 let at = coord.to_world(0.0);
-                (
+                Ok((
                     coord,
                     OceanWaterColumn {
                         mean_height: SEA_LEVEL,
-                        bed_height: bed_level(Vec2::new(at.x, at.z)) as f32 * 0.4,
+                        bed_height: f32::from(i16::try_from(bed_level(Vec2::new(at.x, at.z)))?)
+                            * 0.4,
                         water_id: hex_core::SubstanceId(3),
                     },
-                )
+                ))
             })
-            .collect();
-        LabSurface::from_beds(beds, 0.4, default())
+            .collect::<Result<_, std::num::TryFromIntError>>()?;
+        Ok(LabSurface::from_beds(beds, 0.4, default()))
     }
     #[test]
     fn real_beach_alternates_wet_and_dry_and_presets_span_gentle_to_extreme() {
-        let lab = fixture();
+        let lab = fixture().expect("bounded laboratory bed levels");
         let env = OceanEnvironmentView {
             package_fingerprint: 1,
             sampler: Arc::new(lab.clone()),
@@ -503,7 +504,7 @@ mod revision_tests {
             "only {alternating} columns wash and reveal"
         );
         let coord = HexCoord::from_world(Vec3::new(-32.0, 0.0, -12.0));
-        let column = lab.columns.get(&coord).unwrap().water;
+        let column = lab.columns.get(&coord).expect("wave sample column").water;
         for (wave, min_range, max_range) in [
             (LabWave::Flat, 0.0, 0.001),
             (LabWave::Gentle, 0.4, 0.81),
@@ -511,8 +512,8 @@ mod revision_tests {
         ] {
             let mut sampled = lab.clone();
             sampled.settings.wave = wave;
-            let heights: Vec<_> = (0..128)
-                .map(|i| sampled.height(coord, i as f32 * 0.125, column))
+            let heights: Vec<_> = (0_i16..128)
+                .map(|i| sampled.height(coord, f32::from(i) * 0.125, column))
                 .collect();
             let range = heights.iter().copied().fold(f32::NEG_INFINITY, f32::max)
                 - heights.iter().copied().fold(f32::INFINITY, f32::min);
@@ -524,11 +525,11 @@ mod revision_tests {
     }
     #[test]
     fn channel_front_spans_multiple_columns_and_dissipates_toward_end_and_banks() {
-        let lab = fixture();
+        let lab = fixture().expect("bounded laboratory bed levels");
         let probe = |x, z| {
             *lab.columns
                 .get(&HexCoord::from_world(Vec3::new(x, 0.0, z)))
-                .unwrap()
+                .expect("channel sample column")
         };
         let inlet = probe(-14.0, 3.0);
         let middle = probe(-3.0, 3.0);
@@ -561,6 +562,8 @@ mod revision_tests {
             .count();
         assert!(rising >= 5, "channel wave reduced to {rising} columns");
         let launch = HexCoord::from_axial(-2, -6).to_world(0.0);
-        assert!(bed_level(Vec2::new(launch.x, launch.z)) as f32 * 0.4 >= SEA_LEVEL + 18.0);
+        let launch_level =
+            i16::try_from(bed_level(Vec2::new(launch.x, launch.z))).expect("bounded launch level");
+        assert!(f32::from(launch_level) * 0.4 >= SEA_LEVEL + 18.0);
     }
 }

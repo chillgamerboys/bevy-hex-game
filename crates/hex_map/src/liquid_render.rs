@@ -1580,10 +1580,16 @@ mod tests {
 
         let expected_first_center =
             cap_transform(surfaces[0].position, 0.4).transform_point(Vec3::ZERO);
-        assert_vec3_near(Vec3::from_array(mesh.positions[0]), expected_first_center);
+        assert_vec3_near(
+            Vec3::from_array(*mesh.positions.first().expect("first cap center")),
+            expected_first_center,
+        );
         let expected_second_center =
             cap_transform(surfaces[1].position, 0.4).transform_point(Vec3::ZERO);
-        assert_vec3_near(Vec3::from_array(mesh.positions[7]), expected_second_center);
+        assert_vec3_near(
+            Vec3::from_array(*mesh.positions.get(7).expect("second cap center")),
+            expected_second_center,
+        );
     }
 
     #[test]
@@ -1612,16 +1618,20 @@ mod tests {
                 let mesh = cap_batch_geometry(&surfaces, 0.4)
                     .expect("adjacent turning flow caps are valid");
                 let mut shared_vertices = 0;
-                for first in 0..7 {
-                    for second in 7..14 {
-                        let first_position = Vec3::from_array(mesh.positions[first]);
-                        let second_position = Vec3::from_array(mesh.positions[second]);
+                let first_positions = mesh.positions.get(..7).expect("first cap positions");
+                let second_positions = mesh.positions.get(7..14).expect("second cap positions");
+                let first_uvs = mesh.uvs.get(..7).expect("first cap UVs");
+                let second_uvs = mesh.uvs.get(7..14).expect("second cap UVs");
+                for (first_position, first_uv) in first_positions.iter().zip(first_uvs) {
+                    for (second_position, second_uv) in second_positions.iter().zip(second_uvs) {
+                        let first_position = Vec3::from_array(*first_position);
+                        let second_position = Vec3::from_array(*second_position);
                         if !first_position.abs_diff_eq(second_position, 1.0e-5) {
                             continue;
                         }
                         shared_vertices += 1;
-                        assert!(Vec2::from_array(mesh.uvs[first])
-                            .abs_diff_eq(Vec2::from_array(mesh.uvs[second]), 1.0e-5));
+                        assert!(Vec2::from_array(*first_uv)
+                            .abs_diff_eq(Vec2::from_array(*second_uv), 1.0e-5));
                     }
                 }
                 assert_eq!(shared_vertices, 2, "one shared hex edge has two vertices");
@@ -1837,24 +1847,28 @@ mod tests {
             .expect("valid exposed liquid sides");
         assert_eq!(strips.len(), 2);
         assert_eq!(
-            strips[&LiquidCurtainBatchKey {
-                fountain: None,
-                role: FillMaterialRole::Water,
-                style: MaterialStyle::Surface,
-            }],
-            vec![CurtainStrip {
+            strips
+                .get(&LiquidCurtainBatchKey {
+                    fountain: None,
+                    role: FillMaterialRole::Water,
+                    style: MaterialStyle::Surface,
+                })
+                .expect("surface curtain"),
+            &vec![CurtainStrip {
                 source: generic_source,
                 downstream: generic_lower,
                 side: HexSide::East,
             }]
         );
         assert_eq!(
-            strips[&LiquidCurtainBatchKey {
-                fountain: None,
-                role: FillMaterialRole::Water,
-                style: MaterialStyle::Fall,
-            }],
-            vec![CurtainStrip {
+            strips
+                .get(&LiquidCurtainBatchKey {
+                    fountain: None,
+                    role: FillMaterialRole::Water,
+                    style: MaterialStyle::Fall,
+                })
+                .expect("fall curtain"),
+            &vec![CurtainStrip {
                 source: fall_source,
                 downstream: fall_lower,
                 side: HexSide::East,
@@ -1904,7 +1918,7 @@ mod tests {
             Color::srgb(0.90, 0.96, 0.99),
             LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Surface),
         );
-        assert!(LIQUID_PRESENTATION_DEPTH_BIAS > 0.0);
+        assert!(material.base.depth_bias > 0.0);
         assert!(cap_bias(0.4) > 0.0 && cap_bias(0.4) < 0.4);
         assert_f32_near(material.base.depth_bias, LIQUID_PRESENTATION_DEPTH_BIAS);
         assert_f32_near(material.base.perceptual_roughness, WATER_SURFACE_ROUGHNESS);

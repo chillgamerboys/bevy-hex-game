@@ -109,15 +109,22 @@ mod tests {
             bed_heights: vec![-80.0; 21],
             ..Default::default()
         };
-        for z in 0..3 {
-            bed.bed_heights[z * 7] = 5.0;
+        for row in bed.bed_heights.chunks_exact_mut(7) {
+            *row.first_mut().expect("seven-column fixture row") = 5.0;
         }
         let original = bed.bed_heights.clone();
         let bed = bed.with_shore_shelter(0.0, 40.0).unwrap();
         assert_eq!(bed.bed_heights, original);
-        assert!(bed.shore_shelter[8] < 0.4);
-        assert!(bed.shore_shelter[9] < bed.shore_shelter[10]);
-        assert!((bed.shore_shelter[11] - 1.0).abs() < 0.00001);
+        let [near, middle, farther, open] = bed
+            .shore_shelter
+            .get(8..12)
+            .expect("four shoreline samples")
+        else {
+            panic!("expected four shoreline samples");
+        };
+        assert!(*near < 0.4);
+        assert!(middle < farther);
+        assert!((open - 1.0).abs() < 0.00001);
         assert!(bed.is_valid());
     }
 }

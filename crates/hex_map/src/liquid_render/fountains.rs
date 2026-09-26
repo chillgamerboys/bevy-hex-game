@@ -306,10 +306,10 @@ mod tests {
         }
     }
 
-    fn spawn(app: &mut App, pools: &FountainWater) -> Vec<Entity> {
+    fn spawn(app: &mut App, pools: &FountainWater) -> Result<Vec<Entity>, String> {
         let table = super::super::tests::liquid_table();
-        let water = table.id("water").expect("water");
-        let lava = table.id("lava").expect("lava");
+        let water = table.id("water").ok_or("water missing from test table")?;
+        let lava = table.id("lava").ok_or("lava missing from test table")?;
         let mut map = VoxelMap::new();
         for surface in surfaces() {
             map.set(
@@ -326,7 +326,7 @@ mod tests {
         let mut materials = app
             .world_mut()
             .remove_resource::<Assets<LiquidMaterial>>()
-            .expect("materials");
+            .ok_or("test material resource missing")?;
         let entities = spawn_presentations(
             &mut Commands::new(&mut queue, app.world()),
             &mut meshes,
@@ -339,10 +339,10 @@ mod tests {
             None,
             pools,
         )
-        .expect("liquids");
+        .map_err(|error| error.to_string())?;
         queue.apply(app.world_mut());
         app.insert_resource(materials);
-        entities
+        Ok(entities)
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
                 Update,
                 (advance_liquid_visual_time, sync_fountain_materials).chain(),
             );
-        let old_entities = spawn(&mut app, &sites(7));
+        let old_entities = spawn(&mut app, &sites(7)).expect("initial fountain presentations");
         let assert_charged = |app: &mut App, expected: &BTreeSet<&str>| {
             let mut query = app
                 .world_mut()
@@ -404,7 +404,7 @@ mod tests {
         for entity in old_entities {
             app.world_mut().despawn(entity);
         }
-        spawn(&mut app, &sites(8));
+        spawn(&mut app, &sites(8)).expect("reset fountain presentations");
         app.world_mut()
             .resource_mut::<ArenaFountainVisuals>()
             .charged

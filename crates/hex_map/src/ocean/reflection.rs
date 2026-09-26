@@ -163,8 +163,9 @@ mod tests {
             assert_eq!(
                 reflection(&profile, &bed, Vec2::new(x, 0.0))
                     .unwrap()
-                    .weight,
-                0.0
+                    .weight
+                    .to_bits(),
+                0.0_f32.to_bits()
             );
         }
     }
@@ -234,7 +235,10 @@ mod tests {
                 shore_anchors: anchors.to_vec(),
                 ..default()
             };
-            assert_eq!(reflection(&profile, &bed, at).unwrap().weight, 0.0);
+            assert_eq!(
+                reflection(&profile, &bed, at).unwrap().weight.to_bits(),
+                0.0_f32.to_bits()
+            );
         }
     }
     #[test]
