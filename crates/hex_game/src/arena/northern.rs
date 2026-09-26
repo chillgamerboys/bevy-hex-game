@@ -1,19 +1,19 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
-use super::{ArenaCamera, ArenaFrame, ViewState, environment::UnderwaterTint};
+use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
 use bevy::camera::ScalingMode;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
-use hex_core::HexCoord;
 use hex_core::arena::{
     ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
     ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
 };
 use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfile};
+use hex_core::HexCoord;
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
-    OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary, OceanRenderStatus,
-    OceanSurfaceAdapter, OceanSurfaceProfile, sample_local_surface_at_time, sample_surface,
+    sample_local_surface_at_time, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
+    OceanNearBoundary, OceanRenderStatus, OceanSurfaceAdapter, OceanSurfaceProfile,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
 use std::sync::Arc;
@@ -423,20 +423,21 @@ fn stage_summit(
     );
 }
 
-fn interest(
+pub(super) fn interest(
     session: Res<ArenaSession>,
-    cache: Res<NorthernPresentation>,
+    selection: Res<ArenaSelection>,
+    cache: Option<Res<NorthernPresentation>>,
     mut target: ResMut<ArenaStreamInterest>,
 ) {
-    if !cache.enabled {
+    if !selection.map.capabilities().streamed {
         return;
     }
-    if let Some(position) = cache.summit_pending {
+    if let Some(position) = cache.as_ref().and_then(|cache| cache.summit_pending) {
         *target = ArenaStreamInterest {
             position,
             velocity: Vec3::ZERO,
         };
-    } else if let Some(capture) = cache.capture {
+    } else if let Some(capture) = cache.as_ref().and_then(|cache| cache.capture) {
         // An explicitly windowless composition camera requests fine terrain at
         // its subject, never fabricating movement or discoveries for the actor.
         *target = ArenaStreamInterest {

@@ -68,6 +68,10 @@ fn fixture() -> App {
         .add_plugins((hex_map::arena::plugin, hex_arena::plugin))
         .add_systems(
             Update,
+            super::super::northern::interest.in_set(ArenaFrame::Input),
+        )
+        .add_systems(
+            Update,
             super::super::drive_simulation.in_set(ArenaFrame::Tick),
         );
     install(builder.app_mut());
