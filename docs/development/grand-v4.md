@@ -61,9 +61,18 @@ simulation ticks; reward acquisition and respawn also trigger saves.
   and ordinary sailing momentum are preserved.
 
 Source residency is bounded at 512 chunks and detailed presentation at 256 chunks.
-The distant World Tree mesh comes from the authored package, yields to the complete
-detailed object, and is suppressed after a footprint edit. It is not collision or
-seabed authority.
+The distant World Tree mesh comes from compact authored columns, yields to the
+complete detailed object, and applies persistent removals after edits or restore.
+Ground damage cannot erase the tree. Updating this mesh never pins source chunks;
+it is bounded to 20,000 columns, 25,000 runs and 600,000 indexed vertices. The current
+265-by-223.5-unit canopy uses 496,932 vertices across an 85-chunk footprint. It is
+not collision or seabed authority. Local shrine and library lights make the opaque
+caves readable without changing global daylight or gameplay visibility.
+
+The detailed terrain renderer owns water above mean sea level. The animated ocean
+owns sea-level water; raised neighbors still occlude its boundary faces. This keeps
+the garden, fountain, falls, valley lake and river visible without duplicate ocean
+bottoms or sides.
 
 ## Reproducible acceptance
 
