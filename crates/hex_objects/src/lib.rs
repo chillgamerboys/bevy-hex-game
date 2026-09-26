@@ -2749,9 +2749,12 @@ mod tests {
         let terrain_only = material_for(style, ReviewMaterialTreatment::MatteTerrain);
         let unified = material_for(style, ReviewMaterialTreatment::UnifiedMatte);
 
-        assert_eq!(current.perceptual_roughness, 0.82);
-        assert_eq!(terrain_only.perceptual_roughness, 0.82);
-        assert_eq!(unified.perceptual_roughness, 1.0);
+        assert_eq!(current.perceptual_roughness.to_bits(), 0.82_f32.to_bits());
+        assert_eq!(
+            terrain_only.perceptual_roughness.to_bits(),
+            0.82_f32.to_bits()
+        );
+        assert_eq!(unified.perceptual_roughness.to_bits(), 1.0_f32.to_bits());
         assert_eq!(terrain_only.base_color, current.base_color);
         assert_eq!(unified.base_color, current.base_color);
         assert_eq!(terrain_only.emissive, current.emissive);
@@ -2870,7 +2873,9 @@ mod tests {
             app.world()
                 .resource::<Assets<StandardMaterial>>()
                 .get(*id)
-                .is_some_and(|material| material.perceptual_roughness == 0.82)
+                .is_some_and(|material| {
+                    material.perceptual_roughness.to_bits() == 0.82_f32.to_bits()
+                })
         }));
 
         app.insert_resource(ReviewMaterialTreatment::UnifiedMatte);
@@ -2886,9 +2891,11 @@ mod tests {
         assert!(current_materials
             .iter()
             .all(|material| materials.get(*material).is_none()));
-        assert!(unified_materials.iter().all(|id| materials
-            .get(*id)
-            .is_some_and(|material| material.perceptual_roughness == 1.0)));
+        assert!(unified_materials
+            .iter()
+            .all(|id| materials.get(*id).is_some_and(|material| {
+                material.perceptual_roughness.to_bits() == 1.0_f32.to_bits()
+            })));
     }
 
     #[test]

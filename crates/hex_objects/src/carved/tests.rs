@@ -1,5 +1,4 @@
 #![expect(
-    clippy::expect_used,
     clippy::indexing_slicing,
     reason = "Tests use fixed fixture cells and require catalog, mesh, and entity preconditions"
 )]
