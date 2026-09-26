@@ -340,9 +340,15 @@ pub fn build_grand_v3_structural_preview(
     let (waterfall_centerline, waterfall_gorge_rows) = match waterfall_evidence {
         Ok(evidence) => evidence,
         Err(error) if std::env::var_os("HEX_GRAND_V3_STRUCTURAL_REVIEW_DRAFT").is_some() => {
-            eprintln!(
+            #[expect(
+                clippy::print_stderr,
+                reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+            )]
+            {
+                eprintln!(
                 "Grand V3 structural-review draft: omitting incomplete waterfall evidence: {error}"
             );
+            }
             (Vec::new(), Vec::new())
         }
         Err(error) => return Err(error),
@@ -548,8 +554,14 @@ fn peak_chain_sections(
                 .unwrap_or(summit);
             let tangent = if previous.coord == next.coord {
                 delta(
-                    centers[summit_index.saturating_sub(1)],
-                    centers[(summit_index + 1).min(centers.len().saturating_sub(1))],
+                    *centers.get(summit_index.saturating_sub(1)).ok_or_else(|| {
+                        StructuralPreviewError("peak center missing before summit".into())
+                    })?,
+                    *centers
+                        .get((summit_index + 1).min(centers.len().saturating_sub(1)))
+                        .ok_or_else(|| {
+                            StructuralPreviewError("peak center missing after summit".into())
+                        })?,
                 )
             } else {
                 delta(previous.coord, next.coord)
@@ -584,14 +596,17 @@ fn peak_chain_sections(
             ));
         }
 
-        for saddle_index in 0..region_ids.len().saturating_sub(1) {
-            let first_region = region_ids[saddle_index];
-            let second_region = region_ids[saddle_index + 1];
+        for (saddle_index, ([first_region, second_region], [first_pin, second_pin])) in region_ids
+            .array_windows::<2>()
+            .zip(summit_pins.array_windows::<2>())
+            .enumerate()
+        {
+            let (first_region, second_region) = (*first_region, *second_region);
             let (first, second) = exact_interpeak_saddle(
                 first_region,
                 second_region,
-                summit_pins[saddle_index],
-                summit_pins[saddle_index + 1],
+                *first_pin,
+                *second_pin,
                 fields,
             )?;
             let transverse_axis = delta(first.coord, second.coord);
@@ -822,10 +837,8 @@ fn farthest_pair(coords: &[HexCoord]) -> Option<(HexCoord, HexCoord)> {
 
 fn join_center_path(centers: &[HexCoord]) -> Vec<HexCoord> {
     let mut result = Vec::new();
-    for pair in centers.windows(2) {
-        let [first, second] = pair else {
-            continue;
-        };
+    for pair in centers.array_windows::<2>() {
+        let [first, second] = pair;
         let mut segment = first.line_between(*second);
         if !result.is_empty() && !segment.is_empty() {
             segment.remove(0);
@@ -1133,7 +1146,7 @@ fn semantic_three_lane_centerline(
         },
     );
     let mut result = Vec::with_capacity(raw_path.len());
-    for (index, (position, _)) in raw_path.iter().copied().enumerate() {
+    for (index, (position, source_liquid)) in raw_path.iter().copied().enumerate() {
         let previous = raw_path
             .get(index.saturating_sub(2))
             .or_else(|| raw_path.get(index.saturating_sub(1)))
@@ -1143,8 +1156,7 @@ fn semantic_three_lane_centerline(
             .or_else(|| raw_path.get(index.saturating_add(1)))
             .map_or(position.coord, |entry| entry.0.coord);
         let tangent = if previous == next {
-            raw_path[index]
-                .1
+            source_liquid
                 .downstream
                 .map_or((0, 1), |downstream| delta(position.coord, downstream.coord))
         } else {
@@ -1170,19 +1182,19 @@ fn semantic_three_lane_centerline(
                 row.center
             }
             Err(_error)
-                if index > 0
-                    && index.saturating_add(1) < raw_path.len()
-                    && raw_path[index.saturating_sub(1)]
-                        .0
-                        .coord
-                        .distance(position.coord)
-                        == 1
-                    && position
-                        .coord
-                        .distance(raw_path[index.saturating_add(1)].0.coord)
-                        == 1
-                    && raw_path[index.saturating_sub(1)].0.level >= position.level
-                    && position.level >= raw_path[index.saturating_add(1)].0.level =>
+                if index
+                    .checked_sub(1)
+                    .and_then(|previous| {
+                        raw_path
+                            .get(previous)
+                            .zip(raw_path.get(index.saturating_add(1)))
+                    })
+                    .is_some_and(|(previous, next)| {
+                        previous.0.coord.distance(position.coord) == 1
+                            && position.coord.distance(next.0.coord) == 1
+                            && previous.0.level >= position.level
+                            && position.level >= next.0.level
+                    }) =>
             {
                 // A normalized high-drop bend can collapse the three semantic
                 // lanes into two adjacent rows joined by one exact directed
@@ -1205,7 +1217,7 @@ fn semantic_three_lane_centerline(
         })?;
         result.push((semantic_center, liquid));
     }
-    if result.windows(2).any(|pair| {
+    if result.array_windows::<2>().any(|pair| {
         pair[0].0.coord.distance(pair[1].0.coord) > 1 || pair[1].0.level > pair[0].0.level
     }) {
         return Err(StructuralPreviewError(
@@ -1923,7 +1935,7 @@ mod tests {
                 section.samples.get(1).map(|sample| sample.coord),
                 step(center, direction, 1)
             );
-            assert!(section.samples.windows(2).all(|pair| {
+            assert!(section.samples.array_windows::<2>().all(|pair| {
                 pair.first()
                     .zip(pair.last())
                     .is_some_and(|(first, last)| first.coord.distance(last.coord) == 1)
@@ -1937,11 +1949,81 @@ mod tests {
         let generated =
             hex_schematic::reference_plan(&template, GRAND_V3_STRUCTURAL_PREVIEW_HERO_SEED)
                 .expect("reference plan remains valid");
-        let sections = peak_chain_sections(&generated.plan, &StructuralFields::default())
-            .expect("reference peak rings remain two six-cell chains");
+        assert!(peak_chain_sections(&generated.plan, &StructuralFields::default()).is_err());
+        let peak_cells = generated
+            .plan
+            .cells
+            .iter()
+            .filter(|cell| cell.facts.overlays.contains(&FeatureKind::PeakRing))
+            .map(|cell| (cell.coord, u32::from(cell.id.get())))
+            .collect::<BTreeMap<_, _>>();
+        let peak_coords = peak_cells.keys().copied().collect::<BTreeSet<_>>();
+        let mut fields = StructuralFields::default();
+        // The projector now requires exact owned summit and saddle evidence.
+        // A small synthetic chain supplies those facts without compiling a world.
+        for component in schematic_components(&peak_coords).expect("two reference peak chains") {
+            let ordered = ordered_component_path(&component).expect("six-cell chain path");
+            for [first, second] in ordered.array_windows::<2>() {
+                let first_center = schematic_world_center(*first).expect("first center projects");
+                let second_center =
+                    schematic_world_center(*second).expect("second center projects");
+                let first_region = *peak_cells.get(first).expect("first peak owns its terrain");
+                let second_region = *peak_cells
+                    .get(second)
+                    .expect("second peak owns its terrain");
+                for coord in first_center.line_between(second_center) {
+                    let biome_region =
+                        if coord.distance(first_center) <= coord.distance(second_center) {
+                            first_region
+                        } else {
+                            second_region
+                        };
+                    let position = TilePos::new(coord, 150);
+                    fields.terrain.insert(
+                        coord,
+                        TerrainSurface {
+                            position,
+                            biome_region,
+                        },
+                    );
+                    fields.material.insert(coord, position.level);
+                }
+            }
+        }
+        for (coarse, biome_region) in &peak_cells {
+            let coord = schematic_world_center(*coarse).expect("summit center projects");
+            let position = TilePos::new(coord, 200);
+            fields.terrain.insert(
+                coord,
+                TerrainSurface {
+                    position,
+                    biome_region: *biome_region,
+                },
+            );
+            fields.material.insert(coord, position.level);
+        }
+        let sections = peak_chain_sections(&generated.plan, &fields)
+            .expect("reference peak rings retain exact summit and saddle witnesses");
+        assert_eq!(sections.len(), 38);
         assert_eq!(
             sections
                 .iter()
+                .filter(|section| section.name.contains("-summit-"))
+                .count(),
+            24
+        );
+        assert_eq!(
+            sections
+                .iter()
+                .filter(|section| section.name.contains("-saddle-"))
+                .count(),
+            10
+        );
+        assert_eq!(
+            sections
+                .iter()
+                .filter(|section| !section.name.contains("-summit-")
+                    && !section.name.contains("-saddle-"))
                 .map(|section| section.name.as_str())
                 .collect::<Vec<_>>(),
             vec![
@@ -2071,7 +2153,14 @@ mod tests {
         let raw = centers
             .iter()
             .copied()
-            .map(|position| (position, liquids[&position]))
+            .map(|position| {
+                (
+                    position,
+                    (*liquids
+                        .get(&position)
+                        .expect("fixture contains the requested entry")),
+                )
+            })
             .collect::<Vec<_>>();
 
         let semantic = semantic_three_lane_centerline(&raw, &liquids)

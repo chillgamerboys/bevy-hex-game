@@ -1020,11 +1020,17 @@ fn finish_build<M>(
     let materialized = materialize::materialize(validated, palette, is_solid)
         .map_err(V3GenerationError::Materialization)?;
     if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
-        eprintln!(
-            "v3 profile: materialization={:?} total_before_report={:?}",
-            materialization_started.elapsed(),
-            started.elapsed()
-        );
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
+                "v3 profile: materialization={:?} total_before_report={:?}",
+                materialization_started.elapsed(),
+                started.elapsed()
+            );
+        }
     }
     let MaterializedV3World {
         map,

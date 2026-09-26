@@ -163,6 +163,10 @@ fn public_generated_hero_schematic_compiles_publishes_and_exports() {
     }
 }
 
+#[expect(
+    clippy::panic,
+    reason = "This integration-test assertion helper must fail with the missing camera destination named in the diagnostic."
+)]
 fn assert_hero_camera_anchor_positions(compiled: &CompiledSchematicMap) {
     use hex_core::{HexCoord, MapAnchorId, TilePos};
 
@@ -328,6 +332,10 @@ fn public_maximum_seed_schematic_compiles_a_complete_world() {
     assert_generated_complete_world(u64::MAX);
 }
 
+#[expect(
+    clippy::panic,
+    reason = "This integration-test helper reports the exact seed and compiler error when an expected complete world cannot be generated."
+)]
 fn assert_generated_complete_world(seed: u64) {
     let _serial = full_world_compilation_guard();
     let inputs = compilation_inputs();
@@ -346,6 +354,10 @@ fn assert_generated_complete_world(seed: u64) {
 
 #[test]
 #[ignore = "release-only: run with `cargo test --release -p hex_map --test schematic_compile grand_v3_full_world_release_corpus_compiles_32_seeds -- --ignored --exact --test-threads=1`"]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "The test returns an error for the wrong build profile; assertion failures must still fail the release corpus."
+)]
 fn grand_v3_full_world_release_corpus_compiles_32_seeds() -> Result<(), &'static str> {
     if cfg!(debug_assertions) {
         return Err("the full-world corpus must run with --release");
@@ -420,6 +432,10 @@ fn assert_normal_generated_schematic(
     );
 }
 
+#[expect(
+    clippy::panic,
+    reason = "This integration-test assertion helper rejects absent Grand V3 metrics before checking their complete-world contract."
+)]
 fn assert_complete_world_contract(
     compiled: &CompiledSchematicMap,
     expected_seed: u64,
@@ -539,6 +555,10 @@ fn assert_complete_world_contract(
     assert!(presentation.lights > 0);
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "This integration-test fixture requires the checked-in template, settings, palette, and substances to parse and agree."
+)]
 fn compilation_inputs() -> CompilationInputs {
     let template = hex_schematic::grand_v3_reference_template().expect("template should parse");
     let settings: MapSettings = ron::de::from_str(include_str!(
@@ -570,6 +590,11 @@ fn full_world_compilation_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "This integration-test fixture requires every checked-in runtime art source; a missing or invalid asset must fail the test with its path."
+)]
 fn runtime_art_catalog(palette: &ArtPalette) -> RuntimeArtCatalog {
     let styles: VoxelStyleCatalog =
         ron::from_str(include_str!("../../../assets/art/voxel_styles.ron"))

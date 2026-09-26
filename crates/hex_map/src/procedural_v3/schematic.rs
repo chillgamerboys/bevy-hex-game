@@ -466,7 +466,7 @@ impl MassifPortalBackboneAuthority {
                 .any(|surface| !self.surfaces.contains(surface))
             || self
                 .centerline
-                .windows(2)
+                .array_windows::<2>()
                 .any(|pair| pair[0].coord.distance(pair[1].coord) != 1)
             || !connected_coords(&coords)
             || coords.iter().any(|coord| !visual_mask.contains(coord))
@@ -958,7 +958,7 @@ pub(crate) fn admit_schematic_topology(
         plan,
         &mut layout,
         i32::try_from(schematic.cell_pitch)
-            .map_err(|_| schematic_contract("schematic pitch exceeds i32"))?,
+            .map_err(|error| schematic_contract(format!("schematic pitch exceeds i32: {error}")))?,
     )?;
     let crystal_patch_id = claimed_layout.patch_id();
     let SchematicFoundation {
@@ -1157,7 +1157,7 @@ pub(crate) fn admit_schematic_topology(
     let locked_tunnel = fine_network_path(
         &schematic_network_path(plan, NetworkKind::Tunnel, "edge/tunnel-complete")?,
         i32::try_from(schematic.cell_pitch)
-            .map_err(|_| schematic_contract("schematic pitch exceeds i32"))?,
+            .map_err(|error| schematic_contract(format!("schematic pitch exceeds i32: {error}")))?,
     );
     let tunnel = resolve_exact_terminal_lane(
         &lower_terminal,
@@ -1181,7 +1181,7 @@ pub(crate) fn admit_schematic_topology(
         || tunnel.rows.iter().any(|row| row.len() != 4)
         || tunnel
             .rows
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| !lane_rows_connect_smoothly(&pair[0], &pair[1]))
         || tunnel
             .rows
@@ -1333,7 +1333,7 @@ fn compile_generated_schematic(
         &plan,
         &mut layout,
         i32::try_from(schematic.cell_pitch)
-            .map_err(|_| schematic_contract("schematic pitch exceeds i32"))?,
+            .map_err(|error| schematic_contract(format!("schematic pitch exceeds i32: {error}")))?,
     )?;
     grand_profile_checkpoint("crystal claim", profile_started, &mut profile_previous);
     let crystal_fragment = super::schematic_crystal::construct_fragment(
@@ -1394,11 +1394,17 @@ fn grand_profile_checkpoint(
 ) {
     if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
         let now = std::time::Instant::now();
-        eprintln!(
-            "grand-v3 profile: {stage}: delta={:?} total={:?}",
-            now.duration_since(*previous),
-            now.duration_since(started)
-        );
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
+                "grand-v3 profile: {stage}: delta={:?} total={:?}",
+                now.duration_since(*previous),
+                now.duration_since(started)
+            );
+        }
         *previous = now;
     }
 }
@@ -1407,15 +1413,9 @@ fn grand_profile_checkpoint(
 /// changes a structural surface. The value is `q,r` in fine axial space and
 /// is intentionally inert unless a developer opts in.
 fn grand_trace_coord() -> Option<HexCoord> {
-    let Some(raw) = std::env::var_os("HEX_GRAND_TRACE_COORD") else {
-        return None;
-    };
-    let Some(raw) = raw.to_str() else {
-        return None;
-    };
-    let Some((q, r)) = raw.split_once(',') else {
-        return None;
-    };
+    let raw = std::env::var_os("HEX_GRAND_TRACE_COORD")?;
+    let raw = raw.to_str()?;
+    let (q, r) = raw.split_once(',')?;
     let (Ok(q), Ok(r)) = (q.trim().parse::<i32>(), r.trim().parse::<i32>()) else {
         return None;
     };
@@ -1434,9 +1434,15 @@ fn grand_profile_surface_checkpoint(stage: &str, volume: &VolumePlan) {
         .columns
         .get(&coord)
         .map(|column| column.elements.as_slice());
-    eprintln!(
+    #[expect(
+        clippy::print_stderr,
+        reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+    )]
+    {
+        eprintln!(
         "grand-v3 surface trace: {stage}: {coord:?} -> surfaces={surfaces:?}, column={column:?}"
     );
+    }
 }
 
 /// Exact pre-feature terrain shared by runtime compilation and the lightweight
@@ -1680,8 +1686,21 @@ fn seal_peak_ridge_route_grades(
             let expected = spine
                 .centerline
                 .iter()
-                .map(|coord| TilePos::new(*coord, spine.authored_grades[coord]))
-                .collect::<Vec<_>>();
+                .map(|coord| {
+                    spine
+                        .authored_grades
+                        .get(coord)
+                        .copied()
+                        .map(|level| TilePos::new(*coord, level))
+                        .ok_or_else(|| {
+                            schematic_contract("ordered peak spine lost an authored grade")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The function first resolves every AUTHORED_PEAK_ROUTE_NAMES entry successfully; protected_routes remains borrowed immutably throughout sealing."
+            )]
             let actual = features.protected_routes["grand_v3.inner_peak_ledge"]
                 .centerline
                 .iter()
@@ -1723,6 +1742,10 @@ fn seal_peak_ridge_route_grades(
             .keys()
             .find(|coord| authored_route_coords.contains(coord))
         {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The function first resolves every AUTHORED_PEAK_ROUTE_NAMES entry successfully; protected_routes remains borrowed immutably throughout sealing."
+            )]
             let owners = AUTHORED_PEAK_ROUTE_NAMES
                 .into_iter()
                 .filter(|name| {
@@ -1743,6 +1766,10 @@ fn seal_peak_ridge_route_grades(
                         .top_surface_at_coord(**pin)
                         .is_none_or(|(surface, _)| surface.level != **expected))
         }) {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The function first resolves every AUTHORED_PEAK_ROUTE_NAMES entry successfully; protected_routes remains borrowed immutably throughout sealing."
+            )]
             let route_owners = AUTHORED_PEAK_ROUTE_NAMES
                 .into_iter()
                 .filter(|name| {
@@ -1784,6 +1811,10 @@ fn seal_peak_ridge_route_grades(
             if !authored_route_coords.contains(coord)
                 && !authored_terrain_feature_coords.contains(coord)
             {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "The function first resolves every AUTHORED_PEAK_ROUTE_NAMES entry successfully; protected_routes remains borrowed immutably throughout sealing."
+                )]
                 let route_mentions = AUTHORED_PEAK_ROUTE_NAMES
                     .into_iter()
                     .filter_map(|name| {
@@ -1970,7 +2001,7 @@ fn reconcile_peak_ridge_foundation(
                 || unique.len() != spine.centerline.len()
                 || spine
                     .centerline
-                    .windows(2)
+                    .array_windows::<2>()
                     .any(|pair| pair[0].distance(pair[1]) != 1)
                 || has_chord
                 || spine.ingress_portals.is_empty()
@@ -1991,8 +2022,12 @@ fn reconcile_peak_ridge_foundation(
                 || !unique.is_subset(&spine.support_domain)
                 || !connected_coords(&spine.support_domain)
                 || authored_grade_coords != required_grade_coords
-                || spine.centerline.windows(2).any(|pair| {
-                    spine.authored_grades[&pair[0]].abs_diff(spine.authored_grades[&pair[1]]) > 1
+                || spine.centerline.array_windows::<2>().any(|pair| {
+                    spine
+                        .authored_grades
+                        .get(&pair[0])
+                        .zip(spine.authored_grades.get(&pair[1]))
+                        .is_none_or(|(first, second)| first.abs_diff(*second) > 1)
                 })
                 || spine.authored_grades.iter().any(|(coord, level)| {
                     component.expected_ridge_profile.get(coord) != Some(level)
@@ -2425,7 +2460,9 @@ fn build_schematic_foundation(
                 let surface_level = resolve_fine_surface_level(
                     cell,
                     *coord,
-                    foundation_baselines[coord],
+                    *foundation_baselines.get(coord).ok_or_else(|| {
+                        schematic_contract("foundation column has no authored baseline")
+                    })?,
                     &highlands,
                 );
                 let access = if *coord == massif_crest.coord && surface_level == massif_crest.level
@@ -2878,6 +2915,10 @@ fn build_proxy_world(
     // therefore is not permission to grade the natural cap. Admit that shared
     // transit only while the already-projected top still satisfies Crystal's
     // exact per-column burial authority.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The shell apron is exactly the keys of shell_concealment_floors, and the intersection cannot add keys."
+    )]
     if let Some((coord, floor, actual)) = crystal_shell_apron
         .intersection(&published_route_coords)
         .find_map(|coord| {
@@ -2952,6 +2993,10 @@ fn build_proxy_world(
             inner_peak_runway_reservation.len()
         )));
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "All three route names were resolved by the preceding published_route_coords collection; no route is removed between these checks."
+    )]
     if let Some((name, surface)) = [
         "grand_v3.tunnel",
         "grand_v3.crystal_route",
@@ -3026,7 +3071,6 @@ fn build_proxy_world(
     ]
     .into_iter()
     .flat_map(|center| center.within_radius(6))
-    .into_iter()
     .filter(|coord| massif_route_taper_exclusion.contains(coord))
     .collect::<BTreeSet<_>>();
     let authored_natural_pass_exclusion = surface_route_exclusion
@@ -3190,9 +3234,15 @@ fn build_proxy_world(
             // authority. A structural review must be able to show the current
             // highlands even when this optional route has not yet found an
             // admissible coordinate-simple path for the selected seed.
-            eprintln!(
+            #[expect(
+                clippy::print_stderr,
+                reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+            )]
+            {
+                eprintln!(
                 "Grand V3 structural-review draft: omitting the unfinished hero-seed inner-peak ledge"
             );
+            }
             let preview_surface = world
                 .features
                 .protected_routes
@@ -3343,7 +3393,15 @@ fn build_proxy_world(
         )));
     }
     let surviving_peak_ridge_profile = if structural_review_draft {
-        eprintln!("Grand V3 structural-review draft: deferring peak-ridge route-grade admission");
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
+                "Grand V3 structural-review draft: deferring peak-ridge route-grade admission"
+            );
+        }
         BTreeSet::new()
     } else {
         seal_peak_ridge_route_grades(
@@ -3444,9 +3502,15 @@ fn build_proxy_world(
         // inspected in the game before the expensive ordinary-route solver and
         // its fail-closed validators are complete. It does not alter normal
         // generation and deliberately publishes no durable hub authority.
-        eprintln!(
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
             "Grand V3 structural-review draft: skipping unfinished ordinary hub-network construction"
         );
+        }
         let preview_surface = world
             .anchors
             .get("grand_v3.tunnel_mouth")
@@ -3640,9 +3704,15 @@ fn build_proxy_world(
     // 105,469 columns after decoration. The explicit structural-review draft
     // keeps today's geometry launchable while this gameplay route is unfinished.
     let (_final_reachable, final_reachability) = if structural_review_draft {
-        eprintln!(
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
             "Grand V3 structural-review draft: skipping final traversal and corrective admission checks"
         );
+        }
         let reachable = ordinary_graph.distances_from(review_root);
         let levels = reachable
             .keys()
@@ -4633,7 +4703,14 @@ fn compile_authoritative_hydrology(
 
     // Keep one independent feature stream observable without allowing it to
     // perturb coast, terrain relief, or schematic candidate selection.
-    let _feature_variant = named_sample(seed, "feature_variants", river_centerline[0].coord);
+    let _feature_variant = named_sample(
+        seed,
+        "feature_variants",
+        river_centerline
+            .first()
+            .ok_or_else(|| schematic_contract("river centerline is empty"))?
+            .coord,
+    );
 
     Ok(HydrologyCompilation {
         liquids,
@@ -4772,7 +4849,7 @@ fn schematic_network_path(
 
 fn fine_network_path(coarse: &[SchematicCoord], pitch: i32) -> Vec<HexCoord> {
     let mut result = Vec::new();
-    for pair in coarse.windows(2) {
+    for pair in coarse.array_windows::<2>() {
         append_path(
             &mut result,
             schematic_to_world(pair[0], pitch).line_between(schematic_to_world(pair[1], pitch)),
@@ -4884,6 +4961,10 @@ fn waterfall_source_opens_into_pool(
         })
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "The selected rank is modulo fall_count, and the loop only indexes the vector allocated with exactly fall_count entries."
+)]
 fn waterfall_pool_lengths(seed: u64, attempt: u32, fall_count: usize) -> Vec<usize> {
     let mut pools = vec![WATERFALL_POOL_MIN_TRANSITIONS; fall_count];
     // Intentionally retain eight two-row pools with exactly one deterministic
@@ -4895,10 +4976,7 @@ fn waterfall_pool_lengths(seed: u64, attempt: u32, fall_count: usize) -> Vec<usi
         let sample = named_sample(
             seed.wrapping_add(u64::from(attempt).rotate_left(17)),
             "grand_v3.hydrology.waterfall_pool_lengths",
-            HexCoord::from_axial(
-                i32::try_from(extra).unwrap_or(i32::MAX),
-                i32::try_from(attempt).unwrap_or(i32::MAX),
-            ),
+            HexCoord::from_axial(extra, i32::try_from(attempt).unwrap_or(i32::MAX)),
         );
         let mut rank =
             usize::try_from(sample % u64::try_from(fall_count).unwrap_or(1)).unwrap_or_default();
@@ -4991,9 +5069,9 @@ fn select_irregular_waterfall_sources(
     }
     let mut latest_sources = vec![0; pool_lengths.len()];
     let mut next = final_source;
-    for rank in (0..pool_lengths.len()).rev() {
-        next = next.checked_sub(pool_lengths[rank])?.checked_sub(1)?;
-        latest_sources[rank] = next;
+    for (pool, latest) in pool_lengths.iter().zip(&mut latest_sources).rev() {
+        next = next.checked_sub(*pool)?.checked_sub(1)?;
+        *latest = next;
     }
     let span = final_source.checked_sub(cascade_start)?;
     let desired_sources = (0..pool_lengths.len())
@@ -5095,12 +5173,12 @@ fn allocate_irregular_minor_drops(
                 ),
             )
         });
-        let rank = eligible[0];
+        let rank = *eligible.first()?;
         if raising {
-            drops[rank] = drops[rank].saturating_add(1);
+            (*drops.get_mut(rank)?) = (*drops.get(rank)?).saturating_add(1);
             total = total.saturating_add(1);
         } else {
-            drops[rank] = drops[rank].saturating_sub(1);
+            (*drops.get_mut(rank)?) = (*drops.get(rank)?).saturating_sub(1);
             total = total.saturating_sub(1);
         }
         adjustment = adjustment.saturating_add(1);
@@ -5155,7 +5233,7 @@ fn waterfall_irregular_schedule_for_rows(
             continue;
         };
         let gaps = sources
-            .windows(2)
+            .array_windows::<2>()
             .map(|pair| pair[1].saturating_sub(pair[0]))
             .collect::<BTreeSet<_>>();
         if sources
@@ -5378,7 +5456,7 @@ fn authoritative_bending_waterfall_centerline(
                     let waterfall_centerline = waterfall_coords
                         .iter()
                         .copied()
-                        .zip(waterfall_levels.into_iter())
+                        .zip(waterfall_levels)
                         .map(|(coord, level)| TilePos::new(coord, level))
                         .collect::<Vec<_>>();
                     let mut complete_centerline = waterfall_centerline.clone();
@@ -5459,18 +5537,24 @@ fn waterfall_plunge_lip_at_mask_transition(
         .enumerate()
         .skip(high_index.saturating_add(1))
         .find_map(|(index, coord)| (*coord == low_center).then_some(index))?;
-    let lip = (high_index.saturating_add(1)..=low_index)
-        .find(|index| low_receiving_mask.contains(&approach[*index]))?;
+    let lip = (high_index.saturating_add(1)..=low_index).find(|index| {
+        approach
+            .get(*index)
+            .is_some_and(|coord| low_receiving_mask.contains(coord))
+    })?;
 
-    let high_side_is_exact = approach[high_index..lip]
+    let high_side_is_exact = approach
+        .get(high_index..lip)?
         .iter()
         .all(|coord| high_approach_mask.contains(coord));
-    let low_side_is_exact = approach[lip..=low_index]
+    let low_side_is_exact = approach
+        .get(lip..=low_index)?
         .iter()
         .all(|coord| low_receiving_mask.contains(coord));
     let crosses_one_edge = lip
         .checked_sub(1)
-        .is_some_and(|previous| approach[previous].distance(approach[lip]) == 1);
+        .and_then(|previous| approach.get(previous).zip(approach.get(lip)))
+        .is_some_and(|(previous, current)| previous.distance(*current) == 1);
     (high_side_is_exact && low_side_is_exact && crosses_one_edge).then_some(lip)
 }
 
@@ -5482,7 +5566,7 @@ fn waterfall_bend_candidate(
     label: &str,
 ) -> Vec<HexCoord> {
     let mut result = Vec::new();
-    for (segment_index, pair) in coarse.windows(2).enumerate() {
+    for (segment_index, pair) in coarse.array_windows::<2>().enumerate() {
         let Some((start, end)) =
             pair.first()
                 .copied()
@@ -5616,7 +5700,7 @@ fn validate_waterfall_fine_bend(
         })
         .collect::<Vec<_>>();
     let maximum_excursion = excursions.iter().copied().max().unwrap_or_default();
-    let every_segment_bends = coarse.windows(2).all(|pair| {
+    let every_segment_bends = coarse.array_windows::<2>().all(|pair| {
         let Some((start, end)) =
             pair.first()
                 .copied()
@@ -5658,7 +5742,7 @@ fn validate_waterfall_fine_bend(
     let tail_directions = candidate
         .get(tail_start..)
         .unwrap_or_default()
-        .windows(2)
+        .array_windows::<2>()
         .filter_map(|pair| {
             pair.first().and_then(|current| {
                 pair.get(1).and_then(|next| {
@@ -5673,7 +5757,7 @@ fn validate_waterfall_fine_bend(
     if candidate.first() != direct.first()
         || candidate.last() != direct.last()
         || candidate.len() <= direct.len()
-        || candidate.windows(2).any(|pair| {
+        || candidate.array_windows::<2>().any(|pair| {
             pair.first()
                 .zip(pair.get(1))
                 .is_none_or(|(first, second)| first.distance(*second) != 1)
@@ -5785,7 +5869,7 @@ fn meandering_fine_network_path(
             || candidate.last() != direct.last()
             || candidate.len() < direct.len()
             || candidate
-                .windows(2)
+                .array_windows::<2>()
                 .any(|pair| pair[0].distance(pair[1]) != 1)
             || candidate.iter().copied().collect::<BTreeSet<_>>().len() != candidate.len()
             || candidate
@@ -5840,7 +5924,7 @@ fn river_meander_candidate(
 ) -> Vec<HexCoord> {
     let mut result = Vec::new();
     let segment_count = coarse.len().saturating_sub(1);
-    for (segment_index, pair) in coarse.windows(2).enumerate() {
+    for (segment_index, pair) in coarse.array_windows::<2>().enumerate() {
         let start = schematic_to_world(pair[0], pitch);
         let end = schematic_to_world(pair[1], pitch);
         let direct = start.line_between(end);
@@ -5895,6 +5979,10 @@ fn river_meander_candidate(
     result
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Every caller derives direction from the six-neighbor array position or a modulo-six turn; the six-neighbor array preserves that order."
+)]
 fn append_direction_run(
     path: &mut Vec<HexCoord>,
     current: &mut HexCoord,
@@ -5911,7 +5999,7 @@ fn longest_straight_run(path: &[HexCoord]) -> usize {
     let mut longest = 0_usize;
     let mut current = 0_usize;
     let mut previous_direction = None;
-    for pair in path.windows(2) {
+    for pair in path.array_windows::<2>() {
         let direction = pair[0]
             .neighbors()
             .iter()
@@ -5998,7 +6086,7 @@ fn resolve_exact_terminal_lane(
         locked_centerline.reverse();
     }
     if locked_centerline
-        .windows(2)
+        .array_windows::<2>()
         .any(|pair| pair[0].distance(pair[1]) != 1)
         || locked_centerline
             .iter()
@@ -6061,7 +6149,7 @@ fn resolve_exact_terminal_lane(
                     .iter()
                     .any(|coord| crystal_mask.contains(coord) || !footprint.contains(coord))
         }) || locked_rows
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| !lane_rows_connect_smoothly(&pair[0], &pair[1]))
         {
             continue;
@@ -6095,7 +6183,7 @@ fn resolve_exact_terminal_lane(
                             .iter()
                             .any(|row| !valid_outside_tunnel_row(row, crystal_mask, footprint))
                         || connector_rows
-                            .windows(2)
+                            .array_windows::<2>()
                             .any(|pair| !lane_rows_connect_smoothly(&pair[0], &pair[1]))
                     {
                         continue;
@@ -6140,7 +6228,7 @@ fn resolve_exact_terminal_lane(
                         centerline.extend(anchors);
                         centerline.extend(locked_suffix.iter().copied());
                         if centerline
-                            .windows(2)
+                            .array_windows::<2>()
                             .any(|pair| pair[0].distance(pair[1]) != 1)
                             || centerline.iter().copied().collect::<BTreeSet<_>>().len()
                                 != centerline.len()
@@ -6158,7 +6246,7 @@ fn resolve_exact_terminal_lane(
                                 .skip(1)
                                 .any(|row| !valid_outside_tunnel_row(row, crystal_mask, footprint))
                             || rows
-                                .windows(2)
+                                .array_windows::<2>()
                                 .any(|pair| !lane_rows_connect_smoothly(&pair[0], &pair[1]))
                         {
                             continue;
@@ -6346,6 +6434,10 @@ fn lane_rows_connect_smoothly(first: &BTreeSet<HexCoord>, second: &BTreeSet<HexC
             .all(|coord| first.iter().any(|neighbor| coord.distance(*neighbor) <= 1))
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Callers enumerate this same path or pass an index validated against its length before constructing a lane row."
+)]
 fn tunnel_lane_row(path: &[HexCoord], index: usize, offsets: [i32; 4]) -> BTreeSet<HexCoord> {
     let center = path[index];
     let direction = forward_path_direction(path, index);
@@ -6359,8 +6451,11 @@ fn tunnel_lane_row(path: &[HexCoord], index: usize, offsets: [i32; 4]) -> BTreeS
 /// the final point preserves the previous→current direction instead of facing
 /// back into the route, so an asymmetric even-width row cannot shift sideways.
 fn forward_path_direction(path: &[HexCoord], index: usize) -> usize {
+    let Some(current) = path.get(index) else {
+        return 0;
+    };
     if let Some(next) = path.get(index.saturating_add(1)).copied() {
-        return path[index]
+        return current
             .neighbors()
             .iter()
             .position(|neighbor| *neighbor == next)
@@ -6369,10 +6464,10 @@ fn forward_path_direction(path: &[HexCoord], index: usize) -> usize {
     index
         .checked_sub(1)
         .and_then(|previous| {
-            path[previous]
+            path.get(previous)?
                 .neighbors()
                 .iter()
-                .position(|neighbor| *neighbor == path[index])
+                .position(|neighbor| neighbor == current)
         })
         .unwrap_or(0)
 }
@@ -6472,7 +6567,7 @@ fn validate_waterfall_schedule(
         .collect::<BTreeSet<_>>();
     let gaps = schedule
         .minor_falls
-        .windows(2)
+        .array_windows::<2>()
         .map(|pair| pair[1].source.saturating_sub(pair[0].source))
         .collect::<BTreeSet<_>>();
     let malformed = schedule.minor_falls.iter().enumerate().any(|(rank, fall)| {
@@ -6481,10 +6576,12 @@ fn validate_waterfall_schedule(
                 .contains(&fall.pool_transitions)
             || fall.source < cascade_start
             || fall.source.saturating_add(fall.pool_transitions) >= final_source
-            || rank.checked_sub(1).is_some_and(|previous| {
-                let previous = schedule.minor_falls[previous];
-                fall.source <= previous.source.saturating_add(previous.pool_transitions)
-            })
+            || rank
+                .checked_sub(1)
+                .and_then(|previous| schedule.minor_falls.get(previous))
+                .is_some_and(|previous| {
+                    fall.source <= previous.source.saturating_add(previous.pool_transitions)
+                })
     });
     if !(WATERFALL_MINOR_FALL_MIN_COUNT..=WATERFALL_MINOR_FALL_MAX_COUNT).contains(&count)
         || !(WATERFALL_FINAL_FALL_MIN..=WATERFALL_FINAL_FALL_MAX).contains(&schedule.final_drop)
@@ -6638,9 +6735,10 @@ fn plunge_levels_with_schedule_variant(
     let mut levels = Vec::with_capacity(count);
     levels.push(level);
     for transition in 0..count.saturating_sub(1) {
-        let drop = if transition < cascade_start || transition >= plunge_lip_index {
-            0
-        } else if lake_throat_transitions.contains(&transition) {
+        let drop = if transition < cascade_start
+            || transition >= plunge_lip_index
+            || lake_throat_transitions.contains(&transition)
+        {
             0
         } else if transition == final_source {
             schedule.final_drop
@@ -6732,11 +6830,11 @@ fn validate_plunge_profile(
         ));
     }
     let transitions = centerline
-        .windows(2)
+        .array_windows::<2>()
         .map(|pair| pair[0].level.saturating_sub(pair[1].level))
         .collect::<Vec<_>>();
     if centerline
-        .windows(2)
+        .array_windows::<2>()
         .any(|pair| pair[1].level > pair[0].level)
     {
         return Err(schematic_contract(
@@ -6787,7 +6885,7 @@ fn validate_plunge_profile(
         .map(|fall| fall.1)
         .collect::<BTreeSet<_>>();
     let fall_gap_variants = minor_falls
-        .windows(2)
+        .array_windows::<2>()
         .map(|pair| pair[1].0.saturating_sub(pair[0].0))
         .collect::<BTreeSet<_>>();
     let pool_variants = pool_lengths.iter().copied().collect::<BTreeSet<_>>();
@@ -6803,9 +6901,11 @@ fn validate_plunge_profile(
             index < cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS)
                 || index.saturating_add(WATERFALL_MINIMUM_DESCENT_LEAD) > final_source
         })
-        || centerline[plunge_lip_index..]
-            .iter()
-            .any(|position| position.level != end)
+        || (*centerline
+            .get(plunge_lip_index..)
+            .ok_or_else(|| schematic_contract("waterfall plunge lip exceeds its centerline"))?)
+        .iter()
+        .any(|position| position.level != end)
     {
         return Err(schematic_contract(
             "waterfall must descend for at least twenty-eight rows through a non-periodic sequence of six to eight small falls, varied two-to-four-row pools, one-to-two-level stream edges, and one twenty-four-to-thirty-level final fall before retaining its low approach",
@@ -6841,9 +6941,18 @@ fn waterfall_gorge_footprint(
     let (dominant_source_index, _) = dominant_waterfall_plunge(cascade_rows)?;
     let fall_rows = waterfall_open_aperture_rows(cascade_rows);
     let dominant_source_center =
-        waterfall_three_lane_center(&cascade_rows[dominant_source_index])?.coord;
-    let dominant_sink_center =
-        waterfall_three_lane_center(&cascade_rows[dominant_source_index.saturating_add(1)])?.coord;
+        waterfall_three_lane_center(cascade_rows.get(dominant_source_index).ok_or_else(|| {
+            schematic_contract("waterfall dominant fall escaped the cascade rows")
+        })?)?
+        .coord;
+    let dominant_sink_center = waterfall_three_lane_center(
+        cascade_rows
+            .get(dominant_source_index.saturating_add(1))
+            .ok_or_else(|| {
+                schematic_contract("waterfall dominant fall escaped the cascade rows")
+            })?,
+    )?
+    .coord;
     let mut result = BTreeSet::new();
     for (row_index, row) in cascade_rows.iter().enumerate() {
         if fall_rows.contains(&row_index) {
@@ -6885,8 +6994,9 @@ fn waterfall_is_protected_dominant_source_bank(
         .map(|water| water.coord.distance(coord))
         .min()
         == Some(1);
-    let touches_recessed_approach = cascade_rows[..dominant_source_index]
+    let touches_recessed_approach = cascade_rows
         .iter()
+        .take(dominant_source_index)
         .any(|row| row.iter().map(|water| water.coord.distance(coord)).min() == Some(1));
     touches_source && touches_recessed_approach
 }
@@ -7073,7 +7183,7 @@ fn waterfall_gorge_row_extent(
             "waterfall gorge row has no authored side bias",
         ));
     }
-    let favored_side = if row_index.saturating_div(3) % 2 == 0 {
+    let favored_side = if row_index.saturating_div(3).is_multiple_of(2) {
         1
     } else {
         -1
@@ -7202,7 +7312,7 @@ fn physical_waterfall_transitions(
     }
 
     cascade_rows
-        .windows(2)
+        .array_windows::<2>()
         .enumerate()
         .map(|(source_index, pair)| {
             let (source_row, _) = pair.first().zip(pair.get(1)).ok_or_else(|| {
@@ -7333,7 +7443,7 @@ fn validate_physical_waterfall_profile(
         .map(|(_, drop)| *drop)
         .collect::<BTreeSet<_>>();
     let fall_gap_variants = minor_falls
-        .windows(2)
+        .array_windows::<2>()
         .map(|pair| pair[1].0.saturating_sub(pair[0].0))
         .collect::<BTreeSet<_>>();
     let pool_variants = pool_lengths.iter().copied().collect::<BTreeSet<_>>();
@@ -8320,7 +8430,10 @@ fn validate_waterfall_exposed_fall_silhouette(
     source_index: usize,
     drop: Level,
 ) -> Result<(), V3GenerationError> {
-    let source_row = &authority.cascade_rows[source_index];
+    let source_row = authority
+        .cascade_rows
+        .get(source_index)
+        .ok_or_else(|| schematic_contract("waterfall source exceeds the authored cascade"))?;
     let sink_row = authority
         .cascade_rows
         .get(source_index.saturating_add(1))
@@ -8465,7 +8578,7 @@ fn validate_waterfall_cliff_interface(
         .mountain_lake
         .iter()
         .chain(&authority.lake_aprons.valley_lake)
-        .find(|position| actual_fills.get(position).is_none())
+        .find(|position| !actual_fills.contains_key(position))
     {
         return Err(schematic_contract(format!(
             "waterfall gorge replaced protected lake-apron water at {position:?}"
@@ -8793,23 +8906,18 @@ fn validate_waterfall_cliff_interface(
         // the natural-gorge authority.
         let required_contained_flanks = 0;
         let row_has_overlapping_levels = row.iter().any(|position| position.level != center.level);
-        let base_required_flank_count = if plunge_row {
-            0
-        } else if lake_transition_row {
-            0
-        } else if basin_row {
-            0
-        } else if row_has_overlapping_levels {
-            // At a bend, a lane from the next descending cross-section may
-            // occupy an immediate flank coordinate. The long-range gorge
-            // reach remains the shoulder authority; demanding two dry
-            // adjacent cells here would force an artificial retaining wall.
-            0
-        } else if row_index < dominant_source_index || turning_row {
-            2
-        } else {
-            3
-        };
+        let base_required_flank_count =
+            if plunge_row || lake_transition_row || basin_row || row_has_overlapping_levels {
+                // At a bend, a lane from the next descending cross-section may
+                // occupy an immediate flank coordinate. The long-range gorge
+                // reach remains the shoulder authority; demanding two dry
+                // adjacent cells here would force an artificial retaining wall.
+                0
+            } else if row_index < dominant_source_index || turning_row {
+                2
+            } else {
+                3
+            };
         // A neighboring fall aperture may intentionally remove one immediate
         // dry flank from an otherwise ordinary pool row. At a tight bend, an
         // adjacent row can likewise own that coordinate as authoritative
@@ -9133,7 +9241,9 @@ fn validate_river_meander(
     if coords.first() != direct.first()
         || coords.last() != direct.last()
         || coords.iter().copied().collect::<BTreeSet<_>>().len() != coords.len()
-        || coords.windows(2).any(|pair| pair[0].distance(pair[1]) != 1)
+        || coords
+            .array_windows::<2>()
+            .any(|pair| pair[0].distance(pair[1]) != 1)
         || maximum_excursion < 3
         || longest_straight_run(&coords) >= 44
     {
@@ -9205,7 +9315,7 @@ fn build_three_lane_row_candidates(
 ) -> Result<Vec<Vec<BTreeSet<TilePos>>>, V3GenerationError> {
     if centerline.len() < 2
         || centerline
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].coord.distance(pair[1].coord) != 1)
     {
         return Err(schematic_contract(format!(
@@ -9287,14 +9397,10 @@ fn build_three_lane_row_candidates(
                 }) {
                     continue;
                 }
-                if row_count >= 2
-                    && !three_lane_rows_preserve_exact_progression(
-                        &state.rows[row_count - 2],
-                        &state.rows[row_count - 1],
-                        Some(&row),
-                    )
-                {
-                    continue;
+                if let [.., first, second] = state.rows.as_slice() {
+                    if !three_lane_rows_preserve_exact_progression(first, second, Some(&row)) {
+                        continue;
+                    }
                 }
                 let previous_axis = state.cost.axes.last().copied().unwrap_or(axis);
                 let mut resolution = state.clone();
@@ -9329,13 +9435,10 @@ fn build_three_lane_row_candidates(
     let mut resolutions = states
         .into_values()
         .filter(|state| {
-            let count = state.rows.len();
-            count >= 2
-                && three_lane_rows_preserve_exact_progression(
-                    &state.rows[count - 2],
-                    &state.rows[count - 1],
-                    None,
-                )
+            let [.., first, second] = state.rows.as_slice() else {
+                return false;
+            };
+            three_lane_rows_preserve_exact_progression(first, second, None)
         })
         .collect::<Vec<_>>();
     resolutions.sort_unstable_by_key(|state| state.cost.clone());
@@ -9686,6 +9789,10 @@ fn apply_directed_watercourse(
         .map(|position| (*position, 0_usize))
         .collect::<BTreeMap<_, _>>();
     let mut frontier = final_row.iter().copied().collect::<VecDeque<_>>();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Every frontier entry is inserted in distances before enqueueing, including all final-row seeds; this traversal never removes entries."
+    )]
     while let Some(downstream) = frontier.pop_front() {
         let distance = distances[&downstream];
         for upstream in downstream
@@ -9712,6 +9819,10 @@ fn apply_directed_watercourse(
             positions.len().saturating_sub(distances.len())
         )));
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The preceding full-coverage distance check proves every position has a distance; candidate targets and rank keys come from those same authored rows."
+    )]
     for source in positions.values().copied() {
         if final_row.contains(&source) {
             continue;
@@ -9823,13 +9934,13 @@ fn exact_outlet_authority(
         ));
     }
     let candidates = river_centerline
-        .windows(2)
+        .array_windows::<2>()
         .enumerate()
         .filter(|(_, pair)| {
             !semantic_sea.contains(&pair[0].coord) && semantic_sea.contains(&pair[1].coord)
         })
         .filter_map(|(index, _)| {
-            three_lane_matching(&river_rows[index], &river_rows[index + 1])
+            three_lane_matching(river_rows.get(index)?, river_rows.get(index + 1)?)
                 .map(|matching| (index, matching))
         })
         .collect::<Vec<_>>();
@@ -9839,8 +9950,9 @@ fn exact_outlet_authority(
             candidates.len()
         )));
     };
-    let downstream_course = river_rows[index.saturating_add(1)..]
+    let downstream_course = river_rows
         .iter()
+        .skip(index.saturating_add(1))
         .flatten()
         .copied()
         .collect();
@@ -9873,9 +9985,9 @@ fn three_lane_matching(
             let matching = sources
                 .iter()
                 .copied()
-                .enumerate()
-                .map(|(index, source)| (source, targets[permutation[index]]))
-                .collect::<Vec<_>>();
+                .zip(permutation)
+                .map(|(source, index)| targets.get(index).copied().map(|target| (source, target)))
+                .collect::<Option<Vec<_>>>()?;
             matching
                 .iter()
                 .all(|(source, target)| {
@@ -9998,14 +10110,13 @@ fn compile_river_bridges(
         .keys()
         .map(|position| (position.coord, position.level))
         .collect::<BTreeMap<_, _>>();
-    let candidates = (1..river_rows.len().saturating_sub(1))
-        .filter_map(|index| {
-            let (deck, water_deck) = exact_bridge_deck(
-                river[index],
-                &river_rows[index],
-                river[index + 1],
-                &river_rows[index + 1],
-            )?;
+    let candidates = river
+        .array_windows::<2>()
+        .zip(river_rows.array_windows::<2>())
+        .enumerate()
+        .skip(1)
+        .filter_map(|(index, ([source, target], [source_row, target_row]))| {
+            let (deck, water_deck) = exact_bridge_deck(*source, source_row, *target, target_row)?;
             (index.saturating_add(1) < sea_entry
                 && deck
                     .iter()
@@ -10482,7 +10593,7 @@ fn validate_waterfall_lake_aprons(
         }
         if let Some(position) = apron.iter().find(|position| {
             position.level != expected_level
-                || actual_fills.get(position).is_none()
+                || !actual_fills.contains_key(position)
                 || node_owners
                     .get(position)
                     .is_none_or(|(body, _)| *body != course_body)
@@ -10620,7 +10731,10 @@ fn validate_grand_hydrology(
         .collect::<BTreeMap<_, _>>();
     let fill_runs = world.volume.fill_runs_by_top();
     for source in course.difference(final_row) {
-        let node = node_owners[source].1;
+        let node = node_owners
+            .get(source)
+            .ok_or_else(|| schematic_contract("hydrology course lost a registered liquid node"))?
+            .1;
         let Some(downstream) = node.downstream else {
             return Err(schematic_contract(format!(
                 "three-lane hydrology stops before the sea at {source:?}"
@@ -10649,8 +10763,9 @@ fn validate_grand_hydrology(
         }
     }
     if final_row.iter().any(|position| {
-        let node = node_owners[position].1;
-        node.downstream.is_some() || node.state != LiquidFlowState::Still
+        node_owners.get(position).is_none_or(|(_, node)| {
+            node.downstream.is_some() || node.state != LiquidFlowState::Still
+        })
     }) {
         return Err(schematic_contract(
             "the exact three-wide sea sink is not terminal",
@@ -10659,7 +10774,12 @@ fn validate_grand_hydrology(
     for start in &course {
         let mut cursor = *start;
         let mut seen = BTreeSet::new();
-        while let Some(downstream) = node_owners[&cursor].1.downstream {
+        while let Some(downstream) = node_owners
+            .get(&cursor)
+            .ok_or_else(|| schematic_contract("hydrology course lost a registered liquid node"))?
+            .1
+            .downstream
+        {
             if !seen.insert(cursor) || !course.contains(&downstream) {
                 return Err(schematic_contract(
                     "authoritative hydrology contains a cycle or side leak",
@@ -10738,12 +10858,14 @@ fn validate_grand_hydrology(
         )));
     }
 
-    if bridges.crossings.len() != 2
-        || bridges.crossings[0].structure == bridges.crossings[1].structure
-        || !bridges.crossings[0]
-            .deck
-            .is_disjoint(&bridges.crossings[1].deck)
-        || bridges.crossings[0].river_row_indices[1] >= bridges.crossings[1].river_row_indices[0]
+    let [first_bridge, second_bridge] = bridges.crossings.as_slice() else {
+        return Err(schematic_contract(
+            "river requires two distinct ordered bridge crossings",
+        ));
+    };
+    if first_bridge.structure == second_bridge.structure
+        || !first_bridge.deck.is_disjoint(&second_bridge.deck)
+        || first_bridge.river_row_indices[1] >= second_bridge.river_row_indices[0]
     {
         return Err(schematic_contract(
             "river requires two distinct ordered bridge crossings",
@@ -10921,7 +11043,7 @@ fn compile_tunnel(
     }
     if centerline.iter().copied().collect::<BTreeSet<_>>().len() != centerline.len()
         || centerline
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].distance(pair[1]) != 1)
     {
         return Err(schematic_contract(
@@ -10940,7 +11062,7 @@ fn compile_tunnel(
         ));
     }
     if planned_rows
-        .windows(2)
+        .array_windows::<2>()
         .any(|pair| !lane_rows_connect_smoothly(&pair[0], &pair[1]))
     {
         return Err(schematic_contract(
@@ -10971,7 +11093,7 @@ fn compile_tunnel(
         .last()
         .ok_or_else(|| schematic_contract("the tunnel has no foot terminal"))?;
     let direction = centerline
-        .windows(2)
+        .array_windows::<2>()
         .last()
         .and_then(|pair| {
             pair[0]
@@ -11005,7 +11127,7 @@ fn compile_tunnel(
         .collect::<Vec<_>>();
     if approach_rows.iter().any(|row| row.len() != 4)
         || approach_rows
-            .windows(2)
+            .array_windows::<2>()
             .any(|rows| !lane_rows_connect_smoothly(&rows[0], &rows[1]))
         || planned_rows.last() != approach_rows.first()
         || approach_rows
@@ -11051,7 +11173,10 @@ fn compile_tunnel(
             "tunnel foot has only {concealed_approach_rows} concealed approach rows; at least {MIN_CONCEALED_APPROACH_ROWS} are required"
         )));
     }
-    let entrance_row = approach_rows[concealed_approach_rows].clone();
+    let entrance_row = (*approach_rows
+        .get(concealed_approach_rows)
+        .ok_or_else(|| schematic_contract("tunnel lost an authored row or column"))?)
+    .clone();
     let mouth_index = concealed_approach_rows.saturating_add(1);
     let mouth_center = approach.get(mouth_index).copied().ok_or_else(|| {
         schematic_contract("concealed tunnel approach leaves no exterior mouth row")
@@ -11090,7 +11215,10 @@ fn compile_tunnel(
         // Row zero is the exact authored Crystal terminal. The next twelve
         // outside rows are the Gothic transition; every remaining roofed row
         // stays rough-hewn stone.
-        let row = planned_rows[index].clone();
+        let row = (*planned_rows
+            .get(index)
+            .ok_or_else(|| schematic_contract("tunnel lost an authored row or column"))?)
+        .clone();
         for coord in row {
             let biome = fine_index.biome(coord).ok_or_else(|| {
                 schematic_contract(format!("tunnel lane {coord:?} has no biome owner"))
@@ -11327,7 +11455,11 @@ fn compile_tunnel(
             let (top_surface, top_metadata) = volume
                 .top_surface_at_coord(coord)
                 .ok_or_else(|| schematic_contract("tunnel alcove column has no surface"))?;
-            let existing_column = volume.columns[&coord].clone();
+            let existing_column = (*volume
+                .columns
+                .get(&coord)
+                .ok_or_else(|| schematic_contract("tunnel lost an authored row or column"))?)
+            .clone();
             let column = tunnel_column(
                 &existing_column,
                 top_surface.level,
@@ -11540,8 +11672,12 @@ fn compile_tunnel(
         .chain(approach_surfaces)
         .chain(route_centerline.iter().copied())
         .collect::<BTreeSet<_>>();
-    let midpoint = route_centerline[route_centerline.len() / 2];
-    let gothic = route_centerline[GOTHIC_ROWS.min(route_centerline.len() - 1)];
+    let midpoint = *route_centerline
+        .get(route_centerline.len() / 2)
+        .ok_or_else(|| schematic_contract("tunnel lost an authored row or column"))?;
+    let gothic = *route_centerline
+        .get(GOTHIC_ROWS.min(route_centerline.len() - 1))
+        .ok_or_else(|| schematic_contract("tunnel lost an authored row or column"))?;
     let mouth_anchor = mouth_anchor.ok_or_else(|| {
         schematic_contract("concealed tunnel approach omitted its first exterior mouth surface")
     })?;
@@ -11645,7 +11781,7 @@ fn compile_exact_crystal_route(
     let mut centerline = tunnel.centerline.iter().rev().copied().collect::<Vec<_>>();
     centerline.extend(interior_path.iter().copied().skip(1));
     if centerline
-        .windows(2)
+        .array_windows::<2>()
         .any(|pair| !graph.admits(pair[0], pair[1]))
         || centerline.iter().copied().collect::<BTreeSet<_>>().len() != centerline.len()
     {
@@ -11743,7 +11879,7 @@ fn compile_frozen_summit_connection(
         .collect::<BTreeSet<_>>();
     if distinct_coords.len() != 16
         || ordered_coords
-            .windows(2)
+            .array_windows::<2>()
             .any(|rows| !lane_rows_connect_smoothly(rows[0], rows[1]))
     {
         return Err(schematic_contract(
@@ -12501,7 +12637,9 @@ fn grade_natural_pass_shoulders(
     }
 
     for coord in &support_coords {
-        let level = projected[coord];
+        let level = *projected
+            .get(coord)
+            .ok_or_else(|| schematic_contract("natural-pass shoulder lost its projected level"))?;
         let biome = fine_index.biome(*coord).ok_or_else(|| {
             schematic_contract(format!(
                 "natural-pass shoulder {coord:?} has no biome owner"
@@ -13670,7 +13808,7 @@ fn compile_natural_pass(
     if surfaces.len() != pass_coords.len()
         || centerline.len() != path.len()
         || centerline
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].level.abs_diff(pair[1].level) > 1)
         || pass_coords.iter().any(|coord| {
             let Some(surface) = surfaces_by_coord.get(coord) else {
@@ -14123,7 +14261,7 @@ fn compile_peak_saddle(
     let path_coords = path.iter().map(|(coord, _)| *coord).collect::<Vec<_>>();
     if path_coords.len() < 2
         || path_coords
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].distance(pair[1]) != 1)
     {
         return Err(schematic_contract(
@@ -14309,10 +14447,8 @@ fn compile_peak_saddle(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if let Some((from, to)) = construction_walk.windows(2).find_map(|pair| {
-        let [from, to] = pair else {
-            return None;
-        };
+    if let Some((from, to)) = construction_walk.array_windows::<2>().find_map(|pair| {
+        let [from, to] = pair;
         (!ordinary_transition_is_admitted(volume, None, *from, *to)).then_some((*from, *to))
     }) {
         return Err(schematic_contract(format!(
@@ -14519,11 +14655,24 @@ fn compile_peak_foothill_ledge(
     let mut diagnostics = Vec::new();
     let mut group_start = 0;
     while group_start < branches.len() {
-        let nearest_gap = branches[group_start].0;
-        let group_end =
-            group_start + branches[group_start..].partition_point(|(gap, _)| *gap == nearest_gap);
+        let nearest_gap = branches
+            .get(group_start)
+            .ok_or_else(|| {
+                schematic_contract("peak-foothill candidate group exceeds its branch list")
+            })?
+            .0;
+        let group_end = group_start
+            + (*branches.get(group_start..).ok_or_else(|| {
+                schematic_contract("peak-foothill candidate group exceeds its branch list")
+            })?)
+            .partition_point(|(gap, _)| *gap == nearest_gap);
         let mut candidates = Vec::<(u32, usize, TilePos, Vec<HexCoord>)>::new();
-        for (_, branch) in branches[group_start..group_end].iter().copied() {
+        for (_, branch) in (*branches.get(group_start..group_end).ok_or_else(|| {
+            schematic_contract("peak-foothill candidate group exceeds its branch list")
+        })?)
+        .iter()
+        .copied()
+        {
             let owner = fine_index.patch(branch.coord).ok_or_else(|| {
                 schematic_contract(format!(
                     "peak-foothill branch {branch:?} has no fine-grid owner"
@@ -14647,7 +14796,9 @@ fn compile_peak_foothill_ledge(
     if path.len() < 3
         || path.first().copied() != Some(branch.coord)
         || path.iter().copied().collect::<BTreeSet<_>>().len() != path.len()
-        || path.windows(2).any(|pair| pair[0].distance(pair[1]) != 1)
+        || path
+            .array_windows::<2>()
+            .any(|pair| pair[0].distance(pair[1]) != 1)
         || path
             .iter()
             .skip(1)
@@ -14827,7 +14978,7 @@ fn resolve_peak_saddle_terminal_path(
                     .map_err(Clone::clone)
                     .and_then(|(branch, terminal, corridor)| {
                         let route_levels = graded_upper_terminal_levels_with_minimums(
-                            &corridor,
+                            corridor,
                             *branch,
                             *terminal,
                             bench_level,
@@ -15291,10 +15442,8 @@ fn validate_protected_route_integrity(
             "{label} centerline lost exact walker node {position:?}"
         )));
     }
-    if let Some((from, to)) = route.centerline.windows(2).find_map(|pair| {
-        let [from, to] = pair else {
-            return None;
-        };
+    if let Some((from, to)) = route.centerline.array_windows::<2>().find_map(|pair| {
+        let [from, to] = pair;
         (!ordinary_transition_is_admitted(volume, None, *from, *to)).then_some((*from, *to))
     }) {
         return Err(schematic_contract(format!(
@@ -15644,7 +15793,12 @@ fn graded_upper_bench_levels_with_minimums(
             corridor
                 .contains(&neighbor)
                 .then_some(neighbor)
-                .filter(|neighbor| levels[coord].abs_diff(levels[neighbor]) > 1)
+                .filter(|neighbor| {
+                    levels
+                        .get(coord)
+                        .zip(levels.get(neighbor))
+                        .is_none_or(|(first, second)| first.abs_diff(*second) > 1)
+                })
                 .map(|neighbor| (*coord, neighbor))
         })
     }) {
@@ -15697,7 +15851,9 @@ fn graded_upper_terminal_levels_with_minimums(
     {
         return Err("terminal construction corridor is disconnected".to_owned());
     }
-    let root_to_terminal = fixed_distances[&branch.coord]
+    let root_to_terminal = fixed_distances
+        .get(&branch.coord)
+        .ok_or_else(|| "terminal branch has no distance field".to_owned())?
         .get(&terminal)
         .copied()
         .ok_or_else(|| "terminal root cannot reach its destination".to_owned())?;
@@ -15787,7 +15943,12 @@ fn graded_upper_terminal_levels_with_minimums(
             corridor
                 .contains(&neighbor)
                 .then_some(neighbor)
-                .filter(|neighbor| levels[coord].abs_diff(levels[neighbor]) > 1)
+                .filter(|neighbor| {
+                    levels
+                        .get(coord)
+                        .zip(levels.get(neighbor))
+                        .is_none_or(|(first, second)| first.abs_diff(*second) > 1)
+                })
                 .map(|neighbor| (*coord, neighbor))
         })
     }) {
@@ -15947,7 +16108,10 @@ fn grade_peak_saddle_with_support(
         || route_coords.iter().any(|coord| {
             coord.neighbors().into_iter().any(|neighbor| {
                 route_coords.contains(&neighbor)
-                    && route_levels[coord].abs_diff(route_levels[&neighbor]) > 1
+                    && route_levels
+                        .get(coord)
+                        .zip(route_levels.get(&neighbor))
+                        .is_none_or(|(first, second)| first.abs_diff(*second) > 1)
             })
         })
     {
@@ -16065,7 +16229,6 @@ fn peak_saddle_influenced_support_coords(
             }
         }
     }
-    drop(seed);
     while let Some((level, coord)) = upper_frontier.pop_first() {
         if upper.get(&coord).copied() != Some(level) {
             continue;
@@ -16222,10 +16385,12 @@ fn project_peak_saddle_support(
     let mut lower_frontier =
         BinaryHeap::from_iter(lower.iter().map(|(coord, (level, _))| (*level, *coord)));
     while let Some((level, coord)) = lower_frontier.pop() {
-        if lower.get(&coord).map(|(current, _)| *current) != Some(level) {
+        let Some((current, source)) = lower.get(&coord).copied() else {
+            continue;
+        };
+        if current != level {
             continue;
         }
-        let source = lower[&coord].1;
         for neighbor in coord
             .neighbors()
             .into_iter()
@@ -16246,10 +16411,12 @@ fn project_peak_saddle_support(
         .map(|(coord, (level, _))| (*level, *coord))
         .collect::<BTreeSet<_>>();
     while let Some((level, coord)) = upper_frontier.pop_first() {
-        if upper.get(&coord).map(|(current, _)| *current) != Some(level) {
+        let Some((current, source)) = upper.get(&coord).copied() else {
+            continue;
+        };
+        if current != level {
             continue;
         }
-        let source = upper[&coord].1;
         for neighbor in coord
             .neighbors()
             .into_iter()
@@ -18036,8 +18203,12 @@ fn compile_ordinary_hub_network(
         let mut connected = None;
         for candidate in candidates.iter().copied().take(24) {
             let band = OrdinaryRegionBand::containing(candidate.level);
-            band_counts[usize::from(band == OrdinaryRegionBand::Upper)] =
-                band_counts[usize::from(band == OrdinaryRegionBand::Upper)].saturating_add(1);
+            let [lower_count, upper_count] = &mut band_counts;
+            let count = match band {
+                OrdinaryRegionBand::Lower => lower_count,
+                OrdinaryRegionBand::Upper => upper_count,
+            };
+            *count = count.saturating_add(1);
             let (candidate_paths, candidate_connection) = try_ordinary_candidate_connector(
                 candidate,
                 cell.id.get(),
@@ -18059,7 +18230,9 @@ fn compile_ordinary_hub_network(
             }
         }
         if connected.is_none() && candidates.len() > 24 {
-            let remaining = &candidates[24..];
+            let remaining = candidates
+                .get(24..)
+                .ok_or_else(|| schematic_contract("ordinary candidate suffix is missing"))?;
             let needs_lower = remaining.iter().any(|candidate| {
                 OrdinaryRegionBand::containing(candidate.level) == OrdinaryRegionBand::Lower
             });
@@ -18119,8 +18292,12 @@ fn compile_ordinary_hub_network(
             reachable_fallback_count = reachable.len();
             for (_, candidate) in reachable.into_iter().take(24) {
                 let band = OrdinaryRegionBand::containing(candidate.level);
-                band_counts[usize::from(band == OrdinaryRegionBand::Upper)] =
-                    band_counts[usize::from(band == OrdinaryRegionBand::Upper)].saturating_add(1);
+                let [lower_count, upper_count] = &mut band_counts;
+                let count = match band {
+                    OrdinaryRegionBand::Lower => lower_count,
+                    OrdinaryRegionBand::Upper => upper_count,
+                };
+                *count = count.saturating_add(1);
                 let (candidate_paths, candidate_connection) = try_ordinary_candidate_connector(
                     candidate,
                     cell.id.get(),
@@ -18656,7 +18833,6 @@ fn repair_ordinary_band_distances(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn repair_ordinary_network_cache(
     graph: &mut OrdinaryGraph,
     volume: &VolumePlan,
@@ -18765,10 +18941,10 @@ fn carve_ordinary_connector(
         route.push(position);
     }
     if route
-        .windows(2)
+        .array_windows::<2>()
         .any(|pair| pair[0].coord.distance(pair[1].coord) != 1)
         || route
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].level.abs_diff(pair[1].level) > 1)
     {
         return Ok(None);
@@ -18805,7 +18981,6 @@ fn carve_ordinary_connector(
     Ok(Some(route))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn try_ordinary_candidate_connector(
     candidate: TilePos,
     cell_id: u16,
@@ -18951,9 +19126,15 @@ fn try_ordinary_candidate_connector(
                 )
             })
             .collect::<Vec<_>>();
-        eprintln!(
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
             "grand-v3 connector trace: cell={cell_id}, candidate={candidate:?}, target={target:?}, traced={traced_coord:?}, path(coord,planned,current,hard,preserved,network)={traced_path:?}"
         );
+        }
     }
     let label = format!("ordinary connector for cell {cell_id}");
     let Some(route) = carve_ordinary_connector(
@@ -18998,7 +19179,7 @@ fn massif_portal_skeleton_rejections(
         .filter(|coord| taper_avoidance.contains(coord))
         .collect::<BTreeSet<_>>();
     let seam_transitions = path
-        .windows(2)
+        .array_windows::<2>()
         .filter(|pair| {
             massif_visual.visual_mask.contains(&pair[0])
                 != massif_visual.visual_mask.contains(&pair[1])
@@ -19046,7 +19227,6 @@ fn massif_portal_skeleton_rejections(
     rejected
 }
 
-#[allow(clippy::too_many_arguments)]
 #[expect(
     dead_code,
     reason = "retained as a re-authoring reference until the shared-transit Grand V3 route passes strict acceptance"
@@ -19143,7 +19323,6 @@ fn plan_massif_portal_connector(
     (path_count, best_direct)
 }
 
-#[allow(clippy::too_many_arguments)]
 #[expect(
     dead_code,
     reason = "retained as a re-authoring reference until the shared-transit Grand V3 route passes strict acceptance"
@@ -19252,7 +19431,7 @@ fn three_wide_route_coords(
 ) -> Option<BTreeSet<HexCoord>> {
     if centerline.len() < 2
         || centerline
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].coord.distance(pair[1].coord) != 1)
     {
         return None;
@@ -19312,7 +19491,7 @@ fn existing_natural_pass_massif_portal(
     )?;
     let transitions = natural_pass
         .centerline
-        .windows(2)
+        .array_windows::<2>()
         .enumerate()
         .filter(|(_, pair)| {
             massif_visual.visual_mask.contains(&pair[0].coord)
@@ -19320,31 +19499,61 @@ fn existing_natural_pass_massif_portal(
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    if transitions.len() != 2 {
+    let [entry, exit] = transitions.as_slice() else {
         return Err(schematic_contract(format!(
             "natural pass must supply one Massif through-transit with exactly two boundary terminals, found {} transitions at {transitions:?}",
             transitions.len()
         )));
-    }
-    let entry = transitions[0];
-    let exit = transitions[1];
+    };
+    let (entry, exit) = (*entry, *exit);
     let visual = &massif_visual.visual_mask;
-    if visual.contains(&natural_pass.centerline[entry].coord)
-        || !visual.contains(&natural_pass.centerline[entry.saturating_add(1)].coord)
-        || !visual.contains(&natural_pass.centerline[exit].coord)
-        || visual.contains(&natural_pass.centerline[exit.saturating_add(1)].coord)
-    {
+    if visual.contains(
+        &natural_pass
+            .centerline
+            .get(entry)
+            .ok_or_else(|| {
+                schematic_contract("natural-pass Massif terminal escaped its centerline")
+            })?
+            .coord,
+    ) || !visual.contains(
+        &natural_pass
+            .centerline
+            .get(entry.saturating_add(1))
+            .ok_or_else(|| {
+                schematic_contract("natural-pass Massif terminal escaped its centerline")
+            })?
+            .coord,
+    ) || !visual.contains(
+        &natural_pass
+            .centerline
+            .get(exit)
+            .ok_or_else(|| {
+                schematic_contract("natural-pass Massif terminal escaped its centerline")
+            })?
+            .coord,
+    ) || visual.contains(
+        &natural_pass
+            .centerline
+            .get(exit.saturating_add(1))
+            .ok_or_else(|| {
+                schematic_contract("natural-pass Massif terminal escaped its centerline")
+            })?
+            .coord,
+    ) {
         return Err(schematic_contract(format!(
             "natural-pass Massif transit terminals do not form one outside-to-inside-to-outside traversal at {transitions:?}"
         )));
     }
-    let interior = &natural_pass.centerline[entry.saturating_add(1)..=exit];
+    let interior = natural_pass
+        .centerline
+        .get(entry.saturating_add(1)..=exit)
+        .ok_or_else(|| schematic_contract("natural-pass Massif terminal escaped its centerline"))?;
     if interior.is_empty()
         || interior
             .iter()
             .any(|surface| !visual.contains(&surface.coord))
         || interior
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].coord.distance(pair[1].coord) != 1)
     {
         return Err(schematic_contract(
@@ -19360,8 +19569,11 @@ fn existing_natural_pass_massif_portal(
             let end = transition
                 .saturating_add(12)
                 .min(natural_pass.centerline.len().saturating_sub(1));
-            natural_pass.centerline[start..=end]
+            natural_pass
+                .centerline
                 .iter()
+                .skip(start)
+                .take(end.saturating_sub(start).saturating_add(1))
                 .filter_map(|surface| {
                     outer_taper
                         .contains(&surface.coord)
@@ -19370,10 +19582,15 @@ fn existing_natural_pass_massif_portal(
                 .collect::<BTreeSet<_>>()
         })
         .collect::<Vec<_>>();
+    let [first_crossing, second_crossing] = terminal_crossings.as_slice() else {
+        return Err(schematic_contract(
+            "natural-pass Massif transit lost a terminal crossing",
+        ));
+    };
     if terminal_crossings
         .iter()
         .any(|crossing| crossing.is_empty() || crossing.len() > 12 || !connected_coords(crossing))
-        || !terminal_crossings[0].is_disjoint(&terminal_crossings[1])
+        || !first_crossing.is_disjoint(second_crossing)
     {
         return Err(schematic_contract(format!(
             "natural-pass Massif transit terminals lost their two distinct compact taper crossings: {:?}",
@@ -19395,17 +19612,20 @@ fn existing_natural_pass_massif_portal(
         .ok_or_else(|| {
             schematic_contract("natural-pass Massif crossing has no non-taper interior surface")
         })?;
-    let mut authority = MassifRouteAuthority::default();
-    authority.portal_centerline = natural_pass.centerline.clone();
-    authority.portal_core = terminal_crossings.into_iter().flatten().collect();
+    let authority = MassifRouteAuthority {
+        portal_centerline: natural_pass.centerline.clone(),
+        portal_core: terminal_crossings.into_iter().flatten().collect(),
+        ..Default::default()
+    };
     Ok((
-        natural_pass.centerline[internal_index],
+        (*natural_pass.centerline.get(internal_index).ok_or_else(|| {
+            schematic_contract("natural-pass Massif terminal escaped its centerline")
+        })?),
         natural_pass.clone(),
         authority,
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 #[expect(
     dead_code,
     reason = "retained as a re-authoring reference until the shared-transit Grand V3 route passes strict acceptance"
@@ -19448,7 +19668,9 @@ fn author_massif_portal(
     let segment_end = last_taper
         .saturating_add(4)
         .min(centerline.len().saturating_sub(1));
-    let segment = &centerline[segment_start..=segment_end];
+    let segment = centerline
+        .get(segment_start..=segment_end)
+        .ok_or_else(|| schematic_contract("Massif portal lost its authored crossing interval"))?;
     let portal_core =
         three_wide_route_coords(segment, &world.layout.footprint).ok_or_else(|| {
             schematic_contract("Massif portal cannot resolve an exact three-wide crossing ribbon")
@@ -19475,8 +19697,10 @@ fn author_massif_portal(
             .ok_or_else(|| schematic_contract("Massif portal has no ribbon end"))?,
     )
     .ok_or_else(|| schematic_contract("Massif portal width has no one-level height field"))?;
-    let mut authority = MassifRouteAuthority::default();
-    authority.portal_core = portal_core.clone();
+    let mut authority = MassifRouteAuthority {
+        portal_core: portal_core.clone(),
+        ..Default::default()
+    };
     for coord in &portal_core {
         let original = original_before_centerline
             .get(coord)
@@ -19486,7 +19710,9 @@ fn author_massif_portal(
                 schematic_contract(format!("Massif portal lost surface at {coord:?}"))
             })?;
         authority.original_surfaces.insert(*coord, original);
-        let level = portal_levels[coord];
+        let level = *portal_levels.get(coord).ok_or_else(|| {
+            schematic_contract("Massif portal lost its authored crossing interval")
+        })?;
         if original.level.abs_diff(level) > MASSIF_PORTAL_MAXIMUM_CUT_FILL {
             return Err(schematic_contract(format!(
                 "Massif portal requires a {}-level cut/fill at {coord:?}, above the {}-level visual bound",
@@ -19551,7 +19777,9 @@ fn author_massif_portal(
             .min_by_key(|core| (core.distance(coord), **core))
             .copied()
             .ok_or_else(|| schematic_contract("Massif portal feather has no core"))?;
-        let core_level = portal_levels[&nearest_core];
+        let core_level = *portal_levels.get(&nearest_core).ok_or_else(|| {
+            schematic_contract("Massif portal lost its authored crossing interval")
+        })?;
         let numerator = MASSIF_PORTAL_FEATHER_DEPTH
             .saturating_add(1)
             .saturating_sub(distance);
@@ -19609,7 +19837,7 @@ fn author_massif_portal(
         .filter_map(|coord| surface_by_coord.get(coord).copied())
         .collect::<Vec<_>>();
     let seam_transitions = rebuilt_centerline
-        .windows(2)
+        .array_windows::<2>()
         .filter(|pair| {
             massif_visual.visual_mask.contains(&pair[0].coord)
                 != massif_visual.visual_mask.contains(&pair[1].coord)
@@ -19617,7 +19845,7 @@ fn author_massif_portal(
         .count();
     if rebuilt_centerline.len() != plan.path.len()
         || rebuilt_centerline
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].level.abs_diff(pair[1].level) > 1)
         || seam_transitions != 1
         || authority.changed_taper.is_empty()
@@ -19822,7 +20050,7 @@ fn massif_grade_aware_connector_to_network(
             let path_coords = reversed.iter().copied().collect::<BTreeSet<_>>();
             let flat_final = volume
                 .surface_headroom(*target)
-                .map_or(true, |headroom| headroom.0 < 3);
+                .is_none_or(|headroom| headroom.0 < 3);
             let mut fixed = BTreeMap::from([(target.coord, target.level)]);
             if flat_final {
                 let penultimate = reversed.get(reversed.len().saturating_sub(2)).copied()?;
@@ -19949,30 +20177,30 @@ fn massif_dense_bounded_connector_to_network(
         upper.push(natural.saturating_add(maximum_cut_fill).min(MAX_V3_LEVEL));
     }
     let state_index = |coord_index: usize, level: Level| {
-        if level < lower[coord_index] || level > upper[coord_index] {
+        if level < (*lower.get(coord_index)?) || level > (*upper.get(coord_index)?) {
             return None;
         }
         coord_index
             .checked_mul(slots_per_coord)?
-            .checked_add(usize::try_from(level.saturating_sub(lower[coord_index])).ok()?)
+            .checked_add(usize::try_from(level.saturating_sub(*lower.get(coord_index)?)).ok()?)
     };
     let state_coord_level = |state: usize| {
         let indexed_coord = state / slots_per_coord;
         let level_offset = Level::try_from(state % slots_per_coord).ok()?;
         Some((
             coords.get(indexed_coord).copied()?,
-            lower[indexed_coord].checked_add(level_offset)?,
+            (*lower.get(indexed_coord)?).checked_add(level_offset)?,
         ))
     };
     let mut frontier = BinaryHeap::<Reverse<(u32, u32, u64, usize)>>::new();
     let start_exposure = u32::from(!preferred_interior.contains(&start.coord));
-    for level in lower[start_coord_index]..=upper[start_coord_index] {
+    for level in (*lower.get(start_coord_index)?)..=(*upper.get(start_coord_index)?) {
         let index = state_index(start_coord_index, level)?;
         let displacement = u64::from(start.level.abs_diff(level));
         let cost = displacement.saturating_mul(displacement);
-        best_exposure[index] = start_exposure;
-        best_steps[index] = 0;
-        best_cost[index] = cost;
+        (*best_exposure.get_mut(index)?) = start_exposure;
+        (*best_steps.get_mut(index)?) = 0;
+        (*best_cost.get_mut(index)?) = cost;
         frontier.push(Reverse((start_exposure, 0, cost, index)));
     }
     let mut seen_regrade_candidates = BTreeSet::<Vec<HexCoord>>::new();
@@ -19980,9 +20208,9 @@ fn massif_dense_bounded_connector_to_network(
 
     while let Some(Reverse((exposure, steps, cost, current_state))) = frontier.pop() {
         if (
-            best_exposure[current_state],
-            best_steps[current_state],
-            best_cost[current_state],
+            (*best_exposure.get(current_state)?),
+            (*best_steps.get(current_state)?),
+            (*best_cost.get(current_state)?),
         ) != (exposure, steps, cost)
         {
             continue;
@@ -20004,7 +20232,7 @@ fn massif_dense_bounded_connector_to_network(
             let mut cursor = current_state;
             loop {
                 state_path.push(cursor);
-                let previous = parent[cursor];
+                let previous = *parent.get(cursor)?;
                 if previous == missing {
                     break;
                 }
@@ -20026,7 +20254,7 @@ fn massif_dense_bounded_connector_to_network(
             let every_contact_is_compatible = contacts.iter().all(|target| {
                 let flat_final = volume
                     .surface_headroom(*target)
-                    .map_or(true, |headroom| headroom.0 < 3);
+                    .is_none_or(|headroom| headroom.0 < 3);
                 level.abs_diff(target.level) <= 1 && (!flat_final || level == target.level)
             });
             let self_contacts_are_compatible = unique
@@ -20035,7 +20263,9 @@ fn massif_dense_bounded_connector_to_network(
                         assigned_by_coord
                             .get(&neighbor)
                             .is_none_or(|neighbor_level| {
-                                assigned_by_coord[path_coord].abs_diff(*neighbor_level) <= 1
+                                assigned_by_coord
+                                    .get(path_coord)
+                                    .is_some_and(|level| level.abs_diff(*neighbor_level) <= 1)
                             })
                     })
                 });
@@ -20044,7 +20274,7 @@ fn massif_dense_bounded_connector_to_network(
                     .provisionally_compatible_terminals
                     .saturating_add(1);
                 if self_contacts_are_compatible {
-                    let target = contacts[0];
+                    let target = *contacts.first()?;
                     let mut proof_domain = path_set.clone();
                     proof_domain.extend(contacts.iter().map(|target| target.coord));
                     let mut fixed = assigned_by_coord.clone();
@@ -20137,8 +20367,8 @@ fn massif_dense_bounded_connector_to_network(
             let mut previous_level = None;
             for next_level in candidate_levels {
                 if previous_level == Some(next_level)
-                    || next_level < lower[next_coord_index]
-                    || next_level > upper[next_coord_index]
+                    || next_level < (*lower.get(next_coord_index)?)
+                    || next_level > (*upper.get(next_coord_index)?)
                 {
                     continue;
                 }
@@ -20151,17 +20381,18 @@ fn massif_dense_bounded_connector_to_network(
                 let next_steps = steps.saturating_add(1);
                 let next_score = (next_exposure, next_steps, next_cost);
                 let current_score = (
-                    best_exposure[next_state],
-                    best_steps[next_state],
-                    best_cost[next_state],
+                    (*best_exposure.get(next_state)?),
+                    (*best_steps.get(next_state)?),
+                    (*best_cost.get(next_state)?),
                 );
                 let replace = next_score < current_score
-                    || (next_score == current_score && current_state < parent[next_state]);
+                    || (next_score == current_score
+                        && current_state < (*parent.get(next_state)?));
                 if replace {
-                    best_exposure[next_state] = next_exposure;
-                    best_steps[next_state] = next_steps;
-                    best_cost[next_state] = next_cost;
-                    parent[next_state] = current_state;
+                    (*best_exposure.get_mut(next_state)?) = next_exposure;
+                    (*best_steps.get_mut(next_state)?) = next_steps;
+                    (*best_cost.get_mut(next_state)?) = next_cost;
+                    (*parent.get_mut(next_state)?) = current_state;
                     frontier.push(Reverse((next_exposure, next_steps, next_cost, next_state)));
                 }
             }
@@ -20214,7 +20445,7 @@ fn massif_regrade_singleton_dense_skeleton(
         .copied()
         .ok_or_else(|| "dense skeleton is empty".to_owned())?;
     let edge_count = u32::try_from(path.len())
-        .map_err(|_| "dense skeleton edge count does not fit u32".to_owned())?;
+        .map_err(|error| format!("dense skeleton edge count does not fit u32: {error}"))?;
     if edge_count > MAXIMUM_ORDINARY_CONNECTOR_SEARCH_STEPS.saturating_add(1) {
         return Err(format!("dense skeleton has {edge_count} edges"));
     }
@@ -20236,31 +20467,35 @@ fn massif_regrade_singleton_dense_skeleton(
     complete_path.push(target.coord);
     let flat_final = volume
         .surface_headroom(target)
-        .map_or(true, |headroom| headroom.0 < 3);
+        .is_none_or(|headroom| headroom.0 < 3);
     let maximum_edges = MAXIMUM_ORDINARY_CONNECTOR_SEARCH_STEPS.saturating_add(1);
     let resolve = |candidate: &[HexCoord]| -> Result<Vec<Level>, String> {
         let candidate_edges = u32::try_from(candidate.len().saturating_sub(1))
-            .map_err(|_| "dense skeleton edge count does not fit u32".to_owned())?;
+            .map_err(|error| format!("dense skeleton edge count does not fit u32: {error}"))?;
         let candidate_penultimate = candidate
             .get(candidate.len().saturating_sub(2))
             .copied()
             .ok_or_else(|| "dense skeleton lost its terminal approach".to_owned())?;
         let candidate_last = candidate.len().saturating_sub(1);
         let candidate_set = candidate.iter().copied().collect::<BTreeSet<_>>();
-        let target_contacts = candidate[..candidate_last]
-            .iter()
-            .copied()
-            .filter(|coord| coord.distance(target.coord) == 1)
-            .collect::<BTreeSet<_>>();
+        let target_contacts = (*candidate
+            .get(..candidate_last)
+            .ok_or_else(|| "Massif skeleton splice exceeds the resolved path".to_owned())?)
+        .iter()
+        .copied()
+        .filter(|coord| coord.distance(target.coord) == 1)
+        .collect::<BTreeSet<_>>();
         if candidate.last().copied() != Some(target.coord)
             || candidate_edges > maximum_edges
             || candidate_set.len() != candidate.len()
             || candidate
-                .windows(2)
+                .array_windows::<2>()
                 .any(|pair| pair[0].distance(pair[1]) != 1)
-            || candidate[..candidate_last]
-                .iter()
-                .any(|coord| !domain.contains(coord) || network_by_coord.contains_key(coord))
+            || (*candidate
+                .get(..candidate_last)
+                .ok_or_else(|| "Massif skeleton splice exceeds the resolved path".to_owned())?)
+            .iter()
+            .any(|coord| !domain.contains(coord) || network_by_coord.contains_key(coord))
             || target_contacts != BTreeSet::from([candidate_penultimate])
         {
             return Err(
@@ -20288,9 +20523,9 @@ fn massif_regrade_singleton_dense_skeleton(
     };
 
     let maximum_cells = usize::try_from(maximum_edges.saturating_add(1))
-        .map_err(|_| "Massif connector cell ceiling does not fit usize".to_owned())?;
+        .map_err(|error| format!("Massif connector cell ceiling does not fit usize: {error}"))?;
     let maximum_cut_fill = Level::try_from(MASSIF_PORTAL_MAXIMUM_CUT_FILL)
-        .map_err(|_| "Massif cut/fill bound does not fit Level".to_owned())?;
+        .map_err(|error| format!("Massif cut/fill bound does not fit Level: {error}"))?;
     let upper_floor = UPPER_REGION_THRESHOLD.saturating_add(1);
     let empty = BTreeSet::<HexCoord>::new();
     let mut repair_count = 0_u8;
@@ -20305,7 +20540,13 @@ fn massif_regrade_singleton_dense_skeleton(
 
         let last = complete_path.len().saturating_sub(1);
         let mut worst_deficit = None::<(u32, usize)>;
-        for (index, coord) in complete_path[..last].iter().copied().enumerate() {
+        for (index, coord) in (*complete_path
+            .get(..last)
+            .ok_or_else(|| "Massif skeleton splice exceeds the resolved path".to_owned())?)
+        .iter()
+        .copied()
+        .enumerate()
+        {
             let Some(natural) = surface_by_coord.get(&coord).copied() else {
                 continue;
             };
@@ -20350,7 +20591,7 @@ fn massif_regrade_singleton_dense_skeleton(
         };
         let splice_start = chord_start.map_or(deficit_start, |index| index.min(deficit_start));
         let current_suffix_edges = u32::try_from(last.saturating_sub(splice_start))
-            .map_err(|_| "Massif suffix length does not fit u32".to_owned())?;
+            .map_err(|error| format!("Massif suffix length does not fit u32: {error}"))?;
         let required_suffix_edges = current_suffix_edges.saturating_add(deficit.max(1));
         let maximum_segment_cells = maximum_cells.saturating_sub(splice_start);
         if required_suffix_edges
@@ -20365,7 +20606,9 @@ fn massif_regrade_singleton_dense_skeleton(
             );
         }
         let Some(detour) = connector_switchback_detour(
-            complete_path[splice_start],
+            *complete_path
+                .get(splice_start)
+                .ok_or_else(|| "Massif skeleton splice exceeds the resolved path".to_owned())?,
             target.coord,
             required_suffix_edges,
             maximum_segment_cells,
@@ -20386,7 +20629,10 @@ fn massif_regrade_singleton_dense_skeleton(
                 ),
             );
         };
-        let mut candidate = complete_path[..splice_start].to_vec();
+        let mut candidate = (*complete_path
+            .get(..splice_start)
+            .ok_or_else(|| "Massif skeleton splice exceeds the resolved path".to_owned())?)
+        .to_vec();
         candidate.extend(detour);
         if candidate == complete_path {
             break (
@@ -20418,7 +20664,7 @@ fn massif_singleton_induced_candidate_lower_bound(
         .and_then(|edges| u32::try_from(edges).ok())?;
     let flat_final = volume
         .surface_headroom(target)
-        .map_or(true, |headroom| headroom.0 < 3);
+        .is_none_or(|headroom| headroom.0 < 3);
     let height_edges = start
         .level
         .abs_diff(target.level)
@@ -20426,7 +20672,6 @@ fn massif_singleton_induced_candidate_lower_bound(
     Some(geometric_edges.max(height_edges).max(1))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn validate_massif_singleton_induced_branch_witness(
     start: TilePos,
     target: TilePos,
@@ -20466,8 +20711,12 @@ fn validate_massif_singleton_induced_branch_witness(
         || u32::try_from(path.len().saturating_sub(1)).map_or(true, |edges| {
             edges > MAXIMUM_ORDINARY_CONNECTOR_SEARCH_STEPS.saturating_add(1)
         })
-        || path.windows(2).any(|pair| pair[0].distance(pair[1]) != 1)
-        || levels.windows(2).any(|pair| pair[0].abs_diff(pair[1]) > 1)
+        || path
+            .array_windows::<2>()
+            .any(|pair| pair[0].distance(pair[1]) != 1)
+        || levels
+            .array_windows::<2>()
+            .any(|pair| pair[0].abs_diff(pair[1]) > 1)
         || connector_path_nonconsecutive_chord(path).is_some()
     {
         return Err(
@@ -20515,14 +20764,18 @@ fn validate_massif_singleton_induced_branch_witness(
         .collect::<BTreeSet<_>>();
     let expected_contact = (
         TilePos::new(
-            path[path.len().saturating_sub(2)],
-            levels[levels.len().saturating_sub(2)],
+            *path
+                .get(path.len().saturating_sub(2))
+                .ok_or_else(|| "Massif branch lost its final predecessor".to_owned())?,
+            *levels
+                .get(levels.len().saturating_sub(2))
+                .ok_or_else(|| "Massif branch lost its final predecessor".to_owned())?,
         ),
         target,
     );
     let flat_final = volume
         .surface_headroom(target)
-        .map_or(true, |headroom| headroom.0 < 3);
+        .is_none_or(|headroom| headroom.0 < 3);
     if contact_edges != BTreeSet::from([expected_contact])
         || expected_contact.0.level.abs_diff(target.level) > 1
         || (flat_final && expected_contact.0.level != target.level)
@@ -20620,7 +20873,7 @@ fn massif_internal_level_field_with_shared_bounds(
     }
 
     let maximum_cut_fill = Level::try_from(MASSIF_PORTAL_MAXIMUM_CUT_FILL)
-        .map_err(|_| "Massif cut/fill bound does not fit Level".to_owned())?;
+        .map_err(|error| format!("Massif cut/fill bound does not fit Level: {error}"))?;
     let upper_floor = UPPER_REGION_THRESHOLD.saturating_add(1);
     let mut lower = BTreeMap::<HexCoord, Level>::new();
     let mut upper = BTreeMap::<HexCoord, Level>::new();
@@ -20681,7 +20934,9 @@ fn massif_internal_level_field_with_shared_bounds(
     // budget merely to reach the low portal seed.
     let mut lower_frontier = corridor.iter().copied().collect::<VecDeque<_>>();
     while let Some(coord) = lower_frontier.pop_front() {
-        let current = lower[&coord];
+        let current = *lower
+            .get(&coord)
+            .ok_or_else(|| "Massif bound propagation lost a corridor coordinate".to_owned())?;
         for neighbor in coord.neighbors() {
             let Some(existing) = lower.get(&neighbor).copied() else {
                 continue;
@@ -20695,7 +20950,9 @@ fn massif_internal_level_field_with_shared_bounds(
     }
     let mut upper_frontier = corridor.iter().copied().collect::<VecDeque<_>>();
     while let Some(coord) = upper_frontier.pop_front() {
-        let current = upper[&coord];
+        let current = *upper
+            .get(&coord)
+            .ok_or_else(|| "Massif bound propagation lost a corridor coordinate".to_owned())?;
         for neighbor in coord.neighbors() {
             let Some(existing) = upper.get(&neighbor).copied() else {
                 continue;
@@ -20707,6 +20964,10 @@ fn massif_internal_level_field_with_shared_bounds(
             }
         }
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Both closed bound maps are initialized for every corridor coordinate and only update existing entries; their key sets remain equal to corridor."
+    )]
     let conflicts = corridor
         .iter()
         .filter(|coord| lower[*coord] > upper[*coord])
@@ -20746,6 +21007,10 @@ fn massif_internal_level_field_with_shared_bounds(
         ));
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Both closed bound maps were populated for the complete corridor, and the closure loops never remove keys."
+    )]
     let midpoint = corridor
         .iter()
         .map(|coord| {
@@ -20816,7 +21081,6 @@ fn massif_branch_domain_for_root(
     domain
 }
 
-#[allow(clippy::too_many_arguments)]
 fn author_massif_internal_network(
     plan: &SchematicPlanV1,
     portal: &ProtectedFeatureRoute,
@@ -21436,7 +21700,7 @@ fn author_massif_internal_network(
                                 .filter_map(|coord| surface_by_coord.get(coord).copied())
                                 .collect::<Vec<_>>();
                             let maximum_step = path
-                                .windows(2)
+                                .array_windows::<2>()
                                 .filter_map(|pair| {
                                     surface_by_coord
                                         .get(&pair[0])
@@ -21478,7 +21742,11 @@ fn author_massif_internal_network(
     // Reserve their interiors and one-column no-touch halos before building
     // the representative forest, rather than repairing geometric chords after
     // widening.
-    let sealed_component_link_paths = &authored_internal_link_paths[..sealed_component_link_count];
+    let sealed_component_link_paths = authored_internal_link_paths
+        .get(..sealed_component_link_count)
+        .ok_or_else(|| {
+            schematic_contract("Massif internal network lost a sealed path or projected coordinate")
+        })?;
     let authored_link_coords = authored_internal_link_paths
         .iter()
         .flat_map(|path| path.iter().copied())
@@ -21517,9 +21785,15 @@ fn author_massif_internal_network(
             for representative in &blocked_representatives {
                 branch_no_touch.remove(representative);
             }
-            eprintln!(
+            #[expect(
+                clippy::print_stderr,
+                reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+            )]
+            {
+                eprintln!(
                 "Grand V3 structural-review draft: relaxing Massif no-touch halo at {blocked_representatives:?}"
             );
+            }
         } else {
             return Err(schematic_contract(format!(
                 "Massif bounded trunk no-touch halo contains required representatives {blocked_representatives:?}"
@@ -21665,7 +21939,7 @@ fn author_massif_internal_network(
             )));
         };
         let root_path = vec![internal_root.coord];
-        let root_levels = vec![internal_root.level];
+        let root_levels = [internal_root.level];
         let attachment = MassifGatewayAttachment {
             gateway: gateway_root,
             internal: internal_root,
@@ -22262,6 +22536,10 @@ fn author_massif_internal_network(
     // The route corridor still grades against itself. Scenic blend cells are
     // bounded by movement and shared terrain authority, but may meet one
     // another or unchanged Massif terrain as a deliberate cliff.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Both blend bound maps are populated for every blend_domain coordinate before propagation; propagation only updates existing neighbor keys and never removes them."
+    )]
     let resolve_blend_bounds = || {
         let mut blend_lower = BTreeMap::<HexCoord, Level>::new();
         let mut blend_upper = BTreeMap::<HexCoord, Level>::new();
@@ -22348,6 +22626,10 @@ fn author_massif_internal_network(
             "Massif internal feather has no shared-authority-compatible blend: {conflicts:?}"
         ))
     })?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "resolve_blend_bounds returns lower and upper maps covering the exact blend_domain; neither map has been mutated since that boundary."
+    )]
     let blend_midpoint = blend_domain
         .iter()
         .map(|coord| {
@@ -22359,6 +22641,10 @@ fn author_massif_internal_network(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Every candidate has the exact blend_domain key set, and internal_original_surfaces was captured for every coordinate in that domain before resolving bounds."
+    )]
     let blend_levels = [blend_lower, blend_midpoint, blend_upper]
         .into_iter()
         .filter(|candidate| {
@@ -22396,8 +22682,12 @@ fn author_massif_internal_network(
     // levels to meet the natural shoulder without losing one-level footing.
     authority.internal_centerline.clear();
     for coord in corridor.iter().copied() {
-        let original = internal_original_surfaces[&coord];
-        let level = blend_levels[&coord];
+        let original = *internal_original_surfaces.get(&coord).ok_or_else(|| {
+            schematic_contract("Massif internal network lost a sealed path or projected coordinate")
+        })?;
+        let level = *blend_levels.get(&coord).ok_or_else(|| {
+            schematic_contract("Massif internal network lost a sealed path or projected coordinate")
+        })?;
         levels.insert(coord, level);
         if exact_internal_seam_surfaces.get(&coord) == Some(&level) {
             let exact = surface_by_coord.get(&coord).copied().ok_or_else(|| {
@@ -22442,8 +22732,12 @@ fn author_massif_internal_network(
         authority.internal_centerline.insert(position);
     }
     for coord in internal_feather.iter().copied() {
-        let original = internal_original_surfaces[&coord];
-        let level = blend_levels[&coord];
+        let original = *internal_original_surfaces.get(&coord).ok_or_else(|| {
+            schematic_contract("Massif internal network lost a sealed path or projected coordinate")
+        })?;
+        let level = *blend_levels.get(&coord).ok_or_else(|| {
+            schematic_contract("Massif internal network lost a sealed path or projected coordinate")
+        })?;
         authority.original_surfaces.insert(coord, original);
         let biome = fine_index.biome(coord).ok_or_else(|| {
             schematic_contract(format!("Massif internal feather has no biome at {coord:?}"))
@@ -22638,7 +22932,11 @@ fn author_massif_internal_network(
         })
         || corridor.iter().any(|coord| {
             coord.neighbors().into_iter().any(|neighbor| {
-                corridor.contains(&neighbor) && levels[coord].abs_diff(levels[&neighbor]) > 1
+                corridor.contains(&neighbor)
+                    && levels
+                        .get(coord)
+                        .zip(levels.get(&neighbor))
+                        .is_none_or(|(first, second)| first.abs_diff(*second) > 1)
             })
         })
         || required_representatives
@@ -22698,7 +22996,6 @@ fn ordinary_connector_to_network(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn ordinary_connector_to_network_avoiding(
     start: HexCoord,
     band: OrdinaryRegionBand,
@@ -22822,7 +23119,6 @@ fn ordinary_connector_to_network_avoiding(
 /// cheapest-parent dominance. The singleton Massif trunk, whose induced-path
 /// legality depends on complete ancestry, uses its explicit specialist rather
 /// than this compact multi-target state model.
-#[allow(clippy::too_many_arguments)]
 fn solve_required_ordinary_connector(
     start: TilePos,
     band: OrdinaryRegionBand,
@@ -22853,7 +23149,6 @@ fn solve_required_ordinary_connector(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn solve_required_ordinary_connector_with_cut_fill(
     start: TilePos,
     band: OrdinaryRegionBand,
@@ -23115,7 +23410,6 @@ impl MassifInducedConnectorSearchResult {
 /// the nonconsecutive-neighbor rule exact. The expansion ceiling is a
 /// deterministic fail-closed guard for the one Grand Massif trunk; multi-target
 /// branch searches retain the compact solver above.
-#[allow(clippy::too_many_arguments)]
 fn solve_massif_single_target_induced_connector(
     start: TilePos,
     target: TilePos,
@@ -23491,7 +23785,9 @@ impl SingleTargetInducedConnectorSearch<'_> {
         }
         (levels.first().copied() == Some(self.start.level)
             && levels.last().copied() == Some(self.target.level)
-            && levels.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1)
+            && levels
+                .array_windows::<2>()
+                .all(|pair| pair[0].abs_diff(pair[1]) <= 1)
             && connector_path_nonconsecutive_chord(&coordinates).is_none())
         .then_some((coordinates, levels))
     }
@@ -23527,7 +23823,6 @@ fn level_distance_to_interval(level: Level, interval: (Level, Level)) -> u32 {
 /// must terminate immediately at a second unchanged network node. Authored,
 /// protected, water-bank, blocker, and sibling-landing coordinates remain
 /// excluded through the shared forbidden and preserved authorities.
-#[allow(clippy::too_many_arguments)]
 fn solve_mutable_bridge_bank_apron(
     start: TilePos,
     bridge_approach: BridgeBankApproach,
@@ -23681,7 +23976,6 @@ struct RequiredConnectorDomain {
 }
 
 impl RequiredConnectorDomain {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         band: OrdinaryRegionBand,
         footprint: &BTreeSet<HexCoord>,
@@ -23716,8 +24010,8 @@ impl RequiredConnectorDomain {
                         .any(|position| band.accepts_existing(position.level))
                 })
                 && surface_by_coord.contains_key(coord);
-            open[index] = u8::from(admitted);
-            penalized[index] = u8::from(preserved && hard_forbidden.contains(coord));
+            *open.get_mut(index)? = u8::from(admitted);
+            *penalized.get_mut(index)? = u8::from(preserved && hard_forbidden.contains(coord));
         }
         Some(Self {
             minimum_q,
@@ -23782,8 +24076,11 @@ fn required_connector_reverse_distances(
             let Some(index) = domain.index(neighbor) else {
                 continue;
             };
-            if domain.is_open(neighbor) && distances[index] == u32::MAX {
-                distances[index] = 0;
+            let Some(distance) = distances.get_mut(index) else {
+                continue;
+            };
+            if domain.is_open(neighbor) && *distance == u32::MAX {
+                *distance = 0;
                 frontier.push_back(neighbor);
             }
         }
@@ -23792,7 +24089,9 @@ fn required_connector_reverse_distances(
         let Some(index) = domain.index(coord) else {
             continue;
         };
-        let distance = distances[index];
+        let Some(distance) = distances.get(index).copied() else {
+            continue;
+        };
         if distance >= MAXIMUM_ORDINARY_CONNECTOR_SEARCH_STEPS {
             continue;
         }
@@ -23802,10 +24101,13 @@ fn required_connector_reverse_distances(
             let Some(neighbor_index) = domain.index(neighbor) else {
                 continue;
             };
-            if distances[neighbor_index] != u32::MAX || !domain.is_open(neighbor) {
+            let Some(neighbor_distance) = distances.get_mut(neighbor_index) else {
+                continue;
+            };
+            if *neighbor_distance != u32::MAX || !domain.is_open(neighbor) {
                 continue;
             }
-            distances[neighbor_index] = distance.saturating_add(1);
+            *neighbor_distance = distance.saturating_add(1);
             frontier.push_back(neighbor);
         }
     }
@@ -23833,8 +24135,11 @@ fn required_connector_reverse_costs(
             let Some(index) = domain.index(neighbor) else {
                 continue;
             };
-            if domain.is_open(neighbor) && costs[index] == u32::MAX {
-                costs[index] = 0;
+            let Some(cost) = costs.get_mut(index) else {
+                continue;
+            };
+            if domain.is_open(neighbor) && *cost == u32::MAX {
+                *cost = 0;
                 frontier.push(Reverse((0, neighbor)));
             }
         }
@@ -23860,17 +24165,19 @@ fn required_connector_reverse_costs(
             let Some(index) = domain.index(predecessor) else {
                 continue;
             };
-            if !domain.is_open(predecessor) || costs[index] <= next_cost {
+            let Some(cost) = costs.get_mut(index) else {
+                continue;
+            };
+            if !domain.is_open(predecessor) || *cost <= next_cost {
                 continue;
             }
-            costs[index] = next_cost;
+            *cost = next_cost;
             frontier.push(Reverse((next_cost, predecessor)));
         }
     }
     costs
 }
 
-#[allow(clippy::too_many_arguments)]
 fn ordinary_connector_coord_is_open(
     coord: HexCoord,
     band: OrdinaryRegionBand,
@@ -23896,7 +24203,6 @@ fn ordinary_connector_coord_is_open(
         && surface_by_coord.contains_key(&coord)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn ordinary_connector_reverse_distances(
     band: OrdinaryRegionBand,
     footprint: &BTreeSet<HexCoord>,
@@ -24028,7 +24334,9 @@ fn ordinary_connector_levels(
             .iter()
             .take(count.saturating_sub(1))
             .all(|level| band.accepts_new(*level))
-        && levels.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1))
+        && levels
+            .array_windows::<2>()
+            .all(|pair| pair[0].abs_diff(pair[1]) <= 1))
     .then_some(levels)
 }
 
@@ -24088,20 +24396,20 @@ fn ordinary_connector_levels_with_preserved_banks(
 
     let mut feasible = vec![(0, 0); path.len()];
     let last = path.len().saturating_sub(1);
-    feasible[last] = allowed[last];
+    (*feasible.get_mut(last)?) = *allowed.get(last)?;
     for index in (0..last).rev() {
-        let next = feasible[index.saturating_add(1)];
-        let lower = allowed[index].0.max(next.0.saturating_sub(1));
-        let upper = allowed[index].1.min(next.1.saturating_add(1));
+        let next = *feasible.get(index.saturating_add(1))?;
+        let lower = allowed.get(index)?.0.max(next.0.saturating_sub(1));
+        let upper = allowed.get(index)?.1.min(next.1.saturating_add(1));
         if lower > upper {
             return None;
         }
-        feasible[index] = (lower, upper);
+        (*feasible.get_mut(index)?) = (lower, upper);
     }
 
     let mut levels = Vec::<Level>::with_capacity(path.len());
     for (index, coord) in path.iter().copied().enumerate() {
-        let (mut lower, mut upper) = feasible[index];
+        let (mut lower, mut upper) = *feasible.get(index)?;
         if let Some(previous) = levels.last().copied() {
             lower = lower.max(previous.saturating_sub(1));
             upper = upper.min(previous.saturating_add(1));
@@ -24120,11 +24428,12 @@ fn ordinary_connector_levels_with_preserved_banks(
         levels.push(preferred.clamp(lower, upper));
     }
     (levels.last().copied() == Some(target.level)
-        && levels.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1))
+        && levels
+            .array_windows::<2>()
+            .all(|pair| pair[0].abs_diff(pair[1]) <= 1))
     .then_some(levels)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn solve_ordinary_connector_candidates(
     skeletons: Vec<(Vec<HexCoord>, TilePos)>,
     preferred_start: Level,
@@ -24225,13 +24534,12 @@ fn connector_total_vertical_deficit(
     {
         return None;
     }
-    fixed.windows(2).try_fold(0_u32, |total, pair| {
+    fixed.array_windows::<2>().try_fold(0_u32, |total, pair| {
         let edges = u32::try_from(pair[1].0.saturating_sub(pair[0].0)).ok()?;
         Some(total.saturating_add(pair[0].1.abs_diff(pair[1].1).saturating_sub(edges)))
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn inflate_connector_switchbacks(
     skeleton: &[HexCoord],
     preferred_start: Level,
@@ -24285,7 +24593,7 @@ fn inflate_connector_switchbacks(
             surface_by_coord,
         )?;
         let mut deficient_segment = None;
-        for (anchor_index, pair) in fixed.windows(2).enumerate() {
+        for (anchor_index, pair) in fixed.array_windows::<2>().enumerate() {
             let (start_index, start_level) = pair[0];
             let (end_index, end_level) = pair[1];
             let edges = u32::try_from(end_index.saturating_sub(start_index)).ok()?;
@@ -24299,7 +24607,7 @@ fn inflate_connector_switchbacks(
             return None;
         }
 
-        let end = path[end_index];
+        let end = *path.get(end_index)?;
         let end_level = fixed.get(anchor_index.saturating_add(1))?.1;
         let mut replacement = None;
         // The closest fixed bank can itself sit in a one-cell throat beside a
@@ -24307,8 +24615,8 @@ fn inflate_connector_switchbacks(
         // through earlier fixed anchors and replace the enclosed bank chain as
         // one longer, bank-preserving detour.
         for earlier_anchor in (0..=anchor_index).rev() {
-            let (candidate_start_index, candidate_start_level) = fixed[earlier_anchor];
-            let start = path[candidate_start_index];
+            let (candidate_start_index, candidate_start_level) = *fixed.get(earlier_anchor)?;
+            let start = *path.get(candidate_start_index)?;
             let required_edges = candidate_start_level.abs_diff(end_level);
             let outside_cells = path.len().saturating_sub(
                 end_index
@@ -24341,7 +24649,6 @@ fn inflate_connector_switchbacks(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connector_switchback_detour(
     start: HexCoord,
     end: HexCoord,
@@ -24461,9 +24768,10 @@ fn connector_switchback_detour(
             && detour.len() <= maximum_cells
             && detour.iter().copied().collect::<BTreeSet<_>>().len() == detour.len()
         {
-            let mut complete_candidate = complete_path[..replaced_start].to_vec();
+            let mut complete_candidate = (*complete_path.get(..replaced_start)?).to_vec();
             complete_candidate.extend(detour.iter().copied());
-            complete_candidate.extend_from_slice(&complete_path[replaced_end.saturating_add(1)..]);
+            complete_candidate
+                .extend_from_slice(complete_path.get(replaced_end.saturating_add(1)..)?);
             // A switchback is a path through the physical hex graph, not only
             // an ordered list.  If two nonconsecutive runs touch, the walker
             // sees that adjacency too and the prescribed heights can demand
@@ -24486,9 +24794,9 @@ fn connector_switchback_detour(
         surface_by_coord,
         &outside_path,
     )?;
-    let mut complete_candidate = complete_path[..replaced_start].to_vec();
+    let mut complete_candidate = (*complete_path.get(..replaced_start)?).to_vec();
     complete_candidate.extend(detour.iter().copied());
-    complete_candidate.extend_from_slice(&complete_path[replaced_end.saturating_add(1)..]);
+    complete_candidate.extend_from_slice(complete_path.get(replaced_end.saturating_add(1)..)?);
     connector_path_nonconsecutive_chord(&complete_candidate)
         .is_none()
         .then_some(detour)
@@ -24514,7 +24822,6 @@ fn connector_path_nonconsecutive_chord(path: &[HexCoord]) -> Option<(HexCoord, H
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connector_induced_switchback_path(
     start: HexCoord,
     end: HexCoord,
@@ -24560,7 +24867,6 @@ fn connector_induced_switchback_path(
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connector_induced_switchback_dfs(
     end: HexCoord,
     desired_edges: u32,
@@ -24580,6 +24886,9 @@ fn connector_induced_switchback_dfs(
         return false;
     }
     *expansions = expansions.saturating_add(1);
+    let Some(start) = path.first().copied() else {
+        return false;
+    };
     let Some(current) = path.last().copied() else {
         return false;
     };
@@ -24601,7 +24910,7 @@ fn connector_induced_switchback_dfs(
     neighbors.sort_unstable_by_key(|neighbor| {
         (
             Reverse(neighbor.distance(end)),
-            neighbor.distance(path[0]),
+            neighbor.distance(start),
             *neighbor,
         )
     });
@@ -24613,7 +24922,7 @@ fn connector_induced_switchback_dfs(
             || (neighbor != end
                 && !connector_detour_coord_is_open(
                     neighbor,
-                    path[0],
+                    start,
                     end,
                     footprint,
                     ordinary_mask,
@@ -24655,7 +24964,6 @@ fn connector_induced_switchback_dfs(
     false
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connector_detour_shortest_path(
     start: HexCoord,
     target: HexCoord,
@@ -24717,7 +25025,6 @@ fn connector_detour_shortest_path(
     Some(reversed)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connector_detour_coord_is_open(
     coord: HexCoord,
     start: HexCoord,
@@ -24776,7 +25083,6 @@ fn connector_fixed_anchors(
     Some(fixed.into_iter().collect())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connector_skeleton_diagnostic(
     ordinal: usize,
     path: &[HexCoord],
@@ -24829,7 +25135,7 @@ fn connector_skeleton_diagnostic(
         })
         .collect::<Vec<_>>();
     let maximum_deficit = fixed
-        .windows(2)
+        .array_windows::<2>()
         .map(|pair| {
             let edges = u32::try_from(pair[1].0.saturating_sub(pair[0].0)).unwrap_or(u32::MAX);
             pair[0].1.abs_diff(pair[1].1).saturating_sub(edges)
@@ -25236,7 +25542,9 @@ fn compile_schematic_vegetation(
             if covered.len() >= target {
                 break;
             }
-            let root = supports[&root_coord];
+            let root = *supports.get(&root_coord).ok_or_else(|| {
+                schematic_contract("vegetation lost its admitted root or object projection")
+            })?;
             let family = named_sample(seed, "vegetation_tree_family", root_coord);
             let family_start = if ecology.prefer_old_growth {
                 0
@@ -25249,15 +25557,22 @@ fn compile_schematic_vegetation(
             let mut accepted = None;
             for object_offset in 0..tree_objects.len() {
                 let object_index = (family_start + object_offset) % tree_objects.len();
-                let object = tree_objects[object_index];
+                let object = *tree_objects.get(object_index).ok_or_else(|| {
+                    schematic_contract("vegetation lost its admitted root or object projection")
+                })?;
                 for rotation_offset in 0..6_u8 {
                     let rotation =
                         HexObjectRotation::new(rotation_start.saturating_add(rotation_offset) % 6)
                             .map_err(|error| schematic_contract(error.to_string()))?;
-                    let Some(clearance) = tree_clearance_projections[object_index]
-                        .get(usize::from(rotation.steps()))
-                        .and_then(Option::as_ref)
-                    else {
+                    let Some(clearance) = (*tree_clearance_projections
+                        .get(object_index)
+                        .ok_or_else(|| {
+                            schematic_contract(
+                                "vegetation lost its admitted root or object projection",
+                            )
+                        })?)
+                    .get(usize::from(rotation.steps()))
+                    .and_then(Option::as_ref) else {
                         continue;
                     };
                     if !VegetationObjectSpec::precomputed_projection_is_clear(
@@ -25326,7 +25641,9 @@ fn compile_schematic_vegetation(
             {
                 continue;
             }
-            let root = supports[&root_coord];
+            let root = *supports.get(&root_coord).ok_or_else(|| {
+                schematic_contract("vegetation lost its admitted root or object projection")
+            })?;
             let rotation = HexObjectRotation::new(
                 u8::try_from(named_sample(seed, "vegetation_grass_rotation", root_coord) % 6)
                     .unwrap_or_default(),
@@ -25464,6 +25781,10 @@ fn exact_eligible_tree_roots(
         .collect()
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "The empty eligible set returns before sampling; each sampled cluster index is modulo the unchanged ordered vector length."
+)]
 fn coherent_vegetation_roots(
     seed: u64,
     cell: &CellPlan,
@@ -25925,6 +26246,10 @@ fn top_solid_material(column: &VolumeColumn) -> SolidMaterialRole {
         .unwrap_or(SolidMaterialRole::Gravel)
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Callers enumerate this same path or validate the requested path index before asking for its direction."
+)]
 fn path_direction(path: &[HexCoord], index: usize) -> usize {
     let current = path[index];
     let target = path
@@ -25943,6 +26268,10 @@ fn path_direction(path: &[HexCoord], index: usize) -> usize {
         .unwrap_or(0)
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "All callers pass a direction from the six-neighbor array or a modulo-six turn; reversal is also reduced modulo six."
+)]
 fn step_in_direction(mut coord: HexCoord, direction: usize, offset: i32) -> HexCoord {
     let actual_direction = if offset < 0 {
         (direction + 3) % 6
@@ -26075,7 +26404,7 @@ fn reconcile_final_review_anchor_reachability(
 
 fn waterfall_review_targets(centerline: &[TilePos]) -> Option<(TilePos, TilePos, TilePos)> {
     let drops = centerline
-        .windows(2)
+        .array_windows::<2>()
         .enumerate()
         .filter_map(|(index, pair)| {
             (pair[0].level > pair[1].level).then_some((
@@ -26102,7 +26431,7 @@ fn waterfall_review_targets(centerline: &[TilePos]) -> Option<(TilePos, TilePos,
     // smaller staged drops. Keeping the base target on the former downstream
     // junction displaced its reachable review footing by an entire coarse
     // half-cell from the waterfall it was meant to inspect.
-    let base = centerline[dominant_sink_index];
+    let base = *centerline.get(dominant_sink_index)?;
     // The profile witness frames a middle cascade and therefore exposes both
     // the upstream slope and the final medium fall in the same review orbit.
     let profile = visible_falls.get(visible_falls.len().saturating_div(2))?.1;
@@ -27510,17 +27839,25 @@ mod tests {
         assert!(review_profile.level < 120 && review_profile.level > 60);
         assert_eq!(review_base.level, 15);
         let cascade_start = lip - WATERFALL_CASCADE_TRANSITIONS;
-        assert!(levels
-            [cascade_start..=cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS)]
-            .iter()
-            .all(|level| *level == 150));
+        assert!((*levels
+            .get(cascade_start..=cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS))
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .all(|level| *level == 150));
         assert!(
-            levels[cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS) + 1] < 150,
+            (*levels
+                .get(cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS) + 1)
+                .expect("fixture contains the requested entry"))
+                < 150,
             "the exact lake throat must hand off to a real first descent"
         );
-        assert!(levels[lip..].iter().all(|level| *level == 15));
+        assert!((*levels
+            .get(lip..)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .all(|level| *level == 15));
         let falls = levels
-            .windows(2)
+            .array_windows::<2>()
             .enumerate()
             .filter_map(|(index, pair)| (pair[0] > pair[1]).then_some((index, pair[0] - pair[1])))
             .collect::<Vec<_>>();
@@ -27542,7 +27879,7 @@ mod tests {
             .iter()
             .map(|(index, _)| {
                 levels
-                    .windows(2)
+                    .array_windows::<2>()
                     .skip(index.saturating_add(1))
                     .take_while(|pair| pair[0] == pair[1])
                     .count()
@@ -27561,14 +27898,14 @@ mod tests {
         );
         assert!(
             minor_falls
-                .windows(2)
+                .array_windows::<2>()
                 .map(|pair| pair[1].0.saturating_sub(pair[0].0))
                 .collect::<BTreeSet<_>>()
                 .len()
                 >= 2
         );
         assert!(pool_lengths.into_iter().collect::<BTreeSet<_>>().len() >= 2);
-        assert!(levels.windows(2).all(|pair| pair[0] >= pair[1]));
+        assert!(levels.array_windows::<2>().all(|pair| pair[0] >= pair[1]));
         assert_eq!(
             levels.first().copied().unwrap_or_default()
                 - levels.last().copied().unwrap_or_default(),
@@ -27673,19 +28010,23 @@ mod tests {
         );
         let mut variants = BTreeSet::new();
         let mut rank = 0_usize;
-        loop {
-            let Some(levels) =
-                plunge_levels_with_schedule_variant(150, 15, 67, lip, &schedule, rank)
-                    .expect("canonical allocation rank is valid")
-            else {
-                break;
-            };
+        while let Some(levels) =
+            plunge_levels_with_schedule_variant(150, 15, 67, lip, &schedule, rank)
+                .expect("canonical allocation rank is valid")
+        {
             let cascade_start = lip - WATERFALL_CASCADE_TRANSITIONS;
-            assert!(levels
-                [cascade_start..=cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS)]
-                .iter()
-                .all(|level| *level == 150));
-            assert!(levels[lip..].iter().all(|level| *level == 15));
+            assert!((*levels
+                .get(
+                    cascade_start..=cascade_start.saturating_add(WATERFALL_LAKE_THROAT_TRANSITIONS)
+                )
+                .expect("fixture contains the requested entry"))
+            .iter()
+            .all(|level| *level == 150));
+            assert!((*levels
+                .get(lip..)
+                .expect("fixture contains the requested entry"))
+            .iter()
+            .all(|level| *level == 15));
             assert!(variants.insert(levels), "every allocation rank is unique");
             rank += 1;
         }
@@ -27724,20 +28065,34 @@ mod tests {
             .map(|(index, _)| *index)
             .expect("fixture retains a small fall");
         let mut collapsed_lane = cascade.clone();
-        let center = waterfall_three_lane_center(&collapsed_lane[first_fall])
-            .expect("fall row retains its center");
-        let outer = collapsed_lane[first_fall]
-            .iter()
-            .copied()
-            .find(|position| position.coord != center.coord)
-            .expect("fall row retains an outer lane");
-        let sink_level = collapsed_lane[first_fall + 1]
-            .iter()
-            .map(|position| position.level)
-            .min()
-            .expect("fall retains a sink");
-        collapsed_lane[first_fall].remove(&outer);
-        collapsed_lane[first_fall].insert(TilePos::new(outer.coord, sink_level));
+        let center = waterfall_three_lane_center(
+            collapsed_lane
+                .get(first_fall)
+                .expect("fixture contains the requested entry"),
+        )
+        .expect("fall row retains its center");
+        let outer = (*collapsed_lane
+            .get(first_fall)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .copied()
+        .find(|position| position.coord != center.coord)
+        .expect("fall row retains an outer lane");
+        let sink_level = (*collapsed_lane
+            .get(first_fall + 1)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .map(|position| position.level)
+        .min()
+        .expect("fall retains a sink");
+        (*collapsed_lane
+            .get_mut(first_fall)
+            .expect("fixture contains the requested entry"))
+        .remove(&outer);
+        (*collapsed_lane
+            .get_mut(first_fall)
+            .expect("fixture contains the requested entry"))
+        .insert(TilePos::new(outer.coord, sink_level));
         assert!(
             validate_physical_waterfall_profile(&collapsed_lane).is_err(),
             "one collapsed side lane must fail even though the center ray still falls"
@@ -27758,15 +28113,21 @@ mod tests {
 
         let final_source = WATERFALL_CASCADE_TRANSITIONS - 1;
         let mut short_final = cascade;
-        let final_sink_level = short_final[final_source + 1]
-            .iter()
-            .map(|position| position.level)
-            .min()
-            .expect("final fall retains its receiving row");
-        short_final[final_source] = short_final[final_source]
-            .iter()
-            .map(|position| TilePos::new(position.coord, final_sink_level.saturating_add(23)))
-            .collect();
+        let final_sink_level = (*short_final
+            .get(final_source + 1)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .map(|position| position.level)
+        .min()
+        .expect("final fall retains its receiving row");
+        (*short_final
+            .get_mut(final_source)
+            .expect("fixture contains the requested entry")) = (*short_final
+            .get(final_source)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .map(|position| TilePos::new(position.coord, final_sink_level.saturating_add(23)))
+        .collect();
         assert!(
             validate_physical_waterfall_profile(&short_final).is_err(),
             "a twenty-three-level final curtain must fail the twenty-four-to-thirty-level contract"
@@ -27784,16 +28145,26 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let cascade_start = lip - WATERFALL_CASCADE_TRANSITIONS;
-        let reclaimed = rows[cascade_start]
-            .first()
-            .copied()
-            .expect("source row has a lane");
-        let displaced = rows[cascade_start + 2]
-            .first()
-            .copied()
-            .expect("later row has a lane");
-        rows[cascade_start + 2].remove(&displaced);
-        rows[cascade_start + 2].insert(reclaimed);
+        let reclaimed = (*rows
+            .get(cascade_start)
+            .expect("fixture contains the requested entry"))
+        .first()
+        .copied()
+        .expect("source row has a lane");
+        let displaced = (*rows
+            .get(cascade_start + 2)
+            .expect("fixture contains the requested entry"))
+        .first()
+        .copied()
+        .expect("later row has a lane");
+        (*rows
+            .get_mut(cascade_start + 2)
+            .expect("fixture contains the requested entry"))
+        .remove(&displaced);
+        (*rows
+            .get_mut(cascade_start + 2)
+            .expect("fixture contains the requested entry"))
+        .insert(reclaimed);
         let selected = waterfall_irregular_schedule_for_rows(&rows, lip, 150, 15, 1_592_598_566)
             .expect("other pool-separated sources remain available");
         assert!(
@@ -27896,7 +28267,7 @@ mod tests {
         );
 
         let mut outside_corridor = Vec::new();
-        for pair in coarse.windows(2) {
+        for pair in coarse.array_windows::<2>() {
             let (start, end) = pair
                 .first()
                 .copied()
@@ -27933,7 +28304,7 @@ mod tests {
         assert!(coarse
             .iter()
             .all(|waypoint| outside_corridor.contains(&schematic_to_world(*waypoint, 22))));
-        assert!(outside_corridor.windows(2).all(|pair| {
+        assert!(outside_corridor.array_windows::<2>().all(|pair| {
             pair.first()
                 .zip(pair.get(1))
                 .is_some_and(|(first, second)| first.distance(*second) == 1)
@@ -27997,25 +28368,27 @@ mod tests {
             .flat_map(|coord| std::iter::once(coord).chain(coord.neighbors()))
             .collect::<BTreeSet<_>>();
         assert!(
-            hero_cascade[..=WATERFALL_LAKE_THROAT_TRANSITIONS]
+            (*hero_cascade.get(..=WATERFALL_LAKE_THROAT_TRANSITIONS).expect("fixture contains the requested entry"))
                 .iter()
                 .flatten()
                 .all(|position| position.level == profile.mountain_lake_level
                     && semantic_mountain_lake.contains(&position.coord)),
             "the hero waterfall must leave the actual mountain lake through a full-width level-150 throat"
         );
-        let invalid_basin_rows = hero_cascade[WATERFALL_CASCADE_TRANSITIONS..]
-            .iter()
-            .enumerate()
-            .flat_map(|(row, positions)| {
-                let valley_lake_interface = &valley_lake_interface;
-                positions.iter().copied().filter_map(move |position| {
-                    (position.level != profile.valley_lake_level
-                        || !valley_lake_interface.contains(&position.coord))
-                    .then_some((row, position))
-                })
+        let invalid_basin_rows = (*hero_cascade
+            .get(WATERFALL_CASCADE_TRANSITIONS..)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .enumerate()
+        .flat_map(|(row, positions)| {
+            let valley_lake_interface = &valley_lake_interface;
+            positions.iter().copied().filter_map(move |position| {
+                (position.level != profile.valley_lake_level
+                    || !valley_lake_interface.contains(&position.coord))
+                .then_some((row, position))
             })
-            .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
         assert!(
             invalid_basin_rows.is_empty(),
             "the hero final fall must land inside five full-width valley-lake basin rows: {invalid_basin_rows:?}"
@@ -28029,12 +28402,19 @@ mod tests {
             (WATERFALL_MINOR_FALL_MIN_DROP..=WATERFALL_MINOR_FALL_MAX_DROP)
                 .contains(&first_minor_drop)
         );
-        let first_minor_source = waterfall_three_lane_center(&hero_cascade[first_minor_index])
-            .expect("hero first minor fall retains its source center");
-        let first_minor_sink =
-            waterfall_three_lane_center(&hero_cascade[first_minor_index.saturating_add(1)])
-                .expect("hero first minor fall retains its sink center");
-        let hero_water_coords = watercourse_coords(&rows);
+        let first_minor_source = waterfall_three_lane_center(
+            hero_cascade
+                .get(first_minor_index)
+                .expect("fixture contains the requested entry"),
+        )
+        .expect("hero first minor fall retains its source center");
+        let first_minor_sink = waterfall_three_lane_center(
+            hero_cascade
+                .get(first_minor_index.saturating_add(1))
+                .expect("fixture contains the requested entry"),
+        )
+        .expect("hero first minor fall retains its sink center");
+        let hero_water_coords = watercourse_coords(rows);
         let hero_clearance =
             waterfall_fall_air_floors(&layout.footprint, &hero_cascade, &hero_water_coords)
                 .expect("hero exposed falls resolve exact clearance floors");
@@ -28076,8 +28456,16 @@ mod tests {
             .expect("hero approach retains its high terminal cell");
         let low_cell = approach_transition_cell(&generated.plan, &approach_coarse, 1)
             .expect("hero approach retains its low terminal cell");
-        let high_mask = &layout.patches[&PatchId(u32::from(high_cell.id.get()))].mask;
-        let low_mask = &layout.patches[&PatchId(u32::from(low_cell.id.get()))].mask;
+        let high_mask = &layout
+            .patches
+            .get(&PatchId(u32::from(high_cell.id.get())))
+            .expect("fixture contains the requested entry")
+            .mask;
+        let low_mask = &layout
+            .patches
+            .get(&PatchId(u32::from(low_cell.id.get())))
+            .expect("fixture contains the requested entry")
+            .mask;
         let authored_high_approach = approach_coarse
             .iter()
             .take(approach_coarse.len().saturating_sub(1))
@@ -28086,14 +28474,25 @@ mod tests {
             .flat_map(|patch| patch.mask.iter().copied())
             .collect::<BTreeSet<_>>();
         assert!(
-            waterfall[lip.saturating_sub(WATERFALL_CASCADE_TRANSITIONS)..lip]
+            (*waterfall.get(lip.saturating_sub(WATERFALL_CASCADE_TRANSITIONS)..lip).expect("fixture contains the requested entry"))
                 .iter()
                 .all(|position| authored_high_approach.contains(&position.coord)
                     && position.level > profile.valley_lake_level),
             "the complete staged cascade must remain inside the declared high approach before its exact terminal-cell lip"
         );
-        assert!(low_mask.contains(&waterfall[lip].coord));
-        assert_eq!(waterfall[lip].level, profile.valley_lake_level);
+        assert!(low_mask.contains(
+            &waterfall
+                .get(lip)
+                .expect("fixture contains the requested entry")
+                .coord
+        ));
+        assert_eq!(
+            waterfall
+                .get(lip)
+                .expect("fixture contains the requested entry")
+                .level,
+            profile.valley_lake_level
+        );
         assert_eq!(
             waterfall_plunge_lip_at_mask_transition(
                 &waterfall
@@ -28421,7 +28820,9 @@ mod tests {
         });
         let normally_banked_source_edge = normally_banked_source_edge
             .expect("one source-water neighbor outside the exact aperture remains normally banked");
-        let source_level = resolved_water_levels[&normally_banked_source_edge.water];
+        let source_level = *resolved_water_levels
+            .get(&normally_banked_source_edge.water)
+            .expect("fixture contains the requested entry");
         assert!(volume
             .top_surface_at_coord(normally_banked_source_edge.bank)
             .is_some_and(|(surface, _)| surface.level >= source_level.saturating_add(1)));
@@ -28522,10 +28923,19 @@ mod tests {
         ] {
             let noncourse = apron.difference(&course).copied().collect::<BTreeSet<_>>();
             let endpoint_rows = if expected_level == 150 {
-                &authority.cascade_rows[..=WATERFALL_LAKE_THROAT_TRANSITIONS]
+                authority
+                    .cascade_rows
+                    .get(..=WATERFALL_LAKE_THROAT_TRANSITIONS)
+                    .expect("fixture contains the requested entry")
             } else {
-                &authority.cascade_rows[WATERFALL_CASCADE_TRANSITIONS
-                    ..=WATERFALL_CASCADE_TRANSITIONS.saturating_add(WATERFALL_GORGE_LOW_ROWS)]
+                authority
+                    .cascade_rows
+                    .get(
+                        WATERFALL_CASCADE_TRANSITIONS
+                            ..=WATERFALL_CASCADE_TRANSITIONS
+                                .saturating_add(WATERFALL_GORGE_LOW_ROWS),
+                    )
+                    .expect("fixture contains the requested entry")
             };
             let endpoint_contacts = endpoint_rows
                 .iter()
@@ -28665,8 +29075,18 @@ mod tests {
                 .collect(),
         };
         let core = BTreeSet::from([core_coord]);
-        let gorge_source_levels = BTreeMap::from([(core_coord, original_levels[&core_coord])]);
-        let immutable = BTreeMap::from([(summit_coord, original_levels[&summit_coord])]);
+        let gorge_source_levels = BTreeMap::from([(
+            core_coord,
+            (*original_levels
+                .get(&core_coord)
+                .expect("fixture contains the requested entry")),
+        )]);
+        let immutable = BTreeMap::from([(
+            summit_coord,
+            (*original_levels
+                .get(&summit_coord)
+                .expect("fixture contains the requested entry")),
+        )]);
         let feather = feather_waterfall_gorge_boundary(
             &core,
             &BTreeSet::new(),
@@ -28692,7 +29112,10 @@ mod tests {
                 .top_surface_at_coord(*coord)
                 .map(|(surface, _)| surface.level)
                 .expect("every feather coordinate retains terrain");
-            level <= original_levels[coord]
+            level
+                <= (*original_levels
+                    .get(coord)
+                    .expect("fixture contains the requested entry"))
                 && coord.neighbors().into_iter().all(|neighbor| {
                     !feather.contains(&neighbor)
                         || volume
@@ -28723,31 +29146,41 @@ mod tests {
             validate_physical_waterfall_profile(&cascade)
                 .unwrap_or_else(|error| panic!("{label} physical profile validates: {error}"));
             assert!(
-                cascade[..=WATERFALL_LAKE_THROAT_TRANSITIONS]
-                    .iter()
-                    .flatten()
-                    .all(|position| position.level == profile.mountain_lake_level),
+                (*cascade
+                    .get(..=WATERFALL_LAKE_THROAT_TRANSITIONS)
+                    .expect("fixture contains the requested entry"))
+                .iter()
+                .flatten()
+                .all(|position| position.level == profile.mountain_lake_level),
                 "{label} overlap must preserve every exact mountain-lake throat pin"
             );
-            let (shared_row, shared_position) = cascade[1..=WATERFALL_LAKE_THROAT_TRANSITIONS]
-                .iter()
-                .enumerate()
-                .find_map(|(offset, row)| {
-                    row.iter()
-                        .copied()
-                        .find(|position| {
-                            cascade[0]
-                                .iter()
-                                .any(|source| source.coord == position.coord)
-                        })
-                        .map(|position| (offset.saturating_add(1), position))
-                })
-                .unwrap_or_else(|| {
-                    panic!("{label} fixture must retain the same-level corner overlap")
-                });
+            let (shared_row, shared_position) = (*cascade
+                .get(1..=WATERFALL_LAKE_THROAT_TRANSITIONS)
+                .expect("fixture contains the requested entry"))
+            .iter()
+            .enumerate()
+            .find_map(|(offset, row)| {
+                row.iter()
+                    .copied()
+                    .find(|position| {
+                        (*cascade
+                            .first()
+                            .expect("fixture contains the requested entry"))
+                        .iter()
+                        .any(|source| source.coord == position.coord)
+                    })
+                    .map(|position| (offset.saturating_add(1), position))
+            })
+            .unwrap_or_else(|| panic!("{label} fixture must retain the same-level corner overlap"));
             let mut lowered = cascade.clone();
-            assert!(lowered[shared_row].remove(&shared_position));
-            lowered[shared_row].insert(TilePos::new(
+            assert!((*lowered
+                .get_mut(shared_row)
+                .expect("fixture contains the requested entry"))
+            .remove(&shared_position));
+            (*lowered
+                .get_mut(shared_row)
+                .expect("fixture contains the requested entry"))
+            .insert(TilePos::new(
                 shared_position.coord,
                 shared_position.level.saturating_sub(1),
             ));
@@ -28830,14 +29263,19 @@ mod tests {
                 .expect("dominant plunge air prism resolves");
         let (dominant_source_index, _) =
             dominant_waterfall_plunge(&cascade_rows).expect("fixture retains a dominant plunge");
-        let dominant_source = &cascade_rows[dominant_source_index];
+        let dominant_source = cascade_rows
+            .get(dominant_source_index)
+            .expect("fixture contains the requested entry");
         let dominant_source_center = waterfall_three_lane_center(dominant_source)
             .expect("dominant source retains a center")
             .coord;
-        let dominant_sink_center =
-            waterfall_three_lane_center(&cascade_rows[dominant_source_index.saturating_add(1)])
-                .expect("dominant sink retains a center")
-                .coord;
+        let dominant_sink_center = waterfall_three_lane_center(
+            cascade_rows
+                .get(dominant_source_index.saturating_add(1))
+                .expect("fixture contains the requested entry"),
+        )
+        .expect("dominant sink retains a center")
+        .coord;
         let approach_claims = cascade_rows
             .iter()
             .enumerate()
@@ -28874,9 +29312,11 @@ mod tests {
                     .map(|water| water.coord.distance(*coord))
                     .min()
                     == Some(1);
-                let touches_approach = cascade_rows[..dominant_source_index].iter().any(|row| {
-                    row.iter().map(|water| water.coord.distance(*coord)).min() == Some(1)
-                });
+                let touches_approach = (*cascade_rows
+                    .get(..dominant_source_index)
+                    .expect("fixture contains the requested entry"))
+                .iter()
+                .any(|row| row.iter().map(|water| water.coord.distance(*coord)).min() == Some(1));
                 !(touches_source && touches_approach)
             }),
             "a bent basin footprint must not acquire authority over the recessed high-source bank"
@@ -28901,11 +29341,13 @@ mod tests {
         }
         for plunge_index in waterfall_exposed_fall_rows(&cascade_rows) {
             assert!(
-                cascade_rows[plunge_index]
-                    .iter()
-                    .flat_map(|water| water.coord.neighbors())
-                    .filter(|coord| plunge_clearance_coords.contains(coord))
-                    .all(|coord| !gorge_coords.contains(&coord)),
+                (*cascade_rows
+                    .get(plunge_index)
+                    .expect("fixture contains the requested entry"))
+                .iter()
+                .flat_map(|water| water.coord.neighbors())
+                .filter(|coord| plunge_clearance_coords.contains(coord))
+                .all(|coord| !gorge_coords.contains(&coord)),
                 "every Fall row must retain a dry open-air aperture"
             );
         }
@@ -29040,16 +29482,28 @@ mod tests {
             .map(|(index, center)| {
                 let row_gorge = waterfall_gorge_row_footprint(
                     &volume.mask,
-                    &authority.cascade_rows[index],
+                    authority
+                        .cascade_rows
+                        .get(index)
+                        .expect("fixture contains the requested entry"),
                     index,
                     &water_coords,
                 )
                 .expect("cascade row retains its authored gorge footprint");
                 waterfall_gorge_flank_reaches(
-                    &authority.cascade_rows[index],
+                    authority
+                        .cascade_rows
+                        .get(index)
+                        .expect("fixture contains the requested entry"),
                     center.coord,
-                    waterfall_three_lane_axis(&authority.cascade_rows[index], *center)
-                        .expect("cascade row retains its exact transverse lane axis"),
+                    waterfall_three_lane_axis(
+                        authority
+                            .cascade_rows
+                            .get(index)
+                            .expect("fixture contains the requested entry"),
+                        *center,
+                    )
+                    .expect("cascade row retains its exact transverse lane axis"),
                     &row_gorge,
                 )
             })
@@ -29064,10 +29518,13 @@ mod tests {
 
         let (dominant_source_index, _) = dominant_waterfall_plunge(&authority.cascade_rows)
             .expect("fixture retains its dominant plunge");
-        let retaining_wall_level = authority.cascade_rows[dominant_source_index]
-            .first()
-            .map(|position| position.level.saturating_add(1))
-            .expect("dominant source row retains its water level");
+        let retaining_wall_level = (*authority
+            .cascade_rows
+            .get(dominant_source_index)
+            .expect("fixture contains the requested entry"))
+        .first()
+        .map(|position| position.level.saturating_add(1))
+        .expect("dominant source row retains its water level");
         let wall_replacements = authority
             .plunge_clearance_surfaces
             .iter()
@@ -29416,7 +29873,7 @@ mod tests {
             "the authoritative river must remain simple"
         );
         assert!(meander
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].distance(pair[1]) == 1));
         assert_ne!(meander, direct, "the river may not remain a ruler line");
         assert!(
@@ -29537,8 +29994,12 @@ mod tests {
                         continue;
                     }
                     let downstream = node.downstream.expect("nonterminal lane keeps flowing");
-                    let source_rank = ranks[&source.coord];
-                    let target_rank = ranks[&downstream.coord];
+                    let source_rank = *ranks
+                        .get(&source.coord)
+                        .expect("fixture contains the requested entry");
+                    let target_rank = *ranks
+                        .get(&downstream.coord)
+                        .expect("fixture contains the requested entry");
                     assert!(target_rank == source_rank || target_rank == source_rank + 1);
                     if target_rank == source_rank {
                         lateral_edges = lateral_edges.saturating_add(1);
@@ -29551,7 +30012,9 @@ mod tests {
                     let mut seen = BTreeSet::new();
                     while !final_row.contains(&cursor) {
                         assert!(seen.insert(cursor), "bend flow must remain acyclic");
-                        cursor = nodes[&cursor]
+                        cursor = nodes
+                            .get(&cursor)
+                            .expect("fixture contains the requested entry")
                             .downstream
                             .expect("every lane terminates at the exact final row");
                     }
@@ -29572,7 +30035,7 @@ mod tests {
             .map(|q| HexCoord::from_axial(q, 0))
             .collect::<Vec<_>>();
         assert!(staged_walk
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].distance(pair[1]) == 1));
         assert!(staged_walk.iter().filter(|coord| coord.x() == 23).count() > 1);
         let corridor = staged_walk.iter().copied().collect::<BTreeSet<_>>();
@@ -29583,22 +30046,42 @@ mod tests {
             .expect("the unique graph, not occurrence order, determines one exact field");
 
         assert_eq!(levels.len(), corridor.len());
-        assert_eq!(levels[&branch.coord], branch.level);
-        assert_eq!(levels[&rejoin.coord], rejoin.level);
+        assert_eq!(
+            (*levels
+                .get(&branch.coord)
+                .expect("fixture contains the requested entry")),
+            branch.level
+        );
+        assert_eq!(
+            (*levels
+                .get(&rejoin.coord)
+                .expect("fixture contains the requested entry")),
+            rejoin.level
+        );
         assert_eq!(levels.values().copied().max(), Some(166));
         assert!(levels
             .values()
             .all(|level| *level >= UPPER_REGION_THRESHOLD.saturating_add(1)));
         assert!(corridor.iter().all(|coord| {
             coord.neighbors().into_iter().all(|neighbor| {
-                !corridor.contains(&neighbor) || levels[coord].abs_diff(levels[&neighbor]) <= 1
+                !corridor.contains(&neighbor)
+                    || (*levels
+                        .get(coord)
+                        .expect("fixture contains the requested entry"))
+                    .abs_diff(
+                        *levels
+                            .get(&neighbor)
+                            .expect("fixture contains the requested entry"),
+                    ) <= 1
             })
         }));
         assert_eq!(
             staged_walk
                 .iter()
                 .filter(|coord| **coord == HexCoord::from_axial(23, 0))
-                .map(|coord| levels[coord])
+                .map(|coord| *levels
+                    .get(coord)
+                    .expect("fixture contains the requested entry"))
                 .collect::<BTreeSet<_>>()
                 .len(),
             1,
@@ -29624,13 +30107,36 @@ mod tests {
         )
         .expect("the bank cone and exact bench/junction pins share one feasible grade");
 
-        assert_eq!(levels[&branch.coord], branch.level);
-        assert_eq!(levels[&rejoin.coord], rejoin.level);
-        assert_eq!(levels[&bank], 160);
+        assert_eq!(
+            (*levels
+                .get(&branch.coord)
+                .expect("fixture contains the requested entry")),
+            branch.level
+        );
+        assert_eq!(
+            (*levels
+                .get(&rejoin.coord)
+                .expect("fixture contains the requested entry")),
+            rejoin.level
+        );
+        assert_eq!(
+            (*levels
+                .get(&bank)
+                .expect("fixture contains the requested entry")),
+            160
+        );
         assert_eq!(levels.values().copied().max(), Some(166));
         assert!(corridor.iter().all(|coord| {
             coord.neighbors().into_iter().all(|neighbor| {
-                !corridor.contains(&neighbor) || levels[coord].abs_diff(levels[&neighbor]) <= 1
+                !corridor.contains(&neighbor)
+                    || (*levels
+                        .get(coord)
+                        .expect("fixture contains the requested entry"))
+                    .abs_diff(
+                        *levels
+                            .get(&neighbor)
+                            .expect("fixture contains the requested entry"),
+                    ) <= 1
             })
         }));
     }
@@ -29668,7 +30174,7 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.len(), 5);
         assert_eq!(
-            first[1],
+            (*first.get(1).expect("fixture contains the requested entry")),
             upper[1].min(lower[1]),
             "equal minimax and length routes use canonical coordinate tie-breaking"
         );
@@ -29826,7 +30332,11 @@ mod tests {
             "final reconciliation must preserve unreachable authored walker intent"
         );
         assert_eq!(
-            volume.surfaces[&unreachable_authored].access,
+            volume
+                .surfaces
+                .get(&unreachable_authored)
+                .expect("fixture contains the requested entry")
+                .access,
             SurfaceAccess::Ordinary
         );
         assert_eq!(
@@ -29841,7 +30351,11 @@ mod tests {
             1,
         );
         assert_eq!(
-            volume.surfaces[&unreachable_authored].access,
+            volume
+                .surfaces
+                .get(&unreachable_authored)
+                .expect("fixture contains the requested entry")
+                .access,
             SurfaceAccess::SpecialMovement(INACCESSIBLE_MOVEMENT_REGION)
         );
         let reachable = graph.distances_from(root);
@@ -29872,10 +30386,23 @@ mod tests {
         )
         .expect("a disconnected observational anchor should rebind deterministically");
 
-        assert_eq!(anchors["grand_v3.valley_lake"], nearest);
-        assert_eq!(anchors["party_start"], farther);
         assert_eq!(
-            anchors["grand_v3.crystal_summit"], exact_crystal,
+            (*anchors
+                .get("grand_v3.valley_lake")
+                .expect("fixture contains the requested entry")),
+            nearest
+        );
+        assert_eq!(
+            (*anchors
+                .get("party_start")
+                .expect("fixture contains the requested entry")),
+            farther
+        );
+        assert_eq!(
+            (*anchors
+                .get("grand_v3.crystal_summit")
+                .expect("fixture contains the requested entry")),
+            exact_crystal,
             "exact Crystal route anchors must remain immovable and fail later validation"
         );
     }
@@ -29939,26 +30466,74 @@ mod tests {
 
         let (volume, positions) = build(false);
         let natural = ProtectedFeatureRoute {
-            centerline: vec![positions[5], positions[6]],
-            surfaces: BTreeSet::from([positions[5], positions[6]]),
+            centerline: vec![
+                (*positions
+                    .get(5)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .get(6)
+                    .expect("fixture contains the requested entry")),
+            ],
+            surfaces: BTreeSet::from([
+                (*positions
+                    .get(5)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .get(6)
+                    .expect("fixture contains the requested entry")),
+            ]),
         };
         let crystal = ProtectedFeatureRoute {
-            centerline: vec![positions[11], positions[0]],
-            surfaces: BTreeSet::from([positions[11], positions[0]]),
+            centerline: vec![
+                (*positions
+                    .get(11)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .first()
+                    .expect("fixture contains the requested entry")),
+            ],
+            surfaces: BTreeSet::from([
+                (*positions
+                    .get(11)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .first()
+                    .expect("fixture contains the requested entry")),
+            ]),
         };
         let graph = OrdinaryGraph::from_volume(&volume, None);
-        let distances =
-            validate_upper_route_cut_graph(&graph, positions[2], positions[8], &natural, &crystal)
-                .expect(
-                    "either declared portal connects, while removing both disconnects the ring",
-                );
-        assert!(distances.contains_key(&positions[8]));
+        let distances = validate_upper_route_cut_graph(
+            &graph,
+            *positions
+                .get(2)
+                .expect("fixture contains the requested entry"),
+            *positions
+                .get(8)
+                .expect("fixture contains the requested entry"),
+            &natural,
+            &crystal,
+        )
+        .expect("either declared portal connects, while removing both disconnects the ring");
+        assert!(distances.contains_key(
+            positions
+                .get(8)
+                .expect("fixture contains the requested entry")
+        ));
 
         let (volume, positions) = build(true);
         let graph = OrdinaryGraph::from_volume(&volume, None);
-        let error =
-            validate_upper_route_cut_graph(&graph, positions[2], positions[8], &natural, &crystal)
-                .expect_err("an unclaimed third lower-to-upper contact must fail closed");
+        let error = validate_upper_route_cut_graph(
+            &graph,
+            *positions
+                .get(2)
+                .expect("fixture contains the requested entry"),
+            *positions
+                .get(8)
+                .expect("fixture contains the requested entry"),
+            &natural,
+            &crystal,
+        )
+        .expect_err("an unclaimed third lower-to-upper contact must fail closed");
         assert!(matches!(
             error,
             V3GenerationError::RecipeContract(detail)
@@ -30308,9 +30883,16 @@ mod tests {
             &surfaces,
         );
         assert_eq!(geometric.len(), 1);
-        assert!(geometric[0].0.contains(&incompatible));
+        assert!(geometric
+            .first()
+            .expect("fixture contains the requested entry")
+            .0
+            .contains(&incompatible));
         assert!(ordinary_connector_levels_with_preserved_banks(
-            &geometric[0].0,
+            &geometric
+                .first()
+                .expect("fixture contains the requested entry")
+                .0,
             start.level,
             target,
             3,
@@ -30369,7 +30951,9 @@ mod tests {
         assert_eq!(path.len(), levels.len());
         assert_eq!(levels.first().copied(), Some(start.level));
         assert_eq!(levels.last().copied(), Some(target.level));
-        assert!(levels.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1));
+        assert!(levels
+            .array_windows::<2>()
+            .all(|pair| pair[0].abs_diff(pair[1]) <= 1));
     }
 
     #[test]
@@ -30468,11 +31052,24 @@ mod tests {
             );
         }
         let portal = ProtectedFeatureRoute {
-            centerline: vec![positions[&shared_first], positions[&shared_second]],
+            centerline: vec![
+                (*positions
+                    .get(&shared_first)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .get(&shared_second)
+                    .expect("fixture contains the requested entry")),
+            ],
             surfaces: BTreeSet::from([
-                positions[&shared_first],
-                positions[&shared_second],
-                positions[&undeclared_portal],
+                (*positions
+                    .get(&shared_first)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .get(&shared_second)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .get(&undeclared_portal)
+                    .expect("fixture contains the requested entry")),
             ]),
         };
         let visual_mask = BTreeSet::from([shared_first, shared_second]);
@@ -30488,7 +31085,14 @@ mod tests {
         .expect("the exact natural-pass ribbon is a valid portal backbone");
         assert_eq!(
             authority.surfaces,
-            BTreeSet::from([positions[&shared_first], positions[&shared_second]])
+            BTreeSet::from([
+                (*positions
+                    .get(&shared_first)
+                    .expect("fixture contains the requested entry")),
+                (*positions
+                    .get(&shared_second)
+                    .expect("fixture contains the requested entry"))
+            ])
         );
 
         let portal_coords = portal
@@ -30516,12 +31120,20 @@ mod tests {
         assert!(internal_surfaces.is_disjoint(&portal.surfaces));
         let planned = BTreeSet::from([
             MassifGatewayAttachment {
-                gateway: positions[&shared_first],
-                internal: positions[&left],
+                gateway: (*positions
+                    .get(&shared_first)
+                    .expect("fixture contains the requested entry")),
+                internal: (*positions
+                    .get(&left)
+                    .expect("fixture contains the requested entry")),
             },
             MassifGatewayAttachment {
-                gateway: positions[&shared_second],
-                internal: positions[&right],
+                gateway: (*positions
+                    .get(&shared_second)
+                    .expect("fixture contains the requested entry")),
+                internal: (*positions
+                    .get(&right)
+                    .expect("fixture contains the requested entry")),
             },
         ]);
         let (routes, forest) = admit_massif_internal_branch_forest(
@@ -30546,12 +31158,18 @@ mod tests {
 
         let mut stale_planned = planned.clone();
         stale_planned.remove(&MassifGatewayAttachment {
-            gateway: positions[&shared_first],
-            internal: positions[&left],
+            gateway: (*positions
+                .get(&shared_first)
+                .expect("fixture contains the requested entry")),
+            internal: (*positions
+                .get(&left)
+                .expect("fixture contains the requested entry")),
         });
         stale_planned.insert(MassifGatewayAttachment {
             gateway: TilePos::new(shared_first, 131),
-            internal: positions[&left],
+            internal: (*positions
+                .get(&left)
+                .expect("fixture contains the requested entry")),
         });
         let error = admit_massif_internal_branch_forest(
             &portal,
@@ -30579,7 +31197,9 @@ mod tests {
         assert!(error.to_string().contains("moved, blocked, or invalidated"));
 
         let network_gateway = MassifTransitGatewayAuthority {
-            surfaces: BTreeSet::from([positions[&right]]),
+            surfaces: BTreeSet::from([(*positions
+                .get(&right)
+                .expect("fixture contains the requested entry"))]),
         };
         network_gateway
             .validate_current("test admission", &volume, &positions)
@@ -30740,7 +31360,9 @@ mod tests {
         .expect("the deferred planned target retains an exact production witness");
         let (regraded_path, regraded_target, regraded_levels) =
             massif_regrade_singleton_dense_skeleton(
-                &planned_path[..planned_path.len().saturating_sub(1)],
+                planned_path
+                    .get(..planned_path.len().saturating_sub(1))
+                    .expect("fixture contains the requested entry"),
                 &branch_domain,
                 &planned_network,
                 &volume,
@@ -30754,7 +31376,7 @@ mod tests {
             .is_some_and(|level| start.level.abs_diff(*level) <= MASSIF_PORTAL_MAXIMUM_CUT_FILL));
         assert_eq!(regraded_levels.last().copied(), Some(planned_target.level));
         assert!(regraded_levels
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].abs_diff(pair[1]) <= 1));
 
         let network = BTreeMap::from([(target.coord, vec![target, target])]);
@@ -31029,7 +31651,9 @@ mod tests {
         assert_eq!(levels.first().copied(), Some(first.level));
         assert_eq!(levels.get(1).copied(), Some(sibling.level));
         assert_eq!(levels.last().copied(), Some(target.level));
-        assert!(levels.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 1));
+        assert!(levels
+            .array_windows::<2>()
+            .all(|pair| pair[0].abs_diff(pair[1]) <= 1));
 
         let mut drifted = surfaces;
         drifted.insert(sibling.coord, TilePos::new(sibling.coord, 16));
@@ -31419,11 +32043,23 @@ mod tests {
         assert!(volume.surfaces.contains_key(&lower));
         assert!(volume.surfaces.contains_key(&raised_bank));
         assert!(!volume.surfaces.contains_key(&old_bank));
-        assert_eq!(volume.surfaces[&lower].interior, Some(lower_interior));
+        assert_eq!(
+            volume
+                .surfaces
+                .get(&lower)
+                .expect("fixture contains the requested entry")
+                .interior,
+            Some(lower_interior)
+        );
         assert_eq!(biomes.get(&lower), Some(&hex_core::BiomeRegionId(17)));
         assert_eq!(biomes.get(&raised_bank), Some(&hex_core::BiomeRegionId(19)));
         assert!(matches!(
-            volume.columns[&coord].elements.as_slice(),
+            volume
+                .columns
+                .get(&coord)
+                .expect("fixture contains the requested entry")
+                .elements
+                .as_slice(),
             [
                 VolumeElement::Solid(SolidMass {
                     levels: LevelInterval { bottom: 0, top: 7 },
@@ -31458,7 +32094,11 @@ mod tests {
         );
         volume.surfaces.insert(declared, metadata);
         let mut biomes = BTreeMap::from([(declared, hex_core::BiomeRegionId(23))]);
-        let before_column = volume.columns[&coord].clone();
+        let before_column = (*volume
+            .columns
+            .get(&coord)
+            .expect("fixture contains the requested entry"))
+        .clone();
 
         let error = raise_top_bank_surface_preserving_stacks(
             &mut volume,
@@ -31477,7 +32117,13 @@ mod tests {
             }
         };
         assert!(detail.contains("not the top of one exact solid run"));
-        assert_eq!(volume.columns[&coord], before_column);
+        assert_eq!(
+            (*volume
+                .columns
+                .get(&coord)
+                .expect("fixture contains the requested entry")),
+            before_column
+        );
         assert_eq!(volume.surfaces.get(&declared), Some(&metadata));
         assert_eq!(biomes.get(&declared), Some(&hex_core::BiomeRegionId(23)));
     }
@@ -31487,9 +32133,21 @@ mod tests {
         let coords = (0..=192)
             .map(|q| HexCoord::from_axial(q, 0))
             .collect::<Vec<_>>();
-        let start = coords[0];
-        let target = TilePos::new(coords[192], 150);
-        let footprint = coords[..192].iter().copied().collect::<BTreeSet<_>>();
+        let start = *coords
+            .first()
+            .expect("fixture contains the requested entry");
+        let target = TilePos::new(
+            *coords
+                .get(192)
+                .expect("fixture contains the requested entry"),
+            150,
+        );
+        let footprint = (*coords
+            .get(..192)
+            .expect("fixture contains the requested entry"))
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
         let surfaces = footprint
             .iter()
             .copied()
@@ -31507,15 +32165,38 @@ mod tests {
             &surfaces,
         );
         assert_eq!(skeletons.len(), 1);
-        assert_eq!(skeletons[0].0.len(), 193);
+        assert_eq!(
+            skeletons
+                .first()
+                .expect("fixture contains the requested entry")
+                .0
+                .len(),
+            193
+        );
 
-        let short_path = [coords[0], coords[1], coords[2]];
-        let preserved = BTreeSet::from([coords[1]]);
-        let bank_surfaces = BTreeMap::from([(coords[1], TilePos::new(coords[1], 16))]);
+        let short_path = [
+            (*coords
+                .first()
+                .expect("fixture contains the requested entry")),
+            (*coords.get(1).expect("fixture contains the requested entry")),
+            (*coords.get(2).expect("fixture contains the requested entry")),
+        ];
+        let preserved =
+            BTreeSet::from([(*coords.get(1).expect("fixture contains the requested entry"))]);
+        let bank_surfaces = BTreeMap::from([(
+            (*coords.get(1).expect("fixture contains the requested entry")),
+            TilePos::new(
+                *coords.get(1).expect("fixture contains the requested entry"),
+                16,
+            ),
+        )]);
         assert!(connector_total_vertical_deficit(
             &short_path,
             170,
-            TilePos::new(coords[2], 150),
+            TilePos::new(
+                *coords.get(2).expect("fixture contains the requested entry"),
+                150
+            ),
             3,
             false,
             OrdinaryRegionBand::Upper,
@@ -31612,11 +32293,11 @@ mod tests {
         );
         assert!(resolved
             .centerline
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].distance(pair[1]) == 1));
         assert!(resolved
             .rows
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| lane_rows_connect_smoothly(&pair[0], &pair[1])));
         assert!(connector_rows.iter().flatten().all(|coord| {
             site_center.distance(*coord) == CRYSTAL_CONNECTOR_RING_RADIUS
@@ -31752,16 +32433,27 @@ mod tests {
         let fixture = reference_fixture();
         let authority = {
             let world = &fixture.selection.validated.plan;
-            let route = &world.features.protected_routes["grand_v3.tunnel"];
-            let mouth = world.anchors["grand_v3.tunnel_mouth"];
+            let route = world
+                .features
+                .protected_routes
+                .get("grand_v3.tunnel")
+                .expect("fixture contains the requested entry");
+            let mouth = *world
+                .anchors
+                .get("grand_v3.tunnel_mouth")
+                .expect("fixture contains the requested entry");
             let crystal_mask = world
                 .layout
                 .patches
                 .values()
                 .find(|patch| {
-                    patch
-                        .mask
-                        .contains(&world.anchors["crystal_ascent.lower_entry"].coord)
+                    patch.mask.contains(
+                        &world
+                            .anchors
+                            .get("crystal_ascent.lower_entry")
+                            .expect("fixture contains the requested entry")
+                            .coord,
+                    )
                 })
                 .map(|patch| &patch.mask)
                 .expect("reference Crystal entry retains one claimed mask");
@@ -31834,7 +32526,14 @@ mod tests {
                 VolumeElement::Solid(_) | VolumeElement::Fill(_) => None,
             })
             .expect("mutated overburden retains level sixteen");
-        mass.material = if expected.1.voxels[&stratum].material == SolidMaterialRole::WorkedStone {
+        mass.material = if expected
+            .1
+            .voxels
+            .get(&stratum)
+            .expect("fixture contains the requested entry")
+            .material
+            == SolidMaterialRole::WorkedStone
+        {
             SolidMaterialRole::Grass
         } else {
             SolidMaterialRole::WorkedStone
@@ -31866,7 +32565,13 @@ mod tests {
                 VolumeElement::Solid(_) | VolumeElement::Fill(_) => None,
             })
             .expect("mutated overburden retains its cap voxel");
-        mass.material = if expected.1.voxels[&cap_level].material == SolidMaterialRole::WorkedStone
+        mass.material = if expected
+            .1
+            .voxels
+            .get(&cap_level)
+            .expect("fixture contains the requested entry")
+            .material
+            == SolidMaterialRole::WorkedStone
         {
             SolidMaterialRole::Grass
         } else {
@@ -31889,8 +32594,15 @@ mod tests {
         corrective::validate_concealed_tunnel(&world, profile)
             .expect("reference tunnel satisfies the corrective contract");
 
-        let route = &world.features.protected_routes["grand_v3.tunnel"];
-        let mouth = world.anchors["grand_v3.tunnel_mouth"];
+        let route = world
+            .features
+            .protected_routes
+            .get("grand_v3.tunnel")
+            .expect("fixture contains the requested entry");
+        let mouth = *world
+            .anchors
+            .get("grand_v3.tunnel_mouth")
+            .expect("fixture contains the requested entry");
         let mouth_index = route
             .centerline
             .iter()
@@ -31929,7 +32641,12 @@ mod tests {
         let side_lane = threshold_row
             .iter()
             .copied()
-            .find(|coord| *coord != centerline[threshold_index])
+            .find(|coord| {
+                *coord
+                    != (*centerline
+                        .get(threshold_index)
+                        .expect("fixture contains the requested entry"))
+            })
             .expect("four-wide threshold has a side lane");
         let roof = world
             .volume
@@ -32185,7 +32902,10 @@ mod tests {
         let authority = reference_crystal_mantle_authority();
         let expected_top = crystal_terrain_top(&world.volume, &crystal_mask)
             .expect("reference Crystal top resolves from final terrain");
-        let expected_summit = world.anchors["crystal_ascent.upper_exit"];
+        let expected_summit = *world
+            .anchors
+            .get("crystal_ascent.upper_exit")
+            .expect("fixture contains the requested entry");
         assert!(
             expected_top > expected_summit.level,
             "the composite terrain peak and authored summit exit are separate authorities"
@@ -32236,7 +32956,10 @@ mod tests {
         let authority = reference_crystal_mantle_authority();
         let expected_top = crystal_terrain_top(&world.volume, &crystal_mask)
             .expect("reference Crystal top resolves from final terrain");
-        let expected_summit = world.anchors["crystal_ascent.upper_exit"];
+        let expected_summit = *world
+            .anchors
+            .get("crystal_ascent.upper_exit")
+            .expect("fixture contains the requested entry");
         let (coord, expected) = authority
             .expected_uplift_caps
             .as_ref()
@@ -32270,7 +32993,10 @@ mod tests {
         let authority = reference_crystal_mantle_authority();
         let expected_top = crystal_terrain_top(&world.volume, &crystal_mask)
             .expect("reference Crystal top resolves from final terrain");
-        let expected_summit = world.anchors["crystal_ascent.upper_exit"];
+        let expected_summit = *world
+            .anchors
+            .get("crystal_ascent.upper_exit")
+            .expect("fixture contains the requested entry");
         let coord = authority
             .shell_concealment_apron()
             .into_iter()
@@ -32279,7 +33005,11 @@ mod tests {
         replace_test_surface_level(
             &mut world,
             coord,
-            authority.shell_concealment_floors[&coord].saturating_sub(1),
+            (*authority
+                .shell_concealment_floors
+                .get(&coord)
+                .expect("fixture contains the requested entry"))
+            .saturating_sub(1),
         );
 
         let error = corrective::validate_crystal_mantle(
@@ -32308,7 +33038,10 @@ mod tests {
         let authority = reference_crystal_mantle_authority();
         let expected_top = crystal_terrain_top(&world.volume, &crystal_mask)
             .expect("reference Crystal top resolves from final terrain");
-        let expected_summit = world.anchors["crystal_ascent.upper_exit"];
+        let expected_summit = *world
+            .anchors
+            .get("crystal_ascent.upper_exit")
+            .expect("fixture contains the requested entry");
         let (&coord, &ceiling) = authority
             .shell_concealment_ceilings
             .first_key_value()
@@ -32343,7 +33076,10 @@ mod tests {
         let authority = reference_crystal_mantle_authority();
         let expected_top = crystal_terrain_top(&world.volume, &crystal_mask)
             .expect("reference Crystal top resolves from final terrain");
-        let expected_summit = world.anchors["crystal_ascent.upper_exit"];
+        let expected_summit = *world
+            .anchors
+            .get("crystal_ascent.upper_exit")
+            .expect("fixture contains the requested entry");
         assert!(expected_top > expected_summit.level);
         world.anchors.insert(
             "crystal_ascent.upper_exit".to_owned(),
@@ -32382,7 +33118,10 @@ mod tests {
     fn massif_crown_authority_rejects_a_one_column_needle() {
         let fixture = reference_fixture();
         let mut world = fixture.selection.validated.plan.clone();
-        let crest = world.observation_anchors["grand_v3.massif_crest"];
+        let crest = *world
+            .observation_anchors
+            .get("grand_v3.massif_crest")
+            .expect("fixture contains the requested entry");
         let massif_mask = fixture
             .plan
             .cells
@@ -32443,7 +33182,10 @@ mod tests {
         let mut world = reference_fixture().selection.validated.plan.clone();
         corrective::validate_peak_ridge_authority(&world, authority)
             .expect("reference final peak ridges satisfy their authority");
-        let (pin, expected) = authority.components[0]
+        let (pin, expected) = authority
+            .components
+            .first()
+            .expect("fixture contains the requested entry")
             .summit_pins
             .first_key_value()
             .map(|(coord, level)| (*coord, *level))
@@ -32458,7 +33200,10 @@ mod tests {
     fn final_peak_authority_rejects_raising_a_low_saddle_into_a_peak_wall() {
         let authority = reference_peak_ridge_authority();
         let mut world = reference_fixture().selection.validated.plan.clone();
-        let component = &authority.components[0];
+        let component = authority
+            .components
+            .first()
+            .expect("fixture contains the requested entry");
         let saddle = component
             .expected_ridge_profile
             .iter()
@@ -32475,7 +33220,10 @@ mod tests {
     fn final_peak_authority_rejects_an_ordinary_saddle_cross_section() {
         let authority = reference_peak_ridge_authority();
         let mut world = reference_fixture().selection.validated.plan.clone();
-        let swath = authority.components[0]
+        let swath = authority
+            .components
+            .first()
+            .expect("fixture contains the requested entry")
             .expected_saddle_swaths
             .first_key_value()
             .map(|(_, swath)| swath.clone())
@@ -32608,7 +33356,10 @@ mod tests {
     fn final_peak_authority_rejects_an_unauthorized_additional_high_surface() {
         let authority = reference_peak_ridge_authority();
         let mut world = reference_fixture().selection.validated.plan.clone();
-        let component = &authority.components[0];
+        let component = authority
+            .components
+            .first()
+            .expect("fixture contains the requested entry");
         let intentional_routes = [
             "grand_v3.natural_pass",
             "grand_v3.peak_saddle",
@@ -32616,7 +33367,11 @@ mod tests {
         ]
         .into_iter()
         .flat_map(|name| {
-            world.features.protected_routes[name]
+            world
+                .features
+                .protected_routes
+                .get(name)
+                .expect("fixture contains the requested entry")
                 .surfaces
                 .iter()
                 .map(|surface| surface.coord)
@@ -32781,7 +33536,11 @@ mod tests {
         assert!(summit_crowns.len() > 12);
 
         for name in AUTHORED_PEAK_ROUTE_NAMES {
-            let route = &world.features.protected_routes[name];
+            let route = world
+                .features
+                .protected_routes
+                .get(name)
+                .expect("fixture contains the requested entry");
             assert!(
                 route
                     .surfaces
@@ -32822,8 +33581,14 @@ mod tests {
         validate_protected_route_integrity("test inner peak ledge", inner, &world.volume)
             .expect("replacement inner ledge retains exact walker edges");
         assert_eq!(
-            world.anchors["grand_v3.peak_foothill_ledge"],
-            world.anchors["grand_v3.inner_peak_ledge"],
+            (*world
+                .anchors
+                .get("grand_v3.peak_foothill_ledge")
+                .expect("fixture contains the requested entry")),
+            (*world
+                .anchors
+                .get("grand_v3.inner_peak_ledge")
+                .expect("fixture contains the requested entry")),
             "the legacy review anchor remains a semantic alias"
         );
         let terminal = *inner
@@ -32831,17 +33596,29 @@ mod tests {
             .last()
             .expect("replacement inner ledge reaches its cell-38 review terminal");
         assert_eq!(
-            world.anchors["grand_v3.inner_peak_ledge"],
+            (*world.anchors.get("grand_v3.inner_peak_ledge").expect("fixture contains the requested entry")),
             terminal,
             "the ridge-composition overlook must face the waterfall from the authored route terminal"
         );
-        assert!(world.layout.patches[&PatchId(38)]
+        assert!(world
+            .layout
+            .patches
+            .get(&PatchId(38))
+            .expect("fixture contains the requested entry")
             .mask
             .contains(&terminal.coord));
         let graph = OrdinaryGraph::from_volume(&world.volume, Some(&world.blockers));
-        let tunnel_mouth = world.anchors["grand_v3.tunnel_mouth"];
+        let tunnel_mouth = *world
+            .anchors
+            .get("grand_v3.tunnel_mouth")
+            .expect("fixture contains the requested entry");
         let reachable = graph.distances_from(tunnel_mouth);
-        assert!(reachable.contains_key(&world.anchors["grand_v3.peak_foothill_ledge"]));
+        assert!(reachable.contains_key(
+            world
+                .anchors
+                .get("grand_v3.peak_foothill_ledge")
+                .expect("fixture contains the requested entry")
+        ));
         for expected_id in [59_u16, 88] {
             let patch = world
                 .layout
@@ -32906,10 +33683,8 @@ mod tests {
             0,
             "the radius-32 Crystal claim completely removes the nominal 123/87 coarse boundary"
         );
-        for pair in [165_u16, 124, 123, 88, 58, 59, 36, 19, 38].windows(2) {
-            let [from, to] = pair else {
-                unreachable!("a two-cell portal window always has two entries");
-            };
+        for pair in [165_u16, 124, 123, 88, 58, 59, 36, 19, 38].array_windows::<2>() {
+            let [from, to] = pair;
             assert!(
                 peak_routes::raw_boundary_portal_count(&world.layout.patches, *from, *to) > 0,
                 "the exact non-Crystal perimeter detour lost its {from}/{to} boundary"
@@ -33056,8 +33831,16 @@ mod tests {
         );
         assert!(
             longest.iter().any(|(first, second)| {
-                let first_semantic_water = is_sea(owner[first]);
-                let second_semantic_water = is_sea(owner[second]);
+                let first_semantic_water = is_sea(
+                    *owner
+                        .get(first)
+                        .expect("fixture contains the requested entry"),
+                );
+                let second_semantic_water = is_sea(
+                    *owner
+                        .get(second)
+                        .expect("fixture contains the requested entry"),
+                );
                 actual_water.contains(first) != first_semantic_water
                     || actual_water.contains(second) != second_semantic_water
             }),
@@ -33158,7 +33941,10 @@ mod tests {
             varied_boundary_columns > 0,
             "constructive rollback removed every visible default-seed coast mutation"
         );
-        let crest = world.observation_anchors["grand_v3.massif_crest"];
+        let crest = *world
+            .observation_anchors
+            .get("grand_v3.massif_crest")
+            .expect("fixture contains the requested entry");
         let massif_maxima = reference
             .plan
             .cells
@@ -33172,7 +33958,11 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(massif_maxima.len() >= 3);
         assert!(massif_maxima.contains(&crest));
-        assert!(!world.features.protected_routes["grand_v3.ordinary_hubs"]
+        assert!(!world
+            .features
+            .protected_routes
+            .get("grand_v3.ordinary_hubs")
+            .expect("fixture contains the requested entry")
             .surfaces
             .iter()
             .any(|surface| surface.coord == crest.coord));
@@ -33205,7 +33995,10 @@ mod tests {
             queue.push_back(coord);
         }
         while let Some(coord) = queue.pop_front() {
-            let next_depth = depths[&coord].saturating_add(1);
+            let next_depth = (*depths
+                .get(&coord)
+                .expect("fixture contains the requested entry"))
+            .saturating_add(1);
             for neighbor in coord.neighbors() {
                 if visual.contains(&neighbor) && !depths.contains_key(&neighbor) {
                     depths.insert(neighbor, next_depth);
@@ -33284,11 +34077,15 @@ mod tests {
                 .fine_index
                 .patch(coord)
                 .unwrap_or_else(|| panic!("{fixture_name} has no owner for {coord:?}"));
-            let cell = cells[&owner];
+            let cell = *cells
+                .get(&owner)
+                .expect("fixture contains the requested entry");
             if has_overlay(cell, SchematicFeature::FrozenWoods) {
                 return profile.frozen_woods_level;
             }
-            let base = datums[&owner];
+            let base = *datums
+                .get(&owner)
+                .expect("fixture contains the requested entry");
             let mut weighted_sum = 0_i64;
             let mut weighted_relief = 0_i64;
             let mut weight_sum = 0_i64;
@@ -33315,7 +34112,10 @@ mod tests {
             .iter()
             .filter(|cell| has_overlay(cell, SchematicFeature::FrozenWoods))
             .flat_map(|cell| {
-                layout.patches[&PatchId(u32::from(cell.id.get()))]
+                layout
+                    .patches
+                    .get(&PatchId(u32::from(cell.id.get())))
+                    .expect("fixture contains the requested entry")
                     .mask
                     .iter()
                     .copied()
@@ -33522,7 +34322,12 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{fixture_name} layout failed: {error}"));
             let claimed = super::super::schematic_crystal::claim_site(&plan, &mut layout, 22)
                 .unwrap_or_else(|error| panic!("{fixture_name} Crystal claim failed: {error}"));
-            let crystal_site = layout.patches[&claimed.patch_id()].mask.clone();
+            let crystal_site = layout
+                .patches
+                .get(&claimed.patch_id())
+                .expect("fixture contains the requested entry")
+                .mask
+                .clone();
             let foundation = build_schematic_foundation(
                 &plan,
                 &layout,
@@ -33579,7 +34384,10 @@ mod tests {
             .expect("the Massif transition retains its natural surface");
         assert!(boundary_surface.level >= boundary_minimum);
         let mut lowered_boundary = foundation.volume.clone();
-        let boundary_metadata = lowered_boundary.surfaces[&boundary_surface];
+        let boundary_metadata = *lowered_boundary
+            .surfaces
+            .get(&boundary_surface)
+            .expect("fixture contains the requested entry");
         lowered_boundary.remove_surfaces_at_coord(regression_boundary);
         let lowered = TilePos::new(regression_boundary, boundary_minimum.saturating_sub(1));
         lowered_boundary.columns.insert(
@@ -33607,7 +34415,10 @@ mod tests {
             .expect("the raised-wall regression coordinate retains its natural surface");
         assert!(raised_boundary_surface.level <= boundary_maximum);
         let mut raised_boundary = foundation.volume.clone();
-        let raised_boundary_metadata = raised_boundary.surfaces[&raised_boundary_surface];
+        let raised_boundary_metadata = *raised_boundary
+            .surfaces
+            .get(&raised_boundary_surface)
+            .expect("fixture contains the requested entry");
         raised_boundary.remove_surfaces_at_coord(raised_regression_boundary);
         let raised = TilePos::new(
             raised_regression_boundary,
@@ -33654,7 +34465,10 @@ mod tests {
             .find(|surface| **surface != authority.crest)
             .expect("broad summit authority has a non-crest surface");
         let mut changed = foundation.volume.clone();
-        let metadata = changed.surfaces[&replaced];
+        let metadata = *changed
+            .surfaces
+            .get(&replaced)
+            .expect("fixture contains the requested entry");
         changed.remove_surfaces_at_coord(replaced.coord);
         let raised = TilePos::new(replaced.coord, replaced.level.saturating_add(1));
         changed.columns.insert(
@@ -33704,7 +34518,12 @@ mod tests {
             .validate_geometry("final compiled world", &world.volume)
             .expect("the broad natural Massif core survives final construction");
         for surface in &authority.protected_surfaces {
-            let access = world.volume.surfaces[surface].access;
+            let access = world
+                .volume
+                .surfaces
+                .get(surface)
+                .expect("fixture contains the requested entry")
+                .access;
             if *surface == authority.crest {
                 assert_eq!(
                     access,
@@ -33717,7 +34536,15 @@ mod tests {
                         | SurfaceAccess::SpecialMovement(INACCESSIBLE_MOVEMENT_REGION)
                 ));
             }
-            assert_eq!(world.volume.surfaces[surface].interior, None);
+            assert_eq!(
+                world
+                    .volume
+                    .surfaces
+                    .get(surface)
+                    .expect("fixture contains the requested entry")
+                    .interior,
+                None
+            );
         }
         for (name, route) in &world.features.protected_routes {
             if name == "grand_v3.ordinary_hubs" {
@@ -33731,7 +34558,10 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{error}"));
         }
         assert_eq!(
-            world.observation_anchors["grand_v3.massif_crest"],
+            (*world
+                .observation_anchors
+                .get("grand_v3.massif_crest")
+                .expect("fixture contains the requested entry")),
             authority.crest
         );
     }
@@ -33744,11 +34574,22 @@ mod tests {
             .anchors
             .get("crystal_ascent.lower_entry")
             .expect("Crystal lower entry remains present");
-        let upper_exit = world.anchors["crystal_ascent.upper_exit"];
-        let lower_terminal =
-            &world.features.protected_routes["crystal_ascent.lower_terminal_pad"].surfaces;
-        let upper_terminal =
-            &world.features.protected_routes["crystal_ascent.upper_terminal_pad"].surfaces;
+        let upper_exit = *world
+            .anchors
+            .get("crystal_ascent.upper_exit")
+            .expect("fixture contains the requested entry");
+        let lower_terminal = &world
+            .features
+            .protected_routes
+            .get("crystal_ascent.lower_terminal_pad")
+            .expect("fixture contains the requested entry")
+            .surfaces;
+        let upper_terminal = &world
+            .features
+            .protected_routes
+            .get("crystal_ascent.upper_terminal_pad")
+            .expect("fixture contains the requested entry")
+            .surfaces;
         let crystal_mask = &world
             .layout
             .patches
@@ -33756,7 +34597,11 @@ mod tests {
             .find(|patch| patch.mask.contains(&lower_entry.coord))
             .expect("lower entry retains its exact Crystal owner")
             .mask;
-        let tunnel_route = &world.features.protected_routes["grand_v3.tunnel"];
+        let tunnel_route = world
+            .features
+            .protected_routes
+            .get("grand_v3.tunnel")
+            .expect("fixture contains the requested entry");
         let tunnel_connector = tunnel_route
             .surfaces
             .iter()
@@ -33777,7 +34622,7 @@ mod tests {
         );
         assert!(tunnel_route
             .centerline
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].coord.distance(pair[1].coord) == 1));
         let locked_outside_goal = TilePos::new(HexCoord::from_axial(22, -99), 6);
         let goal_index = tunnel_route
@@ -33786,39 +34631,53 @@ mod tests {
             .position(|position| *position == locked_outside_goal)
             .expect("outside connector reaches the locked first-outside center");
         assert!(goal_index > 2, "connector must leave the terminal vicinity");
-        let connector_directions = tunnel_route.centerline[..=goal_index]
-            .windows(2)
-            .filter_map(|pair| {
-                pair[0]
-                    .coord
-                    .neighbors()
-                    .iter()
-                    .position(|neighbor| *neighbor == pair[1].coord)
-            })
-            .collect::<BTreeSet<_>>();
+        let connector_directions = (*tunnel_route
+            .centerline
+            .get(..=goal_index)
+            .expect("fixture contains the requested entry"))
+        .array_windows::<2>()
+        .filter_map(|pair| {
+            pair[0]
+                .coord
+                .neighbors()
+                .iter()
+                .position(|neighbor| *neighbor == pair[1].coord)
+        })
+        .collect::<BTreeSet<_>>();
         assert!(
             connector_directions.len() > 1,
             "connector must bend around the convex Crystal shell"
         );
         assert!(lower_terminal.contains(&lower_entry));
         assert!(upper_terminal.contains(&upper_exit));
-        let frozen_exit = &world.features.protected_routes["grand_v3.frozen_exit"];
+        let frozen_exit = world
+            .features
+            .protected_routes
+            .get("grand_v3.frozen_exit")
+            .expect("fixture contains the requested entry");
         assert_eq!(frozen_exit.surfaces.len(), 16);
         assert_eq!(frozen_exit.centerline.len(), 4);
         assert_eq!(frozen_exit.centerline.first(), Some(&upper_exit));
         assert_eq!(
-            world.anchors["grand_v3.frozen_exit"],
+            (*world
+                .anchors
+                .get("grand_v3.frozen_exit")
+                .expect("fixture contains the requested entry")),
             *frozen_exit
                 .centerline
                 .last()
                 .expect("Frozen exit retains its exact final route surface"),
             "Frozen-exit review anchor must identify the route's final Frozen-Woods footing"
         );
-        assert!(frozen_exit.centerline.windows(2).all(|pair| {
+        assert!(frozen_exit.centerline.array_windows::<2>().all(|pair| {
             pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
         }));
         assert_eq!(
-            world.features.protected_routes["grand_v3.crystal_route"]
+            world
+                .features
+                .protected_routes
+                .get("grand_v3.crystal_route")
+                .expect("fixture contains the requested entry")
                 .centerline
                 .last(),
             frozen_exit.centerline.last(),
@@ -33856,7 +34715,11 @@ mod tests {
             "grand_v3.peak_saddle",
             "grand_v3.inner_peak_ledge",
         ] {
-            assert!(world.features.protected_routes[name]
+            assert!(world
+                .features
+                .protected_routes
+                .get(name)
+                .expect("fixture contains the requested entry")
                 .surfaces
                 .iter()
                 .all(|surface| !mantle_screen.contains(&surface.coord)));
@@ -33882,7 +34745,11 @@ mod tests {
                     .top_surface_at_coord(floor.coord)
                     .is_some_and(|(cap, _)| cap.level > crystal_top)
         }));
-        assert!(world.features.protected_routes["grand_v3.ordinary_hubs"]
+        assert!(world
+            .features
+            .protected_routes
+            .get("grand_v3.ordinary_hubs")
+            .expect("fixture contains the requested entry")
             .surfaces
             .iter()
             .filter(|surface| mantle_screen.contains(&surface.coord))
@@ -33899,7 +34766,11 @@ mod tests {
             .and_then(|metadata| metadata.interior)
             .expect("composite lower entry belongs to the unified Dark domain");
         assert_eq!(world.interiors.by_id.len(), 1);
-        let unified = &world.interiors.by_id[&unified_id];
+        let unified = world
+            .interiors
+            .by_id
+            .get(&unified_id)
+            .expect("fixture contains the requested entry");
         assert!(lower_terminal.iter().all(|surface| {
             world
                 .volume
@@ -33919,7 +34790,12 @@ mod tests {
                 && unified.entrances.contains(surface)
         }));
         assert_eq!(
-            world.volume.surfaces[&upper_exit].interior,
+            world
+                .volume
+                .surfaces
+                .get(&upper_exit)
+                .expect("fixture contains the requested entry")
+                .interior,
             Some(unified_id)
         );
         let foot_threshold = unified
@@ -33945,15 +34821,31 @@ mod tests {
             .find(|cell| has_overlay(cell, SchematicFeature::ValleyLake))
             .map(|cell| schematic_to_world(cell.coord, 22))
             .expect("reference has a valley lake");
-        let valley_anchor = world.anchors["grand_v3.valley_lake"];
+        let valley_anchor = *world
+            .anchors
+            .get("grand_v3.valley_lake")
+            .expect("fixture contains the requested entry");
         assert!(valley_anchor.coord.distance(valley_center) <= 22);
         assert_eq!(
-            world.volume.surfaces[&valley_anchor].access,
+            world
+                .volume
+                .surfaces
+                .get(&valley_anchor)
+                .expect("fixture contains the requested entry")
+                .access,
             SurfaceAccess::Ordinary
         );
-        let waterfall_profile = world.anchors["grand_v3.waterfall_profile"];
+        let waterfall_profile = *world
+            .anchors
+            .get("grand_v3.waterfall_profile")
+            .expect("fixture contains the requested entry");
         assert_eq!(
-            world.volume.surfaces[&waterfall_profile].access,
+            world
+                .volume
+                .surfaces
+                .get(&waterfall_profile)
+                .expect("fixture contains the requested entry")
+                .access,
             SurfaceAccess::Ordinary,
             "the stable waterfall profile review anchor must be standable"
         );
@@ -33963,14 +34855,25 @@ mod tests {
             "grand_v3.treeline_transition",
             "grand_v3.peak_ridge_overlook",
         ] {
-            let anchor = world.anchors[name];
+            let anchor = *world
+                .anchors
+                .get(name)
+                .expect("fixture contains the requested entry");
             assert_eq!(
-                world.volume.surfaces[&anchor].access,
+                world
+                    .volume
+                    .surfaces
+                    .get(&anchor)
+                    .expect("fixture contains the requested entry")
+                    .access,
                 SurfaceAccess::Ordinary,
                 "corrective shipped-camera anchor {name} must remain ordinary"
             );
         }
-        let mantle_overlook = world.anchors["grand_v3.crystal_mantle_overlook"];
+        let mantle_overlook = *world
+            .anchors
+            .get("grand_v3.crystal_mantle_overlook")
+            .expect("fixture contains the requested entry");
         let crystal_center = fixture
             .plan
             .cells
@@ -33991,12 +34894,21 @@ mod tests {
         ));
 
         assert_eq!(
-            world.anchors["grand_v3.peak_ridge_overlook"],
-            world.anchors["grand_v3.peak_foothill_ledge"],
+            (*world
+                .anchors
+                .get("grand_v3.peak_ridge_overlook")
+                .expect("fixture contains the requested entry")),
+            (*world
+                .anchors
+                .get("grand_v3.peak_foothill_ledge")
+                .expect("fixture contains the requested entry")),
             "the peak review must remain the authored ledge rather than a generic relocation"
         );
 
-        let treeline = world.anchors["grand_v3.treeline_transition"];
+        let treeline = *world
+            .anchors
+            .get("grand_v3.treeline_transition")
+            .expect("fixture contains the requested entry");
         assert_eq!(
             solid_material_at(&world.volume, treeline),
             Some(SolidMaterialRole::Snow)
@@ -34014,7 +34926,10 @@ mod tests {
             witnesses.downhill_tree.coord,
             witnesses.uphill_snow.coord,
         ));
-        let garden_anchor = world.observation_anchors["grand_v3.lake_island"];
+        let garden_anchor = *world
+            .observation_anchors
+            .get("grand_v3.lake_island")
+            .expect("fixture contains the requested entry");
         assert!(!world.anchors.contains_key("grand_v3.lake_island"));
         let garden_patch = fixture
             .plan
@@ -34026,7 +34941,10 @@ mod tests {
         assert!(garden_patch.mask.contains(&garden_anchor.coord));
         assert!(world.volume.surfaces.contains_key(&garden_anchor));
 
-        let massif_crest = world.observation_anchors["grand_v3.massif_crest"];
+        let massif_crest = *world
+            .observation_anchors
+            .get("grand_v3.massif_crest")
+            .expect("fixture contains the requested entry");
         assert!(!world.anchors.contains_key("grand_v3.massif_crest"));
         let highest_peak = fixture
             .plan
@@ -34061,12 +34979,11 @@ mod tests {
         let tunnel_bright = world
             .lights
             .values()
-            .filter_map(|light| {
+            .filter(|light| {
                 matches!(
                     light.presentation,
                     Some(PlannedLightPresentation::CaveCrystal(_))
                 )
-                .then_some(light)
             })
             .collect::<Vec<_>>();
         let tunnel_dim = world
@@ -34087,7 +35004,11 @@ mod tests {
                 && tunnel_dim.iter().any(|dim| dim.origin == light.origin)
         }));
 
-        let hub_route = &world.features.protected_routes["grand_v3.ordinary_hubs"];
+        let hub_route = world
+            .features
+            .protected_routes
+            .get("grand_v3.ordinary_hubs")
+            .expect("fixture contains the requested entry");
         let ordinary_cells = fixture
             .plan
             .cells
@@ -34117,7 +35038,10 @@ mod tests {
                 && !world.blockers.contains(hub)
         }));
         let ordinary_graph = OrdinaryGraph::from_volume(&world.volume, Some(&world.blockers));
-        let foothill = world.anchors["grand_v3.tunnel_mouth"];
+        let foothill = *world
+            .anchors
+            .get("grand_v3.tunnel_mouth")
+            .expect("fixture contains the requested entry");
         let reachable = ordinary_graph.distances_from(foothill);
         assert!(
             !world
@@ -34151,7 +35075,11 @@ mod tests {
             assert!(backdrop.facts.overlays.is_empty());
             assert!(!ordinary_cells.iter().any(|cell| cell.id.get() == cell_id));
         }
-        let waterfall_patch = &world.layout.patches[&PatchId(u32::from(waterfall_cell.id.get()))];
+        let waterfall_patch = world
+            .layout
+            .patches
+            .get(&PatchId(u32::from(waterfall_cell.id.get())))
+            .expect("fixture contains the requested entry");
         assert!(world.volume.surfaces.iter().all(|(surface, metadata)| {
             !waterfall_patch.mask.contains(&surface.coord)
                 || metadata.access != SurfaceAccess::Ordinary
@@ -34159,7 +35087,10 @@ mod tests {
         assert!(!world.anchors.contains_key("grand_v3.waterfall_crown"));
         assert!(!world.anchors.contains_key("grand_v3.waterfall_base"));
         for name in ["grand_v3.waterfall_crown", "grand_v3.waterfall_base"] {
-            let surface = world.observation_anchors[name];
+            let surface = *world
+                .observation_anchors
+                .get(name)
+                .expect("fixture contains the requested entry");
             let metadata = world
                 .volume
                 .surfaces
@@ -34170,13 +35101,22 @@ mod tests {
                 "waterfall review anchors may be scenic-inaccessible, but may not promise disconnected Ordinary footing"
             );
         }
-        assert!(reachable.contains_key(&world.anchors["grand_v3.waterfall_profile"]));
+        assert!(reachable.contains_key(
+            world
+                .anchors
+                .get("grand_v3.waterfall_profile")
+                .expect("fixture contains the requested entry")
+        ));
         for (cell, hub) in ordinary_cells
             .iter()
             .copied()
             .zip(hub_route.centerline.iter().copied())
         {
-            let patch = &world.layout.patches[&PatchId(u32::from(cell.id.get()))];
+            let patch = world
+                .layout
+                .patches
+                .get(&PatchId(u32::from(cell.id.get())))
+                .expect("fixture contains the requested entry");
             assert!(patch.mask.contains(&hub.coord));
             assert!(reachable.contains_key(&hub));
         }
@@ -34184,7 +35124,10 @@ mod tests {
             .iter()
             .position(|cell| cell.id.get() == 19)
             .expect("the locked first sharp-peak cell remains Ordinary");
-        let peak_19_hub = hub_route.centerline[peak_19];
+        let peak_19_hub = *hub_route
+            .centerline
+            .get(peak_19)
+            .expect("fixture contains the requested entry");
         assert!(reachable.contains_key(&peak_19_hub));
         assert_eq!(
             fixture.selection.metrics.reachable_surfaces,
@@ -34243,7 +35186,11 @@ mod tests {
             .iter()
             .filter(|cell| has_overlay(cell, SchematicFeature::FrozenWoods))
             .flat_map(|cell| {
-                world.layout.patches[&PatchId(u32::from(cell.id.get()))]
+                world
+                    .layout
+                    .patches
+                    .get(&PatchId(u32::from(cell.id.get())))
+                    .expect("fixture contains the requested entry")
                     .mask
                     .iter()
                     .copied()
@@ -34273,7 +35220,10 @@ mod tests {
             .expect("temperate vegetation resolves");
         let frozen = SnowyVegetationSet::resolve(catalog, "Grand vegetation test")
             .expect("frozen vegetation resolves");
-        let lower_entry = world.anchors["crystal_ascent.lower_entry"];
+        let lower_entry = *world
+            .anchors
+            .get("crystal_ascent.lower_entry")
+            .expect("fixture contains the requested entry");
         let crystal_mask = &world
             .layout
             .patches
@@ -34762,7 +35712,14 @@ mod tests {
                 {
                     continue;
                 }
-                let delta = levels[coord].abs_diff(levels[&neighbor]);
+                let delta = (*levels
+                    .get(coord)
+                    .expect("fixture contains the requested entry"))
+                .abs_diff(
+                    *levels
+                        .get(&neighbor)
+                        .expect("fixture contains the requested entry"),
+                );
                 checked_pairs = checked_pairs.saturating_add(1);
                 if worst.is_none_or(|(current, ..)| delta > current) {
                     worst = Some((delta, *coord, neighbor, *owner, *neighbor_owner));

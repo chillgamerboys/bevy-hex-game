@@ -337,11 +337,17 @@ fn materialization_profile_checkpoint(
 ) {
     if std::env::var_os("HEX_GRAND_PROFILE").is_some() {
         let now = std::time::Instant::now();
-        eprintln!(
-            "v3 materialization profile: {stage}: delta={:?} total={:?}",
-            now.duration_since(*previous),
-            now.duration_since(started)
-        );
+        #[expect(
+            clippy::print_stderr,
+            reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+        )]
+        {
+            eprintln!(
+                "v3 materialization profile: {stage}: delta={:?} total={:?}",
+                now.duration_since(*previous),
+                now.duration_since(started)
+            );
+        }
         *previous = now;
     }
 }

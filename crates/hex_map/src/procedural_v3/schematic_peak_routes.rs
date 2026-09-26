@@ -101,7 +101,7 @@ impl SelectedInnerPeakTransitAdmission {
     fn is_retained_by(&self, route: &[TilePos]) -> bool {
         let retains_portal = |portal: BoundaryPortal| {
             route
-                .windows(2)
+                .array_windows::<2>()
                 .any(|pair| pair[0].coord == portal.from && pair[1].coord == portal.to)
         };
         retains_portal(self.ingress)
@@ -149,11 +149,9 @@ impl InnerPeakTransitAuthority {
             let from_mask = masks.get(&from);
             let to_mask = masks.get(&to);
             route
-                .windows(2)
+                .array_windows::<2>()
                 .filter_map(|pair| {
-                    let [first, second] = pair else {
-                        return None;
-                    };
+                    let [first, second] = pair;
                     (from_mask.is_some_and(|mask| mask.contains(&first.coord))
                         && to_mask.is_some_and(|mask| mask.contains(&second.coord)))
                     .then_some(BoundaryPortal {
@@ -604,7 +602,7 @@ pub(super) fn compile_inner_peak_ledge(
     let suffix_ids = main_ids
         .get(5..)
         .ok_or_else(|| schematic_contract("inner peak route lost its authored suffix"))?;
-    let transit_authorities = vec![ordered_inner_peak_transit_authority(
+    let transit_authorities = [ordered_inner_peak_transit_authority(
         &patch_masks,
         ordered_transit_spine,
         &route_search_allowed,
@@ -685,15 +683,18 @@ pub(super) fn compile_inner_peak_ledge(
                 transit_authority,
                 &mut transit_search_budget,
             );
-            let Ok(centerline) = search else {
-                if diagnostics.len() < 8 {
-                    diagnostics.push(format!(
-                        "{junction:?} transit-{transit_index}/{}: {}",
-                        transit_authority.runway_domain.len(),
-                        search.unwrap_err()
-                    ));
+            let centerline = match search {
+                Ok(value) => value,
+                Err(error) => {
+                    if diagnostics.len() < 8 {
+                        diagnostics.push(format!(
+                            "{junction:?} transit-{transit_index}/{}: {}",
+                            transit_authority.runway_domain.len(),
+                            error
+                        ));
+                    }
+                    continue;
                 }
-                continue;
             };
             let transit_admission =
                 match transit_authority.validate_route(&centerline, &patch_masks) {
@@ -754,9 +755,15 @@ pub(super) fn compile_inner_peak_ledge(
                     // centerline selected by the bounded solver, but omit only its
                     // unfinished nine-level shoulder. Normal generation never
                     // takes this path and remains fail-closed.
-                    eprintln!(
+                    #[expect(
+                        clippy::print_stderr,
+                        reason = "Explicit structural-review and profiling diagnostics must remain available before the application logger is installed."
+                    )]
+                    {
+                        eprintln!(
                         "Grand V3 structural-review draft: omitting inner-peak ledge shoulder: {diagnostic}"
                     );
+                    }
                     let route_levels = centerline
                         .iter()
                         .map(|position| (position.coord, position.level))
@@ -836,12 +843,9 @@ pub(super) fn compile_inner_peak_ledge(
             ))
         })?;
         let position = TilePos::new(*coord, level);
-        let current = volume
-            .top_surface_at_coord(*coord)
-            .map(|(surface, metadata)| (surface, metadata))
-            .ok_or_else(|| {
-                schematic_contract(format!("inner peak ledge lost source surface at {coord:?}"))
-            })?;
+        let current = volume.top_surface_at_coord(*coord).ok_or_else(|| {
+            schematic_contract(format!("inner peak ledge lost source surface at {coord:?}"))
+        })?;
         if current.0 != position {
             let biome = fine_index.biome(*coord).ok_or_else(|| {
                 schematic_contract(format!("inner peak ledge {coord:?} has no biome owner"))
@@ -1004,10 +1008,8 @@ fn validate_upper_ledge_side_branch_contract(
             "{label} must publish a two-node trunk prefix followed by an off-trunk surface"
         ));
     };
-    let prefix_is_real = trunk.centerline.windows(2).any(|pair| {
-        let [first, second] = pair else {
-            return false;
-        };
+    let prefix_is_real = trunk.centerline.array_windows::<2>().any(|pair| {
+        let [first, second] = pair;
         (*first == *shared_start && *second == *junction)
             || (*first == *junction && *second == *shared_start)
     });
@@ -1022,10 +1024,8 @@ fn validate_upper_ledge_side_branch_contract(
         .collect::<BTreeSet<_>>()
         .len()
         != centerline.len()
-        || centerline.windows(2).any(|pair| {
-            let [first, second] = pair else {
-                return true;
-            };
+        || centerline.array_windows::<2>().any(|pair| {
+            let [first, second] = pair;
             first.coord.distance(second.coord) != 1 || first.level.abs_diff(second.level) > 1
         })
     {
@@ -1319,7 +1319,7 @@ fn compile_upper_ledge_side_branch(
         // again.
         let mut attachments = trunk
             .centerline
-            .windows(2)
+            .array_windows::<2>()
             .flat_map(|pair| [(pair[0], pair[1]), (pair[1], pair[0])])
             .filter(|(shared_start, junction)| {
                 source_mask.contains(&shared_start.coord)
@@ -1418,14 +1418,17 @@ fn compile_upper_ledge_side_branch(
                 Some(junction.level),
                 Some(&bounds),
             );
-            let Ok(centerline) = search else {
-                if attempts.len().saturating_sub(source_attempt_start) < 6 {
-                    attempts.push(format!(
-                        "source={source_id} junction={junction:?}: {}",
-                        search.unwrap_err()
-                    ));
+            let centerline = match search {
+                Ok(value) => value,
+                Err(error) => {
+                    if attempts.len().saturating_sub(source_attempt_start) < 6 {
+                        attempts.push(format!(
+                            "source={source_id} junction={junction:?}: {}",
+                            error
+                        ));
+                    }
+                    continue;
                 }
-                continue;
             };
             if centerline.len() < 2
                 || centerline
@@ -1451,14 +1454,17 @@ fn compile_upper_ledge_side_branch(
                 planned_saddles_remain_scenic(component, &graded.all_levels(), volume)?;
                 Ok(graded)
             });
-            let Ok(graded) = grading else {
-                if attempts.len().saturating_sub(source_attempt_start) < 6 {
-                    attempts.push(format!(
-                        "source={source_id} junction={junction:?}: {}",
-                        grading.unwrap_err()
-                    ));
+            let graded = match grading {
+                Ok(value) => value,
+                Err(error) => {
+                    if attempts.len().saturating_sub(source_attempt_start) < 6 {
+                        attempts.push(format!(
+                            "source={source_id} junction={junction:?}: {}",
+                            error
+                        ));
+                    }
+                    continue;
                 }
-                continue;
             };
             let prospective_centerline = std::iter::once(shared_start)
                 .chain(centerline.iter().copied())
@@ -1502,7 +1508,6 @@ fn compile_upper_ledge_side_branch(
             "{label} has no dry Upper-only one-junction branch into cell {expected_id} outside exact feature/highland authority: {}",
             std::iter::once(format!("target-exclusions=(water,occupied,feature,high-band,summit,upper-ordinary)={target_exclusion_summary:?}"))
                 .chain(source_summaries)
-                .into_iter()
                 .chain(attempts)
                 .collect::<Vec<_>>()
                 .join("; ")
@@ -1861,8 +1866,10 @@ fn inner_peak_suffix_reachability(
             let width = i64::from(maximum)
                 .saturating_sub(i64::from(minimum))
                 .saturating_add(1);
-            let width = usize::try_from(width).map_err(|_| {
-                format!("inner peak suffix bounds at {coord:?} exceed addressable state space")
+            let width = usize::try_from(width).map_err(|error| {
+                format!(
+                    "inner peak suffix bounds at {coord:?} exceed addressable state space: {error}"
+                )
             })?;
             possible_states = possible_states.saturating_add(width);
         }
@@ -1877,10 +1884,8 @@ fn inner_peak_suffix_reachability(
     }
 
     let mut portals = Vec::with_capacity(sequence.len().saturating_sub(1));
-    for (stage, pair) in sequence.windows(2).enumerate() {
-        let [from_id, to_id] = pair else {
-            continue;
-        };
+    for (stage, pair) in sequence.array_windows::<2>().enumerate() {
+        let [from_id, to_id] = pair;
         let from_allowed = allowed_by_stage
             .get(stage)
             .ok_or_else(|| format!("inner peak suffix lost admitted patch {from_id}"))?;
@@ -1991,8 +1996,11 @@ fn inner_peak_suffix_reachability(
         .iter()
         .filter_map(|(state, distance)| (state.stage == 0).then_some((state.position, *distance)))
         .collect::<BTreeMap<_, _>>();
-    let reachable_by_stage = (0..sequence.len())
-        .map(|stage| {
+    let reachable_by_stage = sequence
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(stage, patch)| {
             let states = distances
                 .keys()
                 .filter(|state| state.stage == stage)
@@ -2000,7 +2008,7 @@ fn inner_peak_suffix_reachability(
             let levels = states.iter().map(|state| state.position.level);
             let minimum = levels.clone().min();
             let maximum = levels.max();
-            (sequence[stage], states.len(), minimum, maximum)
+            (patch, states.len(), minimum, maximum)
         })
         .collect::<Vec<_>>();
     let egress_diagnostic = egress
@@ -2034,7 +2042,13 @@ fn inner_peak_suffix_reachability(
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "The complete transit authority is retained as a named contract-test oracle; production uses the staged route search."
+    )
+)]
 fn inner_peak_transit_authorities(
     masks: &BTreeMap<PatchId, BTreeSet<HexCoord>>,
     saddle_swaths: &BTreeMap<(PatchId, PatchId), BTreeSet<HexCoord>>,
@@ -2229,18 +2243,25 @@ fn ordered_inner_peak_transit_authority(
         || runway_domain.len() != authored.centerline.len()
         || authored
             .centerline
-            .windows(2)
+            .array_windows::<2>()
             .any(|pair| pair[0].distance(pair[1]) != 1)
         || has_chord
         || authored_grade_coords != runway_domain
-        || authored.centerline.windows(2).any(|pair| {
-            authored.authored_grades[&pair[0]].abs_diff(authored.authored_grades[&pair[1]]) > 1
+        || authored.centerline.array_windows::<2>().any(|pair| {
+            authored
+                .authored_grades
+                .get(&pair[0])
+                .zip(authored.authored_grades.get(&pair[1]))
+                .is_none_or(|(first, second)| first.abs_diff(*second) > 1)
         })
         || runway_domain.iter().any(|coord| {
             !owner_mask.contains(coord)
                 || !route_search_allowed.contains(coord)
                 || route_bounds.get(coord).is_none_or(|(minimum, maximum)| {
-                    !(*minimum..=*maximum).contains(&authored.authored_grades[coord])
+                    authored
+                        .authored_grades
+                        .get(coord)
+                        .is_none_or(|level| !(*minimum..=*maximum).contains(level))
                 })
         })
     {
@@ -2272,7 +2293,10 @@ fn ordered_inner_peak_transit_authority(
                         && to_minimum <= from_maximum.saturating_add(1)
                 })
     };
-    let first = authored.centerline[0];
+    let first = *authored
+        .centerline
+        .first()
+        .ok_or_else(|| schematic_contract("ordered inner-peak transit lost its ingress"))?;
     let last = *authored
         .centerline
         .last()
@@ -2419,8 +2443,17 @@ fn ordered_inner_peak_transit_authority(
             authored
                 .centerline
                 .iter()
-                .map(|coord| TilePos::new(*coord, authored.authored_grades[coord]))
-                .collect(),
+                .map(|coord| {
+                    authored
+                        .authored_grades
+                        .get(coord)
+                        .copied()
+                        .map(|level| TilePos::new(*coord, level))
+                        .ok_or_else(|| {
+                            schematic_contract("ordered inner-peak transit lost an authored grade")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         ),
     })
 }
@@ -2789,8 +2822,12 @@ fn segmented_inner_peak_route_ranked(
             "inner peak route sequence does not retain the exact 58->59->36 transit contract: {sequence:?}"
         ));
     }
-    let prefix_sequence = &sequence[..=transit_stage];
-    let suffix_sequence = &sequence[transit_stage..];
+    let prefix_sequence = sequence
+        .get(..=transit_stage)
+        .ok_or("inner peak transit prefix exceeds the sequence")?;
+    let suffix_sequence = sequence
+        .get(transit_stage..)
+        .ok_or("inner peak transit suffix exceeds the sequence")?;
     if prefix_sequence.len() < 2 || suffix_sequence.len() < 2 {
         return Err("inner peak transit split produced an empty prefix or suffix".to_owned());
     }
@@ -2977,7 +3014,7 @@ fn segmented_inner_peak_route_ranked(
         };
         if prefix_handoff != handoff
             || !prefix
-                .windows(2)
+                .array_windows::<2>()
                 .any(|pair| pair[0].coord == ingress.from && pair[1].coord == ingress.to)
         {
             if diagnostics.len() < 8 {
@@ -2996,7 +3033,7 @@ fn segmented_inner_peak_route_ranked(
             .map(|position| position.coord)
             .collect::<BTreeSet<_>>();
         if coordinates.len() != route.len()
-            || route.windows(2).any(|pair| {
+            || route.array_windows::<2>().any(|pair| {
                 pair[0].coord.distance(pair[1].coord) != 1
                     || pair[0].level.abs_diff(pair[1].level) > 1
             })
@@ -3126,10 +3163,8 @@ fn segmented_portal_route_ranked_with_transit_budgeted(
 
     let mut portals: Vec<Vec<BoundaryPortal>> =
         Vec::with_capacity(sequence.len().saturating_sub(1));
-    for pair in sequence.windows(2) {
-        let [from_id, to_id] = pair else {
-            continue;
-        };
+    for pair in sequence.array_windows::<2>() {
+        let [from_id, to_id] = pair;
         let from_allowed = allowed_by_patch
             .get(from_id)
             .ok_or_else(|| format!("portal route lost admitted cell {from_id}"))?;
@@ -3976,7 +4011,7 @@ fn exact_recovered_route_is_valid(
         owners.first() == Some(&0)
             && owners.last() == Some(&final_stage)
             && owners
-                .windows(2)
+                .array_windows::<2>()
                 .all(|pair| pair[0] <= pair[1] && pair[1].saturating_sub(pair[0]) <= 1)
     });
     route
@@ -3986,10 +4021,10 @@ fn exact_recovered_route_is_valid(
         .len()
         == route.len()
         && route
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].coord.distance(pair[1].coord) == 1)
         && route
-            .windows(2)
+            .array_windows::<2>()
             .all(|pair| pair[0].level.abs_diff(pair[1].level) <= 1)
         && route.iter().all(|position| {
             bounds
@@ -4115,7 +4150,7 @@ fn exact_simple_stage_runways(
             .collect::<Vec<_>>();
         route.push(TilePos::new(portal.to, to_level));
         (route.first().copied() == Some(start)
-            && route.windows(2).all(|pair| {
+            && route.array_windows::<2>().all(|pair| {
                 pair[0].coord.distance(pair[1].coord) == 1
                     && pair[0].level.abs_diff(pair[1].level) <= 1
             }))
@@ -4628,10 +4663,8 @@ fn grade_authored_inner_peak_ledge(
             .collect::<BTreeSet<_>>()
             .len()
             != centerline.len()
-        || centerline.windows(2).any(|pair| {
-            let [first, second] = pair else {
-                return true;
-            };
+        || centerline.array_windows::<2>().any(|pair| {
+            let [first, second] = pair;
             first.coord.distance(second.coord) != 1 || first.level.abs_diff(second.level) > 1
         })
     {
@@ -4826,10 +4859,8 @@ fn grade_authored_inner_peak_ledge(
         || route_levels.values().any(|level| {
             !OrdinaryRegionBand::Upper.accepts_new(*level) || *level > MAXIMUM_LEDGE_LEVEL
         })
-        || centerline.windows(2).any(|pair| {
-            let [first, second] = pair else {
-                return true;
-            };
+        || centerline.array_windows::<2>().any(|pair| {
+            let [first, second] = pair;
             route_levels
                 .get(&first.coord)
                 .zip(route_levels.get(&second.coord))
@@ -5107,7 +5138,9 @@ mod tests {
         ));
 
         let mut scoped_allowed = allowed.clone();
-        let patch_59 = &masks[&INNER_PEAK_TRANSIT_PATCH];
+        let patch_59 = masks
+            .get(&INNER_PEAK_TRANSIT_PATCH)
+            .expect("fixture contains the requested entry");
         scoped_allowed
             .retain(|coord| !patch_59.contains(coord) || transit.runway_domain.contains(coord));
         let mut search_budget = InnerPeakTransitSearchBudget::new();
@@ -5181,7 +5214,12 @@ mod tests {
         let admission = transit
             .validate_route(&route, &masks)
             .expect("the exact retained spine satisfies typed transit");
-        assert_eq!(admission.runway, route[1..=2]);
+        assert_eq!(
+            admission.runway,
+            (*route
+                .get(1..=2)
+                .expect("fixture contains the requested entry"))
+        );
 
         let shortened = [ingress_from, first, egress_to]
             .into_iter()
@@ -5242,7 +5280,13 @@ mod tests {
             inner_peak_transit_authorities(&masks, &swaths, &allowed, &bounds, &[59, 36])
                 .expect("the connected full Patch-59 domain supplies the missing scenic runway");
         assert_eq!(transits.len(), 1);
-        assert_eq!(transits[0].runway_domain, full_runway);
+        assert_eq!(
+            transits
+                .first()
+                .expect("fixture contains the requested entry")
+                .runway_domain,
+            full_runway
+        );
 
         let mut search_budget = InnerPeakTransitSearchBudget::new();
         let route = segmented_inner_peak_route_ranked(
@@ -5253,13 +5297,17 @@ mod tests {
             &BTreeMap::new(),
             0,
             &bounds,
-            &transits[0],
+            transits
+                .first()
+                .expect("fixture contains the requested entry"),
             &mut search_budget,
         )
         .expect("the split transit proof follows the longer full-patch detour");
-        let admission = transits[0]
-            .validate_route(&route, &masks)
-            .expect("the longer detour retains both exact typed portals");
+        let admission = (*transits
+            .first()
+            .expect("fixture contains the requested entry"))
+        .validate_route(&route, &masks)
+        .expect("the longer detour retains both exact typed portals");
         assert_eq!(admission.runway.len(), 4);
         assert!(admission.is_retained_by(&route));
     }
@@ -5555,10 +5603,8 @@ mod tests {
 
         assert!(path.contains(&good_entry));
         assert!(!path.contains(&bad_entry));
-        assert!(path.windows(2).all(|pair| {
-            let [first, second] = pair else {
-                return false;
-            };
+        assert!(path.array_windows::<2>().all(|pair| {
+            let [first, second] = pair;
             first.distance(*second) == 1
         }));
     }
@@ -5651,7 +5697,9 @@ mod tests {
             path.iter().copied().collect::<BTreeSet<_>>().len(),
             path.len()
         );
-        assert!(path.windows(2).all(|pair| pair[0].distance(pair[1]) == 1));
+        assert!(path
+            .array_windows::<2>()
+            .all(|pair| pair[0].distance(pair[1]) == 1));
     }
 
     #[test]
@@ -5699,7 +5747,7 @@ mod tests {
                 .len(),
             route.len()
         );
-        assert!(route.windows(2).all(|pair| {
+        assert!(route.array_windows::<2>().all(|pair| {
             pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
         }));
     }
@@ -5749,7 +5797,7 @@ mod tests {
                 .len(),
             route.len()
         );
-        assert!(route.windows(2).all(|pair| {
+        assert!(route.array_windows::<2>().all(|pair| {
             pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
         }));
     }
@@ -5876,7 +5924,7 @@ mod tests {
             .position(|position| *position == TilePos::new(reused_choke, 2))
             .expect("the valid history saves the choke for the rising tail");
         assert!(dominated_index < choke_index);
-        assert!(route.windows(2).all(|pair| {
+        assert!(route.array_windows::<2>().all(|pair| {
             pair[0].coord.distance(pair[1].coord) == 1 && pair[0].level.abs_diff(pair[1].level) <= 1
         }));
     }
@@ -6231,10 +6279,8 @@ mod tests {
             }
         }
         assert_eq!(owners, sequence);
-        assert!(path.windows(2).all(|pair| {
-            let [first, second] = pair else {
-                return false;
-            };
+        assert!(path.array_windows::<2>().all(|pair| {
+            let [first, second] = pair;
             first.distance(*second) == 1
         }));
     }
