@@ -112,7 +112,7 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         liquids,
         objects,
         trees: compiler.tree_count,
-        buildings: if compiler.source.full_dressing { 8 } else { 0 },
+        buildings: objects.saturating_sub(compiler.tree_count),
         solid_top_levels: [lowest, highest],
         sea_top_level: hex_schematic::v4::grand::SEA_TOP,
         player_spawn: overview.player_spawn,
