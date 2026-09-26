@@ -851,7 +851,13 @@ mod tests {
             expected.lower_glow_angular_radius_radians,
         );
         assert_approx_eq(actual.lower_glow_strength, expected.lower_glow_strength);
-        assert_approx_eq(actual._padding, expected._padding);
+        assert_approx_eq(actual.cloud_phase_seconds, expected.cloud_phase_seconds);
+        assert_approx_eq(
+            actual.upper_hemisphere_clouds,
+            expected.upper_hemisphere_clouds,
+        );
+        assert_eq!(actual.underwater_color, expected.underwater_color);
+        assert_approx_eq(actual.underwater_strength, expected.underwater_strength);
     }
 
     #[cfg(feature = "dev-time-preview")]
