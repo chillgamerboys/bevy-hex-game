@@ -17,14 +17,17 @@ from v4_review import atomic_json, file_record, png_coverage
 ROOT = Path(__file__).resolve().parents[1]
 VIEWS = ("grand-overview", "grand-mainland", "grand-garden", "grand-waterfall",
          "grand-valley-lake", "grand-world-tree", "grand-roots-entrance", "grand-shrine-plant",
-         "grand-forest", "grand-summit", "grand-shrine-air", "grand-crystal", "grand-shrine-earth",
+         "grand-forest", "grand-forest-ground", "grand-forest-ground-reverse", "grand-river-exit",
+         "grand-island-landing", "grand-summit", "grand-shrine-air", "grand-crystal", "grand-shrine-earth",
          "grand-frozen-woods", "grand-volcano", "grand-shrine-fire", "grand-bay",
          "grand-bay-baseline", "grand-bay-reverse", "grand-waterline", "grand-underwater",
          "grand-waterfall-cave", "grand-library", "grand-library-upper",
          "grand-shadow-tunnel", "grand-shadow-reverse", "grand-shadow-exit", "first", "third", "start")
 MOTION_ROUTE = (
     "Start at the beach; enter water, deploy/steer/fold the boat, sail to Fire; "
-    "walk the river to the world tree and garden; follow water to the waterfall cave; "
+    "walk off both riverbanks into the hills and through the forest in both directions; "
+    "land on the island and walk its ascent; follow the river to the world tree and garden, "
+    "then water to the waterfall cave; "
     "walk both library branches, Shadow tunnel, Crystal Ascent and summit; glide down. "
     "Activate shrines, defeat Shadow, test valid and refused teleport, die/respawn. "
     "Save/restart on land, sailing and airborne; complete a 30-minute circuit and inspect seams both ways."
@@ -83,7 +86,7 @@ def capture(args: argparse.Namespace) -> int:
     (pack / "staged.patch").write_bytes(staged)
     (pack / "unstaged.patch").write_bytes(unstaged)
     atomic_json(pack / "package-state.json", package)
-    receipt = {"source": source, "package": package, "matrix": "grand-v4-composition-v1",
+    receipt = {"source": source, "package": package, "matrix": "grand-v4-composition-v2",
                "source_label": "UNAPPROVABLE-DIRTY" if source["dirty"] else "COMMITTED-CANDIDATE",
                "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
                "motion_route": MOTION_ROUTE, "mechanical_status": "INCOMPLETE",

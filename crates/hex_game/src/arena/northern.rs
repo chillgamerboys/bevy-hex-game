@@ -1,19 +1,19 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
-use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
+use super::{ArenaCamera, ArenaFrame, ViewState, environment::UnderwaterTint};
 use bevy::camera::ScalingMode;
 use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::prelude::*;
 use hex_arena::ArenaSession;
+use hex_core::HexCoord;
 use hex_core::arena::{
     ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
     ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
 };
 use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfile};
-use hex_core::HexCoord;
 use hex_map::arena::streamed::StreamedArena;
 use hex_map::ocean::{
-    sample_local_surface_at_time, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
-    OceanNearBoundary, OceanRenderStatus, OceanSurfaceAdapter, OceanSurfaceProfile,
+    OceanBathymetry, OceanBoundaryColumn, OceanFrame, OceanNearBoundary, OceanRenderStatus,
+    OceanSurfaceAdapter, OceanSurfaceProfile, sample_local_surface_at_time, sample_surface,
 };
 use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
 use std::sync::Arc;
@@ -23,6 +23,7 @@ struct CapturePose {
     camera: Transform,
     interest: Vec3,
     overview_height: Option<f32>,
+    ground_pending: bool,
 }
 
 #[derive(Resource, Default)]
@@ -153,7 +154,7 @@ pub(super) fn capture_ready(
     if !fixture_view(view) {
         return true;
     }
-    if presentation.capture.is_none() {
+    if presentation.capture.is_none_or(|pose| pose.ground_pending) {
         return false;
     }
     let Some(streamed) = streamed else {
@@ -350,7 +351,9 @@ fn configure(
         .map(|pose| pose.interest);
     }
     if state.capture.is_some() && fixture_view(&state.capture_view) {
-        if cache.capture.is_none() || cache.capture_view != state.capture_view {
+        if cache.capture.is_none_or(|pose| pose.ground_pending)
+            || cache.capture_view != state.capture_view
+        {
             cache.capture = capture_pose(
                 &state.capture_view,
                 &session,
@@ -778,6 +781,7 @@ fn capture_pose(
                 .looking_at(bay.with_y(map.sea_level + 1.0), Vec3::Y),
             interest: site,
             overview_height: None,
+            ground_pending: false,
         });
     }
     if view == "grand-mainland" {
@@ -787,6 +791,31 @@ fn capture_pose(
             map.sea_level,
             560.0,
             anchor("forest")?,
+        ));
+    }
+    let ground_site = match view {
+        "grand-forest-ground" => Some((
+            anchor("forest")? + Vec3::new(-35.0, 0.0, 25.0),
+            anchor("forest")?,
+        )),
+        "grand-forest-ground-reverse" => Some((
+            anchor("forest")? + Vec3::new(35.0, 0.0, -25.0),
+            anchor("forest")?,
+        )),
+        "grand-island-landing" => Some((anchor("volcano_landing")?, anchor("volcano")?)),
+        "grand-river-exit" => Some((
+            Vec3::new(-73.0, map.sea_level, 270.0),
+            Vec3::new(-230.0, map.sea_level, 270.0),
+        )),
+        _ => None,
+    };
+    if let Some((desired, toward)) = ground_site {
+        return Some(ground_capture_pose(
+            terrain,
+            geometry,
+            desired,
+            toward,
+            map.sea_level,
         ));
     }
     if let Some(name) = view.strip_prefix("grand-") {
@@ -838,6 +867,7 @@ fn capture_pose(
                 site
             },
             overview_height: None,
+            ground_pending: false,
         });
     }
     let (position, target, interest) = match view {
@@ -899,7 +929,76 @@ fn capture_pose(
         camera: Transform::from_translation(position).looking_at(target, Vec3::Y),
         interest,
         overview_height: None,
+        ground_pending: false,
     })
+}
+
+/// Review-only eye height follows admitted terrain rather than a coarse overview
+/// or a landmark's distant elevation. Pending interest loads the exact ground;
+/// neither this camera nor its bounded clearance search relocates the player.
+fn ground_capture_pose(
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    desired: Vec3,
+    toward: Vec3,
+    sea: f32,
+) -> CapturePose {
+    let mut candidates = HexCoord::from_world(desired).within_radius(6);
+    candidates.sort_by(|a, b| {
+        a.to_world(0.0)
+            .distance_squared(desired.with_y(0.0))
+            .total_cmp(&b.to_world(0.0).distance_squared(desired.with_y(0.0)))
+    });
+    let eye = candidates.into_iter().find_map(|coord| {
+        if terrain
+            .residency
+            .as_ref()
+            .is_some_and(|residency| residency.at(coord, geometry) != ArenaAvailability::Ready)
+        {
+            return None;
+        }
+        let level = terrain
+            .columns
+            .get(&coord)?
+            .iter()
+            .map(|span| span.top_level)
+            .max()?;
+        let ground = geometry.top(hex_core::TilePos::new(coord, level));
+        if ground < sea
+            || terrain
+                .liquids
+                .iter()
+                .any(|span| span.bottom.coord == coord && span.top_level > level)
+        {
+            return None;
+        }
+        let eye = coord.to_world(ground + 1.7);
+        let clear = [
+            Vec3::ZERO,
+            Vec3::X * 0.2,
+            -Vec3::X * 0.2,
+            Vec3::Z * 0.2,
+            -Vec3::Z * 0.2,
+        ]
+        .into_iter()
+        .all(|offset| {
+            [0.2, 0.8, 1.7, 1.9].into_iter().all(|height| {
+                geometry
+                    .voxel_at(eye.with_y(ground + height) + offset)
+                    .is_some_and(|position| terrain.solid_at(position).is_none())
+            })
+        });
+        clear.then_some(eye)
+    });
+    let position = eye.unwrap_or(desired + Vec3::Y * 1.7);
+    let direction = (toward - desired).with_y(0.0).normalize_or(Vec3::NEG_Z);
+    CapturePose {
+        camera: Transform::from_translation(position)
+            .looking_at(position + direction * 30.0, Vec3::Y),
+        interest: desired,
+        overview_height: None,
+        ground_pending: eye.is_none(),
+    }
 }
 
 // A coarse height sample can misclassify a steep coast. Wait for actual admitted
@@ -957,6 +1056,7 @@ fn overview_pose(origin: Vec2, extent: Vec2, sea: f32, summit: f32, interest: Ve
             .looking_at(target, Vec3::Y),
         interest,
         overview_height: Some(height),
+        ground_pending: false,
     }
 }
 
@@ -1105,6 +1205,34 @@ mod tests {
         let site = waterline_site(&terrain, geometry, spawn, bay, 10.0)
             .expect("the admitted deep interval is suitable for both water views");
         assert_eq!(HexCoord::from_world(site), deep);
+    }
+
+    #[test]
+    fn ground_fixture_waits_for_clear_actual_terrain() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry::default();
+        let mut terrain = ArenaTerrainView::default();
+        let desired = Vec3::ZERO;
+        let toward = Vec3::NEG_Z * 30.0;
+        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0).ground_pending);
+        let floor = ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(HexCoord::ORIGIN, 0),
+            top_level: 80,
+            substance: hex_core::SubstanceId::AIR,
+        };
+        terrain.columns.insert(HexCoord::ORIGIN, vec![floor]);
+        let pose = ground_capture_pose(&terrain, geometry, desired, toward, 0.0);
+        assert!(!pose.ground_pending);
+        assert!((pose.camera.translation.y - (80.0 * geometry.level_height + 1.7)).abs() < 0.001);
+        terrain.object_columns.insert(
+            HexCoord::ORIGIN,
+            vec![ArenaSolidSpan {
+                bottom: hex_core::TilePos::new(HexCoord::ORIGIN, 81),
+                top_level: 90,
+                substance: hex_core::SubstanceId::AIR,
+            }],
+        );
+        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0).ground_pending);
     }
 
     #[test]
