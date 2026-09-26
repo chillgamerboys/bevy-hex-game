@@ -33,7 +33,8 @@ The finite ocean envelope has radius 900 and 2,432,701 total columns in 9,804 ch
 Ocean volume is independent of the mainland-area measurement.
 
 The source defines the beach start, five shrines, 14 encounter sites, the forest
-and World Tree, a temple below its roots, a fort, the mountain garden and fountain,
+and World Tree with grounded spreading roots, a planted temple below its roots,
+six small camp/ruin accents, four coastal rock clusters, a fort, the mountain garden and fountain,
 a continuous descending watercourse through falls and valley lake into the bay,
 Crystal terraces and frozen woods, the library stair route inside the mountain,
 a separate uniform Shadow tunnel, and the offshore volcanic island. Site facts
@@ -50,7 +51,8 @@ Terrain and object source use compact runs, compiled and admitted one chunk at a
 time. The runtime retains at most 512 source chunks and 256 detailed render chunks.
 Grand publishes exact loaded collision, bounded actor interests, and a compact
 package-bound biome companion. The World Tree spans 21 chunks and has a stable
-`grand/world-tree` identity; distant presentation is separate from seabed authority.
+`grand/world-tree` identity; its bounded roots preserve the south temple approach.
+Distant presentation is separate from seabed authority.
 
 Map checkpoint records preserve sparse edits, partial voxel health, transaction
 counters, impact batch counters and per-actor burrow sequences. An owned sparse

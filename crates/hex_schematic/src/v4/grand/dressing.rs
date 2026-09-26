@@ -1,6 +1,14 @@
 //! Bounded, deterministic natural silhouettes and authored landmark geometry.
 use super::*;
 type Cells = BTreeMap<WorldHex, BTreeMap<i32, &'static str>>;
+const CAMPS: [(f64, f64); 6] = [
+    (-55., 380.),
+    (-263., 273.),
+    (132., 294.),
+    (-192., 188.),
+    (112., 147.),
+    (24., 211.),
+];
 fn add(cells: &mut Cells, p: WorldHex, bottom: i32, top: i32, material: &'static str) {
     for y in bottom..top {
         cells.entry(p).or_default().insert(y, material);
@@ -116,6 +124,35 @@ fn tree(
             );
         }
     }
+    if giant {
+        // Low, spreading buttress roots follow the actual terrain. The south
+        // approach remains clear above the authored passage into the temple.
+        for (arm, (dq, dr)) in DIRS.into_iter().enumerate() {
+            for distance in 5_i64..=24 {
+                let bend = ((distance / 5 + arm as i64) % 3) - 1;
+                let center = WorldHex::new(
+                    root.q + dq * distance - dr * bend,
+                    root.r + dr * distance + dq * bend,
+                );
+                let width: i64 = if distance < 13 { 2 } else { 1 };
+                for aq in -width..=width {
+                    for ar in -width..=width {
+                        if aq.abs().max(ar.abs()).max((aq + ar).abs()) > width {
+                            continue;
+                        }
+                        let p = WorldHex::new(center.q + aq, center.r + ar);
+                        let [x, z] = world_xz(p);
+                        if (x + 60.).abs() < 10. && (135. ..200.).contains(&z) {
+                            continue;
+                        }
+                        let lo = g.surface(p).level + 1;
+                        let rise = (29 - distance) as i32 / 3 + 1;
+                        add(&mut cells, p, lo, lo + rise, "timber");
+                    }
+                }
+            }
+        }
+    }
     object(
         g,
         if giant {
@@ -189,6 +226,7 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
                 || ((x + 60.) / 65.).hypot((z - 150.) / 105.) < 1.
                 || g.cavity(root).is_some()
                 || sites::reserved_encounter(x, z)
+                || CAMPS.iter().any(|(cx, cz)| (x - cx).hypot(z - cz) < 16.)
             {
                 continue;
             }
@@ -207,6 +245,18 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
         index += 1;
     }
     out.push(tree(g, nearest_hex(-60., 125.), index, true)?);
+    out.push(temple_plant(g)?);
+    for (i, (x, z)) in CAMPS.into_iter().enumerate() {
+        out.push(camp(g, i, nearest_hex(x, z))?);
+    }
+    for (i, (x, z)) in [(-390., 430.), (-555., 360.), (535., 580.), (600., 210.)]
+        .into_iter()
+        .enumerate()
+    {
+        if let Some(root) = coastal_root(g, x, z) {
+            out.push(coastal_rock(g, i, root)?);
+        }
+    }
     for (id, x, z, inside) in [
         ("water", 275., -490., false),
         ("air", -400., -565., false),
@@ -303,4 +353,125 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
+}
+
+fn temple_plant(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
+    // Behind the interaction point, inside the ring of temple columns.
+    let root = nearest_hex(-60., 120.);
+    let floor = g.support(-60., 120., true).level + 1;
+    let mut cells = Cells::new();
+    add(&mut cells, root, floor, floor + 10, "timber");
+    for q in -2_i64..=2 {
+        for r in -2_i64..=2 {
+            let distance = q.abs().max(r.abs()).max((q + r).abs());
+            if distance == 0 || distance > 2 {
+                continue;
+            }
+            let p = WorldHex::new(root.q + q, root.r + r);
+            let bottom = floor + 4 + distance as i32;
+            add(&mut cells, p, bottom, bottom + 2, "foliage");
+        }
+    }
+    object(
+        g,
+        "grand/root-temple-plant".into(),
+        "decor/grand-temple-plant",
+        root,
+        cells,
+    )
+}
+
+fn camp(g: &GrandCompiler, index: usize, root: WorldHex) -> Result<ObjectInstance, ContractError> {
+    let mut cells = Cells::new();
+    for q in -6_i64..=6 {
+        for r in -6_i64..=6 {
+            let p = WorldHex::new(root.q + q, root.r + r);
+            let surface = g.surface(p);
+            if surface.water.is_some() || !g.mainland(p) {
+                continue;
+            }
+            let lo = surface.level + 1;
+            let distance = q.abs().max(r.abs()).max((q + r).abs());
+            if distance == 2 {
+                add(&mut cells, p, lo, lo + 2, "stone");
+            } else if r.abs() == 4 && q.abs() <= 3 {
+                add(&mut cells, p, lo, lo + 3, "timber");
+            } else if index % 2 == 0 && [(-5, 0), (-5, 1), (-4, -1), (5, -3)].contains(&(q, r)) {
+                let height = 7 + ((q - r + index as i64).rem_euclid(7)) as i32;
+                add(&mut cells, p, lo, lo + height, "stone");
+            }
+        }
+    }
+    object(
+        g,
+        format!("grand/forest-camp/{index}"),
+        "structure/grand-camp",
+        root,
+        cells,
+    )
+}
+
+fn coastal_root(g: &GrandCompiler, x: f64, z: f64) -> Option<WorldHex> {
+    let hint = nearest_hex(x, z);
+    let mut best: Option<(f64, WorldHex)> = None;
+    for q in -60_i64..=60 {
+        for r in -60_i64..=60 {
+            if q.abs().max(r.abs()).max((q + r).abs()) > 60 {
+                continue;
+            }
+            let p = WorldHex::new(hint.q + q, hint.r + r);
+            let depth = index(p).map_or(0, |i| g.coast[i]);
+            if !(2..=5).contains(&depth) {
+                continue;
+            }
+            let surface = g.surface(p);
+            if surface.water.is_some() || surface.level > 430 {
+                continue;
+            }
+            let [px, pz] = world_xz(p);
+            if g.anchors
+                .iter()
+                .filter(|a| a.id.ends_with("party_start") || a.id.ends_with("sailing_start"))
+                .any(|a| {
+                    let [ax, az] = world_xz(a.position.column);
+                    (px - ax).hypot(pz - az) < 35.
+                })
+            {
+                continue;
+            }
+            let distance = (px - x).powi(2) + (pz - z).powi(2);
+            if best.is_none_or(|(old, _)| distance < old) {
+                best = Some((distance, p));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+fn coastal_rock(
+    g: &GrandCompiler,
+    index: usize,
+    root: WorldHex,
+) -> Result<ObjectInstance, ContractError> {
+    let mut cells = Cells::new();
+    for q in -3_i64..=3 {
+        for r in -3_i64..=3 {
+            let metric = q * q + q * r + r * r;
+            if metric > 9 {
+                continue;
+            }
+            let p = WorldHex::new(root.q + q, root.r + r);
+            let lo = g.surface(p).level + 1;
+            let rise =
+                3 + ((9 - metric) * 2 / 3) as i32 + ((q + index as i64).rem_euclid(3)) as i32;
+            add(&mut cells, p, lo, lo + rise, "stone");
+        }
+    }
+    object(
+        g,
+        format!("grand/coastal-rock/{index}"),
+        "terrain/grand-coastal-rock",
+        root,
+        cells,
+    )
 }

@@ -187,3 +187,100 @@ fn offshore_sailing_reference_has_clear_sea_between_launch_and_landing() {
         );
     }
 }
+
+#[test]
+fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
+    let source: GrandSpec = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .unwrap();
+    let g = GrandCompiler::new(source).unwrap();
+    let objects: Vec<_> = g.objects.values().flatten().collect();
+    assert!(objects.len() < 900, "bounded authored objects");
+    assert_eq!(
+        objects
+            .iter()
+            .filter(|o| o.id.starts_with("grand/forest-camp/"))
+            .count(),
+        6
+    );
+    assert_eq!(
+        objects
+            .iter()
+            .filter(|o| o.id.starts_with("grand/coastal-rock/"))
+            .count(),
+        4
+    );
+    assert!(objects.iter().any(|o| o.id == "grand/root-temple-plant"));
+    let tree = objects.iter().find(|o| o.id == "grand/world-tree").unwrap();
+    let tree_chunks: std::collections::BTreeSet<_> =
+        tree.occupancy.iter().map(|c| c.position.chunk()).collect();
+    assert!(
+        tree_chunks.len() <= 32,
+        "complete landmark fits comfortably inside 256 detailed chunks"
+    );
+    assert!(
+        tree.occupancy.iter().any(|c| {
+            c.position.checked_distance(tree.origin.column).unwrap() > 12
+                && c.runs
+                    .iter()
+                    .any(|r| r.material == "timber" && r.bottom == g.surface(c.position).level + 1)
+        }),
+        "tree has grounded spreading roots beyond its trunk"
+    );
+    for z in 148..=194 {
+        assert!(
+            g.clear_support(g.support(-60., f64::from(z), true), 8),
+            "root-temple approach blocked at {z}"
+        );
+    }
+    let sites = g.sites(1).unwrap();
+    for site in &sites.encounters {
+        assert!(g.clear_support(site.preferred, 16));
+        assert!(
+            site.surfaces.len() >= 50,
+            "deployment region shrank too far for {}",
+            site.id
+        );
+    }
+    for node in &sites.route_nodes {
+        assert!(
+            g.clear_support(node.position, 8),
+            "shrine interaction blocked: {}",
+            node.id
+        );
+    }
+    // Exercise actual grounding/material policy in all newly decorated chunks.
+    let chunks: std::collections::BTreeSet<_> = objects
+        .iter()
+        .filter(|o| {
+            o.id == "grand/world-tree"
+                || o.id == "grand/root-temple-plant"
+                || o.id.starts_with("grand/forest-camp/")
+                || o.id.starts_with("grand/coastal-rock/")
+        })
+        .flat_map(|o| {
+            o.occupancy
+                .iter()
+                .map(|c| c.position.chunk())
+                .chain(std::iter::once(o.origin.column.chunk()))
+        })
+        .collect();
+    let mut manifest = g.manifest();
+    let mut packages = vec![];
+    for id in chunks {
+        let package = g.chunk(id).unwrap().unwrap();
+        manifest.features.extend(package.features.iter().cloned());
+        manifest.chunks.push(ChunkDescriptor {
+            coordinate: id,
+            fingerprint: package.fingerprint,
+            path: format!("chunks/{}_{}.ron", id.q, id.r),
+        });
+        packages.push(package);
+    }
+    manifest.seal().unwrap();
+    let index = ManifestIndex::new(std::sync::Arc::new(manifest)).unwrap();
+    for package in packages {
+        package.validate_with_index(&index).unwrap();
+    }
+}
