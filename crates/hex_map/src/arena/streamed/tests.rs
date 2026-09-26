@@ -496,3 +496,119 @@ fn actual_northern_three_circuits_carve_restart_and_map_switch() {
         "parked source cardinality still grew on the third identical circuit"
     );
 }
+
+#[test]
+#[ignore = "requires HEX_GRAND_WORLD pointing to the authored Grand package"]
+fn actual_grand_fresh_burrow_and_owned_checkpoint_round_trip() {
+    use hex_core::arena::{
+        ArenaBurrowOutcome, ArenaBurrowRequest, ArenaBurrowResult, ArenaMaterials,
+    };
+    use hex_world_runtime::{
+        CancellationToken, CheckpointIdentity, CheckpointLimits, SessionCheckpointStore,
+    };
+    let mut app = App::new();
+    app.insert_resource(ArenaSelection {
+        map: ArenaMap::GrandV4,
+        ..default()
+    })
+    .add_plugins(MinimalPlugins)
+    .add_plugins(super::super::plugin);
+    app.update();
+    let spawn = app.world().resource::<ArenaTerrainView>().spawns[0];
+    assert!(checkpoint::restore_ready(app.world(), spawn));
+    let stone = app.world().resource::<ArenaMaterials>().stone;
+    let dirt = app.world().resource::<ArenaMaterials>().dirt;
+    let view = app.world().resource::<ArenaTerrainView>();
+    let geometry = *app.world().resource::<ArenaVoxelGeometry>();
+    let (coord, span) = view
+        .columns
+        .iter()
+        .find_map(|(c, spans)| {
+            if view.residency.as_ref()?.at(*c, geometry) != ArenaAvailability::Ready {
+                return None;
+            }
+            spans.iter().find(|s| s.substance == stone).map(|s| (*c, *s))
+        })
+        .expect("loaded compact stone");
+    let pos = TilePos::new(coord, span.bottom.level);
+    assert!(view.voxels.is_empty());
+    let generation = app.world().resource::<ArenaWorldState>().generation;
+    app.world_mut().write_message(ArenaBurrowRequest {
+        generation,
+        actor: 400,
+        sequence: 1,
+        volume: vec![pos],
+    });
+    // Runs without PreUpdate: this is exactly the app's save-settle boundary.
+    app.world_mut().run_schedule(ArenaTick);
+    let outcomes: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<ArenaBurrowOutcome>>()
+        .drain()
+        .collect();
+    assert!(matches!(
+        outcomes.as_slice(),
+        [ArenaBurrowOutcome {
+            result: ArenaBurrowResult::Accepted { .. },
+            ..
+        }]
+    ));
+    assert_eq!(
+        app.world().resource::<ArenaTerrainView>().solid_at(pos),
+        Some(dirt)
+    );
+    let identity = {
+        let state = app.world().resource::<StreamedArena>();
+        CheckpointIdentity {
+            world_id: state.runtime.manifest().world_id.clone(),
+            manifest_fingerprint: state.runtime.manifest().fingerprint,
+            content_version: 1,
+        }
+    };
+    let slot = std::env::temp_dir().join(format!("hex-grand-map-roundtrip-{}", std::process::id()));
+    let store = SessionCheckpointStore::new(&slot, identity, CheckpointLimits::default()).unwrap();
+    let owned = checkpoint::snapshot_records(app.world()).unwrap();
+    let snapshot = std::thread::spawn(move || {
+        store
+            .commit(None, owned.into_records(), &CancellationToken::default())
+            .unwrap()
+    })
+    .join()
+    .unwrap();
+    let staged = checkpoint::stage_restore(app.world(), &snapshot).unwrap();
+    checkpoint::commit_staged(app.world_mut(), staged, spawn).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !checkpoint::restore_ready(app.world(), spawn) {
+        super::pump(app.world_mut());
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    // Restored edits remain authoritative even if this non-player column is not resident.
+    let state = app.world().resource::<StreamedArena>();
+    let changed = VoxelPosition {
+        column: world_hex(pos.coord),
+        level: pos.level,
+    };
+    let partition = state
+        .edits
+        .checkpoint_partitions()
+        .find_map(|p| {
+            let p = p.unwrap();
+            (p.coordinate == changed.column.chunk()).then_some(p)
+        })
+        .unwrap();
+    assert!(
+        partition
+            .terrain_edits
+            .iter()
+            .any(|e| e.position == changed && e.material.as_deref() == Some("dirt"))
+    );
+    assert_eq!(
+        app.world()
+            .resource::<ArenaWorldState>()
+            .burrow_sequences
+            .get(&400),
+        Some(&1)
+    );
+    std::fs::remove_dir_all(slot).unwrap();
+}
