@@ -1,0 +1,17 @@
+{
+  "canonical_source": "assets/config/schematics/grand-v3-template.ron",
+  "canonical_sha256": "0abdb6a13b54cc84eddc5fbac72d91aaa1a29418f7202d83d9802b8d1ea876fe",
+  "fine_radius": 187,
+  "coarse_pitch": 22,
+  "full_disk_columns": 105469,
+  "canonical_mainland_columns": 92849,
+  "other_included_component_columns": [],
+  "mainland_columns": 649943,
+  "mainland_area_ratio": 7.0,
+  "linear_scale": 2.6457513110645907,
+  "coast_rounding_columns": 18,
+  "canonical_crystal_radius": 32,
+  "canonical_crystal_columns": 3169,
+  "crystal_target_columns": 22183,
+  "hex_column_area": 2.598076211353316
+}
