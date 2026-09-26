@@ -4,16 +4,22 @@
 //! preserve the actual grounded trunk and crown without expanding voxel levels.
 //! The full semantic chunk is released after building this disposable mesh.
 use super::{package_path_for, StreamedArena};
-use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
+use bevy::{
+    asset::RenderAssetUsages,
+    mesh::{Indices, PrimitiveTopology},
+    prelude::*,
+};
 use hex_core::{arena::ArenaMap, HexCoord};
 use hex_world_contracts::{ChunkId, ObjectInstance, VoxelRun, WorldHex};
 use hex_world_runtime::{FileChunkSource, IoLimits};
 use std::collections::{BTreeMap, BTreeSet};
 
 const TREE_ASSET: &str = "plant/grand-world-tree";
-const MAX_COLUMNS: usize = 10_000;
-const MAX_RUNS: usize = 20_000;
-const MAX_VERTICES: usize = 524_288;
+const MAX_COLUMNS: usize = 20_000;
+const MAX_RUNS: usize = 25_000;
+// Grand package 13408690208396973052 uses 15,883 columns / 19,963 runs and
+// 496,932 indexed vertices (853,182 indices); retain a bounded ~20% margin.
+const MAX_VERTICES: usize = 600_000;
 const CORNERS: [Vec3; 6] = [
     Vec3::new(0.0, 0.0, 1.0),
     Vec3::new(0.866_025_4, 0.0, 0.5),
@@ -214,19 +220,37 @@ struct Surface {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
+    indices: Vec<u32>,
 }
 
 impl Surface {
-    fn triangle(&mut self, vertices: [Vec3; 3], color: [f32; 4]) -> Result<(), String> {
-        if self.positions.len() + 3 > MAX_VERTICES {
+    // Each convex planar face owns its vertices, so indexing shares positions
+    // within a cap/quad without smoothing normals across separate hex faces.
+    fn polygon(&mut self, vertices: &[Vec3], color: [f32; 4]) -> Result<(), String> {
+        let [a, b, c, ..] = vertices else {
+            return Err("World Tree face has fewer than three vertices".into());
+        };
+        if !matches!(vertices.len(), 4 | 6) {
+            return Err("World Tree faces must be hex caps or side quads".into());
+        }
+        if self.positions.len() + vertices.len() > MAX_VERTICES {
             return Err("World Tree surface exceeds its vertex budget".into());
         }
-        let [a, b, c] = vertices;
-        let normal = (b - a).cross(c - a).normalize_or(Vec3::Y).to_array();
+        let base = u32::try_from(self.positions.len()).map_err(|error| error.to_string())?;
+        let normal = (*b - *a).cross(*c - *a).normalize_or(Vec3::Y).to_array();
+        // At most two indices per admitted vertex: six-vertex caps use four
+        // triangles, and four-vertex sides use two. The vertex bound also bounds
+        // the index allocation; no individual voxel levels are expanded.
+        for offset in 1..vertices.len() - 1 {
+            let next = base + u32::try_from(offset).map_err(|error| error.to_string())?;
+            self.indices.extend([base, next, next + 1]);
+        }
         self.positions
-            .extend(vertices.map(|vertex| vertex.to_array()));
-        self.normals.extend([normal; 3]);
-        self.colors.extend([color; 3]);
+            .extend(vertices.iter().map(|vertex| vertex.to_array()));
+        self.normals
+            .extend(std::iter::repeat_n(normal, vertices.len()));
+        self.colors
+            .extend(std::iter::repeat_n(color, vertices.len()));
         Ok(())
     }
 
@@ -240,6 +264,7 @@ impl Surface {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(self.indices))
     }
 }
 
@@ -313,25 +338,26 @@ fn surface(
                 .runs
                 .iter()
                 .any(|neighbor| neighbor.top == run.bottom);
+            if cap_top {
+                out.polygon(&CORNERS.map(|corner| (center + corner).with_y(top)), color)?;
+            }
+            if cap_bottom {
+                let mut vertices = CORNERS.map(|corner| (center + corner).with_y(bottom));
+                vertices.reverse();
+                out.polygon(&vertices, color)?;
+            }
             for (first, second) in CORNERS.iter().zip(CORNERS.iter().cycle().skip(1)) {
                 let a = center + *first;
                 let b = center + *second;
-                if cap_top {
-                    out.triangle([center.with_y(top), a.with_y(top), b.with_y(top)], color)?;
-                }
-                if cap_bottom {
-                    out.triangle(
-                        [center.with_y(bottom), b.with_y(bottom), a.with_y(bottom)],
-                        color,
-                    )?;
-                }
                 let neighbor = HexCoord::from_world(center + *first + *second);
                 let neighbor = WorldHex::new(i64::from(neighbor.x()), i64::from(neighbor.y()));
                 let neighbors = columns.get(&neighbor).copied().unwrap_or(&[]);
                 for (lo, hi) in exposed(run.bottom, run.top, neighbors) {
                     let (lo, hi) = (lo as f32 * level_height, hi as f32 * level_height);
-                    out.triangle([a.with_y(lo), b.with_y(lo), b.with_y(hi)], color)?;
-                    out.triangle([a.with_y(lo), b.with_y(hi), a.with_y(hi)], color)?;
+                    out.polygon(
+                        &[a.with_y(lo), b.with_y(lo), b.with_y(hi), a.with_y(hi)],
+                        color,
+                    )?;
                 }
             }
         }
@@ -390,18 +416,164 @@ mod tests {
         let palette = BTreeMap::from([("timber".into(), [0.2, 0.1, 0.0, 1.0])]);
         let mesh = surface(&object, 0.35, &palette).expect("bounded tree");
         // 320 levels still cost two caps and five exposed sides per column.
-        assert_eq!(mesh.count_vertices(), 132);
+        assert_eq!(mesh.count_vertices(), 64);
+        assert_eq!(mesh.indices().expect("indexed faces").len(), 108);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
             panic!("positions")
         };
-        let bottom = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+        let bottom = positions
+            .iter()
+            .map(|p| Vec3::from(*p).y)
+            .fold(f32::INFINITY, f32::min);
         let top = positions
             .iter()
-            .map(|p| p[1])
+            .map(|p| Vec3::from(*p).y)
             .fold(f32::NEG_INFINITY, f32::max);
         assert!((bottom - 17.0 * 0.35).abs() < 0.00001);
         assert!((top - 337.0 * 0.35).abs() < 0.00001);
+
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            panic!("normals")
+        };
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("colors")
+        };
+        assert_eq!(normals.len(), positions.len());
+        assert_eq!(colors.len(), positions.len());
+        assert!(colors
+            .iter()
+            .all(|color| color.map(f32::to_bits) == [0.2_f32, 0.1, 0.0, 1.0].map(f32::to_bits)));
+        let indices: Vec<_> = mesh.indices().expect("indices").iter().collect();
+        let mut area = 0.0;
+        for triangle in indices.chunks_exact(3) {
+            let [a, b, c] = triangle else {
+                panic!("triangle list")
+            };
+            let a_pos = Vec3::from(*positions.get(*a).expect("first vertex"));
+            let b_pos = Vec3::from(*positions.get(*b).expect("second vertex"));
+            let c_pos = Vec3::from(*positions.get(*c).expect("third vertex"));
+            let normal = Vec3::from(*normals.get(*a).expect("face normal"));
+            let cross = (b_pos - a_pos).cross(c_pos - a_pos);
+            assert!(
+                cross.dot(normal) > 0.0,
+                "winding agrees with the outward face normal"
+            );
+            assert!((normal.length() - 1.0).abs() < 0.00001);
+            assert!(normal.abs_diff_eq(
+                Vec3::from(*normals.get(*b).expect("second normal")),
+                0.00001
+            ));
+            assert!(
+                normal.abs_diff_eq(Vec3::from(*normals.get(*c).expect("third normal")), 0.00001)
+            );
+            area += cross.length() * 0.5;
+        }
+        // Four regular unit-hex caps plus ten side rectangles of width one.
+        let expected_area = 4.0 * (3.0 * 3.0_f32.sqrt() * 0.5) + 10.0 * (top - bottom);
+        assert!(
+            (area - expected_area).abs() < 0.001,
+            "indexed triangulation preserves exact exposed area: {area} vs {expected_area}"
+        );
+    }
+
+    #[test]
+    fn indexed_face_budget_rejects_before_mutating_any_mesh_buffer() {
+        let mut out = Surface {
+            positions: vec![[0.0; 3]; MAX_VERTICES - 4],
+            ..default()
+        };
+        assert!(out.polygon(&CORNERS, [1.0; 4]).is_err());
+        assert_eq!(out.positions.len(), MAX_VERTICES - 4);
+        assert!(out.normals.is_empty());
+        assert!(out.colors.is_empty());
+        assert!(out.indices.is_empty());
+    }
+
+    #[test]
+    fn indexed_hex_cap_has_six_vertices_and_four_triangles() {
+        let mut out = Surface::default();
+        out.polygon(&CORNERS, [1.0; 4]).expect("hex cap");
+        assert_eq!(out.positions.len(), 6);
+        assert_eq!(out.indices.len(), 12);
+        let [a, b, ..] = CORNERS;
+        out.polygon(&[a, b, b + Vec3::Y, a + Vec3::Y], [1.0; 4])
+            .expect("side quad");
+        assert_eq!(out.positions.len(), 10);
+        assert_eq!(out.indices.len(), 18);
+    }
+
+    #[test]
+    #[ignore = "requires HEX_GRAND_WORLD pointing to the actual full Grand package"]
+    fn actual_grand_world_tree_fits_indexed_surface_budget() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("HEX_GRAND_WORLD").expect("explicit actual Grand package"),
+        );
+        let overview: hex_schematic::v4::northern::NorthernOverview = ron::from_str(
+            &std::fs::read_to_string(directory.join("grand-overview.ron")).expect("overview"),
+        )
+        .expect("overview format");
+        let source = FileChunkSource::open_workspace(&directory, IoLimits::default())
+            .expect("actual package");
+        assert_eq!(source.manifest().fingerprint, overview.package_fingerprint);
+        let root = source
+            .manifest()
+            .features
+            .iter()
+            .find(|feature| feature.asset.as_deref() == Some(TREE_ASSET))
+            .expect("World Tree feature")
+            .anchor
+            .column;
+        let package = source.load_chunk(root.chunk()).expect("root chunk");
+        let tree = package
+            .semantics
+            .objects
+            .iter()
+            .find(|object| object.asset == TREE_ASSET && object.origin.column == root)
+            .expect("complete World Tree object");
+        let palette = source
+            .manifest()
+            .materials
+            .iter()
+            .map(|material| {
+                let [r, g, b, a] = material.color;
+                let linear = Color::srgba_u8(r, g, b, a).to_linear();
+                (
+                    material.id.clone(),
+                    [linear.red, linear.green, linear.blue, linear.alpha],
+                )
+            })
+            .collect();
+        let mesh =
+            surface(tree, overview.level_height, &palette).expect("bounded actual tree mesh");
+        let vertices = mesh.count_vertices();
+        let indices = mesh.indices().expect("indexed tree").len();
+        assert!(vertices > 0 && vertices <= MAX_VERTICES);
+        assert!(indices <= 2 * vertices);
+        assert!(mesh
+            .indices()
+            .expect("indices")
+            .iter()
+            .all(|index| index < vertices));
+        if overview.package_fingerprint == 13_408_690_208_396_973_052 {
+            // Independent immutable-column face count, not a receipt produced by
+            // this mesher. A changed shape uses its own bounded fresh review.
+            assert_eq!(vertices, 496_932);
+            assert_eq!(indices, 853_182);
+        }
+        println!(
+            "GRAND_TREE_PROXY package={} columns={} runs={} vertices={vertices} indices={indices}",
+            overview.package_fingerprint,
+            tree.occupancy.len(),
+            tree.occupancy
+                .iter()
+                .map(|column| column.runs.len())
+                .sum::<usize>(),
+        );
     }
 }
