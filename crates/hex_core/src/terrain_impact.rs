@@ -48,7 +48,7 @@ pub enum TerrainImpactRejection {
 }
 
 /// The source of terrain damage, independent of the material's response policy.
-#[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TerrainDamageKind {
     /// A catalog-backed spell element.
     Elemental(ElementId),
