@@ -14,13 +14,13 @@ use hex_world_contracts::hash_serializable;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    CancellationToken, ErrorKind, RuntimeError, RuntimeResult,
     persistence::write_immutable,
     runtime::validate_identity,
     source::{
         atomic_write_head, checked_existing_path, ensure_relative_directory, lock_directory,
         read_bounded, read_bytes_bounded, sync_directory,
     },
-    CancellationToken, ErrorKind, RuntimeError, RuntimeResult,
 };
 
 const CHECKPOINT_SCHEMA: u32 = 1;
@@ -354,6 +354,39 @@ impl SessionCheckpointStore {
             head,
             limits: self.limits,
         }))
+    }
+
+    /// Preserve the current raw head for an explicitly confirmed replacement run.
+    /// Immutable owner records stay in this directory, so the archive remains complete.
+    /// A valid head stays active until the replacement commits against the returned
+    /// token. An invalid/incompatible head is quarantined without decoding its bytes.
+    /// The directory and its writer-lock inode never move, preserving stale-writer
+    /// protection across concurrent processes and interrupted new-run creation.
+    pub fn archive_current_head(&self) -> RuntimeResult<Option<CheckpointToken>> {
+        fs::create_dir_all(&self.root).map_err(RuntimeError::io)?;
+        let root = self.root.canonicalize().map_err(RuntimeError::io)?;
+        let _writer = lock_directory(&root)?;
+        match fs::symlink_metadata(root.join(HEAD_FILE)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(RuntimeError::io(error)),
+            Ok(_) => {}
+        }
+        let head = checked_existing_path(&root, HEAD_FILE)?;
+        let token = self.load().ok().flatten().map(|snapshot| snapshot.token());
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(RuntimeError::invalid)?
+            .as_nanos();
+        let archive = root.join(format!("archived-session-{stamp}.ron"));
+        // Head publication always replaces files atomically; the archive link keeps
+        // the complete old inode without copying unbounded corrupt input into RAM.
+        fs::hard_link(&head, &archive).map_err(RuntimeError::io)?;
+        sync_directory(&root)?;
+        if token.is_none() {
+            fs::remove_file(&head).map_err(RuntimeError::io)?;
+            sync_directory(&root)?;
+        }
+        Ok(token)
     }
 
     /// Atomically replace the complete slot from an iterator of owner records.

@@ -18,6 +18,123 @@ fn record(owner: &str, key: &str, bytes: &[u8]) -> RuntimeResult<OwnerRecord> {
 }
 
 #[test]
+fn confirmed_replacement_preserves_head_and_the_writer_lock() {
+    let temp = TempRoot::new();
+    let slot = temp.child("slot");
+    let store =
+        SessionCheckpointStore::new(&slot, identity(), CheckpointLimits::default()).expect("store");
+    let first = store
+        .commit(
+            None,
+            [record("gameplay", "actors", b"first")],
+            &CancellationToken::default(),
+        )
+        .expect("first");
+    let original = fs::read(slot.join("session.ron")).expect("original");
+    let writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(slot.join("writer.lock"))
+        .expect("writer");
+    writer.lock().expect("external lock");
+    assert_eq!(
+        store
+            .archive_current_head()
+            .expect_err("archive obeys writer lock")
+            .kind,
+        ErrorKind::Conflict
+    );
+    writer.unlock().expect("unlock");
+    assert_eq!(
+        store.archive_current_head().expect("archive"),
+        Some(first.token())
+    );
+    assert_eq!(
+        store.load().expect("load").expect("still active").token(),
+        first.token()
+    );
+    let archives: Vec<_> = fs::read_dir(&slot)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| {
+            path.file_name()
+                .expect("name")
+                .to_string_lossy()
+                .starts_with("archived-session-")
+        })
+        .collect();
+    assert_eq!(archives.len(), 1);
+    let archive = archives.first().expect("archive");
+    assert_eq!(fs::read(archive).expect("archived bytes"), original);
+    let replacement = store
+        .commit(
+            Some(first.token()),
+            [record("gameplay", "actors", b"new run")],
+            &CancellationToken::default(),
+        )
+        .expect("replacement");
+    assert_eq!(replacement.token().generation, 2);
+    assert_eq!(
+        fs::read(archive).expect("archive survives atomic replacement"),
+        original
+    );
+    assert_eq!(
+        store
+            .commit(
+                Some(first.token()),
+                [record("gameplay", "actors", b"old process")],
+                &CancellationToken::default()
+            )
+            .expect_err("stale prior process")
+            .kind,
+        ErrorKind::Conflict
+    );
+    assert_eq!(
+        first
+            .record("gameplay", "actors", "test-v1")
+            .expect("old immutable record"),
+        Some(b"first".to_vec())
+    );
+}
+
+#[test]
+fn confirmed_replacement_quarantines_corrupt_head_bytes() {
+    let temp = TempRoot::new();
+    let slot = temp.child("slot");
+    fs::create_dir_all(&slot).expect("directory");
+    fs::write(slot.join("session.ron"), b"corrupt run\0do not erase").expect("corrupt fixture");
+    let store =
+        SessionCheckpointStore::new(&slot, identity(), CheckpointLimits::default()).expect("store");
+    assert!(store.load().is_err());
+    assert_eq!(
+        store.archive_current_head().expect("preserve raw head"),
+        None
+    );
+    assert!(store.load().expect("absent head").is_none());
+    let archive = fs::read_dir(&slot)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").path())
+        .find(|path| {
+            path.file_name()
+                .expect("name")
+                .to_string_lossy()
+                .starts_with("archived-session-")
+        })
+        .expect("quarantine");
+    assert_eq!(
+        fs::read(archive).expect("raw bytes"),
+        b"corrupt run\0do not erase"
+    );
+    store
+        .commit(
+            None,
+            [record("gameplay", "actors", b"fresh")],
+            &CancellationToken::default(),
+        )
+        .expect("new run can save");
+}
+
+#[test]
 fn session_atomic_records_span_owners_and_replace_complete_snapshot() {
     let temp = TempRoot::new();
     let store =
@@ -98,13 +215,15 @@ fn session_interrupted_export_cancel_lock_and_stale_writer_preserve_old_head() {
             message: "simulated interruption after terrain export".into(),
         }),
     ];
-    assert!(store
-        .commit(
-            Some(first.token()),
-            interrupted,
-            &CancellationToken::default()
-        )
-        .is_err());
+    assert!(
+        store
+            .commit(
+                Some(first.token()),
+                interrupted,
+                &CancellationToken::default()
+            )
+            .is_err()
+    );
     assert_eq!(
         fs::read(slot.join("session.ron")).expect("old durable head"),
         old_head
@@ -234,13 +353,15 @@ fn session_rejects_source_format_and_body_corruption_without_empty_fallback() {
     fs::write(body, b"different!").expect("tamper body");
     assert!(snapshot.verify_all(&CancellationToken::default()).is_err());
     assert!(snapshot.record("world", "damage", "test-v1").is_err());
-    assert!(store
-        .commit(
-            Some(snapshot.token()),
-            [record("world", "damage", b"partial-hp")],
-            &CancellationToken::default()
-        )
-        .is_err());
+    assert!(
+        store
+            .commit(
+                Some(snapshot.token()),
+                [record("world", "damage", b"partial-hp")],
+                &CancellationToken::default()
+            )
+            .is_err()
+    );
     assert_eq!(
         store
             .load()
@@ -281,9 +402,11 @@ fn session_record_count_bytes_duplicates_and_metadata_are_bounded() {
         ],
         vec![record("world", "a", b"1"), record("world", "a", b"2")],
     ] {
-        assert!(store
-            .commit(Some(first.token()), records, &CancellationToken::default())
-            .is_err());
+        assert!(
+            store
+                .commit(Some(first.token()), records, &CancellationToken::default())
+                .is_err()
+        );
         assert_eq!(
             store.load().expect("load").expect("head").token(),
             first.token()
@@ -322,13 +445,15 @@ fn session_content_directory_symlink_cannot_write_outside_slot() {
     std::os::unix::fs::symlink(&outside, slot.join("session-records")).expect("symlink");
     let store =
         SessionCheckpointStore::new(&slot, identity(), CheckpointLimits::default()).expect("store");
-    assert!(store
-        .commit(
-            None,
-            [record("world", "a", b"x")],
-            &CancellationToken::default()
-        )
-        .is_err());
+    assert!(
+        store
+            .commit(
+                None,
+                [record("world", "a", b"x")],
+                &CancellationToken::default()
+            )
+            .is_err()
+    );
     assert_eq!(fs::read_dir(outside).expect("outside").count(), 0);
     assert!(store.load().expect("no head").is_none());
 }
