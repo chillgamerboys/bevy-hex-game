@@ -417,18 +417,50 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         }
     }
     if failed.is_none() {
-        for _ in 0..20 {
+        let settle_tick = app.world().resource::<ArenaSession>().tick;
+        let settle_deadline = (Instant::now() + Duration::from_secs(20)).min(total_deadline);
+        while app
+            .world()
+            .resource::<ArenaSession>()
+            .tick
+            .saturating_sub(settle_tick)
+            < 40
+        {
+            if Instant::now() >= settle_deadline {
+                failed = Some(
+                    "route endpoint could not complete forty settling simulation ticks".into(),
+                );
+                break;
+            }
+            let before = app.world().resource::<ArenaSession>().tick;
             frame(app, Vec3::ZERO);
+            if let Some(reason) = block_reason(app.world()) {
+                failed = Some(reason.to_string());
+                break;
+            }
+            if app.world().resource::<ArenaSession>().tick == before {
+                std::thread::sleep(Duration::from_millis(2));
+            }
         }
         let world = app.world();
-        if !world.resource::<ArenaSession>().actor_pose_valid(
-            0,
-            world.resource::<ArenaTerrainView>(),
-            *world.resource::<ArenaVoxelGeometry>(),
-        ) {
+        if failed.is_none()
+            && !world.resource::<ArenaSession>().actor_pose_valid(
+                0,
+                world.resource::<ArenaTerrainView>(),
+                *world.resource::<ArenaVoxelGeometry>(),
+            )
+        {
             failed = Some("route endpoint did not settle onto clear dry support".into());
-            samples.push(serde_json::json!({"endpoint":body_state(world)}));
         }
+        let [x, z] = *route.points.last().expect("nonempty route");
+        let remaining = human(world).feet.with_y(0.0).distance(Vec3::new(x, 0.0, z));
+        if failed.is_none() && remaining > REACHED {
+            failed = Some("settling carried the player outside the final waypoint".into());
+        }
+        samples.push(serde_json::json!({
+            "endpoint":body_state(world),"remaining":remaining,
+            "settling_ticks":world.resource::<ArenaSession>().tick.saturating_sub(settle_tick),
+        }));
     }
     app.world_mut().resource_mut::<ViewState>().pause();
     serde_json::json!({

@@ -156,6 +156,50 @@ fn unchanged_progress(world: &World) -> Result<(), String> {
     Ok(())
 }
 
+fn endpoint_liveness(
+    app: &mut App,
+    peaks: &mut SailingHighwater,
+) -> Result<serde_json::Value, String> {
+    let began = Instant::now();
+    let first_tick = app.world().resource::<ArenaSession>().tick;
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::KeyW);
+        keys.press(KeyCode::KeyS);
+    }
+    // Arrival time is captured before this ordinary braking probe. Completing
+    // twenty ticks proves the endpoint is not a locally ready global load stall.
+    while app
+        .world()
+        .resource::<ArenaSession>()
+        .tick
+        .saturating_sub(first_tick)
+        < 20
+    {
+        if began.elapsed() >= Duration::from_secs(20) {
+            return Err("arrival could not complete twenty ordinary braking ticks".into());
+        }
+        let before = app.world().resource::<ArenaSession>().tick;
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        unchanged_progress(app.world())?;
+        observe(app, peaks)?;
+        if !player(app.world())?.boat().is_some_and(|boat| boat.active) {
+            return Err("arrival probe lost the deployed boat".into());
+        }
+        if app.world().resource::<ArenaSession>().tick == before {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    Ok(serde_json::json!({
+        "completed_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
+        "wall_seconds":began.elapsed().as_secs_f64(),"feet":player(app.world())?.feet.to_array(),
+        "boat":player(app.world())?.boat(),
+    }))
+}
+
 fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let overview = Arc::clone(&app.world().resource::<StreamedArena>().overview);
     let start = Vec3::from_array(
@@ -184,8 +228,8 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let OceanSurfaceState::ReadyWet(water) = surface(app.world(), start) else {
         return Err("authored sailing_start is not admitted wet ocean".into());
     };
-    let launch = start.with_y(water.height - 0.2);
-    relocate(app, launch);
+    let prepared_launch = start.with_y(water.height - 0.2);
+    relocate(app, prepared_launch);
     let window = input_surface(app);
     // Apply the exact production environment publication while still paused.
     app.update();
@@ -198,6 +242,25 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         view.yaw = (-direction.x).atan2(-direction.z);
         view.pitch = 0.0;
     }
+    // Complete real idle simulation before B. A nearby encounter may still need
+    // terrain after local restore_ready succeeds; no input edge is retried.
+    let idle_tick = app.world().resource::<ArenaSession>().tick;
+    let idle_deadline = Instant::now() + Duration::from_secs(30);
+    while app.world().resource::<ArenaSession>().tick == idle_tick {
+        if Instant::now() >= idle_deadline {
+            return Err(format!(
+                "launch readiness never advanced an idle tick: {}",
+                app.world().resource::<ArenaSession>().notice
+            ));
+        }
+        app.update();
+        unchanged_progress(app.world())?;
+        if app.world().resource::<ArenaSession>().tick == idle_tick {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    let idle_completed_ticks = app.world().resource::<ArenaSession>().tick - idle_tick;
+    let launch = player(app.world())?.feet;
     unchanged_progress(app.world())?;
     let before = player(app.world())?
         .boat()
@@ -231,6 +294,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let mut wind_max = 0.0_f32;
     let mut alignment_min = 1.0_f32;
     let mut departure = None;
+    let mut first_b_frame = None;
     loop {
         let tick = app.world().resource::<ArenaSession>().tick;
         let actor = player(app.world())?;
@@ -253,8 +317,9 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         app.update();
         frames += 1;
         let now_tick = app.world().resource::<ArenaSession>().tick;
-        // Model one physical press: clear the B edge after this input frame.
-        // The production ArenaInput latch retains it if no simulation tick ran.
+        // Model one physical press, without retrying a rejected or consumed B.
+        // simulate may consume a mode edge even when Grand terrain waits prevent
+        // tick advancement, so record that explicitly instead of assuming a latch.
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.release(KeyCode::KeyB);
@@ -262,10 +327,22 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         }
         if now_tick == tick {
             unchanged_tick_frames += 1;
-            unchanged_tick_wall_seconds += frame_started.elapsed().as_secs_f64();
         }
         let actor = player(app.world())?;
         let boat = actor.boat().ok_or("boat capability lost")?;
+        if first_b_frame.is_none() {
+            let pending = app.world().resource::<ArenaInput>().human.boat_toggle;
+            first_b_frame = Some(serde_json::json!({
+                "tick_before":tick,"tick_after":now_tick,"boat_active":boat.active,
+                "pending_input_edge":pending,"notice":app.world().resource::<ArenaSession>().notice,
+            }));
+            if !boat.active && (now_tick > tick || !pending) {
+                failure = Some(
+                    "the single B press was refused or consumed before boat activation".into(),
+                );
+                break;
+            }
+        }
         let traveled = actor.feet.with_y(0.0).distance(previous.with_y(0.0));
         distance += f64::from(traveled);
         previous = actor.feet;
@@ -312,34 +389,48 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         {
             std::thread::sleep(Duration::from_millis(2));
         }
-    }
-    app.world_mut().resource_mut::<ViewState>().pause();
-    observe(app, &mut peaks)?;
-    if failure.is_none() {
-        unchanged_progress(app.world())?;
-        if !player(app.world())?.boat().is_some_and(|boat| boat.active) {
-            return Err("arrival did not retain the deployed boat".into());
+        if now_tick == tick {
+            unchanged_tick_wall_seconds += frame_started.elapsed().as_secs_f64();
         }
     }
+    let arrival_tick = app.world().resource::<ArenaSession>().tick;
+    let arrival_seconds = app.world().resource::<ArenaSession>().ocean_time().seconds;
+    let arrival_environment_seconds = app.world().resource::<OceanSimulationTime>().seconds;
+    let arrival_feet = player(app.world())?.feet;
+    let arrival_boat = player(app.world())?.boat();
+    let crossing_wall_seconds = began.elapsed().as_secs_f64();
+    let endpoint_probe = if failure.is_none() {
+        match endpoint_liveness(app, &mut peaks) {
+            Ok(probe) => Some(probe),
+            Err(error) => {
+                failure = Some(error);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    app.world_mut().resource_mut::<ViewState>().pause();
+    observe(app, &mut peaks)?;
     let session = app.world().resource::<ArenaSession>();
-    let actor = player(app.world())?;
-    let elapsed = session.ocean_time().seconds - first_seconds;
-    let remaining = actor.feet.with_y(0.0).distance(target.with_y(0.0));
+    let elapsed = arrival_seconds - first_seconds;
+    let remaining = arrival_feet.with_y(0.0).distance(target.with_y(0.0));
     Ok(serde_json::json!({
         "status":if failure.is_none(){"PASS"}else{"FAIL"},"error":failure,
         "identity":identity,"authored_start":start.to_array(),"authored_target":target.to_array(),
-        "launch":launch.to_array(),"end":actor.feet.to_array(),"arrival_radius":ARRIVAL_RADIUS,"remaining":remaining,
+        "prepared_launch":prepared_launch.to_array(),"idle_readiness_ticks":idle_completed_ticks,"first_b_frame":first_b_frame,
+        "launch":launch.to_array(),"end":arrival_feet.to_array(),"arrival_radius":ARRIVAL_RADIUS,"remaining":remaining,
         "target_surface":format!("{:?}",surface(app.world(),target)),
         "authored_horizontal_distance":start.with_y(0.0).distance(target.with_y(0.0)),"traveled_horizontal_distance":distance,
-        "simulation_ticks":session.tick-first_tick,"elapsed_simulation_seconds":elapsed,
-        "session_clock_start":first_seconds,"session_clock_end":session.ocean_time().seconds,
-        "environment_clock_start":first_environment_seconds,"environment_clock_end":app.world().resource::<OceanSimulationTime>().seconds,
+        "simulation_ticks":arrival_tick-first_tick,"elapsed_simulation_seconds":elapsed,
+        "session_clock_start":first_seconds,"session_clock_end":arrival_seconds,
+        "environment_clock_start":first_environment_seconds,"environment_clock_end":arrival_environment_seconds,
         "wind_publisher":"production northern::configure, refreshed on terrain revision and quantized player center",
         "reference_seconds":45.0,"reference_delta_seconds":elapsed-45.0,
         "timing_acceptance":"Measurement only: no invented tolerance around the requested approximately 45 seconds.",
-        "setup_wall_seconds":setup_wall_seconds,"crossing_wall_seconds":began.elapsed().as_secs_f64(),
+        "setup_wall_seconds":setup_wall_seconds,"crossing_wall_seconds":crossing_wall_seconds,"endpoint_liveness_probe":endpoint_probe,
         "frames":frames,"unchanged_tick_frames":unchanged_tick_frames,"unchanged_tick_wall_seconds":unchanged_tick_wall_seconds,
-        "stationary_boat_ticks":stationary_boat_ticks,"departure":departure,"end_boat":actor.boat(),
+        "stationary_boat_ticks":stationary_boat_ticks,"departure":departure,"end_boat":arrival_boat,
         "wind_speed_min":wind_min.is_finite().then_some(wind_min),"wind_speed_max":wind_max,
         "minimum_heading_wind_alignment":alignment_min,"prevailing_wind":{"speed":app.world().resource::<OceanEnvironmentView>().wind.speed,"heading_radians":app.world().resource::<OceanEnvironmentView>().wind.heading_radians},
         "unupgraded":session.grand_progress().is_some_and(|p|p.shrines.is_empty() && !p.teleport_unlocked),
