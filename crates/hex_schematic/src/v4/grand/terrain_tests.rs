@@ -62,7 +62,11 @@ fn ordinary_lowland_is_a_broad_connected_landscape() {
     components.sort_unstable_by(|a, b| b.cmp(a));
     let largest = components.first().copied().unwrap();
     let second = components.get(1).copied().unwrap_or(0);
-    println!("LOWLAND columns={} walkable_edges={walkable}/{edges} largest={largest} second={second} components={}", ground.len(), components.len());
+    println!(
+        "LOWLAND columns={} walkable_edges={walkable}/{edges} largest={largest} second={second} components={}",
+        ground.len(),
+        components.len()
+    );
     // The river intentionally separates two broad ordinary-walkable banks.
     assert!(
         walkable * 100 >= edges * 96,
@@ -129,4 +133,58 @@ fn export_plain_relief_when_requested() {
     let g = plain();
     let overview = g.overview();
     std::fs::write(path, ron::to_string(&overview).unwrap()).unwrap();
+}
+
+#[test]
+fn island_landing_turn_has_a_broad_connected_surface() {
+    let g = plain();
+    // The former rectangular apron edge crossed this entire first turn. Probe
+    // parallel bands around the authored center, not one fortunate grid line.
+    let (sx, sz) = (-1118.0_f64, 475.0_f64);
+    let (ex, ez) = (-1131.0_f64, 502.0_f64);
+    let dx = ex - sx;
+    let dz = ez - sz;
+    let length = dx.hypot(dz);
+    for offset in [-4.0, -2.0, 0.0, 2.0, 4.0] {
+        let mut previous: Option<(WorldHex, i32)> = None;
+        for step in 0..=60 {
+            let t = f64::from(step) / 60.0;
+            let p = nearest_hex(
+                sx + dx * t - dz / length * offset,
+                sz + dz * t + dx / length * offset,
+            );
+            let h = g.surface(p).level;
+            if let Some((old_p, old_h)) = previous {
+                if old_p != p {
+                    assert!(
+                        (h - old_h).abs() <= 1,
+                        "landing turn barrier {old_p:?}:{old_h} -> {p:?}:{h}, band {offset}"
+                    );
+                }
+            }
+            previous = Some((p, h));
+        }
+    }
+}
+
+#[test]
+fn shadow_outlet_flat_landing_joins_crystal_shoulder_without_a_lip() {
+    let g = plain();
+    for offset in [-2.0, 0.0, 2.0] {
+        let mut previous: Option<(WorldHex, i32)> = None;
+        for step in 0..=60 {
+            let t = f64::from(step) / 60.0;
+            let p = nearest_hex(-105.0 + 35.0 * t, -618.0 - 15.0 * t + offset);
+            let h = g.surface(p).level;
+            if let Some((old_p, old_h)) = previous {
+                if old_p != p {
+                    assert!(
+                        (h - old_h).abs() <= 1,
+                        "outlet lip {old_p:?}:{old_h} -> {p:?}:{h}, band {offset}"
+                    );
+                }
+            }
+            previous = Some((p, h));
+        }
+    }
 }

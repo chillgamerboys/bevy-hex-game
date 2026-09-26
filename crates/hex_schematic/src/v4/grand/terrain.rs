@@ -43,6 +43,10 @@ fn shelf(h: f64, x: f64, z: f64, path: &[Pin], half_width: f64, shoulder: f64) -
     let Some((distance, grade)) = nearest_grade(x, z, path) else {
         return h;
     };
+    blend_shelf(h, distance, grade, half_width, shoulder)
+}
+
+fn blend_shelf(h: f64, distance: f64, grade: f64, half_width: f64, shoulder: f64) -> f64 {
     if distance > half_width + shoulder {
         return h;
     }
@@ -51,6 +55,54 @@ fn shelf(h: f64, x: f64, z: f64, path: &[Pin], half_width: f64, shoulder: f64) -
     let d = (distance - half_width).max(0.);
     let target = h.clamp(grade - d * 0.55, grade + d * 0.55);
     target + (h - target) * smooth(d / shoulder)
+}
+
+// Blend only neighboring road segments at turns. Picking the nearest segment
+// alone makes their different grades jump across the bend's angle bisector.
+#[expect(
+    clippy::expect_used,
+    reason = "Adjacent ordinals from this static path windows have a shared vertex."
+)]
+fn volcanic_ascent(h: f64, x: f64, z: f64) -> f64 {
+    let mut candidates: Vec<_> = VOLCANO_ASCENT
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| {
+            nearest_grade(x, z, pair).map(|(distance, grade)| (index, distance, grade))
+        })
+        .collect();
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let Some(&(index, distance, mut grade)) = candidates.first() else {
+        return h;
+    };
+    if let Some(&(other, second_distance, second_grade)) = candidates.get(1) {
+        if index.abs_diff(other) == 1 {
+            let joint = VOLCANO_ASCENT
+                .get(index.max(other))
+                .expect("adjacent segments have a shared vertex");
+            let &[jx, jz, _] = joint;
+            let joint_blend = 1.0 - smooth(((x - jx).hypot(z - jz) - 6.0) / 8.0);
+            let weight = (1.0 - smooth((second_distance - distance) / 16.0)) * 0.5 * joint_blend;
+            grade += (second_grade - grade) * weight;
+        }
+    }
+    // The beach and first bend share one inclined plane. This preserves a
+    // bounded gradient across the full apron instead of switching projected
+    // polyline grades on the bend bisector.
+    if index <= 2 {
+        let weight = 1.0 - smooth((-x - 1131.0) / 60.0);
+        grade += (landing_plane(x, z) - grade) * weight;
+    }
+    let half_width = 7.0 + 7.0 * smooth((x + 1160.0) / 30.0);
+    blend_shelf(h, distance, grade, half_width, 14.0)
+}
+
+fn landing_plane(x: f64, z: f64) -> f64 {
+    // Plane through the first three ascent pins; gradient magnitude is 0.50
+    // levels/world-unit, below one level between any pair of adjacent hexes.
+    let x_slope = (10.157 * 37.0 - 24.333 * 10.0) / 383.0;
+    let z_slope = (10.157 - 19.0 * x_slope) / 10.0;
+    401.0 + (-1099.0 - x) * x_slope + (z - 465.0) * z_slope
 }
 
 const WESTERN_RIDGE: &[Pin] = &[
@@ -63,6 +115,7 @@ const WESTERN_RIDGE: &[Pin] = &[
 // These are broad landform terraces, not the sole valid strips through lowlands.
 const CRYSTAL_SHOULDER: &[Pin] = &[
     [-105., -618., 592.],
+    [-83., -627., 592.],
     [10., -665., 646.],
     [55., -535., 704.],
     [-45., -450., 760.],
@@ -357,12 +410,15 @@ pub(super) fn surface(g: &GrandCompiler, p: WorldHex) -> GrandSurface {
     // Finalize the connected ascent after summit aprons: their broad support
     // envelopes must not lift the low beach back into a wall.
     if vr < 1. {
-        h = shelf(h, x, z, VOLCANO_ASCENT, 7., 14.);
-        // A landing beach is an area, not merely the first point of the ascent.
-        // Its shallow plane reaches inland across several player-width rows.
-        if x > -1133. && (z - 465.).abs() < 23. {
-            h = 401. + (-1099. - x) * 0.42 + ((z - 465.).abs() - 14.).max(0.) * 0.2;
+        // A broad landing apron joins the first turn continuously. Its old
+        // rectangular override ended at z=488 and cut a six-level wall through
+        // the route; compose its shoulders before the connected ascent instead.
+        if let Some((distance, _)) =
+            nearest_grade(x, z, &[[-1099., 465., 401.], [-1128., 465., 413.18]])
+        {
+            h = blend_shelf(h, distance, landing_plane(x, z), 14.0, 20.0);
         }
+        h = volcanic_ascent(h, x, z);
     }
     if (276. ..=306.).contains(&x) {
         let center = -474. + 4. * ((x - 276.) / 30.) + 1.5 * ((x - 276.) / 9.).sin();
