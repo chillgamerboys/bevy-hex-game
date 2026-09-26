@@ -372,7 +372,10 @@ pub(super) fn deployment_pose(
     let mut surfaces: Vec<_> = region.surfaces.iter().copied().collect();
     surfaces.sort_by_key(|pos| (pos.coord.distance(region.preferred.coord), *pos));
     surfaces.into_iter().find_map(|surface| {
-        if !view.voxels.contains_key(&surface) {
+        if view
+            .solid_at(surface)
+            .is_none_or(|material| material.is_air())
+        {
             return None;
         }
         let feet = surface.coord.to_world(geometry.top(surface) + SKIN);

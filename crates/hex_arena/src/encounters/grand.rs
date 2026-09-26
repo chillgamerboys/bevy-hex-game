@@ -372,6 +372,86 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_grand_parties_admit_from_ready_compact_columns_without_legacy_voxels() {
+        use hex_core::arena::{
+            ArenaEncounterSite, ArenaExpeditionSites, ArenaResidency, ArenaSolidSpan,
+        };
+        let geometry = ArenaVoxelGeometry::default();
+        let surfaces = HexCoord::ORIGIN
+            .within_radius(10)
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 0))
+            .collect();
+        let region = hex_core::arena::ArenaDeploymentRegion {
+            preferred: TilePos::new(HexCoord::ORIGIN, 0),
+            surfaces,
+        };
+        let chunks: std::collections::BTreeSet<_> = (-5..=5)
+            .flat_map(|q| (-5..=5).map(move |r| (q, r)))
+            .collect();
+        for &(name, _, count) in SITES {
+            let player = HexCoord::from_axial(-20, 0).to_world(SKIN);
+            let mut world = ArenaTerrainView {
+                revision: 1,
+                selection: hex_core::arena::ArenaSelection {
+                    map: ArenaMap::GrandV4,
+                    ..Default::default()
+                },
+                spawns: [player, player],
+                columns: HexCoord::ORIGIN
+                    .within_radius(40)
+                    .into_iter()
+                    .map(|coord| {
+                        (
+                            coord,
+                            vec![ArenaSolidSpan {
+                                bottom: TilePos::new(coord, 0),
+                                top_level: 0,
+                                substance: hex_core::SubstanceId(1),
+                            }],
+                        )
+                    })
+                    .collect(),
+                residency: Some(ArenaResidency {
+                    catalogue: chunks.clone(),
+                    ready: Default::default(),
+                }),
+                expedition: Some(ArenaExpeditionSites {
+                    encounters: [(
+                        name.into(),
+                        ArenaEncounterSite {
+                            deployment: region.clone(),
+                            rally_entry: None,
+                        },
+                    )]
+                    .into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut session = ArenaSession::default();
+            session.reset(1, &world, geometry);
+            session.actors.truncate(1);
+            session.actors[0].configure_expedition_player();
+            session.admit_grand_parties(&world, geometry, &ArenaTuning::default());
+            assert_eq!(
+                session.actors.len(),
+                1,
+                "unloaded {name} must remain unadmitted"
+            );
+            world.residency.as_mut().unwrap().ready = chunks.clone();
+            world.revision += 1;
+            world.full_rebuild = true;
+            session.collision.refresh(&world, geometry);
+            assert!(world.voxels.is_empty());
+            session.admit_grand_parties(&world, geometry, &ArenaTuning::default());
+            assert_eq!(session.actors.len(), count + 1, "ready compact {name}");
+            assert!(session.grand.as_ref().unwrap().admitted.contains(name));
+            assert_eq!(session.encounter.brains.len(), count);
+        }
+    }
+
+    #[test]
     fn grand_roster_keeps_existing_population_budget_and_unique_wide_ids() {
         assert_eq!(SITES.iter().map(|s| s.2).sum::<usize>(), 127);
         let ids: std::collections::BTreeSet<_> = SITES
