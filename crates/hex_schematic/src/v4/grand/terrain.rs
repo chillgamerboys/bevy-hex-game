@@ -5,6 +5,8 @@
 //! The broad lowlands use maxima/minima of bounded slopes, rather than adding
 //! overlapping hills whose combined gradient traps the ordinary controller.
 use super::*;
+mod grading;
+pub(super) use grading::{compile_cave_cover, compile_grades};
 
 pub(super) const SHADOW_FLOOR: i32 = 460;
 pub(super) const LIBRARY_FLOOR: i32 = 600;
@@ -121,17 +123,18 @@ const CRYSTAL_SHOULDER: &[Pin] = &[
     [-45., -450., 760.],
     [-179., -518., 801.],
     [-260., -625., 830.],
-    [-400., -610., 860.],
+    [-380., -595., 850.],
     [-400., -565., 841.],
 ];
 const WESTERN_ASCENT: &[Pin] = &[
     [-170., -115., 505.],
-    [-400., -190., 554.],
-    [-555., -300., 630.],
-    [-550., -430., 716.],
-    [-525., -565., 800.],
-    [-485., -610., 842.],
-    [-400., -610., 860.],
+    [-400., -190., 600.],
+    [-555., -300., 676.],
+    [-550., -430., 736.],
+    [-500., -510., 795.],
+    [-470., -545., 855.],
+    [-440., -570., 847.],
+    [-400., -575., 841.],
     [-400., -565., 841.],
 ];
 const GARDEN_ASCENT: &[Pin] = &[
@@ -327,7 +330,23 @@ fn river_width(t: f64) -> f64 {
     10. + 12. * t + 3. * (t * std::f64::consts::PI * 5.).sin()
 }
 
+// Vegetated shoulders follow altitude with broad, irregular outcrops. This is
+// material authoring only: entered biome names and their gameplay facts stay fixed.
+fn vegetation_limit(x: f64, z: f64) -> f64 {
+    655. + 42. * (x / 117. + z / 163.).sin()
+        + 23. * (x / 53. - z / 89.).sin()
+        + 11. * (x / 29. + z / 41.).cos()
+}
+
 pub(super) fn surface(g: &GrandCompiler, p: WorldHex) -> GrandSurface {
+    let mut result = raw_surface(g, p);
+    if let Some(&top) = g.graded_shoulders.get(&p) {
+        result.level = top - 1;
+    }
+    result
+}
+
+fn raw_surface(g: &GrandCompiler, p: WorldHex) -> GrandSurface {
     let [x, z] = world_xz(p);
     let depth = grid_value(&g.coast, p, 0);
     let offshore = f64::from(grid_value(&g.offshore_distance, p, 100).min(100));
@@ -339,7 +358,7 @@ pub(super) fn surface(g: &GrandCompiler, p: WorldHex) -> GrandSurface {
     let mut water = None;
     let mut material = if depth < 10 {
         "sand"
-    } else if z < -220. {
+    } else if h > vegetation_limit(x, z) {
         "stone"
     } else {
         "moss"
@@ -467,6 +486,7 @@ pub(super) fn surface(g: &GrandCompiler, p: WorldHex) -> GrandSurface {
             material = "sand";
         }
     }
+    h = h.max(f64::from(g.cave_cover.get(&p).copied().unwrap_or(0)));
     GrandSurface {
         level: h.floor().clamp(3., 1500.) as i32 - 1,
         material,

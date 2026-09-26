@@ -106,6 +106,39 @@ fn library_is_covered_by_one_massif_not_exposed_stair_strips() {
 }
 
 #[test]
+fn library_exterior_walls_close_every_unintended_roof_side_aperture() {
+    let g = plain();
+    let mut perimeter = 0;
+    for r in -410..=-190 {
+        for q in -220..=400 {
+            let p = WorldHex::new(q, r);
+            let Some((_, ceiling)) = library_cavity(p) else {
+                continue;
+            };
+            if terrain::library_portal(p) {
+                continue;
+            }
+            for (dq, dr) in DIRS {
+                let outside = WorldHex::new(q + dq, r + dr);
+                if terrain::library_portal(outside) || library_cavity(outside).is_some() {
+                    continue;
+                }
+                let (column, _) = g.column(outside);
+                assert!(
+                    column.runs.iter().any(|run| run.material != "water"
+                        && run.bottom < ceiling
+                        && run.top >= ceiling),
+                    "open library side from {p:?} below ceiling {ceiling} to {outside:?}"
+                );
+                perimeter += 1;
+            }
+        }
+    }
+    assert!(perimeter > 2000);
+    println!("LIBRARY solid exterior roof-side edges={perimeter}");
+}
+
+#[test]
 fn eastern_volcano_landing_has_wide_shallow_walkout() {
     let g = plain();
     for z in [459., 463.5, 468., 471.] {

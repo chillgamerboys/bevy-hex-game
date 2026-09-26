@@ -448,7 +448,8 @@ fn volcanic_caldera_stays_below_its_rim_and_preserves_exact_sites() {
     let bottom = g.surface(nearest_hex(-1195., 472.)).level;
     let rim = g.surface(nearest_hex(-1217., 472.)).level;
     assert!(rim - bottom >= 80, "visible caldera depth");
-    assert_eq!(g.support(-1170., 455., false).level, 579);
+    // The flat shrine follows its authored pad, not a projected ascent segment.
+    assert_eq!(g.support(-1170., 455., false).level, 580);
     assert_eq!(g.support(-1205., 430., false).level, 575);
     assert!(g.clear_support(g.support(-1170., 455., false), 12));
 }

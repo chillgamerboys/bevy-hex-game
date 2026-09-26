@@ -79,6 +79,8 @@ pub struct GrandCompiler {
     coast: Vec<u16>,
     offshore_distance: Vec<u16>,
     crystal: std::collections::BTreeSet<WorldHex>,
+    cave_cover: BTreeMap<WorldHex, i32>,
+    graded_shoulders: BTreeMap<WorldHex, i32>,
     anchors: Vec<WorldAnchor>,
     objects: BTreeMap<ChunkId, Vec<ObjectInstance>>,
     influences: BTreeMap<ChunkId, Vec<ObjectInfluence>>,
@@ -253,10 +255,13 @@ impl GrandCompiler {
             coast,
             offshore_distance,
             crystal,
+            cave_cover: terrain::compile_cave_cover(),
+            graded_shoulders: BTreeMap::new(),
             anchors: vec![],
             objects: BTreeMap::new(),
             influences: BTreeMap::new(),
         };
+        result.graded_shoulders = terrain::compile_grades(&result)?;
         result.anchors = result.make_anchors();
         let objects = if result.source.full_dressing {
             dressing::compose(&result)?
@@ -434,7 +439,7 @@ impl GrandCompiler {
         WorldManifest {
             schema_version: SCHEMA_VERSION,
             world_id: self.source.id.clone(),
-            compiler_version: "hex-grand/2".into(),
+            compiler_version: "hex-grand/3".into(),
             source_fingerprint: self.source_fingerprint,
             materials: self.materials.clone(),
             regions: vec![RegionDescriptor {
