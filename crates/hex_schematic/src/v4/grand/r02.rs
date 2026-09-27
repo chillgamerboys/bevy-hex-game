@@ -408,8 +408,9 @@ impl Layered {
                 route.open_ends,
             )?;
         }
-        // Fit cave ceilings beneath the actual mountain. Rooms under the World
-        // Tree are enclosed by its reserved trunk volume, not an inflated pad.
+        // Fit every closed passage beneath the actual landform. The root
+        // temple keeps its four-level natural roof, including the approach;
+        // the tree's reserved volume must not excuse an exposed trench.
         let mut natural = BTreeMap::new();
         for (&p, layers) in &mut out.columns {
             let mut neighborhood = Vec::new();
@@ -428,17 +429,25 @@ impl Layered {
                     }
                 }
             }
-            let ceiling = neighborhood.iter().map(|(_, top)| *top - 8).min();
             for l in layers {
-                if !l.open && l.layer != SupportLayer::RootTemple {
+                if !l.open {
+                    // The shallow root chamber already requires four levels
+                    // of roof in its full-room/architecture contract. Mountain
+                    // cave routes retain their deeper eight-level cover.
+                    let cover = if l.layer == SupportLayer::RootTemple {
+                        4
+                    } else {
+                        8
+                    };
+                    let ceiling = neighborhood.iter().map(|(_, top)| *top - cover).min();
                     if let Some(limit) = ceiling.filter(|limit| *limit >= l.top + 8) {
                         l.ceiling = l.ceiling.min(limit);
                     }
                     for &(n, _) in &neighborhood {
                         out.cover
                             .entry(n)
-                            .and_modify(|h| *h = (*h).max(l.ceiling + 8))
-                            .or_insert(l.ceiling + 8);
+                            .and_modify(|h| *h = (*h).max(l.ceiling + cover))
+                            .or_insert(l.ceiling + cover);
                     }
                 }
             }
@@ -696,6 +705,84 @@ mod cave_cover_tests {
                 .collect::<Vec<_>>()
         );
     }
+    #[test]
+    fn root_corridor_keeps_natural_ground_above_its_complete_closed_ribbon() {
+        let compiler = tests::compiler(false);
+        let g = &compiler.geography;
+        let d = g.document.as_ref().expect("canonical geography");
+        let route = compiler
+            .layered
+            .routes
+            .iter()
+            .find(|route| route.id == "root_temple")
+            .expect("root approach route");
+        let room = d
+            .rooms
+            .iter()
+            .find(|room| room.frame == "root_temple")
+            .expect("root chamber");
+        let frame = d.frames.get("root_temple").expect("root chamber frame");
+        let mut closed = 0;
+        let mut outside_room = 0;
+        for support in &route.ribbon {
+            let layers = compiler
+                .layered
+                .columns
+                .get(&support.column)
+                .expect("every published ribbon has its physical layer");
+            let layer = layers
+                .iter()
+                .find(|layer| {
+                    layer.layer == SupportLayer::RootTemple && layer.top == support.level + 1
+                })
+                .expect("exact root support layer");
+            // Only the explicitly open entrance is exempt from a natural roof.
+            if layer.open {
+                continue;
+            }
+            let natural = compiler.surface(support.column).level + 1;
+            let (column, water) = compiler.column(support.column);
+            let exterior = column
+                .runs
+                .iter()
+                .filter(|run| run.material != "water")
+                .map(|run| run.top)
+                .max()
+                .expect("natural solid ground");
+            assert!(water.is_none(), "root corridor remains dry");
+            assert_eq!(
+                exterior, natural,
+                "closed root passage removes usable ground at {:?}",
+                support.column
+            );
+            assert!(layer.ceiling - layer.top >= 8, "physical body clearance");
+            assert!(natural - layer.ceiling >= 4, "existing root roof contract");
+            assert!(compiler.clear_support(*support, 8));
+            for level in layer.ceiling..natural {
+                assert!(
+                    column.material_at(level).is_some_and(|m| m != "water"),
+                    "root roof breached at {:?}, level {level}",
+                    support.column
+                );
+            }
+            let point = g.model_xz(support.column);
+            outside_room += usize::from(
+                (point[0] - frame.origin[0]).abs() > room.half_extents[0]
+                    || (point[1] - frame.origin[1]).abs() > room.half_extents[1],
+            );
+            closed += 1;
+        }
+        assert!(
+            closed > route.ribbon.len() / 2,
+            "survey the complete approach"
+        );
+        assert!(
+            outside_room > 100,
+            "cover the corridor preceding the chamber"
+        );
+        eprintln!("ROOT_CORRIDOR closed_columns={closed} outside_room={outside_room}");
+    }
+
     #[test]
     fn root_room_keeps_natural_roof_and_architecture_beneath_lake_shore() {
         let compiler = tests::compiler(true);

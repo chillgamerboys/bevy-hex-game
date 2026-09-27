@@ -727,7 +727,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 36
+      "floor": 35
     },
     "root_temple_entrance": {
       "origin": [
@@ -736,7 +736,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 36
+      "floor": 35
     },
     "root_temple_altar": {
       "origin": [
@@ -745,7 +745,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 36
+      "floor": 35
     },
     "shrine_plant": {
       "origin": [
@@ -754,7 +754,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 36
+      "floor": 35
     },
     "library_lower": {
       "origin": [
@@ -1734,12 +1734,12 @@
         ],
         [
           195,
-          36,
+          35,
           16
         ],
         [
           195,
-          36,
+          35,
           71
         ]
       ],
