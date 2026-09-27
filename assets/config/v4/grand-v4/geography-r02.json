@@ -648,6 +648,15 @@
       "layer": "Exterior",
       "floor": null
     },
+    "volcano_berth": {
+      "origin": [
+        -1426.1138298702765,
+        -792.8092454999891
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
     "camp_01": {
       "origin": [
         -35,
