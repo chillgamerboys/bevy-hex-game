@@ -671,3 +671,44 @@ tests whether the live/proxy finish mismatch contributes to the visible patch;
 a separate actual-mesh ray probe identifies the northwest curtains. Neither
 changes source terrain or authorizes the banked seam geometry prototype. All
 source and capture work retains separate ownership and serialized Cargo use.
+
+### Upper-body candidate and remaining bank discontinuity
+
+`31a2095`/`b845a2c` integrate the second upper-mountain source study. Three
+asymmetric variable-height shoulder spines replace the tallest isolated needles
+with broader connected crests. Their realized maxima are approximately 285m,
+315m and 280m above sea level. The 140–230m blend, 20m uplift bound and wider
+spatial blend reduce the first study's amplification of existing upper cliffs.
+All 530,276 baseline dry supports below 140m remain identical, as do all 461,576
+members of that corrective baseline's largest ordinary-edge component. Some
+upper ordinary edges still become steep; this is not all-ground preservation.
+Root and independent reviewers inspected the matched source views, sections and
+whole-domain data. The second study is admitted as the next game candidate, not
+final visual approval. The lake backing and several blunt lobes remain review
+concerns. Source checks pass: 63 Grand tests, three ignored diagnostics, exhaustive
+emitted flow, and scoped schematic Clippy. A test-only error-return lint repair
+does not change the terrain bytes.
+
+`a4b1e0b` integrates the separately reviewed Grand dry-material finish: opaque
+detail now shares the distant terrain's roughness/reflectance. Three focused tests
+and scoped map Clippy pass. The actual off/on pair establishes a small local
+finish improvement only. Six actual northwest mesh hits identify real voxel caps
+and short sides in the apparent curtains; they do not support another trial of
+the banked seam geometry. Fine-face versus smooth-proxy representation remains
+an open rendering concern, with a separate default-off prototype proposed.
+
+The direct plain03-package versus corrective-source comparison exposes another
+real defect before plain05 export. It recovers 6,034 of plain04's old losses but
+newly loses 1,476 previously connected cells. Most new losses lie east of the
+falls: widened dry bank influence changes abruptly when nearest ownership switches
+between channel segments with different levels, or between ordinary and steep
+segments. These are dry hills, not necessary wet-channel exclusions. Repair
+per-reach far-bank continuity while retaining exact wet containment and the
+corrected swim shelf. Do not improve the graph by moving controller endpoints or
+grading their paths. Smaller remaining low-hill losses come from the earlier
+peak-rounding profile and require a separate shape-preserving comparison.
+
+Plain05 has not been compiled. Its prepared pipeline will retain new package
+identity, direct comparisons against both plain03 and plain04, the unchanged dry
+and mixed probes, selected authored routes and six affected game views. The
+source continuity defect is a start dependency for this next export.
