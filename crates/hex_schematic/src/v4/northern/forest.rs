@@ -22,7 +22,7 @@ pub const MAX_FOREST_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum opaque vertices in one uncut shared tree mesh.
 pub const MAX_FOREST_SHAPE_VERTICES: usize = 6_144;
 /// Maximum simultaneously submitted ordinary forest vertices, including roots.
-pub const MAX_FOREST_VERTICES: usize = 1_600_000;
+pub const MAX_FOREST_VERTICES: usize = 1_750_000;
 /// Canonical coarse foliage radius in units of the exact hex lattice.
 pub const FOREST_FOLIAGE_RADIUS: i64 = 3;
 /// Canonical coarse foliage band in exact logical levels.
