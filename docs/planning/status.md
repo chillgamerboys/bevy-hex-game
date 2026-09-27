@@ -9,28 +9,41 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-**Grand V4 — geography rebuild, 2026-09-27.** `wave/grand-v4` preserves the
-playable `873a2c37` baseline from draft PRs #222/#223 and adds the seven-times
-mainland and independently enlarged Crystal Ascent, five cumulative shrines,
-127 authored enemies, Shadow-earned teleport, durable resume and shrine respawn.
-The user rejected the earlier terrain and approved a revised composition before
-production rebuilding. Plain diagnostic package `4642324525893473046`, from clean
-`48681cae80a3524be934ae66a1e875c43a0cd074`, lowers relief while preserving physical
-player/tree dimensions and joins Crystal, Frozen Woods and the hidden garden lake
-within one mountain complex. Nine actual views show broader lower ground and a
-corrected lake-bed color policy, but presentation is not accepted: distant/detail
-transitions and an obstructed waterfall approach remain. Selected western foothill,
-mixed walk/swim/walk, garden, Crystal and Frozen controllers pass. Lake-foot uphill
-still stalls near its target; a separate exposed root-corridor roof also needs repair.
-This plain package has no trees or buildings and is not a completed expedition.
+**Grand V4 — dressed-world integration, 2026-09-27.** `wave/grand-v4`
+preserves the playable `873a2c37` baseline from draft PRs #222/#223 and adds the
+seven-times mainland and independently enlarged Crystal Ascent, five cumulative
+shrines, 127 authored enemies, Shadow-earned teleport, durable resume and shrine
+respawn. The user rejected the earlier terrain and approved a revised composition
+before production rebuilding.
 
-Earlier package `4216780698166138326` at `c8f1b8e` retains the land/boat/air restart,
-three streaming circuits, fourteen encounter admissions and 43.9-second sailing
-evidence. Those results do not validate the redesigned world. Durable gameplay and
-staged safe-ground respawn remain implemented; dressed-world integration, full
-combined CI, native control feel and measured performance are still open. This is
-**not delivered on `dev`**.
-See the [candidate guide](../development/grand-v4.md) and
+The first actual dressed revision02 package is `4086254255885708135`, from clean
+`d28d11b32258bef69a251c0e895cb9fb3fdf65a6`: 878 objects, including the World Tree and
+780 ordinary trees. Nine independently reviewed views establish the garden island
+and Crystal–Frozen–lake connection, but dressing is not accepted: the tree has
+spherical crowns, ordinary trees obscure its lakeside clearing, and distant garden
+architecture disappears. The reverse tree defect was traced to review-camera
+near-plane clipping. Inherited detailed/distant terrain contrast remains open.
+
+Actual land/boat/air process restarts and three streaming circuits pass on this
+package. Walking passes 19 of 20 routes, including the revised foothills, all cave
+routes and volcano ascent; the ordinary river bank has a steep cut shoulder. The
+separate walk/swim/walk crossing passes. Dragon admission fails because its authored
+slope provides no complete grounded footprints. Sailing v1 also fails: its target
+is dry ground beyond the boat's navigable shallows; the longer bay run reaches its
+120-second deadline while still moving. Original failures remain preserved.
+
+Source corrections include an irregular crown, a connected root/shore/camp glade,
+a framing-preserving camera retreat, a natural upper-volcano Dragon roost, and
+bounded distant garden meshes. Ordinary river cuts now have broad bank transitions;
+the added wet berth remains separate from the unchanged dry landing. The required
+disembark/swim/walk check compiles with scoped Clippy passing. The bank source passes
+67 Grand checks, preserves every water level and wet bed, and retains closed cave
+cover. Fresh controller and image results are still required, including the root
+entrance where the lowered bank extends the existing open mouth by one row.
+These source changes do not retroactively repair the immutable dressed01 package.
+Final dressed presentation, combined CI, native control feel and measured performance
+remain open. This is **not delivered on `dev`**; the hard stop is 50% weekly usage
+consumed. See the [candidate guide](../development/grand-v4.md) and
 [integration record](waves/grand-v4/manifest.md). Linear reconciliation is unverified
 until the connector is reconnected.
 

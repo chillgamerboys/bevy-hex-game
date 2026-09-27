@@ -1,6 +1,73 @@
 # Grand V4 integration wave
 
-## September 27 restart — terrain composition before further dressing
+## September 27 first dressed checkpoint
+
+Immutable `compiled-r02-dressed-01` was compiled at clean
+`d28d11b32258bef69a251c0e895cb9fb3fdf65a6`, package `4086254255885708135`, source
+`16648840675520890631`. Strict readback passes: mainland 6.999775×, Crystal
+7.005680×, 878 objects including 780 ordinary trees and one World Tree.
+
+The old plain-only survey refused dressed data. Its failure remains in the original
+pipeline; a separate v3 reader proves that terrain columns exclude authored object
+occupancy and reproduces all eleven plain06 arrays bit-for-bit. Actual ground gains
+4,378 connected supports and loses 427 (largest component 479,795), with no water-level
+change. These are terrain diagnostics, not body traversal or visual acceptance.
+
+All nine original game frames were independently inspected. Garden island/courtyard
+and Crystal→Frozen→shore relationships are visible. Dressing fails its intended
+character: smooth World Tree balls and obstructed lakeside space. Ordinary forest-ground
+is dense woodland with a nearby trunk, not an embedded camera. It does not establish a
+readable clearing. The waterfall-side striped crown is an orthographic near-plane cut;
+its separate 210-unit optical retreat preserves framing and clears the full authored
+bounds. Inherited terrain presentation seams remain unresolved.
+
+Actual process restart on land, in a boat and airborne passes, retaining complete
+owner state, attacks, partial damage and revisited destruction. Three streaming circuits
+pass with 31 stops, high water 46 source chunks / 15 detailed chunks / 2 jobs. Full
+walking passes 19 of 20 routes; the sole failure is a narrow ordinary river-bank cut.
+The separate water crossing passes. All cave/root routes and volcano ascent pass.
+Seven encounter groups admit before Dragon fails: its old slope has zero complete
+grounded Dragon supports. A named natural upper-roost candidate retains stable IDs
+and offers 76 full supports, independently checked against actual object occupancy.
+
+Both original sailing failures remain explicit. Western departure reaches the shallow
+island approach, but its old target is ReadyDry and cannot be reached in a deployed
+boat. Bay departure is still moving with 97 units remaining at the 120-second bound.
+The revised check separates an authored wet berth from the unchanged dry landing,
+requires one ordinary B stow, swimming/walking and forty settled dry ticks, and retains
+the measured boat-only travel clock. Its longer bay completion bound does not change
+the roughly 45-second western-shore design target or boat/wind tuning.
+
+Integrated source corrections: `860ca4c` irregular crown; `32298c6` connected glade
+(36 ordinary trees omitted, 744 retained); `c52f98c` review-camera depth;
+`401fc64` natural Dragon roost; `63a43f5` bounded garden distant architecture. The
+crown retains dimensions/wood and fits 19,300 columns / 24,849 runs / 715,208 vertices.
+The garden uses four exact objects, 216 columns / 307 runs / 7,024 vertices and no
+added source residency, with persistent cuts and atomic detailed-object handoff.
+67 Grand source tests and scoped schematic Clippy pass for crown/glade; fourteen map
+tests, a real-package garden proof and scoped map Clippy pass for the garden renderer.
+Fresh combined images and actual revised admissions/river/sailing remain required.
+
+The next clean candidate includes `0b4dc66` ordinary river banks, `3d69930` wet
+berth publication and `b370f92` sailing-v2 checks. Bank widths fade at whole-chain
+terminals and remain broad across internal bends; no route endpoint, physics limit,
+water level or submerged bed changed. The frozen 653,261-column comparison lowers
+27,998 dry tops, gaining 178 and losing 28 members of its diagnostic ground graph.
+Twenty-three losses are unchanged shoreline containment caps; five extend the existing
+open root entrance by one row. Closed room/corridor roof and clearance checks pass.
+The original failed bank trial remains preserved. Full Grand source tests (67),
+scoped schematic Clippy, app lib/tests Clippy and formatting pass. Actual root,
+river-bank and staged boat-arrival checks remain required in the new package.
+
+Root owns shared application verification and integration. L4 remains sole world
+source writer; the bank correction and berth are integrated. L6's previous matte and
+boundary experiments remain banked; its garden change is separate. The active Cargo
+slot is serialized. Original pipeline, images, ground survey, traversal and independent
+reviews remain under task outputs/work; no failed receipt is relabeled as a pass.
+Full presentation/motion, final combined CI and approved native play/performance remain
+open. Stop at **50% account weekly usage consumed**.
+
+## Historical September 27 plain-terrain checkpoint
 
 The user reviewed the actual plain04 render and the latest source study, then authorized
 continuing with a hard stop at **50% account weekly usage consumed**. The reset starts at
