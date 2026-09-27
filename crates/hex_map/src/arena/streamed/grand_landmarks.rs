@@ -1,9 +1,10 @@
-//! One bounded distant World Tree surface, sourced from its immutable semantic root.
+//! Bounded distant World Tree and garden surfaces from immutable semantic roots.
 //!
 //! This is independent of the ocean bed/terrain overview. Compact column runs
 //! preserve the actual grounded trunk and crown without expanding voxel levels.
 //! Only the bounded authored tree columns are retained after releasing the root
 //! chunk. Persistent object removals mask those columns even after source eviction.
+mod garden;
 use super::{package_path_for, StreamedArena};
 use bevy::{
     asset::RenderAssetUsages,
@@ -36,6 +37,7 @@ const CORNERS: [Vec3; 6] = [
 struct Cache {
     identity: (u64, u64),
     tree: Option<Tree>,
+    garden: Vec<Tree>,
 }
 
 struct Tree {
@@ -65,12 +67,7 @@ pub(super) fn sync(
         return;
     }
     let identity = (state.runtime.manifest().fingerprint, state.generation);
-    if world
-        .get_resource::<Cache>()
-        .is_some_and(|cache| cache.identity != identity)
-    {
-        clear(world);
-    }
+    retire_stale(world, identity);
     if !world.contains_resource::<Cache>() {
         let tree = match load(state) {
             Ok(Some((id, geometry, mesh))) => {
@@ -116,14 +113,59 @@ pub(super) fn sync(
             }
         };
         // Cache failures as well: never retry filesystem work every render frame.
-        world.insert_resource(Cache { identity, tree });
+        let garden = match garden::load(state) {
+            Ok(loaded) => loaded
+                .into_iter()
+                .map(|(id, geometry, mesh)| spawn_landmark(world, id, geometry, mesh))
+                .collect(),
+            Err(error) => {
+                warn!("Grand garden proxies unavailable: {error}");
+                vec![]
+            }
+        };
+        world.insert_resource(Cache {
+            identity,
+            tree,
+            garden,
+        });
     }
     world.resource_scope(|world, mut cache: Mut<Cache>| {
-        let Some(tree) = cache.tree.as_mut() else {
-            return;
-        };
-        tree.sync(world, &state.edits, detailed_objects.contains_key(&tree.id));
+        let Cache { tree, garden, .. } = &mut *cache;
+        for tree in tree.iter_mut().chain(garden) {
+            tree.sync(world, &state.edits, detailed_objects.contains_key(&tree.id));
+        }
     });
+}
+
+fn spawn_landmark(world: &mut World, id: String, geometry: TreeGeometry, mesh: Mesh) -> Tree {
+    let current_surface = mesh.count_vertices() > 0;
+    let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
+    let material = world
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.96,
+            reflectance: 0.05,
+            ..default()
+        });
+    let entity = world
+        .spawn((
+            Name::new(format!("Grand distant {id}")),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::default(),
+            Visibility::Hidden,
+        ))
+        .id();
+    Tree {
+        id,
+        geometry,
+        current_surface,
+        entity,
+        mesh,
+        material,
+        visible: false,
+    }
 }
 
 impl Tree {
@@ -143,7 +185,10 @@ impl Tree {
                 // Never display stale intact geometry if its current mask cannot
                 // fit the bounded proxy; detailed publication remains authoritative.
                 self.current_surface = false;
-                warn!("Grand World Tree masked proxy unavailable: {error}");
+                warn!(
+                    id = self.id,
+                    "Grand landmark masked proxy unavailable: {error}"
+                );
             }
         }
         let visible = should_show(complete_detailed, self.current_surface);
@@ -164,12 +209,21 @@ fn should_show(complete_detailed: bool, current_surface: bool) -> bool {
     !complete_detailed && current_surface
 }
 
+fn retire_stale(world: &mut World, identity: (u64, u64)) {
+    if world
+        .get_resource::<Cache>()
+        .is_some_and(|cache| cache.identity != identity)
+    {
+        clear(world);
+    }
+}
+
 /// Clear alongside the streamed renderer on map exit or package replacement.
 pub(super) fn clear(world: &mut World) {
     let Some(cache) = world.remove_resource::<Cache>() else {
         return;
     };
-    if let Some(tree) = cache.tree {
+    for tree in cache.tree.into_iter().chain(cache.garden) {
         world.despawn(tree.entity);
         if let Some(mut meshes) = world.get_resource_mut::<Assets<Mesh>>() {
             meshes.remove(tree.mesh.id());
@@ -234,6 +288,40 @@ struct TreeGeometry {
     observed_revisions: BTreeMap<ChunkId, u64>,
     level_height: f32,
     palette: BTreeMap<String, [f32; 4]>,
+    limits: SurfaceLimits,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceLimits {
+    columns: usize,
+    runs: usize,
+    vertices: usize,
+}
+
+impl SurfaceLimits {
+    const TREE: Self = Self {
+        columns: MAX_COLUMNS,
+        runs: MAX_RUNS,
+        vertices: MAX_VERTICES,
+    };
+
+    fn mesh(
+        self,
+        columns: &[ColumnData],
+        level_height: f32,
+        palette: &BTreeMap<String, [f32; 4]>,
+    ) -> Result<Mesh, String> {
+        if columns.len() > self.columns
+            || columns.iter().map(|c| c.runs.len()).sum::<usize>() > self.runs
+        {
+            return Err("landmark compact occupancy exceeds its presentation budget".into());
+        }
+        let mesh = surface_with_limit(columns, level_height, palette, self.vertices)?;
+        if mesh.count_vertices() > self.vertices {
+            return Err("landmark surface exceeds its presentation budget".into());
+        }
+        Ok(mesh)
+    }
 }
 
 impl TreeGeometry {
@@ -243,7 +331,24 @@ impl TreeGeometry {
         palette: BTreeMap<String, [f32; 4]>,
         edits: &FiniteWorldSession,
     ) -> Result<(Self, Mesh), String> {
+        Self::with_limits(object, level_height, palette, edits, SurfaceLimits::TREE)
+    }
+
+    fn with_limits(
+        object: &ObjectInstance,
+        level_height: f32,
+        palette: BTreeMap<String, [f32; 4]>,
+        edits: &FiniteWorldSession,
+        limits: SurfaceLimits,
+    ) -> Result<(Self, Mesh), String> {
         check_occupancy_budget(&object.occupancy)?;
+        // Check the original source as well as its surviving mask: a heavily
+        // edited source cannot evade the bounded retained-occupancy contract.
+        if object.occupancy.len() > limits.columns
+            || object.occupancy.iter().map(|c| c.runs.len()).sum::<usize>() > limits.runs
+        {
+            return Err("authored landmark exceeds its presentation budget".into());
+        }
         let observed_revisions = object
             .occupancy
             .iter()
@@ -259,8 +364,8 @@ impl TreeGeometry {
             .map(|chunk| (chunk, edits.revision(chunk).unwrap_or(0)))
             .collect();
         // Apply restored removals before the first mesh can become visible.
-        let masked = masked_columns(&object.occupancy, edits)?;
-        let mesh = surface(&masked, level_height, &palette)?;
+        let masked = masked_columns(&object.occupancy, edits, limits.runs)?;
+        let mesh = limits.mesh(&masked, level_height, &palette)?;
         Ok((
             Self {
                 authored: object.occupancy.clone(),
@@ -268,6 +373,7 @@ impl TreeGeometry {
                 observed_revisions,
                 level_height,
                 palette,
+                limits,
             },
             mesh,
         ))
@@ -285,12 +391,15 @@ impl TreeGeometry {
         }
         // Revision changes are only a cheap dirty hint. Terrain damage, refills,
         // or edits to another object in these chunks cannot reshape this tree.
-        let masked = masked_columns(&self.authored, edits)?;
+        let masked = masked_columns(&self.authored, edits, self.limits.runs)?;
         if masked == self.masked {
             return Ok(None);
         }
+        let mesh = self
+            .limits
+            .mesh(&masked, self.level_height, &self.palette)?;
         self.masked = masked;
-        surface(&self.masked, self.level_height, &self.palette).map(Some)
+        Ok(Some(mesh))
     }
 }
 
@@ -312,6 +421,7 @@ fn check_occupancy_budget(occupancy: &[ColumnData]) -> Result<(), String> {
 fn masked_columns(
     authored: &[ColumnData],
     edits: &FiniteWorldSession,
+    max_runs: usize,
 ) -> Result<Vec<ColumnData>, String> {
     let mut columns = Vec::with_capacity(authored.len());
     let mut run_count = 0;
@@ -323,10 +433,17 @@ fn masked_columns(
                 .removed_in_column(column.position)
                 .filter(|removed| removed.level >= run.bottom && removed.level < run.top)
             {
-                append_fragment(&mut runs, &mut run_count, run, bottom, removed.level)?;
+                append_fragment(
+                    &mut runs,
+                    &mut run_count,
+                    run,
+                    bottom,
+                    removed.level,
+                    max_runs,
+                )?;
                 bottom = removed.level + 1; // Strictly below the exclusive i32 run top.
             }
-            append_fragment(&mut runs, &mut run_count, run, bottom, run.top)?;
+            append_fragment(&mut runs, &mut run_count, run, bottom, run.top, max_runs)?;
         }
         columns.push(ColumnData {
             position: column.position,
@@ -342,9 +459,10 @@ fn append_fragment(
     source: &VoxelRun,
     bottom: i32,
     top: i32,
+    max_runs: usize,
 ) -> Result<(), String> {
     if bottom < top {
-        if *total >= MAX_RUNS {
+        if *total >= max_runs {
             return Err("World Tree removal mask exceeds its run budget".into());
         }
         runs.push(VoxelRun {
@@ -357,12 +475,24 @@ fn append_fragment(
     Ok(())
 }
 
-#[derive(Default)]
 struct Surface {
+    max_vertices: usize,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
+}
+
+impl Default for Surface {
+    fn default() -> Self {
+        Self {
+            max_vertices: MAX_VERTICES,
+            positions: vec![],
+            normals: vec![],
+            colors: vec![],
+            indices: vec![],
+        }
+    }
 }
 
 impl Surface {
@@ -375,7 +505,7 @@ impl Surface {
         if !matches!(vertices.len(), 4 | 6) {
             return Err("World Tree faces must be hex caps or side quads".into());
         }
-        if self.positions.len() + vertices.len() > MAX_VERTICES {
+        if self.positions.len() + vertices.len() > self.max_vertices {
             return Err("World Tree surface exceeds its vertex budget".into());
         }
         let base = u32::try_from(self.positions.len()).map_err(|error| error.to_string())?;
@@ -436,14 +566,24 @@ fn exposed(bottom: i32, top: i32, neighbors: &[VoxelRun]) -> Vec<(i32, i32)> {
     out
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "Validated finite Grand columns lie within the bounded f32 render envelope."
-)]
+#[cfg(test)]
 fn surface(
     occupancy: &[ColumnData],
     level_height: f32,
     palette: &BTreeMap<String, [f32; 4]>,
+) -> Result<Mesh, String> {
+    surface_with_limit(occupancy, level_height, palette, MAX_VERTICES)
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Validated finite Grand columns lie within the bounded f32 render envelope."
+)]
+fn surface_with_limit(
+    occupancy: &[ColumnData],
+    level_height: f32,
+    palette: &BTreeMap<String, [f32; 4]>,
+    max_vertices: usize,
 ) -> Result<Mesh, String> {
     check_occupancy_budget(occupancy)?;
     if !level_height.is_finite() || level_height <= 0.0 {
@@ -453,7 +593,10 @@ fn surface(
         .iter()
         .map(|column| (column.position, column.runs.as_slice()))
         .collect();
-    let mut out = Surface::default();
+    let mut out = Surface {
+        max_vertices,
+        ..default()
+    };
     for column in occupancy {
         let coord = super::local(column.position).ok_or("World Tree column outside local range")?;
         for run in &column.runs {
@@ -516,20 +659,27 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    struct Fixture {
-        runtime: WorldRuntime,
-        edits: FiniteWorldSession,
-        object: ObjectInstance,
-        palette: BTreeMap<String, [f32; 4]>,
+    pub(super) struct Fixture {
+        pub(super) runtime: WorldRuntime,
+        pub(super) edits: FiniteWorldSession,
+        pub(super) object: ObjectInstance,
+        pub(super) palette: BTreeMap<String, [f32; 4]>,
     }
 
     fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
+        fixture_for("grand/world-tree", TREE_ASSET)
+    }
+
+    pub(super) fn fixture_for(
+        id: &str,
+        asset: &str,
+    ) -> Result<Fixture, Box<dyn std::error::Error>> {
         let root = WorldHex::new(15, 0);
         let crown = WorldHex::new(16, 0); // A second source chunk.
         let object = ObjectInstance {
-            id: "grand/world-tree".into(),
+            id: id.into(),
             region_id: "tree".into(),
-            asset: TREE_ASSET.into(),
+            asset: asset.into(),
             origin: VoxelPosition {
                 column: root,
                 level: 10,
@@ -666,7 +816,7 @@ mod tests {
         })
     }
 
-    fn remove_cells(
+    pub(super) fn remove_cells(
         edits: &mut FiniteWorldSession,
         id: &str,
         cells: &[VoxelPosition],
@@ -691,7 +841,7 @@ mod tests {
         Ok(())
     }
 
-    fn tree_in_world(geometry: TreeGeometry, mesh: Mesh) -> (World, Tree) {
+    pub(super) fn tree_in_world(geometry: TreeGeometry, mesh: Mesh) -> (World, Tree) {
         let mut world = World::new();
         world.init_resource::<Assets<Mesh>>();
         let current_surface = mesh.count_vertices() > 0;
@@ -711,7 +861,9 @@ mod tests {
         )
     }
 
-    fn mesh_bits(mesh: &Mesh) -> Option<(Vec<[u32; 3]>, Vec<[u32; 3]>, Vec<[u32; 4]>, Vec<usize>)> {
+    pub(super) fn mesh_bits(
+        mesh: &Mesh,
+    ) -> Option<(Vec<[u32; 3]>, Vec<[u32; 3]>, Vec<[u32; 4]>, Vec<usize>)> {
         use bevy::mesh::VertexAttributeValues::{Float32x3, Float32x4};
         let Some(Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
             return None;
@@ -863,7 +1015,7 @@ mod tests {
             .expect("unloaded refresh")
             .is_none());
         assert_eq!(
-            masked_columns(&f.object.occupancy, &f.edits).expect("unloaded mask"),
+            masked_columns(&f.object.occupancy, &f.edits, MAX_RUNS).expect("unloaded mask"),
             remaining
         );
         let header = f.edits.checkpoint_header();
@@ -912,10 +1064,10 @@ mod tests {
         };
         let mut runs = vec![];
         let mut count = MAX_RUNS;
-        assert!(append_fragment(&mut runs, &mut count, &source, 1, 2).is_err());
+        assert!(append_fragment(&mut runs, &mut count, &source, 1, 2, MAX_RUNS).is_err());
         assert!(runs.is_empty());
         assert_eq!(count, MAX_RUNS);
-        append_fragment(&mut runs, &mut count, &source, 2, 2)
+        append_fragment(&mut runs, &mut count, &source, 2, 2, MAX_RUNS)
             .expect("empty interval costs nothing");
     }
 
