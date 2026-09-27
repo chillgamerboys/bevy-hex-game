@@ -595,16 +595,18 @@ fn temple_plant(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
 }
 
 fn root_temple_ribs(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
-    let frame = g.geography.frame("root_temple_entrance")?;
+    // Ground the piers at the room's sides. The narrow approach is reserved
+    // across its whole width, so placing piers there would sever their feet.
+    let frame = g.geography.frame("root_temple")?;
     let root = frame.hex([0., 0.]);
     let mut cells = Cells::new();
-    for north in [-12., 0., 12.] {
-        for east in [-5., 5.] {
+    for north in [-14., 0., 14.] {
+        for east in [-17., 17.] {
             let p = frame.hex([east, north]);
             let floor = g.support_at(&frame, [east, north])?.level + 1;
             add(&mut cells, p, floor, floor + 26, "timber");
         }
-        for east in -5..=5 {
+        for east in -17..=17 {
             let local = [f64::from(east), north];
             let p = frame.hex(local);
             let floor = g.support_at(&frame, local)?.level + 1;
@@ -748,7 +750,7 @@ fn camp(
     index: usize,
     frame: &LandmarkFrame,
 ) -> Result<ObjectInstance, ContractError> {
-    let root = frame.hex([0., 25.]);
+    let root = frame.hex([0., 30.]);
     let mut cells = Cells::new();
     for q in -6_i64..=6 {
         for r in -6_i64..=6 {
@@ -773,11 +775,11 @@ fn camp(
     }
     // One small open-front hut sits beside each encounter clearing. The room
     // stays navigable, and neither a perimeter wall nor a fort is reconstructed.
-    let hut = frame.hex([25., 0.]);
+    let hut = frame.hex([31., 0.]);
     let base = g.surface(hut).level + 1;
     for east in -5_i32..=5 {
         for north in -7_i32..=7 {
-            let p = frame.hex([25. + f64::from(east), f64::from(north)]);
+            let p = frame.hex([31. + f64::from(east), f64::from(north)]);
             let surface = g.surface(p);
             if surface.water.is_some() || !g.mainland(p) {
                 continue;

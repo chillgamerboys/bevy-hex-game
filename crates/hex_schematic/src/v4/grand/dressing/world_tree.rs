@@ -160,14 +160,14 @@ fn finalized(g: &GrandCompiler, p: WorldHex, pieces: &[Piece]) -> Vec<VoxelRun> 
         else {
             continue;
         };
-        if !g.reserved_interval(p, bottom, top) {
+        if !g.tree_reserved_interval(p, bottom, top) {
             append(&mut out, bottom, top, selected.material);
             continue;
         }
         // Only intersecting columns need this exact narrow carve. The shared
         // room, doorway and movement reservations remain authoritative.
         for level in bottom..top {
-            if !g.reserved_interval(p, level, level + 1) {
+            if !g.tree_reserved_interval(p, level, level + 1) {
                 append(&mut out, level, level + 1, selected.material);
             }
         }
@@ -455,7 +455,7 @@ mod tests {
             for run in &column.runs {
                 run_count += 1;
                 assert!(
-                    !g.reserved_interval(column.position, run.bottom, run.top),
+                    !g.tree_reserved_interval(column.position, run.bottom, run.top),
                     "tree blocks a shared passage"
                 );
                 let (terrain, _) = g.column(column.position);
