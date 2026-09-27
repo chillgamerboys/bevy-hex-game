@@ -114,7 +114,11 @@ fn ordinary_lowland_is_a_broad_connected_landscape() {
     components.sort_unstable_by(|a, b| b.cmp(a));
     let largest = components.first().copied().expect("survey is nonempty");
     let second = components.get(1).copied().unwrap_or(0);
-    println!("LOWLAND columns={} walkable_edges={walkable}/{edges} largest={largest} second={second} components={}", ground.len(), components.len());
+    println!(
+        "LOWLAND columns={} walkable_edges={walkable}/{edges} largest={largest} second={second} components={}",
+        ground.len(),
+        components.len()
+    );
     // Retain the earlier broad-hill usability standard. The river may divide
     // the field into two banks; this does not claim controller traversal proof.
     assert!(
@@ -308,8 +312,9 @@ fn island_landing_turn_has_a_broad_connected_surface() {
 }
 
 #[test]
-fn shadow_outlet_flat_landing_joins_crystal_shoulder_without_a_lip() {
+fn shadow_outlet_reaches_crystal_stairs_across_clear_well_floor() {
     let g = plain();
+    let d = g.geography.document.as_ref().expect("geography");
     let shadow = g
         .layered
         .routes
@@ -323,29 +328,49 @@ fn shadow_outlet_flat_landing_joins_crystal_shoulder_without_a_lip() {
         .find(|r| r.id == "crystal_ascent")
         .expect("Crystal route");
     let exit = *shadow.supports.last().expect("exit");
-    assert_eq!(
-        Some(&exit),
-        crystal.supports.first(),
-        "the tunnel meets the actual bottom tread"
-    );
-    let landing: BTreeSet<_> = shadow
-        .ribbon
+    let start = *crystal.supports.first().expect("bottom tread");
+    let floor = g.geography.top_level(d.ascent.base) - 1;
+    // The tunnel and first tread enter different sides of the open well.
+    // Query actual composed columns; the named floor is a search datum, never
+    // a fabricated support or permission to walk through an overhanging tread.
+    let clear_floor: BTreeSet<_> = g
+        .crystal
         .iter()
-        .chain(&crystal.ribbon)
         .copied()
+        .filter(|p| oracle::crystal_distance(d, g.geography.model_xz(*p)) < d.ascent.well_apothem)
+        .flat_map(|column| {
+            (floor - 1..=floor + 1).map(move |level| VoxelPosition { column, level })
+        })
         .filter(|s| {
-            s.column.checked_distance(exit.column).is_ok_and(|d| d <= 5)
-                && (s.level - exit.level).abs() <= 8
+            g.clear_support(*s, 8)
+                && g.column(s.column)
+                    .1
+                    .is_none_or(|water| water.top <= s.level + 1)
         })
         .collect();
-    assert!(landing.len() > 30, "the join has body width");
-    for s in &landing {
-        assert!(g.clear_support(*s, 8), "landing clearance {s:?}");
-    }
-    assert_eq!(
-        support_component(&landing, exit),
-        landing,
-        "outlet lip separates tunnel and bottom stair"
+    // One neighboring hex ring gives the corridor real width. A lone sequence
+    // of clear point samples beside walls is insufficient for this connection.
+    let body_floor: BTreeSet<_> = clear_floor
+        .iter()
+        .copied()
+        .filter(|s| {
+            neighbors(s.column).all(|column| {
+                (s.level - 1..=s.level + 1)
+                    .any(|level| clear_floor.contains(&VoxelPosition { column, level }))
+            })
+        })
+        .collect();
+    assert!(
+        body_floor.contains(&exit),
+        "Shadow exit has no dry body-width floor"
+    );
+    assert!(
+        body_floor.contains(&start),
+        "bottom tread has no dry body-width floor"
+    );
+    assert!(
+        support_component(&body_floor, exit).contains(&start),
+        "actual well floor disconnects the Shadow exit from the first Crystal tread"
     );
 }
 
@@ -493,10 +518,11 @@ fn frozen_shore_preserves_a_water_separated_garden_island() {
         g.clear_support(shore, 8),
         "the ordinary mountain route reaches dry shore"
     );
-    assert!(g
-        .column(shore.column)
-        .1
-        .is_none_or(|l| l.top <= shore.level + 1));
+    assert!(
+        g.column(shore.column)
+            .1
+            .is_none_or(|l| l.top <= shore.level + 1)
+    );
     let garden = g.geography.frame("shrine_water").expect("garden shrine");
     let court = g.support_at(&garden, [0., 0.]).expect("garden court");
     assert!(g.clear_support(court, 8));
