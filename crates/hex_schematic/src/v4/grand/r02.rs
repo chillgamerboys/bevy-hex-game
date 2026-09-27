@@ -472,6 +472,10 @@ impl GrandCompiler {
         let top = self.geography.top_level(h).max(2);
         let mut material = if h < 9. {
             "sand"
+        } else if water.is_some() {
+            // Inland rock beds have a deliberate submerged cap. Terrestrial
+            // altitude/biome bands must not paint moss or snow through lakes.
+            "stone"
         } else if volcano > mainland && h > 45. {
             "basalt"
         } else if h > 340. + 17. * (point[0] * 0.012 - point[1] * 0.014).sin() {
@@ -481,13 +485,15 @@ impl GrandCompiler {
         } else {
             "moss"
         };
-        if self.crystal.contains(&p)
+        if water.is_none()
+            && self.crystal.contains(&p)
             && oracle::crystal_distance(d, point) >= d.ascent.well_apothem
             && material != "snow"
         {
             material = "slate";
         }
-        if self.geography.frozen_planting_weight(p) > 0. && h > 180. && h < 255. {
+        if water.is_none() && self.geography.frozen_planting_weight(p) > 0. && h > 180. && h < 255.
+        {
             material = "snow";
         }
         GrandSurface {
@@ -593,6 +599,39 @@ impl GrandCompiler {
 mod cave_cover_tests {
     use super::*;
     use std::collections::BTreeSet;
+    #[test]
+    fn inland_lake_beds_do_not_inherit_terrestrial_snow_or_moss() {
+        let compiler = tests::compiler(false);
+        let g = &compiler.geography;
+        let d = g.document.as_ref().expect("canonical geography");
+        // These exact columns produced blue, green and pale panels in the
+        // plain05 lake frame despite sharing one standing-water surface.
+        for (q, r) in [
+            (728, -250),
+            (783, -294),
+            (690, -262),
+            (695, -314),
+            (743, -333),
+        ] {
+            let p = WorldHex::new(q, r);
+            let surface = compiler.surface(p);
+            let (column, liquid) = compiler.column(p);
+            let liquid = liquid.expect("reviewed lake sample remains submerged");
+            assert_eq!(liquid.top, g.top_level(d.upper_lake.level));
+            assert!(liquid.top > surface.level + 1);
+            assert_eq!(column.material_at(surface.level), Some("stone"), "{p:?}");
+        }
+        let dry_frozen = compiler.surface(g.world_hex([-60., 776.]));
+        assert!(dry_frozen.water.is_none(), "forest ground remains dry");
+        assert_eq!(dry_frozen.material, "snow", "dry Frozen forest keeps snow");
+        let ocean = compiler.surface(g.world_hex([0., -1200.]));
+        assert!(ocean.level < SEA_TOP);
+        assert_eq!(
+            ocean.material, "sand",
+            "ocean/coastal sediment is preserved"
+        );
+    }
+
     #[test]
     fn closed_cave_cover_never_inflates_approved_landforms() {
         let compiler = tests::compiler(false);
