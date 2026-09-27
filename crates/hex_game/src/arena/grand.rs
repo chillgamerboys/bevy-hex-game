@@ -175,20 +175,56 @@ fn content() -> Result<(GrandTuning, ArenaTuning, String), String> {
     let package = hex_map::arena::streamed::package_path_for(ArenaMap::GrandV4);
     for name in ["grand-overview.ron", "arena-sites.ron", "grand-biomes.ron"] {
         let path = package.join(name);
-        let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        digest.update(name.as_bytes());
-        digest.update(
-            &u64::try_from(bytes.len())
-                .map_err(|error| error.to_string())?
-                .to_le_bytes(),
-        );
-        digest.update(&bytes);
+        let file =
+            std::fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let length = file.metadata().map_err(|error| error.to_string())?.len();
+        hash_companion(
+            &mut digest,
+            name,
+            file,
+            length,
+            hex_map::arena::streamed::GRAND_OVERVIEW_MAX_BYTES,
+        )
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     }
     Ok((
         grand.ok_or("Grand tuning is missing")?,
         arena.ok_or("Arena tuning is missing")?,
         format!("grand-{CONTENT_VERSION}-{:016x}", digest.digest()),
     ))
+}
+
+/// Preserve the existing name/length/bytes digest while bounding temporary memory.
+fn hash_companion(
+    digest: &mut xxhash_rust::xxh3::Xxh3,
+    name: &str,
+    reader: impl std::io::Read,
+    length: u64,
+    limit: u64,
+) -> Result<(), String> {
+    use std::io::Read;
+    if length > limit {
+        return Err("Grand companion exceeds the admitted size limit".into());
+    }
+    digest.update(name.as_bytes());
+    digest.update(&length.to_le_bytes());
+    let mut reader = reader.take(length.saturating_add(1));
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut actual = 0_u64;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        actual += u64::try_from(count).map_err(|error| error.to_string())?;
+        digest.update(buffer.get(..count).ok_or("Invalid companion read length")?);
+    }
+    if actual != length {
+        return Err("Grand companion changed length while loading".into());
+    }
+    Ok(())
 }
 
 fn before_frame(world: &mut World) {

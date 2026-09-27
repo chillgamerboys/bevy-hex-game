@@ -933,3 +933,32 @@ fn process_checkpoint_child() {
         _ => panic!("unsupported child phase"),
     }
 }
+
+#[test]
+fn companion_streaming_preserves_checkpoint_identity_and_rejects_incomplete_reads() {
+    let bytes = vec![37_u8; 40_001];
+    let length = u64::try_from(bytes.len()).expect("bounded fixture");
+    let name = "grand-overview.ron";
+    let mut prior = xxhash_rust::xxh3::Xxh3::new();
+    prior.update(name.as_bytes());
+    prior.update(&length.to_le_bytes());
+    prior.update(&bytes);
+    let mut current = xxhash_rust::xxh3::Xxh3::new();
+    hash_companion(&mut current, name, bytes.as_slice(), length, length)
+        .expect("complete companion");
+    assert_eq!(current.digest(), prior.digest());
+    for (declared, cap) in [
+        (length + 1, length + 1),
+        (length - 1, length),
+        (length, length - 1),
+    ] {
+        assert!(hash_companion(
+            &mut xxhash_rust::xxh3::Xxh3::new(),
+            name,
+            bytes.as_slice(),
+            declared,
+            cap
+        )
+        .is_err());
+    }
+}
