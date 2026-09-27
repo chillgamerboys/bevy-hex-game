@@ -68,27 +68,30 @@ Source residency is bounded at 512 chunks and detailed presentation at 256 chunk
 The distant World Tree mesh comes from compact authored columns, yields to the
 complete detailed object, and applies persistent removals after edits or restore.
 Ground damage cannot erase the tree. Updating this mesh never pins source chunks;
-it is bounded to 20,000 columns, 25,000 runs and 600,000 indexed vertices. The current
-265-by-223.5-unit canopy uses 496,932 vertices across an 85-chunk footprint. It is
-not collision or seabed authority. Local shrine and library lights illuminate the
-opaque caves without changing global daylight or gameplay visibility. Final cave
+it is bounded to 20,000 columns, 25,000 runs and 750,000 indexed vertices. Revision02
+uses the approved tapered trunk, exposed branches, substantial roots and deep
+asymmetric crown. Actual new-package counts and performance remain measured gates;
+the earlier canopy counts do not apply. This presentation is not collision or seabed
+authority. Local shrine and library lights illuminate the opaque caves without changing global daylight or gameplay visibility. Final cave
 contrast and readability remain part of fresh presentation review.
 
 Ordinary forest trees also publish authored distant silhouettes, independent of
 source-chunk residency. Shared crown/trunk meshes yield atomically to detailed
 objects, retain persistent cuts and never pin source chunks. The bounded overview
-contains 773 ordinary trees from 13 recipe families; its full intact geometry is about
-1.41 million vertices against a 1.6-million limit. Ground edits do not erase trees.
+retains a 1.6-million-vertex limit. Revision02 placements follow the shared forest
+regions, slopes and movement reservations; record their actual admitted count from
+the new package. Ground edits do not erase trees.
 The recipes reuse the earlier Dragon/Goblin expedition’s curved timber and layered
 foliage, with irregular grove edges and understory. The garden now has an open
 courtyard, planted beds and a shallow fountain rim; the library has arched wall
 bays with colored books. Fresh composed-package review remains the acceptance
 authority for their appearance.
 
-The detailed terrain renderer owns water above mean sea level. The animated ocean
-owns sea-level water; raised neighbors still occlude its boundary faces. This keeps
-the garden, fountain, falls, valley lake and river visible without duplicate ocean
-bottoms or sides.
+The detailed terrain renderer owns nearby inland water. Distant inland water and
+its surrounding terrain publish exact faces from those same authored columns and
+yield atomically to detail; persistent edits suppress stale faces. The animated
+ocean owns sea-level water, and raised neighbors occlude its boundary faces. The
+shared water clock and continuous river phase are preserved across presentation.
 
 ## Reproducible acceptance
 
@@ -113,9 +116,9 @@ process-memory or frame-rate claim.
 integrity. The restart clock fixture also covers a run longer than sixty hours.
 `--walking` exercises the current authored routes and independent broad-area probes through the real controller,
 including independent forest crossings, riverbank escapes, and published stacked mountain/cave connections. It requires completed simulation ticks and clear supported endpoints.
-`--sailing` measures the authored crossing with one ordinary B input, live wind and
-unupgraded boat physics; its reported time is a measurement against the approximate
-45-second design reference, not an assumed success.
+`--sailing` measures western-shore and starting-bay departures separately with one
+ordinary B input, the same live wind and unupgraded boat physics. The bay is farther
+away. Both reported times are measurements; neither is an assumed 45-second pass.
 
 The 43-view capture matrix is windowless and requires a clean committed candidate
 and a package whose authoring signature matches current source. A `--view` subset
@@ -174,4 +177,4 @@ same horizontal position cannot count as reaching a Crystal stair waypoint.
 
 The revision02 capture matrix adds the connected Crystal/Frozen overview and three
 ordinary valley views of the mountain enclosure. They establish game transfer
-evidence; the older package04 measurements above remain historical.
+evidence; earlier package04 measurements remain historical in the wave manifest.
