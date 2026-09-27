@@ -574,10 +574,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "Canonical fixture and codec failures must fail this test with context."
-    )]
     fn canonical_landmarks_and_ascent_use_the_new_coordinate_frame() {
         let (g, map) = fixture().expect("canonical biome fixture");
         let d = g.document.as_ref().expect("missing canonical document");
@@ -639,10 +635,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "Canonical fixture and codec failures must fail this test with context."
-    )]
     fn stacked_rooms_and_multiturn_routes_preserve_vertical_labels() {
         let (g, map) = fixture().expect("canonical biome fixture");
         let d = g.document.as_ref().expect("missing canonical document");
@@ -683,10 +675,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "Canonical fixture and codec failures must fail this test with context."
-    )]
     fn companion_validation_rejects_nonfinite_unbounded_and_ambiguous_data() {
         let (_, map) = fixture().expect("canonical biome fixture");
         let mut bad = map.clone();
@@ -707,10 +695,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "Canonical fixture and codec failures must fail this test with context."
-    )]
     fn legacy_companions_keep_legacy_labels_and_cannot_inject_new_regions() {
         let mut map: GrandBiomeMap = ron::from_str(
             "(version:1,source_fingerprint:1,package_fingerprint:2,mainland_rows:[],crystal_rows:[])",
