@@ -298,6 +298,251 @@ fn context<'a>(
     }
 }
 
+struct ShallowBank {
+    actor: Actor,
+    world: CollisionWorld,
+    terrain: ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    environment: OceanEnvironmentView,
+}
+
+impl ShallowBank {
+    fn new(high_wall: bool) -> Self {
+        let (mut actor, _, mut terrain, mut geometry, environment) = fixture();
+        geometry.level_height = 0.35;
+        terrain.selection.map = ArenaMap::GrandV4;
+        terrain.voxels.clear();
+        terrain.columns.clear();
+        terrain.liquids.clear();
+        for q in -12..=12 {
+            for r in -12..=12 {
+                let coord = HexCoord::from_axial(q, r);
+                // Constant physical-east bands prevent a diagonal axial wall
+                // from becoming a sideways path around the test obstacle.
+                let band = (2 * q + r).div_euclid(2);
+                let top = match band {
+                    ..=-1 => -4,
+                    0 => -3,
+                    1 if !high_wall => -2,
+                    2 if !high_wall => -1,
+                    _ => 0,
+                };
+                terrain.columns.insert(
+                    coord,
+                    vec![ArenaSolidSpan {
+                        bottom: TilePos::new(coord, -20),
+                        top_level: top,
+                        substance: SubstanceId(1),
+                    }],
+                );
+                if top < 0 {
+                    terrain.liquids.push(ArenaSolidSpan {
+                        bottom: TilePos::new(coord, top + 1),
+                        top_level: 0,
+                        substance: SubstanceId(2),
+                    });
+                }
+            }
+        }
+        terrain.liquids.sort_by_key(|span| span.bottom);
+        let mut world = CollisionWorld::default();
+        world.refresh(&terrain, geometry);
+        actor.feet = HexCoord::from_axial(-3, 0).to_world(-actor.dimensions.y * (2.0 / 3.0));
+        actor.previous_feet = actor.feet;
+        actor.body = Default::default();
+        actor.grounded = false;
+        actor.free_flight = None;
+        actor.marine = Some(MarineState {
+            lab: true,
+            ..Default::default()
+        });
+        Self {
+            actor,
+            world,
+            terrain,
+            geometry,
+            environment,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        let swimming = tick_or_wait(
+            &mut self.actor,
+            ActorIntent {
+                movement: Vec2::Y,
+                ..Default::default()
+            },
+            &context(&self.terrain, self.geometry, &self.environment),
+            &self.world,
+        );
+        if !swimming {
+            crate::motion::tick(
+                &mut self.actor,
+                Vec3::X,
+                false,
+                false,
+                false,
+                &self.world,
+                &crate::EncounterTuning::default(),
+            );
+        }
+        swimming
+    }
+}
+
+#[test]
+fn grand_swimmer_walks_out_over_one_voxel_submerged_steps_without_jump() {
+    let mut bank = ShallowBank::new(false);
+    let target = HexCoord::from_axial(5, 0).to_world(0.0);
+    let mut swimming_ticks = 0;
+    let mut wading_ticks = 0;
+    let mut maximum_step = 0.0_f32;
+    let mut ground_handoff = false;
+    for _ in 0..1200 {
+        let swimming = bank.advance();
+        assert!(
+            !ground_handoff || !swimming,
+            "shallow support must retain ordinary control on subsequent ticks"
+        );
+        if swimming {
+            swimming_ticks += 1;
+        } else {
+            ground_handoff = true;
+            if bank.actor.feet.y < -0.01 {
+                wading_ticks += 1;
+            }
+        }
+        assert!(bank.world.clear(
+            bank.actor.feet,
+            bank.actor.dimensions.y,
+            bank.actor.dimensions.x * 0.5
+        ));
+        maximum_step = maximum_step.max(bank.actor.step_rise_this_tick());
+        if bank.actor.feet.x >= target.x && bank.actor.grounded {
+            break;
+        }
+    }
+    assert!(
+        swimming_ticks > 0 && wading_ticks > 0,
+        "requires an actual swim-to-wade transition"
+    );
+    assert!(
+        bank.actor.feet.x >= target.x && bank.actor.grounded,
+        "swimmer stranded at {:?}",
+        bank.actor.feet
+    );
+    assert!(bank.actor.swimming().is_some_and(|state| !state.active));
+    assert!(
+        maximum_step > 0.3
+            && maximum_step <= crate::controller::ground_motion_contract().automatic_step_height
+    );
+    assert!(bank.actor.feet.y.abs() < 0.001);
+}
+
+#[test]
+fn grand_swim_handoff_does_not_climb_a_three_voxel_bank_wall() {
+    let mut bank = ShallowBank::new(true);
+    let mut wading_ticks = 0;
+    for _ in 0..1200 {
+        if !bank.advance() {
+            wading_ticks += 1;
+        }
+        assert!(bank.world.clear(
+            bank.actor.feet,
+            bank.actor.dimensions.y,
+            bank.actor.dimensions.x * 0.5
+        ));
+        assert!(
+            bank.actor.step_rise_this_tick()
+                <= crate::controller::ground_motion_contract().automatic_step_height
+        );
+    }
+    assert!(wading_ticks > 0 && bank.actor.grounded);
+    assert!(bank.actor.feet.x < HexCoord::from_axial(1, 0).to_world(0.0).x);
+    assert!(
+        (bank.actor.feet.y + 1.05).abs() < 0.001,
+        "wall must remain too high: {:?}",
+        bank.actor.feet
+    );
+}
+
+#[test]
+fn grand_near_bed_handoff_preserves_deep_dive_loading_and_lab_policy() {
+    let mut bank = ShallowBank::new(false);
+    let intent = ActorIntent::default();
+    assert!(!supported_grand_wading(
+        &bank.actor,
+        intent,
+        &context(&bank.terrain, bank.geometry, &bank.environment),
+        0.0,
+        &bank.world
+    ));
+    bank.actor.feet.y = -1.3;
+    assert!(
+        !supported_grand_wading(
+            &bank.actor,
+            intent,
+            &context(&bank.terrain, bank.geometry, &bank.environment),
+            0.0,
+            &bank.world
+        ),
+        "a deep bed within one voxel must not turn submerged swimming into walking"
+    );
+    bank.actor.feet = HexCoord::ORIGIN.to_world(-0.8);
+    let feet = bank.actor.feet;
+    assert!(supported_grand_wading(
+        &bank.actor,
+        intent,
+        &context(&bank.terrain, bank.geometry, &bank.environment),
+        0.0,
+        &bank.world
+    ));
+    assert!(!supported_grand_wading(
+        &bank.actor,
+        ActorIntent {
+            flight_vertical: -1.0,
+            ..intent
+        },
+        &context(&bank.terrain, bank.geometry, &bank.environment),
+        0.0,
+        &bank.world
+    ));
+    assert_eq!(
+        bank.actor.feet, feet,
+        "handoff query must not snap the body"
+    );
+    bank.terrain.selection.map = ArenaMap::WaterLab;
+    assert!(
+        tick_or_wait(
+            &mut bank.actor,
+            intent,
+            &context(&bank.terrain, bank.geometry, &bank.environment),
+            &bank.world
+        ),
+        "legacy lab depth policy remains unchanged"
+    );
+    bank.terrain.selection.map = ArenaMap::GrandV4;
+    bank.terrain
+        .residency
+        .as_mut()
+        .expect("streamed fixture")
+        .ready
+        .clear();
+    bank.terrain.revision += 1;
+    bank.world.refresh(&bank.terrain, bank.geometry);
+    let feet = bank.actor.feet;
+    assert!(tick_or_wait(
+        &mut bank.actor,
+        intent,
+        &context(&bank.terrain, bank.geometry, &bank.environment),
+        &bank.world
+    ));
+    assert_eq!(
+        bank.actor.feet, feet,
+        "unloaded support never grants recovery motion"
+    );
+}
+
 fn toggle() -> ActorIntent {
     ActorIntent {
         boat_toggle: true,

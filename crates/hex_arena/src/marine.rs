@@ -8,7 +8,7 @@ use hex_core::ocean::{
 };
 use hex_core::{HexCoord, TilePos};
 
-use crate::collision::{slide_with_contacts, CollisionWorld};
+use crate::collision::{CollisionWorld, slide_with_contacts};
 use crate::{Actor, ActorIntent, ArenaSession, STEP};
 
 const OXYGEN: f32 = 90.0;
@@ -726,6 +726,37 @@ fn boat_tick(
     }
 }
 
+/// A swimmer can reach a submerged step before its centre enters shallow water.
+/// Hand Grand's neutral motion back only when nearby admitted support can hold
+/// the standing body above water. The ground controller alone supplies gravity,
+/// grounding and automatic steps.
+fn supported_grand_wading(
+    actor: &Actor,
+    intent: ActorIntent,
+    sea: &MarineWorld<'_>,
+    water_height: f32,
+    world: &CollisionWorld,
+) -> bool {
+    if sea.terrain.selection.map != hex_core::arena::ArenaMap::GrandV4
+        || intent.flight_vertical.abs() > 0.01
+        || intent.high_jump
+        || actor.body.vertical_velocity > 0.0
+        || actor.body.impulse_velocity.y > 0.0
+    {
+        return false;
+    }
+    let height = actor.dimensions.y;
+    let radius = actor.dimensions.x * 0.5;
+    let distance = sea.geometry.level_height;
+    world.clear(actor.feet, height, radius)
+        && !world.needs_terrain(actor.feet, Vec3::NEG_Y * distance, height, radius)
+        && world
+            .ground(actor.feet, height, radius, distance)
+            .is_some_and(|support| {
+                support.y + height >= water_height && world.clear(support, height, radius)
+            })
+}
+
 /// Returns true when boat/swimming owns movement or must wait for exact terrain.
 pub(crate) fn tick_or_wait(
     actor: &mut Actor,
@@ -811,7 +842,9 @@ pub(crate) fn tick_or_wait(
     } else {
         0.95
     };
-    if lab && surface.height - surface.bed_height < immersion {
+    if (lab && surface.height - surface.bed_height < immersion)
+        || supported_grand_wading(actor, intent, sea, surface.height, world)
+    {
         if let Some(state) = &mut actor.marine {
             state.swim.active = false;
             state.reset_wave_motion();
