@@ -403,3 +403,19 @@ and a read-only sparse edit range query in the finite session. These reuse detai
 water presentation and invalidate far faces without changing water physics or the
 persistence format. The common authored-camera/inland-water schema landed first as
 7262bf3; application consumers follow that producer vocabulary.
+
+Independent continuous-oracle calibration sampled the actual hex lattice and flood
+filled its largest six-neighbor mainland component. Scale0.8838784715190828 gives
+exactly653282 mainland columns, excluding a53-column detached islet, with no boundary
+trimming. Vertical scale stays1. The island is shifted to retain an800-unit geometric
+shore gap; actual sailing remains pending. Integer axial recentering[361,87] keeps
+the exact measurement while limiting the proposed full ocean disk to radius1052.
+The hash-bound numerical receipt is `approved-r02/production-calibration.json`.
+The Rust compiler must independently reproduce these figures before package admission.
+
+Root owns the narrow explicit-bound validators in Northern forest/ground-cover data
+(284bc7d). Existing no-argument validation retains its legacy limits; current Grand
+producer/consumers pass the admitted radius and levels. Five current-source app camera
+and ground-support tests pass at42aec8e under the serialized fresh-workspace CI build;
+23 Python capture/motion/package provenance tests pass. These are focused checks, not
+new-world compilation or final combined acceptance.

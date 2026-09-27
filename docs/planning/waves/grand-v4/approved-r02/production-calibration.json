@@ -1,0 +1,66 @@
+{
+  "oracle": "largest6-neighbor mainland component of continuous build_revision.terrain(with_volcano=False); excludes detached islets; no12u raster or2u vertical quantization",
+  "target_mainland_columns": 653282,
+  "scale_iterations": [
+    {
+      "scale": 0.8911459334172724,
+      "mainland_columns": 664066,
+      "other_positive_columns": 50
+    },
+    {
+      "scale": 0.8838805009848867,
+      "mainland_columns": 653286,
+      "other_positive_columns": 53
+    },
+    {
+      "scale": 0.8838777950280654,
+      "mainland_columns": 653281,
+      "other_positive_columns": 53
+    },
+    {
+      "scale": 0.8838784715190828,
+      "mainland_columns": 653282,
+      "other_positive_columns": 53
+    }
+  ],
+  "horizontal_scale": 0.8838784715190828,
+  "vertical_scale": 1,
+  "mainland_columns_after_boundary_correction": 653282,
+  "boundary_corrections_before_translation": [],
+  "volcano_center_model_adjusted": [
+    -1732.4511165300764,
+    -1027.3838139582456
+  ],
+  "volcano_shift_world": [
+    -83.08998259204903,
+    -49.27429259194428
+  ],
+  "shore_gap_world": 800.0000034004819,
+  "sailing_shore_pair_before_translation_model_north": [
+    [
+      -698.0849745699347,
+      -190.11981735358856
+    ],
+    [
+      -1270.9372078629308,
+      -748.5464680893838
+    ]
+  ],
+  "minimum_centered_land_radius": 1003.6080041028371,
+  "axial_translation": [
+    361,
+    87
+  ],
+  "world_translation_xz": [
+    700.6145516616108,
+    130.5
+  ],
+  "recommended_radius_with_48hex_apron": 1052,
+  "source_sha256": "fced0f8ced447a8acfd752ecc4c1a296da37ea1ddcc12fabbe36fbe2d52864bd",
+  "status": "independent numeric calibration; compiler must independently reproduce count and actual boat timing",
+  "implementation_hashes": {
+    "production-calibration.py": "e5b2d08e4681c95f437bfefc5dd802f9a9a13e6fd35556cd0bbf2010f9b974fe",
+    "round-a/revision-02/model/build_revision.py": "28ce90132a0b98844d83b7178e76bb478b9b794ea6cf02c046b1faaa54669412",
+    "round-a/model/build_models.py": "80156bf1241e2b2fb6e47cdb8ed28c32f2657f312d07fa018e2fdb55859d856a"
+  }
+}

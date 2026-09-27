@@ -9,7 +9,7 @@ use hex_world_contracts::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-pub use surface::{ForestMesh, forest_mesh};
+pub use surface::{forest_mesh, ForestMesh};
 
 /// Maximum different shared authored shapes, including snowy palette variants.
 pub const MAX_FOREST_SHAPES: usize = 18;
