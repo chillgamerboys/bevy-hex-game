@@ -769,6 +769,10 @@ fn capture_pose(
                     eye: actor.eye().y - actor.feet.y,
                     height: actor.body_dimensions().y,
                     radius: actor.body_dimensions().x * 0.5,
+                    // Authored heights identify a storey. Permit a local
+                    // terrain adjustment within the horizontal search radius,
+                    // but never silently substitute a distant cave roof.
+                    maximum_height_shift: Some(HexCoord::from_axial(6, 0).to_world(0.0).length()),
                 },
             );
             // Ground admission moves the eye onto real, loaded support. Keep the
@@ -884,6 +888,7 @@ fn capture_pose(
                 eye: actor.eye().y - actor.feet.y,
                 height: actor.body_dimensions().y,
                 radius: actor.body_dimensions().x * 0.5,
+                maximum_height_shift: None,
             },
         ));
     }
@@ -1012,6 +1017,7 @@ struct GroundCaptureProfile {
     eye: f32,
     height: f32,
     radius: f32,
+    maximum_height_shift: Option<f32>,
 }
 
 fn authored_ground_direction(position: Vec3, original_eye: Vec3, target: Vec3) -> Transform {
@@ -1027,32 +1033,50 @@ fn ground_capture_pose(
     sea: f32,
     body: GroundCaptureProfile,
 ) -> CapturePose {
-    let mut candidates = HexCoord::from_world(desired).within_radius(6);
+    // Compare every admitted support in three dimensions. A cave camera must
+    // not snap onto the exterior roof merely because that is the highest span
+    // in the closest horizontal column.
+    let mut candidates: Vec<_> = HexCoord::from_world(desired)
+        .within_radius(6)
+        .into_iter()
+        .filter(|coord| {
+            terrain
+                .residency
+                .as_ref()
+                .is_none_or(|residency| residency.at(*coord, geometry) == ArenaAvailability::Ready)
+        })
+        .flat_map(|coord| {
+            terrain
+                .columns
+                .get(&coord)
+                .into_iter()
+                .flatten()
+                .map(move |span| hex_core::TilePos::new(coord, span.top_level))
+        })
+        .collect();
     candidates.sort_by(|a, b| {
-        a.to_world(0.0)
-            .distance_squared(desired.with_y(0.0))
-            .total_cmp(&b.to_world(0.0).distance_squared(desired.with_y(0.0)))
+        a.coord
+            .to_world(geometry.top(*a) + body.eye)
+            .distance_squared(desired)
+            .total_cmp(
+                &b.coord
+                    .to_world(geometry.top(*b) + body.eye)
+                    .distance_squared(desired),
+            )
+            .then_with(|| a.cmp(b))
     });
-    let eye = candidates.into_iter().find_map(|coord| {
-        if terrain
-            .residency
-            .as_ref()
-            .is_some_and(|residency| residency.at(coord, geometry) != ArenaAvailability::Ready)
-        {
-            return None;
-        }
-        let level = terrain
-            .columns
-            .get(&coord)?
-            .iter()
-            .map(|span| span.top_level)
-            .max()?;
-        let ground = geometry.top(hex_core::TilePos::new(coord, level));
-        if ground < sea
-            || terrain
-                .liquids
-                .iter()
-                .any(|span| span.bottom.coord == coord && span.top_level > level)
+    let eye = candidates.into_iter().find_map(|support| {
+        let coord = support.coord;
+        let ground = geometry.top(support);
+        if body
+            .maximum_height_shift
+            .is_some_and(|limit| (ground + body.eye - desired.y).abs() > limit)
+            || ground < sea
+            || terrain.liquids.iter().any(|span| {
+                span.bottom.coord == coord
+                    && span.top_level > support.level
+                    && geometry.top(span.bottom) - geometry.level_height < ground + body.height
+            })
         {
             return None;
         }
@@ -1069,7 +1093,9 @@ fn ground_capture_pose(
             let low = geometry.voxel_at(eye.with_y(ground + 0.02) + offset);
             let high = geometry.voxel_at(eye.with_y(ground + body.height - 0.02) + offset);
             low.zip(high).is_some_and(|(low, high)| {
-                (low.level..=high.level).all(|level| {
+                terrain.residency.as_ref().is_none_or(|residency| {
+                    residency.at(low.coord, geometry) == ArenaAvailability::Ready
+                }) && (low.level..=high.level).all(|level| {
                     terrain
                         .solid_at(hex_core::TilePos::new(low.coord, level))
                         .is_none()
@@ -1327,6 +1353,63 @@ mod tests {
     }
 
     #[test]
+    fn ground_fixture_chooses_clear_stacked_support_near_authored_height() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry::default();
+        let body = GroundCaptureProfile {
+            eye: 0.93,
+            height: 1.2,
+            radius: 0.25,
+            maximum_height_shift: Some(HexCoord::from_axial(6, 0).to_world(0.0).length()),
+        };
+        let mut terrain = ArenaTerrainView::default();
+        let span = |coord, bottom, top_level| ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(coord, bottom),
+            top_level,
+            substance: hex_core::SubstanceId::AIR,
+        };
+        terrain.columns.insert(
+            HexCoord::ORIGIN,
+            vec![
+                span(HexCoord::ORIGIN, 0, 80),
+                span(HexCoord::ORIGIN, 100, 120),
+                span(HexCoord::ORIGIN, 180, 200),
+            ],
+        );
+        // Water above a cave roof must not make the dry lower floor wet.
+        terrain.liquids.push(span(HexCoord::ORIGIN, 201, 208));
+        for level in [80, 120] {
+            let height = geometry.top(hex_core::TilePos::new(HexCoord::ORIGIN, level)) + body.eye;
+            let desired = Vec3::Y * height;
+            let pose = ground_capture_pose(&terrain, geometry, desired, Vec3::NEG_Z, 0.0, body);
+            assert!(!pose.ground_pending);
+            assert!(pose.camera.translation.distance(desired) < 0.001);
+        }
+        // A blocked center should use a nearby floor at the same level before
+        // considering a clear but unrelated upper storey in that center.
+        terrain
+            .object_columns
+            .insert(HexCoord::ORIGIN, vec![span(HexCoord::ORIGIN, 81, 84)]);
+        let neighbor = HexCoord::from_axial(1, 0);
+        terrain
+            .columns
+            .insert(neighbor, vec![span(neighbor, 0, 80)]);
+        let height = geometry.top(hex_core::TilePos::new(HexCoord::ORIGIN, 80)) + body.eye;
+        let pose =
+            ground_capture_pose(&terrain, geometry, Vec3::Y * height, Vec3::NEG_Z, 0.0, body);
+        assert!(!pose.ground_pending);
+        assert_eq!(HexCoord::from_world(pose.camera.translation), neighbor);
+        assert!((pose.camera.translation.y - height).abs() < 0.001);
+        terrain.columns.remove(&neighbor);
+        let pose =
+            ground_capture_pose(&terrain, geometry, Vec3::Y * height, Vec3::NEG_Z, 0.0, body);
+        assert!(
+            pose.ground_pending,
+            "an obstructed lower floor cannot authorize an upper storey"
+        );
+    }
+
+    #[test]
     fn ground_fixture_waits_for_clear_actual_terrain() {
         use hex_core::arena::ArenaSolidSpan;
         let geometry = ArenaVoxelGeometry::default();
@@ -1335,6 +1418,7 @@ mod tests {
             eye: 0.93,
             height: 1.2,
             radius: 0.25,
+            maximum_height_shift: None,
         };
         let desired = Vec3::ZERO;
         let toward = Vec3::NEG_Z * 30.0;
