@@ -174,7 +174,7 @@ def capture(args: argparse.Namespace) -> int:
             hashes.add(row["sha256"])
             row["mechanical_status"] = "CAPTURED"
             atomic_json(pack / "receipt.json", receipt)
-        if arena.source_state()[0] != source or package_state(args.package) != package:
+        if arena.source_state()[0] != source or package_state(args.package, plain=args.plain) != package:
             raise RuntimeError("Source/package changed during capture")
         complete_matrix(receipt)
     except (Exception, KeyboardInterrupt) as error:
