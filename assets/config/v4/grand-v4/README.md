@@ -36,9 +36,11 @@ detached islet. It requires no arbitrary coastline trimming. Horizontal model sc
 is 0.8838784715190828; vertical scale stays 1. The compiler independently checks
 its result, recorded in each package's `compile-receipt.json`.
 
-Crystal Ascent independently reserves **22,183 columns**, seven times the original
-embedded Grand footprint of 3,169 columns. Its climb occupies that larger mountain
-feature; the central open shaft is not its entire footprint. The complete finite
+Crystal Ascent targets **22,183 columns**, seven times the original embedded Grand
+footprint of 3,169 columns. Its authored outer hex polygon emits **22,201 columns**
+(7.00568× the original, +0.081% discrete rounding from the target). The compiler
+measures this enclosing rock feature, rather than an unused reservation or only
+its central open shaft; the approved inner well and stair radius stay unchanged. The complete finite
 ocean envelope has radius 1052 and 3,323,269 columns. Ocean area is separate from
 the mainland measurement.
 

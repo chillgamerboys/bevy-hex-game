@@ -67,12 +67,38 @@ def package_state(directory: Path, *, plain: bool = False) -> dict:
     if identity.get("compiler_mode") != "cargo-current-source":
         raise RuntimeError("Package lacks current-source compiler provenance; rebuild through Cargo before capture")
     receipt = json.loads((directory / "compile-receipt.json").read_text())
-    if (receipt.get("strict") is not True or receipt.get("world_id") != "grand-v4"
-            or receipt.get("mainland_columns") != 7 * receipt.get("canonical_mainland_columns", 0)
-            or receipt.get("crystal_columns") != 7 * receipt.get("canonical_crystal_columns", 0)):
-        raise RuntimeError("Package does not establish the Grand area contract")
+    measurement = json.loads((ROOT / "assets/config/v4/grand-v4/measurement.json").read_text())
+    geography = json.loads((ROOT / "assets/config/v4/grand-v4/geography-r02.json").read_text())
+    validate_area(receipt, measurement, geography)
     return {"directory": str(directory), "compiler_receipt": receipt,
             "authoring_identity": identity, "files": files}
+
+
+
+def validate_area(receipt: dict, measurement: dict, geography: dict) -> None:
+    """Require the emitted feature, including documented hex-lattice rounding.
+
+    A package's own canonical counts cannot authorize its area. Bind them to the
+    retained V3 measurement and the current authored outer polygon instead.
+    """
+    crystal = geography["ascent"]["expected_columns"]
+    canonical = measurement["canonical_crystal_columns"]
+    ratio = receipt.get("crystal_area_ratio")
+    expected = {
+        "world_id": "grand-v4",
+        "mainland_columns": measurement["mainland_target_columns"],
+        "canonical_mainland_columns": measurement["canonical_mainland_columns"],
+        "canonical_crystal_columns": canonical,
+        "crystal_target_columns": measurement["crystal_target_columns"],
+        "crystal_columns": crystal,
+        "crystal_authored_columns": crystal,
+        "crystal_footprint_basis": "authored_outer_hex",
+    }
+    if (receipt.get("strict") is not True
+            or any(receipt.get(key) != value for key, value in expected.items())
+            or type(ratio) not in (int, float) or not math.isfinite(ratio)
+            or not math.isclose(ratio, crystal / canonical, rel_tol=1e-12)):
+        raise RuntimeError("Package does not establish the Grand area contract")
 
 
 def matrix_contract(selected: list[str] | None) -> dict:

@@ -34,7 +34,10 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
             (directory / name).write_text("fixture")
         receipt = {"strict": True, "world_id": "grand-v4", "package_fingerprint": 42,
                    "mainland_columns": 653282, "canonical_mainland_columns": 93326,
-                   "crystal_columns": 22183, "canonical_crystal_columns": 3169}
+                   "crystal_columns": 22201, "canonical_crystal_columns": 3169,
+                   "crystal_target_columns": 22183, "crystal_authored_columns": 22201,
+                   "crystal_area_ratio": 22201 / 3169,
+                   "crystal_footprint_basis": "authored_outer_hex"}
         (directory / "compile-receipt.json").write_text(json.dumps(receipt))
         if identity is not None:
             (directory / "authoring-identity.json").write_text(json.dumps(identity))
@@ -91,6 +94,31 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
                                          "compiler_mode": compiler_mode})
                 with patch.object(grand_capture.grand_package, "signature", return_value="current"):
                     with self.assertRaisesRegex(RuntimeError, "current-source compiler provenance"):
+                        grand_capture.package_state(directory)
+
+    def test_reserved_or_mismatched_crystal_area_cannot_approve_emitted_geometry(self):
+        invalid = (
+            {"crystal_columns": 22183},  # Old reservation is not emitted geometry.
+            {"crystal_columns": 22200, "crystal_authored_columns": 22200},
+            {"crystal_columns": 22202, "crystal_authored_columns": 22202},
+            {"crystal_target_columns": 22201},
+            {"canonical_crystal_columns": 3171},
+            {"crystal_area_ratio": 7.0},
+            {"crystal_area_ratio": float("nan")},
+            {"crystal_footprint_basis": "legacy_reserved_footprint"},
+            {"mainland_columns": 700, "canonical_mainland_columns": 100},
+        )
+        for change in invalid:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                self.package(directory, {"signature": "current-dressed", "plain": False,
+                                         "compiler_mode": "cargo-current-source"})
+                path = directory / "compile-receipt.json"
+                receipt = json.loads(path.read_text())
+                receipt.update(change)
+                path.write_text(json.dumps(receipt))
+                with patch.object(grand_capture.grand_package, "signature", return_value="current"):
+                    with self.assertRaisesRegex(RuntimeError, "area contract"):
                         grand_capture.package_state(directory)
 
     def receipt(self, selected=None, captured=None):
