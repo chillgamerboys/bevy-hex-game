@@ -151,9 +151,9 @@ impl GrandCompiler {
                 })
                 .collect();
             for p in fringe {
-                if !water.contains_key(&p) {
+                if let std::collections::btree_map::Entry::Vacant(entry) = water.entry(p) {
                     if let Some(liquid) = self.column(p).1.filter(|l| self.r02_receiver(reach, l)) {
-                        water.insert(p, liquid);
+                        entry.insert(liquid);
                     }
                 }
             }
