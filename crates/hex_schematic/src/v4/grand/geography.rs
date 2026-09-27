@@ -24,6 +24,8 @@ pub struct GrandGeographyDocument {
     pub(super) mountain_composition: Option<MountainComposition>,
     #[serde(default)]
     pub(super) upper_mountain_bodies: Option<UpperMountainBodies>,
+    #[serde(default)]
+    pub(super) mountain_envelope: Option<MountainEnvelope>,
     pub(super) massif: [f64; 5],
     pub(super) headland: [f64; 5],
     pub(super) peaks: Vec<[f64; 5]>,
@@ -117,6 +119,19 @@ shape!(UpperMountainBodies {
 });
 // Each spine node is [model east, model north, absolute crest height, width].
 shape!(UpperMountainBody {name: String, spine: Vec<[f64; 4]>});
+// Shared landform before lake, ascent and cave carving. Broad spines are
+// absolute sea-relative relief, not extra height added once per landmark.
+shape!(MountainEnvelope {shore_blend: f64, bodies: Vec<EnvelopeBody>});
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EnvelopeBody {
+    pub name: String,
+    pub spine: Vec<[f64; 4]>,
+    pub lower_slope_power: f64,
+    /// Only the inner crest; zero retains the pointed profile.
+    #[serde(default)]
+    pub crest_rounding_radius: f64,
+}
 shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
 shape!(Ellipse {
     center: [f64; 2],
@@ -263,6 +278,33 @@ impl GrandGeographyDocument {
             return Err(ContractError::new(
                 "grand.upper_mountains",
                 "invalid bounded upper-rock bodies",
+            ));
+        }
+        if self.mountain_envelope.as_ref().is_some_and(|profile| {
+            !(100. ..=240.).contains(&profile.shore_blend)
+                || !bounded(profile.bodies.len(), 2, 8)
+                || profile.bodies.iter().any(|body| {
+                    !(1. ..=3.).contains(&body.lower_slope_power)
+                        || !(0. ..=0.45).contains(&body.crest_rounding_radius)
+                        || body.name.is_empty()
+                        || body.name.len() > 64
+                        || !bounded(body.spine.len(), 2, 12)
+                        || body.spine.iter().any(|node| {
+                            !position([node[0], node[1]])
+                                || !(70. ..=450.).contains(&node[2])
+                                || !(160. ..=700.).contains(&node[3])
+                        })
+                        || body.spine.windows(2).any(|nodes| {
+                            nodes
+                                .first()
+                                .zip(nodes.get(1))
+                                .is_none_or(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) < 1.)
+                        })
+                })
+        }) {
+            return Err(ContractError::new(
+                "grand.mountain_envelope",
+                "invalid connected mountain envelope",
             ));
         }
         let f = &self.foothills;

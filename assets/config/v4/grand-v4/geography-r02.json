@@ -727,7 +727,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 37
+      "floor": 36
     },
     "root_temple_entrance": {
       "origin": [
@@ -736,7 +736,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 37
+      "floor": 36
     },
     "root_temple_altar": {
       "origin": [
@@ -745,7 +745,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 37
+      "floor": 36
     },
     "shrine_plant": {
       "origin": [
@@ -754,7 +754,7 @@
       ],
       "angle": 0.0,
       "layer": "RootTemple",
-      "floor": 37
+      "floor": 36
     },
     "library_lower": {
       "origin": [
@@ -1874,12 +1874,12 @@
         ],
         [
           195,
-          37,
+          36,
           16
         ],
         [
           195,
-          37,
+          36,
           71
         ]
       ],
@@ -2978,7 +2978,7 @@
       170.0
     ],
     "frozen_verge": 8.0,
-    "frozen_undulation": 8.0,
+    "frozen_undulation": 12,
     "phase": 0.7,
     "peak_rounding_radius": 0.55,
     "frozen_toe_rise": 2
@@ -3089,6 +3089,180 @@
             95
           ]
         ]
+      }
+    ]
+  },
+  "mountain_envelope": {
+    "shore_blend": 180,
+    "bodies": [
+      {
+        "name": "western-massif-and-crystal",
+        "spine": [
+          [
+            -470,
+            485,
+            315,
+            210
+          ],
+          [
+            -300,
+            650,
+            254,
+            310
+          ],
+          [
+            -170,
+            570,
+            264,
+            300
+          ],
+          [
+            -120,
+            735,
+            245,
+            285
+          ]
+        ],
+        "lower_slope_power": 1.7,
+        "crest_rounding_radius": 0.35
+      },
+      {
+        "name": "frozen-high-saddle",
+        "spine": [
+          [
+            -260,
+            770,
+            250,
+            304.0
+          ],
+          [
+            -60,
+            805,
+            259,
+            273.6
+          ],
+          [
+            120,
+            785,
+            272,
+            258.4
+          ],
+          [
+            245,
+            790,
+            292,
+            228.0
+          ]
+        ],
+        "lower_slope_power": 1.0
+      },
+      {
+        "name": "northern-crown",
+        "spine": [
+          [
+            120,
+            780,
+            292,
+            264.0
+          ],
+          [
+            220,
+            815,
+            260,
+            240.0
+          ],
+          [
+            340,
+            860,
+            385,
+            228.0
+          ],
+          [
+            425,
+            815,
+            275,
+            216.0
+          ],
+          [
+            520,
+            785,
+            330,
+            196.0
+          ],
+          [
+            600,
+            720,
+            275,
+            184.0
+          ]
+        ],
+        "lower_slope_power": 2.0
+      },
+      {
+        "name": "lake-screening-ridge",
+        "spine": [
+          [
+            115,
+            535,
+            260,
+            195
+          ],
+          [
+            240,
+            450,
+            242,
+            180
+          ],
+          [
+            350,
+            470,
+            253,
+            190
+          ],
+          [
+            438,
+            502,
+            239,
+            195
+          ],
+          [
+            490,
+            452,
+            235,
+            180
+          ]
+        ],
+        "lower_slope_power": 2.0
+      },
+      {
+        "name": "eastern-lake-and-outlet",
+        "spine": [
+          [
+            585,
+            720,
+            280,
+            198.9
+          ],
+          [
+            625,
+            615,
+            292,
+            191.1
+          ],
+          [
+            600,
+            520,
+            245,
+            187.2
+          ],
+          [
+            565,
+            445,
+            234,
+            163.8
+          ]
+        ],
+        "lower_slope_power": 2.0
       }
     ]
   }

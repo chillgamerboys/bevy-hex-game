@@ -100,6 +100,12 @@ fn export_bank_source_study() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore = "explicit connected-envelope source study, not game acceptance"]
+fn export_envelope_source_study() -> Result<(), Box<dyn Error>> {
+    export_source_study("envelope")
+}
+
+#[test]
 #[ignore = "read exact source around preselected bank ownership boundaries"]
 fn sample_bank_ownership_boundaries() -> Result<(), Box<dyn Error>> {
     let input = std::env::var("HEX_GRAND_BANK_SEAMS")?;
@@ -164,13 +170,32 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
                 .dry_reach_support = None;
             "current accepted terrain without the new continuous dry reach support"
         }
+        "envelope" => {
+            baseline.mountain_envelope = None;
+            "same candidate document with the shared mountain envelope removed; all other authoring controls retained"
+        }
         _ => return Err("unknown source study mode".into()),
     };
     let candidate_bytes = source_bytes.to_vec();
-    let profile = candidate
-        .upper_mountain_bodies
-        .as_ref()
-        .expect("study profile");
+    let bodies: Vec<(&str, &[[f64; 4]])> = if mode == "envelope" {
+        candidate
+            .mountain_envelope
+            .as_ref()
+            .expect("envelope")
+            .bodies
+            .iter()
+            .map(|body| (body.name.as_str(), body.spine.as_slice()))
+            .collect()
+    } else {
+        candidate
+            .upper_mountain_bodies
+            .as_ref()
+            .expect("study profile")
+            .bodies
+            .iter()
+            .map(|body| (body.name.as_str(), body.spine.as_slice()))
+            .collect()
+    };
     let baseline_bytes = serde_json::to_vec(&baseline)?;
     let mut source: GrandSpec = ron::from_str(include_str!(
         "../../../../../assets/config/v4/grand-v4/world.ron"
@@ -189,7 +214,10 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
         return Err("upper mountain study changed the coast/depth field".into());
     }
     let mut columns = BufWriter::new(File::create(output.join("columns.csv"))?);
-    writeln!(columns, "q,r,model_east,model_north,baseline_surface,candidate_surface,baseline_top,candidate_top,baseline_water_top,candidate_water_top")?;
+    writeln!(
+        columns,
+        "q,r,model_east,model_north,baseline_surface,candidate_surface,baseline_top,candidate_top,baseline_water_top,candidate_water_top"
+    )?;
     let mut count = 0_usize;
     let mut changed_top = 0_usize;
     let mut changed_water = 0_usize;
@@ -219,11 +247,16 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
                 });
             changed_near_channel += usize::from(old_top != new_top && near_channel);
             count += 1;
-            writeln!(columns, "{q},{r},{east:.9},{north:.9},{old_surface:.9},{new_surface:.9},{old_top},{new_top},{old_water},{new_water}")?;
+            writeln!(
+                columns,
+                "{q},{r},{east:.9},{north:.9},{old_surface:.9},{new_surface:.9},{old_top},{new_top},{old_water},{new_water}"
+            )?;
         }
     }
     columns.flush()?;
-    eprintln!("UPPER_STUDY exported {count} final columns, changed tops {changed_top}, water {changed_water}");
+    eprintln!(
+        "UPPER_STUDY exported {count} final columns, changed tops {changed_top}, water {changed_water}"
+    );
     let mut sections = Vec::new();
     let section_paths = if mode == "banks" {
         [
@@ -302,8 +335,8 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
         }),
     )?;
     let mut crest_samples = Vec::new();
-    for body in &profile.bodies {
-        for node in &body.spine {
+    for (name, spine) in bodies {
+        for node in spine {
             let mut old_max = f64::NEG_INFINITY;
             let mut new_max = f64::NEG_INFINITY;
             let mut old_at = [0.; 2];
@@ -329,7 +362,7 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            crest_samples.push(json!({"body":body.name,"authored_node":node,"search_half_width_model":20,
+            crest_samples.push(json!({"body":name,"authored_node":node,"search_half_width_model":20,
                 "baseline_max":old_max,"baseline_at":old_at,"candidate_max":new_max,"candidate_at":new_at}));
         }
     }

@@ -1,6 +1,6 @@
 //! Continuous approved landforms, sampled at production hex resolution.
 //! No 12-unit study-grid stair steps enter the playable terrain.
-use super::geography::{GrandGeographyDocument, ellipse, irregular, route_distance, segment};
+use super::geography::{ellipse, irregular, route_distance, segment, GrandGeographyDocument};
 fn clamp(x: f64) -> f64 {
     x.clamp(0., 1.)
 }
@@ -145,6 +145,13 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
         base += height * (-ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
     }
     base = base.max((coast_distance * 0.07).min(12.));
+    if d.mountain_envelope.is_some() {
+        return finish_terrain(
+            d,
+            [x, z],
+            mountain_envelope(d, [x, z], base, coast_distance),
+        );
+    }
     let mut apron: f64 = 0.;
     let mut core: f64 = 0.;
     for (i, &[cx, cz, height, rx, rz]) in std::iter::once(&d.massif).chain(&d.peaks).enumerate() {
@@ -227,6 +234,80 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
             composed_relief(low, active_core, profile.join_width)
         });
     finish_terrain(d, [x, z], upper_mountain_bodies(d, [x, z], height))
+}
+
+/// Compose one continuous ridge-and-spur envelope before any landmark cuts.
+/// The gentle outer tails and broad connected saddles belong to the landform;
+/// they are not a separate steep skirt around each route or lake.
+fn mountain_envelope(
+    d: &GrandGeographyDocument,
+    point: [f64; 2],
+    base: f64,
+    coast_distance: f64,
+) -> f64 {
+    let Some(profile) = &d.mountain_envelope else {
+        return base;
+    };
+    // Keep the established long shallow foot below the mountain faces.
+    // Its heights vary with coast distance and unequal landform centers;
+    // this is not a constant shelf surrounding the upper composition.
+    let f = &d.foothills;
+    let mut apron: f64 = 0.;
+    for &[cx, cz, _, rx, rz] in std::iter::once(&d.massif).chain(&d.peaks) {
+        let radii = [
+            (rx * f.radius_multiplier).max(f.minimum_radius),
+            (rz * f.radius_multiplier).max(f.minimum_radius),
+        ];
+        apron = apron.max(f.apron_relief * smooth(1. - ellipse(point, [cx, cz], radii)));
+    }
+    let mut grade = f.shore_grade;
+    for &[cx, cz, extra, rx, rz] in &f.shore_headlands {
+        grade += extra * (-2. * ellipse(point, [cx, cz], [rx, rz]).powi(2)).exp();
+    }
+    let low = base.max(apron).min(coast_distance * grade);
+    let mut relief: f64 = 0.;
+    for body in &profile.bodies {
+        for pair in body.spine.windows(2) {
+            let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            let (distance, t) = segment(point, [a[0], a[1]], [b[0], b[1]]);
+            // Piecewise linear crests keep separate high peaks and saddles.
+            let crest = a[2] * (1. - t) + b[2] * t;
+            let width = a[3] * (1. - t) + b[3] * t;
+            let radius = distance / width;
+            if radius < 1. {
+                let weight =
+                    envelope_weight(radius, body.lower_slope_power, body.crest_rounding_radius);
+                relief = relief.max((crest - low).max(0.) * weight);
+            }
+        }
+    }
+    // Only the outermost toe fades to the coast. It does not create a cliff
+    // by clipping a high plateau against an arbitrary island boundary.
+    relief *= smooth(coast_distance / profile.shore_blend);
+    low + relief
+}
+
+/// A narrow rounded crest joins the unchanged mountain face with the same
+/// height and slope. It shapes the summit without widening the lower foot.
+fn envelope_weight(radius: f64, power: f64, join: f64) -> f64 {
+    let profile = |r: f64| {
+        let foot = (1. - r * r).powi(2);
+        let face = (1. - r).powf(1.4);
+        (0.55 * foot + 0.45 * face).powf(power)
+    };
+    if join <= 0. || radius >= join {
+        return profile(radius);
+    }
+    let value = profile(join);
+    let inner = 0.55 * (1. - join * join).powi(2) + 0.45 * (1. - join).powf(1.4);
+    let derivative = power
+        * inner.powf(power - 1.)
+        * (-2.2 * join * (1. - join * join) - 0.63 * (1. - join).powf(0.4));
+    let t = radius / join;
+    1. + (value - 1.) * (3. * t.powi(2) - 2. * t.powi(3))
+        + derivative * join * (t.powi(3) - t.powi(2))
 }
 
 /// Reshape only the existing upper rock. Lower terrain remains bit-identical.
@@ -349,7 +430,9 @@ fn finish_terrain_profiled(
     } else {
         ascent.top + 12. + 5. * noise(x, z)
     };
-    h = crystal_enclosure(d, [x, z], h, crest);
+    if d.mountain_envelope.is_none() || !profiles {
+        h = crystal_enclosure(d, [x, z], h, crest);
+    }
     let fr = &d.frozen_route;
     let (dist, y, _) = route_distance([x, z], &fr.points);
     let grade_weight = if let Some(m) = d.mountain_composition.as_ref().filter(|_| profiles) {
@@ -371,7 +454,15 @@ fn finish_terrain_profiled(
             let support = smooth((fr.forest_half_width - dist) / (fr.forest_half_width - inner));
             (h + m.frozen_toe_rise) * (1. - support) + body * support
         };
-        h = h.max(shoulder);
+        if d.mountain_envelope.is_some() {
+            // The Frozen Woods are a broad pass cut into the shared mountain,
+            // not a thin raised route or a trench through a higher plateau.
+            let forest = smooth((width - dist) / (width - fr.forest_half_width));
+            let rolling_pass = body + 0.18 * (h - body);
+            h = h * (1. - forest) + rolling_pass * forest;
+        } else {
+            h = h.max(shoulder);
+        }
         smooth((fr.width * 0.5 + m.frozen_verge - dist) / m.frozen_verge)
     } else {
         smooth((fr.forest_half_width - dist) / 43.)
@@ -1092,7 +1183,7 @@ mod profile_tests {
     #[test]
     #[ignore = "explicit exact-source shape study; emits sections, not a traversal verdict"]
     fn report_mountain_composition_sections() {
-        use super::super::{GrandCompiler, GrandSpec, grid_value};
+        use super::super::{grid_value, GrandCompiler, GrandSpec};
         let candidate = document();
         assert!(candidate.mountain_composition.is_some());
         let mut baseline = candidate.clone();
@@ -1587,7 +1678,18 @@ mod profile_tests {
 
     #[test]
     fn automatic_peak_links_keep_saddles_below_adjacent_summits() {
-        let g = super::super::tests::compiler(false);
+        // Automatic links belong to the retained legacy profile. The shared
+        // envelope authors its own ridge nodes and does not consume these
+        // old peak coordinates; test the branch that owns this contract.
+        let mut document = document();
+        document.mountain_envelope = None;
+        let bytes = serde_json::to_vec(&document).expect("legacy geography");
+        let g = super::super::GrandCompiler::with_geography(
+            super::super::tests::compiler(false).source.clone(),
+            document,
+            &bytes,
+        )
+        .expect("legacy profile compiler");
         let d = g.geography.document.as_ref().expect("geography");
         let top = |point| {
             g.column(g.geography.world_hex(point))
@@ -1613,8 +1715,45 @@ mod profile_tests {
     }
 
     #[test]
+    fn northern_envelope_keeps_unequal_summits_and_a_lower_saddle() {
+        let g = super::super::tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("geography");
+        let crown = d
+            .mountain_envelope
+            .as_ref()
+            .expect("connected mountains")
+            .bodies
+            .iter()
+            .find(|body| body.name == "northern-crown")
+            .expect("authored northern crown");
+        // The three outer crown nodes are beyond the Frozen Woods carve.
+        // Check emitted terrain, where overlapping bodies could otherwise
+        // erase the deliberately lower saddle between the unequal summits.
+        let tops = [2, 3, 4].map(|index| {
+            let node = crown.spine.get(index).expect("crest/saddle node");
+            g.column(g.geography.world_hex([node[0], node[1]]))
+                .0
+                .runs
+                .into_iter()
+                .filter(|run| run.material != "water")
+                .map(|run| run.top)
+                .max()
+                .expect("solid crown")
+        });
+        let [west, saddle, east] = tops;
+        assert!(
+            west > east,
+            "northern summits lost their unequal heights: {tops:?}"
+        );
+        assert!(
+            saddle < west.min(east),
+            "northern crown merged into a uniform wall: {tops:?}"
+        );
+    }
+
+    #[test]
     fn mountain_lake_is_screened_from_authored_valley_eyes() {
-        use super::super::{LEVEL_HEIGHT, nearest_hex, world_xz};
+        use super::super::{nearest_hex, world_xz, LEVEL_HEIGHT};
         let g = super::super::tests::compiler(false);
         let d = g.geography.document.as_ref().expect("geography");
         let center = g.geography.world_hex(d.upper_lake.center);
