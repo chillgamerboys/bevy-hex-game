@@ -454,3 +454,33 @@ immutable first package; that renderer-only comparison cannot accept new geograp
 The next actual map screenshots require a fresh combined package. Full dressed
 presentation, ordinary traversal, restarted saves, residency, combined CI and native
 feel/performance remain open; historical package04 results do not clear them.
+
+### Spatial mountain-base implementation
+
+The spatial revision is integrated at `39f5260`: broad lower aprons, smaller upper
+cores, varied coastal headlands and continuous Crystal supports replace the failed
+height-compression approach. Cave routes fit the actual new rock cover, including
+the lowered western summit. All eight route ribbons (42,033 supports), their
+centerlines and closed-cave cover pass the focused source checks. These checks do
+not establish cross-country controller movement or appearance.
+
+An independent whole-lattice survey reproduces 653,282 mainland and 22,201 Crystal
+columns. In the dry front below 70 units, 92.32% of western and 87.21% of lake-front
+neighbor edges meet the ordinary one-level step limit. The survey excludes layered
+routes, objects and body clearance. Four fixed geographic crossing/uphill probes
+are now published as review cameras and consumed by the walking harness; they are
+not chosen by searching for successful paths.
+
+The combined Grand unit run on that source passed 39 tests and failed six. Two
+failures expose small real ledges at the Shadow well exit and volcano landing;
+their repairs are in progress. One test incorrectly required the Shadow exit to
+equal the Crystal stair endpoint. Two dressing defects account for the remaining
+three failures: a root contacts removed natural terrain, and garden finishes
+overlap shrine solids. The dressing and stale-endpoint repairs are integrated as
+`9b5859b`; eight focused dressing tests pass. Combined validation remains pending.
+
+The stepped far-terrain prototype is banked, not integrated. Its old-package
+east-camera comparison still shows coarse terraces and mixed detail density, at
+337.7 MB of raw terrain buffers. The next corrected-geography package uses the
+existing renderer. That comparison neither accepts the new terrain nor establishes
+performance. First revised actual game pictures remain pending a fresh package.

@@ -110,3 +110,11 @@ within the user's requested shape correction. Any lowered summit requires the Ai
 shrine and library to fit the actual new rock cover, without rebuilding an exterior
 wall to preserve an old endpoint. Review the broad foothill belt and mountain joins
 before another full package, then verify the real composed columns and movement.
+
+The spatial repair is now in source: wider low mountain aprons, setback steep
+cores, continuous Crystal shoulders and a broad backing landform beneath the lake.
+Source measurements show substantial connected foothill ground, but neither the
+coarse MODEL pictures nor the graph clears the user's concern. The next review
+uses a new actual game package, matching whole-world angles and four fixed walking
+height views across and up the western and lake-front bases. Keep this feedback
+open until those images and ordinary controller movement have been reviewed.
