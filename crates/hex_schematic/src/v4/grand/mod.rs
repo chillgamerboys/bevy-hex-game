@@ -635,21 +635,22 @@ impl GrandCompiler {
         let mut surface_materials = Vec::with_capacity(width * height);
         for row in 0..height {
             for col in 0..width {
-                let s = self.surface(nearest_hex(
+                let p = nearest_hex(
                     origin_xz[0] + col as f64 * spacing,
                     origin_xz[1] + row as f64 * spacing,
-                ));
-                bed_heights.push(((s.level + 1) as f64 * LEVEL_HEIGHT) as f32);
+                );
+                let (column, _) = self.column(p);
+                let solid = column
+                    .runs
+                    .iter()
+                    .filter(|r| r.material != "water")
+                    .max_by_key(|r| r.top)
+                    .expect("finite terrain has solid bedrock");
+                bed_heights.push((f64::from(solid.top) * LEVEL_HEIGHT) as f32);
                 surface_materials.push(
                     self.materials
                         .iter()
-                        .position(|m| {
-                            m.id == if s.water.is_some() {
-                                "water"
-                            } else {
-                                s.material
-                            }
-                        })
+                        .position(|m| m.id == solid.material)
                         .expect("authored surface material is in the compiler palette")
                         as u16,
                 );

@@ -14,7 +14,7 @@ const ENCOUNTERS: &[(&str, [f64; 2], Option<f64>)] = &[
     ("grand_worm_01", [-205., 525.], Some(65.)),
     ("grand_worm_02", [-140., 585.], Some(65.)),
     ("grand_worm_03", [-170., 570.], Some(65.)),
-    ("grand_shadow_tunnel", [-170., 275.], Some(62.4)),
+    ("grand_shadow_tunnel", [-170., 340.], Some(18.)),
 ];
 impl GrandCompiler {
     pub(super) fn r02_support(
@@ -88,9 +88,9 @@ impl GrandCompiler {
             ("forest", [-100., -120.], None, false),
             ("goblin_fort", [-35., -40.], None, false),
             ("root_temple_approach", [195., -35.], Some(46.), false),
-            ("shadow_entrance", [-170., 115.], Some(60.), true),
-            ("shadow_tunnel", [-170., 275.], Some(62.4), true),
-            ("shadow_exit", [-170., 452.], Some(65.), true),
+            ("shadow_entrance", [-170., 115.], Some(58.8), true),
+            ("shadow_tunnel", [-170., 340.], Some(18.), true),
+            ("shadow_exit", [-170., 615.], Some(65.), true),
             ("waterfall", [508., 442.], Some(114.), false),
             ("mountain_lake", [216., 650.], Some(206.), false),
             ("valley_lake", [202., 145.], None, false),

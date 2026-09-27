@@ -172,11 +172,36 @@ impl Layered {
                     continue;
                 };
                 let xz = g.model_xz(p);
-                let portal = points.first().is_some_and(|a| {
-                    open_ends[0] && (xz[0] - a[0]).hypot(xz[1] - a[2]) < width * 0.7
-                }) || points.last().is_some_and(|a| {
-                    open_ends[1] && (xz[0] - a[0]).hypot(xz[1] - a[2]) < width * 0.7
+                let natural_top = g.document.as_ref().map_or(top, |d| {
+                    g.top_level(oracle::mainland(d, xz).max(oracle::volcano(d, xz)))
                 });
+                // A passage can emerge through its intended terminal when the
+                // natural cover ends. It must never extrude a ridge to hide it.
+                let terminal_radius = width * 4.;
+                let near_terminal = points.first().is_some_and(|a| {
+                    open_ends[0] && (xz[0] - a[0]).hypot(xz[1] - a[2]) < terminal_radius
+                }) || points.last().is_some_and(|a| {
+                    open_ends[1] && (xz[0] - a[0]).hypot(xz[1] - a[2]) < terminal_radius
+                });
+                let terminal_cover = if near_terminal {
+                    let mut minimum = natural_top;
+                    if let Some(d) = &g.document {
+                        for q in -3_i64..=3 {
+                            for r in -3_i64..=3 {
+                                if q.abs().max(r.abs()).max((q + r).abs()) <= 3 {
+                                    let point = g.model_xz(WorldHex::new(p.q + q, p.r + r));
+                                    minimum = minimum.min(g.top_level(
+                                        oracle::mainland(d, point).max(oracle::volcano(d, point)),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    minimum
+                } else {
+                    natural_top
+                };
+                let portal = near_terminal && terminal_cover < top + 16;
                 self.columns.entry(p).or_default().push(ClearLayer {
                     top,
                     ceiling: top + 36,
@@ -288,22 +313,34 @@ impl Layered {
                 route.open_ends,
             )?;
         }
-        // Actual closed cave cover includes an exterior collar. Portal terminals are
-        // deliberately open and keep their authored supporting approaches.
-        for (&p, layers) in &out.columns {
+        // Fit cave ceilings beneath the actual mountain. Rooms under the World
+        // Tree are enclosed by its reserved trunk volume, not an inflated pad.
+        let mut natural = BTreeMap::new();
+        for (&p, layers) in &mut out.columns {
+            let mut neighborhood = Vec::new();
+            for q in -3_i64..=3 {
+                for r in -3_i64..=3 {
+                    if q.abs().max(r.abs()).max((q + r).abs()) <= 3 {
+                        let n = WorldHex::new(p.q + q, p.r + r);
+                        let top = *natural.entry(n).or_insert_with(|| {
+                            let point = g.model_xz(n);
+                            g.top_level(oracle::mainland(d, point).max(oracle::volcano(d, point)))
+                        });
+                        neighborhood.push((n, top));
+                    }
+                }
+            }
+            let ceiling = neighborhood.iter().map(|(_, top)| *top - 8).min();
             for l in layers {
-                if !l.open {
-                    let required = l.ceiling + 8;
-                    for q in -3_i64..=3 {
-                        for r in -3_i64..=3 {
-                            if q.abs().max(r.abs()).max((q + r).abs()) <= 3 {
-                                let n = WorldHex::new(p.q + q, p.r + r);
-                                out.cover
-                                    .entry(n)
-                                    .and_modify(|h| *h = (*h).max(required))
-                                    .or_insert(required);
-                            }
-                        }
+                if !l.open && l.layer != SupportLayer::RootTemple {
+                    if let Some(limit) = ceiling.filter(|limit| *limit >= l.top + 8) {
+                        l.ceiling = l.ceiling.min(limit);
+                    }
+                    for &(n, _) in &neighborhood {
+                        out.cover
+                            .entry(n)
+                            .and_modify(|h| *h = (*h).max(l.ceiling + 8))
+                            .or_insert(l.ceiling + 8);
                     }
                 }
             }
@@ -349,11 +386,9 @@ impl GrandCompiler {
                 water = Some(a[1] + t * (b[1] - a[1]));
             }
         }
-        let mut top = self.geography.top_level(h).max(2);
-        if let Some(cover) = self.layered.cover.get(&p) {
-            top = top.max(*cover);
-            h = (f64::from(top - SEA_TOP) * LEVEL_HEIGHT) / d.transform.vertical_scale;
-        }
+        // The approved natural landform is authoritative. Cave authoring must
+        // fit beneath it; cover requirements never change the exterior skyline.
+        let top = self.geography.top_level(h).max(2);
         let mut material = if h < 9. {
             "sand"
         } else if volcano > mainland && h > 45. {
@@ -466,5 +501,33 @@ impl GrandCompiler {
         )
         .expect("finite admitted geography levels");
         (ColumnData { position: p, runs }, liquid)
+    }
+}
+
+#[cfg(test)]
+mod cave_cover_tests {
+    use super::*;
+    #[test]
+    fn closed_cave_cover_never_inflates_approved_landforms() {
+        let g = tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("canonical geography");
+        let failures: Vec<_> = g
+            .layered
+            .cover
+            .iter()
+            .filter_map(|(&p, &required)| {
+                let point = g.geography.model_xz(p);
+                let natural = g
+                    .geography
+                    .top_level(oracle::mainland(d, point).max(oracle::volcano(d, point)));
+                (required > natural).then_some((p, required, natural))
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "closed cave breaks natural cover: {} columns, first {:?}",
+            failures.len(),
+            failures.iter().take(24).map(|(p,r,n)| (g.geography.model_xz(*p), r,n)).collect::<Vec<_>>()
+        );
     }
 }
