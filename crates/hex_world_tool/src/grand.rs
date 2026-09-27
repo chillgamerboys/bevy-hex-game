@@ -28,9 +28,6 @@ struct Receipt {
     crystal_authored_columns: usize,
     crystal_area_ratio: f64,
     crystal_footprint_basis: &'static str,
-    sailing_reference_seconds: f64,
-    sailing_reference_wind_speed: f64,
-    sailing_reference_integrated_units: f64,
     sailing_verified_in_engine: bool,
     strict: bool,
     presentation_reviewed: bool,
@@ -147,9 +144,8 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         } else {
             "legacy_reserved_footprint"
         },
-        sailing_reference_seconds: 45.0,
-        sailing_reference_wind_speed: 9.0,
-        sailing_reference_integrated_units: 793.9485,
+        // Only the independent production-controller crossing harness can
+        // measure the western-shore and starting-bay journeys for this package.
         sailing_verified_in_engine: false,
         strict: true,
         presentation_reviewed: false,

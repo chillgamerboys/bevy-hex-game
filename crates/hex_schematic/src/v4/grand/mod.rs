@@ -126,10 +126,6 @@ fn smooth(t: f64) -> f64 {
     let t = t.clamp(0., 1.);
     t * t * (3. - 2. * t)
 }
-// Existing vegetation density field; terrain no longer composes these heights.
-fn gaussian(x: f64, z: f64, cx: f64, cz: f64, rx: f64, rz: f64) -> f64 {
-    (-((x - cx) / rx).powi(2) - ((z - cz) / rz).powi(2)).exp()
-}
 fn run(bottom: i32, top: i32, material: &str) -> VoxelRun {
     VoxelRun {
         bottom,

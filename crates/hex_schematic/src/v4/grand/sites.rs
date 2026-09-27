@@ -323,10 +323,3 @@ impl GrandCompiler {
                 })
     }
 }
-
-/// Exact deployment disks reserve canopy and trunk clearance before any tree is placed.
-pub(super) fn reserved_encounter(x: f64, z: f64) -> bool {
-    ENCOUNTERS
-        .iter()
-        .any(|(_, a, b, _)| (x - a).hypot(z - b) < 35.)
-}
