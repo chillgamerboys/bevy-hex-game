@@ -9,7 +9,6 @@ struct Lobe {
     width: f64,
     depth: f64,
     vertical: f64,
-    material: &'static str,
 }
 // Fractions of the geography-owned actual crown bounds. A tall leader and
 // staggered, deep bough masses preserve the accepted Forest tree vocabulary.
@@ -21,7 +20,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.47,
         depth: 0.44,
         vertical: 0.27,
-        material: "foliage_light",
     },
     Lobe {
         east: -0.55,
@@ -30,7 +28,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.43,
         depth: 0.39,
         vertical: 0.25,
-        material: "foliage",
     },
     Lobe {
         east: 0.55,
@@ -39,7 +36,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.43,
         depth: 0.37,
         vertical: 0.24,
-        material: "foliage_light",
     },
     Lobe {
         east: 0.10,
@@ -48,7 +44,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.42,
         depth: 0.44,
         vertical: 0.22,
-        material: "foliage_dark",
     },
     Lobe {
         east: -0.15,
@@ -57,7 +52,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.40,
         depth: 0.43,
         vertical: 0.24,
-        material: "foliage",
     },
     Lobe {
         east: -0.42,
@@ -66,7 +60,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.36,
         depth: 0.37,
         vertical: 0.21,
-        material: "foliage",
     },
     Lobe {
         east: 0.40,
@@ -75,7 +68,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.37,
         depth: 0.36,
         vertical: 0.24,
-        material: "foliage_dark",
     },
     Lobe {
         east: 0.21,
@@ -84,7 +76,6 @@ const LOBES: [Lobe; 8] = [
         width: 0.36,
         depth: 0.32,
         vertical: 0.21,
-        material: "foliage",
     },
 ];
 #[derive(Clone)]
@@ -239,26 +230,50 @@ pub(super) fn compose(g: &GrandCompiler, root: WorldHex) -> Result<ObjectInstanc
             for (index, lobe) in LOBES.iter().enumerate() {
                 let x = (east - lobe.east * rx) / (lobe.width * rx);
                 let z = (north - lobe.north * rz) / (lobe.depth * rz);
-                let radial = x * x + z * z;
+                let phase = 0.7 + index as f64 * 1.3;
+                let angle = z.atan2(x);
+                // The accepted Heart sculptor varies the three- and five-fold
+                // contours of each unequal bough. Fade this variation at the
+                // shared outer bounds so the crown never acquires clipped sides.
+                let outer = (east.abs() / rx).max(north.abs() / rz);
+                let edge = 1.
+                    + smooth(((1. - outer) / 0.18).clamp(0., 1.))
+                        * (-0.02
+                            + 0.10 * (3. * angle + phase).sin()
+                            + 0.065 * (5. * angle - phase * 0.7).cos());
+                let radial = (x * x + z * z) / edge.powi(2);
                 if radial >= 1. || east.abs() > rx || north.abs() > rz {
                     continue;
                 }
                 let extent = (1. - radial).sqrt() * lobe.vertical * height;
-                piece(
-                    &mut parts,
-                    base,
-                    (lobe.height * height - extent).max(0.),
-                    (lobe.height * height + extent).min(height),
-                    lobe.material,
-                    index,
-                );
-            }
-            // Leaf masses share one palette choice in a column. Their exact
-            // exterior union stays intact; buried colour intersections need
-            // not fragment the compact representation or distant surface.
-            if let Some(material) = parts.iter().max_by_key(|v| v.top).map(|v| v.material) {
-                for part in &mut parts {
-                    part.material = material;
+                // Broad leaf clusters break the regular top and underside at a
+                // useful monumental scale. The leader's center retains its height.
+                let ripple = ((east * 0.23 + north * 0.11 + phase).sin()
+                    + (east * 0.09 - north * 0.19).sin())
+                    * height
+                    * 0.012
+                    * smooth((radial.sqrt() * 4.).clamp(0., 1.));
+                let low = (lobe.height * height - extent + ripple * 0.55).max(0.);
+                let high = (lobe.height * height + extent + ripple * 0.80).min(height);
+                // Shared uneven color strata join overlapping boughs instead of
+                // painting each complete mass or vertical column a separate hue.
+                // Constrain bands to the deep underside and sunlit leader: the
+                // intermediate canopy remains compact rather than storing buried
+                // per-lobe palette intersections throughout this enormous asset.
+                let shade = ((east * 0.11 + north * 0.07).sin()
+                    + 0.5 * (east * 0.05 - north * 0.13).cos())
+                    * height
+                    * 0.008;
+                let dark_top = height * 0.30 + shade;
+                let light_bottom = height * 0.985 + shade;
+                for (bottom, top, material) in [
+                    (low, high.min(dark_top), "foliage_dark"),
+                    (low.max(dark_top), high.min(light_bottom), "foliage"),
+                    (low.max(light_bottom), high, "foliage_light"),
+                ] {
+                    if bottom < top {
+                        piece(&mut parts, base, bottom, top, material, index);
+                    }
                 }
             }
             // The bending trunk and fractional contour end each woody column at
@@ -450,8 +465,21 @@ mod tests {
         let mut max_height = 0_f64;
         let mut low_crown = f64::INFINITY;
         let mut run_count = 0_usize;
+        let mut shaded_undersides = 0_usize;
+        let mut layered_tops = 0_usize;
         for column in &tree.occupancy {
             let [east, north] = frame.local(column.position).map(|v| v * scale);
+            let foliage = column.runs.iter().any(|run| run.material == "foliage");
+            shaded_undersides += usize::from(
+                foliage && column.runs.iter().any(|run| run.material == "foliage_dark"),
+            );
+            layered_tops += usize::from(
+                foliage
+                    && column
+                        .runs
+                        .iter()
+                        .any(|run| run.material == "foliage_light"),
+            );
             for run in &column.runs {
                 run_count += 1;
                 assert!(
@@ -471,6 +499,14 @@ mod tests {
                 }
             }
         }
+        assert!(
+            shaded_undersides > 0,
+            "underside color must retain vertical layers"
+        );
+        assert!(
+            layered_tops > 0,
+            "sunlit crown color must retain vertical layers"
+        );
         let [rx, rz] = dimensions.crown_radii;
         assert!(max_east >= rx * 0.96 && max_east <= rx + 1.);
         assert!(max_north >= rz * 0.96 && max_north <= rz + 1.);
@@ -482,7 +518,7 @@ mod tests {
         assert!(tree.grounding.as_ref().expect("root supports").len() > 100);
         let vertices = surface_vertices(&tree);
         println!(
-            "GRAND_R02_WORLD_TREE columns={} runs={run_count} exact_indexed_vertices={vertices} height={max_height:.3} crown_radii={max_east:.3},{max_north:.3}",
+            "GRAND_R02_WORLD_TREE columns={} runs={run_count} exact_indexed_vertices={vertices} height={max_height:.3} crown_radii={max_east:.3},{max_north:.3} shaded_undersides={shaded_undersides} layered_tops={layered_tops}",
             tree.occupancy.len()
         );
         assert!(
