@@ -8,7 +8,10 @@ mod biomes;
 mod dressing;
 mod flow;
 mod forest_overview;
+mod geography;
 mod ground_cover;
+pub use geography::{GrandGeography, GrandGeographyDocument};
+pub(super) use geography::{GrandRegion, LandmarkFrame, SupportLayer, TreeDimensions};
 mod library_finish;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
@@ -42,6 +45,9 @@ pub struct GrandSpec {
     pub version: u32,
     /// Whether globally reserved landmarks and vegetation are included.
     pub full_dressing: bool,
+    /// Optional sibling JSON geography authoring document, resolved by the tool.
+    #[serde(default)]
+    pub geography: Option<String>,
     /// Stable immutable world identity.
     pub id: String,
     /// Deterministic variation seed.
@@ -69,6 +75,7 @@ pub struct GrandCompiler {
     pub source: GrandSpec,
     /// Canonical authoring identity.
     pub source_fingerprint: u64,
+    pub(super) geography: GrandGeography,
     /// Stable material policies and presentation colors.
     pub materials: Vec<MaterialSpec>,
     /// Exact enlarged coast-enclosed area in hex columns.
@@ -143,6 +150,43 @@ fn cut(runs: &mut Vec<VoxelRun>, bottom: i32, top: i32) {
 impl GrandCompiler {
     /// Validate measured area, build coastal-distance field and reserve exact objects.
     pub fn new(source: GrandSpec) -> Result<Self, ContractError> {
+        if source.geography.is_some() {
+            return Err(ContractError::new(
+                "grand.geography",
+                "resolve the named geography document before compilation",
+            ));
+        }
+        Self::build(source, GrandGeography::legacy(), None)
+    }
+    /// Compile an explicitly resolved sibling geography document. The exact bytes
+    /// and the validated typed value both participate in immutable source identity.
+    pub fn with_geography(
+        source: GrandSpec,
+        document: GrandGeographyDocument,
+        bytes: &[u8],
+    ) -> Result<Self, ContractError> {
+        let name = source
+            .geography
+            .as_deref()
+            .ok_or_else(|| ContractError::new("grand.geography", "missing geography dependency"))?;
+        if !name.ends_with(".json")
+            || name.contains(['/', '\\'])
+            || name == ".json"
+            || name.contains("..")
+        {
+            return Err(ContractError::new(
+                "grand.geography",
+                "geography must be a single sibling JSON filename",
+            ));
+        }
+        let geography = GrandGeography::new(document)?;
+        Self::build(source, geography, Some(xxhash_rust::xxh3::xxh3_64(bytes)))
+    }
+    fn build(
+        source: GrandSpec,
+        geography: GrandGeography,
+        geography_bytes: Option<u64>,
+    ) -> Result<Self, ContractError> {
         if source.version != 1
             || source.id != "grand-v4"
             || source.canonical_mainland_columns != 93326
@@ -246,10 +290,12 @@ impl GrandCompiler {
             .take(source.canonical_crystal_columns * 7)
             .map(|(_, q, r)| WorldHex::new(root.q + q, root.r + r))
             .collect();
-        let source_fingerprint = hash_serializable(&source)?;
+        let source_fingerprint =
+            hash_serializable(&(&source, geography_bytes, &geography.document))?;
         let mut result = Self {
             source,
             source_fingerprint,
+            geography,
             materials: palette(),
             mainland_columns: count,
             crystal_columns: 22183,

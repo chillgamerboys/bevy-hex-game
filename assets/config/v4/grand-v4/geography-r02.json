@@ -1,0 +1,726 @@
+{
+  "coast": {
+    "center": [
+      0,
+      100
+    ],
+    "radii": [
+      790,
+      760
+    ],
+    "phase": 0.3,
+    "coves": [
+      [
+        540,
+        -480,
+        160,
+        125
+      ],
+      [
+        80,
+        -590,
+        260,
+        155
+      ],
+      [
+        -650,
+        -330,
+        105,
+        140
+      ]
+    ]
+  },
+  "massif": [
+    -470,
+    485,
+    425,
+    315,
+    320
+  ],
+  "headland": [
+    375,
+    645,
+    235,
+    320,
+    280
+  ],
+  "peaks": [
+    [
+      135,
+      560,
+      362,
+      135,
+      175
+    ],
+    [
+      180,
+      760,
+      440,
+      170,
+      180
+    ],
+    [
+      350,
+      865,
+      492,
+      155,
+      165
+    ],
+    [
+      525,
+      795,
+      458,
+      145,
+      180
+    ],
+    [
+      635,
+      620,
+      404,
+      145,
+      185
+    ],
+    [
+      565,
+      445,
+      339,
+      140,
+      150
+    ]
+  ],
+  "ridge_links": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      3,
+      4
+    ],
+    [
+      4,
+      5
+    ]
+  ],
+  "upper_lake": {
+    "center": [
+      375,
+      620
+    ],
+    "radii": [
+      146,
+      112
+    ],
+    "level": 205,
+    "phase": 0.2
+  },
+  "garden": {
+    "center": [
+      360,
+      640
+    ],
+    "radii": [
+      38,
+      34
+    ]
+  },
+  "falls": {
+    "width": 22,
+    "points": [
+      [
+        390,
+        205,
+        509
+      ],
+      [
+        420,
+        205,
+        508
+      ],
+      [
+        457,
+        205,
+        490
+      ],
+      [
+        490,
+        203,
+        452
+      ],
+      [
+        494,
+        106,
+        444
+      ],
+      [
+        484,
+        106,
+        394
+      ],
+      [
+        471,
+        83,
+        386
+      ],
+      [
+        435,
+        83,
+        330
+      ],
+      [
+        421,
+        60,
+        322
+      ],
+      [
+        387,
+        55,
+        228
+      ]
+    ]
+  },
+  "lower_lake": {
+    "center": [
+      355,
+      145
+    ],
+    "radii": [
+      149,
+      100
+    ],
+    "level": 55,
+    "phase": 1.2
+  },
+  "river": {
+    "width": 19,
+    "points": [
+      [
+        290,
+        55,
+        74
+      ],
+      [
+        268,
+        48,
+        10
+      ],
+      [
+        310,
+        39,
+        -70
+      ],
+      [
+        250,
+        31,
+        -151
+      ],
+      [
+        225,
+        21,
+        -250
+      ],
+      [
+        136,
+        12,
+        -340
+      ],
+      [
+        121,
+        5,
+        -444
+      ],
+      [
+        70,
+        0,
+        -555
+      ]
+    ]
+  },
+  "tree": {
+    "center": [
+      195,
+      65
+    ],
+    "height": 202,
+    "crown_radius": 149
+  },
+  "forest": {
+    "center": [
+      -30,
+      -115
+    ],
+    "radii": [
+      570,
+      380
+    ],
+    "seed": 18
+  },
+  "volcano": {
+    "center": [
+      -1732.4824897131564,
+      -1027.4024189856436
+    ],
+    "radii": [
+      335,
+      305
+    ],
+    "height": 210,
+    "phase": 0.7
+  },
+  "site_shoulders": [
+    [
+      -175,
+      650,
+      235,
+      210,
+      245
+    ],
+    [
+      -20,
+      780,
+      215,
+      230,
+      180
+    ]
+  ],
+  "landform_ridges": [
+    [
+      [
+        -470,
+        485,
+        425,
+        215
+      ],
+      [
+        -405,
+        650,
+        310,
+        175
+      ],
+      [
+        -250,
+        790,
+        278,
+        150
+      ],
+      [
+        -20,
+        830,
+        287,
+        150
+      ],
+      [
+        190,
+        830,
+        335,
+        145
+      ],
+      [
+        350,
+        865,
+        480,
+        140
+      ]
+    ],
+    [
+      [
+        135,
+        560,
+        360,
+        140
+      ],
+      [
+        245,
+        485,
+        310,
+        100
+      ],
+      [
+        360,
+        470,
+        300,
+        95
+      ],
+      [
+        465,
+        480,
+        315,
+        90
+      ],
+      [
+        565,
+        520,
+        345,
+        130
+      ]
+    ]
+  ],
+  "ascent": {
+    "center": [
+      -170,
+      550
+    ],
+    "base": 65,
+    "top": 205,
+    "well_apothem": 112,
+    "stair_radius": 98,
+    "turns": 1.5,
+    "width": 16,
+    "riser": 0.35,
+    "temple_radius": 27
+  },
+  "frozen_route": {
+    "width": 24,
+    "forest_half_width": 73,
+    "points": [
+      [
+        -170,
+        205,
+        648
+      ],
+      [
+        -170,
+        207,
+        687
+      ],
+      [
+        -60,
+        213,
+        736
+      ],
+      [
+        65,
+        214,
+        745
+      ],
+      [
+        150,
+        211,
+        718
+      ],
+      [
+        216,
+        206.15,
+        650
+      ]
+    ]
+  },
+  "volcano_route": {
+    "width": 26,
+    "local_points": [
+      [
+        265,
+        1,
+        195
+      ],
+      [
+        250,
+        16,
+        142
+      ],
+      [
+        192,
+        39,
+        102
+      ],
+      [
+        83,
+        62,
+        154
+      ],
+      [
+        -50,
+        88,
+        106
+      ],
+      [
+        -106,
+        112,
+        7
+      ],
+      [
+        -17,
+        137,
+        -91
+      ],
+      [
+        94,
+        158,
+        -65
+      ],
+      [
+        121,
+        174,
+        24
+      ],
+      [
+        73,
+        174,
+        69
+      ],
+      [
+        25,
+        155,
+        17
+      ]
+    ]
+  },
+  "shadow_route": [
+    [
+      -170,
+      60,
+      115
+    ],
+    [
+      -170,
+      65,
+      452
+    ]
+  ],
+  "library_concept": [
+    [
+      508,
+      114,
+      442
+    ],
+    [
+      -345,
+      135,
+      355
+    ],
+    [
+      -470,
+      425,
+      485
+    ]
+  ],
+  "version": 1,
+  "approval": "shared-topology-r02/a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257",
+  "transform": {
+    "horizontal_scale": 0.8838438452231908,
+    "vertical_scale": 1.0,
+    "translation": [
+      700.6145516616108,
+      130.5
+    ],
+    "sea_top": 400
+  },
+  "calibration": "Continuous approved r02 terrain sampled at production hex centers:653282 mainland columns; independent Crystal reservation22183; no boundary corrections. Ocean gap geometric800u, not a boat benchmark.",
+  "frames": {
+    "world_tree": {
+      "origin": [
+        195,
+        65
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "garden": {
+      "origin": [
+        360,
+        640
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "fountain": {
+      "origin": [
+        382,
+        635
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "shrine_water": {
+      "origin": [
+        347,
+        630
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "shrine_air": {
+      "origin": [
+        -470,
+        485
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "shrine_fire": {
+      "origin": [
+        -1707.4824897131564,
+        -1010.4024189856436
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "camp_01": {
+      "origin": [
+        -35,
+        -40
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "camp_02": {
+      "origin": [
+        -270,
+        -160
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "camp_03": {
+      "origin": [
+        90,
+        -220
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "camp_04": {
+      "origin": [
+        -335,
+        -35
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "camp_05": {
+      "origin": [
+        -100,
+        -260
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "camp_06": {
+      "origin": [
+        90,
+        -55
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
+    "earth_temple": {
+      "origin": [
+        -170,
+        550
+      ],
+      "angle": 0.0,
+      "layer": "CrystalFloor",
+      "floor": 65
+    },
+    "crystal_heart": {
+      "origin": [
+        -170,
+        550
+      ],
+      "angle": 0.0,
+      "layer": "CrystalFloor",
+      "floor": 65
+    },
+    "shrine_earth": {
+      "origin": [
+        -170,
+        525
+      ],
+      "angle": 0.0,
+      "layer": "CrystalFloor",
+      "floor": 65
+    },
+    "root_temple": {
+      "origin": [
+        195,
+        65
+      ],
+      "angle": 0.0,
+      "layer": "RootTemple",
+      "floor": 37
+    },
+    "root_temple_entrance": {
+      "origin": [
+        195,
+        16
+      ],
+      "angle": 0.0,
+      "layer": "RootTemple",
+      "floor": 37
+    },
+    "root_temple_altar": {
+      "origin": [
+        195,
+        84
+      ],
+      "angle": 0.0,
+      "layer": "RootTemple",
+      "floor": 37
+    },
+    "shrine_plant": {
+      "origin": [
+        195,
+        71
+      ],
+      "angle": 0.0,
+      "layer": "RootTemple",
+      "floor": 37
+    },
+    "library_lower": {
+      "origin": [
+        -345,
+        355
+      ],
+      "angle": 0.0,
+      "layer": "LibraryLower",
+      "floor": 135
+    },
+    "library_upper": {
+      "origin": [
+        -420,
+        445
+      ],
+      "angle": 0.0,
+      "layer": "LibraryUpper",
+      "floor": 300
+    },
+    "library_stair": {
+      "origin": [
+        -425,
+        372
+      ],
+      "angle": 0.0,
+      "layer": "LibraryLower",
+      "floor": 135
+    },
+    "library_entrance": {
+      "origin": [
+        508,
+        442
+      ],
+      "angle": 0.0,
+      "layer": "LibraryLower",
+      "floor": 114
+    }
+  }
+}
