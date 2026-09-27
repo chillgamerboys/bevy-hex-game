@@ -231,7 +231,7 @@ struct Geometry {
 }
 #[expect(
     clippy::cast_precision_loss,
-    reason = "Validated radius900, level1000 ground-cover coordinates fit the f32 render envelope."
+    reason = "Explicitly admitted finite ground-cover coordinates fit the f32 render envelope."
 )]
 fn chunk_mesh(chunk: &GroundCoverChunk, edits: &FiniteWorldSession) -> Mesh {
     let mut mesh = Geometry::default();

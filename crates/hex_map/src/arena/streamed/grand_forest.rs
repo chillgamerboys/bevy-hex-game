@@ -61,6 +61,7 @@ pub(super) fn sync(
                 source,
                 &state.runtime.manifest().materials,
                 &state.edits,
+                (state.overview.radius, state.overview.level_bounds),
             ) {
                 Ok(forest) => Some(forest),
                 Err(error) => {
@@ -140,8 +141,11 @@ impl Forest {
         source: &ForestOverview,
         materials: &[MaterialSpec],
         edits: &FiniteWorldSession,
+        bounds: (u32, [i32; 2]),
     ) -> Result<Self, String> {
-        source.validate().map_err(|e| e.to_string())?;
+        source
+            .validate_in_bounds(bounds.0, bounds.1)
+            .map_err(|e| e.to_string())?;
         let palette: BTreeMap<_, _> = materials
             .iter()
             .map(|m| {
@@ -381,7 +385,7 @@ fn instance_mesh(
 }
 #[expect(
     clippy::cast_precision_loss,
-    reason = "Overview admission bounds exact roots to radius900 and levels0..1600."
+    reason = "Overview admission bounds exact roots to the validated finite presentation envelope."
 )]
 fn instance_transform(instance: &ForestInstance) -> Result<Transform, String> {
     let local =

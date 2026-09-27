@@ -436,7 +436,7 @@ fn exposed(bottom: i32, top: i32, neighbors: &[VoxelRun]) -> Vec<(i32, i32)> {
 
 #[expect(
     clippy::cast_precision_loss,
-    reason = "Validated finite Grand columns are within radius900 and1600levels."
+    reason = "Validated finite Grand columns lie within the bounded f32 render envelope."
 )]
 fn surface(
     occupancy: &[ColumnData],

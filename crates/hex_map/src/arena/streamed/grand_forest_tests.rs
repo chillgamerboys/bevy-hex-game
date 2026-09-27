@@ -223,7 +223,14 @@ fn mask_mesh(source: &ForestOverview, edits: &FiniteWorldSession) -> Result<Fore
 fn forest_ground_only_edits_keep_shared_geometry_and_partial_detail_keeps_whole_tree() {
     let mut f = fixture().expect("actual compact finite source");
     let mut world = world();
-    let mut forest = Forest::new(&mut world, &f.source, &f.materials, &f.edits).expect("forest");
+    let mut forest = Forest::new(
+        &mut world,
+        &f.source,
+        &f.materials,
+        &f.edits,
+        (900, [0, 1600]),
+    )
+    .expect("forest");
     let before = mask_mesh(&f.source, &f.edits).expect("source mesh");
     let shape = forest.source.shapes.first().expect("shape");
     let tree = forest.trees.first_mut().expect("tree");
@@ -321,8 +328,14 @@ fn forest_actual_trunk_and_crown_cuts_survive_zero_residency_checkpoint_resume()
     }
 
     let mut world = world();
-    let forest =
-        Forest::new(&mut world, &f.source, &f.materials, &f.edits).expect("masked initialization");
+    let forest = Forest::new(
+        &mut world,
+        &f.source,
+        &f.materials,
+        &f.edits,
+        (900, [0, 1600]),
+    )
+    .expect("masked initialization");
     let tree = forest.trees.first().expect("tree");
     assert_eq!(tree.cuts.len(), 2);
     assert!(tree.edited.is_some());
@@ -378,7 +391,14 @@ fn forest_actual_trunk_and_crown_cuts_survive_zero_residency_checkpoint_resume()
 fn forest_source_replacement_and_map_exit_release_all_meshes_entities_and_materials() {
     let f = fixture().expect("source");
     let mut world = world();
-    let forest = Forest::new(&mut world, &f.source, &f.materials, &f.edits).expect("forest");
+    let forest = Forest::new(
+        &mut world,
+        &f.source,
+        &f.materials,
+        &f.edits,
+        (900, [0, 1600]),
+    )
+    .expect("forest");
     let entities: Vec<_> = forest.trees.iter().map(|t| t.body).collect();
     world.insert_resource(Cache {
         identity: (7, 1),
@@ -396,8 +416,14 @@ fn forest_source_replacement_and_map_exit_release_all_meshes_entities_and_materi
     }
     assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
     assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
-    let forest =
-        Forest::new(&mut world, &f.source, &f.materials, &f.edits).expect("reenter forest");
+    let forest = Forest::new(
+        &mut world,
+        &f.source,
+        &f.materials,
+        &f.edits,
+        (900, [0, 1600]),
+    )
+    .expect("reenter forest");
     world.insert_resource(Cache {
         identity: (8, 1),
         forest: Some(forest),

@@ -619,9 +619,12 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         state.overview.level_height,
         PresentationLimits {
             max_resident_chunks: 256,
-            max_local_hex: 2048,
-            max_local_level: 4096,
-            max_render_height: 1024.0,
+            max_local_hex: i32::try_from(state.overview.radius).map_err(|e| e.to_string())?,
+            max_local_level: state.overview.level_bounds[1] + 1,
+            max_render_height: f32::from(
+                i16::try_from(state.overview.level_bounds[1]).map_err(|e| e.to_string())?,
+            ) * state.overview.level_height
+                + state.overview.vertical_offset,
             ..default()
         },
     )
@@ -1318,6 +1321,8 @@ mod tests {
             tree_count: 0,
             forest: None,
             ground_cover: None,
+            inland_water: None,
+            review_cameras: BTreeMap::new(),
             building_count: 0,
         }
     }

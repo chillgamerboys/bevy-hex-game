@@ -25,6 +25,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod admission;
+use admission::validate_overview;
 mod burrow;
 pub mod checkpoint;
 mod grand_forest;
@@ -37,6 +39,9 @@ mod tests;
 pub(super) fn clear_render(world: &mut World) {
     render::clear(world);
 }
+
+/// Hard byte ceiling shared by companion admission and durable identity hashing.
+pub const GRAND_OVERVIEW_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Local world authority and sparse run-local edits; never retains the full fine map.
 #[derive(Resource)]
@@ -132,10 +137,21 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
     } else {
         "northern-overview.ron"
     };
-    let overview: NorthernOverview = ron::from_str(
-        &std::fs::read_to_string(directory.join(overview_name)).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    use std::io::Read;
+    let mut overview_text = String::new();
+    std::fs::File::open(directory.join(overview_name))
+        .map_err(|e| e.to_string())?
+        .take(GRAND_OVERVIEW_MAX_BYTES + 1)
+        .read_to_string(&mut overview_text)
+        .map_err(|e| e.to_string())?;
+    if overview_text.len() as u64 > GRAND_OVERVIEW_MAX_BYTES {
+        return Err("Streamed overview exceeds its byte budget".into());
+    }
+    info!(
+        bytes = overview_text.len(),
+        "Streamed overview loaded within its byte budget"
+    );
+    let overview: NorthernOverview = ron::from_str(&overview_text).map_err(|e| e.to_string())?;
     let overview = Arc::new(overview);
     let source = Arc::new(
         FileChunkSource::open_workspace(&directory, IoLimits::default())
@@ -163,16 +179,7 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
             return Err("Grand biome companion identity/bounds mismatch".into());
         }
         for rows in [&map.mainland_rows, &map.crystal_rows] {
-            if rows.windows(2).any(|pair| pair.first() >= pair.get(1))
-                || rows.iter().any(|(r, a, b)| {
-                    a > b
-                        || r.unsigned_abs() > 900
-                        || a.unsigned_abs() > 900
-                        || b.unsigned_abs() > 900
-                })
-            {
-                return Err("Grand biome rows are invalid".into());
-            }
+            admission::validate_biome_rows(rows, overview.radius)?;
         }
         Some(map)
     } else {
@@ -352,114 +359,6 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
         let mut view = world.resource_mut::<ArenaTerrainView>();
         publish(&mut state, &mut view, &geometry);
     });
-    Ok(())
-}
-
-fn validate_overview(
-    overview: &NorthernOverview,
-    manifest: &hex_world_contracts::WorldManifest,
-) -> Result<(), String> {
-    let grand = manifest.world_id == "grand-v4";
-    let radius = if grand { 900 } else { 700 };
-    let max_level = if grand { 1600 } else { 1400 };
-    let extent_x = if grand { 1564.0 } else { 1216.0 };
-    let extent_z = if grand { 1356.0 } else { 1056.0 };
-    let max_height = if grand { 560.0 } else { 490.0 };
-    let [region] = manifest.regions.as_slice() else {
-        return Err("Northern package requires one finite region".into());
-    };
-    if overview.version != 1
-        || overview.world_id != manifest.world_id
-        || overview.package_fingerprint != manifest.fingerprint
-        || overview.source_fingerprint != manifest.source_fingerprint
-        || overview.materials != manifest.materials
-        || region.origin != WorldHex::new(0, 0)
-        || region.radius != overview.radius
-        || overview.radius != radius
-        || overview.level_bounds != [0, max_level]
-        || overview.hex_radius.to_bits() != 1.0_f32.to_bits()
-        || overview.level_height.to_bits() != 0.35_f32.to_bits()
-        || overview.vertical_offset.to_bits() != 0.35_f32.to_bits()
-        || overview.sea_level.to_bits() != 140.0_f32.to_bits()
-    {
-        return Err(
-            "Northern overview identity, palette or geometry differs from its package/profile"
-                .into(),
-        );
-    }
-    if let Some(forest) = &overview.forest {
-        if !grand {
-            return Err("Forest companion is only supported for Grand".into());
-        }
-        forest
-            .validate_catalog(&manifest.features)
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(cover) = &overview.ground_cover {
-        if !grand {
-            return Err("Ground cover companion is only supported for Grand".into());
-        }
-        cover.validate().map_err(|e| e.to_string())?;
-    }
-    let samples = overview
-        .width
-        .checked_mul(overview.height)
-        .and_then(|value| usize::try_from(value).ok())
-        .ok_or("Northern overview dimensions overflow")?;
-    if overview.width < 2
-        || overview.height < 2
-        || samples > 1_048_576
-        || overview.player_spawn[0].abs() > extent_x
-        || overview.player_spawn[2].abs() > extent_z
-        || !(0.0..=max_height).contains(&overview.player_spawn[1])
-        || overview.bed_heights.len() != samples
-        || overview.surface_materials.len() != samples
-        || !overview.spacing.is_finite()
-        || !(0.5..=8.0).contains(&overview.spacing)
-        || !overview
-            .origin_xz
-            .iter()
-            .chain(&overview.player_spawn)
-            .chain(overview.anchors.values().flatten())
-            .all(|v| v.is_finite())
-        || overview
-            .bed_heights
-            .iter()
-            .any(|height| !height.is_finite() || !(0.0..=max_height).contains(height))
-        || overview
-            .surface_materials
-            .iter()
-            .any(|index| overview.materials.get(usize::from(*index)).is_none())
-    {
-        return Err(
-            "Northern overview grid, palette index or observation position is invalid".into(),
-        );
-    }
-    let [ox, oz] = overview.origin_xz;
-    let width = u16::try_from(overview.width - 1)
-        .map_err(|error| format!("Northern overview width exceeds its grid bound: {error}"))?;
-    let height = u16::try_from(overview.height - 1)
-        .map_err(|error| format!("Northern overview height exceeds its grid bound: {error}"))?;
-    let end_x = ox + f32::from(width) * overview.spacing;
-    let end_z = oz + f32::from(height) * overview.spacing;
-    if ox > -extent_x + 3.0
-        || oz > -extent_z + 5.0
-        || end_x < extent_x - 3.0
-        || end_z < extent_z - 5.0
-        || !end_x.is_finite()
-        || !end_z.is_finite()
-        || world_hex(HexCoord::from_world(Vec3::from_array(
-            overview.player_spawn,
-        )))
-        .checked_distance(WorldHex::new(0, 0))
-        .map_err(|error| error.to_string())?
-            > u64::from(radius)
-    {
-        return Err(
-            "Northern overview does not cover the finite region or has an outside-world spawn"
-                .into(),
-        );
-    }
     Ok(())
 }
 
