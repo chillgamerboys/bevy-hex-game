@@ -271,11 +271,25 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
         let (dist, target, _) = route_distance([x, z], &channel.points);
         let half = channel.width * 0.5;
         let bank = half + 20.;
+        // A sea-level outfall has lateral banks, not a circular levee around
+        // its terminal cap. Preserve submerged natural ground beyond the last
+        // cross-section so the authored river can join actual ocean columns.
+        let open_sea_mouth = channel
+            .points
+            .last()
+            .zip(channel.points.iter().rev().nth(1))
+            .is_some_and(|(end, previous)| {
+                end[1] <= 0.
+                    && h < 0.
+                    && (x - end[0]) * (end[0] - previous[0]) + (z - end[2]) * (end[2] - previous[2])
+                        >= 0.
+            });
         if dist < half {
             // A channel has an authored supported bed even where the previous
             // lowland was lower than it. Merely taking min leaves deep gaps.
             h = target - 3.;
         } else if dist < bank
+            && !open_sea_mouth
             && ![&d.upper_lake, &d.lower_lake]
                 .into_iter()
                 .any(|lake| irregular([x, z], lake.center, lake.radii, lake.phase) < 1.)
@@ -417,6 +431,26 @@ mod profile_tests {
             assert!(
                 (height - center).abs() < 0.01,
                 "directional jump: {height} vs {center}"
+            );
+        }
+    }
+
+    #[test]
+    fn sea_level_outfall_keeps_its_ocean_side_open() {
+        let d = document();
+        // Final emitted river cap and its three seaward neighbors. These cells
+        // previously surrounded the river's sea-level pool with a dry bank.
+        for [q, r] in [[233, 419], [232, 420], [231, 420]] {
+            let [x, z] = super::super::world_xz(hex_world_contracts::WorldHex::new(q, r));
+            let point = [
+                (x - d.transform.translation[0]) / d.transform.horizontal_scale,
+                -(z - d.transform.translation[1]) / d.transform.horizontal_scale,
+            ];
+            let bed = mainland(&d, point, 0.);
+            assert!(bed < 0., "ocean mouth blocked at {point:?}: {bed}");
+            assert!(
+                water(&d, point, bed).is_none(),
+                "receiving water must be ocean"
             );
         }
     }
