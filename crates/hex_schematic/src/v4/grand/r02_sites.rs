@@ -178,11 +178,12 @@ impl GrandCompiler {
             .document
             .as_ref()
             .ok_or_else(|| ContractError::new("grand.site", "missing geography"))?;
-        definitions.push((
-            "grand_dragon_01",
-            [d.volcano.center[0] + 100., d.volcano.center[1] + 120.],
-            None,
-        ));
+        // The roost is the existing upper ascent shoulder, authored alongside
+        // the caldera approach. A radial offset can instead land on its steep face.
+        let roost = d.frames.get("dragon_roost").ok_or_else(|| {
+            ContractError::new("grand.site", "missing authored dragon_roost frame")
+        })?;
+        definitions.push(("grand_dragon_01", roost.origin, roost.floor));
         let mut encounters = Vec::new();
         let mut failures = Vec::new();
         for (id, point, height) in definitions {

@@ -639,6 +639,15 @@
       "layer": "Exterior",
       "floor": null
     },
+    "dragon_roost": {
+      "origin": [
+        -1650.4511165300764,
+        -967.3838139582456
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
+    },
     "camp_01": {
       "origin": [
         -35,
