@@ -213,7 +213,14 @@ fn place_tree(
             let (q, r) = turn(*q, *r, rotation);
             let p = WorldHex::new(root.q + q, root.r + r);
             let surface = g.surface(p);
-            if !g.mainland(p) || surface.water.is_some() || reserved_growth(g, p) {
+            let (terrain, _) = g.column(p);
+            if !g.mainland(p)
+                || surface.water.is_some()
+                || reserved_growth(g, p)
+                || terrain
+                    .material_at(surface.level)
+                    .is_none_or(|material| material == "water")
+            {
                 return Ok(None);
             }
             contacts.insert(p, surface.level + 1);
@@ -240,10 +247,15 @@ fn place_tree(
         } else {
             floor + lo
         };
+        let (terrain, _) = g.column(p);
         if !g.mainland(p)
             || bottom <= surface.level
             || (material != "timber" && bottom < surface.level + 9)
             || g.reserved_interval(p, bottom, floor + hi)
+            || terrain
+                .runs
+                .iter()
+                .any(|run| run.bottom < floor + hi && bottom < run.top)
         {
             return Ok(None);
         }
@@ -1173,7 +1185,9 @@ mod forest_tests {
             for contact in contacts {
                 let (terrain, _) = g.column(contact.column);
                 assert!(
-                    terrain.material_at(contact.level).is_some(),
+                    terrain
+                        .material_at(contact.level)
+                        .is_some_and(|material| material != "water"),
                     "unsupported root {}",
                     tree.id
                 );
@@ -1188,6 +1202,16 @@ mod forest_tests {
                 );
             }
             for column in &tree.occupancy {
+                let (terrain, _) = g.column(column.position);
+                assert!(
+                    column.runs.iter().all(|run| terrain
+                        .runs
+                        .iter()
+                        .all(|old| old.top <= run.bottom || run.top <= old.bottom)),
+                    "tree intersects composed terrain: {} at {:?}",
+                    tree.id,
+                    column.position
+                );
                 if column
                     .runs
                     .iter()

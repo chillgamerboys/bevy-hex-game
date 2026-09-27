@@ -105,6 +105,17 @@ fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>,
             add(&mut basin, p, floor, floor + 1, "sand");
         }
     }
+    // The shrine is composed first and owns its solid cells. Garden finishes
+    // may meet that architecture, but never replace a post/roof voxel or add a
+    // coincident second surface when the local terrain changes their heights.
+    for cells in [&mut frame, &mut plants, &mut basin] {
+        cells.retain(|p, levels| {
+            if let Some(runs) = occupied.get(p) {
+                levels.retain(|y, _| runs.iter().all(|(lo, hi)| *y < *lo || *y >= *hi));
+            }
+            !levels.is_empty()
+        });
+    }
     Ok(vec![
         object(
             g,
@@ -424,16 +435,19 @@ mod tests {
             .collect();
         assert_eq!(camps.len(), 6);
         for camp in camps {
-            assert!(camp
-                .occupancy
-                .iter()
-                .flat_map(|c| &c.runs)
-                .any(|run| run.material == "timber"));
-            assert!(!camp
-                .grounding
-                .as_ref()
-                .expect("hut and clearing contacts")
-                .is_empty());
+            assert!(
+                camp.occupancy
+                    .iter()
+                    .flat_map(|c| &c.runs)
+                    .any(|run| run.material == "timber")
+            );
+            assert!(
+                !camp
+                    .grounding
+                    .as_ref()
+                    .expect("hut and clearing contacts")
+                    .is_empty()
+            );
         }
         let rim = objects
             .iter()
@@ -457,9 +471,10 @@ mod tests {
         let plain = test_compiler(false);
         let water_shrine =
             shrine(&plain, "water", &Occupied::new()).expect("existing Water Shrine fixture");
+        let mut occupied = Occupied::new();
+        reserve(&mut occupied, &water_shrine);
         let additions = compose(&plain, &[water_shrine]).expect("bounded architecture");
         assert_eq!(additions.len(), 16);
-        let mut occupied = Occupied::new();
         for object in &additions {
             assert!(!object.occupancy.is_empty(), "{}", object.id);
             let grounding = object.grounding.as_ref().expect("contacts");
