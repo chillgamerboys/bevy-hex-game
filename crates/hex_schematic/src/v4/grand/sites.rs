@@ -207,6 +207,9 @@ impl GrandCompiler {
     }
     /// Manifest-bound sites, independent of which source chunks are currently resident.
     pub fn sites(&self, manifest_fingerprint: u64) -> Result<GrandSites, ContractError> {
+        if self.geography.document.is_some() {
+            return self.r02_sites(manifest_fingerprint);
+        }
         let mut encounters = vec![];
         for &(id, x, z, inside) in ENCOUNTERS {
             let preferred = self.support(x, z, inside);

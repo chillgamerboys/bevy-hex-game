@@ -1,14 +1,20 @@
 //! Exact authored river links; physical liquid intervals remain unchanged.
 use super::*;
 
-/// Shared absolute longitudinal chart for Grand's southwest-flowing river.
+/// Shared absolute longitudinal chart for revision-02's south-flowing river.
 /// Every authored directed edge must strictly increase this projection.
-pub const RIVER_PHASE_DIRECTION: [f32; 2] = [-0.8, 0.6];
+pub const RIVER_PHASE_DIRECTION: [f32; 2] = [0.03, 0.9995499];
 
-fn progress(p: WorldHex) -> f64 {
+fn r02_progress(p: WorldHex) -> f64 {
     let [x, z] = world_xz(p);
     let [dx, dz] = RIVER_PHASE_DIRECTION;
     x * f64::from(dx) + z * f64::from(dz)
+}
+
+// The retained pre-r02 fixtures have their original southwest chart.
+fn progress(p: WorldHex) -> f64 {
+    let [x, z] = world_xz(p);
+    x * -0.8 + z * 0.6
 }
 
 fn in_channel(p: WorldHex) -> bool {
@@ -21,6 +27,10 @@ fn is_receiver(liquid: &LiquidColumn) -> bool {
 
 impl GrandCompiler {
     pub(super) fn direct_river(&self, liquid: &mut LiquidColumn) {
+        if self.geography.document.is_some() {
+            self.r02_direct_river(liquid);
+            return;
+        }
         if !in_channel(liquid.column) || liquid.body_id != "grand/river" || liquid.top <= SEA_TOP {
             return;
         }
@@ -37,6 +47,69 @@ impl GrandCompiler {
                 a.top
                     .cmp(&b.top)
                     .then_with(|| progress(b.column).total_cmp(&progress(a.column)))
+            });
+        if let Some(next) = next {
+            liquid.kind = if liquid.top - next.top >= 8 {
+                LiquidKind::Waterfall
+            } else {
+                LiquidKind::Directed
+            };
+            liquid.downstream = vec![VoxelPosition {
+                column: next.column,
+                level: next.top - 1,
+            }];
+        }
+    }
+}
+
+impl GrandCompiler {
+    fn r02_reach(&self, p: WorldHex) -> Option<usize> {
+        let d = self.geography.document.as_ref()?;
+        let point = self.geography.model_xz(p);
+        [&d.fountain_rill, &d.falls, &d.river]
+            .into_iter()
+            .position(|c| geography::route_distance(point, &c.points).0 < c.width * 0.5 + 0.01)
+    }
+    fn r02_receiver(&self, reach: usize, liquid: &LiquidColumn) -> bool {
+        let Some(d) = &self.geography.document else {
+            return false;
+        };
+        if reach == 2 {
+            return liquid.top == SEA_TOP;
+        }
+        let lake = if reach == 0 {
+            &d.upper_lake
+        } else {
+            &d.lower_lake
+        };
+        liquid.top == self.geography.top_level(lake.level)
+            && geography::irregular(
+                self.geography.model_xz(liquid.column),
+                lake.center,
+                lake.radii,
+                lake.phase,
+            ) < 1.
+    }
+    fn r02_direct_river(&self, liquid: &mut LiquidColumn) {
+        if liquid.body_id != "grand/river" {
+            return;
+        }
+        let Some(reach) = self.r02_reach(liquid.column) else {
+            return;
+        };
+        let next = DIRS
+            .into_iter()
+            .map(|(q, r)| WorldHex::new(liquid.column.q + q, liquid.column.r + r))
+            .filter(|p| r02_progress(*p) > r02_progress(liquid.column))
+            .filter_map(|p| self.column(p).1)
+            .filter(|n| {
+                n.top <= liquid.top
+                    && (self.r02_reach(n.column) == Some(reach) || self.r02_receiver(reach, n))
+            })
+            .min_by(|a, b| {
+                a.top
+                    .cmp(&b.top)
+                    .then_with(|| r02_progress(b.column).total_cmp(&r02_progress(a.column)))
             });
         if let Some(next) = next {
             liquid.kind = if liquid.top - next.top >= 8 {
@@ -75,6 +148,7 @@ mod tests {
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
         spec.full_dressing = false;
+        spec.geography = None; // Explicit legacy river fixture.
         let compiler = GrandCompiler::new(spec)?;
         let mut pending: std::collections::BTreeSet<_> =
             channel_positions().map(WorldHex::chunk).collect();
@@ -167,6 +241,7 @@ mod tests {
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
         spec.full_dressing = false;
+        spec.geography = None; // Explicit legacy river fixture.
         let compiler = GrandCompiler::new(spec)?;
         let mut graph = BTreeMap::new();
         for p in channel_positions() {
@@ -229,6 +304,7 @@ mod tests {
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
         spec.full_dressing = false;
+        spec.geography = None; // Explicit legacy river fixture.
         let compiler = GrandCompiler::new(spec)?;
         let mut directed = 0;
         let mut falls = 0;

@@ -265,8 +265,8 @@
   },
   "volcano": {
     "center": [
-      -1732.4824897131564,
-      -1027.4024189856436
+      -1732.4511165300764,
+      -1027.3838139582456
     ],
     "radii": [
       335,
@@ -417,54 +417,79 @@
     "width": 26,
     "local_points": [
       [
-        265,
-        1,
-        195
+        265.0,
+        1.0,
+        195.00000000000003
       ],
       [
-        250,
-        16,
-        142
+        124.3736800495975,
+        22.237957950514232,
+        283.970000638737
       ],
       [
-        192,
-        39,
-        102
+        -32.173513930553035,
+        42.22875827715287,
+        289.22741697838035
       ],
       [
-        83,
-        62,
-        154
+        -161.21518332309242,
+        60.97348744253953,
+        219.08730041343335
       ],
       [
-        -50,
-        88,
-        106
+        -231.75514134105163,
+        78.47346399281804,
+        101.50452418976131
       ],
       [
-        -106,
-        112,
-        7
+        -232.57344444163655,
+        94.73030935190708,
+        -25.87135421943426
       ],
       [
-        -17,
-        137,
-        -91
+        -173.17460082686668,
+        109.74604765512782,
+        -127.43036664618486
       ],
       [
-        94,
-        158,
-        -65
+        -78.63536832992489,
+        123.52325007596505,
+        -179.54028204336623
       ],
       [
-        121,
-        174,
-        24
+        19.56919450831549,
+        136.06524952944426,
+        -175.91947190489276
       ],
       [
-        73,
-        174,
-        69
+        93.64554996927738,
+        147.3764708618142,
+        -127.26190124029996
+      ],
+      [
+        127.32542274568078,
+        157.46295884133843,
+        -55.76621247008867
+      ],
+      [
+        119.26549936814895,
+        166.3332624147653,
+        13.267034797196724
+      ],
+      [
+        81.34920165373332,
+        174.0,
+        59.860733292369815
+      ],
+      [
+        20,
+        168,
+        87
+      ],
+      [
+        -35,
+        162,
+        35
       ],
       [
         25,
@@ -505,7 +530,7 @@
   "version": 1,
   "approval": "shared-topology-r02/a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257",
   "transform": {
-    "horizontal_scale": 0.8838438452231908,
+    "horizontal_scale": 0.8838784715190828,
     "vertical_scale": 1.0,
     "translation": [
       700.6145516616108,
@@ -513,7 +538,7 @@
     ],
     "sea_top": 400
   },
-  "calibration": "Continuous approved r02 terrain sampled at production hex centers:653282 mainland columns; independent Crystal reservation22183; no boundary corrections. Ocean gap geometric800u, not a boat benchmark.",
+  "calibration": "Largest six-neighbor continuous-r02 mainland sampled at production hex centers:653282 mainland columns; separate53-column islet excluded. Independent Crystal reservation22183. Ocean gap geometric800u, not a boat benchmark.",
   "frames": {
     "world_tree": {
       "origin": [
@@ -562,8 +587,8 @@
     },
     "shrine_fire": {
       "origin": [
-        -1707.4824897131564,
-        -1010.4024189856436
+        -1707.4511165300764,
+        -1010.3838139582456
       ],
       "angle": 0.0,
       "layer": "Exterior",
@@ -688,8 +713,8 @@
     },
     "library_lower": {
       "origin": [
-        -345,
-        355
+        -445,
+        485
       ],
       "angle": 0.0,
       "layer": "LibraryLower",
@@ -697,8 +722,8 @@
     },
     "library_upper": {
       "origin": [
-        -420,
-        445
+        -470,
+        485
       ],
       "angle": 0.0,
       "layer": "LibraryUpper",
@@ -706,8 +731,8 @@
     },
     "library_stair": {
       "origin": [
-        -425,
-        372
+        -395,
+        425
       ],
       "angle": 0.0,
       "layer": "LibraryLower",
@@ -722,5 +747,1174 @@
       "layer": "LibraryLower",
       "floor": 114
     }
+  },
+  "site_blends": [
+    [
+      -170,
+      550,
+      235,
+      88,
+      91
+    ],
+    [
+      -10,
+      730,
+      225,
+      110,
+      75
+    ]
+  ],
+  "frozen_landing": {
+    "center": [
+      216,
+      650
+    ],
+    "radii": [
+      30,
+      24
+    ],
+    "height": 206
+  },
+  "rooms": [
+    {
+      "frame": "library_lower",
+      "half_extents": [
+        80,
+        48
+      ],
+      "height": 24
+    },
+    {
+      "frame": "library_upper",
+      "half_extents": [
+        45,
+        28
+      ],
+      "height": 20
+    },
+    {
+      "frame": "root_temple",
+      "half_extents": [
+        24,
+        24
+      ],
+      "height": 22
+    }
+  ],
+  "layer_routes": {
+    "library_lower": {
+      "from": "waterfall",
+      "to": "library_hall",
+      "points": [
+        [
+          508,
+          114,
+          442
+        ],
+        [
+          470,
+          114,
+          450
+        ],
+        [
+          80,
+          128,
+          448
+        ],
+        [
+          -350,
+          135,
+          476
+        ],
+        [
+          -445,
+          135,
+          485
+        ]
+      ],
+      "width": 13,
+      "layer": "LibraryLower",
+      "open_ends": [
+        true,
+        false
+      ]
+    },
+    "library_upper": {
+      "from": "library_hall",
+      "to": "library_upper",
+      "points": [
+        [
+          -445,
+          135,
+          485
+        ],
+        [
+          -395,
+          135,
+          425
+        ],
+        [
+          -395,
+          148.75,
+          545
+        ],
+        [
+          -545,
+          162.5,
+          545
+        ],
+        [
+          -545,
+          176.25,
+          425
+        ],
+        [
+          -395,
+          190.0,
+          425
+        ],
+        [
+          -395,
+          203.75,
+          545
+        ],
+        [
+          -545,
+          217.5,
+          545
+        ],
+        [
+          -545,
+          231.25,
+          425
+        ],
+        [
+          -395,
+          245.0,
+          425
+        ],
+        [
+          -395,
+          258.75,
+          545
+        ],
+        [
+          -545,
+          272.5,
+          545
+        ],
+        [
+          -545,
+          286.25,
+          425
+        ],
+        [
+          -395,
+          300.0,
+          425
+        ],
+        [
+          -470,
+          300,
+          485
+        ]
+      ],
+      "width": 12,
+      "layer": "LibraryUpper",
+      "open_ends": [
+        false,
+        false
+      ]
+    },
+    "library_air": {
+      "from": "library_upper",
+      "to": "shrine_air",
+      "points": [
+        [
+          -470,
+          300,
+          485
+        ],
+        [
+          -400,
+          300,
+          550
+        ],
+        [
+          -540,
+          310.4166666666667,
+          550
+        ],
+        [
+          -540,
+          320.8333333333333,
+          420
+        ],
+        [
+          -400,
+          331.25,
+          420
+        ],
+        [
+          -400,
+          341.6666666666667,
+          550
+        ],
+        [
+          -540,
+          352.0833333333333,
+          550
+        ],
+        [
+          -540,
+          362.5,
+          420
+        ],
+        [
+          -400,
+          372.9166666666667,
+          420
+        ],
+        [
+          -400,
+          383.3333333333333,
+          550
+        ],
+        [
+          -540,
+          393.75,
+          550
+        ],
+        [
+          -540,
+          404.1666666666667,
+          420
+        ],
+        [
+          -400,
+          414.5833333333333,
+          420
+        ],
+        [
+          -400,
+          425.0,
+          550
+        ],
+        [
+          -470,
+          425,
+          485
+        ]
+      ],
+      "width": 12,
+      "layer": "LibraryUpper",
+      "open_ends": [
+        false,
+        true
+      ]
+    },
+    "root_temple": {
+      "from": "root_temple_approach",
+      "to": "shrine_plant",
+      "points": [
+        [
+          195,
+          46,
+          -35
+        ],
+        [
+          195,
+          37,
+          16
+        ],
+        [
+          195,
+          37,
+          71
+        ]
+      ],
+      "width": 18,
+      "layer": "RootTemple",
+      "open_ends": [
+        true,
+        false
+      ]
+    }
+  },
+  "sailing_start": [
+    -789.7974631853709,
+    -215.0972373236312
+  ],
+  "review_cameras": {
+    "grand-overview": {
+      "eye": [
+        1900,
+        2350,
+        -3450
+      ],
+      "target": [
+        -490,
+        100,
+        -195
+      ],
+      "interest": [
+        195,
+        50,
+        65
+      ],
+      "horizontal_span": 4100,
+      "ground": false
+    },
+    "grand-mainland": {
+      "eye": [
+        1450,
+        1650,
+        -2300
+      ],
+      "target": [
+        -10,
+        110,
+        170
+      ],
+      "interest": [
+        195,
+        50,
+        65
+      ],
+      "horizontal_span": 2350,
+      "ground": false
+    },
+    "grand-crystal-frozen": {
+      "eye": [
+        170,
+        530,
+        60
+      ],
+      "target": [
+        -120,
+        145,
+        660
+      ],
+      "interest": [
+        -170,
+        65,
+        550
+      ],
+      "horizontal_span": 690,
+      "ground": false
+    },
+    "grand-volcano": {
+      "eye": [
+        -972,
+        660,
+        -278
+      ],
+      "target": [
+        -1732,
+        75,
+        -1027
+      ],
+      "interest": [
+        -1707,
+        155,
+        -1010
+      ],
+      "horizontal_span": 1030,
+      "ground": false
+    },
+    "grand-valley-tree-bank": {
+      "eye": [
+        70,
+        47.7,
+        -55
+      ],
+      "target": [
+        376,
+        223,
+        605
+      ],
+      "interest": [
+        70,
+        47.7,
+        -55
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-valley-lake-bank": {
+      "eye": [
+        100,
+        57.7,
+        100
+      ],
+      "target": [
+        385,
+        230,
+        608
+      ],
+      "interest": [
+        100,
+        57.7,
+        100
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-valley-waterfall-approach": {
+      "eye": [
+        450,
+        49.7,
+        280
+      ],
+      "target": [
+        445,
+        220,
+        560
+      ],
+      "interest": [
+        450,
+        49.7,
+        280
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-forest-ground": {
+      "eye": [
+        -145,
+        45,
+        -140
+      ],
+      "target": [
+        -80,
+        45,
+        -90
+      ],
+      "interest": [
+        -145,
+        45,
+        -140
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-river-exit": {
+      "eye": [
+        221,
+        34,
+        -180
+      ],
+      "target": [
+        170,
+        36,
+        -210
+      ],
+      "interest": [
+        221,
+        34,
+        -180
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-motion-forest-forward": {
+      "eye": [
+        -170,
+        43,
+        -125
+      ],
+      "target": [
+        -115,
+        43,
+        -100
+      ],
+      "interest": [
+        -170,
+        43,
+        -125
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-motion-river-forward": {
+      "eye": [
+        215,
+        35,
+        -150
+      ],
+      "target": [
+        180,
+        35,
+        -200
+      ],
+      "interest": [
+        215,
+        35,
+        -150
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-mainland-south": {
+      "eye": [
+        0,
+        1400,
+        -2350
+      ],
+      "target": [
+        0,
+        130,
+        240
+      ],
+      "interest": [
+        195,
+        50,
+        65
+      ],
+      "horizontal_span": 2400,
+      "ground": false
+    },
+    "grand-mainland-east": {
+      "eye": [
+        2250,
+        1300,
+        200
+      ],
+      "target": [
+        0,
+        140,
+        200
+      ],
+      "interest": [
+        375,
+        205,
+        620
+      ],
+      "horizontal_span": 2400,
+      "ground": false
+    },
+    "grand-mainland-northwest": {
+      "eye": [
+        -1550,
+        1600,
+        2050
+      ],
+      "target": [
+        0,
+        150,
+        230
+      ],
+      "interest": [
+        -170,
+        65,
+        550
+      ],
+      "horizontal_span": 2450,
+      "ground": false
+    },
+    "grand-forest-ground-reverse": {
+      "eye": [
+        -80,
+        45,
+        -90
+      ],
+      "target": [
+        -145,
+        45,
+        -140
+      ],
+      "interest": [
+        -80,
+        45,
+        -90
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-garden": {
+      "eye": [
+        600,
+        420,
+        380
+      ],
+      "target": [
+        370,
+        210,
+        630
+      ],
+      "interest": [
+        360,
+        213,
+        640
+      ],
+      "horizontal_span": 520,
+      "ground": false
+    },
+    "grand-garden-ground": {
+      "eye": [
+        347,
+        214,
+        612
+      ],
+      "target": [
+        381,
+        218,
+        648
+      ],
+      "interest": [
+        347,
+        214,
+        612
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-waterfall": {
+      "eye": [
+        760,
+        300,
+        110
+      ],
+      "target": [
+        450,
+        132,
+        402
+      ],
+      "interest": [
+        450,
+        50,
+        280
+      ],
+      "horizontal_span": 630,
+      "ground": false
+    },
+    "grand-valley-lake": {
+      "eye": [
+        680,
+        300,
+        -20
+      ],
+      "target": [
+        355,
+        55,
+        145
+      ],
+      "interest": [
+        202,
+        55,
+        145
+      ],
+      "horizontal_span": 640,
+      "ground": false
+    },
+    "grand-world-tree": {
+      "eye": [
+        510,
+        340,
+        -290
+      ],
+      "target": [
+        195,
+        170,
+        65
+      ],
+      "interest": [
+        195,
+        67,
+        65
+      ],
+      "horizontal_span": 700,
+      "ground": false
+    },
+    "grand-roots-entrance": {
+      "eye": [
+        195,
+        48,
+        -35
+      ],
+      "target": [
+        195,
+        44,
+        54
+      ],
+      "interest": [
+        195,
+        48,
+        -35
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-shrine-plant": {
+      "eye": [
+        190,
+        38.7,
+        47
+      ],
+      "target": [
+        195,
+        43,
+        84
+      ],
+      "interest": [
+        190,
+        38.7,
+        47
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-forest": {
+      "eye": [
+        150,
+        380,
+        -640
+      ],
+      "target": [
+        -90,
+        45,
+        -95
+      ],
+      "interest": [
+        -100,
+        50,
+        -120
+      ],
+      "horizontal_span": 1100,
+      "ground": false
+    },
+    "grand-crystal": {
+      "eye": [
+        -170,
+        390,
+        150
+      ],
+      "target": [
+        -170,
+        130,
+        550
+      ],
+      "interest": [
+        -170,
+        65,
+        550
+      ],
+      "horizontal_span": 500,
+      "ground": false
+    },
+    "grand-shrine-earth": {
+      "eye": [
+        -170,
+        66.7,
+        498
+      ],
+      "target": [
+        -170,
+        72,
+        550
+      ],
+      "interest": [
+        -170,
+        66.7,
+        498
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-frozen-woods": {
+      "eye": [
+        -95,
+        280,
+        585
+      ],
+      "target": [
+        90,
+        212,
+        727
+      ],
+      "interest": [
+        -65,
+        212,
+        730
+      ],
+      "horizontal_span": 460,
+      "ground": false
+    },
+    "grand-summit": {
+      "eye": [
+        -650,
+        610,
+        180
+      ],
+      "target": [
+        -470,
+        425,
+        485
+      ],
+      "interest": [
+        -470,
+        425,
+        485
+      ],
+      "horizontal_span": 590,
+      "ground": false
+    },
+    "grand-shrine-air": {
+      "eye": [
+        -470,
+        426.7,
+        463
+      ],
+      "target": [
+        -470,
+        434,
+        485
+      ],
+      "interest": [
+        -470,
+        426.7,
+        463
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-shrine-fire": {
+      "eye": [
+        -1723.4511165300764,
+        156.7,
+        -1018.3838139582456
+      ],
+      "target": [
+        -1704.4511165300764,
+        162,
+        -1005.3838139582456
+      ],
+      "interest": [
+        -1723.4511165300764,
+        156.7,
+        -1018.3838139582456
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-island-landing": {
+      "eye": [
+        -1337.4511165300764,
+        105,
+        -762.3838139582456
+      ],
+      "target": [
+        -1467.4511165300764,
+        15,
+        -832.3838139582456
+      ],
+      "interest": [
+        -1467.4511165300764,
+        1,
+        -832.3838139582456
+      ],
+      "horizontal_span": 400,
+      "ground": false
+    },
+    "grand-bay": {
+      "eye": [
+        -105,
+        110,
+        -710
+      ],
+      "target": [
+        -105,
+        8,
+        -440
+      ],
+      "interest": [
+        -105,
+        3,
+        -495
+      ],
+      "horizontal_span": null,
+      "ground": false
+    },
+    "grand-bay-baseline": {
+      "eye": [
+        -105,
+        35,
+        -640
+      ],
+      "target": [
+        -105,
+        10,
+        -430
+      ],
+      "interest": [
+        -105,
+        3,
+        -495
+      ],
+      "horizontal_span": null,
+      "ground": false
+    },
+    "grand-bay-reverse": {
+      "eye": [
+        -105,
+        16,
+        -460
+      ],
+      "target": [
+        -1467.4511165300764,
+        18,
+        -832.3838139582456
+      ],
+      "interest": [
+        -105,
+        3,
+        -495
+      ],
+      "horizontal_span": null,
+      "ground": false
+    },
+    "grand-waterline": {
+      "eye": [
+        -105,
+        1,
+        -560
+      ],
+      "target": [
+        -105,
+        2,
+        -485
+      ],
+      "interest": [
+        -105,
+        3,
+        -495
+      ],
+      "horizontal_span": null,
+      "ground": false
+    },
+    "grand-underwater": {
+      "eye": [
+        -105,
+        -2,
+        -560
+      ],
+      "target": [
+        -105,
+        -2,
+        -520
+      ],
+      "interest": [
+        -105,
+        3,
+        -495
+      ],
+      "horizontal_span": null,
+      "ground": false
+    },
+    "grand-waterfall-cave": {
+      "eye": [
+        508,
+        115.7,
+        442
+      ],
+      "target": [
+        470,
+        115,
+        450
+      ],
+      "interest": [
+        508,
+        115.7,
+        442
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-library": {
+      "eye": [
+        -510,
+        136.7,
+        461
+      ],
+      "target": [
+        -390,
+        145,
+        500
+      ],
+      "interest": [
+        -510,
+        136.7,
+        461
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-library-reverse": {
+      "eye": [
+        -383,
+        136.7,
+        509
+      ],
+      "target": [
+        -510,
+        146,
+        465
+      ],
+      "interest": [
+        -383,
+        136.7,
+        509
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-library-upper": {
+      "eye": [
+        -500,
+        301.7,
+        470
+      ],
+      "target": [
+        -440,
+        310,
+        499
+      ],
+      "interest": [
+        -500,
+        301.7,
+        470
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-shadow-tunnel": {
+      "eye": [
+        -170,
+        62.7,
+        170
+      ],
+      "target": [
+        -170,
+        67,
+        410
+      ],
+      "interest": [
+        -170,
+        62.7,
+        170
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-shadow-reverse": {
+      "eye": [
+        -170,
+        66,
+        425
+      ],
+      "target": [
+        -170,
+        62,
+        150
+      ],
+      "interest": [
+        -170,
+        66,
+        425
+      ],
+      "horizontal_span": null,
+      "ground": true
+    },
+    "grand-shadow-exit": {
+      "eye": [
+        -170,
+        66.7,
+        435
+      ],
+      "target": [
+        -170,
+        95,
+        540
+      ],
+      "interest": [
+        -170,
+        66.7,
+        435
+      ],
+      "horizontal_span": null,
+      "ground": true
+    }
+  },
+  "low_hills": [
+    [
+      -300,
+      70,
+      30,
+      430,
+      300
+    ],
+    [
+      550,
+      -60,
+      34,
+      320,
+      310
+    ]
+  ],
+  "valley_bowl": {
+    "offset": [
+      -100,
+      0
+    ],
+    "radii": [
+      350,
+      275
+    ],
+    "level": 53
+  },
+  "caldera": {
+    "radii": [
+      85,
+      79
+    ],
+    "floor": 126,
+    "rim": 185,
+    "amplitude": 22
+  },
+  "sailing_start_bay": [
+    -105,
+    -560
+  ],
+  "fountain_basin": {
+    "center": [
+      382,
+      635
+    ],
+    "radii": [
+      4,
+      4
+    ],
+    "level": 210,
+    "phase": 0
+  },
+  "fountain_rill": {
+    "width": 3,
+    "points": [
+      [
+        382,
+        210,
+        635
+      ],
+      [
+        390,
+        209,
+        632
+      ],
+      [
+        403,
+        205,
+        625
+      ]
+    ]
   }
 }

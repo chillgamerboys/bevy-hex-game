@@ -10,8 +10,12 @@ mod flow;
 mod forest_overview;
 mod geography;
 mod ground_cover;
+mod oracle;
+mod r02;
+mod r02_overview;
+mod r02_sites;
 pub use geography::{GrandGeography, GrandGeographyDocument};
-pub(super) use geography::{GrandRegion, LandmarkFrame, SupportLayer, TreeDimensions};
+use geography::{GrandRegion, LandmarkFrame, SupportLayer, TreeDimensions};
 mod library_finish;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
@@ -27,15 +31,15 @@ use serde::{Deserialize, Serialize};
 pub use sites::GrandSites;
 use std::collections::{BTreeMap, VecDeque};
 /// Finite ocean envelope, independent of the measured mainland area.
-pub const RADIUS: i64 = 900;
+pub const RADIUS: i64 = 1052;
 /// World units per voxel level.
 pub const LEVEL_HEIGHT: f64 = 0.35;
 /// Exclusive ocean surface level.
 pub const SEA_TOP: i32 = 400;
 /// Inclusive vertical storage bound.
-pub const MAX_LEVEL: i32 = 1600;
-const GRID: usize = 1101;
-const OFFSET: i64 = 550;
+pub const MAX_LEVEL: i32 = 2100;
+const GRID: usize = 2105;
+const OFFSET: i64 = 1052;
 const DIRS: [(i64, i64); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
 /// Small measured authoring input. Rows are (r, first q, last q), inclusive.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,6 +90,8 @@ pub struct GrandCompiler {
     pub tree_count: usize,
     forest: Option<super::northern::forest::ForestOverview>,
     ground_cover: Option<super::northern::ground_cover::GroundCover>,
+    inland: Option<super::northern::InlandWaterOverview>,
+    layered: r02::Layered,
     coast: Vec<u16>,
     offshore_distance: Vec<u16>,
     crystal: std::collections::BTreeSet<WorldHex>,
@@ -183,7 +189,7 @@ impl GrandCompiler {
         Self::build(source, geography, Some(xxhash_rust::xxh3::xxh3_64(bytes)))
     }
     fn build(
-        source: GrandSpec,
+        mut source: GrandSpec,
         geography: GrandGeography,
         geography_bytes: Option<u64>,
     ) -> Result<Self, ContractError> {
@@ -199,17 +205,67 @@ impl GrandCompiler {
         }
         let mut coast = vec![0_u16; GRID * GRID];
         let mut count = 0;
-        for &(r, a, b) in &source.mainland_rows {
-            if a > b {
-                return Err(ContractError::new("grand", "inverted footprint row"));
-            }
-            for q in a..=b {
-                let cell = grid_cell(&mut coast, WorldHex::new(q, r))?;
-                if *cell != 0 {
-                    return Err(ContractError::new("grand", "overlapping footprint rows"));
+        if let Some(document) = &geography.document {
+            for r in -OFFSET..=OFFSET {
+                for q in -OFFSET..=OFFSET {
+                    let p = WorldHex::new(q, r);
+                    let point = geography.model_xz(p);
+                    if !(-1200. ..=1200.).contains(&point[0])
+                        || !(-1000. ..=1500.).contains(&point[1])
+                    {
+                        continue;
+                    }
+                    if oracle::mainland(document, point) > 0. {
+                        *grid_cell(&mut coast, p)? = u16::MAX;
+                    }
                 }
-                *cell = u16::MAX;
+            }
+            // Only the connected mainland counts toward sevenfold area. Tiny
+            // separate positive coastal islets retain their terrain separately.
+            let seed = geography.world_hex([0., 100.]);
+            let mut todo = VecDeque::from([seed]);
+            *grid_cell(&mut coast, seed)? = 2;
+            while let Some(p) = todo.pop_front() {
                 count += 1;
+                for (a, b) in DIRS {
+                    let n = WorldHex::new(p.q + a, p.r + b);
+                    if grid_value(&coast, n, 0) == u16::MAX {
+                        *grid_cell(&mut coast, n)? = 2;
+                        todo.push_back(n);
+                    }
+                }
+            }
+            for value in &mut coast {
+                *value = if *value == 2 { u16::MAX } else { 0 };
+            }
+            source.mainland_rows.clear();
+            for r in -OFFSET..=OFFSET {
+                let mut begin = None;
+                for q in -OFFSET..=OFFSET + 1 {
+                    let inside = grid_value(&coast, WorldHex::new(q, r), 0) > 0;
+                    match (begin, inside) {
+                        (None, true) => begin = Some(q),
+                        (Some(a), false) => {
+                            source.mainland_rows.push((r, a, q - 1));
+                            begin = None;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        } else {
+            for &(r, a, b) in &source.mainland_rows {
+                if a > b {
+                    return Err(ContractError::new("grand", "inverted footprint row"));
+                }
+                for q in a..=b {
+                    let cell = grid_cell(&mut coast, WorldHex::new(q, r))?;
+                    if *cell != 0 {
+                        return Err(ContractError::new("grand", "overlapping footprint rows"));
+                    }
+                    *cell = u16::MAX;
+                    count += 1;
+                }
             }
         }
         if count != source.canonical_mainland_columns * 7 {
@@ -275,7 +331,10 @@ impl GrandCompiler {
                 }
             }
         }
-        let root = nearest_hex(-201., -524.);
+        let root = geography.document.as_ref().map_or_else(
+            || nearest_hex(-201., -524.),
+            |d| geography.world_hex(d.ascent.center),
+        );
         let mut candidates = Vec::new();
         for q in -95_i64..=95 {
             for r in -95_i64..=95 {
@@ -292,6 +351,8 @@ impl GrandCompiler {
             .collect();
         let source_fingerprint =
             hash_serializable(&(&source, geography_bytes, &geography.document))?;
+        let layered = r02::Layered::compile(&geography)?;
+        let revision02 = geography.document.is_some();
         let mut result = Self {
             source,
             source_fingerprint,
@@ -302,17 +363,29 @@ impl GrandCompiler {
             tree_count: 0,
             forest: None,
             ground_cover: None,
+            inland: None,
+            layered,
             coast,
             offshore_distance,
             crystal,
-            cave_cover: terrain::compile_cave_cover(),
+            cave_cover: if revision02 {
+                BTreeMap::new()
+            } else {
+                terrain::compile_cave_cover()
+            },
             graded_shoulders: BTreeMap::new(),
             anchors: vec![],
             objects: BTreeMap::new(),
             influences: BTreeMap::new(),
         };
-        result.graded_shoulders = terrain::compile_grades(&result)?;
-        result.anchors = result.make_anchors();
+        if !revision02 {
+            result.graded_shoulders = terrain::compile_grades(&result)?;
+        }
+        result.anchors = if revision02 {
+            result.r02_anchors()?
+        } else {
+            result.make_anchors()
+        };
         let objects = if result.source.full_dressing {
             dressing::compose(&result)?
         } else {
@@ -336,6 +409,9 @@ impl GrandCompiler {
                 .or_default()
                 .push(object);
         }
+        if revision02 {
+            result.inland = Some(result.r02_inland()?);
+        }
         Ok(result)
     }
     /// Whether the column is inside the authored mainland footprint.
@@ -344,7 +420,11 @@ impl GrandCompiler {
     }
     /// Quantized solid surface before exact caves and above-ground structures.
     pub fn surface(&self, p: WorldHex) -> GrandSurface {
-        terrain::surface(self, p)
+        if self.geography.document.is_some() {
+            self.r02_surface(p)
+        } else {
+            terrain::surface(self, p)
+        }
     }
 
     /// Exact clear interval [floor+1, ceiling), inclusive support under actors.
@@ -356,6 +436,9 @@ impl GrandCompiler {
     }
     /// Compile one exact column with carved interiors and optional liquid.
     pub fn column(&self, p: WorldHex) -> (ColumnData, Option<LiquidColumn>) {
+        if self.geography.document.is_some() {
+            return self.r02_column(p);
+        }
         let (mut column, liquid) = self.column_without_library_finish(p);
         library_finish::floor(p, &mut column.runs);
         (column, liquid)
@@ -496,7 +579,7 @@ impl GrandCompiler {
         WorldManifest {
             schema_version: SCHEMA_VERSION,
             world_id: self.source.id.clone(),
-            compiler_version: "hex-grand/3".into(),
+            compiler_version: "hex-grand/r02-1".into(),
             source_fingerprint: self.source_fingerprint,
             materials: self.materials.clone(),
             regions: vec![RegionDescriptor {
@@ -518,9 +601,12 @@ impl GrandCompiler {
         reason = "The fixed compiler palette contains every surface material and make_anchors always publishes party_start; missing either is an authoring invariant failure."
     )]
     pub fn overview(&self) -> NorthernOverview {
-        let origin_xz = [-1564., -1356.];
-        let (width, height) = (783, 679);
-        let spacing = 4.;
+        let spacing = 8.;
+        let extent_x = (RADIUS as f64 + 0.5) * 3_f64.sqrt();
+        let extent_z = RADIUS as f64 * 1.5 + 1.;
+        let origin_xz = [-extent_x, -extent_z];
+        let width = (extent_x * 2. / spacing).ceil() as usize + 1;
+        let height = (extent_z * 2. / spacing).ceil() as usize + 1;
         let mut bed_heights = Vec::with_capacity(width * height);
         let mut surface_materials = Vec::with_capacity(width * height);
         for row in 0..height {
@@ -587,8 +673,16 @@ impl GrandCompiler {
             islands: vec![IslandSpec {
                 id: "fire-volcano".into(),
                 cluster: 0,
-                center: [-1180., 450.],
-                radii: [86., 77.],
+                center: self
+                    .geography
+                    .document
+                    .as_ref()
+                    .map_or([-1180., 450.], |d| {
+                        self.geography.world_xz(d.volcano.center)
+                    }),
+                radii: self.geography.document.as_ref().map_or([86., 77.], |d| {
+                    d.volcano.radii.map(|r| self.geography.length(r))
+                }),
                 angle: 0.,
                 peak: 91.,
                 crater: true,
@@ -596,8 +690,8 @@ impl GrandCompiler {
             tree_count: self.tree_count,
             forest: self.forest.clone(),
             ground_cover: self.ground_cover.clone(),
-            inland_water: None,
-            review_cameras: BTreeMap::new(),
+            inland_water: self.inland.clone(),
+            review_cameras: self.r02_cameras(),
             building_count: self
                 .objects
                 .values()

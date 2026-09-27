@@ -78,6 +78,7 @@ mod tests {
         ))
         .expect("Grand source");
         source.full_dressing = false;
+        source.geography = None; // This regression preserves the pre-r02 authoring path.
         let g = GrandCompiler::new(source).expect("terrain");
         let mut warm = 0;
         let mut border = 0;

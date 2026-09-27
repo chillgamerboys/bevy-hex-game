@@ -80,7 +80,7 @@ pub(super) fn compile(objects: &[ObjectInstance]) -> Result<ForestOverview, Cont
         shapes,
         instances,
     };
-    forest.validate()?;
+    forest.validate_in_bounds(super::RADIUS as u32, [0, super::MAX_LEVEL])?;
     for instance in &forest.instances {
         let source = objects
             .iter()
@@ -167,10 +167,15 @@ mod tests {
         let source: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
-        Ok(GrandCompiler::new(GrandSpec {
-            full_dressing: true,
-            ..source
-        })?)
+        let bytes = include_bytes!("../../../../../assets/config/v4/grand-v4/geography-r02.json");
+        Ok(GrandCompiler::with_geography(
+            GrandSpec {
+                full_dressing: true,
+                ..source
+            },
+            serde_json::from_slice(bytes)?,
+            bytes,
+        )?)
     }
     #[test]
     fn distant_forest_exactly_reconstructs_every_actual_authored_tree_and_budget() {
@@ -274,6 +279,7 @@ mod tests {
         ))
         .expect("source");
         source.full_dressing = false;
+        source.geography = None; // Explicit legacy decoding fixture.
         let overview = GrandCompiler::new(source)
             .expect("plain compiler")
             .overview();

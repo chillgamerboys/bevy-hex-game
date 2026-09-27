@@ -37,6 +37,18 @@ pub struct GrandGeographyDocument {
     pub(super) shadow_route: Vec<[f64; 3]>,
     pub(super) library_concept: Vec<[f64; 3]>,
     pub(super) frames: BTreeMap<String, FrameSpec>,
+    pub(super) site_blends: Vec<[f64; 5]>,
+    pub(super) frozen_landing: Landing,
+    pub(super) rooms: Vec<Room>,
+    pub(super) layer_routes: BTreeMap<String, LayerRoute>,
+    pub(super) sailing_start: [f64; 2],
+    pub(super) sailing_start_bay: [f64; 2],
+    pub(super) low_hills: Vec<[f64; 5]>,
+    pub(super) valley_bowl: ValleyBowl,
+    pub(super) caldera: Caldera,
+    pub(super) fountain_basin: Lake,
+    pub(super) fountain_rill: Watercourse,
+    pub(super) review_cameras: BTreeMap<String, Camera>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +107,136 @@ shape!(Ascent {
 shape!(FrozenRoute {width:f64,forest_half_width:f64,points:Vec<[f64;3]>});
 shape!(VolcanoRoute {width:f64,local_points:Vec<[f64;3]>});
 shape!(FrameSpec {origin:[f64;2],angle:f64,layer:SupportLayer,floor:Option<f64>});
+
+shape!(Landing {
+    center: [f64; 2],
+    radii: [f64; 2],
+    height: f64
+});
+shape!(Room {
+    frame: String,
+    half_extents: [f64; 2],
+    height: f64
+});
+shape!(LayerRoute {from:String,to:String,points:Vec<[f64;3]>,width:f64,layer:SupportLayer,open_ends:[bool;2]});
+shape!(Camera {eye:[f64;3],target:[f64;3],interest:[f64;3],horizontal_span:Option<f64>,ground:bool});
+
+shape!(ValleyBowl {
+    offset: [f64; 2],
+    radii: [f64; 2],
+    level: f64
+});
+shape!(Caldera {
+    radii: [f64; 2],
+    floor: f64,
+    rim: f64,
+    amplitude: f64
+});
+
+impl GrandGeographyDocument {
+    fn validate_dimensions(&self) -> Result<(), ContractError> {
+        let bounded = |n: usize, min, max| n >= min && n <= max;
+        let radii = |r: [f64; 2]| r.iter().all(|v| v.is_finite() && (1. ..=1500.).contains(v));
+        let position = |p: [f64; 2]| p.iter().all(|v| v.is_finite() && v.abs() <= 4000.);
+        let path = |p: &[[f64; 3]]| {
+            bounded(p.len(), 2, 256)
+                && p.iter().all(|v| {
+                    position([v[0], v[2]]) && v[1].is_finite() && (-100. ..=560.).contains(&v[1])
+                })
+                && p.windows(2).all(|s| {
+                    s.first()
+                        .zip(s.get(1))
+                        .is_some_and(|(a, b)| (a[0] - b[0]).hypot(a[2] - b[2]) > 0.01)
+                })
+        };
+        if !bounded(self.frames.len(), 1, 128)
+            || !bounded(self.peaks.len(), 1, 32)
+            || self.ridge_links.len() > 64
+            || self.site_shoulders.len() > 32
+            || self.site_blends.len() > 32
+            || self.low_hills.len() > 32
+            || self.coast.coves.len() > 32
+            || self.landform_ridges.len() > 16
+            || self
+                .landform_ridges
+                .iter()
+                .any(|p| !bounded(p.len(), 2, 64))
+            || self.rooms.len() > 16
+            || self.layer_routes.len() > 32
+            || self.review_cameras.len() > 64
+            || ![
+                self.coast.radii,
+                self.upper_lake.radii,
+                self.lower_lake.radii,
+                self.garden.radii,
+                self.forest.radii,
+                self.volcano.radii,
+                self.frozen_landing.radii,
+                self.caldera.radii,
+                self.valley_bowl.radii,
+                self.fountain_basin.radii,
+            ]
+            .into_iter()
+            .all(radii)
+            || self
+                .ridge_links
+                .iter()
+                .any(|p| p.iter().any(|i| *i >= self.peaks.len()))
+            || self
+                .peaks
+                .iter()
+                .chain(&self.site_shoulders)
+                .chain(&self.site_blends)
+                .chain(&self.low_hills)
+                .any(|p| {
+                    !position([p[0], p[1]]) || !(0. ..=560.).contains(&p[2]) || !radii([p[3], p[4]])
+                })
+            || ![&self.falls, &self.river, &self.fountain_rill]
+                .into_iter()
+                .all(|c| path(&c.points) && (1. ..=80.).contains(&c.width))
+            || !path(&self.shadow_route)
+            || !path(&self.frozen_route.points)
+            || !path(&self.volcano_route.local_points)
+            || !(5. ..=40.).contains(&self.ascent.width)
+            || !(20. ..=160.).contains(&self.ascent.well_apothem)
+            || !(10. ..self.ascent.well_apothem).contains(&self.ascent.stair_radius)
+            || !(self.ascent.base..=400.).contains(&self.ascent.top)
+            || self
+                .layer_routes
+                .values()
+                .any(|r| !path(&r.points) || !(3. ..=48.).contains(&r.width))
+            || self.frames.values().any(|f| {
+                !position(f.origin)
+                    || !f.angle.is_finite()
+                    || f.floor
+                        .is_some_and(|h| !h.is_finite() || !(0. ..=560.).contains(&h))
+            })
+            || self.rooms.iter().any(|r| {
+                !self.frames.contains_key(&r.frame)
+                    || !radii(r.half_extents)
+                    || r.half_extents.iter().any(|v| *v > 100.)
+                    || !(3. ..=40.).contains(&r.height)
+            })
+            || self.review_cameras.values().any(|c| {
+                !c.eye
+                    .iter()
+                    .chain(&c.target)
+                    .chain(&c.interest)
+                    .all(|v| v.is_finite() && v.abs() <= 10000.)
+                    || c.eye == c.target
+                    || c.horizontal_span
+                        .is_some_and(|s| !s.is_finite() || !(1. ..=10000.).contains(&s))
+                    || (c.ground && c.horizontal_span.is_some())
+            })
+        {
+            return Err(ContractError::new(
+                "grand.geography",
+                "invalid or over-budget authored dimensions, routes, frames or cameras",
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Named stacked terrain layer; an interior never means the topmost roof.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -186,6 +328,7 @@ impl GrandGeography {
                 "invalid revision-02 transform or identity",
             ));
         }
+        document.validate_dimensions()?;
         let bytes = ron::to_string(&document)
             .map_err(|e| ContractError::new("grand.geography", e.to_string()))?;
         if bytes.contains("NaN") || bytes.contains("inf") {
@@ -375,6 +518,9 @@ impl GrandCompiler {
             })
     }
     pub(super) fn reserved_interval(&self, p: WorldHex, bottom: i32, top: i32) -> bool {
+        if self.r02_reserved(p, bottom, top) {
+            return true;
+        }
         let Some(d) = &self.geography.document else {
             return false;
         };

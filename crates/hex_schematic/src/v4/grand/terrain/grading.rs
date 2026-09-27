@@ -251,6 +251,7 @@ mod tests {
         ))
         .unwrap();
         source.full_dressing = false;
+        source.geography = None; // This regression preserves the pre-r02 authoring path.
         let g = GrandCompiler::new(source).unwrap();
         let mut core_columns = 0;
         let mut edges = 0;

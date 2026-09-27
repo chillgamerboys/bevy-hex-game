@@ -38,7 +38,20 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
     }
     let started = Instant::now();
     let spec: GrandSpec = ron::from_str(std::str::from_utf8(&super::read_bounded(source)?)?)?;
-    let compiler = GrandCompiler::new(spec)?;
+    let compiler = if let Some(name) = &spec.geography {
+        if !name.ends_with(".json") || name.contains(['/', '\\']) || name.contains("..") {
+            return Err("geography must be a single sibling JSON filename".into());
+        }
+        let path = source
+            .parent()
+            .ok_or("source lacks parent directory")?
+            .join(name);
+        let bytes = super::read_bounded(&path)?;
+        let document = serde_json::from_slice(&bytes)?;
+        GrandCompiler::with_geography(spec, document, &bytes)?
+    } else {
+        GrandCompiler::new(spec)?
+    };
     let mut manifest = compiler.manifest();
     let stage = output.with_extension(format!("staging-{}", std::process::id()));
     fs::create_dir_all(stage.join("chunks"))?;
@@ -134,4 +147,90 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
     )?;
     fs::rename(stage, output)?;
     Ok(serde_json::to_string_pretty(&receipt)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn approved_r02_plain_geography_has_measured_area_and_exact_routes(
+    ) -> Result<(), Box<dyn Error>> {
+        let mut spec: GrandSpec =
+            ron::from_str(include_str!("../../../assets/config/v4/grand-v4/world.ron"))?;
+        spec.full_dressing = false;
+        spec.geography = Some("geography-r02.json".into());
+        let bytes = include_bytes!("../../../assets/config/v4/grand-v4/geography-r02.json");
+        let compiler = GrandCompiler::with_geography(spec, serde_json::from_slice(bytes)?, bytes)?;
+        assert_eq!(compiler.mainland_columns, 653282);
+        assert_eq!(compiler.crystal_columns, 22183);
+        let sites = serde_json::to_value(compiler.sites(0)?)?;
+        let overview = compiler.overview();
+        let inland = overview
+            .inland_water
+            .as_ref()
+            .ok_or("missing inland facts")?;
+        let liquid_columns: usize = inland.chunks.iter().map(|c| c.columns.len()).sum();
+        let terrain_columns: usize = inland
+            .chunks
+            .iter()
+            .map(|c| c.terrain.len() + c.halo.len())
+            .sum();
+        let terrain_runs: usize = inland
+            .chunks
+            .iter()
+            .flat_map(|c| c.terrain.iter().chain(&c.halo))
+            .map(|c| c.runs.len())
+            .sum();
+        for id in [
+            "grand-overview",
+            "grand-mainland",
+            "grand-mainland-south",
+            "grand-mainland-east",
+            "grand-mainland-northwest",
+            "grand-crystal-frozen",
+            "grand-valley-tree-bank",
+            "grand-valley-lake-bank",
+            "grand-valley-waterfall-approach",
+            "grand-garden",
+            "grand-garden-ground",
+            "grand-waterfall",
+            "grand-valley-lake",
+            "grand-world-tree",
+            "grand-roots-entrance",
+            "grand-shrine-plant",
+            "grand-forest",
+            "grand-forest-ground",
+            "grand-forest-ground-reverse",
+            "grand-river-exit",
+            "grand-island-landing",
+            "grand-summit",
+            "grand-shrine-air",
+            "grand-crystal",
+            "grand-shrine-earth",
+            "grand-frozen-woods",
+            "grand-volcano",
+            "grand-shrine-fire",
+            "grand-bay",
+            "grand-bay-baseline",
+            "grand-bay-reverse",
+            "grand-waterline",
+            "grand-underwater",
+            "grand-waterfall-cave",
+            "grand-library",
+            "grand-library-reverse",
+            "grand-library-upper",
+            "grand-shadow-tunnel",
+            "grand-shadow-reverse",
+            "grand-shadow-exit",
+            "grand-motion-forest-forward",
+            "grand-motion-river-forward",
+        ] {
+            assert!(
+                overview.review_cameras.contains_key(id),
+                "missing canonical camera {id}"
+            );
+        }
+        println!("r02 producer: {} routes, {} encounters; inland {} chunks, {} water columns, {} solid+halo columns / {} runs, {} serialized overview bytes", sites.get("routes").and_then(serde_json::Value::as_array).ok_or("missing routes")?.len(), sites.get("encounters").and_then(serde_json::Value::as_array).ok_or("missing encounters")?.len(), inland.chunks.len(), liquid_columns, terrain_columns, terrain_runs, ron::to_string(&overview)?.len());
+        Ok(())
+    }
 }
