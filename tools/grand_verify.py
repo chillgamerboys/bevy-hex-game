@@ -216,13 +216,20 @@ def execute_admissions(binary: Path, output: Path, environment: dict[str, str], 
     return receipt
 
 
-def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str]) -> dict:
-    data = output / mode
+def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str],
+                      *, sailing_start: str = "sailing_start") -> dict:
+    if sailing_start not in ("sailing_start", "sailing_start_bay"):
+        raise ValueError(f"Unsupported sailing anchor: {sailing_start}")
+    case = "sailing-bay" if mode == "sailing" and sailing_start == "sailing_start_bay" else mode
+    data = output / case
     data.mkdir()
     (data / "grand-verification-only").write_text("Disposable actual-package traversal verification.\n")
     child = environment | {"HEX_GAME_DATA_DIR": str(data)}
-    for key in ("HEX_GRAND_VERIFY_MODE", "HEX_GRAND_VERIFY_PHASE", "HEX_GRAND_WALK_ROUTE"):
+    for key in ("HEX_GRAND_VERIFY_MODE", "HEX_GRAND_VERIFY_PHASE", "HEX_GRAND_WALK_ROUTE",
+                "HEX_GRAND_SAIL_START_ANCHOR"):
         child.pop(key, None)
+    if mode == "sailing":
+        child["HEX_GRAND_SAIL_START_ANCHOR"] = sailing_start
     command = [str(binary), TRAVERSAL_TESTS[mode], "--exact", "--ignored", "--nocapture", "--test-threads=1"]
     log_path = data / f"{mode}.log"
     with log_path.open("w") as log:
@@ -252,6 +259,7 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     else:
         measurement = receipt.get("measurement", {})
         if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"
+                or measurement.get("start_anchor") != sailing_start
                 or measurement.get("simulation_ticks", 0) <= 0
                 or not measurement.get("endpoint_liveness_probe")
                 or measurement.get("remaining", math.inf) > measurement.get("arrival_radius", 0)):
@@ -269,7 +277,7 @@ def main() -> None:
     parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
     parser.add_argument("--admissions", action="store_true", help="Also verify all fourteen actual-package enemy parties using the same test build")
     parser.add_argument("--walking", action="store_true", help="Also walk all authored connections and independent r02 crossings with ordinary movement")
-    parser.add_argument("--sailing", action="store_true", help="Also measure the authored unupgraded boat crossing with production input")
+    parser.add_argument("--sailing", action="store_true", help="Measure both western-shore and starting-bay boat crossings with production input")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
     parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")
     parser.add_argument("--admission-timeout", type=float, default=420.0, help="Maximum seconds for the optional all-party admission oracle")
@@ -334,6 +342,10 @@ def main() -> None:
             for mode in TRAVERSAL_TESTS:
                 if getattr(arguments, mode):
                     report[mode] = execute_traversal(binary, mode, output, environment)
+                    report_path.write_text(json.dumps(report, indent=2) + "\n")
+                    if mode == "sailing":
+                        report["sailing_bay"] = execute_traversal(
+                            binary, mode, output, environment, sailing_start="sailing_start_bay")
         finally:
             provenance["after_execution"] = source_snapshot()
             provenance["execution_changed_fields"] = changed_source(before_build, provenance["after_execution"])

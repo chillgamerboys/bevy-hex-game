@@ -201,12 +201,17 @@ fn endpoint_liveness(
 }
 
 fn measure(app: &mut App) -> Result<serde_json::Value, String> {
+    let start_anchor =
+        std::env::var("HEX_GRAND_SAIL_START_ANCHOR").unwrap_or_else(|_| "sailing_start".to_owned());
+    if !matches!(start_anchor.as_str(), "sailing_start" | "sailing_start_bay") {
+        return Err(format!("unsupported sailing start anchor: {start_anchor}"));
+    }
     let overview = Arc::clone(&app.world().resource::<StreamedArena>().overview);
     let start = Vec3::from_array(
         *overview
             .anchors
-            .get("sailing_start")
-            .ok_or("sailing_start missing")?,
+            .get(&start_anchor)
+            .ok_or_else(|| format!("{start_anchor} missing"))?,
     );
     let target = Vec3::from_array(
         *overview
@@ -226,7 +231,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     relocate(app, start);
     publish_ocean(app.world_mut());
     let OceanSurfaceState::ReadyWet(water) = surface(app.world(), start) else {
-        return Err("authored sailing_start is not admitted wet ocean".into());
+        return Err(format!("authored {start_anchor} is not admitted wet ocean"));
     };
     let prepared_launch = start.with_y(water.height - 0.2);
     relocate(app, prepared_launch);
@@ -417,6 +422,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let remaining = arrival_feet.with_y(0.0).distance(target.with_y(0.0));
     let summary = serde_json::json!({
         "status":if failure.is_none(){"PASS"}else{"FAIL"},"error":failure,
+        "start_anchor":start_anchor,
         "identity":identity,"authored_start":start.to_array(),"authored_target":target.to_array(),
         "prepared_launch":prepared_launch.to_array(),"idle_readiness_ticks":idle_completed_ticks,"first_b_frame":first_b_frame,
         "launch":launch.to_array(),"end":arrival_feet.to_array(),"arrival_radius":ARRIVAL_RADIUS,"remaining":remaining,
@@ -427,6 +433,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         "environment_clock_start":first_environment_seconds,"environment_clock_end":arrival_environment_seconds,
         "wind_publisher":"production northern::configure, refreshed on terrain revision and quantized player center",
         "reference_seconds":45.0,"reference_delta_seconds":elapsed-45.0,
+        "reference_scope":"The approximately 45-second target applies to the accessible western mainland shore. Starting-bay departure is measured separately and may be longer.",
         "timing_acceptance":"Measurement only: no invented tolerance around the requested approximately 45 seconds.",
     });
     let diagnostics = serde_json::json!({

@@ -419,3 +419,11 @@ producer/consumers pass the admitted radius and levels. Five current-source app 
 and ground-support tests pass at42aec8e under the serialized fresh-workspace CI build;
 23 Python capture/motion/package provenance tests pass. These are focused checks, not
 new-world compilation or final combined acceptance.
+
+The approved topology puts the starting bay farther from the volcano than the
+nearest western mainland shore. The sailing harness now measures both published
+starts (`sailing_start` and `sailing_start_bay`) independently with identical
+production wind and unupgraded input. The 800-unit geometric shore separation is
+not a claim that a bay departure takes 45 seconds; record both actual timings.
+The western start must have ordinary shore access. Sailing results remain pending
+until the new immutable package exists.
