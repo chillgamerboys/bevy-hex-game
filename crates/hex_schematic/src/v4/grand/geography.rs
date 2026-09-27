@@ -98,15 +98,12 @@ shape!(InteriorProfile {
     western_power: f64
 });
 shape!(MountainComposition {
-    crystal_flank_width: [f64; 2],
     crystal_rim_height: [f64; 2],
     frozen_support_width: [f64; 2],
     frozen_verge: f64,
     frozen_undulation: f64,
     frozen_toe_rise: f64,
     peak_rounding_radius: f64,
-    crystal_toe_fraction: f64,
-    crystal_toe_rise: f64,
     phase: f64
 });
 shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
@@ -228,9 +225,7 @@ impl GrandGeographyDocument {
                 || !(0.75..=1.5).contains(&p.western_radius_multiplier)
                 || !(1. ..=4.).contains(&p.western_power)
         }) || self.mountain_composition.as_ref().is_some_and(|m| {
-            !(80. ..=180.).contains(&m.crystal_flank_width[0])
-                || !(m.crystal_flank_width[0]..=240.).contains(&m.crystal_flank_width[1])
-                || !(self.ascent.top..=self.ascent.top + 25.).contains(&m.crystal_rim_height[0])
+            !(self.ascent.top..=self.ascent.top + 25.).contains(&m.crystal_rim_height[0])
                 || !(m.crystal_rim_height[0]..=self.ascent.top + 50.)
                     .contains(&m.crystal_rim_height[1])
                 || !(self.frozen_route.forest_half_width + 20. ..=180.)
@@ -242,8 +237,6 @@ impl GrandGeographyDocument {
                 || !(0. ..=15.).contains(&m.frozen_undulation)
                 || !(0. ..=8.).contains(&m.frozen_toe_rise)
                 || !(0.35..=0.7).contains(&m.peak_rounding_radius)
-                || !(0.4..=0.7).contains(&m.crystal_toe_fraction)
-                || !(0. ..=12.).contains(&m.crystal_toe_rise)
                 || !m.phase.is_finite()
         }) || !(1. ..=3.).contains(&f.radius_multiplier)
             || [

@@ -256,6 +256,17 @@ fn composed_relief(low: f64, core: f64, join_width: f64) -> f64 {
     low.max(core) + (width - (low - core).abs()).max(0.).powi(2) / (4. * width)
 }
 
+/// Add only the rock between the inner well and measured outer enclosure.
+fn crystal_enclosure(d: &GrandGeographyDocument, point: [f64; 2], h: f64, crest: f64) -> f64 {
+    let a = &d.ascent;
+    let distance = crystal_distance(d, point);
+    if distance < a.well_apothem || distance >= a.outer_apothem {
+        return h;
+    }
+    let weight = smooth((a.outer_apothem - distance) / (a.outer_apothem - a.well_apothem));
+    h.max(h * (1. - weight) + crest * weight)
+}
+
 fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
     finish_terrain_profiled(d, [x, z], h, true)
 }
@@ -288,36 +299,20 @@ fn finish_terrain_profiled(
             h = h * (1. - blend) + (level + 1.5 * noise(x, z)) * blend;
         }
     }
-    // The whole ascent includes its enclosing rock. This source-owned envelope
-    // blends into the mountain shoulder; the smaller well is carved below.
+    // The ascent's steep enclosure is confined to its actual authored rock
+    // footprint. Existing higher mountain terrain joins it naturally; the rim
+    // must not spread full summit height across the surrounding usable hills.
     let ascent = &d.ascent;
-    let distance = crystal_distance(d, [x, z]);
-    if let Some(m) = d.mountain_composition.as_ref().filter(|_| profiles) {
+    let crest = if let Some(m) = d.mountain_composition.as_ref().filter(|_| profiles) {
         let angle = (z - ascent.center[1]).atan2(x - ascent.center[0]);
         let variation =
             clamp(0.5 + 0.3 * (2. * angle + m.phase).sin() + 0.2 * (3. * angle - 0.8).cos());
-        let width = m.crystal_flank_width[0]
-            + (m.crystal_flank_width[1] - m.crystal_flank_width[0]) * variation;
-        let crest = m.crystal_rim_height[0]
-            + (m.crystal_rim_height[1] - m.crystal_rim_height[0]) * (1. - variation);
-        if distance >= ascent.well_apothem {
-            let inward = clamp(1. - (distance - ascent.well_apothem) / width);
-            let shoulder = if inward <= m.crystal_toe_fraction {
-                h + m.crystal_toe_rise * smooth(inward / m.crystal_toe_fraction)
-            } else {
-                let weight =
-                    smooth((inward - m.crystal_toe_fraction) / (1. - m.crystal_toe_fraction));
-                (h + m.crystal_toe_rise) * (1. - weight) + crest * weight
-            };
-            h = h.max(shoulder);
-        }
-    } else if distance >= ascent.well_apothem && distance < ascent.outer_apothem {
-        let weight = smooth(
-            (ascent.outer_apothem - distance) / (ascent.outer_apothem - ascent.well_apothem),
-        );
-        let crest = ascent.top + 12. + 5. * noise(x, z);
-        h = h.max(h * (1. - weight) + crest * weight);
-    }
+        m.crystal_rim_height[0]
+            + (m.crystal_rim_height[1] - m.crystal_rim_height[0]) * (1. - variation)
+    } else {
+        ascent.top + 12. + 5. * noise(x, z)
+    };
+    h = crystal_enclosure(d, [x, z], h, crest);
     let fr = &d.frozen_route;
     let (dist, y, _) = route_distance([x, z], &fr.points);
     let grade_weight = if let Some(m) = d.mountain_composition.as_ref().filter(|_| profiles) {
@@ -693,6 +688,44 @@ mod profile_tests {
             "../../../../../assets/config/v4/grand-v4/geography-r02.json"
         ))
         .expect("canonical geography")
+    }
+
+    #[test]
+    fn crystal_rim_stays_inside_its_authored_enclosure() {
+        let d = document();
+        let a = &d.ascent;
+        let crest = d
+            .mountain_composition
+            .as_ref()
+            .expect("mountain profile")
+            .crystal_rim_height[1];
+        for angle in 0_u16..360 {
+            let radians = f64::from(angle).to_radians();
+            let direction = [radians.cos(), radians.sin()];
+            let unit =
+                crystal_distance(&d, [a.center[0] + direction[0], a.center[1] + direction[1]]);
+            for offset in [0., 0.1, 1., 8., 34., 80., 180.] {
+                let radius = (a.outer_apothem + offset) / unit;
+                let p = [
+                    a.center[0] + direction[0] * radius,
+                    a.center[1] + direction[1] * radius,
+                ];
+                // Exercise low ground, the previously lost 70–120 hill band,
+                // and higher backing. The enclosure has no authority to alter
+                // any of these outside its measured footprint.
+                for h in [40., 70., 85., 100., 120., 190., 260.] {
+                    assert!(
+                        (crystal_enclosure(&d, p, h, crest) - h).abs() < 1e-9,
+                        "rim escaped its footprint at {p:?}, base {h}"
+                    );
+                }
+            }
+        }
+        // Existing higher mountain cover wins rather than being flattened to
+        // the uneven rim; lower rock near the well still reaches its crest.
+        let p = [a.center[0] + a.well_apothem, a.center[1]];
+        assert!((crystal_enclosure(&d, p, 260., crest) - 260.).abs() < 1e-9);
+        assert!((crystal_enclosure(&d, p, 85., crest) - crest).abs() < 1e-9);
     }
 
     #[test]
