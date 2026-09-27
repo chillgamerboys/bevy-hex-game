@@ -961,6 +961,20 @@ fn coastal_rock(
 }
 
 #[cfg(test)]
+pub(super) fn test_compiler(dressed: bool) -> GrandCompiler {
+    let mut source: GrandSpec = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .expect("Grand source");
+    source.full_dressing = dressed;
+    source.geography = Some("geography-r02.json".into());
+    let bytes = include_bytes!("../../../../../assets/config/v4/grand-v4/geography-r02.json");
+    let geography: GrandGeographyDocument =
+        serde_json::from_slice(bytes).expect("approved geography");
+    GrandCompiler::with_geography(source, geography, bytes).expect("complete requested geography")
+}
+
+#[cfg(test)]
 mod forest_tests {
     use super::*;
     use std::collections::BTreeSet;
@@ -1236,22 +1250,4 @@ mod forest_tests {
             assert!(g.clear_support(anchor.position, 8), "{}", anchor.id);
         }
     }
-}
-
-#[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "A malformed checked-in geography fixture must fail its caller's test."
-)]
-pub(super) fn test_compiler(dressed: bool) -> GrandCompiler {
-    let mut source: GrandSpec = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .expect("Grand source");
-    source.full_dressing = dressed;
-    source.geography = Some("geography-r02.json".into());
-    let bytes = include_bytes!("../../../../../assets/config/v4/grand-v4/geography-r02.json");
-    let geography: GrandGeographyDocument =
-        serde_json::from_slice(bytes).expect("approved geography");
-    GrandCompiler::with_geography(source, geography, bytes).expect("complete requested geography")
 }

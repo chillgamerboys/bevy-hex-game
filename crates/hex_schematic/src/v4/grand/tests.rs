@@ -25,7 +25,7 @@ pub(super) fn line_columns(g: &GrandCompiler, points: &[[f64; 3]]) -> Vec<WorldH
         let [bx, _, bz] = *b;
         let [ax, az] = g.geography.world_xz([ax, az]);
         let [bx, bz] = g.geography.world_xz([bx, bz]);
-        let steps = ((bx - ax).hypot(bz - az) / 0.75).ceil() as u32;
+        let steps = ((bx - ax).hypot(bz - az) / 0.75).ceil() as i32;
         for step in 0..=steps.max(1) {
             let t = f64::from(step) / f64::from(steps.max(1));
             let p = nearest_hex(ax + (bx - ax) * t, az + (bz - az) * t);
@@ -52,7 +52,7 @@ fn full_measured_world_has_independent_crystal_and_exact_cave_sites() {
         g.source
             .mainland_rows
             .iter()
-            .map(|(_, a, b)| (b - a + 1) as usize)
+            .map(|(_, a, b)| usize::try_from(b - a + 1).expect("ordered admitted row"))
             .sum::<usize>(),
         g.mainland_columns
     );
@@ -289,7 +289,7 @@ fn offshore_sailing_reference_has_clear_sea_between_launch_and_landing() {
     assert!(g.clear_support(b, 8), "dry supported destination");
     let mut sea_samples = 0;
     let mut reached_island = false;
-    let steps = distance.ceil() as u32;
+    let steps = distance.ceil() as i32;
     for step in 0..=steps {
         let t = f64::from(step) / f64::from(steps.max(1));
         let p = nearest_hex(ax + (bx - ax) * t, az + (bz - az) * t);
