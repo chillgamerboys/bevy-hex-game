@@ -542,7 +542,7 @@
   "version": 1,
   "approval": "shared-topology-r02/a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257",
   "transform": {
-    "horizontal_scale": 0.8838784715190828,
+    "horizontal_scale": 0.883566890744603,
     "vertical_scale": 1.0,
     "translation": [
       700.6145516616108,
@@ -550,7 +550,7 @@
     ],
     "sea_top": 400
   },
-  "calibration": "Largest six-neighbor continuous-r02 mainland sampled at production hex centers:653282 mainland columns; separate53-column islet excluded. Crystal whole-feature outer hex apothem146 yields22201 actual columns versus canonical radius32 disk3169 and 7x target22183 (7.00568x; +0.081% discrete boundary rounding); well112/stair98 retained. Ocean gap geometric800u, not a boat benchmark.",
+  "calibration": "Production continuous terrain after broad-foothill and supported-water correction: largest six-neighbor mainland653282=7\u00d793326 at horizontal scale0.883566890744603; no boundary corrections. Crystal authored outer hex22201=7.00568\u00d73169 (+0.081% discretization over reference22183). Translation axial[361,87].",
   "frames": {
     "world_tree": {
       "origin": [
@@ -824,9 +824,14 @@
           442
         ],
         [
+          540,
+          108,
+          495
+        ],
+        [
           450,
-          105,
-          465
+          96,
+          530
         ],
         [
           330,
@@ -834,8 +839,13 @@
           460
         ],
         [
+          280,
+          65,
+          555
+        ],
+        [
           200,
-          62,
+          38,
           430
         ],
         [

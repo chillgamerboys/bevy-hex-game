@@ -513,29 +513,68 @@ mod cave_cover_tests {
     use super::*;
     #[test]
     fn closed_cave_cover_never_inflates_approved_landforms() {
-        let g = tests::compiler(false);
-        let d = g.geography.document.as_ref().expect("canonical geography");
-        let failures: Vec<_> = g
-            .layered
+        let document = serde_json::from_str(include_str!(
+            "../../../../../assets/config/v4/grand-v4/geography-r02.json"
+        ))
+        .expect("canonical geography");
+        let g = GrandGeography::new(document).expect("valid source geometry");
+        let layered = Layered::compile(&g).expect("actual authored layered geometry");
+        let d = g.document.as_ref().expect("canonical geography");
+        let failures: Vec<_> = layered
             .cover
             .iter()
             .filter_map(|(&p, &required)| {
-                let point = g.geography.model_xz(p);
-                let natural = g
-                    .geography
-                    .top_level(oracle::mainland(d, point).max(oracle::volcano(d, point)));
+                let point = g.model_xz(p);
+                let natural =
+                    g.top_level(oracle::mainland(d, point).max(oracle::volcano(d, point)));
                 (required > natural).then_some((p, required, natural))
             })
             .collect();
+        let mut regions = BTreeMap::<(i32, i32), (usize, i32)>::new();
+        for (p, required, natural) in &failures {
+            let [x, z] = g.model_xz(*p);
+            let value = regions
+                .entry(((x / 100.).floor() as i32, (z / 100.).floor() as i32))
+                .or_default();
+            value.0 += 1;
+            value.1 = value.1.max(required - natural);
+        }
         assert!(
             failures.is_empty(),
-            "closed cave breaks natural cover: {} columns, first {:?}",
+            "closed cave breaks natural cover: {} columns; regions {regions:?}, first {:?}",
             failures.len(),
             failures
                 .iter()
                 .take(24)
-                .map(|(p, r, n)| (g.geography.model_xz(*p), r, n))
+                .map(|(p, r, n)| (g.model_xz(*p), r, n))
                 .collect::<Vec<_>>()
         );
+    }
+    #[test]
+    fn library_stairs_do_not_dam_the_main_plunge_receiving_pool() {
+        let document = serde_json::from_str(include_str!(
+            "../../../../../assets/config/v4/grand-v4/geography-r02.json"
+        ))
+        .expect("canonical geography");
+        let g = GrandGeography::new(document).expect("source geometry");
+        let layered = Layered::compile(&g).expect("actual layered geometry");
+        let d = g.document.as_ref().expect("document");
+        let center = g.world_hex([494., 442.]);
+        for (q, r) in DIRS.into_iter().chain(std::iter::once((0, 0))) {
+            let p = WorldHex::new(center.q + q, center.r + r);
+            let point = g.model_xz(p);
+            let bed = oracle::mainland(d, point);
+            let water = oracle::water(d, point, bed).expect("receiving pool is wet");
+            let bed = g.top_level(bed);
+            let water = g.top_level(water);
+            for layer in layered.columns.get(&p).into_iter().flatten() {
+                assert!(
+                    layer.top <= bed || layer.top - 2 >= water,
+                    "library slab {:?}..{} dams receiving pool {p:?}:{bed}..{water}",
+                    layer.top - 2,
+                    layer.top
+                );
+            }
+        }
     }
 }
