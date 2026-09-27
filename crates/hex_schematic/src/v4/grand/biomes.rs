@@ -237,7 +237,7 @@ fn authored_regions(g: &GrandGeography) -> Vec<BiomeRegion> {
         label: Label::Crystal,
         shape: RegionShape::Hex {
             center: point([x, d.ascent.base, z]),
-            apothem: g.length(d.ascent.well_apothem),
+            apothem: g.length(d.ascent.outer_apothem),
         },
         height: None,
     });
@@ -574,9 +574,13 @@ mod tests {
     }
 
     #[test]
-    fn canonical_landmarks_and_ascent_use_the_new_coordinate_frame() -> Result<(), Box<dyn Error>> {
-        let (g, map) = fixture()?;
-        let d = g.document.as_ref().ok_or("missing canonical document")?;
+    #[expect(
+        clippy::expect_used,
+        reason = "Canonical fixture and codec failures must fail this test with context."
+    )]
+    fn canonical_landmarks_and_ascent_use_the_new_coordinate_frame() {
+        let (g, map) = fixture().expect("canonical biome fixture");
+        let d = g.document.as_ref().expect("missing canonical document");
         let [x, z] = d.garden.center;
         assert_eq!(
             map.label_at(position(&g, [x, d.upper_lake.level + 7., z])),
@@ -592,12 +596,18 @@ mod tests {
             map.label_at(position(&g, [x, d.ascent.base, z])),
             Some("Crystal Ascent")
         );
+        let annulus = (d.ascent.well_apothem + d.ascent.outer_apothem) * 0.5;
+        assert_eq!(
+            map.label_at(position(&g, [x + annulus, d.ascent.base, z])),
+            Some("Crystal Ascent"),
+            "the full feature includes its supporting annulus outside the open well"
+        );
         let end = d
             .frozen_route
             .points
             .last()
             .copied()
-            .ok_or("missing Frozen shore")?;
+            .expect("missing Frozen shore");
         assert_eq!(map.label_at(position(&g, end)), Some("Frozen Woods"));
         // The overhead Frozen exit must not rename the bottom of the open well.
         let [x, _, z] = d
@@ -605,35 +615,41 @@ mod tests {
             .points
             .first()
             .copied()
-            .ok_or("missing Frozen exit")?;
+            .expect("missing Frozen exit");
         assert_eq!(
             map.label_at(position(&g, [x, d.ascent.base, z])),
             Some("Crystal Ascent")
         );
-        map.validate_in_bounds(1052, [0, 2100])?;
-        let serialized = ron::to_string(&map)?;
+        map.validate_in_bounds(1052, [0, 2100])
+            .expect("canonical regions fit the finite world");
+        let serialized = ron::to_string(&map).expect("serialize canonical regions");
         assert!(
             serialized.len() < 131072,
             "label regions remain a small companion"
         );
-        let decoded: GrandBiomeMap = ron::from_str(&serialized)?;
-        decoded.validate_in_bounds(1052, [0, 2100])?;
+        let decoded: GrandBiomeMap = ron::from_str(&serialized).expect("decode canonical regions");
+        decoded
+            .validate_in_bounds(1052, [0, 2100])
+            .expect("decoded regions fit the finite world");
         let [x, z] = d.garden.center;
         assert_eq!(
             decoded.label_at(position(&g, [x, d.upper_lake.level + 7., z])),
             Some("Garden of Beginnings")
         );
-        Ok(())
     }
 
     #[test]
-    fn stacked_rooms_and_multiturn_routes_preserve_vertical_labels() -> Result<(), Box<dyn Error>> {
-        let (g, map) = fixture()?;
-        let d = g.document.as_ref().ok_or("missing canonical document")?;
+    #[expect(
+        clippy::expect_used,
+        reason = "Canonical fixture and codec failures must fail this test with context."
+    )]
+    fn stacked_rooms_and_multiturn_routes_preserve_vertical_labels() {
+        let (g, map) = fixture().expect("canonical biome fixture");
+        let d = g.document.as_ref().expect("missing canonical document");
         for key in ["library_lower", "library_upper", "root_temple"] {
-            let frame = d.frames.get(key).ok_or("missing authored room")?;
+            let frame = d.frames.get(key).expect("missing authored room");
             let [x, z] = frame.origin;
-            let floor = frame.floor.ok_or("missing room floor")?;
+            let floor = frame.floor.expect("missing room floor");
             let expected = if key == "root_temple" {
                 "Root Temple"
             } else {
@@ -641,7 +657,7 @@ mod tests {
             };
             assert_eq!(map.label_at(position(&g, [x, floor, z])), Some(expected));
         }
-        let room = d.frames.get("library_upper").ok_or("missing upper room")?;
+        let room = d.frames.get("library_upper").expect("missing upper room");
         let [x, z] = room.origin;
         assert_ne!(
             map.label_at(position(&g, [x, 250., z])),
@@ -650,7 +666,7 @@ mod tests {
         let route = d
             .layer_routes
             .get("library_upper")
-            .ok_or("missing layered route")?;
+            .expect("missing layered route");
         for &p in &route.points {
             assert_eq!(
                 map.label_at(position(&g, p)),
@@ -662,23 +678,25 @@ mod tests {
             .shadow_route
             .first()
             .copied()
-            .ok_or("missing Shadow route")?;
+            .expect("missing Shadow route");
         assert_eq!(map.label_at(position(&g, start)), Some("Shadow Tunnel"));
-        Ok(())
     }
 
     #[test]
-    fn companion_validation_rejects_nonfinite_unbounded_and_ambiguous_data(
-    ) -> Result<(), Box<dyn Error>> {
-        let (_, map) = fixture()?;
+    #[expect(
+        clippy::expect_used,
+        reason = "Canonical fixture and codec failures must fail this test with context."
+    )]
+    fn companion_validation_rejects_nonfinite_unbounded_and_ambiguous_data() {
+        let (_, map) = fixture().expect("canonical biome fixture");
         let mut bad = map.clone();
         bad.version = 3;
         assert!(bad.validate_in_bounds(1052, [0, 2100]).is_err());
         bad = map.clone();
-        bad.regions = vec![map.regions.first().ok_or("missing regions")?.clone(); MAX_REGIONS + 1];
+        bad.regions = vec![map.regions.first().expect("missing regions").clone(); MAX_REGIONS + 1];
         assert!(bad.validate_in_bounds(1052, [0, 2100]).is_err());
         bad = map.clone();
-        bad.regions.first_mut().ok_or("missing region")?.height = Some([0., f64::NAN]);
+        bad.regions.first_mut().expect("missing region").height = Some([0., f64::NAN]);
         assert!(bad.validate_in_bounds(1052, [0, 2100]).is_err());
         bad = map.clone();
         bad.mainland_rows = vec![(0, 0, 10), (0, 5, 15)];
@@ -686,20 +704,22 @@ mod tests {
         assert!(map.validate_in_bounds(64, [0, 2100]).is_err());
         assert!(map.validate_in_bounds(1052, [0, 500]).is_err());
         assert_eq!(map.label_at([f64::NAN, 0., 0.]), None);
-        Ok(())
     }
 
     #[test]
-    fn legacy_companions_keep_legacy_labels_and_cannot_inject_new_regions(
-    ) -> Result<(), Box<dyn Error>> {
+    #[expect(
+        clippy::expect_used,
+        reason = "Canonical fixture and codec failures must fail this test with context."
+    )]
+    fn legacy_companions_keep_legacy_labels_and_cannot_inject_new_regions() {
         let mut map: GrandBiomeMap = ron::from_str(
             "(version:1,source_fingerprint:1,package_fingerprint:2,mainland_rows:[],crystal_rows:[])",
-        )?;
-        map.validate_in_bounds(900, [0, 1600])?;
+        ).expect("decode legacy regions");
+        map.validate_in_bounds(900, [0, 1600])
+            .expect("legacy regions fit the legacy envelope");
         assert_eq!(map.label_at([-1180., 200., 450.]), Some("Volcanic Island"));
         assert_eq!(map.label_at([0., 140., 0.]), Some("Open Sea"));
-        map.regions = fixture()?.1.regions;
+        map.regions = fixture().expect("canonical biome fixture").1.regions;
         assert!(map.validate_in_bounds(1052, [0, 2100]).is_err());
-        Ok(())
     }
 }
