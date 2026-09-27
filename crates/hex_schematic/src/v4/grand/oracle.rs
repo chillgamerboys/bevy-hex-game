@@ -451,6 +451,8 @@ fn finish_terrain_profiled(
         }
     }
     for channel in [&d.falls, &d.river] {
+        let pre_channel_ground = h;
+        let mut required_water = None;
         let (dist, target, _) = route_distance([x, z], &channel.points);
         let half = channel.width * 0.5;
         let ordinary = if profiles {
@@ -556,6 +558,29 @@ fn finish_terrain_profiled(
                 // Blending this bound away can cross a voxel rounding boundary.
                 if let Some(level) = adjacent_water {
                     h = h.max(level);
+                    required_water = Some(level);
+                }
+            }
+        }
+        if profiles {
+            if d.ordinary_channel_banks
+                .as_ref()
+                .and_then(|b| b.dry_reach_support.as_ref())
+                .is_some()
+            {
+                // Water/bed authority stays exact. The dry bank uses complete
+                // continuous reach fields, not a blend carrying the old
+                // nearest-owner height through a second dry transition.
+                if dist >= half
+                    && pre_channel_ground >= 0.
+                    && ![&d.upper_lake, &d.lower_lake]
+                        .into_iter()
+                        .any(|lake| irregular([x, z], lake.center, lake.radii, lake.phase) < 1.)
+                {
+                    h = dry_reach_support(d, [x, z], channel, pre_channel_ground);
+                    if let Some(level) = required_water {
+                        h = h.max(level);
+                    }
                 }
             }
         }
@@ -579,6 +604,76 @@ fn finish_terrain_profiled(
         h = h.min(y - 3.);
     }
     h
+}
+
+/// Compact support from all reaches, independent of nearest reach selection.
+/// Positive ordinary shoulders may extend; cuts and plunge support retain the
+/// original narrow footprint. The max/min union is value-continuous, not C1.
+fn dry_reach_support(
+    d: &GrandGeographyDocument,
+    point: [f64; 2],
+    channel: &super::geography::Watercourse,
+    ground: f64,
+) -> f64 {
+    let Some(banks) = &d.ordinary_channel_banks else {
+        return ground;
+    };
+    let Some(support) = &banks.dry_reach_support else {
+        return ground;
+    };
+    if ground < 0. {
+        return ground;
+    }
+    let mut uplift: f64 = 0.;
+    let mut cut: f64 = 0.;
+    let half = channel.width * 0.5;
+    let outer = banks.dry_outer_blend.unwrap_or(20.);
+    for pair in channel.points.windows(2) {
+        let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+            continue;
+        };
+        let dx = b[0] - a[0];
+        let dz = b[2] - a[2];
+        let length = dx.hypot(dz);
+        if length <= 0. {
+            continue;
+        }
+        let along = ((point[0] - a[0]) * dx + (point[1] - a[2]) * dz) / length;
+        let (distance, _) = segment(point, [a[0], a[2]], [b[0], b[2]]);
+        let ordinary = (b[1] - a[1]).abs() / length <= banks.max_longitudinal_grade;
+        // The expanded shoulder fades inside a reach's endpoints. A perched
+        // pool must not project its hundred-unit skirt beyond a plunge.
+        let endpoint = smooth(along.min(length - along) / support.endpoint_blend);
+        let target = a[1] + (b[1] - a[1]) * clamp(along / length);
+        let mouth = channel.points.last().map_or(1., |end| {
+            if end[1] <= 0. {
+                smooth(((point[0] - end[0]).hypot(point[1] - end[2]) - half) / banks.plunge_buffer)
+            } else {
+                1.
+            }
+        });
+        let width = 20.
+            + f64::from(ordinary)
+                * mouth
+                * endpoint
+                * smooth(ground / support.sea_fade_height)
+                * (outer - 20.);
+        // A width-based inner collar is shared by all dry reach fields.
+        // Switching it at one lake's absolute datum introduces a second
+        // discontinuity as a descending reach arrives at that level.
+        let collar = channel.width * 0.12;
+        let lip = if ordinary { banks.dry_lip } else { 1. };
+        let delta = target + lip - ground;
+        let weight = smooth((half + width - distance) / (width - collar));
+        let narrow = smooth((half + 20. - distance) / (20. - collar));
+        // A perched pool can need a steep local wall. Its distant shoulder
+        // must not reproduce that entire height above the valley floor.
+        uplift = uplift
+            .max(delta.max(0.) * narrow)
+            .max(delta.max(0.).min(support.maximum_outer_rise) * weight);
+        cut = cut.min(delta.min(0.) * narrow);
+    }
+    ground + uplift + cut
 }
 
 /// Irregular wet/dry margins join their own basin to the surrounding land.
@@ -744,6 +839,52 @@ mod profile_tests {
             "../../../../../assets/config/v4/grand-v4/geography-r02.json"
         ))
         .expect("canonical geography")
+    }
+
+    #[test]
+    fn far_bank_fields_are_compact_order_independent_and_continuous() {
+        let d = document();
+        let mut reversed = d.falls.clone();
+        reversed.points.reverse();
+        for point in [[474.4, 278.4], [513.6, 346.3], [435., 310.], [495., 410.]] {
+            let height = dry_reach_support(&d, point, &d.falls, 45.);
+            let reverse = dry_reach_support(&d, point, &reversed, 45.);
+            assert!(
+                (height - reverse).abs() < 1e-9,
+                "reach iteration order changed {point:?}"
+            );
+            for axis in 0..2 {
+                let mut adjacent = point;
+                adjacent[axis] += 1e-6;
+                assert!((height - dry_reach_support(&d, adjacent, &d.falls, 45.)).abs() < 1e-4);
+            }
+        }
+        assert!((dry_reach_support(&d, [1000., 1000.], &d.falls, 45.) - 45.).abs() < 1e-9);
+        assert!((dry_reach_support(&d, [470., 300.], &d.falls, -1.) + 1.).abs() < 1e-9);
+        for channel in [&d.falls, &d.river] {
+            for pair in channel.points.windows(2) {
+                let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                    continue;
+                };
+                let length = (b[0] - a[0]).hypot(b[2] - a[2]);
+                let along = [(b[0] - a[0]) / length, (b[2] - a[2]) / length];
+                let normal = [-along[1], along[0]];
+                for end in [a, b] {
+                    let p = [end[0] + normal[0] * 25., end[2] + normal[1] * 25.];
+                    for ground in [30., 45., 90., 220.] {
+                        let left = [p[0] - along[0] * 1e-6, p[1] - along[1] * 1e-6];
+                        let right = [p[0] + along[0] * 1e-6, p[1] + along[1] * 1e-6];
+                        assert!(
+                            (dry_reach_support(&d, left, channel, ground)
+                                - dry_reach_support(&d, right, channel, ground))
+                            .abs()
+                                < 1e-4,
+                            "reach endpoint changed field value at {p:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

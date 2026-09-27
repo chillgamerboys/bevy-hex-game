@@ -2917,7 +2917,12 @@
     "plunge_buffer": 12.0,
     "dry_lip": 0.0,
     "shelf_power": 2.0,
-    "dry_outer_blend": 100.0
+    "dry_outer_blend": 100.0,
+    "dry_reach_support": {
+      "sea_fade_height": 12.0,
+      "endpoint_blend": 24.0,
+      "maximum_outer_rise": 12.0
+    }
   },
   "interior_profile": {
     "join_width": 30.0,

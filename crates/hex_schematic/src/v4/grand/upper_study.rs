@@ -90,32 +90,98 @@ fn upper_mountain_schema_rejects_unbounded_authoring_and_keeps_old_documents() {
 #[test]
 #[ignore = "explicit full-mainland exact source study; no traversal or pixel acceptance"]
 fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
+    export_source_study("upper_bodies")
+}
+
+#[test]
+#[ignore = "explicit final-column bank comparison; no controller acceptance"]
+fn export_bank_source_study() -> Result<(), Box<dyn Error>> {
+    export_source_study("banks")
+}
+
+#[test]
+#[ignore = "read exact source around preselected bank ownership boundaries"]
+fn sample_bank_ownership_boundaries() -> Result<(), Box<dyn Error>> {
+    let input = std::env::var("HEX_GRAND_BANK_SEAMS")?;
+    let output = std::env::var("HEX_GRAND_BANK_SEAMS_OUT")?;
+    if Path::new(&output).exists() {
+        return Err("preserve prior boundary samples".into());
+    }
+    #[derive(serde::Deserialize)]
+    struct Samples {
+        points: Vec<[f64; 2]>,
+    }
+    let points: Samples = serde_json::from_slice(&fs::read(input)?)?;
+    if points.points.len() > 10000 {
+        return Err("bounded bank sample budget exceeded".into());
+    }
+    let g = super::tests::compiler(false);
+    let d = g
+        .geography
+        .document
+        .as_ref()
+        .ok_or("canonical geography missing")?;
+    let mut before = d.clone();
+    before
+        .ordinary_channel_banks
+        .as_mut()
+        .ok_or("bank profile missing")?
+        .dry_reach_support = None;
+    let mut rows = Vec::new();
+    for point in points.points {
+        let p = g.geography.world_hex(point);
+        let coast = f64::from(grid_value(&g.coast, p, 0)) * 1.5;
+        rows.push(json!({"point":point,"hex":[p.q,p.r],"coast_distance":coast,
+            "baseline":oracle::mainland(&before,point,coast),"candidate":oracle::mainland(d,point,coast)}));
+    }
+    write_json(
+        Path::new(&output),
+        &json!({"scope":"Exact continuous Rust surface on both sides of selected boundaries; source hex coast-depth retained, not a controller verdict.","rows":rows}),
+    )
+}
+
+fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
     let output = std::env::var("HEX_GRAND_UPPER_STUDY_OUT")?;
     let output = Path::new(&output);
     fs::create_dir_all(output)?;
     if output.join("columns.csv").exists() {
         return Err("refusing to overwrite prior study columns".into());
     }
-    let candidate_bytes =
+    let source_bytes =
         include_bytes!("../../../../../assets/config/v4/grand-v4/geography-r02.json");
-    let candidate: GrandGeographyDocument = serde_json::from_slice(candidate_bytes)?;
+    let candidate: GrandGeographyDocument = serde_json::from_slice(source_bytes)?;
+    let mut baseline = candidate.clone();
+    let definition = match mode {
+        "upper_bodies" => {
+            baseline.upper_mountain_bodies = None;
+            "candidate document with only upper_mountain_bodies removed"
+        }
+        "banks" => {
+            baseline
+                .ordinary_channel_banks
+                .as_mut()
+                .ok_or("bank profile missing")?
+                .dry_reach_support = None;
+            "current accepted terrain without the new continuous dry reach support"
+        }
+        _ => return Err("unknown source study mode".into()),
+    };
+    let candidate_bytes = source_bytes.to_vec();
     let profile = candidate
         .upper_mountain_bodies
         .as_ref()
         .expect("study profile");
-    let mut baseline = candidate.clone();
-    baseline.upper_mountain_bodies = None;
     let baseline_bytes = serde_json::to_vec(&baseline)?;
     let mut source: GrandSpec = ron::from_str(include_str!(
         "../../../../../assets/config/v4/grand-v4/world.ron"
     ))?;
     source.full_dressing = false;
-    fs::write(output.join("candidate-geography.json"), candidate_bytes)?;
+    fs::write(output.join("candidate-geography.json"), &candidate_bytes)?;
     fs::write(output.join("baseline-geography.json"), &baseline_bytes)?;
     eprintln!("UPPER_STUDY constructing baseline");
     let before = GrandCompiler::with_geography(source.clone(), baseline.clone(), &baseline_bytes)?;
     eprintln!("UPPER_STUDY constructing candidate");
-    let after = GrandCompiler::with_geography(source, candidate.clone(), candidate_bytes)?;
+    let after = GrandCompiler::with_geography(source, candidate.clone(), &candidate_bytes)?;
     if before.source.mainland_rows != after.source.mainland_rows {
         return Err("upper mountain study changed the mainland footprint".into());
     }
@@ -127,6 +193,8 @@ fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
     let mut count = 0_usize;
     let mut changed_top = 0_usize;
     let mut changed_water = 0_usize;
+    let mut changed_wet_beds = 0_usize;
+    let mut changed_near_channel = 0_usize;
     for &(r, start, end) in &before.source.mainland_rows {
         for q in start..=end {
             let p = WorldHex::new(q, r);
@@ -142,6 +210,14 @@ fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
             let new_water = new_water.map_or(-1, |water| water.top);
             changed_top += usize::from(old_top != new_top);
             changed_water += usize::from(old_water != new_water);
+            changed_wet_beds += usize::from(old_top != new_top && old_water > old_top);
+            let near_channel = [&candidate.falls, &candidate.river]
+                .into_iter()
+                .any(|channel| {
+                    super::geography::route_distance([east, north], &channel.points).0
+                        <= channel.width * 0.5 + 20.
+                });
+            changed_near_channel += usize::from(old_top != new_top && near_channel);
             count += 1;
             writeln!(columns, "{q},{r},{east:.9},{north:.9},{old_surface:.9},{new_surface:.9},{old_top},{new_top},{old_water},{new_water}")?;
         }
@@ -149,14 +225,26 @@ fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
     columns.flush()?;
     eprintln!("UPPER_STUDY exported {count} final columns, changed tops {changed_top}, water {changed_water}");
     let mut sections = Vec::new();
-    for (id, from, to) in [
-        ("northwest-shoulder", [100., 330.], [200., 990.]),
-        ("northern-body", [350., 400.], [350., 1100.]),
-        ("eastern-body", [820., 610.], [330., 610.]),
-        ("outlet-body", [565., 250.], [565., 800.]),
-        ("upper-rock-west-east", [-600., 700.], [800., 700.]),
-        ("frozen-crossing", [-10., 520.], [-10., 950.]),
-    ] {
+    let section_paths = if mode == "banks" {
+        [
+            ("lower-falls-ownership-switch", [430., 280.], [550., 280.]),
+            ("upper-pool-support-end", [470., 350.], [570., 350.]),
+            ("same-swim-exit-shoulder", [405., 300.], [465., 300.]),
+            ("ordinary-reach-through-plunge", [470., 265.], [515., 430.]),
+            ("lower-lake-shore", [195., 30.], [355., 145.]),
+            ("river-support", [220., -60.], [400., -60.]),
+        ]
+    } else {
+        [
+            ("northwest-shoulder", [100., 330.], [200., 990.]),
+            ("northern-body", [350., 400.], [350., 1100.]),
+            ("eastern-body", [820., 610.], [330., 610.]),
+            ("outlet-body", [565., 250.], [565., 800.]),
+            ("upper-rock-west-east", [-600., 700.], [800., 700.]),
+            ("frozen-crossing", [-10., 520.], [-10., 950.]),
+        ]
+    };
+    for (id, from, to) in section_paths {
         let mut points = Vec::new();
         for step in 0_u16..=250 {
             let t = f64::from(step) / 250.;
@@ -249,9 +337,10 @@ fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
         &output.join("source-receipt.json"),
         &json!({
             "status":"SOURCE_STUDY_COMPLETE_NOT_GAME_ACCEPTANCE",
-            "baseline_definition":"candidate document with only upper_mountain_bodies removed; all three corrective commits retained",
+            "mode":mode,"baseline_definition":definition,
             "baseline_source_fingerprint":before.source_fingerprint,"candidate_source_fingerprint":after.source_fingerprint,
             "mainland_columns":count,"changed_top_columns":changed_top,"changed_water_columns":changed_water,
+            "changed_wet_beds":changed_wet_beds,"changed_original_near_channel_tops":changed_near_channel,
             "coast_field_identical":true,"crest_samples":crest_samples,
             "scope":"All mainland final columns include layer carving but omit objects. Gradients/components describe exterior tops, not stacked connectivity or ordinary controller acceptance."
         }),

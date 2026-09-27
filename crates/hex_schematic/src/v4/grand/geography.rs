@@ -154,7 +154,13 @@ shape!(ChannelBanks {
     plunge_buffer: f64,
     dry_lip: f64,
     shelf_power: f64,
-    dry_outer_blend: Option<f64>
+    dry_outer_blend: Option<f64>,
+    dry_reach_support: Option<DryReachSupport>
+});
+shape!(DryReachSupport {
+    sea_fade_height: f64,
+    endpoint_blend: f64,
+    maximum_outer_rise: f64
 });
 shape!(Tree {
     center: [f64; 2],
@@ -310,6 +316,12 @@ impl GrandGeographyDocument {
                     || !(1.5..=3.).contains(&b.shelf_power)
                     || b.dry_outer_blend
                         .is_some_and(|width| !(40. ..=160.).contains(&width))
+                    || b.dry_reach_support.as_ref().is_some_and(|s| {
+                        b.dry_outer_blend.is_none()
+                            || !(4. ..=20.).contains(&s.sea_fade_height)
+                            || !(12. ..=40.).contains(&s.endpoint_blend)
+                            || !(1. ..=24.).contains(&s.maximum_outer_rise)
+                    })
             })
             || self.garden_access.as_ref().is_some_and(|a| {
                 !path(&a.points)
