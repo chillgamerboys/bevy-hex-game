@@ -130,10 +130,11 @@ fn chart(p: WorldHex) -> f64 {
 
 #[test]
 fn all_r02_channel_paths_publish_exact_downhill_edges_and_reach_receiving_water() -> TestResult {
-    let bytes = include_bytes!("../../../assets/config/v4/grand-v4/geography-r02.json");
+    let bytes = include_bytes!("../../../../assets/config/v4/grand-v4/geography-r02.json");
     let document: FlowDocument = serde_json::from_slice(bytes)?;
-    let mut spec: GrandSpec =
-        ron::from_str(include_str!("../../../assets/config/v4/grand-v4/world.ron"))?;
+    let mut spec: GrandSpec = ron::from_str(include_str!(
+        "../../../../assets/config/v4/grand-v4/world.ron"
+    ))?;
     spec.full_dressing = false;
     spec.geography = Some("geography-r02.json".into());
     let compiler = GrandCompiler::with_geography(spec, serde_json::from_slice(bytes)?, bytes)?;

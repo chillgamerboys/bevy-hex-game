@@ -4,6 +4,9 @@
     reason = "black-box tests use Result for fallible setup and assertions for contract failures"
 )]
 
+#[path = "acceptance/grand_r02_flow.rs"]
+mod grand_r02_flow;
+
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::error::Error;
 use std::ffi::OsString;
