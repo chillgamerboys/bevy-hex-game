@@ -1,5 +1,29 @@
 # Grand V4 integration wave
 
+## September 27 restart — terrain composition before further dressing
+
+The user reviewed the actual plain04 render and the latest source study, then authorized
+continuing with a hard stop at **50% account weekly usage consumed**. The reset starts at
+0% reported usage. This replaces all older usage floors; no hourly automation is needed.
+
+The immediate correction is the supporting mountain composition: embed Crystal's retained
+inner ascent in an asymmetric mountain flank, support Frozen Woods as a high saddle in the
+same complex, and replace the upper lake's uniform exterior collar with connected buttresses
+and an irregular screening ridge. Preserve the approved landmark sequence, lake/water levels,
+sevenfold footprints, underground routes, broad usable valley and shoreline access. Selected
+passing routes cannot stand in for generally traversable ground or acceptable landforms.
+
+L4 (`work/grand-world`) is the sole geography writer; finish the isolated bank-continuity
+repair, then the common mountain supports. Root owns integration, package/export tooling and
+this manifest. An independent reviewer challenges source views before the next actual game
+export. L6 (`work/grand-runtime`) only validates the existing default-off far-matte experiment;
+it is independent at dispatch and must demonstrate a visible improvement before integration.
+All Cargo work remains serialized through the shared target lock. No new renderer initiative,
+decoration expansion or broad acceptance rerun precedes the next meaningful terrain picture.
+
+Latest actual package remains rejected plain04; plain05 has not been compiled. The durable
+gameplay/save implementation is retained, with final redesigned-world integration still open.
+
 Status: September 26 revision02 approved; production geography transfer in progress
 Wave: `wave/grand-v4`
 Verified remote dev: `bb556963632de933b44fb75b1d306aca79258cef`
