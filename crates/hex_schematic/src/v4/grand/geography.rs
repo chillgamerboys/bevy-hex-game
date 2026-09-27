@@ -51,6 +51,8 @@ pub struct GrandGeographyDocument {
     pub(super) ascent: Ascent,
     pub(super) frozen_route: FrozenRoute,
     pub(super) volcano_route: VolcanoRoute,
+    #[serde(default)]
+    pub(super) volcano_landing_apron: Option<LandingApron>,
     pub(super) shadow_route: Vec<[f64; 3]>,
     pub(super) library_concept: Vec<[f64; 3]>,
     pub(super) frames: BTreeMap<String, FrameSpec>,
@@ -208,6 +210,10 @@ shape!(Ascent {
 });
 shape!(FrozenRoute {width:f64,forest_half_width:f64,points:Vec<[f64;3]>});
 shape!(VolcanoRoute {width:f64,local_points:Vec<[f64;3]>});
+shape!(LandingApron {
+    core_radius: f64,
+    outer_radius: f64
+});
 shape!(FrameSpec {origin:[f64;2],angle:f64,layer:SupportLayer,floor:Option<f64>});
 
 shape!(Landing {
@@ -442,6 +448,10 @@ impl GrandGeographyDocument {
             || !path(&self.shadow_route)
             || !path(&self.frozen_route.points)
             || !path(&self.volcano_route.local_points)
+            || self.volcano_landing_apron.as_ref().is_some_and(|apron| {
+                !(self.volcano_route.width * 0.5..=40.).contains(&apron.core_radius)
+                    || !(apron.core_radius + 12. ..=120.).contains(&apron.outer_radius)
+            })
             || !(1000..=50000).contains(&self.ascent.expected_columns)
             || !(5. ..=40.).contains(&self.ascent.width)
             || !(20. ..=160.).contains(&self.ascent.well_apothem)

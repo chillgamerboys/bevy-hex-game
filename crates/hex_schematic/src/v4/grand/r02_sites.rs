@@ -168,25 +168,27 @@ impl GrandCompiler {
             },
             role: AnchorRole::Observation,
         });
-        // A boat berth is wet water, separate from the dry ascent landing.
-        // Its authored position preserves the island and original walking target.
-        let berth = self.geography.frame("volcano_berth")?.hex([0., 0.]);
-        let (_, water) = self.column(berth);
-        if !water.is_some_and(|water| water.body_id == "grand/ocean" && water.top == SEA_TOP) {
-            return Err(ContractError::new(
-                "grand.site",
-                "volcano berth is not ocean water",
-            ));
+        // These world-owned marine sites remain wet, separate from the dry
+        // ascent landing. The offshore bend exits the bay before the headland.
+        for id in ["volcano_berth", "sailing_bay_offshore"] {
+            let column = self.geography.frame(id)?.hex([0., 0.]);
+            let (_, water) = self.column(column);
+            if !water.is_some_and(|water| water.body_id == "grand/ocean" && water.top == SEA_TOP) {
+                return Err(ContractError::new(
+                    "grand.site",
+                    format!("marine site {id} is not ocean water"),
+                ));
+            }
+            out.push(WorldAnchor {
+                id: format!("grand/anchor/{id}"),
+                region_id: "grand".into(),
+                position: VoxelPosition {
+                    column,
+                    level: SEA_TOP - 1,
+                },
+                role: AnchorRole::Observation,
+            });
         }
-        out.push(WorldAnchor {
-            id: "grand/anchor/volcano_berth".into(),
-            region_id: "grand".into(),
-            position: VoxelPosition {
-                column: berth,
-                level: SEA_TOP - 1,
-            },
-            role: AnchorRole::Observation,
-        });
         out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
     }

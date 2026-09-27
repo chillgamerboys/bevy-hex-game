@@ -809,6 +809,15 @@
       "angle": 0.0,
       "layer": "LibraryLower",
       "floor": 114
+    },
+    "sailing_bay_offshore": {
+      "origin": [
+        -180.0,
+        -780.0
+      ],
+      "angle": 0.0,
+      "layer": "Exterior",
+      "floor": null
     }
   },
   "site_blends": [
@@ -3187,5 +3196,9 @@
         "crest_rounding_radius": 0.12
       }
     ]
+  },
+  "volcano_landing_apron": {
+    "core_radius": 13.0,
+    "outer_radius": 48.0
   }
 }

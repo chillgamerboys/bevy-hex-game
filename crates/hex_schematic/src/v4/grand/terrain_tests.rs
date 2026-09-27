@@ -252,6 +252,121 @@ fn volcano_landing_has_wide_shallow_walkout() {
 }
 
 #[test]
+fn volcano_landing_connects_broad_shallows_without_moving_sites() {
+    let g = plain();
+    let d = g.geography.document.as_ref().expect("canonical geography");
+    let apron = d
+        .volcano_landing_apron
+        .as_ref()
+        .expect("landing shore apron");
+    let mut old = d.clone();
+    old.volcano_landing_apron = None;
+    let identity = serde_json::to_vec(&old).expect("baseline identity");
+    let baseline = GrandCompiler::with_geography(g.source.clone(), old, &identity)
+        .expect("unchanged island without shore apron");
+    assert_eq!(
+        g.anchors, baseline.anchors,
+        "shore grading moves no authored site"
+    );
+    let start = g
+        .anchors
+        .iter()
+        .find(|a| a.id == "grand/anchor/volcano_landing")
+        .expect("existing dry landing")
+        .position;
+    let center = g.geography.model_xz(start.column);
+    let first = d.volcano_route.local_points.first().expect("ascent start");
+    let authored = [
+        d.volcano.center[0] + first[0],
+        d.volcano.center[1] + first[2],
+    ];
+    let radial_length = first[0].hypot(first[2]);
+    let outward = [first[0] / radial_length, first[2] / radial_length];
+    let radius = (g.geography.length(apron.outer_radius + 20.) / 1.5).ceil() as i64 + 2;
+    let mut supports = BTreeSet::new();
+    let mut wet = BTreeSet::new();
+    let mut rows = Vec::new();
+    let mut changed = 0;
+    for q in -radius..=radius {
+        for r in -radius..=radius {
+            let p = WorldHex::new(start.column.q + q, start.column.r + r);
+            let point = g.geography.model_xz(p);
+            let distance = (point[0] - authored[0]).hypot(point[1] - authored[1]);
+            if distance > apron.outer_radius + 20. {
+                continue;
+            }
+            let (before, old_water) = baseline.column(p);
+            let (after, water) = g.column(p);
+            let old_top = solid_top(&before).expect("old island ground");
+            let top = solid_top(&after).expect("new island ground");
+            if distance >= apron.outer_radius {
+                assert_eq!(before, after, "apron changed distant terrain at {p:?}");
+                assert_eq!(old_water, water, "apron changed distant water at {p:?}");
+            }
+            assert!(top >= old_top, "landing only raises lower shore ground");
+            assert!(water
+                .as_ref()
+                .is_none_or(|w| w.top == SEA_TOP && w.body_id == "grand/ocean"));
+            changed += usize::from(top != old_top);
+            let support = VoxelPosition {
+                column: p,
+                level: top - 1,
+            };
+            if water.as_ref().is_none_or(|w| w.top - top <= 2) && g.clear_support(support, 8) {
+                supports.insert(support);
+                if water.is_some() {
+                    wet.insert(support);
+                }
+            }
+            rows.push((
+                p.q,
+                p.r,
+                point[0],
+                point[1],
+                old_top,
+                top,
+                old_water.as_ref().map(|w| w.top),
+                water.as_ref().map(|w| w.top),
+            ));
+        }
+    }
+    let connected = support_component(&supports, start);
+    let shore: Vec<_> = connected
+        .intersection(&wet)
+        .filter_map(|p| {
+            let point = g.geography.model_xz(p.column);
+            let delta = [point[0] - center[0], point[1] - center[1]];
+            (delta[0] * outward[0] + delta[1] * outward[1] > 0.)
+                .then_some(-delta[0] * outward[1] + delta[1] * outward[0])
+        })
+        .collect();
+    let min = shore
+        .iter()
+        .copied()
+        .reduce(f64::min)
+        .expect("wet shore connects to landing");
+    let max = shore
+        .iter()
+        .copied()
+        .reduce(f64::max)
+        .expect("wet shore span");
+    assert!(
+        max - min >= d.volcano_route.width,
+        "wet exit must span the full landing width"
+    );
+    println!("VOLCANO_SHORE columns={} changed={changed} connected={} connected_wet={} wet_span_model={:.3}",
+        rows.len(), connected.len(), shore.len(), max - min);
+    if let Some(path) = std::env::var_os("HEX_GRAND_LANDING_STUDY_OUT") {
+        let file = std::fs::File::create(path).expect("shore study output");
+        serde_json::to_writer(std::io::BufWriter::new(file), &serde_json::json!({
+            "scope":"Exact Rust source final columns, old apron disabled versus candidate; no object/controller claim",
+            "fields":["q","r","model_east","model_north","old_top","candidate_top","old_water_top","candidate_water_top"],
+            "anchor_unchanged":start,"apron":apron,"connected_wet_span_model":max-min,"rows":rows
+        })).expect("shore study export");
+    }
+}
+
+#[test]
 fn export_plain_relief_when_requested() {
     let Ok(path) = std::env::var("HEX_GRAND_TERRAIN_REVIEW") else {
         return;

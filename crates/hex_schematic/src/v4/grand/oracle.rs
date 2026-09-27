@@ -942,6 +942,18 @@ pub(super) fn volcano(d: &GrandGeographyDocument, point: [f64; 2]) -> f64 {
     if cr < 0.72 && dist > 22. {
         h = d.caldera.floor + 3. * cr;
     }
+    if let (Some(apron), Some(start)) = (
+        &d.volcano_landing_apron,
+        d.volcano_route.local_points.first(),
+    ) {
+        // The open ascent starts at its walking datum, while the broad
+        // volcanic route bed lies two model units lower. Join that entire
+        // landing cap to the wet shore, retaining higher natural ground.
+        let distance = (point[0] - v.center[0] - start[0]).hypot(point[1] - v.center[1] - start[2]);
+        let weight =
+            smooth((apron.outer_radius - distance) / (apron.outer_radius - apron.core_radius));
+        h += (start[1] - h).max(0.) * weight;
+    }
     h
 }
 /// Actual liquid datum within the continuous basin/channel masks.
