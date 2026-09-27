@@ -505,3 +505,32 @@ that the new actual count is exactly sevenfold. The full Crystal footprint remai
 22,201 columns. The strict emitted-flow acceptance now passes: all authored
 channel paths reach their receiving lake or actual ocean through nonuphill wet
 neighbors. A fresh plain package and game renders remain pending.
+
+### Plain02 evidence: foothill correction remains open
+
+`compiled-r02-plain-02` was built from clean `6ad80c54a4430b18337a1ae2df5d8c74e5408d02`
+and passed strict package readback. It contains 3,323,269 columns in 13,134 chunks;
+its package fingerprint is `7399874320269410241`. An independent emitted-column
+audit confirms 653,261 mainland columns and the broader lower fronts. The eleven
+fresh windowless overview/landmark/ground views were inspected individually and
+as a contact sheet by two reviewers. Presentation remains **FAIL**: high near-level
+ridge walls, abrupt detailed/distant terrain boundaries and triangular boundary
+wedges remain. The Crystal/Frozen camera also fails to show the complete shore
+connection. These eleven diagnostic views do not complete the 47-view matrix.
+
+The three new bounded-fall controller fixtures pass. Actual ordinary-controller
+probes against that immutable plain package pass only the lake-uphill route.
+Both western probes stall on loaded two-level rises in the lower apron, near
+model coordinates (-488.40, 249.78) and (-566.93, 317.94). The lake crossing exceeds
+the descent limit at the actual riverbank near (403.55, 300.05). There are no
+objects or streaming waits at these stops. The bank failure is distinct from the
+mountain profiles. Regional edge percentages and source support graphs therefore
+remain useful diagnostics, not proof of broad player traversal.
+
+`eae45f6` restores the original lower saddle factor on automatic peak links;
+explicit authored ridges, coastline and low aprons are unaffected. Five focused
+checks pass, including actual compiled peak separation, lake screening, all route
+ribbons and closed-cave cover. It needs new game captures. Broad flank/shore
+profiles and a bounded distant/detail rendering investigation remain in progress;
+the failed global stepped-renderer experiment is still excluded. No native
+performance, complete movement or final visual acceptance is claimed.

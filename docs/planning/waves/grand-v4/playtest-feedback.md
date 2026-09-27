@@ -118,3 +118,13 @@ coarse MODEL pictures nor the graph clears the user's concern. The next review
 uses a new actual game package, matching whole-world angles and four fixed walking
 height views across and up the western and lake-front bases. Keep this feedback
 open until those images and ordinary controller movement have been reviewed.
+
+The plain02 review keeps this feedback open. Eleven fresh views show broader feet
+but still expose upper walls and abrupt distant/detail terrain boundaries. Actual
+controller checks pass one of the four fixed probes: both western probes stop on
+two-level lower-apron ledges, while the lake crossing hits a riverbank descent.
+The next correction must address the regional source profiles and usable banks;
+do not grade narrow strips along the test lines or weaken the fall limits. The
+automatic ridges' lost saddle factor is separately restored so enclosing peaks
+remain distinct. High mountain screening and broad lower traversal are separate
+requirements, and neither is waived to satisfy the other.
