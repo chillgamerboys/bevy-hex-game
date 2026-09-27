@@ -16,34 +16,38 @@ shrines, 127 authored enemies, Shadow-earned teleport, durable resume and shrine
 respawn. The user rejected the earlier terrain and approved a revised composition
 before production rebuilding.
 
-The first actual dressed revision02 package is `4086254255885708135`, from clean
-`d28d11b32258bef69a251c0e895cb9fb3fdf65a6`: 878 objects, including the World Tree and
-780 ordinary trees. Nine independently reviewed views establish the garden island
-and Crystal–Frozen–lake connection, but dressing is not accepted: the tree has
-spherical crowns, ordinary trees obscure its lakeside clearing, and distant garden
-architecture disappears. The reverse tree defect was traced to review-camera
-near-plane clipping. Inherited detailed/distant terrain contrast remains open.
+The latest actual package is `compiled-r02-dressed-02`, fingerprint
+`16024182847783488117`, from clean `835006d0d7a0dca17d9fff361deade180f022937`.
+Strict compilation passes with 3,323,269 columns, 13,134 chunks and 842 objects
+(including 744 ordinary trees and the World Tree). Mainland and Crystal measure
+6.999775× and 7.005680×. Eleven original game views were independently inspected:
+distant garden architecture, root/shore clearing and reverse-tree framing improve;
+the crown is still too filled and rounded, and detailed/coarse terrain seams remain.
+This is not visual acceptance. The island view's lower water cutoff is a separately
+proved camera near-plane issue; its source-only optical retreat is integrated.
 
-Actual land/boat/air process restarts and three streaming circuits pass on this
-package. Walking passes 19 of 20 routes, including the revised foothills, all cave
-routes and volcano ascent; the ordinary river bank has a steep cut shoulder. The
-separate walk/swim/walk crossing passes. Dragon admission fails because its authored
-slope provides no complete grounded footprints. Sailing v1 also fails: its target
-is dry ground beyond the boat's navigable shallows; the longer bay run reaches its
-120-second deadline while still moving. Original failures remain preserved.
+Actual land/boat/air process restarts preserve complete owner state, attacks, partial
+damage and revisited destruction. Three streaming circuits pass (31 stops; peaks
+49 source chunks, 15 detailed chunks, two jobs). All fourteen encounter groups and
+127 stable enemies admit and checkpoint, including the corrected Dragon roost.
+The original walking run passes 19/20, including both river-bank routes and all cave
+routes. Its valley-crossing failure is an object-steering dead end. A separate
+bounded test-driver correction passes that same route, with one side reversal and
+unchanged controller, endpoints and fall limits; the full suite has not yet rerun
+on that source. The separate walk/swim/walk crossing passes.
 
-Source corrections include an irregular crown, a connected root/shore/camp glade,
-a framing-preserving camera retreat, a natural upper-volcano Dragon roost, and
-bounded distant garden meshes. Ordinary river cuts now have broad bank transitions;
-the added wet berth remains separate from the unchanged dry landing. The required
-disembark/swim/walk check compiles with scoped Clippy passing. The bank source passes
-67 Grand checks, preserves every water level and wet bed, and retains closed cave
-cover. Fresh controller and image results are still required, including the root
-entrance where the lowered bank extends the existing open mouth by one row.
-These source changes do not retroactively repair the immutable dressed01 package.
-Final dressed presentation, combined CI, native control feel and measured performance
-remain open. This is **not delivered on `dev`**; the hard stop is 50% weekly usage
-consumed. See the [candidate guide](../development/grand-v4.md) and
+Both sailing-v2 checks fail and remain explicit. Western sailing reaches the wet
+berth in 39.7 simulation seconds, then shore arrival stops at a four-voxel wet/dry
+ledge. The direct bay bearing hits shallow coastal ground; increasing its deadline
+cannot repair that route. Broad grading of the existing landing and an authored
+offshore bay course are being investigated. Neither result is complete island travel.
+
+The original failed runs remain preserved. The next source work is limited to the
+open crown structure, actual terrain-mesh attribution, and usable marine approach.
+Final combined movement/restart checks, dressed presentation, combined CI, native
+control feel and measured performance remain open. This is **not delivered on `dev`**;
+the hard stop is 50% weekly usage consumed. See the
+[candidate guide](../development/grand-v4.md) and
 [integration record](waves/grand-v4/manifest.md). Linear reconciliation is unverified
 until the connector is reconnected.
 

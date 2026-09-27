@@ -1,6 +1,56 @@
 # Grand V4 integration wave
 
-## September 27 first dressed checkpoint
+## September 27 dressed02 checkpoint
+
+Immutable `compiled-r02-dressed-02` was compiled at clean
+`835006d0d7a0dca17d9fff361deade180f022937`: source `17363636849640084898`,
+package `16024182847783488117`, sites `10774640704479609138`. Strict readback
+passes: 3,323,269 columns, 13,134 chunks, 842 objects (744 ordinary trees plus
+World Tree and 97 other objects), mainland 6.999775× and Crystal 7.005680×.
+
+The emitted same-domain ground comparison confirms the source river repair:
+27,998 dry tops change; water levels/beds do not. The largest diagnostic dry
+component gains178 and loses28, net150, reaching479,945. Closed cave roofs and
+clearance remain valid; this graph does not include object/body clearance.
+Eleven actual originals are independently reviewed. Distant garden structures,
+root/shore/camp opening and reverse-crown opacity improve. Dense rounded crown,
+uniform distant forest and detailed/coarse terrain teeth/strata remain defects.
+The island view's lower sea cutoff matches the near-plane intersection exactly.
+The separate60-unit optical retreat `4705a73` preserves framing and provides
+15.84units worst-case full-frame sea clearance; a fresh image remains required.
+No native ocean seam claim follows from that static camera diagnosis.
+
+Actual land/boat/air process restarts pass with complete owner state, active
+attacks, partial voxel health and revisited destruction. Three circuits pass at
+31stops, high water49 source chunks/15detailed chunks/2jobs. All14parties and
+127stable enemies admit and checkpoint; the corrected Dragon roost works.
+Original walking19/20 passes include both repaired river routes and every cave
+route. Valley crossing stops among unchanged final50-unit ground/body objects
+because its retained steering half-circle is entirely blocked. `90e0e6d` permits
+an opposite-side attempt only at that dead end. Three focused regressions and
+scoped Clippy pass; actual same-endpoint valley crossing passes with one reversal,
+unchanged body/controller/fall limits and forty settled ticks. This separate
+focused pass does not retroactively change the original pipeline FAIL or replace
+a full combined-source walking run. Independent mixed walk/swim/walk passes.
+
+Marine supplement preserves both FAILs. The western boat reaches the wet berth
+in39.700simulation seconds (728.638authored units); one ordinary B stow succeeds,
+but shore movement stops11.810units short at a real four-voxel139.3→140.7ledge.
+The bay boat's direct bearing hits shallow/dry coastal samples, with zero velocity
+rather than merely insufficient time. Next: broadly grade the existing landing
+margin and publish a physically navigable offshore departure course. Keep original
+berth/landing/ascent coordinates, island separation and production movement limits.
+No complete island-arrival or bay-travel pass is claimed.
+
+Root owns app test-driver/integration changes. L4 owns the next crown-only source
+preview and separate landing grading; L6 owns opt-in actual NW published-mesh
+attribution, with prior unsuccessful material/boundary trials still banked. Cargo
+remains serialized. Evidence is preserved under task work directories named
+`grand-dressed02-*`, `grand-walking-side-recovery-01`, and the original pipeline
+receipt. Full static/temporal review, final combined integration/CI and approved
+native control/performance remain open. Stop at50% weekly account usage consumed.
+
+## Historical September 27 first dressed checkpoint
 
 Immutable `compiled-r02-dressed-01` was compiled at clean
 `d28d11b32258bef69a251c0e895cb9fb3fdf65a6`, package `4086254255885708135`, source
