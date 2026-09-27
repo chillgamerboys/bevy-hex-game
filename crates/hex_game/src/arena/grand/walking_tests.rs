@@ -20,6 +20,353 @@ struct Route {
     stacked: bool,
 }
 
+#[derive(Clone, Copy, Serialize)]
+struct GroundedWalkLimits {
+    voxel_height: f32,
+    automatic_step_height: f32,
+    gravity: f32,
+    ground_snap_distance: f32,
+    collision_skin: f32,
+    tick_seconds: f32,
+    maximum_unsupported_descent: f32,
+    maximum_airborne_ticks: u64,
+}
+impl GroundedWalkLimits {
+    fn new(voxel_height: f32) -> Self {
+        let contract = hex_arena::ground_motion_contract();
+        // An ordinary downward step is at most one authored voxel, bounded by
+        // the controller's automatic step contract. Only physical contact/snap
+        // tolerance is added, never a route-specific drop allowance.
+        let maximum_unsupported_descent = voxel_height.min(contract.automatic_step_height)
+            + contract.ground_snap_distance
+            + contract.collision_skin;
+        let fall_seconds =
+            (2.0 * f64::from(maximum_unsupported_descent) / f64::from(contract.gravity)).sqrt();
+        // The controller starts falling on the tick after walking off support.
+        // Round ballistic landing upward to a simulation tick, then allow that
+        // one departure/classification tick. Streaming pauses add no ticks.
+        let maximum_airborne_ticks = u64::try_from(
+            Duration::from_secs_f64(fall_seconds)
+                .as_nanos()
+                .div_ceil(Duration::from_secs_f32(hex_arena::STEP).as_nanos()),
+        )
+        .expect("bounded one-voxel fall duration")
+            + 1;
+        Self {
+            voxel_height,
+            automatic_step_height: contract.automatic_step_height,
+            gravity: contract.gravity,
+            ground_snap_distance: contract.ground_snap_distance,
+            collision_skin: contract.collision_skin,
+            tick_seconds: hex_arena::STEP,
+            maximum_unsupported_descent,
+            maximum_airborne_ticks,
+        }
+    }
+}
+
+#[derive(Resource, Serialize)]
+struct GroundedWalkTrace {
+    contract: &'static str,
+    limits: GroundedWalkLimits,
+    observed_simulation_ticks: u64,
+    total_airborne_ticks: u64,
+    maximum_airborne_ticks: u64,
+    maximum_unsupported_descent: f32,
+    completed_airborne_episodes: u64,
+    airborne_at_end: bool,
+    failure: Option<&'static str>,
+    #[serde(skip)]
+    last_tick: u64,
+    #[serde(skip)]
+    previous_height: f32,
+    #[serde(skip)]
+    departure_height: f32,
+    #[serde(skip)]
+    airborne_ticks: u64,
+}
+impl GroundedWalkTrace {
+    fn new(limits: GroundedWalkLimits, tick: u64, feet: Vec3) -> Self {
+        Self {
+            contract: "one-voxel-grounded-walk-v1",
+            limits,
+            observed_simulation_ticks: 0,
+            total_airborne_ticks: 0,
+            maximum_airborne_ticks: 0,
+            maximum_unsupported_descent: 0.0,
+            completed_airborne_episodes: 0,
+            airborne_at_end: false,
+            failure: None,
+            last_tick: tick,
+            previous_height: feet.y,
+            departure_height: feet.y,
+            airborne_ticks: 0,
+        }
+    }
+
+    fn observe(&mut self, tick: u64, feet: Vec3, grounded: bool) {
+        if tick == self.last_tick {
+            return;
+        }
+        if tick.checked_sub(self.last_tick) != Some(1) {
+            self.failure
+                .get_or_insert("walking observer missed a simulation tick");
+            return;
+        }
+        self.last_tick = tick;
+        self.observed_simulation_ticks += 1;
+        if !feet.is_finite() {
+            self.failure.get_or_insert("nonfinite walking pose");
+            return;
+        }
+        if !self.airborne_at_end {
+            self.departure_height = self.previous_height;
+        }
+        self.departure_height = self.departure_height.max(feet.y);
+        // Include the landing sample before resetting an episode. Otherwise a
+        // final swept collision could hide most of the unsupported descent.
+        self.maximum_unsupported_descent = self
+            .maximum_unsupported_descent
+            .max(self.departure_height - feet.y);
+        if !grounded || self.airborne_at_end {
+            self.airborne_ticks += 1;
+            self.maximum_airborne_ticks = self.maximum_airborne_ticks.max(self.airborne_ticks);
+        }
+        if !grounded {
+            self.total_airborne_ticks += 1;
+        } else {
+            self.completed_airborne_episodes += u64::from(self.airborne_at_end);
+            self.airborne_ticks = 0;
+        }
+        self.airborne_at_end = !grounded;
+        self.previous_height = feet.y;
+        if self.maximum_unsupported_descent > self.limits.maximum_unsupported_descent {
+            self.failure
+                .get_or_insert("unsupported descent exceeded one ordinary voxel step");
+        }
+        if self.maximum_airborne_ticks > self.limits.maximum_airborne_ticks {
+            self.failure
+                .get_or_insert("airborne duration exceeded one ordinary voxel step");
+        }
+    }
+}
+
+fn observe_grounded_walk(session: Res<ArenaSession>, mut trace: ResMut<GroundedWalkTrace>) {
+    if let Some(player) = session.actors.iter().find(|actor| actor.id == 0) {
+        trace.observe(session.tick, player.feet, player.grounded);
+    } else {
+        trace
+            .failure
+            .get_or_insert("walking observer lost the human actor");
+    }
+}
+
+fn install_grounded_walk_observer(app: &mut App) {
+    app.add_systems(
+        ArenaTick,
+        observe_grounded_walk
+            .after(hex_core::arena::ArenaSystems::Simulate)
+            .run_if(resource_exists::<GroundedWalkTrace>),
+    );
+}
+
+fn downward_step_fixture(drop_levels: i32) -> App {
+    use hex_core::arena::{
+        ArenaExpeditionSites, ArenaPackageIdentity, ArenaResidency, ArenaSolidSpan,
+    };
+    use hex_core::{ElementId, SubstanceId};
+
+    let geometry = ArenaVoxelGeometry {
+        level_height: 0.35,
+        radius: 16,
+        min_level: -16,
+        ..default()
+    };
+    let start = HexCoord::from_axial(-3, 0);
+    let chunks = (-2..=2)
+        .flat_map(|q| (-2..=2).map(move |r| (q, r)))
+        .collect();
+    let mut terrain = ArenaTerrainView {
+        revision: 1,
+        selection: ArenaSelection {
+            map: ArenaMap::GrandV4,
+            ..default()
+        },
+        spawns: [
+            start.to_world(geometry.top(TilePos::new(start, 0))),
+            Vec3::ZERO,
+        ],
+        residency: Some(ArenaResidency {
+            ready: chunks,
+            catalogue: (-2..=2)
+                .flat_map(|q| (-2..=2).map(move |r| (q, r)))
+                .collect(),
+        }),
+        expedition: Some(ArenaExpeditionSites::default()),
+        package_identity: Some(ArenaPackageIdentity {
+            world_id: "grounded-walk-oracle-fixture".into(),
+            manifest_fingerprint: 1,
+            sites_fingerprint: None,
+        }),
+        ..default()
+    };
+    for coord in HexCoord::ORIGIN.within_radius(16) {
+        terrain.columns.insert(
+            coord,
+            vec![ArenaSolidSpan {
+                bottom: TilePos::new(coord, -16),
+                top_level: if coord.to_world(0.0).x < 0.0 {
+                    0
+                } else {
+                    -drop_levels
+                },
+                substance: SubstanceId(1),
+            }],
+        );
+    }
+    let mut app = App::new();
+    app.insert_resource(terrain)
+        .insert_resource(geometry)
+        .insert_resource(ArenaMaterials {
+            stone: SubstanceId(1),
+            reinforced_stone: None,
+            bedrock: SubstanceId(2),
+            grass: SubstanceId(3),
+            dirt: SubstanceId(4),
+            fire: ElementId(1),
+        })
+        .insert_resource(ArenaReset::default())
+        .add_plugins(hex_arena::plugin);
+    for _ in 0..20 {
+        app.world_mut().run_schedule(ArenaTick);
+        app.world_mut().resource_mut::<ArenaSession>().bot_enabled = false;
+    }
+    assert!(
+        human(app.world()).grounded,
+        "fixture starts on actual support"
+    );
+    let tick = app.world().resource::<ArenaSession>().tick;
+    let feet = human(app.world()).feet;
+    app.insert_resource(GroundedWalkTrace::new(
+        GroundedWalkLimits::new(geometry.level_height),
+        tick,
+        feet,
+    ));
+    install_grounded_walk_observer(&mut app);
+    app
+}
+
+fn exercise_downward_step(drop_levels: i32, pause_in_air: bool) -> App {
+    let mut app = downward_step_fixture(drop_levels);
+    let mut paused = false;
+    for _ in 0..360 {
+        app.world_mut().resource_mut::<ArenaInput>().human = ActorIntent {
+            aim: Vec3::X,
+            movement: if human(app.world()).feet.x < 4.0 {
+                Vec2::Y
+            } else {
+                Vec2::ZERO
+            },
+            ..default()
+        };
+        app.world_mut().run_schedule(ArenaTick);
+        if pause_in_air && !paused && !human(app.world()).grounded {
+            let tick = app.world().resource::<ArenaSession>().tick;
+            let before =
+                serde_json::to_value(app.world().resource::<GroundedWalkTrace>()).expect("trace");
+            {
+                let mut terrain = app.world_mut().resource_mut::<ArenaTerrainView>();
+                terrain
+                    .residency
+                    .as_mut()
+                    .expect("finite fixture")
+                    .ready
+                    .clear();
+                terrain.revision += 1;
+                terrain.full_rebuild = true;
+            }
+            for _ in 0..30 {
+                app.world_mut().run_schedule(ArenaTick);
+            }
+            assert_eq!(
+                app.world().resource::<ArenaSession>().tick,
+                tick,
+                "streaming holds actual simulation"
+            );
+            assert_eq!(
+                serde_json::to_value(app.world().resource::<GroundedWalkTrace>())
+                    .expect("paused trace"),
+                before
+            );
+            {
+                let mut terrain = app.world_mut().resource_mut::<ArenaTerrainView>();
+                let residency = terrain.residency.as_mut().expect("finite fixture");
+                residency.ready = residency.catalogue.clone();
+                terrain.revision += 1;
+                terrain.full_rebuild = true;
+            }
+            paused = true;
+        }
+    }
+    assert!(
+        human(app.world()).feet.x >= 3.9,
+        "controller crossed the fixture ledge"
+    );
+    assert!(
+        human(app.world()).grounded,
+        "include actual landing and settling"
+    );
+    assert!(
+        !pause_in_air || paused,
+        "exercise a real airborne streaming pause"
+    );
+    app
+}
+
+#[test]
+fn grounded_walk_accepts_one_voxel_step_and_excludes_streaming_waits() {
+    let app = exercise_downward_step(1, true);
+    let trace = app.world().resource::<GroundedWalkTrace>();
+    assert!(
+        trace.failure.is_none(),
+        "{trace_failure:?}",
+        trace_failure = trace.failure
+    );
+    assert!(trace.completed_airborne_episodes > 0);
+    assert!(trace.maximum_unsupported_descent > 0.3);
+    assert!(trace.maximum_unsupported_descent <= trace.limits.maximum_unsupported_descent);
+    assert!(trace.maximum_airborne_ticks <= trace.limits.maximum_airborne_ticks);
+    assert_eq!(trace.observed_simulation_ticks, 360);
+}
+
+#[test]
+fn grounded_walk_rejects_a_large_fall_even_when_it_lands_safely() {
+    let app = exercise_downward_step(4, false);
+    let trace = app.world().resource::<GroundedWalkTrace>();
+    assert!(
+        trace.failure.is_some(),
+        "a dry safe landing must not approve a four-voxel fall"
+    );
+    assert!(trace.maximum_unsupported_descent > trace.limits.maximum_unsupported_descent);
+    assert!(trace.maximum_airborne_ticks > trace.limits.maximum_airborne_ticks);
+    assert!(trace.completed_airborne_episodes > 0);
+    assert!(!trace.airborne_at_end);
+}
+
+#[test]
+fn grounded_walk_counts_the_landing_sample_and_endpoint_settling() {
+    let mut trace = GroundedWalkTrace::new(GroundedWalkLimits::new(0.35), 0, Vec3::Y);
+    trace.observe(1, Vec3::Y * 0.8, false);
+    assert!(trace.failure.is_none());
+    trace.observe(2, Vec3::Y * 0.3, true);
+    assert!(
+        trace.failure.is_some(),
+        "the landing tick must retain the full fall"
+    );
+    assert!((trace.maximum_unsupported_descent - 0.7).abs() < 0.00001);
+    assert_eq!(trace.maximum_airborne_ticks, 2);
+}
+
 fn routes(world: &World) -> Vec<Route> {
     let overview = &world.resource::<StreamedArena>().overview;
     let anchor = |name: &str| Vec3::from_array(*overview.anchors.get(name).expect("review anchor"));
@@ -414,6 +761,12 @@ fn object_follower_remembers_side_and_rechecks_a_blocked_heading() {
 }
 
 fn block_reason(world: &World) -> Option<&'static str> {
+    if let Some(failure) = world
+        .get_resource::<GroundedWalkTrace>()
+        .and_then(|trace| trace.failure)
+    {
+        return Some(failure);
+    }
     let player = human(world);
     let session = world.resource::<ArenaSession>();
     let Some(progress) = session.grand_progress() else {
@@ -442,6 +795,7 @@ fn block_reason(world: &World) -> Option<&'static str> {
 
 fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_json::Value {
     let began = Instant::now();
+    install_grounded_walk_observer(app);
     let first = *route.points.first().expect("nonempty route");
     let start = match start_route(app, first, route.stacked) {
         Ok(start) => start,
@@ -450,6 +804,8 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         }
     };
     let first_tick = app.world().resource::<ArenaSession>().tick;
+    let limits = GroundedWalkLimits::new(app.world().resource::<ArenaVoxelGeometry>().level_height);
+    app.insert_resource(GroundedWalkTrace::new(limits, first_tick, start));
     let deadline = (began + ROUTE_LIMIT).min(total_deadline);
     let mut distance = 0.0_f32;
     let mut previous = start;
@@ -576,6 +932,9 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         {
             failed = Some("route endpoint did not settle onto clear dry support".into());
         }
+        if failed.is_none() && world.resource::<GroundedWalkTrace>().airborne_at_end {
+            failed = Some("route endpoint remained airborne after settling".into());
+        }
         let target = Vec3::from_array(*route.points.last().expect("nonempty route"));
         let remaining = human(world).feet.with_y(0.0).distance(target.with_y(0.0));
         if failed.is_none()
@@ -597,7 +956,7 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         "simulation_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
         "wall_seconds":began.elapsed().as_secs_f64(),"distance":distance,"maximum_auto_step":maximum_step,
         "object_detours":detours,"object_steering_trace":steering_trace,"completed_segments":completed,"required_segments":route.points.len()-1,
-        "waypoints":route.points,"samples":samples,
+        "waypoints":route.points,"samples":samples,"grounding":app.world().resource::<GroundedWalkTrace>(),
     })
 }
 
@@ -656,8 +1015,8 @@ fn actual_grand_ordinary_walking() {
             .iter()
             .all(|r| r.get("status").and_then(|v| v.as_str()) == Some("PASS"));
         let receipt = serde_json::json!({
-            "kind":"grand-ordinary-walking-r02","status":if results.len()==routes.len() && pass {"PASS"}else if pass {"PARTIAL"}else{"FAIL"},
-            "scope":"Real package and production ArenaInput/drive_simulation/ArenaTick. Relocations only at independent route starts. No jump, flight, glider, boat, teleport, spells, upgrades or controller changes. AI decisions disabled; body/static-object collision retained. Local object steering only; no terrain path search. Physical walking evidence, not native input/control feel.",
+            "kind":"grand-ordinary-walking-r03","status":if results.len()==routes.len() && pass {"PASS"}else if pass {"PARTIAL"}else{"FAIL"},
+            "scope":"Real package and production ArenaInput/drive_simulation/ArenaTick. Relocations only at independent route starts. No jump, flight, glider, boat, teleport, spells, upgrades or controller changes. Every completed simulation tick, including settling, enforces a one-voxel downward-step and ballistic airtime allowance from production physics; streaming holds add no airtime. AI decisions disabled; body/static-object collision retained. Local object steering only; no terrain path search. Physical walking evidence, not native input/control feel.",
             "package":package,"identity":identity,"selected_route":selected,"expected_routes":routes.len(),"route_names":routes.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "wall_seconds":started.elapsed().as_secs_f64(),"routes":results,
         });

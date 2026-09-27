@@ -216,6 +216,57 @@ def execute_admissions(binary: Path, output: Path, environment: dict[str, str], 
     return receipt
 
 
+
+def validate_walking_receipt(receipt: dict) -> None:
+    """Require per-simulation-tick one-voxel fall limits, including landing/settling."""
+    if receipt.get("kind") != "grand-ordinary-walking-r03" or receipt.get("status") != "PASS":
+        raise RuntimeError("Ordinary walking requires the current bounded-fall receipt")
+    routes = receipt.get("routes", [])
+    expected = receipt.get("route_names", [])
+    required_probes = {"forest_north", "forest_south", "forest_east", "forest_west",
+                       "river_bank_escape", "river_bank_along", "valley_crossing",
+                       "grand-west-foothill-crossing", "grand-west-foothill-uphill",
+                       "grand-lake-foothill-crossing", "grand-lake-foothill-uphill"}
+    if (receipt.get("selected_route") is not None or not required_probes <= set(expected)
+            or not any(route.get("category") == "authored_connection" for route in routes)
+            or receipt.get("expected_routes") != len(expected)
+            or len(expected) != len(set(expected))
+            or len(routes) != len(expected) or {route["name"] for route in routes} != set(expected)
+            or any(route.get("status") != "PASS"
+                   or route.get("completed_segments") != route.get("required_segments")
+                   or route.get("simulation_ticks", 0) <= 40 for route in routes)):
+        raise RuntimeError("Ordinary walking did not complete all declared r02 routes and independent crossings")
+    for route in routes:
+        grounding = route.get("grounding") or {}
+        limits = grounding.get("limits") or {}
+        positive = ("voxel_height", "automatic_step_height", "gravity", "ground_snap_distance",
+                    "collision_skin", "tick_seconds", "maximum_unsupported_descent")
+        if (grounding.get("contract") != "one-voxel-grounded-walk-v1"
+                or grounding.get("failure") is not None
+                or grounding.get("airborne_at_end") is not False
+                or any(type(limits.get(key)) not in (int, float)
+                       or not math.isfinite(limits[key]) or limits[key] <= 0 for key in positive)):
+            raise RuntimeError(f"{route['name']}: missing or invalid grounded-walking contract")
+        descent_limit = (min(limits["voxel_height"], limits["automatic_step_height"])
+                         + limits["ground_snap_distance"] + limits["collision_skin"])
+        airborne_limit = math.ceil(math.sqrt(2 * descent_limit / limits["gravity"])
+                                   / limits["tick_seconds"]) + 1
+        if (not math.isclose(limits["maximum_unsupported_descent"], descent_limit, rel_tol=1e-6)
+                or type(limits.get("maximum_airborne_ticks")) is not int
+                or limits["maximum_airborne_ticks"] != airborne_limit):
+            raise RuntimeError(f"{route['name']}: fall allowance is not derived from the physical step contract")
+        ticks = route["simulation_ticks"]
+        if (grounding.get("observed_simulation_ticks") != ticks
+                or any(type(grounding.get(key)) is not int or not 0 <= grounding[key] <= ticks
+                       for key in ("observed_simulation_ticks", "total_airborne_ticks",
+                                   "maximum_airborne_ticks", "completed_airborne_episodes"))
+                or grounding["maximum_airborne_ticks"] > airborne_limit
+                or type(grounding.get("maximum_unsupported_descent")) not in (int, float)
+                or not math.isfinite(grounding["maximum_unsupported_descent"])
+                or not 0 <= grounding["maximum_unsupported_descent"] <= limits["maximum_unsupported_descent"]):
+            raise RuntimeError(f"{route['name']}: walking exceeded or omitted its per-tick fall evidence")
+
+
 def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str],
                       *, sailing_start: str = "sailing_start") -> dict:
     if sailing_start not in ("sailing_start", "sailing_start_bay"):
@@ -238,26 +289,13 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     if result.returncode or "running 1 test" not in log_path.read_text():
         raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
     receipt = json.loads((data / f"{mode}.json").read_text())
-    kind = "grand-ordinary-walking-r02" if mode == "walking" else "grand-authored-sailing-v1"
+    kind = "grand-ordinary-walking-r03" if mode == "walking" else "grand-authored-sailing-v1"
     if receipt.get("kind") != kind or receipt.get("status") != "PASS":
         raise RuntimeError(f"Actual {mode} receipt did not report completion")
     if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
         raise RuntimeError(f"Actual {mode} used a different immutable package")
     if mode == "walking":
-        routes = receipt.get("routes", [])
-        expected = receipt.get("route_names", [])
-        required_probes = {"forest_north", "forest_south", "forest_east", "forest_west",
-                           "river_bank_escape", "river_bank_along", "valley_crossing",
-                           "grand-west-foothill-crossing", "grand-west-foothill-uphill",
-                           "grand-lake-foothill-crossing", "grand-lake-foothill-uphill"}
-        if (receipt.get("selected_route") is not None or not required_probes <= set(expected)
-                or not any(route.get("category") == "authored_connection" for route in routes)
-                or receipt.get("expected_routes") != len(expected)
-                or len(routes) != len(expected) or {route["name"] for route in routes} != set(expected)
-                or any(route.get("status") != "PASS"
-                       or route.get("completed_segments") != route.get("required_segments")
-                       or route.get("simulation_ticks", 0) <= 40 for route in routes)):
-            raise RuntimeError("Ordinary walking did not complete all declared r02 routes and independent crossings")
+        validate_walking_receipt(receipt)
     else:
         measurement = receipt.get("measurement", {})
         if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"
