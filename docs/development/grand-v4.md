@@ -111,14 +111,13 @@ process-memory or frame-rate claim.
 `--admissions` visits all fourteen actual encounter sites, checks their exact
 127 stable enemy identities and species, and verifies active/dormant checkpoint
 integrity. The restart clock fixture also covers a run longer than sixty hours.
-`--walking` exercises eleven ordinary walking routes through the real controller,
-including both riverbank escapes, cross-country hills, island landing and summit
-approaches. It requires completed simulation ticks and clear supported endpoints.
+`--walking` exercises the current authored routes and independent broad-area probes through the real controller,
+including independent forest crossings, riverbank escapes, and published stacked mountain/cave connections. It requires completed simulation ticks and clear supported endpoints.
 `--sailing` measures the authored crossing with one ordinary B input, live wind and
 unupgraded boat physics; its reported time is a measurement against the approximate
 45-second design reference, not an assumed success.
 
-The 36-view capture matrix is windowless and requires a clean committed candidate
+The 43-view capture matrix is windowless and requires a clean committed candidate
 and a package whose authoring signature matches current source. A `--view` subset
 is explicitly a partial diagnostic, never a completed full matrix. It
 records source and package hashes, renders, native state receipts and an initially
@@ -157,3 +156,22 @@ taste; stills and headless timing do not establish those qualities or 60 FPS.
 
 Rejected visual treatments, the multi-minute island plan and unrelated historical
 V3 cleanup remain excluded. Linear ticket reconciliation awaits reconnection.
+
+## Approved revision02 transfer
+
+The September26 user authorization approves the connected highland layout recorded in
+[the frozen design oracle](../planning/waves/grand-v4/approved-r02/provenance.json).
+The geography companion is an explicit source dependency, included byte-for-byte in
+the authoring signature. A plain compile stages that same companion beside its
+temporary source. Capture `--plain` explicitly selects plain terrain review; default
+captures require the dressed package. Neither mode can borrow the other's identity.
+
+Authored cameras carry final world positions and vertical orthographic spans. The
+ground cameras still wait for loaded, supported player-sized clearance and preserve
+the authored viewing pitch. Temporal walking endpoints also come from the current
+package. Physical route checks use exact XYZ supports so a different floor at the
+same horizontal position cannot count as reaching a Crystal stair waypoint.
+
+The revision02 capture matrix adds the connected Crystal/Frozen overview and three
+ordinary valley views of the mountain enclosure. They establish game transfer
+evidence; the older package04 measurements above remain historical.

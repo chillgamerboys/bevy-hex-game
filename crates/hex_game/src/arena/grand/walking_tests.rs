@@ -12,112 +12,95 @@ const STALL_TICKS: u64 = 600;
 const ROUTE_LIMIT: Duration = Duration::from_secs(180);
 const TOTAL_LIMIT: Duration = Duration::from_secs(1200);
 
-type Point = [f32; 2];
+type Point = [f32; 3];
 struct Route {
-    name: &'static str,
+    name: String,
     category: &'static str,
-    points: &'static [Point],
+    points: Vec<Point>,
+    stacked: bool,
 }
 
-// Coordinates describe independently selected broad areas and the authored
-// mountain shoulders. They do not reconstruct the producer's height function.
-const ROUTES: &[Route] = &[
-    Route {
-        name: "river_west_escape",
-        category: "bank_escape",
-        points: &[[-73., 270.], [-230., 270.]],
-    },
-    Route {
-        name: "river_east_escape",
-        category: "bank_escape",
-        points: &[[-21., 270.], [130., 270.]],
-    },
-    Route {
-        name: "island_landing_and_ascent",
-        category: "island",
-        points: &[
-            [-1099., 465.],
-            [-1118., 475.],
-            [-1131., 502.],
-            [-1184., 510.],
-            [-1238., 484.],
-            [-1240., 431.],
-            [-1207., 395.],
-            [-1161., 406.],
-            [-1145., 439.],
-            [-1170., 455.],
+fn routes(world: &World) -> Vec<Route> {
+    let overview = &world.resource::<StreamedArena>().overview;
+    let anchor = |name: &str| Vec3::from_array(*overview.anchors.get(name).expect("review anchor"));
+    let mut routes = Vec::new();
+    // Deliberately independent cross-country samples: these broad crossings do
+    // not follow the producer's graded route centerlines or search terrain.
+    let forest = anchor("forest");
+    for (name, offset) in [
+        ("forest_north", Vec3::NEG_Z * 90.0),
+        ("forest_south", Vec3::Z * 90.0),
+        ("forest_east", Vec3::X * 90.0),
+        ("forest_west", Vec3::NEG_X * 90.0),
+    ] {
+        routes.push(Route {
+            name: name.into(),
+            category: "cross_country",
+            points: vec![forest.to_array(), (forest + offset).to_array()],
+            stacked: false,
+        });
+    }
+    let bank = overview
+        .review_cameras
+        .get("grand-river-exit")
+        .expect("river bank camera");
+    let riverbank = Vec3::from_array(bank.eye);
+    let across = (Vec3::from_array(bank.target) - riverbank)
+        .with_y(0.0)
+        .normalize_or(Vec3::X);
+    for (name, side) in [
+        ("river_bank_escape", across),
+        ("river_bank_along", across.cross(Vec3::Y)),
+    ] {
+        routes.push(Route {
+            name: name.into(),
+            category: "bank_escape",
+            points: vec![riverbank.to_array(), (riverbank + side * 85.0).to_array()],
+            stacked: false,
+        });
+    }
+    let bank = overview
+        .review_cameras
+        .get("grand-valley-lake-bank")
+        .expect("valley bank camera");
+    let valley = Vec3::from_array(bank.eye);
+    routes.push(Route {
+        name: "valley_crossing".into(),
+        category: "cross_country",
+        points: vec![
+            valley.to_array(),
+            (valley + Vec3::new(-90.0, 0.0, 70.0)).to_array(),
         ],
-    },
-    Route {
-        name: "western_hill_north",
-        category: "cross_country",
-        points: &[[-240., 220.], [-240., 140.]],
-    },
-    Route {
-        name: "western_hill_south",
-        category: "cross_country",
-        points: &[[-240., 220.], [-240., 300.]],
-    },
-    Route {
-        name: "western_hill_west",
-        category: "cross_country",
-        points: &[[-240., 220.], [-320., 220.]],
-    },
-    Route {
-        name: "western_hill_east",
-        category: "cross_country",
-        points: &[[-240., 220.], [-160., 220.]],
-    },
-    Route {
-        name: "eastern_valley_diagonal",
-        category: "cross_country",
-        points: &[[480., 90.], [600., 200.], [400., 310.]],
-    },
-    Route {
-        name: "garden_ascent",
-        category: "mountain",
-        points: &[
-            [490., -110.],
-            [505., -185.],
-            [500., -310.],
-            [425., -405.],
-            [470., -525.],
-            [330., -535.],
-            [275., -490.],
-        ],
-    },
-    Route {
-        name: "western_massif_ascent",
-        category: "mountain",
-        points: &[
-            [-170., -115.],
-            [-400., -190.],
-            [-555., -300.],
-            [-550., -430.],
-            // Authored exterior neck between the inlet and buried library.
-            // The former upper excursion crossed offshore terrain.
-            [-500., -510.],
-            [-470., -545.],
-            [-440., -570.],
-            [-400., -575.],
-            [-400., -565.],
-        ],
-    },
-    Route {
-        name: "crystal_shoulder_ascent",
-        category: "mountain",
-        points: &[
-            [-105., -618.],
-            [10., -665.],
-            [55., -535.],
-            [-45., -450.],
-            [-179., -518.],
-            [-260., -625.],
-            [-380., -595.],
-            [-400., -565.],
-        ],
-    },
-];
+        stacked: false,
+    });
+    let view = world.resource::<ArenaTerrainView>();
+    let geometry = *world.resource::<ArenaVoxelGeometry>();
+    let sites = view
+        .expedition
+        .as_ref()
+        .expect("Grand exact route publication");
+    assert!(
+        !sites.routes.is_empty(),
+        "r02 must publish its actual stacked route supports"
+    );
+    for (name, route) in &sites.routes {
+        // Keeping every support preserves turns and stacked stair levels.
+        // Heights participate in waypoint completion, so crossing a spiral's
+        // plan projection on the wrong floor cannot count as an ascent.
+        let points = route
+            .supports
+            .iter()
+            .map(|support| support.coord.to_world(geometry.top(*support)).to_array())
+            .collect();
+        routes.push(Route {
+            name: name.clone(),
+            category: "authored_connection",
+            points,
+            stacked: true,
+        });
+    }
+    routes
+}
 
 fn human(world: &World) -> &hex_arena::Actor {
     world
@@ -172,7 +155,7 @@ fn body_state(world: &World) -> serde_json::Value {
 
 /// Setup clearance at a hex center using the actual production body height;
 /// final acceptance uses the gameplay owner's exact body/ground hook.
-fn clear_surface(world: &World, coord: HexCoord) -> Option<Vec3> {
+fn clear_surface(world: &World, coord: HexCoord, desired_height: Option<f32>) -> Option<Vec3> {
     let view = world.resource::<ArenaTerrainView>();
     let geometry = *world.resource::<ArenaVoxelGeometry>();
     let level = view
@@ -180,7 +163,16 @@ fn clear_surface(world: &World, coord: HexCoord) -> Option<Vec3> {
         .get(&coord)?
         .iter()
         .map(|s| s.top_level)
-        .max()?;
+        .min_by(|a, b| {
+            desired_height.map_or_else(
+                || b.cmp(a),
+                |height| {
+                    (geometry.top(TilePos::new(coord, *a)) - height)
+                        .abs()
+                        .total_cmp(&(geometry.top(TilePos::new(coord, *b)) - height).abs())
+                },
+            )
+        })?;
     let feet = coord.to_world(geometry.top(TilePos::new(coord, level)) + 0.02);
     if !ready(world, feet) {
         return None;
@@ -218,12 +210,11 @@ fn frame(app: &mut App, direction: Vec3) {
     app.update();
 }
 
-fn start_route(app: &mut App, point: Point) -> Result<Vec3, String> {
+fn start_route(app: &mut App, point: Point, stacked: bool) -> Result<Vec3, String> {
     app.world_mut().resource_mut::<ViewState>().pause();
     // A paused interest load is setup, not movement evidence. Its Y is only an
     // interest coordinate; exact supporting terrain selects the eventual start.
-    let [x, z] = point;
-    let interest = Vec3::new(x, 200., z);
+    let interest = Vec3::from_array(point);
     relocate(app, interest);
     let coord = HexCoord::from_world(interest);
     let mut candidates = coord.within_radius(2);
@@ -234,7 +225,7 @@ fn start_route(app: &mut App, point: Point) -> Result<Vec3, String> {
     });
     let feet = candidates
         .into_iter()
-        .find_map(|c| clear_surface(app.world(), c))
+        .find_map(|c| clear_surface(app.world(), c, stacked.then_some(interest.y)))
         .ok_or_else(|| {
             format!("no clear real dry starting support within two hexes of {point:?}")
         })?;
@@ -431,7 +422,7 @@ fn block_reason(world: &World) -> Option<&'static str> {
 fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_json::Value {
     let began = Instant::now();
     let first = *route.points.first().expect("nonempty route");
-    let start = match start_route(app, first) {
+    let start = match start_route(app, first, route.stacked) {
         Ok(start) => start,
         Err(error) => {
             return serde_json::json!({"name":route.name,"category":route.category,"status":"FAIL","phase":"setup","error":error});
@@ -449,8 +440,8 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
     let mut maximum_step = 0.0_f32;
     let mut sample_tick = first_tick;
     for (index, point) in route.points.iter().skip(1).enumerate() {
-        let &[x, z] = point;
-        let target = Vec3::new(x, 0., z);
+        let authored = Vec3::from_array(*point);
+        let target = authored.with_y(0.0);
         let segment_start = human(app.world()).feet;
         let segment_distance = segment_start.with_y(0.).distance(target);
         let tick_budget = u64::try_from(
@@ -466,7 +457,7 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
             let feet = human(app.world()).feet;
             let tick = app.world().resource::<ArenaSession>().tick;
             let remaining = feet.with_y(0.).distance(target);
-            if remaining <= REACHED {
+            if remaining <= REACHED && (!route.stacked || (feet.y - authored.y).abs() <= 0.8) {
                 completed += 1;
                 break;
             }
@@ -564,9 +555,12 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         {
             failed = Some("route endpoint did not settle onto clear dry support".into());
         }
-        let [x, z] = *route.points.last().expect("nonempty route");
-        let remaining = human(world).feet.with_y(0.0).distance(Vec3::new(x, 0.0, z));
-        if failed.is_none() && remaining > REACHED {
+        let target = Vec3::from_array(*route.points.last().expect("nonempty route"));
+        let remaining = human(world).feet.with_y(0.0).distance(target.with_y(0.0));
+        if failed.is_none()
+            && (remaining > REACHED
+                || (route.stacked && (human(world).feet.y - target.y).abs() > 0.8))
+        {
             failed = Some("settling carried the player outside the final waypoint".into());
         }
         samples.push(serde_json::json!({
@@ -602,15 +596,16 @@ fn actual_grand_ordinary_walking() {
         "use fresh acceptance output"
     );
     let selected = std::env::var("HEX_GRAND_WALK_ROUTE").ok();
-    if let Some(name) = &selected {
-        assert!(
-            ROUTES.iter().any(|r| r.name == name),
-            "unknown route {name}"
-        );
-    }
     let started = Instant::now();
     let deadline = started + TOTAL_LIMIT;
     let mut app = fixture();
+    let routes = routes(app.world());
+    if let Some(name) = &selected {
+        assert!(
+            routes.iter().any(|route| &route.name == name),
+            "unknown route {name}"
+        );
+    }
     let identity = app
         .world()
         .resource::<ArenaTerrainView>()
@@ -618,9 +613,9 @@ fn actual_grand_ordinary_walking() {
         .clone()
         .expect("package identity");
     let mut results = Vec::new();
-    for route in ROUTES
+    for route in routes
         .iter()
-        .filter(|r| selected.as_ref().is_none_or(|name| name == r.name))
+        .filter(|r| selected.as_ref().is_none_or(|name| name == &r.name))
     {
         // Each start is an independent fixture. A prior failure must not carry
         // a respawn, velocity, HP change or acquired state into the next probe.
@@ -640,9 +635,9 @@ fn actual_grand_ordinary_walking() {
             .iter()
             .all(|r| r.get("status").and_then(|v| v.as_str()) == Some("PASS"));
         let receipt = serde_json::json!({
-            "kind":"grand-ordinary-walking-v1","status":if results.len()==ROUTES.len() && pass {"PASS"}else if pass {"PARTIAL"}else{"FAIL"},
+            "kind":"grand-ordinary-walking-r02","status":if results.len()==routes.len() && pass {"PASS"}else if pass {"PARTIAL"}else{"FAIL"},
             "scope":"Real package and production ArenaInput/drive_simulation/ArenaTick. Relocations only at independent route starts. No jump, flight, glider, boat, teleport, spells, upgrades or controller changes. AI decisions disabled; body/static-object collision retained. Local object steering only; no terrain path search. Physical walking evidence, not native input/control feel.",
-            "package":package,"identity":identity,"selected_route":selected,"expected_routes":ROUTES.len(),
+            "package":package,"identity":identity,"selected_route":selected,"expected_routes":routes.len(),"route_names":routes.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "wall_seconds":started.elapsed().as_secs_f64(),"routes":results,
         });
         std::fs::write(

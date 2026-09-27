@@ -18,21 +18,14 @@ struct Route {
     end: Vec3,
     river: bool,
 }
-fn route(view: &str) -> Option<Route> {
-    let (name, a, b, reverse, river) = match view {
-        "grand-motion-forest-forward" => {
-            ("forest-forward", [-240., 220.], [-240., 175.], false, false)
-        }
-        "grand-motion-forest-reverse" => {
-            ("forest-reverse", [-240., 220.], [-240., 175.], true, false)
-        }
-        "grand-motion-river-forward" => ("river-forward", [-18., 235.], [-56., 260.], false, true),
-        "grand-motion-river-reverse" => ("river-reverse", [-18., 235.], [-56., 260.], true, true),
+fn route(view: &str, start: Vec3, end: Vec3) -> Option<Route> {
+    let (name, reverse, river) = match view {
+        "grand-motion-forest-forward" => ("forest-forward", false, false),
+        "grand-motion-forest-reverse" => ("forest-reverse", true, false),
+        "grand-motion-river-forward" => ("river-forward", false, true),
+        "grand-motion-river-reverse" => ("river-reverse", true, true),
         _ => return None,
     };
-    let [ax, az] = a;
-    let [bx, bz] = b;
-    let (start, end) = (Vec3::new(ax, 200., az), Vec3::new(bx, 200., bz));
     Some(Route {
         name,
         start: if reverse { end } else { start },
@@ -40,6 +33,7 @@ fn route(view: &str) -> Option<Route> {
         river,
     })
 }
+
 pub(super) fn is_view(view: &str) -> bool {
     view.starts_with("grand-motion-")
 }
@@ -47,6 +41,8 @@ pub(super) fn is_view(view: &str) -> bool {
 #[derive(Resource)]
 pub(super) struct Run {
     route: Route,
+    view: String,
+    resolved: bool,
     began: Instant,
     placed: Option<u64>,
     start: Option<(u64, u32, Vec3)>,
@@ -59,7 +55,7 @@ pub(super) struct Run {
 }
 impl Run {
     pub(super) fn loading_interest(&self) -> Option<Vec3> {
-        self.placed.is_none().then_some(self.route.start)
+        (self.resolved && self.placed.is_none()).then_some(self.route.start)
     }
 }
 pub(super) fn install(app: &mut App, state: &ViewState, map: ArenaMap) -> Result<(), String> {
@@ -69,9 +65,12 @@ pub(super) fn install(app: &mut App, state: &ViewState, map: ArenaMap) -> Result
     if map != ArenaMap::GrandV4 || !cfg!(feature = "test-support") {
         return Err("Grand temporal capture requires Grand V4 and the test-support feature".into());
     }
-    let route = route(&state.capture_view).ok_or("Unknown Grand temporal route")?;
+    let route =
+        route(&state.capture_view, Vec3::ZERO, Vec3::ZERO).ok_or("Unknown Grand temporal route")?;
     app.insert_resource(Run {
         route,
+        view: state.capture_view.clone(),
+        resolved: false,
         began: Instant::now(),
         placed: None,
         start: None,
@@ -175,7 +174,7 @@ fn walking_intent(route: Route) -> ActorIntent {
     let direction = (route.end - route.start)
         .with_y(0.)
         .normalize_or(Vec3::NEG_Z);
-    let across = Vec3::new(0.55, 0., 0.835);
+    let across = direction.cross(Vec3::Y);
     let forward = (direction
         + if route.river {
             across * 0.75
@@ -204,6 +203,41 @@ pub(super) fn input(world: &mut World) -> Result<ActorIntent, String> {
             return Ok(ActorIntent::default());
         }
         if !world.resource::<ArenaSession>().is_grand_run() {
+            return Ok(ActorIntent::default());
+        }
+        if !run.resolved {
+            let Some(streamed) = world.get_resource::<StreamedArena>() else {
+                return Ok(ActorIntent::default());
+            };
+            let name = if run.route.river {
+                "grand-motion-river-forward"
+            } else {
+                "grand-motion-forest-forward"
+            };
+            let camera = streamed
+                .overview
+                .review_cameras
+                .get(name)
+                .ok_or_else(|| format!("Package lacks authored temporal route {name}"))?;
+            run.route = route(
+                &run.view,
+                Vec3::from_array(camera.eye),
+                Vec3::from_array(camera.target),
+            )
+            .ok_or("Unknown Grand temporal route")?;
+            if run
+                .route
+                .start
+                .with_y(0.0)
+                .distance(run.route.end.with_y(0.0))
+                < 40.0
+            {
+                return Err(
+                    "Authored temporal route is too short for the continuous capture interval"
+                        .into(),
+                );
+            }
+            run.resolved = true;
             return Ok(ActorIntent::default());
         }
         if run.placed.is_none() {
@@ -451,8 +485,10 @@ mod tests {
             ("grand-motion-forest-forward", "grand-motion-forest-reverse"),
             ("grand-motion-river-forward", "grand-motion-river-reverse"),
         ] {
-            let a = route(forward).expect("route");
-            let b = route(reverse).expect("route");
+            let start = Vec3::new(100.0, 200.0, -100.0);
+            let end = start + Vec3::X * 60.0;
+            let a = route(forward, start, end).expect("route");
+            let b = route(reverse, start, end).expect("route");
             assert_eq!(a.start, b.end);
             assert_eq!(a.end, b.start);
             let start = HexCoord::from_world(a.start);

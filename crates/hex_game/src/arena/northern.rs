@@ -753,6 +753,37 @@ fn capture_pose(
 ) -> Option<CapturePose> {
     let map = &streamed.overview;
     let spawn = Vec3::from_array(map.player_spawn);
+    if let Some(authored) = map.review_cameras.get(view) {
+        let position = Vec3::from_array(authored.eye);
+        let target = Vec3::from_array(authored.target);
+        if authored.ground {
+            let human = session.human_actor_id()?;
+            let actor = session.actors.iter().find(|actor| actor.id == human)?;
+            let mut pose = ground_capture_pose(
+                terrain,
+                geometry,
+                position,
+                target,
+                map.sea_level,
+                GroundCaptureProfile {
+                    eye: actor.eye().y - actor.feet.y,
+                    height: actor.body_dimensions().y,
+                    radius: actor.body_dimensions().x * 0.5,
+                },
+            );
+            // Ground admission moves the eye onto real, loaded support. Keep the
+            // authored upward/downward sightline so enclosure views still test
+            // the intended mountain skyline instead of flattening their pitch.
+            pose.camera = authored_ground_direction(pose.camera.translation, position, target);
+            return Some(pose);
+        }
+        return Some(CapturePose {
+            camera: Transform::from_translation(position).looking_at(target, Vec3::Y),
+            interest: Vec3::from_array(authored.interest),
+            overview_height: authored.orthographic_span,
+            ground_pending: false,
+        });
+    }
     if matches!(view, "northern-overview" | "grand-overview") {
         return Some(overview_pose(
             Vec2::from_array(map.origin_xz),
@@ -981,6 +1012,11 @@ struct GroundCaptureProfile {
     eye: f32,
     height: f32,
     radius: f32,
+}
+
+fn authored_ground_direction(position: Vec3, original_eye: Vec3, target: Vec3) -> Transform {
+    let direction = (target - original_eye).normalize_or(Vec3::NEG_Z);
+    Transform::from_translation(position).looking_at(position + direction * 30.0, Vec3::Y)
 }
 
 fn ground_capture_pose(
@@ -1276,6 +1312,18 @@ mod tests {
         let site = waterline_site(&terrain, geometry, spawn, bay, 10.0)
             .expect("the admitted deep interval is suitable for both water views");
         assert_eq!(HexCoord::from_world(site), deep);
+    }
+
+    #[test]
+    fn authored_ground_camera_keeps_mountain_sightline_after_support_admission() {
+        let original = Vec3::new(70.0, 187.7, 55.0);
+        let target = Vec3::new(376.0, 363.0, -605.0);
+        let grounded = Vec3::new(69.28, 186.13, 55.5);
+        let pose = authored_ground_direction(grounded, original, target);
+        let expected = (target - original).normalize();
+        assert!(pose.translation.distance(grounded) < 0.0001);
+        assert!(Vec3::from(pose.forward()).distance(expected) < 0.0001);
+        assert!(pose.forward().y > 0.2);
     }
 
     #[test]

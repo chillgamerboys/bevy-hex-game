@@ -231,19 +231,24 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     if result.returncode or "running 1 test" not in log_path.read_text():
         raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
     receipt = json.loads((data / f"{mode}.json").read_text())
-    kind = "grand-ordinary-walking-v1" if mode == "walking" else "grand-authored-sailing-v1"
+    kind = "grand-ordinary-walking-r02" if mode == "walking" else "grand-authored-sailing-v1"
     if receipt.get("kind") != kind or receipt.get("status") != "PASS":
         raise RuntimeError(f"Actual {mode} receipt did not report completion")
     if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
         raise RuntimeError(f"Actual {mode} used a different immutable package")
     if mode == "walking":
         routes = receipt.get("routes", [])
-        if (receipt.get("selected_route") is not None or receipt.get("expected_routes") != 11
-                or len(routes) != 11 or len({route["name"] for route in routes}) != 11
+        expected = receipt.get("route_names", [])
+        required_probes = {"forest_north", "forest_south", "forest_east", "forest_west",
+                           "river_bank_escape", "river_bank_along", "valley_crossing"}
+        if (receipt.get("selected_route") is not None or not required_probes <= set(expected)
+                or not any(route.get("category") == "authored_connection" for route in routes)
+                or receipt.get("expected_routes") != len(expected)
+                or len(routes) != len(expected) or {route["name"] for route in routes} != set(expected)
                 or any(route.get("status") != "PASS"
                        or route.get("completed_segments") != route.get("required_segments")
                        or route.get("simulation_ticks", 0) <= 40 for route in routes)):
-            raise RuntimeError("Ordinary walking did not complete all eleven live routes")
+            raise RuntimeError("Ordinary walking did not complete all declared r02 routes and independent crossings")
     else:
         measurement = receipt.get("measurement", {})
         if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"
@@ -263,7 +268,7 @@ def main() -> None:
     parser.add_argument("--case", action="append", choices=("land", "boat", "air"), dest="cases")
     parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
     parser.add_argument("--admissions", action="store_true", help="Also verify all fourteen actual-package enemy parties using the same test build")
-    parser.add_argument("--walking", action="store_true", help="Also walk all eleven actual-package terrain routes with ordinary movement")
+    parser.add_argument("--walking", action="store_true", help="Also walk all authored connections and independent r02 crossings with ordinary movement")
     parser.add_argument("--sailing", action="store_true", help="Also measure the authored unupgraded boat crossing with production input")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
     parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")

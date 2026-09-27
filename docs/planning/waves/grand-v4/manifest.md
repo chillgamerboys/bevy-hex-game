@@ -82,7 +82,8 @@ Existing ArenaTick, exact TilePos, ArenaExpeditionSites, ArenaAvailability, fini
   branch: feat/grand-r02-runtime
   owns:
     - "crates/hex_map/src/arena/streamed/**"
-    - "crates/hex_world_runtime/** (only necessary geography envelope adaptation)"
+    - "crates/hex_map/src/v4/river.rs (shared presentation helper only)"
+    - "crates/hex_world_runtime/** (envelope and sparse edit query only)"
   dispatch_blockers: []
   merge_blockers: [L4]
   fences: [preserve-gameplay-and-saves, approved-r02-relationships]
@@ -396,3 +397,9 @@ at measured scale; fresh matching cameras establish transfer fidelity before den
 dressing. Final combined acceptance is still required. Prior package04 passes are
 historical, not evidence for this changed geography. No native play window is opened
 without the user's play request or approval of a named live review.
+
+L6 additionally owns the narrow shared river-material helper in `hex_map/src/v4/river.rs`
+and a read-only sparse edit range query in the finite session. These reuse detailed
+water presentation and invalidate far faces without changing water physics or the
+persistence format. The common authored-camera/inland-water schema landed first as
+7262bf3; application consumers follow that producer vocabulary.
