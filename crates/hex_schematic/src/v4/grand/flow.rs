@@ -2,13 +2,13 @@
 use super::*;
 
 /// Shared absolute longitudinal chart for revision-02's south-flowing river.
-/// Every authored directed edge must strictly increase this projection.
+/// Horizontal part of the shared chart; descent also advances its vertical part.
 pub const RIVER_PHASE_DIRECTION: [f32; 2] = [0.03, 0.9995499];
 
-fn r02_progress(p: WorldHex) -> f64 {
+fn r02_progress(p: WorldHex, top: i32) -> f64 {
     let [x, z] = world_xz(p);
     let [dx, dz] = RIVER_PHASE_DIRECTION;
-    x * f64::from(dx) + z * f64::from(dz)
+    x * f64::from(dx) + z * f64::from(dz) - f64::from(top) * LEVEL_HEIGHT
 }
 
 // The retained pre-r02 fixtures have their original southwest chart.
@@ -156,13 +156,13 @@ impl GrandCompiler {
                     }
                 }
             }
-            let mut ordered: Vec<_> = water.keys().copied().collect();
-            ordered.sort_by(|a, b| r02_progress(*b).total_cmp(&r02_progress(*a)));
+            let mut ordered: Vec<_> = water.values().collect();
+            ordered.sort_by(|a, b| {
+                r02_progress(b.column, b.top).total_cmp(&r02_progress(a.column, a.top))
+            });
             let mut connected = std::collections::BTreeSet::new();
-            for p in ordered {
-                let Some(liquid) = water.get(&p) else {
-                    continue;
-                };
+            for liquid in ordered {
+                let p = liquid.column;
                 if self.r02_receiver(reach, liquid) {
                     connected.insert(p);
                     continue;
@@ -170,13 +170,16 @@ impl GrandCompiler {
                 let next = DIRS
                     .into_iter()
                     .map(|(q, r)| WorldHex::new(p.q + q, p.r + r))
-                    .filter(|n| connected.contains(n) && r02_progress(*n) > r02_progress(p))
+                    .filter(|n| connected.contains(n))
                     .filter_map(|n| water.get(&n))
-                    .filter(|n| n.top <= liquid.top)
+                    .filter(|n| {
+                        n.top <= liquid.top
+                            && r02_progress(n.column, n.top) > r02_progress(p, liquid.top)
+                    })
                     .min_by(|a, b| {
-                        a.top
-                            .cmp(&b.top)
-                            .then_with(|| r02_progress(b.column).total_cmp(&r02_progress(a.column)))
+                        a.top.cmp(&b.top).then_with(|| {
+                            r02_progress(b.column, b.top).total_cmp(&r02_progress(a.column, a.top))
+                        })
                     });
                 if let Some(next) = next {
                     out.insert(
@@ -192,7 +195,9 @@ impl GrandCompiler {
             if let Some(liquid) = water
                 .values()
                 .filter(|l| !connected.contains(&l.column))
-                .max_by(|a, b| r02_progress(a.column).total_cmp(&r02_progress(b.column)))
+                .max_by(|a, b| {
+                    r02_progress(a.column, a.top).total_cmp(&r02_progress(b.column, b.top))
+                })
             {
                 let neighbors: Vec<_> = DIRS
                     .into_iter()
@@ -202,7 +207,9 @@ impl GrandCompiler {
                             p,
                             self.column(p).1.map(|l| l.top),
                             connected.contains(&p),
-                            r02_progress(p) > r02_progress(liquid.column),
+                            water.get(&p).is_some_and(|n| {
+                                r02_progress(p, n.top) > r02_progress(liquid.column, liquid.top)
+                            }),
                         )
                     })
                     .collect();

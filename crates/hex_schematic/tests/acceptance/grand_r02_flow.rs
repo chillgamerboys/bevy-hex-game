@@ -122,10 +122,10 @@ fn distance([x, z]: [f64; 2], [ax, az]: [f64; 2], [bx, bz]: [f64; 2]) -> f64 {
     let t = (((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)).clamp(0., 1.);
     (x - ax - t * dx).hypot(z - az - t * dz)
 }
-fn chart(p: WorldHex) -> f64 {
+fn chart(p: WorldHex, top: i32) -> f64 {
     let [x, z] = world_xz(p);
     let [dx, dz] = RIVER_PHASE_DIRECTION;
-    x * f64::from(dx) + z * f64::from(dz)
+    x * f64::from(dx) + z * f64::from(dz) - f64::from(top) * LEVEL_HEIGHT
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn all_r02_channel_paths_publish_exact_downhill_edges_and_reach_receiving_water(
             assert_eq!(at.checked_distance(next.column)?, 1);
             assert_eq!(next.level, target.top - 1);
             assert!(
-                target.top <= liquid.top && chart(next.column) > chart(at),
+                target.top <= liquid.top && chart(next.column, target.top) > chart(at, liquid.top),
                 "forward downhill graph edge"
             );
             let column = chunks

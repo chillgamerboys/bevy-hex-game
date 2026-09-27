@@ -237,8 +237,8 @@ mod tests {
             );
         }
         // The producer validates that every actual neighbor link advances the
-        // horizontal chart and never rises. Cover each admitted hex direction;
-        // ordinary steps and full falls add progress without phase reversal.
+        // full 3D chart and never rises. A descending westward edge can advance
+        // that chart even though its horizontal component points backwards.
         let mut admitted_directions = 0;
         for (q, r) in [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)] {
             let [x, z] = hex_schematic::v4::northern::world_xz(WorldHex::new(q, r));
@@ -257,6 +257,10 @@ mod tests {
             }
         }
         assert_eq!(admitted_directions, 3);
+        // A real bend on revision02 falls flows one hex west and seven levels
+        // down. Rejecting horizontal reversal alone incorrectly strands it.
+        let west_drop = Vec3::new(-3.0_f32.sqrt(), -7.0 * 0.35, 0.0);
+        assert!(shader_phase(&current.extension.parameters, at + west_drop) > start_phase);
         let shader = include_str!("../../../../assets/shaders/grand_river.wgsl");
         assert!(
             !shader.contains("input.world_normal"),
@@ -269,8 +273,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and Bevy system errors."
     )]
-    fn saved_clock_drives_all_styles_independently_of_camera_and_rejects_nonfinite_time(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn saved_clock_drives_all_styles_independently_of_camera_and_rejects_nonfinite_time()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut world = World::new();
         world.init_resource::<Assets<RiverMaterial>>();
         let handles: Vec<_> = [Style::Current, Style::Rapid, Style::Fall]
