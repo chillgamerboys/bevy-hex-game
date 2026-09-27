@@ -9,20 +9,27 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-**Grand V4 — corrective candidate, 2026-09-26.** `wave/grand-v4` preserves the
+**Grand V4 — geography rebuild, 2026-09-27.** `wave/grand-v4` preserves the
 playable `873a2c37` baseline from draft PRs #222/#223 and adds the seven-times
 mainland and independently enlarged Crystal Ascent, five cumulative shrines,
 127 authored enemies, Shadow-earned teleport, durable resume and shrine respawn.
-The earlier final4 terrain failed the user's traversal review. The replacement
-uses broad lowlands, accessible banks/coasts, graded mountain shoulders and the
-earlier Dragon/Goblin V4 forest recipes. At `c8f1b8e200442621137c1182f4b65e81f3594fb8`,
-strict package `4216780698166138326` passes all eleven ordinary controller walking
-routes, land/boat/air process restart, three streaming circuits and all fourteen
-encounter admissions. The unupgraded crossing measures 43.9 simulation seconds.
-Staged safe-ground respawn also passes current-dependency app checks. The inherited
-map lint repairs are integrated, but the full selector gate remains incomplete.
-Fresh presentation review and native performance/control acceptance remain separate
-requirements. This is **not delivered on `dev`**.
+The user rejected the earlier terrain and approved a revised composition before
+production rebuilding. Plain diagnostic package `4642324525893473046`, from clean
+`48681cae80a3524be934ae66a1e875c43a0cd074`, lowers relief while preserving physical
+player/tree dimensions and joins Crystal, Frozen Woods and the hidden garden lake
+within one mountain complex. Nine actual views show broader lower ground and a
+corrected lake-bed color policy, but presentation is not accepted: distant/detail
+transitions and an obstructed waterfall approach remain. Selected western foothill,
+mixed walk/swim/walk, garden, Crystal and Frozen controllers pass. Lake-foot uphill
+still stalls near its target; a separate exposed root-corridor roof also needs repair.
+This plain package has no trees or buildings and is not a completed expedition.
+
+Earlier package `4216780698166138326` at `c8f1b8e` retains the land/boat/air restart,
+three streaming circuits, fourteen encounter admissions and 43.9-second sailing
+evidence. Those results do not validate the redesigned world. Durable gameplay and
+staged safe-ground respawn remain implemented; dressed-world integration, full
+combined CI, native control feel and measured performance are still open. This is
+**not delivered on `dev`**.
 See the [candidate guide](../development/grand-v4.md) and
 [integration record](waves/grand-v4/manifest.md). Linear reconciliation is unverified
 until the connector is reconnected.

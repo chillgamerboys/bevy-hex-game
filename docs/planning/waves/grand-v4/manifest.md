@@ -26,27 +26,51 @@ with the connected mountain envelope. All Cargo work remains serialized through 
 shared target lock. No new renderer initiative,
 decoration expansion or broad acceptance rerun precedes the next meaningful terrain picture.
 
-Latest actual package is `compiled-r02-plain-05`, built from clean `25fc04a` with
-fingerprint `7001206694272818014`. Strict compilation/readback preserves mainland
-6.999775× and Crystal 7.005680×. Nine fresh windowless views show a connected range
-and broader lower-foot bands, but overall visual review fails: upper fronts remain
-heavy walls and Frozen Woods still reads as a shelf. The waterfall approach frame
-hides receiving water behind a foreground buttress, so that composition remains
-unresolved. The separate surface survey and actual controller receipts are retained.
-West crossing/uphill, mixed walking/swimming/walking, and garden/Crystal/Frozen
-controllers pass; lake-foot uphill stalls about 50m into its route. This is a plain
-diagnostic package with zero dressing, not expedition or native-feel acceptance.
+Latest actual package is `compiled-r02-plain-06`, built from clean
+`48681cae80a3524be934ae66a1e875c43a0cd074`, fingerprint `4642324525893473046`.
+Strict compilation/readback preserves mainland 6.999775× and Crystal 7.005680×.
+Terrain relief is now 0.70 of the previous draft; physical player/architecture
+clearance and the 235.451-unit World Tree remain unchanged. Frozen follows a rolling
+saddle, unequal surrounding ridges contain the upper lake, and adapted library
+stairs preserve body clearance. The source gate passes 66 Grand tests and scoped
+Clippy. Inland wet beds now retain stone instead of terrestrial moss/snow panels;
+the actual paired Crystal/Frozen views confirm that color repair.
 
-The next isolated geography diagnostic lowers authored terrain elevation to 0.70,
-preserving horizontal areas, physical player/architecture clearance and the World
-Tree's existing physical dimensions. It replaces the broad Frozen flattening with a
-rolling mountain saddle and makes natural basin terrain supply lake containment.
-Compressed stair layouts need fewer/wider turns, not relaxed headroom or exterior
-cover mounds. Inland wet-bed material selection also needs correction: actual lake
-samples have identical water height/depth but expose terrestrial moss/snow caps.
-The durable gameplay/save implementation is retained; dressed-world integration,
-combined CI, native feel and measured performance remain open. Weekly usage was 8%
-at this checkpoint; the hard stop remains 50% consumed.
+All nine plain06 originals and the complete contact sheet were independently
+inspected. Lower proportions and broad foreground improve, while the steep upper
+scenic faces, conspicuous bare Frozen snow mass and detailed/distant transitions
+still limit presentation. The waterfall approach again hides receiving water behind
+foreground terrain; this frame is BLOCKED for the intended composition. These
+stills establish neither native movement feel nor visual acceptance.
+
+Actual controller results: western foothill crossing/uphill, same-endpoint mixed
+walk/swim/walk, and garden/Crystal/Frozen routes pass their selected scopes.
+Lake-foot uphill now travels 159.95 units but stalls 7.89 horizontal units before
+the unchanged target, near model [180.35,381.08]. The earlier plain05 failure after
+about 50m is retained. No endpoint or physical movement limit has been relaxed.
+
+The fixed 653,261-column emitted domain grows its largest one-level dry component
+from 427,802 to 475,844: 48,550 gained and 508 lost. Losses include 301 sea-edge
+quantization cells, 202 exposed root-approach cells and five other dry cells.
+This graph is diagnostic, not a controller/body or overall traversal pass. The
+202-cell cluster is a real root-corridor roof breach after lowering terrain. L4 is
+preparing a separate deeper root datum and natural-ceiling repair while preserving
+the existing physical room, ribs, roof and body-clearance requirements.
+
+L6 has a newly bounded renderer trial on `fix/grand-inland-boundary-ownership`,
+based on `48681ca`, independently of its banked matte experiment. Companion data
+proves an immutable water-boundary corner is raised 35.35 units by the old
+corner-max transition. The default-off trial changes only face ownership at that
+interface; it must preserve true cliffs, stacked voids, caps and bounded meshes.
+It requires focused checks and paired actual pictures before integration. No
+terrain or shader change may substitute for that proof. Root remains the sole
+integration writer; Cargo is serialized, with L4's root repair gate before L6.
+
+Receipts are retained under task `outputs/grand-r02-plain06-pipeline.json`,
+`work/grand-plain06-independent-review-01`, emitted/membership diagnostics and the
+two plain06 controller directories. The pipeline is FAIL due to lake-foot uphill;
+the package has zero dressing. Dressed-world integration, combined CI, native feel
+and measured performance remain open. The hard stop remains 50% weekly usage consumed.
 
 Status: September 26 revision02 approved; production geography transfer in progress
 Wave: `wave/grand-v4`
