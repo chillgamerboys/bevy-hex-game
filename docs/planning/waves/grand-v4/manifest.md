@@ -20,7 +20,7 @@ export. L6 (`work/grand-runtime`) only validates the existing default-off far-ma
 it is independent at dispatch and must demonstrate a visible improvement before integration.
 L6's default-off far-matte experiment is now banked on `work/grand-runtime` at
 `b9a1e30`: nine tests and scoped Clippy passed, but paired actual captures did not
-show enough visual improvement to integrate it. The lane is stopped. L4's continuous
+show enough visual improvement to integrate it. That experiment is stopped. L4's continuous
 dry-reach bank repair is integrated at `0eb90ba`; actual-package validation follows
 with the connected mountain envelope. All Cargo work remains serialized through the
 shared target lock. No new renderer initiative,
@@ -53,9 +53,20 @@ The fixed 653,261-column emitted domain grows its largest one-level dry componen
 from 427,802 to 475,844: 48,550 gained and 508 lost. Losses include 301 sea-edge
 quantization cells, 202 exposed root-approach cells and five other dry cells.
 This graph is diagnostic, not a controller/body or overall traversal pass. The
-202-cell cluster is a real root-corridor roof breach after lowering terrain. L4 is
-preparing a separate deeper root datum and natural-ceiling repair while preserving
-the existing physical room, ribs, roof and body-clearance requirements.
+202-cell cluster is a real root-corridor roof breach after lowering terrain. L4's
+separate repair `6923941` is integrated as `e02cd98`: all root frames/interior
+endpoints move from model floor36 to35 and closed root ceilings fit below natural
+ground. All 67 Grand tests and scoped schematic Clippy pass; the complete 559-column
+closed ribbon (341 outside the room) retains exterior terrain and physical body
+clearance. The 686-column room retains at least six natural roof levels above its
+unchanged ribs, exceeding the existing four-level contract. Actual new-package
+validation is pending; this does not repair the immutable plain06 artifact in place.
+
+The remaining lake-foot controller block occurs where the screening ridge's broad
+lower slope steepens, rather than at an isolated column or export discontinuity.
+L4 next reshapes that ridge's lower tail as one coherent shallow toe, preserving
+the steep upper ridge and lake enclosure. The original controller endpoints and
+limits remain unchanged; fixed-domain loss/gain and cave clearance stay explicit.
 
 L6 has a newly bounded renderer trial on `fix/grand-inland-boundary-ownership`,
 based on `48681ca`, independently of its banked matte experiment. Companion data
