@@ -116,7 +116,8 @@ pub(super) fn coast_reference(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f
         }
     }
     h += high + land * hills;
-    finish_terrain(d, [x, z], h)
+    // Interior shore/bed refinements must not redefine the frozen coastline.
+    finish_terrain_profiled(d, [x, z], h, false)
 }
 
 /// Actual mountain interior: broad gentle aprons support smaller steep cores.
@@ -208,7 +209,16 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
     finish_terrain(d, [x, z], height)
 }
 
-fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f64 {
+fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
+    finish_terrain_profiled(d, [x, z], h, true)
+}
+
+fn finish_terrain_profiled(
+    d: &GrandGeographyDocument,
+    [x, z]: [f64; 2],
+    mut h: f64,
+    profiles: bool,
+) -> f64 {
     let c = d.lower_lake.center;
     let blend = clamp(
         1. - ellipse(
@@ -269,6 +279,9 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
             h = h.max(bank * blend + h * (1. - blend));
         }
     }
+    if profiles {
+        h = lake_shore(d, [x, z], h);
+    }
     let gr = ellipse([x, z], d.garden.center, d.garden.radii);
     if gr < 1. {
         h = h.max(d.upper_lake.level + 5. + 3. * clamp(1. - gr));
@@ -277,6 +290,11 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
         let (dist, target, _) = route_distance([x, z], &channel.points);
         let half = channel.width * 0.5;
         let bank = half + 20.;
+        let ordinary = if profiles {
+            ordinary_bank_weight(d, [x, z], channel)
+        } else {
+            0.
+        };
         // A sea-level outfall has lateral banks, not a circular levee around
         // its terminal cap. Preserve submerged natural ground beyond the last
         // cross-section so the authored river can join actual ocean columns.
@@ -293,7 +311,10 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
         if dist < half {
             // A channel has an authored supported bed even where the previous
             // lowland was lower than it. Merely taking min leaves deep gaps.
-            h = target - 3.;
+            let shelf_depth = d.ordinary_channel_banks.as_ref().map_or(3., |b| {
+                0.35 + 2.65 * clamp(1. - dist / half).powf(b.shelf_power)
+            });
+            h = target - (3. * (1. - ordinary) + shelf_depth * ordinary);
         } else if dist < bank
             && !open_sea_mouth
             && ![&d.upper_lake, &d.lower_lake]
@@ -309,7 +330,8 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
                 0.
             };
             let blend = smooth((bank - dist) / (20. - collar));
-            let mut retained_bank = target + 1.;
+            let lip = d.ordinary_channel_banks.as_ref().map_or(1., |b| b.dry_lip);
+            let mut retained_bank = target + 1. - ordinary * (1. - lip);
             // On a short descending reach the nearest centerline datum can be
             // below the water immediately upstream across a hex edge. Retain
             // that adjacent water too; this changes the supporting bank only.
@@ -325,7 +347,7 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
                 let (neighbor_distance, neighbor_level, _) =
                     route_distance([x + dx / scale, z + dz / scale], &channel.points);
                 if neighbor_distance < half {
-                    retained_bank = retained_bank.max(neighbor_level + 0.35);
+                    retained_bank = retained_bank.max(neighbor_level + 0.35 * (1. - ordinary));
                 }
             }
             h = h * (1. - blend) + retained_bank * blend;
@@ -349,6 +371,84 @@ fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f
         h = h.min(y - 3.);
     }
     h
+}
+
+/// A narrow, irregular dry shore joins the existing enclosing mountain body.
+/// Its datum does not depend on the mountain height immediately outside the
+/// basin, so the lake mask cannot cut a fifty-metre vertical wall at the water.
+fn lake_shore(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
+    let Some(s) = &d.upper_lake_shore else {
+        return h;
+    };
+    let lake = &d.upper_lake;
+    let r = irregular([x, z], lake.center, lake.radii, lake.phase);
+    if r < 1. {
+        return h;
+    }
+    let dx = x - lake.center[0];
+    let dz = z - lake.center[1];
+    let angle = (dz / lake.radii[1]).atan2(dx / lake.radii[0]);
+    let distance = (r - 1.) * dx.hypot(dz) / r;
+    let variation =
+        clamp(0.5 + 0.3 * (2. * angle + s.phase).sin() + 0.2 * (3. * angle - 0.7).cos());
+    let shelf = s.shelf_width[0] + (s.shelf_width[1] - s.shelf_width[0]) * variation;
+    let outer = s.outer_blend[0] + (s.outer_blend[1] - s.outer_blend[0]) * (1. - variation);
+    if distance >= shelf + outer {
+        return h;
+    }
+    let target = s.shelf_level + s.shelf_grade * distance.min(shelf);
+    let blend = smooth((distance - shelf) / outer);
+    let shore = target * (1. - blend) + h * blend;
+    // Preserve the exact upper stair/forest arrival and its dry landing.
+    let (frozen_distance, _, _) = route_distance([x, z], &d.frozen_route.points);
+    let route_weight = smooth((frozen_distance - d.frozen_route.width * 0.5 - 5.) / 15.);
+    let landing = ellipse([x, z], d.frozen_landing.center, d.frozen_landing.radii);
+    let weight = route_weight * smooth((landing - 1.) / 0.5);
+    h * (1. - weight) + shore * weight
+}
+
+/// Ordinary channel sides have shallow shelves. Steep waterfall segments and
+/// the short region around their ends keep their authored plunge profiles.
+fn ordinary_bank_weight(
+    d: &GrandGeographyDocument,
+    point: [f64; 2],
+    channel: &super::geography::Watercourse,
+) -> f64 {
+    let Some(profile) = &d.ordinary_channel_banks else {
+        return 0.;
+    };
+    let mut closest = f64::INFINITY;
+    let mut ordinary = false;
+    let mut steep = f64::INFINITY;
+    for pair in channel.points.windows(2) {
+        let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+            continue;
+        };
+        let (distance, _) = segment(point, [a[0], a[2]], [b[0], b[2]]);
+        let grade = (b[1] - a[1]).abs() / (b[0] - a[0]).hypot(b[2] - a[2]);
+        if distance < closest {
+            closest = distance;
+            ordinary = grade <= profile.max_longitudinal_grade;
+        }
+        if grade > profile.max_longitudinal_grade {
+            steep = steep.min(distance);
+        }
+    }
+    if ordinary {
+        let mouth = channel.points.last().map_or(1., |end| {
+            if end[1] <= 0. {
+                smooth(
+                    ((point[0] - end[0]).hypot(point[1] - end[2]) - channel.width * 0.5)
+                        / profile.plunge_buffer,
+                )
+            } else {
+                1.
+            }
+        });
+        mouth * smooth((steep - channel.width * 0.5 - 2.) / profile.plunge_buffer)
+    } else {
+        0.
+    }
 }
 pub(super) fn volcano_points(d: &GrandGeographyDocument) -> Vec<[f64; 3]> {
     let [cx, cz] = d.volcano.center;
@@ -409,6 +509,228 @@ mod profile_tests {
             "../../../../../assets/config/v4/grand-v4/geography-r02.json"
         ))
         .expect("canonical geography")
+    }
+
+    #[test]
+    fn upper_lake_shore_joins_high_ground_without_moving_frozen_arrival() {
+        let d = document();
+        let lake = &d.upper_lake;
+        let mut checked = 0;
+        for i in 0..128_u16 {
+            let angle = f64::from(i) * std::f64::consts::TAU / 128.;
+            let edge =
+                1. + 0.08 * (3. * angle + lake.phase).sin() + 0.04 * (5. * angle - 0.7).cos();
+            let point = [
+                lake.center[0] + lake.radii[0] * angle.cos() * edge * 1.01,
+                lake.center[1] + lake.radii[1] * angle.sin() * edge * 1.01,
+            ];
+            let (distance, _, _) = route_distance(point, &d.frozen_route.points);
+            if distance < d.frozen_route.width * 0.5 + 20.
+                || ellipse(point, d.frozen_landing.center, d.frozen_landing.radii) < 1.5
+            {
+                continue;
+            }
+            let height = lake_shore(&d, point, 300.);
+            assert!((206. ..208.).contains(&height), "shore {point:?}: {height}");
+            checked += 1;
+        }
+        assert!(checked > 90, "survey must cover most of the actual shore");
+        let point = d.frozen_landing.center;
+        assert!((lake_shore(&d, point, 206.) - 206.).abs() < 1e-9);
+        assert!((lake_shore(&d, lake.center, 198.) - 198.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ordinary_channel_shelves_keep_deep_center_and_intentional_plunges() {
+        let d = document();
+        let channel = &d.falls;
+        let a = channel
+            .points
+            .iter()
+            .rev()
+            .nth(1)
+            .expect("last reach start");
+        let b = channel.points.last().expect("last reach end");
+        let length = (b[0] - a[0]).hypot(b[2] - a[2]);
+        let normal = [-(b[2] - a[2]) / length, (b[0] - a[0]) / length];
+        let center = [(a[0] + b[0]) * 0.5, (a[2] + b[2]) * 0.5];
+        let target = (a[1] + b[1]) * 0.5;
+        assert!((ordinary_bank_weight(&d, center, channel) - 1.).abs() < 1e-9);
+        assert!((finish_terrain(&d, center, 60.) - (target - 3.)).abs() < 1e-9);
+        for side in [-1., 1.] {
+            let offset = channel.width * 0.5 - 2.;
+            let point = [
+                center[0] + side * normal[0] * offset,
+                center[1] + side * normal[1] * offset,
+            ];
+            let ground = finish_terrain(&d, point, 60.);
+            let expected = target - 0.35 - 2.65 * (2. / (channel.width * 0.5)).powi(2);
+            assert!(
+                (ground - expected).abs() < 1e-9,
+                "wet shelf {point:?}: {ground}"
+            );
+            let offset = channel.width * 0.5 + 0.5;
+            let point = [
+                center[0] + side * normal[0] * offset,
+                center[1] + side * normal[1] * offset,
+            ];
+            let ground = finish_terrain(&d, point, 60.);
+            assert!(
+                (target..target + 0.3).contains(&ground),
+                "dry lip {point:?}: {ground}"
+            );
+        }
+        let mut old = d.clone();
+        old.ordinary_channel_banks = None;
+        for pair in channel.points.windows(2) {
+            let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            if (b[1] - a[1]).abs() / (b[0] - a[0]).hypot(b[2] - a[2]) <= 0.25 {
+                continue;
+            }
+            let point = [(a[0] + b[0]) * 0.5, (a[2] + b[2]) * 0.5];
+            assert!(ordinary_bank_weight(&d, point, channel).abs() < 1e-9);
+            assert!(
+                (finish_terrain(&d, point, 60.) - finish_terrain(&old, point, 60.)).abs() < 1e-9
+            );
+        }
+    }
+
+    #[test]
+    fn bank_profiles_preserve_actual_ocean_outfall_without_new_dry_land() {
+        use hex_world_contracts::WorldHex;
+        let g = super::super::tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("geography");
+        let mut old = d.clone();
+        old.upper_lake_shore = None;
+        old.ordinary_channel_banks = None;
+        let end = d.river.points.last().expect("river mouth");
+        let center = g.geography.world_hex([end[0], end[2]]);
+        let mut positive_bed_changes = 0;
+        let mut changed_dry_columns = 0;
+        let mut changed_columns = 0;
+        for dq in -70_i64..=70 {
+            for dr in -70_i64..=70 {
+                let p = WorldHex::new(center.q + dq, center.r + dr);
+                let point = g.geography.model_xz(p);
+                let distance = f64::from(super::super::grid_value(&g.coast, p, 0)) * 1.5;
+                let before = mainland(&old, point, distance);
+                let before_top = g.geography.top_level(before).max(2);
+                let before_water = water(&old, point, before)
+                    .map_or(super::super::SEA_TOP, |y| g.geography.top_level(y));
+                let (column, liquid) = g.column(p);
+                let top = column
+                    .runs
+                    .iter()
+                    .filter(|r| r.material != "water")
+                    .map(|r| r.top)
+                    .max()
+                    .expect("sea bed");
+                changed_columns += usize::from(top != before_top);
+                positive_bed_changes += usize::from(
+                    (top > super::super::SEA_TOP) != (before_top > super::super::SEA_TOP),
+                );
+                let before_dry = before_top > super::super::SEA_TOP && before_top >= before_water;
+                let now_dry = top > super::super::SEA_TOP && liquid.is_none();
+                changed_dry_columns += usize::from(now_dry != before_dry);
+                assert!(
+                    !now_dry || before_dry,
+                    "bank profile created dry land at {p:?}"
+                );
+            }
+        }
+        for [q, r] in [[233, 419], [232, 420], [231, 420]] {
+            let liquid = g.column(WorldHex::new(q, r)).1.expect("receiving ocean");
+            assert_eq!(liquid.body_id, "grand/ocean");
+            assert_eq!(liquid.top, super::super::SEA_TOP);
+        }
+        eprintln!(
+            "mouth audit: changed solid columns={changed_columns}, changed positive-bed membership={positive_bed_changes}, changed dry membership={changed_dry_columns}; new dry columns=0"
+        );
+    }
+
+    #[test]
+    fn bank_profiles_report_actual_shallow_entry_bands() {
+        use hex_world_contracts::WorldHex;
+        use std::collections::{BTreeMap, BTreeSet};
+        let g = super::super::tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("geography");
+        let neighbors = [[1, 0], [0, 1], [-1, 1], [-1, 0], [0, -1], [1, -1]];
+        for (name, channel) in [("falls", &d.falls), ("river", &d.river)] {
+            let mut band = BTreeSet::new();
+            for pair in channel.points.windows(2) {
+                let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                    continue;
+                };
+                let a = g.geography.world_hex([a[0], a[2]]);
+                let b = g.geography.world_hex([b[0], b[2]]);
+                for q in a.q.min(b.q) - 16..=a.q.max(b.q) + 16 {
+                    for r in a.r.min(b.r) - 16..=a.r.max(b.r) + 16 {
+                        let p = WorldHex::new(q, r);
+                        let point = g.geography.model_xz(p);
+                        let (distance, _, _) = route_distance(point, &channel.points);
+                        if (distance - channel.width * 0.5).abs() <= 5.
+                            && ordinary_bank_weight(d, point, channel) > 0.999
+                            && [&d.upper_lake, &d.lower_lake]
+                                .iter()
+                                .all(|l| irregular(point, l.center, l.radii, l.phase) >= 1.)
+                        {
+                            band.insert(p);
+                        }
+                    }
+                }
+            }
+            let mut cache = BTreeMap::new();
+            for &p in &band {
+                for [dq, dr] in neighbors.into_iter().chain([[0, 0]]) {
+                    let n = WorldHex::new(p.q + dq, p.r + dr);
+                    cache.entry(n).or_insert_with(|| {
+                        let (column, liquid) = g.column(n);
+                        let top = column
+                            .runs
+                            .iter()
+                            .filter(|r| r.material != "water")
+                            .map(|r| r.top)
+                            .max()
+                            .expect("channel terrain");
+                        (top, liquid)
+                    });
+                }
+            }
+            let mut entry = BTreeMap::<i32, usize>::new();
+            let mut shallow = BTreeMap::<i32, usize>::new();
+            let mut examples = Vec::new();
+            for &p in &band {
+                let (top, liquid) = cache.get(&p).expect("cached band");
+                for [dq, dr] in neighbors {
+                    let n = WorldHex::new(p.q + dq, p.r + dr);
+                    let (other_top, other) = cache.get(&n).expect("cached neighbor");
+                    if let Some(wet) = other {
+                        if wet.top - wet.bottom > 4 {
+                            continue;
+                        }
+                        if liquid.is_none() {
+                            let delta = (*top - wet.bottom).abs();
+                            *entry.entry(delta).or_default() += 1;
+                            if delta > 1 && examples.len() < 4 {
+                                examples.push((p, n, *top, wet.bottom, wet.top));
+                            }
+                        } else if liquid.as_ref().is_some_and(|l| l.top - l.bottom <= 4) {
+                            *shallow.entry((*top - *other_top).abs()).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                !entry.is_empty() && !shallow.is_empty(),
+                "complete regular {name} banks must be surveyed"
+            );
+            eprintln!(
+                "bank audit {name}: band={} dry-to-shallow level differences={entry:?}; shallow-band differences={shallow:?}; >1level examples={examples:?}",
+                band.len()
+            );
+        }
     }
 
     #[test]
@@ -504,13 +826,13 @@ mod profile_tests {
                 .expect("dry bank");
             let [ex, ez] = world_xz(eye_column);
             // An eye above the ordinary player's actual eye is conservative.
-            let ey = f64::from(eye_top) * f64::from(LEVEL_HEIGHT) + 1.7;
-            let water_y = f64::from(water_top) * f64::from(LEVEL_HEIGHT);
+            let ey = f64::from(eye_top) * LEVEL_HEIGHT + 1.7;
+            let water_y = f64::from(water_top) * LEVEL_HEIGHT;
             for &[tx, tz] in &targets {
                 let blocked = (1..192_u16).any(|step| {
                     let t = f64::from(step) / 192.;
                     let p = nearest_hex(ex + (tx - ex) * t, ez + (tz - ez) * t);
-                    let level = (ey + (water_y - ey) * t) / f64::from(LEVEL_HEIGHT);
+                    let level = (ey + (water_y - ey) * t) / LEVEL_HEIGHT;
                     g.column(p).0.runs.iter().any(|run| {
                         run.material != "water"
                             && f64::from(run.bottom) <= level

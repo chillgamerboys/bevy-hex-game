@@ -23,10 +23,14 @@ pub struct GrandGeographyDocument {
     pub(super) peaks: Vec<[f64; 5]>,
     pub(super) ridge_links: Vec<[usize; 2]>,
     pub(super) upper_lake: Lake,
+    #[serde(default)]
+    pub(super) upper_lake_shore: Option<LakeShore>,
     pub(super) garden: Ellipse,
     pub(super) falls: Watercourse,
     pub(super) lower_lake: Lake,
     pub(super) river: Watercourse,
+    #[serde(default)]
+    pub(super) ordinary_channel_banks: Option<ChannelBanks>,
     pub(super) tree: Tree,
     pub(super) forest: Forest,
     pub(super) volcano: Volcano,
@@ -91,6 +95,19 @@ shape!(Lake {
     phase: f64
 });
 shape!(Watercourse {width:f64,points:Vec<[f64;3]>});
+shape!(LakeShore {
+    shelf_width: [f64; 2],
+    outer_blend: [f64; 2],
+    shelf_level: f64,
+    shelf_grade: f64,
+    phase: f64
+});
+shape!(ChannelBanks {
+    max_longitudinal_grade: f64,
+    plunge_buffer: f64,
+    dry_lip: f64,
+    shelf_power: f64
+});
 shape!(Tree {
     center: [f64; 2],
     height: f64,
@@ -167,6 +184,22 @@ impl GrandGeographyDocument {
         };
         let f = &self.foothills;
         if !(1. ..=3.).contains(&f.radius_multiplier)
+            || self.upper_lake_shore.as_ref().is_some_and(|s| {
+                !(2. ..=24.).contains(&s.shelf_width[0])
+                    || !(s.shelf_width[0]..=32.).contains(&s.shelf_width[1])
+                    || !(12. ..=80.).contains(&s.outer_blend[0])
+                    || !(s.outer_blend[0]..=100.).contains(&s.outer_blend[1])
+                    || !(self.upper_lake.level..=self.upper_lake.level + 2.)
+                        .contains(&s.shelf_level)
+                    || !(0. ..=0.2).contains(&s.shelf_grade)
+                    || !s.phase.is_finite()
+            })
+            || self.ordinary_channel_banks.as_ref().is_some_and(|b| {
+                !(0.05..=0.4).contains(&b.max_longitudinal_grade)
+                    || !(4. ..=30.).contains(&b.plunge_buffer)
+                    || !(0. ..=1.).contains(&b.dry_lip)
+                    || !(1.5..=3.).contains(&b.shelf_power)
+            })
             || !(100. ..=1000.).contains(&f.minimum_radius)
             || !(1. ..=150.).contains(&f.apron_relief)
             || !(0.25..=1.).contains(&f.core_setback)

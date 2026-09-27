@@ -2340,21 +2340,21 @@
     },
     "grand-crystal-frozen": {
       "eye": [
-        170,
-        530,
-        60
+        520.0,
+        740.0,
+        100.0
       ],
       "target": [
-        -120,
-        145,
-        660
+        70.0,
+        150.0,
+        620.0
       ],
       "interest": [
-        -170,
-        65,
-        550
+        -170.0,
+        65.0,
+        550.0
       ],
-      "horizontal_span": 690,
+      "horizontal_span": 1050.0,
       "ground": false
     },
     "grand-volcano": {
@@ -3280,5 +3280,24 @@
       0.2,
       0.6
     ]
+  },
+  "upper_lake_shore": {
+    "shelf_width": [
+      6.0,
+      14.0
+    ],
+    "outer_blend": [
+      24.0,
+      48.0
+    ],
+    "shelf_level": 206.0,
+    "shelf_grade": 0.08,
+    "phase": 0.8
+  },
+  "ordinary_channel_banks": {
+    "max_longitudinal_grade": 0.25,
+    "plunge_buffer": 12.0,
+    "dry_lip": 0.0,
+    "shelf_power": 2.0
   }
 }
