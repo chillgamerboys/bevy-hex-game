@@ -1,7 +1,8 @@
 //! One bounded asynchronous V4 target/neighbor preparation transaction at a time.
 use super::StreamedArena;
 use crate::v4::{
-    PreparedChunk, PresentationLimits, RenderNeighbor, RenderOrigin, TerrainPresenter,
+    DryMaterialFinish, PreparedChunk, PresentationLimits, RenderNeighbor, RenderOrigin,
+    TerrainPresenter,
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -630,7 +631,9 @@ fn current_revision(state: &StreamedArena, chunk: ChunkId) -> Option<u64> {
     state.edits.revision(chunk)
 }
 fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, String> {
-    let presenter = TerrainPresenter::with_limits(
+    // Fixed at presenter creation: no live asset mutation or extra lifecycle owner.
+    let dry_finish = dry_material_finish(&state.overview.world_id);
+    let presenter = TerrainPresenter::with_limits_and_dry_finish(
         state.runtime.manifest(),
         RenderOrigin::default(),
         state.overview.level_height,
@@ -644,17 +647,18 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
                 + state.overview.vertical_offset,
             ..default()
         },
+        dry_finish,
     )
     .map_err(|e| e.to_string())?;
     let (sender, receiver) = mpsc::channel();
+    let mut proxy_material = StandardMaterial {
+        base_color: Color::WHITE,
+        ..default()
+    };
+    DryMaterialFinish::ARENA.apply(&mut proxy_material);
     let material = world
         .resource_mut::<Assets<StandardMaterial>>()
-        .add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.96,
-            reflectance: 0.05,
-            ..default()
-        });
+        .add(proxy_material);
     let immutable_edges = super::grand_inland_terrain::edges(&state.overview);
     let mut proxies = BTreeMap::new();
     for descriptor in &state.runtime.manifest().chunks {
@@ -690,6 +694,11 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         epoch: state.generation,
     })
 }
+
+fn dry_material_finish(world_id: &str) -> Option<DryMaterialFinish> {
+    (world_id == "grand-v4").then_some(DryMaterialFinish::ARENA)
+}
+
 const PROXY_STEPS: u32 = 8;
 
 struct ProxySample {
@@ -1145,6 +1154,17 @@ mod liquid_tests;
 mod tests {
     use super::*;
     use hex_schematic::v4::northern::NorthernOverview;
+
+    #[test]
+    fn arena_dry_finish_is_grand_only_and_matches_distant_terrain() {
+        let finish = dry_material_finish("grand-v4").expect("Grand shares its distant finish");
+        let mut material = StandardMaterial::default();
+        finish.apply(&mut material);
+        assert_eq!(material.perceptual_roughness.to_bits(), 0.96_f32.to_bits());
+        assert_eq!(material.reflectance.to_bits(), 0.05_f32.to_bits());
+        assert!(dry_material_finish("northern-archipelago").is_none());
+        assert!(dry_material_finish("another-v4-host").is_none());
+    }
 
     #[test]
     fn northern_object_admission_preserves_carves_and_excludes_unadmitted_fragments() {

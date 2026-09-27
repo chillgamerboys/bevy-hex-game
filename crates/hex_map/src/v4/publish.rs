@@ -63,6 +63,26 @@ struct PublishedChunk {
     halo: RenderHalo,
 }
 
+/// Host-selected render finish; palette, geometry and world authority are unchanged.
+#[derive(Clone, Copy)]
+pub(crate) struct DryMaterialFinish {
+    roughness: f32,
+    reflectance: f32,
+}
+
+impl DryMaterialFinish {
+    #[cfg(any(feature = "arena-prototype", test))]
+    pub(crate) const ARENA: Self = Self {
+        roughness: 0.96,
+        reflectance: 0.05,
+    };
+
+    pub(crate) fn apply(self, material: &mut StandardMaterial) {
+        material.perceptual_roughness = self.roughness;
+        material.reflectance = self.reflectance;
+    }
+}
+
 /// Owns the disposable roots/assets for one bounded local presentation window.
 ///
 /// The host selects nearby visible chunks independently of authoritative residency.
@@ -72,6 +92,7 @@ struct PublishedChunk {
 #[derive(Resource)]
 pub struct TerrainPresenter {
     context: TerrainPreparer,
+    dry_finish: Option<DryMaterialFinish>,
     resident: BTreeMap<ChunkId, PublishedChunk>,
     materials: BTreeMap<SubstanceId, Handle<StandardMaterial>>,
     river_materials: BTreeMap<super::river::Style, Handle<super::river::RiverMaterial>>,
@@ -98,6 +119,17 @@ impl TerrainPresenter {
         origin: RenderOrigin,
         level_height: f32,
         limits: PresentationLimits,
+    ) -> Result<Self, PresentationError> {
+        Self::with_limits_and_dry_finish(manifest, origin, level_height, limits, None)
+    }
+
+    /// Select a finish before any assets exist; public V4 constructors retain defaults.
+    pub(crate) fn with_limits_and_dry_finish(
+        manifest: &WorldManifest,
+        origin: RenderOrigin,
+        level_height: f32,
+        limits: PresentationLimits,
+        dry_finish: Option<DryMaterialFinish>,
     ) -> Result<Self, PresentationError> {
         let manifest = Arc::new(manifest.clone());
         let index = Arc::new(ManifestIndex::new(manifest.clone())?);
@@ -129,6 +161,7 @@ impl TerrainPresenter {
                 level_height,
                 limits,
             },
+            dry_finish,
             resident: BTreeMap::new(),
             materials: BTreeMap::new(),
             river_materials: BTreeMap::new(),
@@ -366,6 +399,11 @@ impl TerrainPresenter {
                     let color = Color::srgba_u8(r, g, b, a);
                     let mut material = StandardMaterial::from(color);
                     material.perceptual_roughness = 0.9;
+                    if let Some(finish) =
+                        self.dry_finish.filter(|_| batch.material.solid && a == 255)
+                    {
+                        finish.apply(&mut material);
+                    }
                     material.alpha_mode = if a < 255 {
                         AlphaMode::Blend
                     } else {

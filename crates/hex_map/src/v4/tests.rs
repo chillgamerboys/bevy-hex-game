@@ -370,6 +370,170 @@ fn replace_unload_and_clear_clean_only_owned_assets_and_entities() {
     assert_eq!(world.query::<&ResidentChunk>().iter(&world).count(), 0);
 }
 
+fn dry_finish_fixture() -> (WorldPackage, WorldHex) {
+    let column = WorldHex::new(0, 0);
+    let mut package = fixture(column);
+    add_object(&mut package, column, column);
+    package.manifest.materials.push(MaterialSpec {
+        id: "opaque_water".into(),
+        solid: false,
+        diggable: false,
+        color: [50, 132, 175, 255],
+    });
+    package
+        .chunks
+        .get_mut(&column.chunk())
+        .expect("center chunk")
+        .columns
+        .iter_mut()
+        .find(|entry| entry.position == column)
+        .expect("center column")
+        .runs
+        .push(run(5, 6, "opaque_water"));
+    package.seal().expect("dry, translucent and liquid fixture");
+    (package, column)
+}
+
+fn published_geometry_bytes(world: &mut World) -> BTreeMap<hex_core::SubstanceId, Vec<Vec<u8>>> {
+    let mut query = world.query::<(&TerrainRenderBatch, &Mesh3d)>();
+    let meshes = world.resource::<Assets<Mesh>>();
+    query
+        .iter(world)
+        .map(|(batch, handle)| {
+            let mesh = meshes.get(&handle.0).expect("owned mesh");
+            let mut buffers: Vec<_> = mesh
+                .attributes()
+                .map(|(_, attribute)| attribute.get_bytes().to_vec())
+                .collect();
+            buffers.push(
+                mesh.get_index_buffer_bytes()
+                    .expect("indexed mesh")
+                    .to_vec(),
+            );
+            (batch.substance(), buffers)
+        })
+        .collect()
+}
+
+#[test]
+fn arena_dry_finish_changes_only_opaque_solid_materials_and_preserves_mesh_bytes() {
+    let (package, column) = dry_finish_fixture();
+    let origin = RenderOrigin { column, level: 0 };
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let mut original = TerrainPresenter::new(&package.manifest, origin, 1.0).expect("default");
+    let mut parity = TerrainPresenter::with_limits_and_dry_finish(
+        &package.manifest,
+        origin,
+        1.0,
+        PresentationLimits::default(),
+        Some(DryMaterialFinish::ARENA),
+    )
+    .expect("arena finish");
+    let mut original_world = World::new();
+    let mut parity_world = World::new();
+    let before = publish(&mut original, &mut original_world, chunk, 1);
+    let after = publish(&mut parity, &mut parity_world, chunk, 1);
+    assert_eq!(before.fingerprint, after.fingerprint);
+    assert_eq!(before.logical_runs, after.logical_runs);
+    assert_eq!(before.object_runs, after.object_runs);
+    assert_eq!(before.vertices, after.vertices);
+    assert_eq!(
+        published_geometry_bytes(&mut original_world),
+        published_geometry_bytes(&mut parity_world)
+    );
+    for (world, opted_in) in [(&mut original_world, false), (&mut parity_world, true)] {
+        let mut query = world.query::<(&TerrainRenderBatch, &MeshMaterial3d<StandardMaterial>)>();
+        let assets = world.resource::<Assets<StandardMaterial>>();
+        let mut checked = 0;
+        for (batch, handle) in query.iter(world) {
+            let palette_index = usize::from(batch.substance().0)
+                .checked_sub(1)
+                .expect("non-air material");
+            let spec = package
+                .manifest
+                .materials
+                .get(palette_index)
+                .expect("typed palette");
+            let material = assets.get(&handle.0).expect("owned material");
+            let [r, g, b, a] = spec.color;
+            let selected = opted_in && spec.solid && a == 255;
+            let roughness: f32 = if selected { 0.96 } else { 0.9 };
+            let reflectance: f32 = if selected { 0.05 } else { 0.5 };
+            assert_eq!(material.perceptual_roughness.to_bits(), roughness.to_bits());
+            assert_eq!(material.reflectance.to_bits(), reflectance.to_bits());
+            assert_eq!(material.base_color, Color::srgba_u8(r, g, b, a));
+            assert_eq!(
+                material.alpha_mode,
+                if a < 255 {
+                    AlphaMode::Blend
+                } else {
+                    AlphaMode::Opaque
+                }
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 3,
+            "dry solid, translucent object and opaque liquid"
+        );
+    }
+}
+
+#[test]
+fn arena_dry_finish_reuses_owned_materials_across_edits_and_clears_them() {
+    let (package, column) = dry_finish_fixture();
+    let mut presenter = TerrainPresenter::with_limits_and_dry_finish(
+        &package.manifest,
+        RenderOrigin { column, level: 0 },
+        1.0,
+        PresentationLimits::default(),
+        Some(DryMaterialFinish::ARENA),
+    )
+    .expect("arena finish");
+    let mut world = World::new();
+    let chunk = package.chunks.get(&column.chunk()).expect("chunk");
+    let first = publish(&mut presenter, &mut world, chunk, 1);
+    let materials: Vec<_> = world.resource::<Assets<StandardMaterial>>().ids().collect();
+    let old_meshes: Vec<_> = world.resource::<Assets<Mesh>>().ids().collect();
+    let mut changed = chunk.clone();
+    changed
+        .columns
+        .first_mut()
+        .expect("column")
+        .runs
+        .push(run(8, 9, "custom_rock"));
+    changed.seal().expect("edited fixture");
+    let next = publish(&mut presenter, &mut world, &changed, 2);
+    assert_ne!(first.root, next.root);
+    assert!(world.get_entity(first.root).is_err());
+    assert!(old_meshes
+        .iter()
+        .all(|id| world.resource::<Assets<Mesh>>().get(*id).is_none()));
+    assert_eq!(
+        world
+            .resource::<Assets<StandardMaterial>>()
+            .ids()
+            .collect::<Vec<_>>(),
+        materials
+    );
+    presenter
+        .remove(&mut world, chunk.coordinate)
+        .expect("evict");
+    assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+    assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 3);
+    publish(&mut presenter, &mut world, &changed, 2);
+    assert_eq!(
+        world
+            .resource::<Assets<StandardMaterial>>()
+            .ids()
+            .collect::<Vec<_>>(),
+        materials
+    );
+    presenter.clear(&mut world);
+    assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+    assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
+}
+
 #[test]
 fn rebase_changes_local_geometry_preserves_global_identity_and_rejects_old_jobs() {
     let column = WorldHex::new(15, 0);
