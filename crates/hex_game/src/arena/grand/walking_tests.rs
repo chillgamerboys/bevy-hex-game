@@ -170,6 +170,310 @@ fn install_grounded_walk_observer(app: &mut App) {
     );
 }
 
+const WATER_CROSSING: &str = "grand-lake-foothill-water-crossing";
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CrossingMode {
+    Walking,
+    Swimming,
+}
+
+#[derive(Clone, Copy)]
+struct CrossingSample {
+    tick: u64,
+    feet: Vec3,
+    swimming: bool,
+    grounded: bool,
+    terrain_ready: bool,
+    solid_body_clear: bool,
+    wet_depth: Option<f32>,
+    oxygen: f32,
+}
+
+#[derive(Resource, Serialize)]
+struct MixedCrossingTrace {
+    contract: &'static str,
+    observed_simulation_ticks: u64,
+    swimming_ticks: u64,
+    wet_swimming_ticks: u64,
+    dry_ticks: u64,
+    entry_count: u64,
+    exit_count: u64,
+    swimming_distance: f32,
+    maximum_sampled_water_depth: f32,
+    minimum_oxygen: f32,
+    all_terrain_ready: bool,
+    all_solid_bodies_clear: bool,
+    swimming_at_end: bool,
+    transitions: Vec<serde_json::Value>,
+    dry_segments: Vec<GroundedWalkTrace>,
+    current_dry_segment: Option<GroundedWalkTrace>,
+    failure: Option<&'static str>,
+    #[serde(skip)]
+    limits: GroundedWalkLimits,
+    #[serde(skip)]
+    previous: CrossingSample,
+}
+
+impl MixedCrossingTrace {
+    fn new(limits: GroundedWalkLimits, sample: CrossingSample) -> Self {
+        Self {
+            contract: "ordinary-walk-swim-walk-v1",
+            observed_simulation_ticks: 0,
+            swimming_ticks: 0,
+            wet_swimming_ticks: 0,
+            dry_ticks: 0,
+            entry_count: 0,
+            exit_count: 0,
+            swimming_distance: 0.0,
+            maximum_sampled_water_depth: 0.0,
+            minimum_oxygen: sample.oxygen,
+            all_terrain_ready: sample.terrain_ready,
+            all_solid_bodies_clear: sample.solid_body_clear,
+            swimming_at_end: sample.swimming,
+            transitions: vec![
+                serde_json::json!({"tick":sample.tick,"mode":CrossingMode::Walking,"feet":sample.feet.to_array()}),
+            ],
+            dry_segments: Vec::new(),
+            current_dry_segment: Some(GroundedWalkTrace::new(limits, sample.tick, sample.feet)),
+            failure: None,
+            limits,
+            previous: sample,
+        }
+    }
+
+    fn observe(&mut self, sample: CrossingSample) {
+        if sample.tick == self.previous.tick {
+            return;
+        }
+        if sample.tick.checked_sub(self.previous.tick) != Some(1) {
+            self.failure
+                .get_or_insert("mixed observer missed a simulation tick");
+            return;
+        }
+        self.observed_simulation_ticks += 1;
+        self.all_terrain_ready &= sample.terrain_ready;
+        self.all_solid_bodies_clear &= sample.solid_body_clear;
+        self.minimum_oxygen = self.minimum_oxygen.min(sample.oxygen);
+        if !sample.feet.is_finite() || !sample.oxygen.is_finite() {
+            self.failure
+                .get_or_insert("nonfinite crossing pose or oxygen");
+        }
+        if !sample.terrain_ready {
+            self.failure
+                .get_or_insert("completed crossing tick used unavailable local terrain");
+        }
+        if !sample.solid_body_clear {
+            self.failure
+                .get_or_insert("crossing body intersected solid geometry");
+        }
+        if sample.swimming {
+            self.swimming_ticks += 1;
+            if let Some(depth) = sample.wet_depth {
+                self.wet_swimming_ticks += 1;
+                self.maximum_sampled_water_depth = self.maximum_sampled_water_depth.max(depth);
+                if self.previous.swimming && self.previous.wet_depth.is_some() {
+                    self.swimming_distance += sample
+                        .feet
+                        .with_y(0.0)
+                        .distance(self.previous.feet.with_y(0.0));
+                }
+            }
+            if !self.previous.swimming {
+                self.entry_count += 1;
+                // Include the transition sample in the preceding dry fall.
+                // Water activation must never erase a cliff-sized entry drop.
+                if let Some(mut dry) = self.current_dry_segment.take() {
+                    dry.observe(sample.tick, sample.feet, true);
+                    if let Some(failure) = dry.failure {
+                        self.failure.get_or_insert(failure);
+                    }
+                    self.dry_segments.push(dry);
+                }
+            }
+        } else {
+            self.dry_ticks += 1;
+            if self.previous.swimming {
+                self.exit_count += 1;
+                self.current_dry_segment = Some(GroundedWalkTrace::new(
+                    self.limits,
+                    self.previous.tick,
+                    self.previous.feet,
+                ));
+            }
+            if let Some(dry) = &mut self.current_dry_segment {
+                dry.observe(sample.tick, sample.feet, sample.grounded);
+                if let Some(failure) = dry.failure {
+                    self.failure.get_or_insert(failure);
+                }
+            }
+        }
+        if sample.swimming != self.previous.swimming {
+            self.transitions.push(serde_json::json!({
+                "tick":sample.tick,"mode":if sample.swimming {CrossingMode::Swimming}else{CrossingMode::Walking},
+                "feet":sample.feet.to_array(),"grounded":sample.grounded,"terrain_ready":sample.terrain_ready,
+                "solid_body_clear":sample.solid_body_clear,"wet_depth":sample.wet_depth,"oxygen":sample.oxygen,
+            }));
+        }
+        self.swimming_at_end = sample.swimming;
+        self.previous = sample;
+    }
+
+    fn completion_error(&self, body_width: f32) -> Option<&'static str> {
+        self.failure.or_else(|| {
+            if self.entry_count == 0 || self.exit_count == 0 || self.swimming_at_end {
+                Some("crossing did not complete real walking/swimming/walking transitions")
+            } else if self.wet_swimming_ticks == 0 || self.swimming_distance < body_width {
+                Some("crossing did not swim through at least one body width of sampled water")
+            } else if self
+                .current_dry_segment
+                .as_ref()
+                .is_none_or(|dry| dry.airborne_at_end)
+            {
+                Some("crossing endpoint was not grounded after swimming")
+            } else {
+                None
+            }
+        })
+    }
+}
+
+fn crossing_sample(world: &World) -> CrossingSample {
+    use hex_core::ocean::{OceanSurfaceState, OceanWaterColumn};
+    let player = human(world);
+    let session = world.resource::<ArenaSession>();
+    let view = world.resource::<ArenaTerrainView>();
+    let geometry = *world.resource::<ArenaVoxelGeometry>();
+    let coord = HexCoord::from_world(player.feet);
+    let availability = view
+        .residency
+        .as_ref()
+        .map_or(ArenaAvailability::Unloaded, |r| r.at(coord, geometry));
+    let column = view
+        .liquids
+        .iter()
+        .filter(|span| span.bottom.coord == coord)
+        .max_by_key(|span| span.top_level)
+        .map(|span| OceanWaterColumn {
+            mean_height: geometry.top(TilePos::new(coord, span.top_level)),
+            bed_height: geometry.top(span.bottom) - geometry.level_height,
+            water_id: span.substance,
+        });
+    let water = world.resource::<OceanEnvironmentView>().sample(
+        Vec2::new(player.feet.x, player.feet.z),
+        session.ocean_time(),
+        availability,
+        column,
+    );
+    let wet_depth = match water {
+        OceanSurfaceState::ReadyWet(surface) => Some(surface.mean_height - surface.bed_height),
+        _ => None,
+    };
+    let swim = player.swimming().expect("Grand swimming snapshot");
+    CrossingSample {
+        tick: session.tick,
+        feet: player.feet,
+        swimming: swim.active,
+        grounded: player.grounded,
+        terrain_ready: ready(world, player.feet),
+        solid_body_clear: session.actor_solid_volume_valid(0),
+        wet_depth,
+        oxygen: swim.oxygen_seconds,
+    }
+}
+
+fn observe_mixed_crossing(world: &mut World) {
+    let sample = crossing_sample(world);
+    world.resource_mut::<MixedCrossingTrace>().observe(sample);
+}
+
+fn install_mixed_crossing_observer(app: &mut App) {
+    app.add_systems(
+        ArenaTick,
+        observe_mixed_crossing
+            .after(hex_core::arena::ArenaSystems::Simulate)
+            .run_if(resource_exists::<MixedCrossingTrace>),
+    );
+}
+
+#[test]
+fn mixed_crossing_keeps_the_dry_entry_fall_and_ignores_zero_tick_waits() {
+    let limits = GroundedWalkLimits::new(0.35);
+    let initial = CrossingSample {
+        tick: 10,
+        feet: Vec3::Y,
+        swimming: false,
+        grounded: true,
+        terrain_ready: true,
+        solid_body_clear: true,
+        wet_depth: None,
+        oxygen: 90.0,
+    };
+    let mut trace = MixedCrossingTrace::new(limits, initial);
+    trace.observe(CrossingSample {
+        feet: Vec3::Y * 0.2,
+        ..initial
+    });
+    assert_eq!(trace.observed_simulation_ticks, 0);
+    trace.observe(CrossingSample {
+        tick: 11,
+        feet: Vec3::Y * 0.2,
+        swimming: true,
+        grounded: false,
+        wet_depth: Some(3.0),
+        ..initial
+    });
+    assert_eq!(trace.entry_count, 1);
+    assert!(
+        trace.failure.is_some(),
+        "swim activation cannot erase an excessive entry fall"
+    );
+}
+
+#[test]
+fn mixed_crossing_requires_real_wet_movement_and_dry_exit() {
+    let initial = CrossingSample {
+        tick: 1,
+        feet: Vec3::Y,
+        swimming: false,
+        grounded: true,
+        terrain_ready: true,
+        solid_body_clear: true,
+        wet_depth: None,
+        oxygen: 90.0,
+    };
+    let mut trace = MixedCrossingTrace::new(GroundedWalkLimits::new(0.35), initial);
+    trace.observe(CrossingSample { tick: 2, ..initial });
+    assert!(trace.completion_error(0.5).is_some());
+    trace.observe(CrossingSample {
+        tick: 3,
+        swimming: true,
+        grounded: false,
+        wet_depth: Some(3.0),
+        ..initial
+    });
+    assert!(trace.completion_error(0.5).is_some());
+    trace.observe(CrossingSample {
+        tick: 4,
+        feet: Vec3::new(0.6, 1.0, 0.0),
+        swimming: true,
+        grounded: false,
+        wet_depth: Some(3.0),
+        ..initial
+    });
+    trace.observe(CrossingSample {
+        tick: 5,
+        feet: Vec3::new(0.6, 1.0, 0.0),
+        ..initial
+    });
+    assert!(trace.completion_error(0.5).is_none());
+    assert_eq!(
+        trace.observed_simulation_ticks,
+        trace.dry_ticks + trace.swimming_ticks
+    );
+}
+
 fn downward_step_fixture(drop_levels: i32) -> App {
     use hex_core::arena::{
         ArenaExpeditionSites, ArenaPackageIdentity, ArenaResidency, ArenaSolidSpan,
@@ -427,7 +731,6 @@ fn routes(world: &World) -> Vec<Route> {
     for name in [
         "grand-west-foothill-crossing",
         "grand-west-foothill-uphill",
-        "grand-lake-foothill-crossing",
         "grand-lake-foothill-uphill",
     ] {
         let frame = overview
@@ -762,6 +1065,12 @@ fn object_follower_remembers_side_and_rechecks_a_blocked_heading() {
 
 fn block_reason(world: &World) -> Option<&'static str> {
     if let Some(failure) = world
+        .get_resource::<MixedCrossingTrace>()
+        .and_then(|trace| trace.failure)
+    {
+        return Some(failure);
+    }
+    if let Some(failure) = world
         .get_resource::<GroundedWalkTrace>()
         .and_then(|trace| trace.failure)
     {
@@ -785,17 +1094,33 @@ fn block_reason(world: &World) -> Option<&'static str> {
         return Some("nonwalking movement activated");
     }
     let view = world.resource::<ArenaTerrainView>();
-    if ready(world, player.feet)
-        && !session.actor_volume_valid(0, view, *world.resource::<ArenaVoxelGeometry>())
-    {
+    let volume_valid = if world.contains_resource::<MixedCrossingTrace>() {
+        session.actor_solid_volume_valid(0)
+    } else {
+        session.actor_volume_valid(0, view, *world.resource::<ArenaVoxelGeometry>())
+    };
+    if ready(world, player.feet) && !volume_valid {
         return Some("player entered solid or liquid volume");
     }
     None
 }
 
 fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_json::Value {
+    traverse_route(app, route, total_deadline, false)
+}
+
+fn traverse_route(
+    app: &mut App,
+    route: &Route,
+    total_deadline: Instant,
+    mixed: bool,
+) -> serde_json::Value {
     let began = Instant::now();
-    install_grounded_walk_observer(app);
+    if mixed {
+        install_mixed_crossing_observer(app);
+    } else {
+        install_grounded_walk_observer(app);
+    }
     let first = *route.points.first().expect("nonempty route");
     let start = match start_route(app, first, route.stacked) {
         Ok(start) => start,
@@ -805,7 +1130,12 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
     };
     let first_tick = app.world().resource::<ArenaSession>().tick;
     let limits = GroundedWalkLimits::new(app.world().resource::<ArenaVoxelGeometry>().level_height);
-    app.insert_resource(GroundedWalkTrace::new(limits, first_tick, start));
+    if mixed {
+        let sample = crossing_sample(app.world());
+        app.insert_resource(MixedCrossingTrace::new(limits, sample));
+    } else {
+        app.insert_resource(GroundedWalkTrace::new(limits, first_tick, start));
+    }
     let deadline = (began + ROUTE_LIMIT).min(total_deadline);
     let mut distance = 0.0_f32;
     let mut previous = start;
@@ -932,8 +1262,19 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         {
             failed = Some("route endpoint did not settle onto clear dry support".into());
         }
-        if failed.is_none() && world.resource::<GroundedWalkTrace>().airborne_at_end {
+        if failed.is_none()
+            && world
+                .get_resource::<GroundedWalkTrace>()
+                .is_some_and(|trace| trace.airborne_at_end)
+        {
             failed = Some("route endpoint remained airborne after settling".into());
+        }
+        if failed.is_none() {
+            if let Some(trace) = world.get_resource::<MixedCrossingTrace>() {
+                failed = trace
+                    .completion_error(human(world).body_dimensions().x)
+                    .map(str::to_string);
+            }
         }
         let target = Vec3::from_array(*route.points.last().expect("nonempty route"));
         let remaining = human(world).feet.with_y(0.0).distance(target.with_y(0.0));
@@ -956,7 +1297,8 @@ fn walk_route(app: &mut App, route: &Route, total_deadline: Instant) -> serde_js
         "simulation_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
         "wall_seconds":began.elapsed().as_secs_f64(),"distance":distance,"maximum_auto_step":maximum_step,
         "object_detours":detours,"object_steering_trace":steering_trace,"completed_segments":completed,"required_segments":route.points.len()-1,
-        "waypoints":route.points,"samples":samples,"grounding":app.world().resource::<GroundedWalkTrace>(),
+        "waypoints":route.points,"samples":samples,"grounding":app.world().get_resource::<GroundedWalkTrace>(),
+        "mixed_crossing":app.world().get_resource::<MixedCrossingTrace>(),
     })
 }
 
@@ -1015,7 +1357,7 @@ fn actual_grand_ordinary_walking() {
             .iter()
             .all(|r| r.get("status").and_then(|v| v.as_str()) == Some("PASS"));
         let receipt = serde_json::json!({
-            "kind":"grand-ordinary-walking-r03","status":if results.len()==routes.len() && pass {"PASS"}else if pass {"PARTIAL"}else{"FAIL"},
+            "kind":"grand-ordinary-walking-r04","status":if results.len()==routes.len() && pass {"PASS"}else if pass {"PARTIAL"}else{"FAIL"},
             "scope":"Real package and production ArenaInput/drive_simulation/ArenaTick. Relocations only at independent route starts. No jump, flight, glider, boat, teleport, spells, upgrades or controller changes. Every completed simulation tick, including settling, enforces a one-voxel downward-step and ballistic airtime allowance from production physics; streaming holds add no airtime. AI decisions disabled; body/static-object collision retained. Local object steering only; no terrain path search. Physical walking evidence, not native input/control feel.",
             "package":package,"identity":identity,"selected_route":selected,"expected_routes":routes.len(),"route_names":routes.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "wall_seconds":started.elapsed().as_secs_f64(),"routes":results,
@@ -1032,5 +1374,82 @@ fn actual_grand_ordinary_walking() {
             .all(|r| r.get("status").and_then(|v| v.as_str()) == Some("PASS")),
         "ordinary walking failed; see {}",
         data.join("walking.json").display()
+    );
+}
+
+#[test]
+#[ignore = "requires explicit actual Grand package and isolated HEX_GAME_DATA_DIR with grand-verification-only marker"]
+fn actual_grand_lake_walk_swim_walk() {
+    let data =
+        PathBuf::from(std::env::var_os("HEX_GAME_DATA_DIR").expect("isolated data directory"));
+    assert!(
+        data.join("grand-verification-only").is_file(),
+        "refuse real user data"
+    );
+    assert!(
+        !data.join("crossing.json").exists(),
+        "use fresh crossing output"
+    );
+    let package =
+        PathBuf::from(std::env::var_os("HEX_GRAND_WORLD").expect("explicit actual package"));
+    let selected = std::env::var("HEX_GRAND_CROSSING_ROUTE").ok();
+    assert!(
+        selected.as_ref().is_none_or(|name| name == WATER_CROSSING),
+        "unknown water crossing"
+    );
+    let mut app = fixture();
+    // The original failed dry probe remains historical evidence. Its SAME
+    // published endpoints now name a separate mixed-mode claim; no terrain
+    // search, endpoint shortening or dry-fall exception creates a passing path.
+    let frame = app
+        .world()
+        .resource::<StreamedArena>()
+        .overview
+        .review_cameras
+        .get("grand-lake-foothill-crossing")
+        .expect("unchanged lake crossing frame")
+        .clone();
+    let points = vec![frame.eye, frame.target];
+    let route = Route {
+        name: WATER_CROSSING.into(),
+        category: "walk_swim_walk",
+        points: points.clone(),
+        stacked: false,
+    };
+    let identity = app
+        .world()
+        .resource::<ArenaTerrainView>()
+        .package_identity
+        .clone()
+        .expect("package identity");
+    let began = Instant::now();
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        traverse_route(&mut app, &route, began + ROUTE_LIMIT, true)
+    }));
+    let result = attempt.unwrap_or_else(|payload| {
+        let error = payload.downcast_ref::<String>().cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_string()))
+            .unwrap_or_else(|| "non-string crossing fixture panic".to_string());
+        serde_json::json!({"name":WATER_CROSSING,"status":"FAIL","phase":"fixture_or_route_panic","error":error})
+    });
+    let pass = result.get("status").and_then(|v| v.as_str()) == Some("PASS");
+    let receipt = serde_json::json!({
+        "kind":"grand-mixed-water-crossing-v1",
+        "status":if !pass {"FAIL"} else if selected.is_some() {"PARTIAL"} else {"PASS"},
+        "scope":"Same original lake-crossing endpoints through production ArenaInput/drive_simulation/ArenaTick. Actual walking/swimming/walking snapshots, loaded terrain and solid body clearance every completed tick; unchanged one-voxel dry fall limits include entry. No jump, flight, glider, boat, teleport, spells, upgrades or mid-route relocation. Forty completed dry settling ticks. This is mixed movement, never a dry-walking or native-feel verdict.",
+        "package":package,"identity":identity,"selected_route":selected,
+        "source_frame":"grand-lake-foothill-crossing","authored_endpoints":points,
+        "wall_seconds":began.elapsed().as_secs_f64(),"route":result,
+    });
+    std::fs::write(
+        data.join("crossing.json"),
+        serde_json::to_vec_pretty(&receipt).expect("crossing receipt"),
+    )
+    .expect("write crossing receipt");
+    println!("GRAND_MIXED_CROSSING {receipt}");
+    assert!(
+        pass,
+        "mixed crossing failed; see {}",
+        data.join("crossing.json").display()
     );
 }

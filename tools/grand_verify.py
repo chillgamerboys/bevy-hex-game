@@ -7,7 +7,8 @@ Every case has explicit disposable HEX_GAME_DATA_DIR storage and a real package.
 With --circuit, the same current-source binary also performs three streaming loops
 with CPU terrain presentation, checking typed residency and sparse-edit retention.
 With --admissions, it verifies all fourteen authored enemy parties and their codec.
-With --walking or --sailing, it exercises ordinary movement through the same build.
+With --walking, both dry walking and the separate walk/swim/walk crossing are required.
+With --sailing, it exercises ordinary boat movement through the same build.
 This checks persistence, not visual quality or native control feel.
 """
 from __future__ import annotations
@@ -30,6 +31,7 @@ ADMISSION_TEST = "arena::grand::tests::admission_tests::actual_grand_all_authore
 TRAVERSAL_TESTS = {
     "walking": "arena::grand::tests::walking_tests::actual_grand_ordinary_walking",
     "sailing": "arena::grand::tests::sailing_tests::actual_grand_unupgraded_authored_sailing",
+    "crossing": "arena::grand::tests::walking_tests::actual_grand_lake_walk_swim_walk",
 }
 
 
@@ -219,15 +221,16 @@ def execute_admissions(binary: Path, output: Path, environment: dict[str, str], 
 
 def validate_walking_receipt(receipt: dict) -> None:
     """Require per-simulation-tick one-voxel fall limits, including landing/settling."""
-    if receipt.get("kind") != "grand-ordinary-walking-r03" or receipt.get("status") != "PASS":
+    if receipt.get("kind") != "grand-ordinary-walking-r04" or receipt.get("status") != "PASS":
         raise RuntimeError("Ordinary walking requires the current bounded-fall receipt")
     routes = receipt.get("routes", [])
     expected = receipt.get("route_names", [])
     required_probes = {"forest_north", "forest_south", "forest_east", "forest_west",
                        "river_bank_escape", "river_bank_along", "valley_crossing",
                        "grand-west-foothill-crossing", "grand-west-foothill-uphill",
-                       "grand-lake-foothill-crossing", "grand-lake-foothill-uphill"}
-    if (receipt.get("selected_route") is not None or not required_probes <= set(expected)
+                       "grand-lake-foothill-uphill"}
+    if (receipt.get("selected_route") is not None or "grand-lake-foothill-crossing" in expected
+            or not required_probes <= set(expected)
             or not any(route.get("category") == "authored_connection" for route in routes)
             or receipt.get("expected_routes") != len(expected)
             or len(expected) != len(set(expected))
@@ -237,34 +240,125 @@ def validate_walking_receipt(receipt: dict) -> None:
                    or route.get("simulation_ticks", 0) <= 40 for route in routes)):
         raise RuntimeError("Ordinary walking did not complete all declared r02 routes and independent crossings")
     for route in routes:
-        grounding = route.get("grounding") or {}
-        limits = grounding.get("limits") or {}
-        positive = ("voxel_height", "automatic_step_height", "gravity", "ground_snap_distance",
-                    "collision_skin", "tick_seconds", "maximum_unsupported_descent")
-        if (grounding.get("contract") != "one-voxel-grounded-walk-v1"
-                or grounding.get("failure") is not None
-                or grounding.get("airborne_at_end") is not False
-                or any(type(limits.get(key)) not in (int, float)
-                       or not math.isfinite(limits[key]) or limits[key] <= 0 for key in positive)):
-            raise RuntimeError(f"{route['name']}: missing or invalid grounded-walking contract")
-        descent_limit = (min(limits["voxel_height"], limits["automatic_step_height"])
-                         + limits["ground_snap_distance"] + limits["collision_skin"])
-        airborne_limit = math.ceil(math.sqrt(2 * descent_limit / limits["gravity"])
-                                   / limits["tick_seconds"]) + 1
-        if (not math.isclose(limits["maximum_unsupported_descent"], descent_limit, rel_tol=1e-6)
-                or type(limits.get("maximum_airborne_ticks")) is not int
-                or limits["maximum_airborne_ticks"] != airborne_limit):
-            raise RuntimeError(f"{route['name']}: fall allowance is not derived from the physical step contract")
-        ticks = route["simulation_ticks"]
-        if (grounding.get("observed_simulation_ticks") != ticks
-                or any(type(grounding.get(key)) is not int or not 0 <= grounding[key] <= ticks
-                       for key in ("observed_simulation_ticks", "total_airborne_ticks",
-                                   "maximum_airborne_ticks", "completed_airborne_episodes"))
-                or grounding["maximum_airborne_ticks"] > airborne_limit
-                or type(grounding.get("maximum_unsupported_descent")) not in (int, float)
-                or not math.isfinite(grounding["maximum_unsupported_descent"])
-                or not 0 <= grounding["maximum_unsupported_descent"] <= limits["maximum_unsupported_descent"]):
-            raise RuntimeError(f"{route['name']}: walking exceeded or omitted its per-tick fall evidence")
+        validate_grounded_trace(route.get("grounding") or {}, route["simulation_ticks"], route["name"])
+
+
+def validate_grounded_trace(grounding: dict, ticks: int, name: str) -> None:
+    """The same unloosened dry-step contract also checks each mixed dry segment."""
+    limits = grounding.get("limits") or {}
+    positive = ("voxel_height", "automatic_step_height", "gravity", "ground_snap_distance",
+                "collision_skin", "tick_seconds", "maximum_unsupported_descent")
+    if (grounding.get("contract") != "one-voxel-grounded-walk-v1"
+            or grounding.get("failure") is not None
+            or grounding.get("airborne_at_end") is not False
+            or any(type(limits.get(key)) not in (int, float)
+                   or not math.isfinite(limits[key]) or limits[key] <= 0 for key in positive)):
+        raise RuntimeError(f"{name}: missing or invalid grounded-walking contract")
+    descent_limit = (min(limits["voxel_height"], limits["automatic_step_height"])
+                     + limits["ground_snap_distance"] + limits["collision_skin"])
+    airborne_limit = math.ceil(math.sqrt(2 * descent_limit / limits["gravity"])
+                               / limits["tick_seconds"]) + 1
+    if (not math.isclose(limits["maximum_unsupported_descent"], descent_limit, rel_tol=1e-6)
+            or type(limits.get("maximum_airborne_ticks")) is not int
+            or limits["maximum_airborne_ticks"] != airborne_limit):
+        raise RuntimeError(f"{name}: fall allowance is not derived from the physical step contract")
+    if (grounding.get("observed_simulation_ticks") != ticks
+            or any(type(grounding.get(key)) is not int or not 0 <= grounding[key] <= ticks
+                   for key in ("observed_simulation_ticks", "total_airborne_ticks",
+                               "maximum_airborne_ticks", "completed_airborne_episodes"))
+            or grounding["maximum_airborne_ticks"] > airborne_limit
+            or type(grounding.get("maximum_unsupported_descent")) not in (int, float)
+            or not math.isfinite(grounding["maximum_unsupported_descent"])
+            or not 0 <= grounding["maximum_unsupported_descent"] <= limits["maximum_unsupported_descent"]):
+        raise RuntimeError(f"{name}: walking exceeded or omitted its per-tick fall evidence")
+
+
+def validate_crossing_receipt(receipt: dict) -> None:
+    """Require the separate complete same-endpoint walk/swim/walk claim."""
+    route = receipt.get("route") or {}
+    trace = route.get("mixed_crossing") or {}
+    points = receipt.get("authored_endpoints", [])
+    if (receipt.get("kind") != "grand-mixed-water-crossing-v1"
+            or receipt.get("status") != "PASS" or receipt.get("selected_route") is not None
+            or receipt.get("source_frame") != "grand-lake-foothill-crossing"
+            or route.get("name") != "grand-lake-foothill-water-crossing"
+            or route.get("category") != "walk_swim_walk" or route.get("status") != "PASS"
+            or route.get("completed_segments") != 1 or route.get("required_segments") != 1
+            or len(points) != 2 or any(len(point) != 3 or any(type(v) not in (int, float)
+                or not math.isfinite(v) for v in point) for point in points)
+            or route.get("waypoints") != points):
+        raise RuntimeError("Mixed crossing must complete its unchanged published endpoints")
+    ticks = route.get("simulation_ticks", 0)
+    transitions = trace.get("transitions", [])
+    positive_counts = ("swimming_ticks", "wet_swimming_ticks", "dry_ticks", "entry_count", "exit_count")
+    if (type(ticks) is not int or ticks <= 40
+            or trace.get("contract") != "ordinary-walk-swim-walk-v1"
+            or trace.get("failure") is not None or trace.get("swimming_at_end") is not False
+            or trace.get("all_terrain_ready") is not True or trace.get("all_solid_bodies_clear") is not True
+            or trace.get("observed_simulation_ticks") != ticks
+            or any(type(trace.get(k)) is not int or not 0 < trace[k] <= ticks for k in positive_counts)
+            or trace["dry_ticks"] + trace["swimming_ticks"] != ticks
+            or trace["wet_swimming_ticks"] > trace["swimming_ticks"]
+            or not isinstance(transitions, list) or len(transitions) < 3):
+        raise RuntimeError("Mixed crossing lacks complete per-tick mode, terrain or body evidence")
+    modes = [event.get("mode") for event in transitions]
+    event_ticks = [event.get("tick") for event in transitions]
+    if (modes[0] != "walking" or modes[-1] != "walking"
+            or any(mode not in ("walking", "swimming") for mode in modes)
+            or any(a == b for a, b in zip(modes, modes[1:]))
+            or modes.count("swimming") != trace["entry_count"]
+            or modes.count("walking") - 1 != trace["exit_count"]
+            or any(type(tick) is not int for tick in event_ticks)
+            or any(a >= b for a, b in zip(event_ticks, event_ticks[1:]))
+            or event_ticks[-1] - event_ticks[0] > ticks
+            or any(event.get("terrain_ready") is not True or event.get("solid_body_clear") is not True
+                   for event in transitions[1:])):
+        raise RuntimeError("Mixed crossing lacks ordered authoritative water entry and exit")
+    dimensions = route.get("body_dimensions", [])
+    if (len(dimensions) != 3 or any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in dimensions)
+            or type(trace.get("swimming_distance")) not in (int, float)
+            or not math.isfinite(trace["swimming_distance"]) or trace["swimming_distance"] < dimensions[0]
+            or type(trace.get("maximum_sampled_water_depth")) not in (int, float)
+            or not math.isfinite(trace["maximum_sampled_water_depth"]) or trace["maximum_sampled_water_depth"] <= 0
+            or type(trace.get("minimum_oxygen")) not in (int, float)
+            or not math.isfinite(trace["minimum_oxygen"]) or trace["minimum_oxygen"] < 0):
+        raise RuntimeError("Mixed crossing did not swim a body width through sampled water")
+    segments = trace.get("dry_segments", [])
+    current = trace.get("current_dry_segment")
+    if not isinstance(segments, list) or len(segments) != trace["entry_count"] or not isinstance(current, dict):
+        raise RuntimeError("Mixed crossing omitted dry segments or its water-entry fall sample")
+    segments = [*segments, current]
+    checked = 0
+    for index, segment in enumerate(segments):
+        count = segment.get("observed_simulation_ticks")
+        if type(count) is not int or count <= 0:
+            raise RuntimeError("Mixed dry segment has no completed simulation evidence")
+        validate_grounded_trace(segment, count, f"mixed dry segment {index}")
+        checked += count
+    if checked != trace["dry_ticks"] + trace["entry_count"]:
+        raise RuntimeError("Mixed dry coverage omitted or duplicated a tick")
+    samples = route.get("samples", [])
+    arrival = samples[-1] if samples else {}
+    endpoint = arrival.get("endpoint", {})
+    if (type(arrival.get("settling_ticks")) is not int or arrival["settling_ticks"] < 40
+            or type(arrival.get("remaining")) not in (int, float)
+            or not math.isfinite(arrival["remaining"]) or not 0 <= arrival["remaining"] <= 2.0
+            or endpoint.get("grounded") is not True or endpoint.get("support_valid") is not True
+            or endpoint.get("volume_valid") is not True or current["observed_simulation_ticks"] < 40):
+        raise RuntimeError("Mixed crossing did not finish forty live ticks on clear dry support")
+
+
+def execute_walking_bundle(binary: Path, output: Path, environment: dict[str, str], report: dict) -> None:
+    """Collect both independent outcomes; neither can substitute for the other."""
+    failures = []
+    for mode in ("walking", "crossing"):
+        try:
+            report[mode] = execute_traversal(binary, mode, output, environment)
+        except Exception as error:
+            report[mode] = {"status": "FAIL", "error": str(error)}
+            failures.append(f"{mode}: {error}")
+    if failures:
+        raise RuntimeError("; ".join(failures))
 
 
 def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str],
@@ -277,7 +371,7 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     (data / "grand-verification-only").write_text("Disposable actual-package traversal verification.\n")
     child = environment | {"HEX_GAME_DATA_DIR": str(data)}
     for key in ("HEX_GRAND_VERIFY_MODE", "HEX_GRAND_VERIFY_PHASE", "HEX_GRAND_WALK_ROUTE",
-                "HEX_GRAND_SAIL_START_ANCHOR"):
+                "HEX_GRAND_SAIL_START_ANCHOR", "HEX_GRAND_CROSSING_ROUTE"):
         child.pop(key, None)
     if mode == "sailing":
         child["HEX_GRAND_SAIL_START_ANCHOR"] = sailing_start
@@ -289,13 +383,16 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     if result.returncode or "running 1 test" not in log_path.read_text():
         raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
     receipt = json.loads((data / f"{mode}.json").read_text())
-    kind = "grand-ordinary-walking-r03" if mode == "walking" else "grand-authored-sailing-v1"
+    kind = {"walking":"grand-ordinary-walking-r04", "sailing":"grand-authored-sailing-v1",
+            "crossing":"grand-mixed-water-crossing-v1"}[mode]
     if receipt.get("kind") != kind or receipt.get("status") != "PASS":
         raise RuntimeError(f"Actual {mode} receipt did not report completion")
     if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
         raise RuntimeError(f"Actual {mode} used a different immutable package")
     if mode == "walking":
         validate_walking_receipt(receipt)
+    elif mode == "crossing":
+        validate_crossing_receipt(receipt)
     else:
         measurement = receipt.get("measurement", {})
         if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"
@@ -316,7 +413,7 @@ def main() -> None:
     parser.add_argument("--case", action="append", choices=("land", "boat", "air"), dest="cases")
     parser.add_argument("--circuit", action="store_true", help="Also run three actual-package streaming loops using the same test build")
     parser.add_argument("--admissions", action="store_true", help="Also verify all fourteen actual-package enemy parties using the same test build")
-    parser.add_argument("--walking", action="store_true", help="Also walk all authored connections and independent r02 crossings with ordinary movement")
+    parser.add_argument("--walking", action="store_true", help="Require dry authored connections/foothill probes AND the separate same-endpoint walk-swim-walk crossing")
     parser.add_argument("--sailing", action="store_true", help="Measure both western-shore and starting-bay boat crossings with production input")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
     parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")
@@ -379,9 +476,12 @@ def main() -> None:
                 report["circuit"] = execute_circuit(binary, output, environment, arguments.circuit_timeout)
             if arguments.admissions:
                 report["admissions"] = execute_admissions(binary, output, environment, arguments.admission_timeout)
-            for mode in TRAVERSAL_TESTS:
+            for mode in ("walking", "sailing"):
                 if getattr(arguments, mode):
-                    report[mode] = execute_traversal(binary, mode, output, environment)
+                    if mode == "walking":
+                        execute_walking_bundle(binary, output, environment, report)
+                    else:
+                        report[mode] = execute_traversal(binary, mode, output, environment)
                     report_path.write_text(json.dumps(report, indent=2) + "\n")
                     if mode == "sailing":
                         report["sailing_bay"] = execute_traversal(
