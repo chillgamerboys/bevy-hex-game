@@ -25,7 +25,7 @@ mod terrain;
 mod terrain_tests;
 #[cfg(test)]
 mod tests;
-use super::northern::{IslandSpec, NorthernOverview, nearest_hex, world_xz};
+use super::northern::{nearest_hex, world_xz, IslandSpec, NorthernOverview};
 use hex_world_contracts::*;
 use serde::{Deserialize, Serialize};
 pub use sites::GrandSites;
@@ -84,6 +84,8 @@ pub struct GrandCompiler {
     pub materials: Vec<MaterialSpec>,
     /// Exact enlarged coast-enclosed area in hex columns.
     pub mainland_columns: usize,
+    /// Allowed coastal authoring variation around sevenfold area (0.01% for r02).
+    pub mainland_tolerance_columns: usize,
     /// Exact independently enlarged Crystal footprint in hex columns.
     pub crystal_columns: usize,
     /// Number of globally reserved tree objects.
@@ -201,7 +203,7 @@ impl GrandCompiler {
             ));
         }
         let mut coast = vec![0_u16; GRID * GRID];
-        let mut count = 0;
+        let mut count: usize = 0;
         if let Some(document) = &geography.document {
             for r in -OFFSET..=OFFSET {
                 for q in -OFFSET..=OFFSET {
@@ -265,12 +267,21 @@ impl GrandCompiler {
                 }
             }
         }
-        if count != source.canonical_mainland_columns * 7 {
+        let mainland_target = source.canonical_mainland_columns * 7;
+        // The brief asks for approximately sevenfold area. Keep a tight 0.01%
+        // coastal allowance so an actual open river mouth need not be dammed
+        // or the whole world rescaled merely to recover a few boundary cells.
+        // Retained explicit-row worlds keep their existing exact contract.
+        let mainland_tolerance_columns = if geography.document.is_some() {
+            mainland_target / 10_000
+        } else {
+            0
+        };
+        if count.abs_diff(mainland_target) > mainland_tolerance_columns {
             return Err(ContractError::new(
                 "grand",
                 format!(
-                    "mainland must be exactly seven times canonical area: actual {count}, expected {}",
-                    source.canonical_mainland_columns * 7
+                    "mainland must approximate seven times canonical area: actual {count}, target {mainland_target}, tolerance {mainland_tolerance_columns}"
                 ),
             ));
         }
@@ -384,6 +395,7 @@ impl GrandCompiler {
             geography,
             materials: palette(),
             mainland_columns: count,
+            mainland_tolerance_columns,
             crystal_columns,
             tree_count: 0,
             forest: None,

@@ -484,3 +484,24 @@ east-camera comparison still shows coarse terraces and mixed detail density, at
 337.7 MB of raw terrain buffers. The next corrected-geography package uses the
 existing renderer. That comparison neither accepts the new terrain nor establishes
 performance. First revised actual game pictures remain pending a fresh package.
+
+The follow-up join repair (`42a0d91`) adds a ninth published ground-level gateway
+through the Crystal stair foundation, keeps Shadow's final landing level, and
+softens the volcano's initial walkout. All 42,247 ribbon supports, centerlines and
+cave-cover checks pass; the two remaining combined dressing/Shadow fixtures also
+pass. The ordinary-walking harness now observes every simulation tick and bounds
+unsupported descent and airtime using production movement facts. Its Python
+receipt checks pass; the new Rust controller fixtures still require execution.
+
+Strict emitted-flow validation exposed a sea-level river pool enclosed by its own
+terminal bank. A river cell at sea height is now required to reach actual ocean
+water, and the seaward bank cap is removed (`c1f6038`, `5e037d8`). This changes the
+measured mainland to 653,261 columns: 21 below the nominal 653,282 target, or
+6.999775 times the original. The scale is unchanged. The approximate-area contract
+now explicitly allows 0.01% (65 columns) for authored coastal openings, while
+retained explicit-row worlds still require their original exact count. Receipts
+report actual area, target, tolerance and ratio separately; no report may claim
+that the new actual count is exactly sevenfold. The full Crystal footprint remains
+22,201 columns. The strict emitted-flow acceptance now passes: all authored
+channel paths reach their receiving lake or actual ocean through nonuphill wet
+neighbors. A fresh plain package and game renders remain pending.

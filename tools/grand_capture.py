@@ -88,9 +88,12 @@ def validate_area(receipt: dict, measurement: dict, geography: dict) -> None:
     crystal = geography["ascent"]["expected_columns"]
     canonical = measurement["canonical_crystal_columns"]
     ratio = receipt.get("crystal_area_ratio")
+    mainland = receipt.get("mainland_columns")
+    mainland_ratio = receipt.get("mainland_area_ratio")
     expected = {
         "world_id": "grand-v4",
-        "mainland_columns": measurement["mainland_target_columns"],
+        "mainland_target_columns": measurement["mainland_target_columns"],
+        "mainland_tolerance_columns": measurement["mainland_tolerance_columns"],
         "canonical_mainland_columns": measurement["canonical_mainland_columns"],
         "canonical_crystal_columns": canonical,
         "crystal_target_columns": measurement["crystal_target_columns"],
@@ -100,6 +103,10 @@ def validate_area(receipt: dict, measurement: dict, geography: dict) -> None:
     }
     if (receipt.get("strict") is not True
             or any(receipt.get(key) != value for key, value in expected.items())
+            or type(mainland) is not int
+            or abs(mainland - measurement["mainland_target_columns"]) > measurement["mainland_tolerance_columns"]
+            or type(mainland_ratio) not in (int, float) or not math.isfinite(mainland_ratio)
+            or not math.isclose(mainland_ratio, mainland / measurement["canonical_mainland_columns"], rel_tol=1e-12)
             or type(ratio) not in (int, float) or not math.isfinite(ratio)
             or not math.isclose(ratio, crystal / canonical, rel_tol=1e-12)):
         raise RuntimeError("Package does not establish the Grand area contract")

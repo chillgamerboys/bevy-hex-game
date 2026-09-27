@@ -8,6 +8,8 @@
   "canonical_mainland_columns": 93326,
   "other_included_component_columns": [],
   "mainland_target_columns": 653282,
+  "mainland_tolerance_columns": 65,
+  "mainland_tolerance_basis": "0.01% of nominal sevenfold area for small authored coastal openings; actual area is reported separately",
   "target_area_ratio": 7,
   "canonical_crystal_radius": 32,
   "canonical_crystal_columns": 3169,

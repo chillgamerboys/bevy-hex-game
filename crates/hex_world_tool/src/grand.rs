@@ -22,6 +22,9 @@ struct Receipt {
     elapsed_seconds: f64,
     mainland_columns: usize,
     canonical_mainland_columns: usize,
+    mainland_target_columns: usize,
+    mainland_tolerance_columns: usize,
+    mainland_area_ratio: f64,
     crystal_columns: usize,
     canonical_crystal_columns: usize,
     crystal_target_columns: usize,
@@ -133,6 +136,10 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         elapsed_seconds: started.elapsed().as_secs_f64(),
         mainland_columns: compiler.mainland_columns,
         canonical_mainland_columns: compiler.source.canonical_mainland_columns,
+        mainland_target_columns: compiler.source.canonical_mainland_columns * 7,
+        mainland_tolerance_columns: compiler.mainland_tolerance_columns,
+        mainland_area_ratio: compiler.mainland_columns as f64
+            / compiler.source.canonical_mainland_columns as f64,
         crystal_columns: compiler.crystal_columns,
         canonical_crystal_columns: compiler.source.canonical_crystal_columns,
         crystal_target_columns: compiler.source.canonical_crystal_columns * 7,
@@ -170,7 +177,8 @@ mod tests {
         spec.geography = Some("geography-r02.json".into());
         let bytes = include_bytes!("../../../assets/config/v4/grand-v4/geography-r02.json");
         let compiler = GrandCompiler::with_geography(spec, serde_json::from_slice(bytes)?, bytes)?;
-        assert_eq!(compiler.mainland_columns, 653282);
+        assert_eq!(compiler.mainland_columns, 653261);
+        assert!(compiler.mainland_columns.abs_diff(653282) <= compiler.mainland_tolerance_columns);
         // The original reference is the entire radius-32 feature (3169 cells),
         // not its hollow well. A clean authored polygon rounds to +0.081% of 7x.
         assert_eq!(compiler.crystal_columns, 22201);

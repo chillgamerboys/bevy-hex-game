@@ -40,7 +40,9 @@ pub(super) fn line_columns(g: &GrandCompiler, points: &[[f64; 3]]) -> Vec<WorldH
 #[test]
 fn full_measured_world_has_independent_crystal_and_exact_cave_sites() {
     let g = compiler(true);
-    assert_eq!(g.mainland_columns, 93_326 * 7);
+    assert_eq!(g.mainland_columns, 653_261);
+    assert_eq!(g.mainland_tolerance_columns, 65);
+    assert!(g.mainland_columns.abs_diff(93_326 * 7) <= g.mainland_tolerance_columns);
     let d = g.geography.document.as_ref().expect("canonical geography");
     assert_eq!(g.crystal.len(), d.ascent.expected_columns);
     assert_eq!(g.crystal_columns, g.crystal.len());

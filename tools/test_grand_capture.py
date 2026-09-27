@@ -33,7 +33,9 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
         for name in ("manifest.ron", "grand-overview.ron", "arena-sites.ron", "grand-biomes.ron"):
             (directory / name).write_text("fixture")
         receipt = {"strict": True, "world_id": "grand-v4", "package_fingerprint": 42,
-                   "mainland_columns": 653282, "canonical_mainland_columns": 93326,
+                   "mainland_columns": 653261, "canonical_mainland_columns": 93326,
+                   "mainland_target_columns": 653282, "mainland_tolerance_columns": 65,
+                   "mainland_area_ratio": 653261 / 93326,
                    "crystal_columns": 22201, "canonical_crystal_columns": 3169,
                    "crystal_target_columns": 22183, "crystal_authored_columns": 22201,
                    "crystal_area_ratio": 22201 / 3169,
@@ -107,6 +109,9 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
             {"crystal_area_ratio": float("nan")},
             {"crystal_footprint_basis": "legacy_reserved_footprint"},
             {"mainland_columns": 700, "canonical_mainland_columns": 100},
+            {"mainland_columns": 653216, "mainland_area_ratio": 653216 / 93326},
+            {"mainland_tolerance_columns": 66},
+            {"mainland_area_ratio": 7.0},
         )
         for change in invalid:
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
