@@ -281,8 +281,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and authoring errors."
     )]
-    fn compiled_channel_chunks_publish_closed_downhill_paths_to_receiving_water()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn compiled_channel_chunks_publish_closed_downhill_paths_to_receiving_water(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut spec: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
@@ -374,8 +374,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and authoring errors."
     )]
-    fn every_authored_channel_path_reaches_receiving_lake_or_ocean()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn every_authored_channel_path_reaches_receiving_lake_or_ocean(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut spec: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
@@ -437,8 +437,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and authoring errors."
     )]
-    fn authored_channel_links_are_exact_downhill_and_increase_the_wave_chart()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn authored_channel_links_are_exact_downhill_and_increase_the_wave_chart(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut spec: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;

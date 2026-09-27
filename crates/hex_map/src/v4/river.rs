@@ -273,8 +273,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and Bevy system errors."
     )]
-    fn saved_clock_drives_all_styles_independently_of_camera_and_rejects_nonfinite_time()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn saved_clock_drives_all_styles_independently_of_camera_and_rejects_nonfinite_time(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut world = World::new();
         world.init_resource::<Assets<RiverMaterial>>();
         let handles: Vec<_> = [Style::Current, Style::Rapid, Style::Fall]

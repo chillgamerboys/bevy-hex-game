@@ -1,6 +1,6 @@
 //! Continuous approved landforms, sampled at production hex resolution.
 //! No 12-unit study-grid stair steps enter the playable terrain.
-use super::geography::{GrandGeographyDocument, ellipse, irregular, route_distance, segment};
+use super::geography::{ellipse, irregular, route_distance, segment, GrandGeographyDocument};
 fn clamp(x: f64) -> f64 {
     x.clamp(0., 1.)
 }
@@ -455,7 +455,7 @@ mod profile_tests {
 
     #[test]
     fn mountain_lake_is_screened_from_authored_valley_eyes() {
-        use super::super::{LEVEL_HEIGHT, nearest_hex, world_xz};
+        use super::super::{nearest_hex, world_xz, LEVEL_HEIGHT};
         let g = super::super::tests::compiler(false);
         let d = g.geography.document.as_ref().expect("geography");
         let center = g.geography.world_hex(d.upper_lake.center);

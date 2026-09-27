@@ -518,11 +518,10 @@ fn frozen_shore_preserves_a_water_separated_garden_island() {
         g.clear_support(shore, 8),
         "the ordinary mountain route reaches dry shore"
     );
-    assert!(
-        g.column(shore.column)
-            .1
-            .is_none_or(|l| l.top <= shore.level + 1)
-    );
+    assert!(g
+        .column(shore.column)
+        .1
+        .is_none_or(|l| l.top <= shore.level + 1));
     let garden = g.geography.frame("shrine_water").expect("garden shrine");
     let court = g.support_at(&garden, [0., 0.]).expect("garden court");
     assert!(g.clear_support(court, 8));

@@ -1,6 +1,6 @@
 //! One source-owned coordinate frame for the approved revision-02 geography.
 //! Model local coordinates are east/north; runtime north is negative Z.
-use super::{GrandCompiler, LEVEL_HEIGHT, SEA_TOP, nearest_hex, world_xz};
+use super::{nearest_hex, world_xz, GrandCompiler, LEVEL_HEIGHT, SEA_TOP};
 use hex_world_contracts::{ContractError, VoxelPosition, WorldHex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

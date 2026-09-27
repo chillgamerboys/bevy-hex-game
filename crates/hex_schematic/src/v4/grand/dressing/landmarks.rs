@@ -435,19 +435,16 @@ mod tests {
             .collect();
         assert_eq!(camps.len(), 6);
         for camp in camps {
-            assert!(
-                camp.occupancy
-                    .iter()
-                    .flat_map(|c| &c.runs)
-                    .any(|run| run.material == "timber")
-            );
-            assert!(
-                !camp
-                    .grounding
-                    .as_ref()
-                    .expect("hut and clearing contacts")
-                    .is_empty()
-            );
+            assert!(camp
+                .occupancy
+                .iter()
+                .flat_map(|c| &c.runs)
+                .any(|run| run.material == "timber"));
+            assert!(!camp
+                .grounding
+                .as_ref()
+                .expect("hut and clearing contacts")
+                .is_empty());
         }
         let rim = objects
             .iter()
