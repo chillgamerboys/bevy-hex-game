@@ -7,6 +7,11 @@
 pub mod forest;
 pub mod ground_cover;
 mod objects;
+mod presentation;
+pub use presentation::{
+    InlandWaterChunk, InlandWaterColumn, InlandWaterOverview, NorthernReviewCamera,
+    MAX_INLAND_WATER_COLUMNS, MAX_INLAND_WATER_SIDE_INTERVALS,
+};
 #[cfg(test)]
 mod tests;
 
@@ -210,6 +215,12 @@ pub struct NorthernOverview {
     /// Optional decorative nonblocking grounded plants, independent of occupancy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ground_cover: Option<ground_cover::GroundCover>,
+    /// Optional exact inland water geometry, independent of the seabed height grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inland_water: Option<InlandWaterOverview>,
+    /// Authored review cameras in final runtime coordinates; old sources have none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub review_cameras: BTreeMap<String, NorthernReviewCamera>,
     /// Exact building count, excluding field.
     pub building_count: usize,
 }
@@ -649,6 +660,8 @@ impl NorthernCompiler {
             tree_count: self.tree_count,
             forest: None,
             ground_cover: None,
+            inland_water: None,
+            review_cameras: BTreeMap::new(),
             building_count: 4,
         }
     }

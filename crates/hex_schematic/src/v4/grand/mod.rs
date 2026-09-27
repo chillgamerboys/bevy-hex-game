@@ -550,6 +550,8 @@ impl GrandCompiler {
             tree_count: self.tree_count,
             forest: self.forest.clone(),
             ground_cover: self.ground_cover.clone(),
+            inland_water: None,
+            review_cameras: BTreeMap::new(),
             building_count: self
                 .objects
                 .values()
