@@ -16,8 +16,8 @@ mod route_probe;
 #[cfg(any(test, feature = "test-support"))]
 pub use route_probe::DryRouteProbeFailure;
 mod separation;
-pub use separation::ActorSeparationStats;
 use separation::separate_many;
+pub use separation::ActorSeparationStats;
 mod steering;
 #[cfg(test)]
 mod tests;
