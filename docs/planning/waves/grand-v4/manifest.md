@@ -1,5 +1,40 @@
 # Grand V4 integration wave
 
+## Next dressed candidate: integrated source
+
+`37037c2` exposes the World Tree forks under unequal crown layers. It preserves
+all original timber, roots, grounding, footprint and height. Exact occupied
+intervals match the reviewed geometry study; the corrected palette uses 23,811
+runs and 682,044 vertices within existing limits. Four matched source views show
+improved branch openings, with tiered pads and dark regional patches still needing
+actual game review. The failed run-budget and one-extra-voxel trials remain preserved.
+
+`5c2f106` adds a geographic landing-apron control and the world-owned
+`sailing_bay_offshore` anchor. The broad 13-to-48-model-unit apron raises only lower
+terrain toward the original ascent datum. All 4,370 baseline sample tops and water
+values independently match dressed02. The candidate raises 1,059 columns by at
+most four levels, preserves all 2,202 surveyed outer-annulus columns, leaves the
+berth unchanged, and connects the unchanged landing to 260 shallow wet supports.
+Every wet/dry edge inside the apron is at most one level; six pre-existing larger
+edges lie outside it. These are necessary support facts, not whole-body traversal.
+
+The bay's authored course exits its mouth before turning offshore of the headland.
+Exact published-package analysis finds wet, object-clear 4.5-unit corridors and a
+45-unit-radius maneuvering pocket. The app check uses ordinary input, an 8-unit
+intermediate waypoint threshold, and the unchanged final berth/landing criteria.
+Sailing-v3 receipts record the authored route and actual loaded boat arrival. No
+production boat physics or endpoints change. Actual new-package sailing remains
+required, including the complete ordinary B/swim/walk/settle shore leg.
+
+World source validation: 68 Grand tests pass, six existing tests remain ignored;
+focused tree/shore exports, scoped schematic Clippy and independent audits pass.
+App formatting and lib/tests scoped Clippy pass. L4 is clean and frozen pending
+actual package/controller/images. L6's banked diagnostic proves the sampled NW
+teeth are dry live-detail versus coarse terrain (face normals/material exposure),
+with no water surface in front of those samples. The earlier matte/inland-water
+boundary trials remain excluded. A bounded presentation remedy is still under
+investigation; full acceptance remains open.
+
 ## September 27 dressed02 checkpoint
 
 Immutable `compiled-r02-dressed-02` was compiled at clean
@@ -10,22 +45,22 @@ World Tree and 97 other objects), mainland 6.999775× and Crystal 7.005680×.
 
 The emitted same-domain ground comparison confirms the source river repair:
 27,998 dry tops change; water levels/beds do not. The largest diagnostic dry
-component gains178 and loses28, net150, reaching479,945. Closed cave roofs and
+component gains 178 and loses 28, net 150, reaching 479,945. Closed cave roofs and
 clearance remain valid; this graph does not include object/body clearance.
 Eleven actual originals are independently reviewed. Distant garden structures,
 root/shore/camp opening and reverse-crown opacity improve. Dense rounded crown,
 uniform distant forest and detailed/coarse terrain teeth/strata remain defects.
 The island view's lower sea cutoff matches the near-plane intersection exactly.
-The separate60-unit optical retreat `4705a73` preserves framing and provides
-15.84units worst-case full-frame sea clearance; a fresh image remains required.
+The separate 60-unit optical retreat `4705a73` preserves framing and provides
+15.84 units worst-case full-frame sea clearance; a fresh image remains required.
 No native ocean seam claim follows from that static camera diagnosis.
 
 Actual land/boat/air process restarts pass with complete owner state, active
 attacks, partial voxel health and revisited destruction. Three circuits pass at
-31stops, high water49 source chunks/15detailed chunks/2jobs. All14parties and
-127stable enemies admit and checkpoint; the corrected Dragon roost works.
-Original walking19/20 passes include both repaired river routes and every cave
-route. Valley crossing stops among unchanged final50-unit ground/body objects
+31 stops, high water 49 source chunks / 15 detailed chunks / 2 jobs. All 14 parties and
+127 stable enemies admit and checkpoint; the corrected Dragon roost works.
+Original walking 19/20 passes include both repaired river routes and every cave
+route. Valley crossing stops among unchanged final 50-unit ground/body objects
 because its retained steering half-circle is entirely blocked. `90e0e6d` permits
 an opposite-side attempt only at that dead end. Three focused regressions and
 scoped Clippy pass; actual same-endpoint valley crossing passes with one reversal,
@@ -34,8 +69,8 @@ focused pass does not retroactively change the original pipeline FAIL or replace
 a full combined-source walking run. Independent mixed walk/swim/walk passes.
 
 Marine supplement preserves both FAILs. The western boat reaches the wet berth
-in39.700simulation seconds (728.638authored units); one ordinary B stow succeeds,
-but shore movement stops11.810units short at a real four-voxel139.3→140.7ledge.
+in 39.700 simulation seconds (728.638 authored units); one ordinary B stow succeeds,
+but shore movement stops 11.810 units short at a real four-voxel 139.3→140.7 ledge.
 The bay boat's direct bearing hits shallow/dry coastal samples, with zero velocity
 rather than merely insufficient time. Next: broadly grade the existing landing
 margin and publish a physically navigable offshore departure course. Keep original
@@ -48,7 +83,7 @@ attribution, with prior unsuccessful material/boundary trials still banked. Carg
 remains serialized. Evidence is preserved under task work directories named
 `grand-dressed02-*`, `grand-walking-side-recovery-01`, and the original pipeline
 receipt. Full static/temporal review, final combined integration/CI and approved
-native control/performance remain open. Stop at50% weekly account usage consumed.
+native control/performance remain open. Stop at 50% weekly account usage consumed.
 
 ## Historical September 27 first dressed checkpoint
 
