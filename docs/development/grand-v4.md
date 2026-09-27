@@ -78,7 +78,7 @@ contrast and readability remain part of fresh presentation review.
 Ordinary forest trees also publish authored distant silhouettes, independent of
 source-chunk residency. Shared crown/trunk meshes yield atomically to detailed
 objects, retain persistent cuts and never pin source chunks. The bounded overview
-retains a 1.6-million-vertex limit. Revision02 placements follow the shared forest
+retains a 1.75-million-vertex limit. Revision02 placements follow the shared forest
 regions, slopes and movement reservations; record their actual admitted count from
 the new package. Ground edits do not erase trees.
 The recipes reuse the earlier Dragon/Goblin expedition’s curved timber and layered
@@ -120,7 +120,7 @@ including independent forest crossings, riverbank escapes, and published stacked
 ordinary B input, the same live wind and unupgraded boat physics. The bay is farther
 away. Both reported times are measurements; neither is an assumed 45-second pass.
 
-The 43-view capture matrix is windowless and requires a clean committed candidate
+The 47-view capture matrix is windowless and requires a clean committed candidate
 and a package whose authoring signature matches current source. A `--view` subset
 is explicitly a partial diagnostic, never a completed full matrix. It
 records source and package hashes, renders, native state receipts and an initially
