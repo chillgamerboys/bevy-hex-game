@@ -534,3 +534,27 @@ ribbons and closed-cave cover. It needs new game captures. Broad flank/shore
 profiles and a bounded distant/detail rendering investigation remain in progress;
 the failed global stepped-renderer experiment is still excluded. No native
 performance, complete movement or final visual acceptance is claimed.
+
+### Plain03 preparation: separate shore, mountain and presentation evidence
+
+The mixed-crossing consumer is integrated in `a7548d1`/`f1925a3`, with its obsolete
+lint expectation removed in `f72e0ee`. Dry walking retains the existing per-tick
+fall rule. The same-endpoint river crossing independently requires actual
+walk–swim–walk transitions, solid body clearance and loaded terrain throughout.
+Plain02 still fails at the previously observed riverbank. The focused runner can
+report only partial selected-route evidence; full walking acceptance requires
+both the dry bundle and the separate crossing.
+
+`cb29841` adds source-owned upper-lake shelves and ordinary-channel bank profiles,
+plus wider Crystal/Frozen camera framing. Focused profile, emitted-bank and
+all-channel flow tests and schematic Clippy pass. Three actual ocean receivers
+remain connected; the bank changes alter river-mouth solid heights but not dry
+mainland membership. Western mountain composition and the affected library/Air
+refit are still in the world lane. Compile a new immutable plain03 only after
+these changes form one coherent candidate.
+
+The rendering lane has a separate default-off, package-specific lake-apron
+experiment. Its geometry/lifecycle tests are bounded diagnostics. It remains
+excluded from the integration candidate pending an actual same-camera A/B;
+neither buffer reduction nor source tests establish visual acceptance or frame
+times. Plain03 will first use the ordinary renderer.

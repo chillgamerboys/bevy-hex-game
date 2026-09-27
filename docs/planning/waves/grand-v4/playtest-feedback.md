@@ -128,3 +128,20 @@ do not grade narrow strips along the test lines or weaken the fall limits. The
 automatic ridges' lost saddle factor is separately restored so enclosing peaks
 remain distinct. High mountain screening and broad lower traversal are separate
 requirements, and neither is waived to satisfy the other.
+
+The lake-crossing endpoints straddle a real river. They now have a separate
+walk–swim–walk check, retaining the same endpoints and strict dry-segment fall
+limits. Every tick still requires loaded terrain and clear body space; a real
+swimming entry, wet travel, exit and settled dry endpoint are required. Plain02
+still fails this corrected check at the same bank, before swimming activates.
+Reclassifying the crossing did not clear the defect. The other three foothill
+probes remain ordinary dry walking.
+
+The next candidate includes irregular dry shelves around the upper lake and
+shallower margins on ordinary river reaches (`cb29841`); the plunge and receiving
+pools retain their separate geometry. Focused emitted-bank and nonuphill-flow
+checks pass, but only a new compiled package and the unchanged mixed crossing
+can establish the actual controller result. The western repair composes the
+coastal foot and mountain body rather than adding their slopes, and broadens the
+western summit. Its library and Air route must be refitted inside the new rock;
+the old room elevations are not a reason to inflate the mountain again.
