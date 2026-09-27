@@ -21,6 +21,60 @@ struct Route {
 }
 
 #[derive(Clone, Copy, Serialize)]
+struct WaypointReach {
+    horizontal_distance: f32,
+    vertical_distance: Option<f32>,
+    require_grounded: bool,
+}
+impl WaypointReach {
+    fn new(stacked: bool, body: Vec3, voxel_height: f32) -> Self {
+        Self {
+            // Authored points name individual supports. A two-unit radius can
+            // skip a neighboring hex and cut a stair corner across several
+            // risers, despite every published support being traversable.
+            horizontal_distance: if stacked {
+                body.x.min(body.z) * 0.5
+            } else {
+                REACHED
+            },
+            vertical_distance: stacked.then_some(voxel_height * 0.5),
+            require_grounded: stacked,
+        }
+    }
+
+    fn reached(self, feet: Vec3, target: Vec3, grounded: bool) -> bool {
+        feet.with_y(0.0).distance(target.with_y(0.0)) <= self.horizontal_distance
+            && self
+                .vertical_distance
+                .is_none_or(|tolerance| (feet.y - target.y).abs() <= tolerance)
+            && (!self.require_grounded || grounded)
+    }
+}
+
+#[test]
+fn authored_waypoint_requires_the_stair_support_instead_of_skipping_it() {
+    let reach = WaypointReach::new(true, Vec3::new(0.5, 1.2, 0.5), 0.35);
+    let feet = Vec3::new(1030.5632, 348.9501, -417.70718);
+    let intermediate = Vec3::new(1032.302, 349.30, -417.0);
+    // The former two-unit / 0.8-height check accepted this actual garden
+    // intermediate before the actor climbed it, then aimed at a higher tread.
+    assert!(feet.with_y(0.0).distance(intermediate.with_y(0.0)) < REACHED);
+    assert!((feet.y - intermediate.y).abs() < 0.8);
+    assert!(!reach.reached(feet, intermediate, true));
+    assert!(!reach.reached(intermediate - Vec3::Y * 0.35, intermediate, true));
+    assert!(!reach.reached(intermediate + Vec3::X, intermediate, true));
+    assert!(!reach.reached(intermediate, intermediate, false));
+    assert!(reach.reached(intermediate + Vec3::Y * 0.0001, intermediate, true));
+}
+
+#[test]
+fn authored_waypoint_does_not_change_cross_country_arrival() {
+    let reach = WaypointReach::new(false, Vec3::new(0.5, 1.2, 0.5), 0.35);
+    assert!(reach.reached(Vec3::new(1.9, 12.0, 0.0), Vec3::ZERO, false));
+    assert!(!reach.reached(Vec3::new(2.1, 0.0, 0.0), Vec3::ZERO, true));
+}
+
+#[derive(Clone, Copy, Serialize)]
 struct GroundedWalkLimits {
     voxel_height: f32,
     automatic_step_height: f32,
@@ -1130,6 +1184,11 @@ fn traverse_route(
     };
     let first_tick = app.world().resource::<ArenaSession>().tick;
     let limits = GroundedWalkLimits::new(app.world().resource::<ArenaVoxelGeometry>().level_height);
+    let waypoint_reach = WaypointReach::new(
+        route.stacked,
+        human(app.world()).body_dimensions(),
+        limits.voxel_height,
+    );
     if mixed {
         let sample = crossing_sample(app.world());
         app.insert_resource(MixedCrossingTrace::new(limits, sample));
@@ -1140,6 +1199,7 @@ fn traverse_route(
     let mut distance = 0.0_f32;
     let mut previous = start;
     let mut samples = vec![serde_json::json!({"tick":first_tick,"feet":start.to_array()})];
+    let mut waypoint_arrivals = Vec::new();
     let mut detours = 0_u32;
     let mut steering_trace = Vec::new();
     let mut failed = None;
@@ -1164,7 +1224,13 @@ fn traverse_route(
             let feet = human(app.world()).feet;
             let tick = app.world().resource::<ArenaSession>().tick;
             let remaining = feet.with_y(0.).distance(target);
-            if remaining <= REACHED && (!route.stacked || (feet.y - authored.y).abs() <= 0.8) {
+            if waypoint_reach.reached(feet, authored, human(app.world()).grounded) {
+                if route.stacked {
+                    waypoint_arrivals.push(serde_json::json!({
+                        "segment": index, "tick": tick, "feet": feet.to_array(),
+                        "target": point, "grounded": human(app.world()).grounded,
+                    }));
+                }
                 completed += 1;
                 break;
             }
@@ -1279,8 +1345,7 @@ fn traverse_route(
         let target = Vec3::from_array(*route.points.last().expect("nonempty route"));
         let remaining = human(world).feet.with_y(0.0).distance(target.with_y(0.0));
         if failed.is_none()
-            && (remaining > REACHED
-                || (route.stacked && (human(world).feet.y - target.y).abs() > 0.8))
+            && !waypoint_reach.reached(human(world).feet, target, human(world).grounded)
         {
             failed = Some("settling carried the player outside the final waypoint".into());
         }
@@ -1294,6 +1359,8 @@ fn traverse_route(
         "name":route.name,"category":route.category,"status":if failed.is_none(){"PASS"}else{"FAIL"},
         "error":failed,"start":start.to_array(),"end":human(app.world()).feet.to_array(),
         "body_dimensions":human(app.world()).body_dimensions().to_array(),
+        "waypoint_reach":waypoint_reach,
+        "waypoint_arrivals":waypoint_arrivals,
         "simulation_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
         "wall_seconds":began.elapsed().as_secs_f64(),"distance":distance,"maximum_auto_step":maximum_step,
         "object_detours":detours,"object_steering_trace":steering_trace,"completed_segments":completed,"required_segments":route.points.len()-1,
