@@ -1,28 +1,101 @@
 #!/usr/bin/env python3
 """Compile immutable full-scale Grand packages using the production chunk writer."""
-import argparse, hashlib, json, os, pathlib, subprocess, tempfile
-ROOT=pathlib.Path(__file__).resolve().parents[1]
-def signature(source):
-    paths=[source,*sorted((ROOT/'crates/hex_schematic/src/v4/grand').rglob('*.rs')),*sorted((ROOT/'crates/hex_schematic/src/v4/northern').rglob('*.rs')),ROOT/'crates/hex_world_tool/src/grand.rs',ROOT/'assets/config/v4/grand-v4/forest/trees.ron']
-    h=hashlib.sha256()
-    for p in paths:h.update(p.read_bytes())
-    return h.hexdigest()
-def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('mode',nargs='?',choices=['compile','ensure'],default='compile');ap.add_argument('--source',type=pathlib.Path,default=ROOT/'assets/config/v4/grand-v4/world.ron');ap.add_argument('--output',type=pathlib.Path,default=ROOT/'assets/config/v4/grand-v4/compiled');ap.add_argument('--target-dir',type=pathlib.Path,default=ROOT/'target/v4-authoring');ap.add_argument('--cargo-profile',choices=['dev','ci'],default='dev',help='Reuse the selected Cargo profile when building current worldc source');ap.add_argument('--plain',action='store_true',help='Same full terrain, caves and water; omit object dressing for composition review');ap.add_argument('--worldc',type=pathlib.Path,help='Use a prebuilt worldc; never invokes Cargo when supplied');a=ap.parse_args()
-    sig=signature(a.source)+('-plain' if a.plain else '-dressed')
-    if a.output.exists():
-        stamp=a.output/'authoring-identity.json'
-        if a.mode=='ensure' and all((a.output/f).is_file() for f in ['manifest.ron','grand-overview.ron','arena-sites.ron','grand-biomes.ron']) and stamp.is_file() and json.loads(stamp.read_text()).get('signature')==sig:return 0
-        ap.error('Output already exists or is stale. Compile to a fresh --output and select it with HEX_GRAND_WORLD; immutable packages are never overwritten.')
-    a.output.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='grand-source-',dir=a.output.parent) as tmp:
-        source=a.source.resolve()
-        if a.plain:
-            source=pathlib.Path(tmp)/'world.ron';source.write_text(a.source.read_text().replace('full_dressing:true','full_dressing:false'))
-        cmd=[str(a.worldc.resolve())] if a.worldc else ['cargo','run','--profile',a.cargo_profile,'-p','hex_world_tool','--bin','worldc','--']
-        env=dict(os.environ,CARGO_TARGET_DIR=str(a.target_dir.resolve()),CARGO_INCREMENTAL='0',CARGO_BUILD_JOBS='2')
-        result=subprocess.call(cmd+['grand-compile','--source',str(source),'--output',str(a.output.resolve())],cwd=ROOT,env=env)
-        if result:return result
-    (a.output/'authoring-identity.json').write_text(json.dumps({'signature':sig,'plain':a.plain,'compiler_mode':'prebuilt-unverified' if a.worldc else 'cargo-current-source','cargo_profile':None if a.worldc else a.cargo_profile},indent=2)+'\n')
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def authoring_files(source: Path) -> list[Path]:
+    """The source and its named geographic companion travel as one input."""
+    files = [source]
+    match = re.search(r'\bgeography\s*:\s*Some\(\s*"([^"\\]+)"\s*\)', source.read_text())
+    if match:
+        name = match.group(1)
+        if Path(name).name != name or not name.endswith(".json"):
+            raise RuntimeError("Grand geography must name a sibling JSON file")
+        geography = source.parent / name
+        if not geography.is_file():
+            raise RuntimeError(f"Missing Grand geography companion: {geography}")
+        files.append(geography)
+    return files
+
+
+def signature(source: Path) -> str:
+    paths = [*authoring_files(source),
+             *sorted((ROOT / "crates/hex_schematic/src/v4/grand").rglob("*.rs")),
+             *sorted((ROOT / "crates/hex_schematic/src/v4/northern").rglob("*.rs")),
+             ROOT / "crates/hex_world_tool/src/grand.rs",
+             ROOT / "assets/config/v4/grand-v4/forest/trees.ron"]
+    digest = hashlib.sha256()
+    for path in paths:
+        data = path.read_bytes()
+        # Length framing prevents concatenation ambiguity without tying packages
+        # to a checkout's absolute path.
+        digest.update(len(data).to_bytes(8, "little"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def stage_plain_source(source: Path, directory: Path) -> Path:
+    for companion in authoring_files(source)[1:]:
+        shutil.copyfile(companion, directory / companion.name)
+    text, count = re.subn(r"\bfull_dressing\s*:\s*(?:true|false)\b",
+                          "full_dressing:false", source.read_text())
+    if count != 1:
+        raise RuntimeError("Expected one explicit full_dressing field in Grand source")
+    staged = directory / source.name
+    staged.write_text(text)
+    return staged
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", nargs="?", choices=["compile", "ensure"], default="compile")
+    parser.add_argument("--source", type=Path, default=ROOT / "assets/config/v4/grand-v4/world.ron")
+    parser.add_argument("--output", type=Path, default=ROOT / "assets/config/v4/grand-v4/compiled")
+    parser.add_argument("--target-dir", type=Path, default=ROOT / "target/v4-authoring")
+    parser.add_argument("--cargo-profile", choices=["dev", "ci"], default="dev")
+    parser.add_argument("--plain", action="store_true", help="Full terrain, caves and water without object dressing")
+    parser.add_argument("--worldc", type=Path, help="Prebuilt compiler; output remains unverified")
+    args = parser.parse_args()
+    source = args.source.resolve()
+    sig = signature(source) + ("-plain" if args.plain else "-dressed")
+    if args.output.exists():
+        stamp = args.output / "authoring-identity.json"
+        required = ["manifest.ron", "grand-overview.ron", "arena-sites.ron", "grand-biomes.ron"]
+        if (args.mode == "ensure" and all((args.output / name).is_file() for name in required)
+                and stamp.is_file() and json.loads(stamp.read_text()).get("signature") == sig):
+            return 0
+        parser.error("Output exists or is stale. Use a fresh --output; immutable packages are never overwritten.")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    inputs = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in authoring_files(source)}
+    with tempfile.TemporaryDirectory(prefix="grand-source-", dir=args.output.parent) as temporary:
+        if args.plain:
+            source = stage_plain_source(source, Path(temporary))
+        command = ([str(args.worldc.resolve())] if args.worldc else
+                   ["cargo", "run", "--profile", args.cargo_profile, "-p", "hex_world_tool", "--bin", "worldc", "--"])
+        env = dict(os.environ, CARGO_TARGET_DIR=str(args.target_dir.resolve()),
+                   CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2")
+        result = subprocess.call(command + ["grand-compile", "--source", str(source),
+                                            "--output", str(args.output.resolve())], cwd=ROOT, env=env)
+        if result:
+            return result
+    (args.output / "authoring-identity.json").write_text(json.dumps({
+        "signature": sig, "plain": args.plain, "authoring_files": inputs,
+        "compiler_mode": "prebuilt-unverified" if args.worldc else "cargo-current-source",
+        "cargo_profile": None if args.worldc else args.cargo_profile}, indent=2) + "\n")
     return 0
-if __name__=='__main__':raise SystemExit(main())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

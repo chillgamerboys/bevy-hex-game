@@ -54,7 +54,7 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
                 directory = Path(temporary)
                 self.package(directory, identity)
                 with patch.object(grand_capture.grand_package, "signature", return_value="current"):
-                    with self.assertRaisesRegex(RuntimeError, "stale or not dressed"):
+                    with self.assertRaisesRegex(RuntimeError, "stale or differs from requested dressing mode"):
                         grand_capture.package_state(directory)
 
     def test_matching_dressed_identity_is_recorded_with_frozen_file_hash(self):
@@ -66,6 +66,22 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
                 result = grand_capture.package_state(directory)
             self.assertEqual(result["authoring_identity"], identity)
             self.assertIn("sha256", result["files"]["authoring-identity.json"])
+
+    def test_plain_capture_requires_explicit_matching_mode(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            identity = {"signature": "current-plain", "plain": True,
+                        "compiler_mode": "cargo-current-source", "cargo_profile": "ci"}
+            self.package(directory, identity)
+            with patch.object(grand_capture.grand_package, "signature", return_value="current"):
+                with self.assertRaisesRegex(RuntimeError, "dressing mode"):
+                    grand_capture.package_state(directory)
+                result = grand_capture.package_state(directory, plain=True)
+                self.assertTrue(result["authoring_identity"]["plain"])
+                identity.update(signature="current-dressed", plain=False)
+                self.package(directory, identity)
+                with self.assertRaisesRegex(RuntimeError, "dressing mode"):
+                    grand_capture.package_state(directory, plain=True)
 
     def test_current_signature_cannot_approve_unverified_prebuilt_compiler(self):
         for compiler_mode in (None, "prebuilt-unverified"):

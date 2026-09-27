@@ -46,7 +46,7 @@ def cargo_arguments(profile: str, *, test_support: bool = False) -> tuple[str, .
     return ("run", "--profile", profile, "-p", "hex_game", "--features", features, "--", "--arena")
 
 
-def package_state(directory: Path) -> dict:
+def package_state(directory: Path, *, plain: bool = False) -> dict:
     if directory.is_symlink() or not directory.is_dir():
         raise RuntimeError("Package must be a real compiled directory")
     files = {}
@@ -59,9 +59,9 @@ def package_state(directory: Path) -> dict:
         if required not in files:
             raise RuntimeError(f"Grand package lacks {required}")
     identity = json.loads((directory / "authoring-identity.json").read_text())
-    expected_signature = grand_package.signature(ROOT / "assets/config/v4/grand-v4/world.ron") + "-dressed"
-    if identity.get("plain") is not False or identity.get("signature") != expected_signature:
-        raise RuntimeError("Package authoring identity is stale or not dressed; compile current source to a fresh directory")
+    expected_signature = grand_package.signature(ROOT / "assets/config/v4/grand-v4/world.ron") + ("-plain" if plain else "-dressed")
+    if identity.get("plain") is not plain or identity.get("signature") != expected_signature:
+        raise RuntimeError("Package authoring identity is stale or differs from requested dressing mode; compile current source to a fresh directory")
     if identity.get("compiler_mode") != "cargo-current-source":
         raise RuntimeError("Package lacks current-source compiler provenance; rebuild through Cargo before capture")
     receipt = json.loads((directory / "compile-receipt.json").read_text())
@@ -128,7 +128,7 @@ def capture(args: argparse.Namespace) -> int:
     pack = ROOT / ".context/grand-review" / label / args.label
     if pack.exists():
         raise RuntimeError(f"Evidence exists already: {pack}")
-    package = package_state(args.package)
+    package = package_state(args.package, plain=args.plain)
     command = cargo_arguments(args.cargo_profile)
     env, removed = arena.environment(args.target_dir)
     env.update(HEX_GRAND_WORLD=str(args.package), HEX_ARENA_MAP="grand-v4")
@@ -137,6 +137,7 @@ def capture(args: argparse.Namespace) -> int:
     (pack / "unstaged.patch").write_bytes(unstaged)
     atomic_json(pack / "package-state.json", package)
     receipt = {"source": source, "package": package, **matrix,
+               "content_stage": "PLAIN-TERRAIN" if args.plain else "DRESSED-WORLD",
                "cargo_profile": args.cargo_profile, "command": ["cargo", *command],
                "source_label": "UNAPPROVABLE-DIRTY" if source["dirty"] else "COMMITTED-CANDIDATE",
                "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
@@ -182,6 +183,7 @@ def capture(args: argparse.Namespace) -> int:
         receipt["finished_at"] = arena.utc_now()
         atomic_json(pack / "receipt.json", receipt)
         rows = [f"# Grand V4 — {label}", "", f"Mechanical: {receipt['mechanical_status']}. Static: UNREVIEWED.",
+                f"Content stage: {receipt['content_stage']}.",
                 f"Matrix: {receipt['matrix_scope']}; {len(receipt['completed_views'])}/{len(VIEWS)} full-matrix views captured.",
                 "Full-matrix presentation approval is unavailable for focused subsets." if receipt["matrix_scope"] != "FULL" else "Full matrix captured only after all declared views complete; independent static review is still required.",
                 "Native movement: HUMAN-MOTION-PENDING.", "", MOTION_ROUTE, ""]
@@ -197,6 +199,7 @@ def main() -> int:
     parser.add_argument("--label", required=True)
     parser.add_argument("--view", choices=VIEWS, action="append")
     parser.add_argument("--dirty-diagnostic", action="store_true")
+    parser.add_argument("--plain", action="store_true", help="Explicitly admit a current plain-terrain package for geometry review")
     parser.add_argument("--cargo-profile", choices=("dev", "ci"), default="dev")
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--settle-frames", type=int, default=4)
