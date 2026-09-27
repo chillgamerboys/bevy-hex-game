@@ -416,12 +416,31 @@ fn finish_terrain_profiled(
     for channel in [&d.falls, &d.river] {
         let (dist, target, _) = route_distance([x, z], &channel.points);
         let half = channel.width * 0.5;
-        let bank = half + 20.;
         let ordinary = if profiles {
             ordinary_bank_weight(d, [x, z], channel)
         } else {
             0.
         };
+        // A regular reach standing above the dry valley floor needs a broad
+        // supporting shoulder after its shallow wet margin. The old twenty
+        // model-unit blend dropped several voxels immediately after swim exit.
+        // Extend only this raised dry side: do not excavate higher gorge/cave
+        // ground or grow a new shore across submerged natural ocean columns.
+        let bank_width = if h >= 0. && h < target {
+            // Fade the extra reach continuously as natural ground meets sea
+            // level. A hard dry/ocean switch would retain the area count while
+            // introducing a new height discontinuity at that same coastline.
+            20. + ordinary
+                * smooth(h / target.max(1.))
+                * (d.ordinary_channel_banks
+                    .as_ref()
+                    .and_then(|profile| profile.dry_outer_blend)
+                    .unwrap_or(20.)
+                    - 20.)
+        } else {
+            20.
+        };
+        let bank = half + bank_width;
         // A sea-level outfall has lateral banks, not a circular levee around
         // its terminal cap. Preserve submerged natural ground beyond the last
         // cross-section so the authored river can join actual ocean columns.
@@ -456,7 +475,7 @@ fn finish_terrain_profiled(
             } else {
                 0.
             };
-            let blend = smooth((bank - dist) / (20. - collar));
+            let blend = smooth((bank - dist) / (bank_width - collar));
             let lip = d.ordinary_channel_banks.as_ref().map_or(1., |b| b.dry_lip);
             let mut retained_bank = target + 1. - ordinary * (1. - lip);
             // On a short descending reach the nearest centerline datum can be
@@ -1123,6 +1142,39 @@ mod profile_tests {
     }
 
     #[test]
+    fn ordinary_dry_bank_does_not_drop_at_observed_swim_exit() {
+        use hex_world_contracts::WorldHex;
+        let compiler = super::super::tests::compiler(false);
+        // Plain04 exited the water successfully and then fell down these dry
+        // shoulder columns. Keep this observed geometry regression separate
+        // from the unchanged full walk/swim/walk production controller probe.
+        let mut tops = Vec::new();
+        for q in 667..=675 {
+            let p = WorldHex::new(q, -90);
+            let (column, water) = compiler.column(p);
+            assert!(water.is_none(), "post-exit shoulder stays dry at {p:?}");
+            tops.push(
+                column
+                    .runs
+                    .iter()
+                    .map(|run| run.top)
+                    .max()
+                    .expect("dry ground"),
+            );
+        }
+        for pair in tops.windows(2) {
+            let [a, b] = pair else {
+                continue;
+            };
+            assert!(
+                a.abs_diff(*b) <= 1,
+                "post-exit dry shoulder still drops: {tops:?}"
+            );
+        }
+        eprintln!("POST_EXIT_DRY_BANK q667..675,r-90 tops={tops:?}");
+    }
+
+    #[test]
     fn bank_profiles_preserve_actual_ocean_outfall_without_new_dry_land() {
         use hex_world_contracts::WorldHex;
         let g = super::super::tests::compiler(false);
@@ -1184,18 +1236,33 @@ mod profile_tests {
         let neighbors = [[1, 0], [0, 1], [-1, 1], [-1, 0], [0, -1], [1, -1]];
         for (name, channel) in [("falls", &d.falls), ("river", &d.river)] {
             let mut band = BTreeSet::new();
+            let outer = d
+                .ordinary_channel_banks
+                .as_ref()
+                .and_then(|profile| profile.dry_outer_blend)
+                .unwrap_or(20.);
+            let extent = channel.width * 0.5 + outer + 4.;
+            let origin = g.geography.world_hex([0., 0.]);
+            let corner = g.geography.world_hex([extent, extent]);
+            let margin = i64::try_from(
+                origin
+                    .checked_distance(corner)
+                    .expect("bounded authored survey"),
+            )
+            .expect("bounded radius")
+                + 2;
             for pair in channel.points.windows(2) {
                 let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
                     continue;
                 };
                 let a = g.geography.world_hex([a[0], a[2]]);
                 let b = g.geography.world_hex([b[0], b[2]]);
-                for q in a.q.min(b.q) - 16..=a.q.max(b.q) + 16 {
-                    for r in a.r.min(b.r) - 16..=a.r.max(b.r) + 16 {
+                for q in a.q.min(b.q) - margin..=a.q.max(b.q) + margin {
+                    for r in a.r.min(b.r) - margin..=a.r.max(b.r) + margin {
                         let p = WorldHex::new(q, r);
                         let point = g.geography.model_xz(p);
                         let (distance, _, _) = route_distance(point, &channel.points);
-                        if (distance - channel.width * 0.5).abs() <= 5.
+                        if (-5. ..=outer).contains(&(distance - channel.width * 0.5))
                             && ordinary_bank_weight(d, point, channel) > 0.999
                             && [&d.upper_lake, &d.lower_lake]
                                 .iter()
@@ -1226,11 +1293,15 @@ mod profile_tests {
             let mut entry = BTreeMap::<i32, usize>::new();
             let mut shallow = BTreeMap::<i32, usize>::new();
             let mut examples = Vec::new();
+            let mut dry_edges = BTreeMap::<i32, usize>::new();
             for &p in &band {
                 let (top, liquid) = cache.get(&p).expect("cached band");
                 for [dq, dr] in neighbors {
                     let n = WorldHex::new(p.q + dq, p.r + dr);
                     let (other_top, other) = cache.get(&n).expect("cached neighbor");
+                    if liquid.is_none() && other.is_none() {
+                        *dry_edges.entry((*top - *other_top).abs()).or_default() += 1;
+                    }
                     if let Some(wet) = other {
                         if wet.top - wet.bottom > 4 {
                             continue;
@@ -1251,6 +1322,7 @@ mod profile_tests {
                 !entry.is_empty() && !shallow.is_empty(),
                 "complete regular {name} banks must be surveyed"
             );
+            eprintln!("ordinary dry-bank audit {name}: outer_blend={outer} level_differences={dry_edges:?}; geometry measurement, not a universal walkability gate");
             eprintln!(
                 "bank audit {name}: band={} dry-to-shallow level differences={entry:?}; shallow-band differences={shallow:?}; >1level examples={examples:?}",
                 band.len()

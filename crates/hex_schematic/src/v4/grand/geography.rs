@@ -142,7 +142,8 @@ shape!(ChannelBanks {
     max_longitudinal_grade: f64,
     plunge_buffer: f64,
     dry_lip: f64,
-    shelf_power: f64
+    shelf_power: f64,
+    dry_outer_blend: Option<f64>
 });
 shape!(Tree {
     center: [f64; 2],
@@ -267,6 +268,8 @@ impl GrandGeographyDocument {
                     || !(4. ..=30.).contains(&b.plunge_buffer)
                     || !(0. ..=1.).contains(&b.dry_lip)
                     || !(1.5..=3.).contains(&b.shelf_power)
+                    || b.dry_outer_blend
+                        .is_some_and(|width| !(40. ..=160.).contains(&width))
             })
             || self.garden_access.as_ref().is_some_and(|a| {
                 !path(&a.points)
