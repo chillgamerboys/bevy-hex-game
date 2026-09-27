@@ -176,7 +176,7 @@ pub(super) fn forest_hash(seed: u64, p: WorldHex) -> u64 {
 pub(super) fn forest_density(g: &GrandCompiler, p: WorldHex) -> f64 {
     g.geography.forest_density(p)
 }
-fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
+pub(super) fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
     let bottom = g.surface(p).level + 1;
     g.reserved_interval(p, bottom, bottom + 17)
 }
