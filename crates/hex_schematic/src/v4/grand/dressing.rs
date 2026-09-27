@@ -1,15 +1,12 @@
 //! Bounded, deterministic natural silhouettes and authored landmark geometry.
 use super::*;
 mod landmarks;
+mod world_tree;
 type Cells = BTreeMap<WorldHex, BTreeMap<i32, &'static str>>;
-const CAMPS: [(f64, f64); 6] = [
-    (-55., 380.),
-    (-263., 273.),
-    (132., 294.),
-    (-192., 188.),
-    (112., 147.),
-    (24., 211.),
+const CAMP_FRAMES: [&str; 6] = [
+    "camp_01", "camp_02", "camp_03", "camp_04", "camp_05", "camp_06",
 ];
+
 fn add(cells: &mut Cells, p: WorldHex, bottom: i32, top: i32, material: &'static str) {
     for y in bottom..top {
         cells.entry(p).or_default().insert(y, material);
@@ -28,7 +25,9 @@ fn object(
         let (terrain, _) = g.column(p);
         let mut runs: Vec<VoxelRun> = vec![];
         for (y, m) in cells {
-            if terrain.runs.iter().any(|r| r.bottom <= y && r.top > y) {
+            if terrain.runs.iter().any(|r| r.bottom <= y && r.top > y)
+                || g.reserved_interval(p, y, y + 1)
+            {
                 continue;
             }
             if let Some(r) = runs.last_mut() {
@@ -174,38 +173,14 @@ pub(super) fn forest_hash(seed: u64, p: WorldHex) -> u64 {
     value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
     value ^ (value >> 31)
 }
-pub(super) fn forest_density(x: f64, z: f64) -> f64 {
-    // A shared biome envelope with a feathered, irregular boundary, not a grid
-    // clipped to a hard ellipse. Large gaps form glades rather than missing rows.
-    let edge = biomes::forest_extent(
-        x + 31. * (z * 0.014).sin() + 12. * (x * 0.031).cos(),
-        z + 23. * (x * 0.013).sin() - 17. * (z * 0.025).cos(),
-    );
-    let boundary = 1. - smooth((edge - 0.72) / 0.32);
-    let groves = 0.82 + 0.12 * (x * 0.026 + z * 0.007).sin() + 0.06 * (z * 0.035 - x * 0.012).cos();
-    let glades = [
-        (-280., 90., 36., 25.),
-        (120., 355., 38., 32.),
-        (-160., 350., 24., 38.),
-    ]
-    .into_iter()
-    .map(|(cx, cz, rx, rz)| gaussian(x, z, cx, cz, rx, rz))
-    .fold(0_f64, f64::max);
-    boundary * groves * (1. - smooth((glades - 0.30) / 0.50))
+pub(super) fn forest_density(g: &GrandCompiler, p: WorldHex) -> f64 {
+    g.geography.forest_density(p)
 }
-pub(super) fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
-    let [x, z] = world_xz(p);
-    sites::reserved_encounter(x, z)
-        || sites::PADS
-            .iter()
-            .any(|a| (x - a.x).hypot(z - a.z) < a.radius + 3.)
-        || CAMPS.iter().any(|(cx, cz)| (x - cx).hypot(z - cz) < 16.)
-        || ((x + 60.).abs() < 12. && (125. ..260.).contains(&z))
-        || g.anchors.iter().any(|a| {
-            let [ax, az] = world_xz(a.position.column);
-            (x - ax).hypot(z - az) < 8.
-        })
+fn reserved_growth(g: &GrandCompiler, p: WorldHex) -> bool {
+    let bottom = g.surface(p).level + 1;
+    g.reserved_interval(p, bottom, bottom + 17)
 }
+
 fn overlaps(occupied: &Occupied, columns: &[ColumnData]) -> bool {
     columns.iter().any(|column| {
         occupied.get(&column.position).is_some_and(|old| {
@@ -268,7 +243,7 @@ fn place_tree(
         if !g.mainland(p)
             || bottom <= surface.level
             || (material != "timber" && bottom < surface.level + 9)
-            || (bottom < surface.level + 17 && reserved_growth(g, p))
+            || g.reserved_interval(p, bottom, floor + hi)
         {
             return Ok(None);
         }
@@ -319,28 +294,34 @@ fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<()
         reserve(&mut occupied, object);
     }
     let mut candidates = vec![];
-    for q in (-480_i64..=480).step_by(4) {
-        for r in (-480_i64..=480).step_by(4) {
+    let mut frozen_candidates = vec![];
+    for &(r, first, last) in &g.source.mainland_rows {
+        if r.rem_euclid(4) != 0 {
+            continue;
+        }
+        for q in (first..=last).filter(|q| q.rem_euclid(4) == 0) {
             let key = forest_hash(g.source.seed, WorldHex::new(q, r));
             let root = WorldHex::new(q + (key % 7) as i64 - 3, r + ((key >> 8) % 7) as i64 - 3);
-            let [x, z] = world_xz(root);
             let surface = g.surface(root);
-            let edge = biomes::forest_extent(x, z);
-            if !g.mainland(root)
-                || surface.water.is_some()
-                || !(420..=850).contains(&surface.level)
-                || g.cavity(root).is_some()
-                || reserved_growth(g, root)
-                || (key % 10_000) as f64 / 10_000. > forest_density(x, z)
-            {
+            if !g.mainland(root) || surface.water.is_some() || reserved_growth(g, root) {
                 continue;
             }
             let variant = 1 + (key >> 24) % 3;
-            let family = if edge < 0.80 && key % 5 < 3 {
+            let frozen = g.geography.frozen_planting_weight(root);
+            if frozen > 0. && (key % 10_000) as f64 / 10_000. <= frozen {
+                let template = library.select(&format!("understory-pine-{variant}"))?;
+                frozen_candidates.push((key, root, template));
+                continue;
+            }
+            let density = forest_density(g, root);
+            if (key % 10_000) as f64 / 10_000. > density || density <= 0. {
+                continue;
+            }
+            let family = if density > 0.70 && key % 5 < 3 {
                 "grove"
-            } else if edge < 0.92 && key % 5 < 4 {
+            } else if density > 0.45 && key % 5 < 4 {
                 "ancient"
-            } else if edge < 0.90 && !key.is_multiple_of(4) {
+            } else if density > 0.35 && !key.is_multiple_of(4) {
                 "landmark"
             } else if key.is_multiple_of(3) {
                 "understory-pine"
@@ -359,8 +340,6 @@ fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<()
             };
             candidates.push((layer, key, root, template));
             if template.height > 34 {
-                // A failed mature crown may still leave a valid sheltered site
-                // for a small tree. This fills layers without adding more roots.
                 let understory = if key.is_multiple_of(3) {
                     "understory-pine"
                 } else {
@@ -371,6 +350,27 @@ fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<()
             }
         }
     }
+    // Reserve a bounded part of the existing whole-forest budget for the
+    // continuous high route, rather than another fixed rectangular grove.
+    frozen_candidates.sort_by_key(|(key, root, _)| (*key, *root));
+    let mut frozen_planted: Vec<WorldHex> = vec![];
+    for (key, root, template) in frozen_candidates {
+        if frozen_planted.len() >= 72 {
+            break;
+        }
+        if frozen_planted
+            .iter()
+            .any(|old| old.checked_distance(root).is_ok_and(|d| d < 8))
+        {
+            continue;
+        }
+        if let Some(tree) = place_tree(g, template, root, key % 6, &occupied, true)? {
+            reserve(&mut occupied, &tree);
+            out.push(tree);
+            frozen_planted.push(root);
+        }
+    }
+    let ordinary_budget = MAX_FOREST_TREES - frozen_planted.len();
     // Mature groves reserve their branches first; smaller trees fill their gaps.
     // Hash order avoids an axial scan edge when the explicit count budget is met.
     candidates.sort_by_key(|(layer, key, root, template)| {
@@ -379,11 +379,11 @@ fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<()
     let mut planted = vec![];
     let mut mature = 0;
     for (_, key, root, template) in candidates {
-        if planted.len() >= MAX_FOREST_TREES - 12 {
+        if planted.len() >= ordinary_budget {
             break;
         }
         // Keep an understory allocation even if every mature candidate fits.
-        if template.height > 34 && mature >= MAX_FOREST_TREES - 12 - 180 {
+        if template.height > 34 && mature >= ordinary_budget.saturating_sub(180) {
             continue;
         }
         if planted
@@ -397,19 +397,6 @@ fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<()
             out.push(tree);
             planted.push((key, root));
             mature += usize::from(template.height > 34);
-        }
-    }
-    // Sparse snowy conifers retain the separately authored highland grove.
-    for i in 0..12 {
-        let root = nearest_hex(
-            -250. + f64::from(i % 4) * 28.,
-            -630. + f64::from(i / 4) * 20.,
-        );
-        let key = forest_hash(g.source.seed, root);
-        let template = library.select(&format!("understory-pine-{}", 1 + i % 3))?;
-        if let Some(tree) = place_tree(g, template, root, key % 6, &occupied, true)? {
-            reserve(&mut occupied, &tree);
-            out.push(tree);
         }
     }
     let mut details = 0;
@@ -483,160 +470,19 @@ fn forest_detail(
     Ok((!overlaps(occupied, &object.occupancy)).then_some(object))
 }
 
-// Independent, asymmetric lobes make a broad living canopy rather than a single
-// sphere on a pole. Compact per-column intervals keep the full landmark bounded.
-const WORLD_TREE_LOBES: [(i64, i64, i64, i32); 7] = [
-    (0, 0, 44, 300),
-    (-35, 8, 35, 278),
-    (38, -14, 34, 294),
-    (8, -38, 36, 269),
-    (-12, 41, 34, 288),
-    (-36, -24, 30, 259),
-    (30, 28, 31, 280),
-];
-fn world_tree(g: &GrandCompiler, root: WorldHex) -> Result<ObjectInstance, ContractError> {
-    let floor = g.surface(root).level + 1;
-    let mut cells = Cells::new();
-    let mut canopy: BTreeMap<WorldHex, (i32, i32)> = BTreeMap::new();
-    for (cq, cr, radius, height) in WORLD_TREE_LOBES {
-        for q in -radius..=radius {
-            for r in -radius..=radius {
-                let metric = q * q + q * r + r * r;
-                if metric > radius * radius {
-                    continue;
-                }
-                let depth = (1. - metric as f64 / (radius * radius) as f64).sqrt();
-                let low = floor + height - (depth * 90.) as i32;
-                let high = floor + height + (depth * 55.) as i32 + 1;
-                let p = WorldHex::new(root.q + cq + q, root.r + cr + r);
-                canopy
-                    .entry(p)
-                    .and_modify(|(lo, hi)| {
-                        *lo = (*lo).min(low);
-                        *hi = (*hi).max(high);
-                    })
-                    .or_insert((low, high));
-            }
-        }
-    }
-    for (p, (lo, hi)) in canopy {
-        add(&mut cells, p, lo, hi, "foliage");
-    }
-    // A gently curved, continuously tapered bole uses fractional contours so
-    // individual columns end at different heights. Root fins and the fixed outer
-    // crown remain the same landmark; this avoids a straight extruded cylinder.
-    for q in -11_i64..=11 {
-        for r in -11_i64..=11 {
-            let p = WorldHex::new(root.q + q, root.r + r);
-            let ground = g.surface(p).level + 1;
-            for level in ground..floor + 265 {
-                let t = (f64::from(level - floor) / 265.).clamp(0., 1.);
-                let drift = smooth(t);
-                let axis_q = 2.2 * drift + 0.6 * (std::f64::consts::PI * t).sin();
-                let axis_r = -1.5 * drift;
-                let x = q as f64 - axis_q + (r as f64 - axis_r) * 0.5;
-                let z = (r as f64 - axis_r) * 3_f64.sqrt() * 0.5;
-                let angle = z.atan2(x);
-                let width = 8.4 - 4.4 * t.powf(0.68);
-                let contour =
-                    1. + 0.10 * (3. * angle + t).sin() + 0.07 * (5. * angle - 1.3 * t).cos();
-                if x * x + z * z <= (width * contour).powi(2) {
-                    add(&mut cells, p, level, level + 1, "timber");
-                }
-            }
-        }
-    }
-    // Each outer lobe has a visible rising branch from the trunk into its heart.
-    for (cq, cr, _, height) in WORLD_TREE_LOBES.into_iter().skip(1) {
-        let steps = cq.abs().max(cr.abs()).max((cq + cr).abs());
-        for step in 0..=steps {
-            let t = step as f64 / steps as f64;
-            let q = (cq as f64 * t).round() as i64;
-            let r = (cr as f64 * t).round() as i64;
-            let center = floor + 110 + ((height - 130) as f64 * t.sqrt()) as i32;
-            let width = if t < 0.30 {
-                4_i64
-            } else if t < 0.70 {
-                3
-            } else {
-                2
-            };
-            for aq in -width..=width {
-                for ar in -width..=width {
-                    if aq.abs().max(ar.abs()).max((aq + ar).abs()) > width {
-                        continue;
-                    }
-                    add(
-                        &mut cells,
-                        WorldHex::new(root.q + q + aq, root.r + r + ar),
-                        center - 6,
-                        center + 7,
-                        "timber",
-                    );
-                }
-            }
-        }
-    }
-    // Broad buttresses and branching surface roots follow terrain, retaining the
-    // main south passage and every encounter/camp's usable deployment ground.
-    for (arm, (dq, dr)) in DIRS.into_iter().enumerate() {
-        for distance in 5_i64..=68 {
-            let bend = ((distance as f64 / 13. + arm as f64).sin() * 4.).round() as i64;
-            let center = WorldHex::new(
-                root.q + dq * distance - dr * bend,
-                root.r + dr * distance + dq * bend,
-            );
-            let width: i64 = if distance < 18 {
-                4
-            } else if distance < 40 {
-                2
-            } else {
-                1
-            };
-            for aq in -width..=width {
-                for ar in -width..=width {
-                    if aq.abs().max(ar.abs()).max((aq + ar).abs()) > width {
-                        continue;
-                    }
-                    let p = WorldHex::new(center.q + aq, center.r + ar);
-                    let [x, z] = world_xz(p);
-                    if (x + 60.).abs() < 12. && (130. ..260.).contains(&z)
-                        || sites::reserved_encounter(x, z)
-                        || CAMPS.iter().any(|(cx, cz)| (x - cx).hypot(z - cz) < 12.)
-                    {
-                        continue;
-                    }
-                    let lo = g.surface(p).level + 1;
-                    let rise = 2 + (68 - distance) as i32 / 4;
-                    add(&mut cells, p, lo, lo + rise, "timber");
-                }
-            }
-        }
-    }
-    object(
-        g,
-        "grand/world-tree".into(),
-        "plant/grand-world-tree",
-        root,
-        cells,
-    )
-}
-fn shrine(
-    g: &GrandCompiler,
-    id: &str,
-    x: f64,
-    z: f64,
-    inside: bool,
-) -> Result<ObjectInstance, ContractError> {
-    let root = nearest_hex(x, z);
-    let floor = g.support(x, z, inside).level + 1;
+fn shrine(g: &GrandCompiler, id: &str) -> Result<ObjectInstance, ContractError> {
+    let frame = g.geography.frame(&format!("shrine_{id}"))?;
+    let root = frame.hex([0., 0.]);
+    let floor = g.support_at(&frame, [0., 0.])?.level + 1;
     let mut cells = Cells::new();
     for q in -8_i64..=8 {
         for r in -8_i64..=8 {
             let d = q.abs().max(r.abs()).max((q + r).abs());
             let p = WorldHex::new(root.q + q, root.r + r);
-            let [px, pz] = world_xz(p);
-            let plant_door = id == "plant" && (px + 60.).abs() < 4. && pz > 125.;
+            let entrance = frame.hex([0., -10.]);
+            let plant_door = id == "plant"
+                && p.checked_distance(entrance)
+                    .is_ok_and(|distance| distance < 5);
             if d == 7 && (q + r) % 3 == 0 && !plant_door {
                 add(
                     &mut cells,
@@ -668,36 +514,27 @@ fn shrine(
 /// Reserve a sparse global forest (bounded roots and exact compact occupancies).
 pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, ContractError> {
     let mut out = vec![
-        world_tree(g, nearest_hex(-60., 125.))?,
+        world_tree::compose(g, g.geography.frame("world_tree")?.hex([0., 0.]))?,
         temple_plant(g)?,
         root_temple_ribs(g)?,
         fire_marker(g)?,
         air_marker(g)?,
         earth_marker(g)?,
     ];
-    for (i, (x, z)) in CAMPS.into_iter().enumerate() {
-        out.push(camp(g, i, nearest_hex(x, z))?);
+    for (i, id) in CAMP_FRAMES.into_iter().enumerate() {
+        let frame = g.geography.frame(id)?;
+        out.push(camp(g, i, &frame)?);
     }
-    for (i, (x, z)) in [(-390., 430.), (-555., 360.), (535., 580.), (700., 260.)]
-        .into_iter()
-        .enumerate()
-    {
-        if let Some(root) = coastal_root(g, x, z) {
-            out.push(coastal_rock(g, i, root)?);
-        }
+    for (i, root) in coastal_roots(g).into_iter().enumerate() {
+        out.push(coastal_rock(g, i, root)?);
     }
-    for (id, x, z, inside) in [
-        ("water", 275., -490., false),
-        ("air", -400., -565., false),
-        ("earth", -179., -518., false),
-        ("plant", -60., 125., true),
-        ("fire", -1170., 455., false),
-    ] {
-        out.push(shrine(g, id, x, z, inside)?);
+    for id in ["water", "air", "earth", "plant", "fire"] {
+        out.push(shrine(g, id)?);
     }
     // Giant central crystal, with an accessible shrine on its eastern shoulder.
-    let root = nearest_hex(-214., -531.);
-    let floor = g.surface(root).level + 1;
+    let frame = g.geography.frame("crystal_heart")?;
+    let root = frame.hex([0., 0.]);
+    let floor = g.support_at(&frame, [0., 0.])?.level + 1;
     let mut cells = Cells::new();
     for q in -9_i64..=9 {
         for r in -9_i64..=9 {
@@ -721,36 +558,8 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
         root,
         cells,
     )?);
-    // Gates align with the world-space temple approach across both skewed axial walls.
-    let root = nearest_hex(-60., 225.);
-    let floor = g.surface(root).level + 1;
-    let mut cells = Cells::new();
-    for q in -17_i64..=17 {
-        for r in -17_i64..=17 {
-            if q.abs() != 17 && r.abs() != 17 {
-                continue;
-            }
-            let p = WorldHex::new(root.q + q, root.r + r);
-            if r.abs() == 17 && (world_xz(p)[0] + 60.).abs() < 8. {
-                continue;
-            }
-            let lo = g.surface(p).level + 1;
-            add(
-                &mut cells,
-                p,
-                lo,
-                floor + if q.abs() > 13 && r.abs() > 13 { 48 } else { 28 },
-                "timber",
-            );
-        }
-    }
-    out.push(object(
-        g,
-        "grand/goblin-fort".into(),
-        "structure/grand-fort",
-        root,
-        cells,
-    )?);
+    // The approved lake-side composition uses the existing small camps and
+    // clearings. A fort enclosure would obstruct the shared root-temple approach.
     let landmarks = landmarks::compose(g, &out)?;
     out.extend(landmarks);
     compose_forest(g, &mut out)?;
@@ -760,8 +569,9 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
 
 fn temple_plant(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     // Behind the interaction point, inside the ring of temple columns.
-    let root = nearest_hex(-60., 120.);
-    let floor = g.support(-60., 120., true).level + 1;
+    let frame = g.geography.frame("root_temple_altar")?;
+    let root = frame.hex([0., 0.]);
+    let floor = g.support_at(&frame, [0., 0.])?.level + 1;
     let mut cells = Cells::new();
     add(&mut cells, root, floor, floor + 10, "timber");
     for q in -2_i64..=2 {
@@ -785,17 +595,19 @@ fn temple_plant(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
 }
 
 fn root_temple_ribs(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
-    let root = nearest_hex(-60., 161.);
+    let frame = g.geography.frame("root_temple_entrance")?;
+    let root = frame.hex([0., 0.]);
     let mut cells = Cells::new();
-    for z in [147., 161., 175.] {
-        for x in [-65., -55.] {
-            let p = nearest_hex(x, z);
-            let floor = g.support(x, z, true).level + 1;
+    for north in [-12., 0., 12.] {
+        for east in [-5., 5.] {
+            let p = frame.hex([east, north]);
+            let floor = g.support_at(&frame, [east, north])?.level + 1;
             add(&mut cells, p, floor, floor + 26, "timber");
         }
-        for x in -65..=-55 {
-            let p = nearest_hex(f64::from(x), z);
-            let floor = g.support(f64::from(x), z, true).level + 1;
+        for east in -5..=5 {
+            let local = [f64::from(east), north];
+            let p = frame.hex(local);
+            let floor = g.support_at(&frame, local)?.level + 1;
             add(&mut cells, p, floor + 26, floor + 29, "timber");
         }
     }
@@ -808,25 +620,37 @@ fn root_temple_ribs(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> 
     )
 }
 
-fn marker_base(g: &GrandCompiler, root: WorldHex) -> (Cells, i32) {
-    let floor = g.surface(root).level + 1;
+fn marker_base(
+    g: &GrandCompiler,
+    frame: &LandmarkFrame,
+    local: [f64; 2],
+) -> Result<(Cells, i32), ContractError> {
+    let root = frame.hex(local);
+    let floor = g.support_at(frame, local)?.level + 1;
     let mut cells = Cells::new();
     for q in -2_i64..=2 {
         for r in -2_i64..=2 {
             if q.abs().max(r.abs()).max((q + r).abs()) <= 2 {
                 let p = WorldHex::new(root.q + q, root.r + r);
-                add(&mut cells, p, g.surface(p).level + 1, floor + 2, "stone");
+                add(
+                    &mut cells,
+                    p,
+                    g.support_at(frame, frame.local(p))?.level + 1,
+                    floor + 2,
+                    "stone",
+                );
             }
         }
     }
-    (cells, floor)
+    Ok((cells, floor))
 }
 
 fn fire_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     // A static flame-shaped sculpture behind the claim point. Its opaque warm
     // masonry has ordinary solid behavior; it is not an active fire or hazard.
-    let root = nearest_hex(-1170., 449.);
-    let (mut cells, floor) = marker_base(g, root);
+    let frame = g.geography.frame("shrine_fire")?;
+    let root = frame.hex([0., 6.]);
+    let (mut cells, floor) = marker_base(g, &frame, [0., 6.])?;
     for q in -1_i64..=1 {
         for r in -1_i64..=1 {
             if q.abs().max(r.abs()).max((q + r).abs()) <= 1 {
@@ -869,8 +693,9 @@ fn fire_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
 fn air_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     // A grounded, pale spiral around a blue center, behind the claim point.
     // This is bounded static art rather than a wind simulation or new ability.
-    let root = nearest_hex(-400., -571.);
-    let (mut cells, floor) = marker_base(g, root);
+    let frame = g.geography.frame("shrine_air")?;
+    let root = frame.hex([0., 6.]);
+    let (mut cells, floor) = marker_base(g, &frame, [0., 6.])?;
     add(&mut cells, root, floor + 2, floor + 16, "crystal");
     for (step, &(q, r)) in DIRS.iter().cycle().take(12).enumerate() {
         let bottom = floor + 2 + step as i32;
@@ -892,8 +717,9 @@ fn air_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
 }
 
 fn earth_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
-    let root = nearest_hex(-179., -524.);
-    let (mut cells, floor) = marker_base(g, root);
+    let frame = g.geography.frame("shrine_earth")?;
+    let root = frame.hex([0., 6.]);
+    let (mut cells, floor) = marker_base(g, &frame, [0., 6.])?;
     for q in -2_i64..=2 {
         for r in -2_i64..=2 {
             let distance = q.abs().max(r.abs()).max((q + r).abs());
@@ -917,7 +743,12 @@ fn earth_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     )
 }
 
-fn camp(g: &GrandCompiler, index: usize, root: WorldHex) -> Result<ObjectInstance, ContractError> {
+fn camp(
+    g: &GrandCompiler,
+    index: usize,
+    frame: &LandmarkFrame,
+) -> Result<ObjectInstance, ContractError> {
+    let root = frame.hex([0., 25.]);
     let mut cells = Cells::new();
     for q in -6_i64..=6 {
         for r in -6_i64..=6 {
@@ -940,6 +771,28 @@ fn camp(g: &GrandCompiler, index: usize, root: WorldHex) -> Result<ObjectInstanc
             }
         }
     }
+    // One small open-front hut sits beside each encounter clearing. The room
+    // stays navigable, and neither a perimeter wall nor a fort is reconstructed.
+    let hut = frame.hex([25., 0.]);
+    let base = g.surface(hut).level + 1;
+    for east in -5_i32..=5 {
+        for north in -7_i32..=7 {
+            let p = frame.hex([25. + f64::from(east), f64::from(north)]);
+            let surface = g.surface(p);
+            if surface.water.is_some() || !g.mainland(p) {
+                continue;
+            }
+            let wall = east == 5 || north.abs() == 7 || (east == -5 && north.abs() >= 4);
+            let roof = base + 14 + (5 - east.abs());
+            if wall {
+                add(&mut cells, p, surface.level + 1, roof, "timber");
+            }
+            add(&mut cells, p, roof, roof + 2, "timber");
+            if (east + north + index as i32).rem_euclid(7) == 0 {
+                add(&mut cells, p, roof + 2, roof + 3, "moss");
+            }
+        }
+    }
     object(
         g,
         format!("grand/forest-camp/{index}"),
@@ -949,41 +802,39 @@ fn camp(g: &GrandCompiler, index: usize, root: WorldHex) -> Result<ObjectInstanc
     )
 }
 
-fn coastal_root(g: &GrandCompiler, x: f64, z: f64) -> Option<WorldHex> {
-    let hint = nearest_hex(x, z);
-    let mut best: Option<(f64, WorldHex)> = None;
-    for q in -60_i64..=60 {
-        for r in -60_i64..=60 {
-            if q.abs().max(r.abs()).max((q + r).abs()) > 60 {
-                continue;
-            }
-            let p = WorldHex::new(hint.q + q, hint.r + r);
-            let depth = grid_value(&g.coast, p, 0);
-            if !(2..=5).contains(&depth) {
+fn coastal_roots(g: &GrandCompiler) -> Vec<WorldHex> {
+    let mut candidates = vec![];
+    for &(r, first, last) in &g.source.mainland_rows {
+        for q in first..=last {
+            let p = WorldHex::new(q, r);
+            if !(2..=5).contains(&grid_value(&g.coast, p, 0)) {
                 continue;
             }
             let surface = g.surface(p);
-            if surface.water.is_some() || surface.level > 430 {
-                continue;
-            }
-            let [px, pz] = world_xz(p);
-            if g.anchors
-                .iter()
-                .filter(|a| a.id.ends_with("party_start") || a.id.ends_with("sailing_start"))
-                .any(|a| {
-                    let [ax, az] = world_xz(a.position.column);
-                    (px - ax).hypot(pz - az) < 35.
-                })
+            if surface.water.is_some()
+                || surface.level > SEA_TOP + 30
+                || g.reserved_interval(p, surface.level + 1, surface.level + 12)
             {
                 continue;
             }
-            let distance = (px - x).powi(2) + (pz - z).powi(2);
-            if best.is_none_or(|(old, _)| distance < old) {
-                best = Some((distance, p));
-            }
+            candidates.push((forest_hash(g.source.seed ^ 0x0043_4f41_5354, p), p));
         }
     }
-    best.map(|(_, p)| p)
+    candidates.sort_unstable();
+    let mut roots: Vec<WorldHex> = vec![];
+    for (_, p) in candidates {
+        if roots
+            .iter()
+            .any(|old| old.checked_distance(p).is_ok_and(|d| d < 80))
+        {
+            continue;
+        }
+        roots.push(p);
+        if roots.len() == 4 {
+            break;
+        }
+    }
+    roots
 }
 
 fn coastal_rock(
@@ -1107,27 +958,34 @@ mod forest_tests {
 
     #[test]
     fn forest_edge_is_feathered_and_named_glades_stay_open() {
-        assert!(forest_density(-280., 90.) < 0.01);
-        assert!(forest_density(120., 355.) < 0.01);
-        assert!(forest_density(-60., 110.) > 0.70);
-        assert!(forest_density(700., 600.) < 0.01);
-        let transition = (-400..600)
-            .map(|x| forest_density(f64::from(x), 330.))
-            .filter(|density| *density > 0.05 && *density < 0.65)
-            .count();
+        let g = test_compiler(false);
+        let mut transitional = 0_usize;
+        let mut dense = 0_usize;
+        for &(r, a, b) in &g.source.mainland_rows {
+            for q in a..=b {
+                let p = WorldHex::new(q, r);
+                let density = forest_density(&g, p);
+                transitional += usize::from(density > 0.05 && density < 0.65);
+                dense += usize::from(density > 0.70);
+            }
+        }
         assert!(
-            transition > 100,
-            "a broad graded edge rather than a hard cutoff"
+            transitional > 1_000,
+            "forest edge must retain a broad gradient"
         );
+        assert!(
+            dense > 10_000,
+            "substantial interior woods, not edge-only decoration"
+        );
+        for name in CAMP_FRAMES {
+            let frame = g.geography.frame(name).expect("clearing");
+            assert!(reserved_growth(&g, frame.hex([0., 0.])), "{name}");
+        }
     }
 
     #[test]
     fn authored_forest_is_bounded_grounded_layered_and_clear_of_gameplay_sites() {
-        let source: GrandSpec = ron::from_str(include_str!(
-            "../../../../../assets/config/v4/grand-v4/world.ron"
-        ))
-        .expect("Grand source");
-        let g = GrandCompiler::new(source).expect("complete authored composition");
+        let g = test_compiler(true);
         let objects: Vec<_> = g.objects.values().flatten().collect();
         let trees: Vec<_> = objects
             .iter()
@@ -1199,14 +1057,13 @@ mod forest_tests {
         for &(r, a, b) in &g.source.mainland_rows {
             for q in a..=b {
                 let p = WorldHex::new(q, r);
-                let [x, z] = world_xz(p);
-                let edge = biomes::forest_extent(x, z);
-                if edge > 1. || g.surface(p).water.is_some() {
+                let density = forest_density(&g, p);
+                if density <= 0. || g.surface(p).water.is_some() {
                     continue;
                 }
                 domain += 1;
                 covered += u32::from(canopy.contains(&p));
-                if edge < 0.70 {
+                if density > 0.70 {
                     core += 1;
                     covered_core += u32::from(canopy.contains(&p));
                 }
@@ -1237,4 +1094,22 @@ mod forest_tests {
             assert!(g.clear_support(node.position, 8), "{}", node.id);
         }
     }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "A malformed checked-in geography fixture must fail its caller's test."
+)]
+pub(super) fn test_compiler(dressed: bool) -> GrandCompiler {
+    let mut source: GrandSpec = ron::from_str(include_str!(
+        "../../../../../assets/config/v4/grand-v4/world.ron"
+    ))
+    .expect("Grand source");
+    source.full_dressing = dressed;
+    source.geography = Some("geography-r02.json".into());
+    let bytes = include_bytes!("../../../../../assets/config/v4/grand-v4/geography-r02.json");
+    let geography: GrandGeographyDocument =
+        serde_json::from_slice(bytes).expect("approved geography");
+    GrandCompiler::with_geography(source, geography, bytes).expect("complete requested geography")
 }

@@ -22,12 +22,8 @@ pub(super) fn compile(
         for q in first..=last {
             let p = WorldHex::new(q, r);
             let [x, z] = world_xz(p);
-            let density = dressing::forest_density(x, z);
-            if density < 0.12
-                || dressing::reserved_growth(g, p)
-                || terrain::cover_reserved(x, z)
-                || g.cavity(p).is_some()
-            {
+            let density = dressing::forest_density(g, p);
+            if density < 0.12 || dressing::reserved_growth(g, p) {
                 continue;
             }
             // Several overlapping wavelengths produce patches, feathered edges,
@@ -40,11 +36,7 @@ pub(super) fn compile(
                 continue;
             }
             let surface = g.surface(p);
-            if surface.water.is_some() || !(420..=760).contains(&surface.level) {
-                continue;
-            }
-            // Taper the same woodland into the higher foothills.
-            if surface.level > 550 && !key.is_multiple_of(5) {
+            if surface.water.is_some() {
                 continue;
             }
             let (column, liquid) = g.column(p);
@@ -88,7 +80,7 @@ pub(super) fn compile(
         })
         .collect();
     let cover = GroundCover { version: 1, chunks };
-    cover.validate()?;
+    cover.validate_in_bounds(RADIUS as u32, [0, MAX_LEVEL])?;
     Ok(cover)
 }
 
@@ -97,27 +89,19 @@ mod tests {
     use super::*;
     #[test]
     fn ground_cover_is_bounded_grounded_reserved_and_has_no_occupancy() {
-        let source: GrandSpec = ron::from_str(include_str!(
-            "../../../../../assets/config/v4/grand-v4/world.ron"
-        ))
-        .expect("source");
-        let g = GrandCompiler::new(GrandSpec {
-            full_dressing: true,
-            ..source
-        })
-        .expect("dressed world");
+        let g = dressing::test_compiler(true);
         let cover = g.ground_cover.as_ref().expect("dressed companion");
-        cover.validate().expect("bounded source");
+        cover
+            .validate_in_bounds(RADIUS as u32, [0, MAX_LEVEL])
+            .expect("bounded source");
         let mut count = 0;
-        let mut near = [0_usize; 2];
+        let mut covered_chunks = std::collections::BTreeSet::new();
         for batch in &cover.chunks {
             for tuft in &batch.tufts {
                 count += 1;
                 let p = tuft.support.column;
-                let [x, z] = world_xz(p);
                 assert!(!dressing::reserved_growth(&g, p));
-                assert!(!terrain::cover_reserved(x, z));
-                assert!(dressing::forest_density(x, z) >= 0.12);
+                assert!(dressing::forest_density(&g, p) >= 0.12);
                 let (column, liquid) = g.column(p);
                 assert!(liquid.is_none());
                 assert_eq!(
@@ -139,11 +123,7 @@ mod tests {
                         "cover never becomes object occupancy"
                     );
                 }
-                for (n, cx) in near.iter_mut().zip([-240., -162.]) {
-                    if (x - cx).hypot(z - 214.5) < 25. {
-                        *n += 1;
-                    }
-                }
+                covered_chunks.insert(p.chunk());
             }
         }
         assert!(
@@ -151,8 +131,8 @@ mod tests {
             "a whole forest needs useful ground coverage, got {count}"
         );
         assert!(
-            near.into_iter().all(|n| n > 20),
-            "representative groves must receive visible patches: {near:?}"
+            covered_chunks.len() > 100,
+            "ground patches must cover the shared woodland rather than a camera-local planting"
         );
         let mut old_overview = g.overview();
         old_overview.ground_cover = None;
@@ -170,6 +150,10 @@ mod tests {
             .first_mut()
             .expect("tufts")
             .material = "stone".into();
-        assert!(invalid.validate().is_err());
+        assert!(
+            invalid
+                .validate_in_bounds(RADIUS as u32, [0, MAX_LEVEL])
+                .is_err()
+        );
     }
 }

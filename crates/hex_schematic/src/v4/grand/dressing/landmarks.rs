@@ -2,20 +2,21 @@
 use super::*;
 
 fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>, ContractError> {
+    let garden_frame = g.geography.frame("garden")?;
     let mut frame = Cells::new();
     // Short north/west arcades frame the court without enclosing its south and
     // east approaches. Their overhead beams are well above ordinary headroom.
-    for (x, z, along_x) in [(248., -491., false), (274., -514., true)] {
-        let root = nearest_hex(x, z);
+    for (x, z, along_x) in [(-27., 1., false), (-1., 24., true)] {
+        let root = garden_frame.hex([x, z]);
         let base = g.surface(root).level + 1;
         for offset in -16_i32..=16 {
             if along_x && offset.abs() < 6 {
                 continue;
             }
-            let p = nearest_hex(
+            let p = garden_frame.hex([
                 x + if along_x { f64::from(offset) } else { 0. },
                 z + if along_x { 0. } else { f64::from(offset) },
-            );
+            ]);
             let ground = g.surface(p).level + 1;
             if offset.abs() == 16 || (along_x && offset.abs() == 6) || (!along_x && offset == 0) {
                 add(&mut frame, p, ground, base + 20, "stone");
@@ -33,8 +34,8 @@ fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>,
     let mut plants = Cells::new();
     // Small raised beds and leafy centres, separated by generous walking gaps.
     // The existing shrine and the basin/rill axis remain wholly undecorated.
-    for (x, z) in [(258., -504.), (290., -504.), (256., -462.), (291., -457.)] {
-        let root = nearest_hex(x, z);
+    for (x, z) in [(-17., 14.), (15., 14.), (-19., -28.), (16., -33.)] {
+        let root = garden_frame.hex([x, z]);
         for q in -3_i64..=3 {
             for r in -3_i64..=3 {
                 let d = q.abs().max(r.abs()).max((q + r).abs());
@@ -70,7 +71,8 @@ fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>,
             }
         }
     }
-    let root = nearest_hex(276., -474.);
+    let fountain = g.geography.frame("fountain")?;
+    let root = fountain.hex([0., 0.]);
     let mut basin = Cells::new();
     for q in -4_i64..=4 {
         for r in -4_i64..=4 {
@@ -78,10 +80,16 @@ fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>,
                 continue;
             }
             let p = WorldHex::new(root.q + q, root.r + r);
-            let [x, z] = world_xz(p);
+            let [_, north] = fountain.local(p);
             // The existing flowing outlet is untouched; the broad south break
             // permits an ordinary walk right to the original water cells.
-            if g.surface(p).water.is_some() || ((x - 276.).abs() < 3.5 && z > -474.) {
+            if g.surface(p).water.is_some()
+                || (fountain
+                    .local(p)
+                    .first()
+                    .is_some_and(|east| east.abs() < 3.5)
+                    && north < 0.)
+            {
                 continue;
             }
             let floor = g.surface(p).level + 1;
@@ -102,14 +110,14 @@ fn garden(g: &GrandCompiler, occupied: &Occupied) -> Result<Vec<ObjectInstance>,
             g,
             "grand/garden-arcades".into(),
             "structure/grand-garden-court",
-            nearest_hex(260., -500.),
+            garden_frame.hex([-15., 10.]),
             frame,
         )?,
         object(
             g,
             "grand/garden-beds".into(),
             "decor/grand-garden-beds",
-            nearest_hex(258., -504.),
+            garden_frame.hex([-17., 14.]),
             plants,
         )?,
         object(
@@ -127,86 +135,86 @@ struct Bay {
     x: f64,
     z: f64,
     along_x: bool,
-    floor: i32,
+    frame: &'static str,
 }
 const BAYS: &[Bay] = &[
     Bay {
-        x: -422.,
-        z: -309.,
+        x: -52.,
+        z: -39.,
         along_x: true,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -394.,
-        z: -309.,
+        x: -24.,
+        z: -39.,
         along_x: true,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -366.,
-        z: -309.,
+        x: 4.,
+        z: -39.,
         along_x: true,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -337.,
-        z: -309.,
+        x: 33.,
+        z: -39.,
         along_x: true,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -367.,
-        z: -381.,
+        x: 3.,
+        z: 33.,
         along_x: true,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -337.,
-        z: -381.,
+        x: 33.,
+        z: 33.,
         along_x: true,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -435.,
-        z: -375.,
+        x: -65.,
+        z: 27.,
         along_x: false,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -435.,
-        z: -323.,
+        x: -65.,
+        z: -25.,
         along_x: false,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -315.,
-        z: -323.,
+        x: 55.,
+        z: -25.,
         along_x: false,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -315.,
-        z: -378.,
+        x: 55.,
+        z: 30.,
         along_x: false,
-        floor: 600,
+        frame: "library_lower",
     },
     Bay {
-        x: -432.,
-        z: -526.,
+        x: -32.,
+        z: -4.,
         along_x: false,
-        floor: 824,
+        frame: "library_upper",
     },
     Bay {
-        x: -432.,
-        z: -546.,
+        x: -32.,
+        z: 16.,
         along_x: false,
-        floor: 824,
+        frame: "library_upper",
     },
     Bay {
-        x: -370.,
-        z: -526.,
+        x: 30.,
+        z: -4.,
         along_x: false,
-        floor: 824,
+        frame: "library_upper",
     },
 ];
 
@@ -234,15 +242,16 @@ fn bay_without_finish(
     encounter_columns: &std::collections::BTreeSet<WorldHex>,
 ) -> Result<ObjectInstance, ContractError> {
     let mut cells = Cells::new();
-    let base = b.floor + 1;
+    let frame = g.geography.frame(b.frame)?;
+    let base = g.support_at(&frame, [b.x, b.z])?.level + 1;
     // A wall bay has visible depth: shelves sit one hex behind the piers.
     // Every authored voxel is checked against the actual cave interval below,
     // so a stair crossing takes precedence over an ornament, never the reverse.
     for t in -8_i32..=8 {
-        let p = nearest_hex(
+        let p = frame.hex([
             b.x + if b.along_x { f64::from(t) } else { 0. },
             b.z + if b.along_x { 0. } else { f64::from(t) },
-        );
+        ]);
         if t.abs() >= 7 {
             add(&mut cells, p, base, base + 34, "stone");
             add(&mut cells, p, base, base + 3, "slate");
@@ -252,11 +261,11 @@ fn bay_without_finish(
         add(&mut cells, p, base + soffit, base + soffit + 3, "sand");
         if t.abs() <= 6 {
             // Recess along the inward/outward normal chosen for each side wall.
-            let inward = if b.along_x || b.x > -400. { -1.5 } else { 1.5 };
-            let shelf = nearest_hex(
+            let inward = if b.along_x || b.x > 0. { -1.5 } else { 1.5 };
+            let shelf = frame.hex([
                 b.x + if b.along_x { f64::from(t) } else { -inward },
                 b.z + if b.along_x { -inward } else { f64::from(t) },
-            );
+            ]);
             for tier in 0_i32..3 {
                 let lo = base + tier * 8;
                 add(&mut cells, shelf, lo, lo + 2, "timber");
@@ -285,20 +294,25 @@ fn bay_without_finish(
     // The exact cave and encounter semantics remain authoritative. Decoration
     // may not occupy any step of the continuous ascending stair or deployment.
     cells.retain(|p, ys| {
-        let Some((floor, ceiling)) = library_cavity(*p) else {
+        let Ok(support) = g.support_at(&frame, frame.local(*p)) else {
             return false;
         };
-        if floor != b.floor || encounter_columns.contains(p) {
+        if encounter_columns.contains(p) {
             return false;
         }
-        ys.retain(|y, _| *y > floor && *y < ceiling);
+        let (column, _) = g.column(*p);
+        ys.retain(|y, _| {
+            *y > support.level
+                && column.material_at(*y).is_none()
+                && !g.reserved_interval(*p, *y, *y + 1)
+        });
         !ys.is_empty()
     });
     object(
         g,
         format!("grand/library-bay/{index:02}"),
         "structure/grand-library-arcade",
-        nearest_hex(b.x, b.z),
+        frame.hex([b.x, b.z]),
         cells,
     )
 }
@@ -335,12 +349,7 @@ mod tests {
 
     #[test]
     fn library_pier_finish_preserves_complete_arcade_occupancy_and_grounding() {
-        let mut source: GrandSpec = ron::from_str(include_str!(
-            "../../../../../../assets/config/v4/grand-v4/world.ron"
-        ))
-        .expect("Grand source");
-        source.full_dressing = false;
-        let compiler = GrandCompiler::new(source).expect("terrain");
+        let compiler = test_compiler(false);
         let encounter_columns = std::collections::BTreeSet::new();
         let mut recolored = 0;
         for (index, spec) in BAYS.iter().copied().enumerate() {
@@ -363,15 +372,7 @@ mod tests {
 
     #[test]
     fn complete_dressing_has_compatible_materials_in_every_shared_chunk() {
-        let source: GrandSpec = ron::from_str(include_str!(
-            "../../../../../../assets/config/v4/grand-v4/world.ron"
-        ))
-        .expect("Grand source");
-        assert!(
-            source.full_dressing,
-            "validate the actual complete composition"
-        );
-        let compiler = GrandCompiler::new(source).expect("complete composition");
+        let compiler = test_compiler(true);
         let mut conflicts = Vec::new();
         for (chunk, influences) in &compiler.influences {
             let mut occupied: BTreeMap<WorldHex, Vec<(&str, &VoxelRun)>> = BTreeMap::new();
@@ -401,62 +402,68 @@ mod tests {
             }
         }
         assert!(conflicts.is_empty(), "{}", conflicts.join("\n"));
-        for q in [19, 20] {
-            let garden = compiler
-                .chunk(ChunkId { q, r: -20 })
+        for name in ["garden", "fountain"] {
+            let root = compiler
+                .geography
+                .frame(name)
+                .expect("named garden frame")
+                .hex([0., 0.]);
+            let chunk = compiler
+                .chunk(root.chunk())
                 .expect("Garden composition must pass strict chunk sealing")
                 .expect("Garden chunk exists");
-            assert!(!garden.semantics.object_influences.is_empty());
+            assert!(!chunk.semantics.object_influences.is_empty());
         }
-        let rim = compiler
-            .objects
-            .values()
-            .flatten()
+        let objects: Vec<_> = compiler.objects.values().flatten().collect();
+        assert!(!objects.iter().any(|object| object.id.contains("fort")));
+        let camps: Vec<_> = objects
+            .iter()
+            .filter(|object| object.id.starts_with("grand/forest-camp/"))
+            .collect();
+        assert_eq!(camps.len(), 6);
+        for camp in camps {
+            assert!(
+                camp.occupancy
+                    .iter()
+                    .flat_map(|c| &c.runs)
+                    .any(|run| run.material == "timber")
+            );
+            assert!(
+                !camp
+                    .grounding
+                    .as_ref()
+                    .expect("hut and clearing contacts")
+                    .is_empty()
+            );
+        }
+        let rim = objects
+            .iter()
             .find(|object| object.id == "grand/fountain-rim")
             .expect("the low fountain rim remains authored");
         assert!(!rim.occupancy.is_empty());
-        for q in [318, 321] {
-            let p = WorldHex::new(q, -320);
-            assert!(
-                rim.occupancy.iter().all(|column| column.position != p),
-                "the existing Water Shrine owns the rim/post intersection at {p:?}"
-            );
-            let shrine = compiler
-                .influences
-                .get(&p.chunk())
-                .expect("shrine chunk")
-                .iter()
-                .find(|object| object.id == "grand/shrine/water")
-                .expect("the existing Water Shrine remains authored");
-            let post = shrine
-                .occupancy
-                .iter()
-                .find(|column| column.position == p)
-                .expect("the established shrine post is preserved");
-            assert!(post.runs.iter().any(|run| run.material == "stone"));
-        }
+        let shrine = objects
+            .iter()
+            .find(|object| object.id == "grand/shrine/water")
+            .expect("the Water Shrine remains authored");
+        let mut occupied = Occupied::new();
+        reserve(&mut occupied, shrine);
+        assert!(
+            !overlaps(&occupied, &rim.occupancy),
+            "rim cannot replace a shrine post"
+        );
     }
 
     #[test]
     fn courtyard_and_library_are_supported_and_preserve_exact_water_and_passages() {
-        let mut source: GrandSpec = ron::from_str(include_str!(
-            "../../../../../../assets/config/v4/grand-v4/world.ron"
-        ))
-        .expect("Grand source");
-        source.full_dressing = false;
-        let plain = GrandCompiler::new(source.clone()).expect("terrain");
-        let water_shrine =
-            shrine(&plain, "water", 275., -490., false).expect("existing Water Shrine fixture");
+        let plain = test_compiler(false);
+        let water_shrine = shrine(&plain, "water").expect("existing Water Shrine fixture");
         let additions = compose(&plain, &[water_shrine]).expect("bounded architecture");
         assert_eq!(additions.len(), 16);
         let mut occupied = Occupied::new();
         for object in &additions {
             assert!(!object.occupancy.is_empty(), "{}", object.id);
-            assert!(
-                !object.grounding.as_ref().expect("contacts").is_empty(),
-                "{}",
-                object.id
-            );
+            let grounding = object.grounding.as_ref().expect("contacts");
+            assert!(!grounding.is_empty(), "{}", object.id);
             assert!(
                 object.occupancy.len() < 600,
                 "bounded footprint: {}",
@@ -468,129 +475,130 @@ mod tests {
                 object.id
             );
             reserve(&mut occupied, object);
-            if object.id.starts_with("grand/library-") {
-                for column in &object.occupancy {
-                    let (floor, ceiling) = library_cavity(column.position).expect("inside library");
-                    assert!(column
-                        .runs
-                        .iter()
-                        .all(|r| r.bottom > floor && r.top <= ceiling));
+            for contact in grounding {
+                let (terrain, _) = plain.column(contact.column);
+                assert!(
+                    terrain.material_at(contact.level).is_some(),
+                    "{}",
+                    object.id
+                );
+                assert!(
+                    object.occupancy.iter().any(|column| {
+                        column.position == contact.column
+                            && column
+                                .runs
+                                .iter()
+                                .any(|run| run.bottom == contact.level + 1)
+                    }),
+                    "contact must touch the actual architecture: {}",
+                    object.id
+                );
+            }
+            for column in &object.occupancy {
+                let (terrain, _) = plain.column(column.position);
+                for run in &column.runs {
+                    assert!(
+                        !terrain
+                            .runs
+                            .iter()
+                            .any(|ground| ground.bottom < run.top && run.bottom < ground.top),
+                        "buried architecture: {}",
+                        object.id
+                    );
+                    assert!(
+                        !plain.reserved_interval(column.position, run.bottom, run.top),
+                        "reserved passage filled: {}",
+                        object.id
+                    );
                 }
+            }
+            if object.id.starts_with("grand/library-") {
                 assert!(
                     object
                         .occupancy
                         .iter()
                         .flat_map(|c| &c.runs)
-                        .any(|r| r.material == "crystal"),
+                        .any(|run| run.material == "crystal"),
                     "filled shelves: {}",
                     object.id
                 );
             }
         }
-        // Preserve a broad ribbon around the original, independently recorded
-        // stair centreline, including its lower/upper room connections.
-        let stair = [
-            (-119, -247),
-            (-111, -263),
-            (-42, -263),
-            (-28, -290),
-            (-106, -290),
-            (-93, -317),
-            (-26, -317),
-            (-13, -343),
-            (-68, -343),
-            (-55, -370),
-            (-46, -370),
-            (-42, -377),
-        ];
-        for pair in stair.windows(2) {
-            let [a, b] = pair else {
-                continue;
-            };
-            let a = WorldHex::new(a.0, a.1);
-            let b = WorldHex::new(b.0, b.1);
-            let steps = a.checked_distance(b).expect("bounded route");
-            for step in 0..=steps {
-                let t = step as f64 / steps as f64;
-                let [ax, az] = world_xz(a);
-                let [bx, bz] = world_xz(b);
-                let centre = nearest_hex(ax + (bx - ax) * t, az + (bz - az) * t);
-                for q in -2_i64..=2 {
-                    for r in -2_i64..=2 {
-                        if q.abs().max(r.abs()).max((q + r).abs()) > 2 {
-                            continue;
-                        }
-                        let p = WorldHex::new(centre.q + q, centre.r + r);
-                        let (floor, _) = library_cavity(p).expect("stair ribbon");
-                        assert!(
-                            occupied.get(&p).is_none_or(|runs| runs
-                                .iter()
-                                .all(|(a, b)| *a >= floor + 9 || *b <= floor + 1)),
-                            "stair obstructed at {p:?}"
-                        );
-                    }
-                }
-            }
-        }
         let before = plain.sites(1).expect("plain sites");
-        source.full_dressing = true;
-        let dressed = GrandCompiler::new(source).expect("complete composition");
+        let dressed = test_compiler(true);
         let after = dressed
             .sites(1)
             .expect("all shrines and encounters retain headroom");
-        assert_eq!(
-            before.fountains.first().expect("fountain").cells,
-            after.fountains.first().expect("fountain").cells
+        assert!(
+            !before.routes.is_empty(),
+            "the producer must publish actual traversable routes"
         );
-        for old in &before.encounters {
-            if matches!(old.id.as_str(), "grand_golem_01" | "grand_wisp_01") {
-                let new = after
-                    .encounters
-                    .iter()
-                    .find(|e| e.id == old.id)
-                    .expect("same encounter");
-                assert_eq!(
-                    old.surfaces, new.surfaces,
-                    "exact interior deployment remains clear: {}",
-                    old.id
-                );
-            }
-        }
-        let fountain = nearest_hex(276., -474.);
-        for object in &additions {
-            for column in &object.occupancy {
+        for route in &before.routes {
+            let new = after
+                .routes
+                .iter()
+                .find(|new| new.id == route.id)
+                .expect("same public route");
+            assert_eq!(
+                route.ribbon, new.ribbon,
+                "dressing cannot move the supported route: {}",
+                route.id
+            );
+            assert_eq!(
+                route.supports, new.supports,
+                "dressing cannot move route endpoints: {}",
+                route.id
+            );
+            let clearance = i32::try_from(route.clearance_levels).expect("bounded body clearance");
+            for support in &route.ribbon {
                 assert!(
-                    !column
-                        .position
-                        .checked_distance(fountain)
-                        .is_ok_and(|d| d <= 3),
-                    "discovery basin occupied by {}",
-                    object.id
+                    dressed.clear_support(*support, clearance),
+                    "route obstructed: {} at {support:?}",
+                    route.id
                 );
             }
         }
-        // Three wide entrances, the shrine centre, basin's southern access, and
-        // the entire waterfall-gallery axis remain ordinary clear walking space.
-        for (x, z, inside) in [
-            (275., -512., false),
-            (275., -457., false),
-            (302., -490., false),
-            (275., -490., false),
-            (276., -465., false),
-            (-370., -348., true),
-            (-400., -530., true),
-        ] {
-            let centre = dressed.support(x, z, inside);
-            for q in -1_i64..=1 {
-                for r in -1_i64..=1 {
-                    let p = WorldHex::new(centre.column.q + q, centre.column.r + r);
-                    let [px, pz] = world_xz(p);
-                    assert!(
-                        dressed.clear_support(dressed.support(px, pz, inside), 8),
-                        "access at {px},{pz}"
-                    );
-                }
+        assert_eq!(before.fountains.len(), after.fountains.len());
+        for fountain in &before.fountains {
+            let new = after
+                .fountains
+                .iter()
+                .find(|f| f.id == fountain.id)
+                .expect("same fountain");
+            assert_eq!(fountain.cells, new.cells);
+            for cell in &fountain.cells {
+                assert!(
+                    occupied.get(&cell.column).is_none_or(|runs| runs
+                        .iter()
+                        .all(|(lo, hi)| *lo > cell.level || *hi <= cell.level)),
+                    "fountain occupied"
+                );
             }
+        }
+        for old in &before.encounters {
+            let new = after
+                .encounters
+                .iter()
+                .find(|e| e.id == old.id)
+                .expect("same encounter");
+            assert_eq!(
+                old.surfaces, new.surfaces,
+                "exact deployment remains clear: {}",
+                old.id
+            );
+        }
+        for id in [
+            "shrine_water",
+            "shrine_plant",
+            "shrine_earth",
+            "library_entrance",
+            "root_temple_entrance",
+        ] {
+            let frame = dressed.geography.frame(id).expect("shared access frame");
+            let centre = dressed
+                .support_at(&frame, [0., 0.])
+                .expect("named layer support");
+            assert!(dressed.clear_support(centre, 8), "access blocked: {id}");
         }
     }
 }
