@@ -633,6 +633,75 @@ mod cave_cover_tests {
         );
     }
     #[test]
+    fn root_room_keeps_natural_roof_and_architecture_beneath_lake_shore() {
+        let compiler = tests::compiler(true);
+        let g = &compiler.geography;
+        let d = g.document.as_ref().expect("canonical geography");
+        let room = d
+            .rooms
+            .iter()
+            .find(|room| room.frame == "root_temple")
+            .expect("authored root room");
+        let frame = d.frames.get(&room.frame).expect("root room frame");
+        let floor = g.top_level(frame.floor.expect("interior floor"));
+        let ceiling = g.top_level(frame.floor.expect("interior floor") + room.height);
+        let mut checked = 0;
+        let mut minimum_cover = i32::MAX;
+        for (&p, layers) in &compiler.layered.columns {
+            let point = g.model_xz(p);
+            if (point[0] - frame.origin[0]).abs() > room.half_extents[0]
+                || (point[1] - frame.origin[1]).abs() > room.half_extents[1]
+                || !layers
+                    .iter()
+                    .any(|layer| layer.layer == SupportLayer::RootTemple)
+            {
+                continue;
+            }
+            let (column, water) = compiler.column(p);
+            let natural_top = compiler.surface(p).level + 1;
+            assert!(water.is_none(), "root room stays dry at {p:?}");
+            assert!(
+                natural_top - ceiling >= 4,
+                "room roof lacks natural cover at {p:?}: ceiling {ceiling}, terrain {natural_top}"
+            );
+            for level in ceiling..natural_top {
+                assert!(
+                    column
+                        .material_at(level)
+                        .is_some_and(|material| material != "water"),
+                    "room carve removed its exterior roof at {p:?}, level {level}"
+                );
+            }
+            assert!(
+                column.material_at(floor - 1).is_some(),
+                "supported room floor"
+            );
+            minimum_cover = minimum_cover.min(natural_top - ceiling);
+            checked += 1;
+        }
+        assert!(checked > 500, "review the entire room, not only its center");
+        for id in ["grand/root-temple-ribs", "grand/root-temple-plant"] {
+            let object = compiler
+                .objects
+                .values()
+                .flatten()
+                .find(|object| object.id == id)
+                .expect("retained root architecture");
+            assert!(!object.occupancy.is_empty());
+            for column in &object.occupancy {
+                for run in &column.runs {
+                    assert!(
+                        run.bottom >= floor && run.top < ceiling,
+                        "{id} no longer fits room height at {:?}",
+                        column.position
+                    );
+                }
+            }
+        }
+        eprintln!("ROOT_ROOM columns={checked} minimum_natural_cover_levels={minimum_cover}");
+    }
+
+    #[test]
     fn all_authored_route_ribbons_keep_full_body_clearance() {
         let compiler = tests::compiler(false);
         let mut failures = Vec::new();
